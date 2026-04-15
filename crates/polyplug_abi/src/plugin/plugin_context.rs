@@ -16,8 +16,8 @@ pub struct BundleInitContext {
 
 #[cfg(test)]
 mod tests {
-    use core::mem::{align_of, offset_of, size_of};
     use core::ffi::c_void;
+    use core::mem::{align_of, offset_of, size_of};
 
     use crate::plugin::plugin_context::BundleInitContext;
 

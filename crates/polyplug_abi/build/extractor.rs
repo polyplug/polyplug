@@ -28,7 +28,9 @@ use syn::{
     Meta, Visibility, parse_file,
 };
 
-use crate::types::{AbiConst, AbiEnum, AbiField, AbiStruct, AbiTypes, AbiUnion, AbiUnionVariant, AbiVariant};
+use crate::types::{
+    AbiConst, AbiEnum, AbiField, AbiStruct, AbiTypes, AbiUnion, AbiUnionVariant, AbiVariant,
+};
 
 /// Extract all ABI types by recursively walking the module tree starting from `src_dir/lib.rs`.
 ///

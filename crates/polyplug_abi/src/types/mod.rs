@@ -12,7 +12,7 @@ pub use buffer::Buffer;
 pub use dependency_info::DependencyInfo;
 pub use error_code::AbiErrorCode;
 pub use string_view::StringView;
-pub use version::{Version, ParseVersionError};
+pub use version::{ParseVersionError, Version};
 
 // ─── FFI Helper Functions ───────────────────────────────────────────────────────
 

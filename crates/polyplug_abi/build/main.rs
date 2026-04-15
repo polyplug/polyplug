@@ -49,10 +49,7 @@ fn main() {
 
     // ─── Step 2: Scan loader crates for config structs ───────────────────────
     for loader_name in LOADER_CRATES {
-        let loader_src_dir: PathBuf = workspace_root
-            .join("crates")
-            .join(loader_name)
-            .join("src");
+        let loader_src_dir: PathBuf = workspace_root.join("crates").join(loader_name).join("src");
 
         // Try config.rs first, fall back to lib.rs
         let config_path: PathBuf = loader_src_dir.join("config.rs");
@@ -83,7 +80,8 @@ fn main() {
                     // pub struct with #[repr(C)]
                     if is_public(&item_struct.vis) && has_repr_c(&item_struct.attrs) {
                         let name: String = item_struct.ident.to_string();
-                        let fields: Vec<types::AbiField> = extract_fields_from_syn(&item_struct.fields);
+                        let fields: Vec<types::AbiField> =
+                            extract_fields_from_syn(&item_struct.fields);
                         let doc: Option<String> = extract_doc_from_attrs(&item_struct.attrs);
 
                         loader_types.add_struct(types::AbiStruct {
@@ -140,8 +138,7 @@ fn extract_fields_from_syn(fields: &syn::Fields) -> Vec<types::AbiField> {
                     return None;
                 }
                 let name: String = field.ident.as_ref()?.to_string();
-                let rust_type: String =
-                    quote::quote!(#field.ty).to_string().replace(' ', "");
+                let rust_type: String = quote::quote!(#field.ty).to_string().replace(' ', "");
                 let doc: Option<String> = extract_doc_from_attrs(&field.attrs);
                 Some(types::AbiField {
                     name,
@@ -159,8 +156,7 @@ fn extract_fields_from_syn(fields: &syn::Fields) -> Vec<types::AbiField> {
                     return None;
                 }
                 let name: String = format!("field_{}", index);
-                let rust_type: String =
-                    quote::quote!(#field.ty).to_string().replace(' ', "");
+                let rust_type: String = quote::quote!(#field.ty).to_string().replace(' ', "");
                 let doc: Option<String> = extract_doc_from_attrs(&field.attrs);
                 Some(types::AbiField {
                     name,

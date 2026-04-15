@@ -15,17 +15,17 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 
 use polyplug::registry::RuntimeStore;
+use polyplug_abi::DispatchMechanisms;
 use polyplug_abi::DispatchType;
-use polyplug_abi::GuestContractInterface;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostInterface;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::DispatchMechanisms;
-use polyplug_abi::GuestContractHandle;
 use polyplug_abi::StringView;
-use polyplug_utils::GuestContractId;
 use polyplug_utils::BundleId;
+use polyplug_utils::GuestContractId;
 
 // ─── Instance lifecycle stubs for benchmarks ────────────────────────────────────
 
@@ -48,7 +48,11 @@ unsafe extern "C" fn bench_destroy_instance(
 
 static BENCH_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0x0000_0000_0000_0001_u64),
-    contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
+    contract_version: polyplug_abi::Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: bench_create_instance,
     destroy_instance: bench_destroy_instance,
@@ -64,7 +68,11 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
     PluginDescriptor {
         name: StringView::from_static(name.as_bytes()),
         contract_name: StringView::from_static(contract_name.as_bytes()),
-        version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
+        version: polyplug_abi::Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
     }
 }
 
@@ -72,7 +80,11 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
 fn make_interface(id: u64) -> GuestContractInterface {
     GuestContractInterface {
         contract_id: GuestContractId::from_u64(id),
-        contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
+        contract_version: polyplug_abi::Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
         dispatch_type: DispatchType::Native,
         create_instance: bench_create_instance,
         destroy_instance: bench_destroy_instance,
@@ -94,7 +106,12 @@ fn bench_registry_resolve_single(c: &mut Criterion) {
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
     let handle: GuestContractHandle = unsafe {
         registry
-            .register_guest_contract(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
+            .register_guest_contract(
+                descriptor,
+                &BENCH_INTERFACE,
+                "bench.contract".to_owned(),
+                BundleId::from_u64(0u64),
+            )
             .expect("registration should succeed")
     };
 
@@ -132,13 +149,22 @@ fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"plugin"),
             contract_name: StringView::from_static(b"contract"),
-            version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
+            version: polyplug_abi::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
         };
 
         // SAFETY: interface is 'static (leaked), pointer is valid for Registry lifetime.
         unsafe {
             registry
-                .register_guest_contract(descriptor, *interface, format!("contract.{}", i_u64), BundleId::from_u64(i_u64))
+                .register_guest_contract(
+                    descriptor,
+                    *interface,
+                    format!("contract.{}", i_u64),
+                    BundleId::from_u64(i_u64),
+                )
                 .expect("registration should succeed");
         }
     }
@@ -172,12 +198,19 @@ fn bench_registry_resolve_stale(c: &mut Criterion) {
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
     let _handle: GuestContractHandle = unsafe {
         registry
-            .register_guest_contract(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
+            .register_guest_contract(
+                descriptor,
+                &BENCH_INTERFACE,
+                "bench.contract".to_owned(),
+                BundleId::from_u64(0u64),
+            )
             .expect("registration should succeed")
     };
 
     // Create a stale handle - use an index that doesn't exist
-    let stale_handle: GuestContractHandle = GuestContractHandle { index: u32::MAX - 1 };
+    let stale_handle: GuestContractHandle = GuestContractHandle {
+        index: u32::MAX - 1,
+    };
 
     let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
         c.benchmark_group("registry");

@@ -1,4 +1,3 @@
-
 /// Dispatch mechanism type — determines how function calls are routed.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

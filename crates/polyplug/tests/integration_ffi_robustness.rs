@@ -4,14 +4,14 @@ use core::cell::RefCell;
 use std::sync::Arc;
 
 use polyplug::registry::runtime_store::RuntimeStore;
-use polyplug_abi::{
-    AbiErrorCode, AbiError, Buffer, HostInterface, GuestContractInterface, GuestContractInstance,
-    BundleInitContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
-    DispatchType, NativeDispatch,
-};
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
+use polyplug_abi::{
+    AbiError, AbiErrorCode, Buffer, BundleInitContext, DispatchMechanisms, DispatchType,
+    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostInterface,
+    NativeDispatch, PluginDescriptor, StringView, Version,
+};
+use polyplug_utils::{BundleId, GuestContractId, bundle_id, guest_contract_id};
 
 const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 
@@ -52,7 +52,14 @@ unsafe extern "C" fn registry_register_callback(
     let result: Result<GuestContractHandle, _> = FFI_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, RuntimeStore> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
-        unsafe { registry.register_guest_contract(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
+        unsafe {
+            registry.register_guest_contract(
+                *desc,
+                interface,
+                contract_name.to_owned(),
+                BundleId::from_u64(iface.contract_id.id()),
+            )
+        }
     });
 
     match result {
@@ -68,11 +75,7 @@ unsafe extern "C" fn registry_register_callback(
 }
 
 /// No-op alloc callback.
-unsafe extern "C" fn noop_alloc(
-    _this: *const HostInterface,
-    size: usize,
-    align: usize,
-) -> *mut u8 {
+unsafe extern "C" fn noop_alloc(_this: *const HostInterface, size: usize, align: usize) -> *mut u8 {
     polyplug_host_alloc(size, align)
 }
 
@@ -165,7 +168,10 @@ unsafe extern "C" fn noop_load_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op reload_bundle callback.
@@ -174,7 +180,10 @@ unsafe extern "C" fn noop_reload_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op register_host_contract callback.
@@ -182,7 +191,10 @@ unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostInterface,
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op register_loader callback.
@@ -191,7 +203,10 @@ unsafe extern "C" fn noop_register_loader(
     _runtime_name: StringView,
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op get_last_error callback.
@@ -204,9 +219,7 @@ unsafe extern "C" fn noop_get_last_error(
 }
 
 /// No-op get_error_len callback.
-unsafe extern "C" fn noop_get_error_len(
-    _this: *const HostInterface,
-) -> usize {
+unsafe extern "C" fn noop_get_error_len(_this: *const HostInterface) -> usize {
     0
 }
 
@@ -223,10 +236,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
     // SAFETY: polyplug_init matches the expected ABI signature (2-arg).
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -266,7 +276,11 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
             &ctx as *const BundleInitContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
+    assert_eq!(
+        init_result.code,
+        AbiErrorCode::Ok,
+        "polyplug_init must succeed"
+    );
 
     let contract_id: GuestContractId = GuestContractId::new("memory.test", 1);
     let handle: GuestContractHandle = FFI_REGISTRY.with(|cell| {
@@ -325,7 +339,11 @@ fn test_misaligned_buffer_fill() {
         )
     };
 
-    assert_ne!(call_result.code, AbiErrorCode::Ok, "misaligned buffer must error");
+    assert_ne!(
+        call_result.code,
+        AbiErrorCode::Ok,
+        "misaligned buffer must error"
+    );
     assert_eq!(out, 0_u32, "out must remain zero on error");
 
     // SAFETY: base_ptr was allocated by polyplug_host_alloc with matching size and alignment.

@@ -68,7 +68,7 @@ fn contract_id(prefix: &str, name: &str, major_version: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::{FNV_OFFSET, FNV_PRIME, HostContractId, GuestContractId};
+    use crate::{FNV_OFFSET, FNV_PRIME, GuestContractId, HostContractId};
 
     use super::{contract_id, fnv1a_64};
 

@@ -4,10 +4,10 @@
 //! - Host-side: header-only C++ callers (RAII wrapper + interface dispatch)
 //! - Guest-side: extern "C" ABI wrappers + abstract base classes + interface statics
 
-use super::is_native_runtime;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -339,7 +339,9 @@ fn generate_cpp_guest_plugin_interface(
         plugin_upper
     ));
     out.push_str("    (void)host; (void)args;  // Unused in default stub.\n");
-    out.push_str("    return GuestContractInstance{nullptr};  // Null instance for stateless plugins.\n");
+    out.push_str(
+        "    return GuestContractInstance{nullptr};  // Null instance for stateless plugins.\n",
+    );
     out.push_str("}\n\n");
     out.push_str(&format!(
         "// Default destroy_instance stub for {} - no-op.\n",
@@ -424,7 +426,9 @@ fn generate_cpp_guest_contract_interface(
         upper
     ));
     out.push_str("    (void)host; (void)args;  // Unused in default stub.\n");
-    out.push_str("    return GuestContractInstance{nullptr};  // Null instance for stateless plugins.\n");
+    out.push_str(
+        "    return GuestContractInstance{nullptr};  // Null instance for stateless plugins.\n",
+    );
     out.push_str("}\n\n");
     out.push_str(&format!(
         "// Default destroy_instance stub for {} - no-op.\n",
@@ -439,7 +443,10 @@ fn generate_cpp_guest_contract_interface(
     out.push_str("}\n\n");
 
     // Interface static
-    out.push_str(&format!("static GuestContractInterface {}_INTERFACE = {{\n", upper));
+    out.push_str(&format!(
+        "static GuestContractInterface {}_INTERFACE = {{\n",
+        upper
+    ));
     out.push_str(&format!("    {}_CONTRACT_ID,\n", upper));
     out.push_str(&format!(
         "    Version{{ {}U, {}U, {}U }},  // contract_version\n",
@@ -483,7 +490,9 @@ fn generate_cpp_guest_abi_wrapper(
         contract_lower, func.name
     ));
     out.push_str("    // Instance is ignored for stateless plugins (instance.data is nullptr).\n");
-    out.push_str("    // For stateful plugins, users override create_instance and use instance.data.\n");
+    out.push_str(
+        "    // For stateful plugins, users override create_instance and use instance.data.\n",
+    );
     out.push_str("    (void)instance;  // Suppress unused warning for stateless plugins.\n");
     out.push_str("    try {\n");
 
@@ -676,7 +685,9 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         "        return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};\n",
     );
     out.push_str("    }\n\n");
-    out.push_str("    // Store host interface for later access via polyplug::get_host_interface()\n");
+    out.push_str(
+        "    // Store host interface for later access via polyplug::get_host_interface()\n",
+    );
     out.push_str("    polyplug::store_host_vtable(host);\n\n");
 
     if let Some(bundle) = &ir.bundle {
@@ -733,7 +744,9 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         }
     }
 
-    out.push_str("    return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
+    out.push_str(
+        "    return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n",
+    );
     out.push_str("}\n");
 
     Ok(out)
@@ -1032,7 +1045,7 @@ fn generate_cpp_host_contract(
     contract: &ResolvedContract,
 ) -> Result<(), PolyplugcError> {
     let class_name: String = contract_name_to_class(&contract.name);
-    let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+    let _contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
 
     out.push_str(&format!(
         "/// Host caller for contract `{}` (id=0x{:016X})\n",
@@ -1066,7 +1079,9 @@ fn generate_cpp_host_contract(
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
     out.push_str("        // Create instance via factory function\n");
-    out.push_str("        GuestContractInstance instance = iface->create_instance(host, nullptr);\n");
+    out.push_str(
+        "        GuestContractInstance instance = iface->create_instance(host, nullptr);\n",
+    );
     out.push_str("        if (instance.data == nullptr) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
@@ -1529,7 +1544,10 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("        if (interface == nullptr) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
-    out.push_str(&format!("        return {}(interface, instance);\n", class_name));
+    out.push_str(&format!(
+        "        return {}(interface, instance);\n",
+        class_name
+    ));
     out.push_str("    }\n\n");
 
     // is_valid method
@@ -1621,9 +1639,7 @@ fn generate_cpp_guest_host_contract_method(
     out.push_str(&format!(
         "                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[{fn_id}_u32]);\n"
     ));
-    out.push_str(
-        "                err = fn_(instance_, args_ptr, out_ptr);\n",
-    );
+    out.push_str("                err = fn_(instance_, args_ptr, out_ptr);\n");
     out.push_str("                break;\n");
     out.push_str("            }\n");
     out.push_str("            case DispatchType::VirtualMachine: {\n");
@@ -1937,12 +1953,16 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     // create_instance stub for host-side factory
     out.push_str("    // create_instance stub - host owns the singleton instance lifecycle\n");
     out.push_str("    static HostContractInstance create_instance_stub(\n");
-    out.push_str("        const HostContractInterface* /*this*/, const void* /*args*/) noexcept {\n");
+    out.push_str(
+        "        const HostContractInterface* /*this*/, const void* /*args*/) noexcept {\n",
+    );
     if singleton {
         out.push_str("        // Singleton: return pointer to static impl as instance data\n");
         out.push_str("        return HostContractInstance{static_cast<void*>(s_impl)};\n");
     } else {
-        out.push_str("        // Multi-instance: not supported in host-side factory, use custom factory\n");
+        out.push_str(
+            "        // Multi-instance: not supported in host-side factory, use custom factory\n",
+        );
         out.push_str("        return HostContractInstance{nullptr};\n");
     }
     out.push_str("    }\n\n");
@@ -1954,14 +1974,20 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     if singleton {
         out.push_str("        // Singleton: no-op, s_impl lives for program lifetime\n");
     } else {
-        out.push_str("        // Multi-instance: not supported in host-side factory, use custom factory\n");
+        out.push_str(
+            "        // Multi-instance: not supported in host-side factory, use custom factory\n",
+        );
     }
     out.push_str("    }\n\n");
 
     // Static interface with inline fields (matches HostContractInterface ABI layout)
     out.push_str("    static HostContractInterface s_interface = {\n");
-    out.push_str(&format!("        0x{contract_id:016X}ULL,  // contract_id\n"));
-    out.push_str(&format!("        Version{{{major}U, {minor}U, {patch}U}},  // contract_version\n"));
+    out.push_str(&format!(
+        "        0x{contract_id:016X}ULL,  // contract_id\n"
+    ));
+    out.push_str(&format!(
+        "        Version{{{major}U, {minor}U, {patch}U}},  // contract_version\n"
+    ));
     out.push_str(&format!("        {},  // singleton\n", singleton));
     out.push_str("        DispatchType::Native,  // dispatch_type\n");
     out.push_str("        nullptr,  // runtime (set by polyplug during registration)\n");
@@ -1990,7 +2016,10 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     out.push_str("///\n");
     out.push_str("/// # Memory\n");
     out.push_str("/// The returned interface pointer is valid for the lifetime of the program.\n");
-    out.push_str(&format!("const HostContractInterface* {}(\n", factory_vm_name));
+    out.push_str(&format!(
+        "const HostContractInterface* {}(\n",
+        factory_vm_name
+    ));
     out.push_str("    void* loader_data,\n");
     out.push_str("    VmDispatchCallFn dispatch_fn\n");
     out.push_str(") noexcept {\n");
@@ -1998,7 +2027,9 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     // create_instance stub for VM factory
     out.push_str("    // create_instance stub - VM loader owns instance lifecycle\n");
     out.push_str("    static HostContractInstance vm_create_instance_stub(\n");
-    out.push_str("        const HostContractInterface* /*this*/, const void* /*args*/) noexcept {\n");
+    out.push_str(
+        "        const HostContractInterface* /*this*/, const void* /*args*/) noexcept {\n",
+    );
     out.push_str("        // VM dispatch: instance managed by VM loader, return placeholder\n");
     out.push_str("        return HostContractInstance{nullptr};\n");
     out.push_str("    }\n\n");
@@ -2012,8 +2043,12 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
 
     // Static interface with inline fields (matches HostContractInterface ABI layout)
     out.push_str("    static HostContractInterface s_interface = {\n");
-    out.push_str(&format!("        0x{contract_id:016X}ULL,  // contract_id\n"));
-    out.push_str(&format!("        Version{{{major}U, {minor}U, {patch}U}},  // contract_version\n"));
+    out.push_str(&format!(
+        "        0x{contract_id:016X}ULL,  // contract_id\n"
+    ));
+    out.push_str(&format!(
+        "        Version{{{major}U, {minor}U, {patch}U}},  // contract_version\n"
+    ));
     out.push_str(&format!("        {},  // singleton\n", singleton));
     out.push_str("        DispatchType::VirtualMachine,  // dispatch_type\n");
     out.push_str("        nullptr,  // runtime (set by polyplug during registration)\n");
@@ -2046,7 +2081,9 @@ fn generate_cpp_host_thunk(
         "    static AbiError {}(HostContractInstance instance, const void* args, void* out) noexcept {{\n",
         thunk_name
     ));
-    out.push_str("        (void)instance;  // Instance data passed by caller, we use s_impl directly\n");
+    out.push_str(
+        "        (void)instance;  // Instance data passed by caller, we use s_impl directly\n",
+    );
     out.push_str("        if (s_impl == nullptr) {\n");
     out.push_str("            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};\n");
     out.push_str("        }\n");
@@ -2238,7 +2275,10 @@ mod tests {
 
     #[test]
     fn plugin_class_name_conversion() {
-        assert_eq!(contract_name_to_guest_contract_class("test.add"), "TestAddGuestContract");
+        assert_eq!(
+            contract_name_to_guest_contract_class("test.add"),
+            "TestAddGuestContract"
+        );
     }
 
     #[test]
@@ -2268,10 +2308,12 @@ mod tests {
         // Now produces 3 files: types.hpp, host_callers.hpp, manifest.toml
         assert!(!files.files.is_empty());
         // At least one file contains the AUTO-GENERATED header
-        assert!(files
-            .files
-            .iter()
-            .any(|f| f.content.contains("AUTO-GENERATED")));
+        assert!(
+            files
+                .files
+                .iter()
+                .any(|f| f.content.contains("AUTO-GENERATED"))
+        );
     }
 
     #[test]

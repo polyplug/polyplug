@@ -7,15 +7,15 @@ import {
     VM_LOADER_DATA_SIZE,
     GUEST_CONTRACT_INSTANCE_SIZE,
     GUEST_CONTRACT_INTERFACE_SIZE,
-    HOST_INTERFACE_SIZE,
-    RUNTIME_INTERFACE_SIZE,
     HOST_CONTRACT_INSTANCE_SIZE,
     HOST_CONTRACT_INTERFACE_SIZE,
+    HOST_INTERFACE_SIZE,
+    RUNTIME_INTERFACE_SIZE,
+    GUEST_CONTRACT_HANDLE_SIZE,
     BUNDLE_INIT_CONTEXT_SIZE,
     PLUGIN_DESCRIPTOR_SIZE,
-    GUEST_CONTRACT_HANDLE_SIZE,
-    RUNTIME_CONFIG_SIZE,
     RELOAD_PHASE_SIZE,
+    RUNTIME_CONFIG_SIZE,
     ABI_ERROR_SIZE,
     BUFFER_SIZE,
     DEPENDENCY_INFO_SIZE,
@@ -43,6 +43,14 @@ Deno.test("GuestContractInterface is 56 bytes", () => {
     assert(GUEST_CONTRACT_INTERFACE_SIZE === 56);
 });
 
+Deno.test("HostContractInstance is 8 bytes", () => {
+    assert(HOST_CONTRACT_INSTANCE_SIZE === 8);
+});
+
+Deno.test("HostContractInterface is 72 bytes", () => {
+    assert(HOST_CONTRACT_INTERFACE_SIZE === 72);
+});
+
 Deno.test("HostInterface is 144 bytes", () => {
     assert(HOST_INTERFACE_SIZE === 144);
 });
@@ -51,12 +59,8 @@ Deno.test("RuntimeInterface is 96 bytes", () => {
     assert(RUNTIME_INTERFACE_SIZE === 96);
 });
 
-Deno.test("HostContractInstance is 8 bytes", () => {
-    assert(HOST_CONTRACT_INSTANCE_SIZE === 8);
-});
-
-Deno.test("HostContractInterface is 72 bytes", () => {
-    assert(HOST_CONTRACT_INTERFACE_SIZE === 72);
+Deno.test("GuestContractHandle is 4 bytes", () => {
+    assert(GUEST_CONTRACT_HANDLE_SIZE === 4);
 });
 
 Deno.test("BundleInitContext is 24 bytes", () => {
@@ -67,16 +71,12 @@ Deno.test("PluginDescriptor is 48 bytes", () => {
     assert(PLUGIN_DESCRIPTOR_SIZE === 48);
 });
 
-Deno.test("GuestContractHandle is 4 bytes", () => {
-    assert(GUEST_CONTRACT_HANDLE_SIZE === 4);
+Deno.test("ReloadPhase is 48 bytes", () => {
+    assert(RELOAD_PHASE_SIZE === 48);
 });
 
 Deno.test("RuntimeConfig is 16 bytes", () => {
     assert(RUNTIME_CONFIG_SIZE === 16);
-});
-
-Deno.test("ReloadPhase is 48 bytes", () => {
-    assert(RELOAD_PHASE_SIZE === 48);
 });
 
 Deno.test("AbiError is 24 bytes", () => {

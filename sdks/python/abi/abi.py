@@ -136,6 +136,65 @@ class GuestContractInterface(ctypes.Structure):
 assert ctypes.sizeof(GuestContractInterface) == 56, f"GuestContractInterface expected 56 bytes, got {ctypes.sizeof(GuestContractInterface)}"
 
 
+class HostContractInstance(ctypes.Structure):
+    """ Opaque handle to a host contract instance.
+    
+     Created by `HostContractInterface::create_instance`, destroyed by `destroy_instance`.
+     For singleton host contracts, the same instance is returned for all callers.
+    """
+    _fields_ = [
+        ("data", ctypes.c_void_p),
+    ]
+
+# Expected size: 8 bytes
+assert ctypes.sizeof(HostContractInstance) == 8, f"HostContractInstance expected 8 bytes, got {ctypes.sizeof(HostContractInstance)}"
+
+
+_host_contract_interface_create_instance_t = ctypes.CFUNCTYPE(HostContractInstance, ctypes.c_void_p, ctypes.c_void_p)
+_host_contract_interface_destroy_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, HostContractInstance)
+class HostContractInterface(ctypes.Structure):
+    """ Host Contract Interface — for host-provided services.
+    
+     Host contracts are services provided by the host application to plugins.
+    
+     # Who provides
+     Host application code creates this struct and registers it with the runtime.
+     Must be `'static` or intentionally leaked.
+    
+     # Who calls
+     Guest (plugin) code calls the dispatch functions after obtaining an instance
+     via `HostInterface::get_host_contract()`.
+    
+     # Ownership
+     Must be `'static`. The runtime holds a reference for the plugin lifetime.
+     Never freed while runtime lives.
+    
+     # Lifetime
+     Lives for the entire runtime lifetime. Must survive hot-reload.
+    
+     # Singleton Mode
+     - `singleton == true`: Same instance returned for all callers
+     - `singleton == false`: New instance per caller (caller must destroy)
+    
+     # Self-Passing Pattern
+     `create_instance` and `destroy_instance` take `self: *const HostContractInterface`.
+     The runtime field provides access to runtime services.
+    """
+    _fields_ = [
+        ("contract_id", HostContractId),
+        ("contract_version", Version),
+        ("singleton", ctypes.c_bool),
+        ("dispatch_type", DispatchType),
+        ("runtime", ctypes.c_void_p),
+        ("create_instance", _host_contract_interface_create_instance_t),
+        ("destroy_instance", _host_contract_interface_destroy_instance_t),
+        ("dispatch", DispatchMechanisms),
+    ]
+
+# Expected size: 72 bytes
+assert ctypes.sizeof(HostContractInterface) == 72, f"HostContractInterface expected 72 bytes, got {ctypes.sizeof(HostContractInterface)}"
+
+
 _host_interface_register_contract_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 _host_interface_alloc_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
 _host_interface_free_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
@@ -268,63 +327,29 @@ class RuntimeInterface(ctypes.Structure):
 assert ctypes.sizeof(RuntimeInterface) == 96, f"RuntimeInterface expected 96 bytes, got {ctypes.sizeof(RuntimeInterface)}"
 
 
-class HostContractInstance(ctypes.Structure):
-    """ Opaque handle to a host contract instance.
+class GuestContractHandle(ctypes.Structure):
+    """ Opaque handle to a registered guest contract.
     
-     Created by `HostContractInterface::create_instance`, destroyed by `destroy_instance`.
-     For singleton host contracts, the same instance is returned for all callers.
+     The handle is just an index into the registry array.
+     Out-of-bounds indices return InvalidHandle error.
+    
+     # Naming
+     Named `GuestContractHandle` for consistency with `GuestContractInterface`
+     and `GuestContractInstance`.
+    
+     # Layout
+     - `index`: Slot index in the registry (u32)
+    
+     # Safety
+     Handles become stale after unload. Call `resolve_contract` to validate.
+     Returns null pointer if the handle is invalid.
     """
     _fields_ = [
-        ("data", ctypes.c_void_p),
+        ("index", ctypes.c_uint32),
     ]
 
-# Expected size: 8 bytes
-assert ctypes.sizeof(HostContractInstance) == 8, f"HostContractInstance expected 8 bytes, got {ctypes.sizeof(HostContractInstance)}"
-
-
-_host_contract_interface_create_instance_t = ctypes.CFUNCTYPE(HostContractInstance, ctypes.c_void_p, ctypes.c_void_p)
-_host_contract_interface_destroy_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, HostContractInstance)
-class HostContractInterface(ctypes.Structure):
-    """ Host Contract Interface — for host-provided services.
-    
-     Host contracts are services provided by the host application to plugins.
-    
-     # Who provides
-     Host application code creates this struct and registers it with the runtime.
-     Must be `'static` or intentionally leaked.
-    
-     # Who calls
-     Guest (plugin) code calls the dispatch functions after obtaining an instance
-     via `HostInterface::get_host_contract()`.
-    
-     # Ownership
-     Must be `'static`. The runtime holds a reference for the plugin lifetime.
-     Never freed while runtime lives.
-    
-     # Lifetime
-     Lives for the entire runtime lifetime. Must survive hot-reload.
-    
-     # Singleton Mode
-     - `singleton == true`: Same instance returned for all callers
-     - `singleton == false`: New instance per caller (caller must destroy)
-    
-     # Self-Passing Pattern
-     `create_instance` and `destroy_instance` take `self: *const HostContractInterface`.
-     The runtime field provides access to runtime services.
-    """
-    _fields_ = [
-        ("contract_id", HostContractId),
-        ("contract_version", Version),
-        ("singleton", ctypes.c_bool),
-        ("dispatch_type", DispatchType),
-        ("runtime", ctypes.c_void_p),
-        ("create_instance", _host_contract_interface_create_instance_t),
-        ("destroy_instance", _host_contract_interface_destroy_instance_t),
-        ("dispatch", DispatchMechanisms),
-    ]
-
-# Expected size: 72 bytes
-assert ctypes.sizeof(HostContractInterface) == 72, f"HostContractInterface expected 72 bytes, got {ctypes.sizeof(HostContractInterface)}"
+# Expected size: 4 bytes
+assert ctypes.sizeof(GuestContractHandle) == 4, f"GuestContractHandle expected 4 bytes, got {ctypes.sizeof(GuestContractHandle)}"
 
 
 class BundleInitContext(ctypes.Structure):
@@ -361,50 +386,6 @@ class PluginDescriptor(ctypes.Structure):
 assert ctypes.sizeof(PluginDescriptor) == 48, f"PluginDescriptor expected 48 bytes, got {ctypes.sizeof(PluginDescriptor)}"
 
 
-class GuestContractHandle(ctypes.Structure):
-    """ Opaque handle to a registered guest contract.
-    
-     The handle is just an index into the registry array.
-     Out-of-bounds indices return InvalidHandle error.
-    
-     # Naming
-     Named `GuestContractHandle` for consistency with `GuestContractInterface`
-     and `GuestContractInstance`.
-    
-     # Layout
-     - `index`: Slot index in the registry (u32)
-    
-     # Safety
-     Handles become stale after unload. Call `resolve_contract` to validate.
-     Returns null pointer if the handle is invalid.
-    """
-    _fields_ = [
-        ("index", ctypes.c_uint32),
-    ]
-
-# Expected size: 4 bytes
-assert ctypes.sizeof(GuestContractHandle) == 4, f"GuestContractHandle expected 4 bytes, got {ctypes.sizeof(GuestContractHandle)}"
-
-
-_runtime_config_on_reload_t = ctypes.CFUNCTYPE(None, ReloadPhase)
-# Nullable function pointer (Option<fn>). Can be set to None.
-class RuntimeConfig(ctypes.Structure):
-    """ Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
-    
-     # OWNERSHIP
-     Borrowed for the duration of the runtime build only.
-     The runtime copies any data it needs to retain.
-    """
-    _fields_ = [
-        ("compatibility", Compatibility),
-        ("hot_reload_enabled", ctypes.c_bool),
-        ("on_reload", _runtime_config_on_reload_t),
-    ]
-
-# Expected size: 16 bytes
-assert ctypes.sizeof(RuntimeConfig) == 16, f"RuntimeConfig expected 16 bytes, got {ctypes.sizeof(RuntimeConfig)}"
-
-
 class ReloadPhase(ctypes.Structure):
     """ FFI-safe reload phase for hot-reload callbacks.
     
@@ -424,6 +405,25 @@ class ReloadPhase(ctypes.Structure):
 
 # Expected size: 48 bytes
 assert ctypes.sizeof(ReloadPhase) == 48, f"ReloadPhase expected 48 bytes, got {ctypes.sizeof(ReloadPhase)}"
+
+
+_runtime_config_on_reload_t = ctypes.CFUNCTYPE(None, ReloadPhase)
+# Nullable function pointer (Option<fn>). Can be set to None.
+class RuntimeConfig(ctypes.Structure):
+    """ Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
+    
+     # OWNERSHIP
+     Borrowed for the duration of the runtime build only.
+     The runtime copies any data it needs to retain.
+    """
+    _fields_ = [
+        ("compatibility", Compatibility),
+        ("hot_reload_enabled", ctypes.c_bool),
+        ("on_reload", _runtime_config_on_reload_t),
+    ]
+
+# Expected size: 16 bytes
+assert ctypes.sizeof(RuntimeConfig) == 16, f"RuntimeConfig expected 16 bytes, got {ctypes.sizeof(RuntimeConfig)}"
 
 
 class AbiError(ctypes.Structure):

@@ -8,8 +8,8 @@
 
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
-use polyplug_abi::HostInterface;
 use polyplug::host_get_last_error;
+use polyplug_abi::HostInterface;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -37,9 +37,11 @@ fn clear_error(host: *const HostInterface) {
 fn trigger_error(host: *const HostInterface) {
     let path: &[u8] = b"/nonexistent/path/that/does/not/exist";
     // SAFETY: host is valid; path is valid bytes.
-    let result: polyplug_abi::AbiError = unsafe { ((*host).load_bundle)(host, path.as_ptr(), path.len()) };
+    let result: polyplug_abi::AbiError =
+        unsafe { ((*host).load_bundle)(host, path.as_ptr(), path.len()) };
     assert_ne!(
-        result.code, polyplug_abi::AbiErrorCode::Ok,
+        result.code,
+        polyplug_abi::AbiErrorCode::Ok,
         "load_bundle with non-existent path must return error"
     );
 }
@@ -58,7 +60,10 @@ fn last_error_empty_on_fresh_runtime() {
     let mut buf: [u8; 64] = [0_u8; 64];
     // SAFETY: buf is a valid stack buffer of length 64; host is valid.
     let n: usize = unsafe { ((*host).get_last_error)(host, buf.as_mut_ptr(), buf.len()) };
-    assert_eq!(n, 0, "get_last_error must return 0 when no error is pending");
+    assert_eq!(
+        n, 0,
+        "get_last_error must return 0 when no error is pending"
+    );
 
     // SAFETY: host was allocated by polyplug_runtime_create.
     unsafe { polyplug_runtime_destroy(host) };
@@ -197,8 +202,7 @@ fn last_error_zero_buf_len_clears_error() {
 
     let mut byte: u8 = 0xBB_u8;
     // SAFETY: buf_len = 0 means zero bytes are written; host is valid.
-    let n: usize =
-        unsafe { ((*host).get_last_error)(host, &mut byte as *mut u8, 0) };
+    let n: usize = unsafe { ((*host).get_last_error)(host, &mut byte as *mut u8, 0) };
     assert_eq!(
         n, 0,
         "get_last_error with buf_len=0 must return 0 written bytes"
@@ -230,9 +234,7 @@ fn last_error_null_buf_zero_len_clears_error() {
     assert!(error_len > 0, "error must be set before null-buf test");
 
     // SAFETY: buf=null, buf_len=0 — no write occurs; host is valid.
-    let n: usize = unsafe {
-        ((*host).get_last_error)(host, core::ptr::null_mut(), 0)
-    };
+    let n: usize = unsafe { ((*host).get_last_error)(host, core::ptr::null_mut(), 0) };
     assert_eq!(
         n, error_len,
         "get_last_error(null buf, 0) must return error length"
@@ -272,16 +274,8 @@ fn last_error_per_runtime_isolation() {
     drain_last_error(host1);
 
     // Both now have no error
-    assert_eq!(
-        peek_error_len(host1),
-        0,
-        "host1 error cleared"
-    );
-    assert_eq!(
-        peek_error_len(host2),
-        0,
-        "host2 still has no error"
-    );
+    assert_eq!(peek_error_len(host1), 0, "host1 error cleared");
+    assert_eq!(peek_error_len(host2), 0, "host2 still has no error");
 
     // SAFETY: host1 and host2 were allocated by polyplug_runtime_create.
     unsafe { polyplug_runtime_destroy(host1) };
@@ -301,9 +295,7 @@ fn last_error_no_write_when_empty() {
     let sentinel: u8 = 0xDE_u8;
     let mut buf: [u8; 16] = [sentinel; 16];
     // SAFETY: buf is a valid stack buffer of length 16; host is valid.
-    let n: usize = unsafe {
-        ((*host).get_last_error)(host, buf.as_mut_ptr(), buf.len())
-    };
+    let n: usize = unsafe { ((*host).get_last_error)(host, buf.as_mut_ptr(), buf.len()) };
     assert_eq!(n, 0, "must return 0 when no error is pending");
 
     // The FFI layer must not modify the buffer when there is nothing to write.
@@ -334,9 +326,7 @@ fn last_error_exact_buf_len_writes_full_message() {
 
     let mut buf: Vec<u8> = vec![0_u8; full_len];
     // SAFETY: buf is a heap-allocated buffer with exactly `full_len` bytes; host is valid.
-    let n: usize = unsafe {
-        ((*host).get_last_error)(host, buf.as_mut_ptr(), buf.len())
-    };
+    let n: usize = unsafe { ((*host).get_last_error)(host, buf.as_mut_ptr(), buf.len()) };
 
     assert_eq!(
         n, full_len,
@@ -365,8 +355,13 @@ fn last_error_large_message_handling() {
     // A 512-byte path — long enough to exercise message formatting with the path included.
     let long_path: Vec<u8> = core::iter::repeat_n(b'x', 512).collect();
     // SAFETY: host is valid; long_path is a valid non-null byte slice.
-    let result: polyplug_abi::AbiError = unsafe { ((*host).load_bundle)(host, long_path.as_ptr(), long_path.len()) };
-    assert_ne!(result.code, polyplug_abi::AbiErrorCode::Ok, "load_bundle with non-existent path must fail");
+    let result: polyplug_abi::AbiError =
+        unsafe { ((*host).load_bundle)(host, long_path.as_ptr(), long_path.len()) };
+    assert_ne!(
+        result.code,
+        polyplug_abi::AbiErrorCode::Ok,
+        "load_bundle with non-existent path must fail"
+    );
 
     let msg_len: usize = peek_error_len(host);
     if msg_len == 0 {
@@ -379,9 +374,7 @@ fn last_error_large_message_handling() {
     // Read into a heap buffer sized exactly to the reported length.
     let mut buf: Vec<u8> = vec![0_u8; msg_len];
     // SAFETY: buf is a heap-allocated buffer with exactly `msg_len` bytes; host is valid.
-    let n: usize = unsafe {
-        ((*host).get_last_error)(host, buf.as_mut_ptr(), buf.len())
-    };
+    let n: usize = unsafe { ((*host).get_last_error)(host, buf.as_mut_ptr(), buf.len()) };
 
     assert_eq!(n, msg_len, "large-message read must return msg_len bytes");
     assert!(
@@ -440,8 +433,7 @@ fn last_error_null_host_returns_zero() {
     let mut buf: [u8; 256] = [0_u8; 256];
     // SAFETY: buf is a valid stack buffer; null host is valid for this call.
     // Call the underlying host_get_last_error function directly.
-    let n: usize =
-        unsafe { host_get_last_error(core::ptr::null(), buf.as_mut_ptr(), buf.len()) };
+    let n: usize = unsafe { host_get_last_error(core::ptr::null(), buf.as_mut_ptr(), buf.len()) };
     assert!(
         n == 0,
         "get_last_error with null host must return 0 (no host to have an error)"

@@ -131,7 +131,8 @@ pub(crate) fn init_context(
             let fxr_path: PathBuf = find_hostfxr_auto().ok_or_else(|| {
                 RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: "<hostfxr>".to_owned(),
-                    error: "CLR init failed: hostfxr not found; install .NET or set DOTNET_ROOT".to_owned(),
+                    error: "CLR init failed: hostfxr not found; install .NET or set DOTNET_ROOT"
+                        .to_owned(),
                 })
             })?;
             netcorehost::hostfxr::Hostfxr::load_from_path(&fxr_path).map_err(|e| {

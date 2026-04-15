@@ -15,7 +15,7 @@
 
 use polyplug_codegen::data::{FieldInfo, StructInfo};
 use polyplug_codegen::languages::{
-    CodeGenerator, CppGenerator, CSharpGenerator, GenerationContext, JsGenerator, LuaGenerator,
+    CSharpGenerator, CodeGenerator, CppGenerator, GenerationContext, JsGenerator, LuaGenerator,
     PythonGenerator,
 };
 
@@ -112,7 +112,7 @@ fn make_array_struct() -> StructInfo {
 
 #[test]
 fn python_fn_ptr_field_produces_cfunctype() {
-    let generator =PythonGenerator::new();
+    let generator = PythonGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_fn_ptr_struct(
         "TestStruct",
@@ -131,7 +131,7 @@ fn python_fn_ptr_field_produces_cfunctype() {
 
 #[test]
 fn python_fn_ptr_typedef_before_struct() {
-    let generator =PythonGenerator::new();
+    let generator = PythonGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_host_interface_struct();
 
@@ -150,7 +150,7 @@ fn python_fn_ptr_typedef_before_struct() {
 
 #[test]
 fn python_multiple_fn_ptrs_all_get_cfunctype() {
-    let generator =PythonGenerator::new();
+    let generator = PythonGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_host_interface_struct();
 
@@ -166,7 +166,7 @@ fn python_multiple_fn_ptrs_all_get_cfunctype() {
 
 #[test]
 fn python_array_field_generates_void_ptr_and_size_t() {
-    let generator =PythonGenerator::new();
+    let generator = PythonGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_array_struct();
 
@@ -183,7 +183,7 @@ fn python_array_field_generates_void_ptr_and_size_t() {
 
 #[test]
 fn csharp_fn_ptr_field_produces_delegate() {
-    let generator =CSharpGenerator::new();
+    let generator = CSharpGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_fn_ptr_struct(
         "TestStruct",
@@ -201,7 +201,7 @@ fn csharp_fn_ptr_field_produces_delegate() {
 
 #[test]
 fn csharp_delegate_has_unmanaged_function_pointer_attribute() {
-    let generator =CSharpGenerator::new();
+    let generator = CSharpGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_fn_ptr_struct(
         "TestStruct",
@@ -219,16 +219,14 @@ fn csharp_delegate_has_unmanaged_function_pointer_attribute() {
 
 #[test]
 fn csharp_delegate_before_struct() {
-    let generator =CSharpGenerator::new();
+    let generator = CSharpGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_host_interface_struct();
 
     let output = generator.generate_struct(&item, &ctx);
 
     // Delegate definitions should appear before the struct.
-    let delegate_pos = output
-        .find("delegate")
-        .expect("Should contain delegate");
+    let delegate_pos = output.find("delegate").expect("Should contain delegate");
     let struct_pos = output
         .find("public struct HostInterface")
         .expect("Should contain struct");
@@ -240,7 +238,7 @@ fn csharp_delegate_before_struct() {
 
 #[test]
 fn csharp_array_field_generates_intptr_and_nuint() {
-    let generator =CSharpGenerator::new();
+    let generator = CSharpGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_array_struct();
 
@@ -257,7 +255,7 @@ fn csharp_array_field_generates_intptr_and_nuint() {
 
 #[test]
 fn lua_fn_ptr_field_produces_typed_typedef() {
-    let generator =LuaGenerator::new();
+    let generator = LuaGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_fn_ptr_struct(
         "TestStruct",
@@ -276,7 +274,7 @@ fn lua_fn_ptr_field_produces_typed_typedef() {
 
 #[test]
 fn lua_array_field_generates_void_and_size_t() {
-    let generator =LuaGenerator::new();
+    let generator = LuaGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_array_struct();
 
@@ -293,7 +291,7 @@ fn lua_array_field_generates_void_and_size_t() {
 
 #[test]
 fn js_fn_ptr_field_produces_number_type() {
-    let generator =JsGenerator::new();
+    let generator = JsGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_fn_ptr_struct(
         "TestStruct",
@@ -312,7 +310,7 @@ fn js_fn_ptr_field_produces_number_type() {
 
 #[test]
 fn js_struct_produces_interface() {
-    let generator =JsGenerator::new();
+    let generator = JsGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_host_interface_struct();
 
@@ -326,7 +324,7 @@ fn js_struct_produces_interface() {
 
 #[test]
 fn js_array_field_generates_generic_struct() {
-    let generator =JsGenerator::new();
+    let generator = JsGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_array_struct();
 
@@ -351,7 +349,7 @@ fn js_array_field_generates_generic_struct() {
 
 #[test]
 fn cpp_fn_ptr_field_produces_typed_ptr() {
-    let generator =CppGenerator::new();
+    let generator = CppGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_fn_ptr_struct(
         "TestStruct",
@@ -370,7 +368,7 @@ fn cpp_fn_ptr_field_produces_typed_ptr() {
 
 #[test]
 fn cpp_array_field_generates_void_and_size_t() {
-    let generator =CppGenerator::new();
+    let generator = CppGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_array_struct();
 
@@ -386,7 +384,7 @@ fn cpp_array_field_generates_void_and_size_t() {
 
 #[test]
 fn python_optional_fn_ptr_generates_cfunctype() {
-    let generator =PythonGenerator::new();
+    let generator = PythonGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_optional_fn_ptr_struct();
 
@@ -401,7 +399,7 @@ fn python_optional_fn_ptr_generates_cfunctype() {
 
 #[test]
 fn csharp_optional_fn_ptr_generates_delegate() {
-    let generator =CSharpGenerator::new();
+    let generator = CSharpGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_optional_fn_ptr_struct();
 
@@ -417,7 +415,7 @@ fn csharp_optional_fn_ptr_generates_delegate() {
 
 #[test]
 fn python_no_void_p_for_fn_ptr_fields() {
-    let generator =PythonGenerator::new();
+    let generator = PythonGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_host_interface_struct();
 

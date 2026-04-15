@@ -12,8 +12,8 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_utils::guest_contract_id as fnv_contract_id;
 use polyplug_codegen::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, Side};
+use polyplug_utils::guest_contract_id as fnv_contract_id;
 use polyplugc::ir::{
     PrimitiveType, ResolvedContract, ResolvedFunction, ResolvedParam, ResolvedTypeRef, ValidatedIr,
     Version,
@@ -538,7 +538,8 @@ fn multiple_contracts_have_independent_fns_arrays() {
         host_contracts: vec![],
         bundle: None,
     };
-    let interfaces: String = run_guest_generator(ir, "multi_contracts_independent", "interfaces.rs");
+    let interfaces: String =
+        run_guest_generator(ir, "multi_contracts_independent", "interfaces.rs");
 
     // Contract A's wrapper and FNS entry must be present.
     assert!(

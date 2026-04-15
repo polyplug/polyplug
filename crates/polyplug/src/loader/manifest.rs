@@ -9,9 +9,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::registry::runtime_store::BundleDependency;
 use polyplug_abi::types::Version;
 use polyplug_utils::{BundleId, GuestContractId};
-use crate::registry::runtime_store::BundleDependency;
 use serde::Deserializer;
 
 const fn current_os() -> &'static str {
@@ -231,17 +231,15 @@ impl ManifestData {
     pub fn parsed_bundle_dependencies(&self) -> Vec<BundleDependency> {
         self.bundle_dependencies
             .iter()
-            .map(|spec: &String| {
-                match spec.split_once('@') {
-                    Some((name, version_str)) => BundleDependency {
-                        name: name.to_string(),
-                        min_version: version_str.parse::<Version>().ok(),
-                    },
-                    None => BundleDependency {
-                        name: spec.clone(),
-                        min_version: None,
-                    },
-                }
+            .map(|spec: &String| match spec.split_once('@') {
+                Some((name, version_str)) => BundleDependency {
+                    name: name.to_string(),
+                    min_version: version_str.parse::<Version>().ok(),
+                },
+                None => BundleDependency {
+                    name: spec.clone(),
+                    min_version: None,
+                },
             })
             .collect::<Vec<BundleDependency>>()
     }

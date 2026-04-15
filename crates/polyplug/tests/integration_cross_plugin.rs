@@ -10,10 +10,10 @@
 //!
 
 use polyplug_abi::{
-    DispatchType, NativeDispatch, PluginDescriptor, DispatchMechanisms, GuestContractInterface,
-    GuestContractInstance, HostInterface, StringView, Version,
+    DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface, HostInterface,
+    NativeDispatch, PluginDescriptor, StringView, Version,
 };
-use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
+use polyplug_utils::{BundleId, GuestContractId, bundle_id, guest_contract_id};
 
 // --- Helpers -----------------------------------------------------------------
 
@@ -40,7 +40,11 @@ unsafe extern "C" fn null_destroy_instance(
 fn make_static_interface(cid: GuestContractId) -> &'static GuestContractInterface {
     Box::leak(Box::new(GuestContractInterface {
         contract_id: cid,
-        contract_version: Version { major: 1, minor: 0, patch: 0 },
+        contract_version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
         dispatch_type: DispatchType::Native,
         create_instance: null_create_instance,
         destroy_instance: null_destroy_instance,
@@ -57,7 +61,11 @@ fn make_desc(plugin_name: &'static str, contract_name: &'static str) -> PluginDe
     PluginDescriptor {
         name: StringView::from_static(plugin_name.as_bytes()),
         contract_name: StringView::from_static(contract_name.as_bytes()),
-        version: Version { major: 1, minor: 0, patch: 0 },
+        version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
     }
 }
 
@@ -69,10 +77,10 @@ mod tests {
     use super::make_static_interface;
     use polyplug::error::RegistryError;
     use polyplug::registry::runtime_store::RuntimeStore;
-    use polyplug_abi::PluginDescriptor;
     use polyplug_abi::GuestContractHandle;
     use polyplug_abi::GuestContractInterface;
-    use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
+    use polyplug_abi::PluginDescriptor;
+    use polyplug_utils::{BundleId, GuestContractId, bundle_id, guest_contract_id};
 
     // -- Test a ----------------------------------------------------------------
 
@@ -85,8 +93,10 @@ mod tests {
         let interface: &'static GuestContractInterface = make_static_interface(cid);
         let desc: PluginDescriptor = make_desc("decoder", "audio.Decoder");
         // SAFETY: interface is 'static and valid for the duration of this test.
-        unsafe { registry.register_guest_contract(desc, interface, "audio.Decoder".to_owned(), bid) }
-            .expect("register should succeed");
+        unsafe {
+            registry.register_guest_contract(desc, interface, "audio.Decoder".to_owned(), bid)
+        }
+        .expect("register should succeed");
 
         let handle: GuestContractHandle = registry
             .find_guest_contract(cid, 0)

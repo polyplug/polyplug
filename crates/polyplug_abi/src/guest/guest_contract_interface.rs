@@ -82,10 +82,8 @@ pub struct GuestContractInterface {
     ///
     /// # Thread Safety
     /// May be called from any thread. Implementation must handle synchronization.
-    pub create_instance: unsafe extern "C" fn(
-        host: *const HostInterface,
-        args: *const (),
-    ) -> GuestContractInstance,
+    pub create_instance:
+        unsafe extern "C" fn(host: *const HostInterface, args: *const ()) -> GuestContractInstance,
     /// Destroy an instance of this contract.
     ///
     /// MUST be called before hot-reload for all instances.
@@ -97,10 +95,8 @@ pub struct GuestContractInterface {
     ///
     /// # Safety
     /// After calling destroy_instance, the instance handle is invalid.
-    pub destroy_instance: unsafe extern "C" fn(
-        host: *const HostInterface,
-        instance: GuestContractInstance,
-    ),
+    pub destroy_instance:
+        unsafe extern "C" fn(host: *const HostInterface, instance: GuestContractInstance),
     /// Union of dispatch mechanisms — access based on dispatch_type.
     ///
     /// For Native dispatch: use `dispatch.native.functions[fn_id]`.
@@ -110,9 +106,9 @@ pub struct GuestContractInterface {
 
 #[cfg(test)]
 mod tests {
-    use core::mem::{align_of, offset_of, size_of};
     use super::GuestContractInterface;
     use crate::host::HostInterface;
+    use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn layout_guest_contract_interface() {

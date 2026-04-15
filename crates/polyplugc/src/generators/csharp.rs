@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 
-use super::is_native_runtime;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
@@ -304,7 +304,10 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             let minor: u32 = contract.version.minor;
             let patch: u32 = contract.version.patch;
 
-            out.push_str(&format!("public static class {}Interfaces {{\n", class_name));
+            out.push_str(&format!(
+                "public static class {}Interfaces {{\n",
+                class_name
+            ));
             out.push_str(&format!(
                 "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n"
             ));
@@ -328,7 +331,9 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                     "    private static AbiError {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {{\n",
                     abi_method
                 ));
-                out.push_str("        // Instance is ignored for stateless plugins (instance is null).\n");
+                out.push_str(
+                    "        // Instance is ignored for stateless plugins (instance is null).\n",
+                );
                 out.push_str("        // For stateful plugins, users override create_instance and use instance.Data.\n");
                 out.push_str("        try {\n");
                 if has_params {
@@ -366,18 +371,14 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             ));
 
             // Instance lifecycle stubs
-            out.push_str(&format!(
-                "    [UnmanagedCallersOnly(CallConvs = new[] {{ typeof(CallConvCdecl) }})]\n"
-            ));
+            out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
             out.push_str(&format!(
                 "    private static GuestContractInstance {upper}_CreateInstanceStub(IntPtr rtCtx, IntPtr args) {{\n"
             ));
             out.push_str("        // Default stub returns null instance - users override for stateful plugins.\n");
             out.push_str("        return new GuestContractInstance { Data = IntPtr.Zero };\n");
             out.push_str("    }\n\n");
-            out.push_str(&format!(
-                "    [UnmanagedCallersOnly(CallConvs = new[] {{ typeof(CallConvCdecl) }})]\n"
-            ));
+            out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
             out.push_str(&format!(
                 "    private static void {upper}_DestroyInstanceStub(IntPtr rtCtx, GuestContractInstance instance) {{\n"
             ));
@@ -420,7 +421,9 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             } else {
                 "DispatchType.VirtualMachine"
             };
-            out.push_str(&format!("            DispatchType = {dispatch_type_str},\n"));
+            out.push_str(&format!(
+                "            DispatchType = {dispatch_type_str},\n"
+            ));
             out.push_str(&format!(
                 "            CreateInstance = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstanceStub,\n"
             ));
@@ -429,7 +432,9 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             ));
             out.push_str("            Dispatch = new DispatchMechanisms {\n");
             out.push_str("                Native = new NativeDispatch {\n");
-            out.push_str(&format!("                    FunctionCount = {fn_count}u,\n"));
+            out.push_str(&format!(
+                "                    FunctionCount = {fn_count}u,\n"
+            ));
             out.push_str(&format!(
                 "                    Functions = _{upper}_pin_handle.AddrOfPinnedObject(),\n"
             ));
@@ -526,7 +531,9 @@ fn generate_cs_guest_plugin_interface(
         out.push_str("            return new AbiError { Code = ex.Code, Message = msg };\n");
         out.push_str("        } catch {\n");
         out.push_str("            var msg = StringHelpers.AllocString(\"plugin panicked\");\n");
-        out.push_str("            return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n");
+        out.push_str(
+            "            return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n",
+        );
         out.push_str("        }\n");
         out.push_str("    }\n\n");
     }
@@ -547,24 +554,24 @@ fn generate_cs_guest_plugin_interface(
         upper = plugin_upper
     ));
     // Instance lifecycle stubs
-    out.push_str(&format!(
-        "    [UnmanagedCallersOnly(CallConvs = new[] {{ typeof(CallConvCdecl) }})]\n",
-    ));
+    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
         "    private static GuestContractInstance {upper}_CreateInstanceStub(IntPtr rtCtx, IntPtr args) {{\n",
         upper = plugin_upper
     ));
-    out.push_str("        // Default stub returns null instance - users override for stateful plugins.\n");
+    out.push_str(
+        "        // Default stub returns null instance - users override for stateful plugins.\n",
+    );
     out.push_str("        return new GuestContractInstance { Data = IntPtr.Zero };\n");
     out.push_str("    }\n\n");
-    out.push_str(&format!(
-        "    [UnmanagedCallersOnly(CallConvs = new[] {{ typeof(CallConvCdecl) }})]\n",
-    ));
+    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
         "    private static void {upper}_DestroyInstanceStub(IntPtr rtCtx, GuestContractInstance instance) {{\n",
         upper = plugin_upper
     ));
-    out.push_str("        // Default stub is no-op - users override for cleanup before hot-reload.\n");
+    out.push_str(
+        "        // Default stub is no-op - users override for cleanup before hot-reload.\n",
+    );
     out.push_str("    }\n\n");
 
     // Static constructor instead of Init method
@@ -606,7 +613,9 @@ fn generate_cs_guest_plugin_interface(
     } else {
         "DispatchType.VirtualMachine"
     };
-    out.push_str(&format!("            DispatchType = {dispatch_type_str},\n"));
+    out.push_str(&format!(
+        "            DispatchType = {dispatch_type_str},\n"
+    ));
     out.push_str(&format!(
         "            CreateInstance = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstanceStub,\n",
         upper = plugin_upper
@@ -617,7 +626,9 @@ fn generate_cs_guest_plugin_interface(
     ));
     out.push_str("            Dispatch = new DispatchMechanisms {\n");
     out.push_str("                Native = new NativeDispatch {\n");
-    out.push_str(&format!("                    FunctionCount = {fn_count}u,\n"));
+    out.push_str(&format!(
+        "                    FunctionCount = {fn_count}u,\n"
+    ));
     out.push_str(&format!(
         "                    Functions = _{upper}_pin_handle.AddrOfPinnedObject(),\n",
         upper = plugin_upper
@@ -856,7 +867,9 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("    }\n\n");
 
         // Factory method
-        out.push_str("    /// <summary>Factory method - resolves contract and creates instance.</summary>\n");
+        out.push_str(
+            "    /// <summary>Factory method - resolves contract and creates instance.</summary>\n",
+        );
         out.push_str(&format!(
             "    public static {caller_name}? Create(Runtime rt, HostInterface* host) {{\n"
         ));
@@ -868,7 +881,9 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("        if (iface == null) { return null; }\n");
         out.push_str("        var inst = iface->CreateInstance((nint)host, nint.Zero);\n");
         out.push_str("        if (inst.Data == nint.Zero) { return null; }\n");
-        out.push_str(&format!("        return new {caller_name}(iface, inst, host);\n"));
+        out.push_str(&format!(
+            "        return new {caller_name}(iface, inst, host);\n"
+        ));
         out.push_str("    }\n\n");
 
         // IsValid property
@@ -876,7 +891,9 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("    public bool IsValid => !_disposed && _instance.Data != nint.Zero;\n\n");
 
         // Reset method - destroy existing, create new
-        out.push_str("    /// <summary>Reset instance - destroy existing and create new.</summary>\n");
+        out.push_str(
+            "    /// <summary>Reset instance - destroy existing and create new.</summary>\n",
+        );
         out.push_str("    public void Reset() {\n");
         out.push_str("        if (!_disposed && _instance.Data != nint.Zero) {\n");
         out.push_str("            _interface->DestroyInstance((nint)_host, _instance);\n");
@@ -885,7 +902,9 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("    }\n\n");
 
         // Dispose pattern
-        out.push_str("    /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>\n");
+        out.push_str(
+            "    /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>\n",
+        );
         out.push_str("    public void Dispose() {\n");
         out.push_str("        if (!_disposed) {\n");
         out.push_str("            if (_instance.Data != nint.Zero) {\n");
@@ -1141,7 +1160,10 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     out.push_str("            if (interface == IntPtr.Zero) {\n");
     out.push_str("                return null;\n");
     out.push_str("            }\n");
-    out.push_str(&format!("            return new {}(interface);\n", class_name));
+    out.push_str(&format!(
+        "            return new {}(interface);\n",
+        class_name
+    ));
     out.push_str("        }\n");
     out.push_str("    }\n\n");
 
@@ -1710,7 +1732,8 @@ fn generate_cs_host_interface_factories_file(ir: &ValidatedIr) -> String {
 fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostContract) {
     let iface_name: String = host_contract_name_to_cs_interface(&contract.name);
     let factory_name: String = format!("Create{}Interface", iface_name.trim_start_matches('I'));
-    let factory_vm_name: String = format!("Create{}InterfaceVm", iface_name.trim_start_matches('I'));
+    let factory_vm_name: String =
+        format!("Create{}InterfaceVm", iface_name.trim_start_matches('I'));
     let fn_count: usize = contract.functions.len();
     let contract_id: u64 = contract.contract_id;
     let major: u32 = contract.version.major;
@@ -1878,9 +1901,7 @@ fn generate_cs_host_thunk(
     out.push_str("        return new AbiError { Code = AbiErrorCode.Ok };\n");
     out.push_str("    } catch (Exception ex) {\n");
     out.push_str("        var msg = StringHelpers.AllocString(ex.Message);\n");
-    out.push_str(
-        "        return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n",
-    );
+    out.push_str("        return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
 }

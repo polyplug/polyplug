@@ -41,7 +41,7 @@ use crate::runtime::Runtime;
 pub unsafe extern "C" fn polyplug_runtime_create(
     config: *const RuntimeConfig,
 ) -> *const HostInterface {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
         let mut builder = Runtime::builder();
 
         if !config.is_null() {
@@ -90,7 +90,7 @@ pub unsafe extern "C" fn polyplug_runtime_create(
 /// Must not be called more than once for the same pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostInterface) {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
         if !host.is_null() {
             // SAFETY: host is a valid HostInterface pointer returned by polyplug_runtime_create.
             // The HostInterface was created by Box::leak in RuntimeBuilder.
@@ -101,9 +101,7 @@ pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostInterface) {
             if !runtime_ptr.is_null() {
                 // SAFETY: runtime_ptr is a valid *mut Runtime that was stored during creation.
                 // Converting back to Box<Runtime> and dropping will clean up resources.
-                let _runtime: Box<Runtime> = unsafe {
-                    Box::from_raw(runtime_ptr as *mut Runtime)
-                };
+                let _runtime: Box<Runtime> = unsafe { Box::from_raw(runtime_ptr as *mut Runtime) };
                 // Note: The HostInterface itself was leaked and will remain in memory.
                 // This is intentional because the HostInterface is 'static.
                 // The Runtime and all its resources are properly cleaned up.
@@ -175,9 +173,7 @@ mod tests {
         assert!(!host.is_null());
 
         // SAFETY: host is valid, testing null path handling
-        let result = unsafe {
-            ((*host).load_bundle)(host, core::ptr::null(), 0)
-        };
+        let result = unsafe { ((*host).load_bundle)(host, core::ptr::null(), 0) };
         assert_eq!(result.code, AbiErrorCode::InvalidPointer);
 
         unsafe { polyplug_runtime_destroy(host) };
@@ -189,9 +185,7 @@ mod tests {
         assert!(!host.is_null());
 
         // SAFETY: host is valid, testing empty registry behavior
-        let handle = unsafe {
-            ((*host).find_guest_contract)(host, 12345, 0)
-        };
+        let handle = unsafe { ((*host).find_guest_contract)(host, 12345, 0) };
         assert!(handle.is_null());
 
         unsafe { polyplug_runtime_destroy(host) };
@@ -203,9 +197,7 @@ mod tests {
         assert!(!host.is_null());
 
         // SAFETY: host is valid, no error set yet
-        let len = unsafe {
-            ((*host).get_error_len)(host)
-        };
+        let len = unsafe { ((*host).get_error_len)(host) };
         assert_eq!(len, 0);
 
         unsafe { polyplug_runtime_destroy(host) };
@@ -213,8 +205,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_concurrent_operations() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
@@ -224,7 +216,8 @@ mod tests {
                 let success: Arc<AtomicUsize> = Arc::clone(&success_count);
                 thread::spawn(move || {
                     for _ in 0..10 {
-                        let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+                        let host: *const HostInterface =
+                            unsafe { polyplug_runtime_create(core::ptr::null()) };
                         if !host.is_null() {
                             success.fetch_add(1, Ordering::SeqCst);
                             unsafe { polyplug_runtime_destroy(host) };
@@ -258,8 +251,7 @@ mod tests {
 
     #[test]
     fn ffi_runtime_create_with_null_options() {
-        let host: *const HostInterface =
-            unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host.is_null());
         unsafe { polyplug_runtime_destroy(host) };
     }
@@ -271,8 +263,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_parallel_mixed_ops() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
@@ -283,15 +275,14 @@ mod tests {
                 let success: Arc<AtomicUsize> = Arc::clone(&success_count);
                 let errors: Arc<AtomicUsize> = Arc::clone(&error_count);
                 thread::spawn(move || {
-                    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+                    let host: *const HostInterface =
+                        unsafe { polyplug_runtime_create(core::ptr::null()) };
                     if host.is_null() {
                         return;
                     }
 
                     // SAFETY: host is valid, testing load_bundle error handling
-                    let result = unsafe {
-                        ((*host).load_bundle)(host, b"/bad".as_ptr(), 4)
-                    };
+                    let result = unsafe { ((*host).load_bundle)(host, b"/bad".as_ptr(), 4) };
 
                     if result.code == AbiErrorCode::Ok {
                         success.fetch_add(1, Ordering::SeqCst);
@@ -321,9 +312,7 @@ mod tests {
 
         // SAFETY: host is valid, testing null handle behavior
         let null_handle = polyplug_abi::GuestContractHandle::null();
-        let interface = unsafe {
-            ((*host).resolve_guest_contract)(host, null_handle)
-        };
+        let interface = unsafe { ((*host).resolve_guest_contract)(host, null_handle) };
         assert!(interface.is_null());
 
         unsafe { polyplug_runtime_destroy(host) };

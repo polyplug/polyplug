@@ -43,7 +43,6 @@ impl From<u64> for HostContractId {
 mod tests {
     use crate::{HostContractId, fnv1a_64};
 
-
     #[test]
     fn contract_id_collision() {
         // Both must be deterministic

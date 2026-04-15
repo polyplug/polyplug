@@ -27,8 +27,8 @@ impl CppGenerator {
     /// Strip `Option<...>` wrapper if present.
     fn strip_option(rust_type: &str) -> &str {
         if let Some(inner) = rust_type.strip_prefix("Option<") {
-            if inner.ends_with('>') {
-                return &inner[..inner.len() - 1];
+            if let Some(stripped) = inner.strip_suffix('>') {
+                return stripped;
             }
         }
         rust_type
@@ -83,10 +83,7 @@ impl CppGenerator {
         }
 
         // Strip Rust module paths (e.g., "crate::host::HostContractInstance" -> "HostContractInstance").
-        if let Some(short) = rust_type
-            .rsplit("::")
-            .next()
-        {
+        if let Some(short) = rust_type.rsplit("::").next() {
             // Only strip if it actually had a :: separator (avoid stripping single-word types).
             if rust_type.contains("::") {
                 return Self::rust_type_to_cpp(short);
@@ -236,7 +233,11 @@ impl CppGenerator {
     /// Generate a typedef for a function pointer type.
     ///
     /// Returns (typedef_line, type_name_to_use_in_struct).
-    fn generate_fn_ptr_typedef(struct_name: &str, field_name: &str, rust_type: &str) -> (String, String) {
+    fn generate_fn_ptr_typedef(
+        struct_name: &str,
+        field_name: &str,
+        rust_type: &str,
+    ) -> (String, String) {
         let fn_type = Self::convert_function_pointer(rust_type);
         let typedef_name = format!("{}_{}_fn", struct_name, field_name);
 
@@ -263,7 +264,8 @@ impl CodeGenerator for CppGenerator {
 
         // Pre-scan fields for function pointer types — collect typedefs.
         for field in &item.fields {
-            if field.rust_type.contains("extern\"C\"fn") || field.rust_type.contains("extern\"C\"") {
+            if field.rust_type.contains("extern\"C\"fn") || field.rust_type.contains("extern\"C\"")
+            {
                 let (typedef, _type_name) =
                     Self::generate_fn_ptr_typedef(&item.name, &field.name, &field.rust_type);
                 typedefs.push_str(&typedef);
@@ -295,7 +297,8 @@ impl CodeGenerator for CppGenerator {
             }
 
             // Handle function pointer fields — use the typedef name.
-            if field.rust_type.contains("extern\"C\"fn") || field.rust_type.contains("extern\"C\"") {
+            if field.rust_type.contains("extern\"C\"fn") || field.rust_type.contains("extern\"C\"")
+            {
                 let (_, typedef_name) =
                     Self::generate_fn_ptr_typedef(&item.name, &field.name, &field.rust_type);
                 output.push_str(&format!("    {} {};\n", typedef_name, field.name));
@@ -315,7 +318,7 @@ impl CodeGenerator for CppGenerator {
                 item.name, size, item.name
             ));
         } else {
-            output.push_str("\n");
+            output.push('\n');
         }
 
         output
@@ -414,8 +417,11 @@ mod tests {
     /// Test that fn ptr typedefs produce valid C++ types.
     #[test]
     fn cpp_fn_ptr_typedef_uses_c_types() {
-        let (typedef, _type_name) =
-            CppGenerator::generate_fn_ptr_typedef("TestStruct", "callback", "unsafeextern\"C\"fn(ptr:*constu8,len:usize)->u32");
+        let (typedef, _type_name) = CppGenerator::generate_fn_ptr_typedef(
+            "TestStruct",
+            "callback",
+            "unsafeextern\"C\"fn(ptr:*constu8,len:usize)->u32",
+        );
         assert!(
             typedef.contains("uint32_t"),
             "u32 return type should be uint32_t: {}",
@@ -471,8 +477,11 @@ mod tests {
     /// Test that void-returning fn ptrs produce correct typedefs.
     #[test]
     fn cpp_fn_ptr_void_return_correct() {
-        let (typedef, _type_name) =
-            CppGenerator::generate_fn_ptr_typedef("Test", "destroy", "unsafeextern\"C\"fn(ptr:*mutu8)->()");
+        let (typedef, _type_name) = CppGenerator::generate_fn_ptr_typedef(
+            "Test",
+            "destroy",
+            "unsafeextern\"C\"fn(ptr:*mutu8)->()",
+        );
         assert!(
             typedef.contains("void(*)"),
             "void return should produce void(*): {}",

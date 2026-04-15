@@ -37,7 +37,10 @@ unsafe extern "C" {
         min_version: u32,
     ) -> u64;
     // New FFI: returns interface pointer directly, no allocation
-    fn polyplug_runtime_resolve_guest_contract(rt: *const OpaqueRuntime, packed_handle: u64) -> *const ();
+    fn polyplug_runtime_resolve_guest_contract(
+        rt: *const OpaqueRuntime,
+        packed_handle: u64,
+    ) -> *const ();
 }
 
 // ─── Setup helper ────────────────────────────────────────────────────────────
@@ -73,15 +76,19 @@ fn bench_ffi_resolve_plugin(c: &mut Criterion) {
         c.benchmark_group("ffi");
     group.throughput(Throughput::Elements(1));
 
-    group.bench_function(BenchmarkId::new("resolve_plugin", "direct_interface"), |b| {
-        b.iter(|| {
-            // SAFETY: rt is non-null valid OpaqueRuntime; packed_handle is a valid handle.
-            // New FFI returns interface pointer directly - no allocation, no release needed.
-            let interface_ptr: *const () =
-                unsafe { polyplug_runtime_resolve_guest_contract(black_box(rt), black_box(packed_handle)) };
-            black_box(interface_ptr);
-        });
-    });
+    group.bench_function(
+        BenchmarkId::new("resolve_plugin", "direct_interface"),
+        |b| {
+            b.iter(|| {
+                // SAFETY: rt is non-null valid OpaqueRuntime; packed_handle is a valid handle.
+                // New FFI returns interface pointer directly - no allocation, no release needed.
+                let interface_ptr: *const () = unsafe {
+                    polyplug_runtime_resolve_guest_contract(black_box(rt), black_box(packed_handle))
+                };
+                black_box(interface_ptr);
+            });
+        },
+    );
 
     group.finish();
 
@@ -102,8 +109,9 @@ fn bench_ffi_resolve_null_handle(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("resolve_plugin", "null_handle"), |b| {
         b.iter(|| {
             // SAFETY: rt is non-null valid OpaqueRuntime; u64::MAX is null handle sentinel.
-            let interface_ptr: *const () =
-                unsafe { polyplug_runtime_resolve_guest_contract(black_box(rt), black_box(u64::MAX)) };
+            let interface_ptr: *const () = unsafe {
+                polyplug_runtime_resolve_guest_contract(black_box(rt), black_box(u64::MAX))
+            };
             black_box(interface_ptr);
         });
     });

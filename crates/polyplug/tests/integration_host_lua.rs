@@ -41,7 +41,11 @@ fn test_last_error_after_failed_load() {
     // SAFETY: host is non-null; bad_path ptr/len are valid for the slice.
     let result: polyplug_abi::AbiError =
         unsafe { ((*host).load_bundle)(host, bad_path.as_ptr(), bad_path.len()) };
-    assert_ne!(result.code, polyplug_abi::AbiErrorCode::Ok, "Expected failure for non-existent path");
+    assert_ne!(
+        result.code,
+        polyplug_abi::AbiErrorCode::Ok,
+        "Expected failure for non-existent path"
+    );
     let err: String = read_last_error(host);
     assert!(
         !err.is_empty(),

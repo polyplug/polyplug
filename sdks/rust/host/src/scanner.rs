@@ -123,8 +123,7 @@ file = "{}"
 "#,
             id, name, so_name
         );
-        std::fs::write(bundle_dir.join("manifest.toml"), manifest_content)
-            .expect("write manifest");
+        std::fs::write(bundle_dir.join("manifest.toml"), manifest_content).expect("write manifest");
     }
 
     #[test]

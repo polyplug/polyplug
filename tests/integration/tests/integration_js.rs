@@ -9,11 +9,11 @@ use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
-use polyplug_abi::GuestContractInterface;
 use polyplug_abi::GuestContractHandle;
-use polyplug_utils::guest_contract_id;
+use polyplug_abi::GuestContractInterface;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
+use polyplug_utils::guest_contract_id;
 
 #[test]
 fn js_quickjs_loader_runtime_name() {
@@ -101,6 +101,10 @@ fn js_quickjs_load_bundle_and_call() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
+    assert_eq!(
+        result.code,
+        AbiErrorCode::Ok,
+        "add must return AbiErrorCode::Ok"
+    );
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 }

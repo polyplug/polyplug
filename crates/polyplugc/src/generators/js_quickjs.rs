@@ -326,15 +326,21 @@ fn render_plugin_interface_quickjs(
         plugin_name
     ));
     out.push_str("    createInstance: function(rtCtxLo, rtCtxHi, argsLo, argsHi) {\n");
-    out.push_str("        // Default stub returns null instance - users override for stateful plugins.\n");
+    out.push_str(
+        "        // Default stub returns null instance - users override for stateful plugins.\n",
+    );
     out.push_str("        return { dataLo: 0, dataHi: 0 };  // Null GuestContractInstance.\n");
     out.push_str("    },\n");
     out.push_str(&format!(
         "    // Default destroy_instance stub for {} - no-op.\n",
         plugin_name
     ));
-    out.push_str("    destroyInstance: function(rtCtxLo, rtCtxHi, instanceDataLo, instanceDataHi) {\n");
-    out.push_str("        // Default stub is no-op - users override for cleanup before hot-reload.\n");
+    out.push_str(
+        "    destroyInstance: function(rtCtxLo, rtCtxHi, instanceDataLo, instanceDataHi) {\n",
+    );
+    out.push_str(
+        "        // Default stub is no-op - users override for cleanup before hot-reload.\n",
+    );
     out.push_str("    },\n");
     out.push_str(&format!("    fnCount: {function_count},\n"));
     out.push_str("    functions: null as unknown as number[],\n");
@@ -378,8 +384,12 @@ fn render_plugin_interface_quickjs(
         out.push_str(&wrapper_name);
         out.push_str("(instanceDataLo, instanceDataHi, args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {\n");
         // SAFETY comments for generated code are required per AGENTS.md for all unsafe operations
-        out.push_str("    // Instance is ignored for stateless plugins (instanceDataLo/Hi are 0).\n");
-        out.push_str("    // For stateful plugins, users override createInstance and use instanceData.\n");
+        out.push_str(
+            "    // Instance is ignored for stateless plugins (instanceDataLo/Hi are 0).\n",
+        );
+        out.push_str(
+            "    // For stateful plugins, users override createInstance and use instanceData.\n",
+        );
         out.push_str("    // SAFETY: args_ptr_lo/hi and out_ptr_lo/hi are valid pointer halves per ABI contract.\n");
         out.push_str("    // The host guarantees these pointers are properly aligned and sized before calling.\n");
         out.push_str("    var polyplug = globalThis.polyplug;\n");
@@ -874,7 +884,9 @@ fn generate_host_caller_class_quickjs(out: &mut String, contract: &ResolvedContr
     out.push_str("    reset(): void {\n");
     out.push_str("        this.destroy();\n");
     out.push_str("        if (this.#interface !== null) {\n");
-    out.push_str("            this.#instance = this.#interface.create_instance(this.#host, null);\n");
+    out.push_str(
+        "            this.#instance = this.#interface.create_instance(this.#host, null);\n",
+    );
     out.push_str("        }\n");
     out.push_str("    }\n\n");
 
@@ -1216,7 +1228,10 @@ fn generate_ts_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     out.push_str("        if (interfacePtr === null || interfacePtr === undefined || (interfacePtr.lo === 0 && interfacePtr.hi === 0)) {\n");
     out.push_str("            return null;\n");
     out.push_str("        }\n");
-    out.push_str(&format!("        return new {}(interfacePtr);\n", class_name));
+    out.push_str(&format!(
+        "        return new {}(interfacePtr);\n",
+        class_name
+    ));
     out.push_str("    }\n\n");
 
     out.push_str("    /** Check if this caller instance is still valid. */\n");
@@ -1277,9 +1292,13 @@ fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::Re
     out.push_str("        }\n");
 
     // SAFETY comments for generated code are required per AGENTS.md for all unsafe operations
-    out.push_str("        // SAFETY: _interface.lo/hi are valid pointer halves per ABI contract.\n");
+    out.push_str(
+        "        // SAFETY: _interface.lo/hi are valid pointer halves per ABI contract.\n",
+    );
     out.push_str("        // Pointer arithmetic reconstructs the full 64-bit address.\n");
-    out.push_str("        const interfaceAddr = this._interface.lo + this._interface.hi * 4294967296;\n");
+    out.push_str(
+        "        const interfaceAddr = this._interface.lo + this._interface.hi * 4294967296;\n",
+    );
     out.push_str("        // SAFETY: readHostContractHeader reads from a valid interface pointer per the polyplug ABI.\n");
     out.push_str("        const header = polyplug.readHostContractHeader(interfaceAddr);\n");
     out.push_str(&format!(
@@ -1648,7 +1667,7 @@ fn generate_js_host_interface_factory(out: &mut String, contract: &ResolvedHostC
     }
 
     // Static function pointer array
-    out.push_str(&"    const functions: (() => number)[] = [\n".to_string());
+    out.push_str("    const functions: (() => number)[] = [\n");
     for func in &contract.functions {
         let thunk_name: String = format!(
             "_{}_{}_thunk",
@@ -1773,14 +1792,14 @@ fn generate_js_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
         let param: &ResolvedParam = &func.params[0];
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-                out.push_str(&"            // Extract StringView from args pointer\n".to_string());
+                out.push_str("            // Extract StringView from args pointer\n");
                 out.push_str(&format!(
                     "            const {name} = '';\n",
                     name = param.name
                 ));
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
-                out.push_str(&"            // Extract Buffer from args pointer\n".to_string());
+                out.push_str("            // Extract Buffer from args pointer\n");
                 out.push_str(&format!(
                     "            const {name} = new Uint8Array(0);\n",
                     name = param.name

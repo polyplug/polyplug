@@ -45,8 +45,8 @@ unsafe impl Sync for VmDispatch {}
 mod tests {
     use core::mem::{align_of, offset_of, size_of};
 
-    use crate::dispatch::vm_dispatch::VmDispatch;
     use crate::dispatch::VmLoaderData;
+    use crate::dispatch::vm_dispatch::VmDispatch;
 
     #[test]
     fn layout_vm_dispatch() {

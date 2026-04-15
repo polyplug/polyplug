@@ -21,7 +21,7 @@ use crate::config::NativeConfig;
 /// Handles .so/.dll/.dylib bundles using dlopen/LoadLibrary.
 /// Owns library handles internally — NOT stored in registry.
 pub struct NativeLoader {
-    config: NativeConfig,
+    _config: NativeConfig,
     /// Active library handles, keyed by BundleId.
     libraries: Mutex<HashMap<BundleId, libloading::Library>>,
 }
@@ -30,7 +30,7 @@ impl NativeLoader {
     /// Create a new NativeLoader.
     pub fn new(config: NativeConfig) -> Self {
         Self {
-            config,
+            _config: config,
             libraries: Mutex::new(HashMap::new()),
         }
     }
@@ -76,6 +76,9 @@ impl BundleLoader for NativeLoader {
                 error: format!("missing symbol 'polyplug_abi_version' in bundle '{}'", path_str),
             }))?
         };
+        // SAFETY: abi_version_symbol was obtained from library.get() which validated the
+        // symbol exists. The function has signature `extern "C" fn() -> u32` and returns
+        // a plain u32, so there are no memory safety concerns.
         let found_version: u32 = unsafe { abi_version_symbol() };
         if found_version != POLYPLUG_ABI_VERSION {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
@@ -97,6 +100,8 @@ impl BundleLoader for NativeLoader {
                     *const HostInterface,
                     *const BundleInitContext,
                 ) -> AbiError,
+            // SAFETY: polyplug_init is an exported C symbol from the plugin library,
+            // validated to exist by library.get(). The signature matches the ABI contract.
             > = unsafe {
                 library
                     .get(b"polyplug_init\0")
@@ -124,6 +129,9 @@ impl BundleLoader for NativeLoader {
         // ─── Step 6: Get HostInterface and call init ───────────────────────────────────
         let host_abi: &'static HostInterface = runtime.host_abi();
         let init_result: AbiError =
+            // SAFETY: host_abi is a valid HostInterface reference obtained from the runtime.
+            // init_fn_ptr is a valid function pointer resolved from the plugin library.
+            // ctx is a stack-allocated BundleInitContext that outlives the call.
             unsafe { init_fn_ptr(host_abi as *const HostInterface, &ctx) };
 
         // ─── Step 7: Clear TLS bundle_id ──────────────────────────────────────────────
@@ -147,7 +155,10 @@ impl BundleLoader for NativeLoader {
 
         // ─── Step 8: Store library handle ─────────────────────────────────────────────
         let bundle_id: BundleId = BundleId::new(&manifest.name);
-        self.libraries.lock().unwrap().insert(bundle_id, library);
+        self.libraries.lock().unwrap_or_else(|e| {
+            eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+            e.into_inner()
+        }).insert(bundle_id, library);
 
         Ok(())
     }
@@ -186,6 +197,8 @@ impl BundleLoader for NativeLoader {
                 error: format!("missing symbol 'polyplug_abi_version' in bundle '{}'", path_str),
             }))?
         };
+        // SAFETY: abi_version_symbol was obtained from new_library.get() which validated
+        // the symbol exists. The function has signature `extern "C" fn() -> u32`.
         let found_version: u32 = unsafe { abi_version_symbol() };
         if found_version != POLYPLUG_ABI_VERSION {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
@@ -206,6 +219,8 @@ impl BundleLoader for NativeLoader {
                     *const HostInterface,
                     *const BundleInitContext,
                 ) -> AbiError,
+            // SAFETY: polyplug_init is an exported C symbol from the new plugin library,
+            // validated to exist by new_library.get(). The signature matches the ABI contract.
             > = unsafe {
                 new_library
                     .get(b"polyplug_init\0")
@@ -233,6 +248,9 @@ impl BundleLoader for NativeLoader {
         // ─── Step 6: Get HostInterface and call init ─────────────────────────────────────
         let host_abi: &'static HostInterface = runtime.host_abi();
         let init_result: AbiError =
+            // SAFETY: host_abi is a valid HostInterface reference obtained from the runtime.
+            // init_fn_ptr is a valid function pointer resolved from the new plugin library.
+            // ctx is a stack-allocated BundleInitContext that outlives the call.
             unsafe { init_fn_ptr(host_abi as *const HostInterface, &ctx) };
 
         // ─── Step 7: Clear TLS bundle_id ────────────────────────────────────────────────
@@ -258,14 +276,20 @@ impl BundleLoader for NativeLoader {
         // SAFETY CONTRACT: Host must not have cached raw function pointers!
         // If they did, this will cause SIGSEGV - that's a HOST BUG.
         // The `on_reload_cb(ReloadPhase::Reloaded)` already fired, giving host a chance to clean up.
-        if let Some(old_library) = self.libraries.lock().unwrap().remove(&bundle_id) {
+        if let Some(old_library) = self.libraries.lock().unwrap_or_else(|e| {
+            eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+            e.into_inner()
+        }).remove(&bundle_id) {
             drop(old_library); // dlclose() - unmaps code pages
         }
 
         // ─── Step 9: Store new library ───────────────────────────────────────────────────
         self.libraries
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
             .insert(bundle_id, new_library);
 
         Ok(())

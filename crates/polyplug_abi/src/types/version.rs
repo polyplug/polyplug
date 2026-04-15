@@ -1,7 +1,7 @@
 //! Version — version struct, and parse/compare logic.
 
 use core::fmt;
-use std::str::FromStr;
+use core::str::FromStr;
 
 #[repr(u32)]
 #[derive(Debug, PartialEq, Eq)]
@@ -45,7 +45,7 @@ impl FromStr for Version {
     /// Returns `Err(LoaderError::ManifestParse)` if the string is not exactly two
     /// dot-separated unsigned integers.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let mut v_iter: std::str::Split<'_, char> = value.split('.');
+        let mut v_iter: core::str::Split<'_, char> = value.split('.');
 
         let major: u32 = v_iter
             .next()
@@ -158,7 +158,14 @@ mod tests {
         // The parser takes major="1", minor="2", patch="3" (ignoring "4")
         // This is valid - extra components after patch are ignored.
         let v: Version = "1.2.3.4".parse::<Version>().expect("parse 1.2.3.4");
-        assert_eq!(v, Version { major: 1, minor: 2, patch: 3 });
+        assert_eq!(
+            v,
+            Version {
+                major: 1,
+                minor: 2,
+                patch: 3
+            }
+        );
     }
 
     #[test]

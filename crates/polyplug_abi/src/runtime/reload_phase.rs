@@ -1,7 +1,7 @@
 //! Reload Phase — FFI-safe representation of reload phases.
 
-use polyplug_utils::BundleId;
 use crate::types::StringView;
+use polyplug_utils::BundleId;
 
 /// Type of reload phase for FFI callbacks.
 #[repr(u32)]
@@ -70,10 +70,10 @@ impl ReloadPhase {
 
 #[cfg(test)]
 mod tests {
-    use core::mem::{align_of, size_of};
     use super::{ReloadPhase, ReloadPhaseType};
-    use polyplug_utils::BundleId;
     use crate::types::StringView;
+    use core::mem::{align_of, size_of};
+    use polyplug_utils::BundleId;
 
     #[test]
     fn layout_reload_phase() {

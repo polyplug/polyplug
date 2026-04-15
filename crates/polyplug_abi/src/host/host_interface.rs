@@ -29,8 +29,8 @@ use core::ffi::c_void;
 use polyplug_utils::BundleId;
 
 use crate::{
-    guest::{GuestContractInterface, GuestContractInstance},
-    plugin::{PluginDescriptor, GuestContractHandle},
+    guest::{GuestContractInstance, GuestContractInterface},
+    plugin::{GuestContractHandle, PluginDescriptor},
     types::{AbiError, Array, DependencyInfo, StringView},
 };
 
@@ -101,7 +101,8 @@ pub struct HostInterface {
     ///
     /// # Returns
     /// Pointer to allocated memory, or null on failure.
-    pub alloc: unsafe extern "C" fn(this: *const HostInterface, size: usize, align: usize) -> *mut u8,
+    pub alloc:
+        unsafe extern "C" fn(this: *const HostInterface, size: usize, align: usize) -> *mut u8,
     /// Free memory allocated via `alloc`.
     ///
     /// Must pass the same size and align used for allocation.
@@ -111,7 +112,8 @@ pub struct HostInterface {
     /// - `ptr`: Pointer to memory to free
     /// - `size`: Size used for allocation
     /// - `align`: Alignment used for allocation
-    pub free: unsafe extern "C" fn(this: *const HostInterface, ptr: *mut u8, size: usize, align: usize),
+    pub free:
+        unsafe extern "C" fn(this: *const HostInterface, ptr: *mut u8, size: usize, align: usize),
     /// Find a guest contract by contract_id and minimum version.
     ///
     /// Returns a GuestContractHandle that can be resolved to an interface.
@@ -211,11 +213,12 @@ pub struct HostInterface {
     ///
     /// # Returns
     /// Pointer to HostContractInterface, or null if invalid/not found.
-    pub resolve_host_contract_interface: unsafe extern "C" fn(
-        this: *const HostInterface,
-        contract_id: u64,
-        min_version: u32,
-    ) -> *const crate::host::HostContractInterface,
+    pub resolve_host_contract_interface:
+        unsafe extern "C" fn(
+            this: *const HostInterface,
+            contract_id: u64,
+            min_version: u32,
+        ) -> *const crate::host::HostContractInterface,
     /// List all loaded bundles.
     ///
     /// Returns an Array of BundleId. Caller must free via `host->free`.
@@ -226,9 +229,7 @@ pub struct HostInterface {
     ///
     /// # Returns
     /// Array of BundleId. Caller owns and must free.
-    pub list_bundles: unsafe extern "C" fn(
-        this: *const HostInterface,
-    ) -> Array<BundleId>,
+    pub list_bundles: unsafe extern "C" fn(this: *const HostInterface) -> Array<BundleId>,
     /// Get dependencies for the calling bundle.
     ///
     /// Uses bundle_id from current BundleInitContext (TLS) to look up declared deps.
@@ -240,9 +241,7 @@ pub struct HostInterface {
     /// # Returns
     /// Array of DependencyInfo. Caller owns and must free.
     /// Returns empty array if called outside bundle init context.
-    pub get_dependencies: unsafe extern "C" fn(
-        this: *const HostInterface,
-    ) -> Array<DependencyInfo>,
+    pub get_dependencies: unsafe extern "C" fn(this: *const HostInterface) -> Array<DependencyInfo>,
     /// Load a plugin bundle from a path.
     ///
     /// Host applications call this to load a bundle at runtime.
@@ -319,11 +318,8 @@ pub struct HostInterface {
     ///
     /// # Returns
     /// Number of bytes written (0 if no error or buffer too small).
-    pub get_last_error: unsafe extern "C" fn(
-        this: *const HostInterface,
-        buf: *mut u8,
-        buf_len: usize,
-    ) -> usize,
+    pub get_last_error:
+        unsafe extern "C" fn(this: *const HostInterface, buf: *mut u8, buf_len: usize) -> usize,
     /// Get last error message length.
     ///
     /// Returns the byte length of the most recent error message.
@@ -334,9 +330,7 @@ pub struct HostInterface {
     ///
     /// # Returns
     /// Length of last error message (0 if no error).
-    pub get_error_len: unsafe extern "C" fn(
-        this: *const HostInterface,
-    ) -> usize,
+    pub get_error_len: unsafe extern "C" fn(this: *const HostInterface) -> usize,
 }
 
 // SAFETY: HostInterface contains an opaque pointer and function pointers.
@@ -378,7 +372,10 @@ mod tests {
         assert_eq!(offset_of!(HostInterface, resolve_guest_contract), 48);
         assert_eq!(offset_of!(HostInterface, call_guest_method), 56);
         assert_eq!(offset_of!(HostInterface, get_host_contract), 64);
-        assert_eq!(offset_of!(HostInterface, resolve_host_contract_interface), 72);
+        assert_eq!(
+            offset_of!(HostInterface, resolve_host_contract_interface),
+            72
+        );
         assert_eq!(offset_of!(HostInterface, list_bundles), 80);
         assert_eq!(offset_of!(HostInterface, get_dependencies), 88);
         // New fields (appended at end)

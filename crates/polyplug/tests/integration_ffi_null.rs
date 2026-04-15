@@ -5,11 +5,11 @@
 
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
-use polyplug_abi::HostInterface;
 use polyplug_abi::GuestContractHandle;
+use polyplug_abi::HostInterface;
 
 // Import the host_* functions directly for null-host tests
-use polyplug::{host_load_bundle, host_get_last_error, host_get_error_len};
+use polyplug::{host_get_error_len, host_get_last_error, host_load_bundle};
 
 #[test]
 fn test_runtime_free_null() {
@@ -25,7 +25,11 @@ fn test_load_bundle_null_host() {
     // We call the underlying host_load_bundle function directly since we don't have a HostInterface.
     let result: polyplug_abi::AbiError =
         unsafe { host_load_bundle(core::ptr::null(), path.as_ptr(), path.len()) };
-    assert_eq!(result.code, polyplug_abi::AbiErrorCode::InvalidPointer, "load_bundle(null host) must return InvalidPointer");
+    assert_eq!(
+        result.code,
+        polyplug_abi::AbiErrorCode::InvalidPointer,
+        "load_bundle(null host) must return InvalidPointer"
+    );
 }
 
 #[test]
@@ -34,8 +38,13 @@ fn test_load_bundle_null_path() {
     let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     // SAFETY: host is valid (asserted above); null path tests the null-safety contract.
-    let result: polyplug_abi::AbiError = unsafe { ((*host).load_bundle)(host, core::ptr::null(), 0) };
-    assert_eq!(result.code, polyplug_abi::AbiErrorCode::InvalidPointer, "load_bundle(null path) must return InvalidPointer");
+    let result: polyplug_abi::AbiError =
+        unsafe { ((*host).load_bundle)(host, core::ptr::null(), 0) };
+    assert_eq!(
+        result.code,
+        polyplug_abi::AbiErrorCode::InvalidPointer,
+        "load_bundle(null path) must return InvalidPointer"
+    );
     // SAFETY: host is valid and was allocated by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
 }
@@ -49,7 +58,10 @@ fn test_find_all_guest_contracts_empty_registry() {
     let arr: polyplug_abi::Array<GuestContractHandle> =
         unsafe { ((*host).find_all_guest_contracts)(host, 0xDEAD_BEEF_u64, 0) };
     // No plugins loaded, so len == 0. Point is: no crash, no panic.
-    assert_eq!(arr.len, 0, "find_all_guest_contracts on empty registry must return empty array");
+    assert_eq!(
+        arr.len, 0,
+        "find_all_guest_contracts on empty registry must return empty array"
+    );
     // SAFETY: host is valid and was allocated by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
 }
@@ -79,20 +91,15 @@ fn test_get_last_error_null_host() {
     // get_last_error with null host returns 0 (no host to have an error)
     // SAFETY: passing null host is explicitly part of the null-safety contract being tested.
     // We call the underlying host_get_last_error function directly.
-    let n: usize =
-        unsafe { host_get_last_error(core::ptr::null(), core::ptr::null_mut(), 0) };
-    assert_eq!(
-        n, 0,
-        "get_last_error(null host) must return 0"
-    );
+    let n: usize = unsafe { host_get_last_error(core::ptr::null(), core::ptr::null_mut(), 0) };
+    assert_eq!(n, 0, "get_last_error(null host) must return 0");
 }
 
 #[test]
 fn test_get_error_len_null_host() {
     // SAFETY: passing null host is explicitly part of the null-safety contract being tested.
     // We call the underlying host_get_error_len function directly.
-    let n: usize =
-        unsafe { host_get_error_len(core::ptr::null()) };
+    let n: usize = unsafe { host_get_error_len(core::ptr::null()) };
     // Returns length of the null host error message
     assert!(
         n > 0,

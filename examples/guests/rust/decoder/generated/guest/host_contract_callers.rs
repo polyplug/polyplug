@@ -74,7 +74,7 @@ impl HostLoggerCaller {
         let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };
 
         let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
-        if 0_u32 >= fn_count {
+        if fn_count < 0_u32 + 1 {
             return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));
         }
 
@@ -128,7 +128,7 @@ impl HostLoggerCaller {
         let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };
 
         let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
-        if 1_u32 >= fn_count {
+        if fn_count < 1_u32 + 1 {
             return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));
         }
 

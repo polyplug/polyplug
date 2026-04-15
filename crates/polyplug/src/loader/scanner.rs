@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use super::{parse_manifest, ManifestData};
+use super::{ManifestData, parse_manifest};
 
 /// Scan directories for plugin bundles.
 ///

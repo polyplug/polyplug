@@ -98,8 +98,8 @@ unsafe impl<T: Sized + Sync> Sync for Array<T> {}
 
 #[cfg(test)]
 mod tests {
-    use core::mem::{align_of, offset_of, size_of};
     use super::Array;
+    use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn layout_array() {

@@ -71,7 +71,7 @@ impl Runtime {
         };
 
         let manifest: ManifestData =
-            crate::loader::parse_manifest(bundle_dir).map_err(|e| RuntimeError::Loader(e))?;
+            crate::loader::parse_manifest(bundle_dir).map_err(RuntimeError::Loader)?;
 
         // Find the loader
         let loader: &dyn crate::loader::BundleLoader = self
@@ -128,7 +128,7 @@ impl Runtime {
                     let contract_id: GuestContractId = self
                         .registry
                         .get_slot_guest_contract_id(*slot_idx)
-                        .ok_or_else(|| {
+                        .ok_or({
                             RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
                                 index: *slot_idx,
                             })
@@ -142,7 +142,7 @@ impl Runtime {
                     let new_interface: Arc<GuestContractInterface> = self
                         .registry
                         .get_guest_contract_interface_arc(new_handle.index)
-                        .ok_or_else(|| {
+                        .ok_or({
                             RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
                                 index: new_handle.index,
                             })
@@ -155,7 +155,10 @@ impl Runtime {
 
                 // Fire Reloaded callback
                 if let Some(cb) = self.on_reload_cb() {
-                    cb(ReloadPhase::reloaded(bundle_id, string_view(&manifest.name)));
+                    cb(ReloadPhase::reloaded(
+                        bundle_id,
+                        string_view(&manifest.name),
+                    ));
                 }
                 Ok(())
             }
@@ -168,7 +171,7 @@ impl Runtime {
                         string_view(&e.to_string()),
                     ));
                 }
-                Err(RuntimeError::from(e))
+                Err(e)
             }
         }
     }

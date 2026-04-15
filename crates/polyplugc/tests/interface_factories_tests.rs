@@ -8,8 +8,8 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_utils::host_contract_id;
 use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplug_utils::host_contract_id;
 use polyplugc::generate;
 use std::path::PathBuf;
 

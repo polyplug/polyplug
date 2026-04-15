@@ -882,7 +882,7 @@ fn layout_buffer_followed_by_u32() {
 #[derive(Debug, Clone, Copy)]
 struct HandleFollowedByU64 {
     handle: GuestContractHandle, // 8 bytes @ 0
-    value: u64,           // 8 bytes @ 8
+    value: u64,                  // 8 bytes @ 8
 }
 
 #[test]
@@ -958,9 +958,9 @@ fn layout_signed_and_float_primitives() {
 #[repr(C)]
 #[derive(Debug)]
 struct AllAbiTypesStruct {
-    sv: StringView,       // 16 bytes @ 0
-    buf: Buffer,          // 24 bytes @ 16
-    err: AbiError,        // 24 bytes @ 40
+    sv: StringView,              // 16 bytes @ 0
+    buf: Buffer,                 // 24 bytes @ 16
+    err: AbiError,               // 24 bytes @ 40
     handle: GuestContractHandle, // 4 bytes @ 64
 }
 

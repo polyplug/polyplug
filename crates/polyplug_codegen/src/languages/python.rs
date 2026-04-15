@@ -24,8 +24,8 @@ impl PythonGenerator {
     /// Strip `Option<...>` wrapper if present, returning inner type.
     fn strip_option(rust_type: &str) -> &str {
         if let Some(inner) = rust_type.strip_prefix("Option<") {
-            if inner.ends_with('>') {
-                return &inner[..inner.len() - 1];
+            if let Some(stripped) = inner.strip_suffix('>') {
+                return stripped;
             }
         }
         rust_type
@@ -129,7 +129,11 @@ impl PythonGenerator {
     /// Generate a CFUNCTYPE typedef string for a function pointer field.
     ///
     /// Returns (typedef_line, type_name_to_use_in_fields).
-    fn generate_cfunctype(struct_name: &str, field_name: &str, rust_type: &str) -> (String, String) {
+    fn generate_cfunctype(
+        struct_name: &str,
+        field_name: &str,
+        rust_type: &str,
+    ) -> (String, String) {
         let (return_type, params) = Self::parse_function_pointer(rust_type)
             .unwrap_or_else(|| ("None".to_string(), Vec::new()));
 
@@ -278,10 +282,7 @@ impl CodeGenerator for PythonGenerator {
         for field in &item.fields {
             // Handle Array<T> — expand into 3 sub-fields per D-21.
             if Self::is_array(&field.rust_type) {
-                output.push_str(&format!(
-                    "        (\"{}\", ctypes.c_void_p),\n",
-                    field.name
-                ));
+                output.push_str(&format!("        (\"{}\", ctypes.c_void_p),\n", field.name));
                 output.push_str(&format!(
                     "        (\"{}_len\", ctypes.c_size_t),\n",
                     field.name
@@ -308,10 +309,7 @@ impl CodeGenerator for PythonGenerator {
 
         // Emit size hint comment and assertion if known.
         if let Some(size) = item.size_hint {
-            output.push_str(&format!(
-                "\n# Expected size: {} bytes\n",
-                size
-            ));
+            output.push_str(&format!("\n# Expected size: {} bytes\n", size));
             output.push_str(&format!(
                 "assert ctypes.sizeof({}) == {}, f\"{} expected {} bytes, got {{ctypes.sizeof({})}}\"\n",
                 item.name, size, item.name, size, item.name
@@ -418,8 +416,8 @@ mod tests {
     #[test]
     fn python_cfunctype_uses_ctypes_params() {
         let rust_type = "unsafeextern\"C\"fn(host:*constHostInterface,contract_id:u64)->AbiError";
-        let (return_type, params) = PythonGenerator::parse_function_pointer(rust_type)
-            .expect("should parse fn ptr");
+        let (return_type, params) =
+            PythonGenerator::parse_function_pointer(rust_type).expect("should parse fn ptr");
 
         assert_eq!(return_type, "AbiError");
         // Params must be ctypes types, not raw Rust syntax.
@@ -534,8 +532,8 @@ mod tests {
     #[test]
     fn python_fn_ptr_with_const_ptr_param() {
         let rust_type = "unsafeextern\"C\"fn(ptr:*constu8,len:usize)->()";
-        let (return_type, params) = PythonGenerator::parse_function_pointer(rust_type)
-            .expect("should parse fn ptr");
+        let (return_type, params) =
+            PythonGenerator::parse_function_pointer(rust_type).expect("should parse fn ptr");
 
         assert_eq!(return_type, "None");
         assert!(

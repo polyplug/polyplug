@@ -79,8 +79,8 @@ impl DependencyInfo {
 
 #[cfg(test)]
 mod tests {
-    use core::mem::{align_of, offset_of, size_of};
     use super::DependencyInfo;
+    use core::mem::{align_of, offset_of, size_of};
     use polyplug_utils::{BundleId, GuestContractId};
 
     #[test]

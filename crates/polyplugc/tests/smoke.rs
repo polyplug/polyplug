@@ -10,18 +10,18 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
-use polyplug_utils::BundleId;
-use polyplug_abi::GuestContractHandle;
-use polyplug_abi::DependencyInfo;
-use polyplug_abi::GuestContractInstance;
-use polyplug_abi::HostInterface;
 use polyplug_abi::BundleInitContext;
-use polyplug_abi::PluginDescriptor;
+use polyplug_abi::DependencyInfo;
+use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostInterface;
+use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
+use polyplug_utils::BundleId;
 use std::ffi::c_void;
 use std::path::Path;
 use std::path::PathBuf;
@@ -217,11 +217,7 @@ struct AddArgs {
 
 // ─── HostInterface stub functions ─────────────────────────────────────────────────
 
-unsafe extern "C" fn stub_alloc(
-    _host: *const HostInterface,
-    size: usize,
-    align: usize,
-) -> *mut u8 {
+unsafe extern "C" fn stub_alloc(_host: *const HostInterface, size: usize, align: usize) -> *mut u8 {
     polyplug_abi::ffi::polyplug_host_alloc(size, align)
 }
 
@@ -278,7 +274,9 @@ unsafe extern "C" fn stub_get_host_contract(
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance { data: core::ptr::null_mut() }
+    polyplug_abi::HostContractInstance {
+        data: core::ptr::null_mut(),
+    }
 }
 
 unsafe extern "C" fn stub_resolve_host_contract_interface(
@@ -289,15 +287,11 @@ unsafe extern "C" fn stub_resolve_host_contract_interface(
     core::ptr::null()
 }
 
-unsafe extern "C" fn stub_list_bundles(
-    _host: *const HostInterface,
-) -> Array<BundleId> {
+unsafe extern "C" fn stub_list_bundles(_host: *const HostInterface) -> Array<BundleId> {
     Array::empty()
 }
 
-unsafe extern "C" fn stub_get_dependencies(
-    _host: *const HostInterface,
-) -> Array<DependencyInfo> {
+unsafe extern "C" fn stub_get_dependencies(_host: *const HostInterface) -> Array<DependencyInfo> {
     Array::empty()
 }
 
@@ -306,7 +300,10 @@ unsafe extern "C" fn stub_load_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 unsafe extern "C" fn stub_reload_bundle(
@@ -314,14 +311,20 @@ unsafe extern "C" fn stub_reload_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 unsafe extern "C" fn stub_register_host_contract(
     _this: *const HostInterface,
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 unsafe extern "C" fn stub_register_loader(
@@ -329,7 +332,10 @@ unsafe extern "C" fn stub_register_loader(
     _runtime_name: StringView,
     _loader_ptr: *mut c_void,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 unsafe extern "C" fn stub_get_last_error(
@@ -340,9 +346,7 @@ unsafe extern "C" fn stub_get_last_error(
     0
 }
 
-unsafe extern "C" fn stub_get_error_len(
-    _this: *const HostInterface,
-) -> usize {
+unsafe extern "C" fn stub_get_error_len(_this: *const HostInterface) -> usize {
     0
 }
 
@@ -411,10 +415,7 @@ fn smoke_rust_codegen_dispatch() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -457,7 +458,11 @@ fn smoke_rust_codegen_dispatch() {
             &ctx as *const BundleInitContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return Ok");
+    assert_eq!(
+        init_result.code,
+        AbiErrorCode::Ok,
+        "polyplug_init must return Ok"
+    );
 
     // ── 9. Retrieve the captured interface ──────────────────────────────────────
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
@@ -495,13 +500,17 @@ fn smoke_rust_codegen_dispatch() {
     // The generated wrapper uses a OnceLock static for stateless plugins.
     let call_result: AbiError = unsafe {
         dispatch_fn(
-            GuestContractInstance::null(),  // instance parameter (stateless plugin)
+            GuestContractInstance::null(), // instance parameter (stateless plugin)
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
     };
 
-    assert_eq!(call_result.code, AbiErrorCode::Ok, "add(3, 5) must return Ok");
+    assert_eq!(
+        call_result.code,
+        AbiErrorCode::Ok,
+        "add(3, 5) must return Ok"
+    );
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 
     println!("smoke_rust_codegen_dispatch: add(3, 5) = {} ✓", out);
@@ -535,7 +544,8 @@ fn smoke_cpp_codegen_dispatch() {
     let guest_dir: PathBuf = out_dir.join("guest");
 
     // ── 3. Assert all 4 expected guest files exist ──────────────────────────
-    let expected_guest_files: [&str; 4] = ["types.hpp", "contracts.hpp", "interfaces.hpp", "init.hpp"];
+    let expected_guest_files: [&str; 4] =
+        ["types.hpp", "contracts.hpp", "interfaces.hpp", "init.hpp"];
     for filename in expected_guest_files {
         let file_path: PathBuf = guest_dir.join(filename);
         assert!(

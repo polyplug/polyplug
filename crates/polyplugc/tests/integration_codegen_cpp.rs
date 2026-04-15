@@ -93,11 +93,7 @@ fn test_generate_cpp_host_files_exist() {
     generate_cpp_bindings(&api_toml, &out_dir, Side::Host);
 
     // Assert expected host files exist
-    let expected_files: &[&str] = &[
-        "host/types.hpp",
-        "host/host_callers.hpp",
-        "manifest.toml",
-    ];
+    let expected_files: &[&str] = &["host/types.hpp", "host/host_callers.hpp", "manifest.toml"];
 
     for rel_path in expected_files {
         let full_path: PathBuf = out_dir.join(rel_path);
@@ -176,7 +172,8 @@ fn test_cpp_codegen_host_contract_uses_interface() {
 
     // If host_contracts.hpp exists, check its content
     if host_callers_file.exists() {
-        let content: String = std::fs::read_to_string(&host_callers_file).expect("read host_contracts file");
+        let content: String =
+            std::fs::read_to_string(&host_callers_file).expect("read host_contracts file");
 
         // Assert HostContractInterface is used (not HostContractVTable)
         if content.contains("HostContract") {
@@ -205,7 +202,9 @@ fn test_cpp_codegen_host_contract_uses_interface() {
         println!("test_cpp_codegen_host_contract_uses_interface: host contract assertions passed");
     } else {
         // Skip if no host contracts defined in test fixture
-        println!("test_cpp_codegen_host_contract_uses_interface: skipped (no host_contracts in fixture)");
+        println!(
+            "test_cpp_codegen_host_contract_uses_interface: skipped (no host_contracts in fixture)"
+        );
     }
 }
 
@@ -227,7 +226,8 @@ fn test_cpp_codegen_guest_instance_wrapper_exists() {
 
     // If host_callers.hpp exists in guest directory, check for instance wrapper pattern
     if host_callers_file.exists() {
-        let content: String = std::fs::read_to_string(&host_callers_file).expect("read host_callers file");
+        let content: String =
+            std::fs::read_to_string(&host_callers_file).expect("read host_callers file");
 
         // Assert instance wrapper pattern exists (for calling guest contracts from host)
         // The pattern includes:
@@ -265,11 +265,14 @@ fn test_cpp_codegen_guest_instance_wrapper_exists() {
                 host_callers_file.display()
             );
         }
-        println!("test_cpp_codegen_guest_instance_wrapper_exists: instance wrapper assertions passed");
+        println!(
+            "test_cpp_codegen_guest_instance_wrapper_exists: instance wrapper assertions passed"
+        );
     } else {
         // Read guest/interfaces.hpp instead - it contains the static interface declaration
         let interfaces_file: PathBuf = out_dir.join("guest").join("interfaces.hpp");
-        let content: String = std::fs::read_to_string(&interfaces_file).expect("read interfaces file");
+        let content: String =
+            std::fs::read_to_string(&interfaces_file).expect("read interfaces file");
 
         // Assert create_instance stub exists in interface
         assert!(
@@ -285,7 +288,9 @@ fn test_cpp_codegen_guest_instance_wrapper_exists() {
             interfaces_file.display()
         );
 
-        println!("test_cpp_codegen_guest_instance_wrapper_exists: instance lifecycle stubs verified");
+        println!(
+            "test_cpp_codegen_guest_instance_wrapper_exists: instance lifecycle stubs verified"
+        );
     }
 }
 
@@ -307,8 +312,8 @@ fn test_cpp_codegen_factory_uses_inline_fields() {
     let interface_factories_file: PathBuf = out_dir.join("host").join("interface_factories.hpp");
 
     if interface_factories_file.exists() {
-        let content: String =
-            std::fs::read_to_string(&interface_factories_file).expect("read interface_factories file");
+        let content: String = std::fs::read_to_string(&interface_factories_file)
+            .expect("read interface_factories file");
 
         // Assert HostContractInterface is used
         assert!(
@@ -341,7 +346,9 @@ fn test_cpp_codegen_factory_uses_inline_fields() {
         println!("test_cpp_codegen_factory_uses_inline_fields: factory assertions passed");
     } else {
         // Skip if no host contracts defined in test fixture
-        println!("test_cpp_codegen_factory_uses_inline_fields: skipped (no interface_factories.hpp generated)");
+        println!(
+            "test_cpp_codegen_factory_uses_inline_fields: skipped (no interface_factories.hpp generated)"
+        );
     }
 }
 

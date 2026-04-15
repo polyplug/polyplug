@@ -3,9 +3,9 @@
 
 use polyplug::plugin_registry::PluginGuard;
 use polyplug::runtime::Runtime;
-use polyplug_abi::AbiErrorCode::Ok;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::AbiErrorCode::Ok;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_native::NativeLoader;

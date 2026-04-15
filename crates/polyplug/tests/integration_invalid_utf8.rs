@@ -23,9 +23,11 @@ fn test_load_bundle_invalid_utf8_path() {
     // Construct a path with invalid UTF-8: \xff\xfe are invalid UTF-8 lead bytes
     let bad_path: &[u8] = &[0xff_u8, 0xfe_u8, b'/', b'p', b'a', b't', b'h'];
     // SAFETY: host is non-null, bad_path.as_ptr() valid for bad_path.len() bytes.
-    let result: polyplug_abi::AbiError = unsafe { ((*host).load_bundle)(host, bad_path.as_ptr(), bad_path.len()) };
+    let result: polyplug_abi::AbiError =
+        unsafe { ((*host).load_bundle)(host, bad_path.as_ptr(), bad_path.len()) };
     assert_ne!(
-        result.code, polyplug_abi::AbiErrorCode::Ok,
+        result.code,
+        polyplug_abi::AbiErrorCode::Ok,
         "load_bundle with invalid UTF-8 path must return error"
     );
     let err: String = read_last_error(host);
@@ -44,9 +46,11 @@ fn test_reload_bundle_invalid_utf8_path() {
     assert!(!host.is_null(), "runtime_new must succeed");
     let bad_path: &[u8] = &[0xff_u8, 0xfe_u8, b'/', b'p', b'l', b'u', b'g'];
     // SAFETY: host is non-null, bad_path.as_ptr() valid for bad_path.len() bytes.
-    let result: polyplug_abi::AbiError = unsafe { ((*host).reload_bundle)(host, bad_path.as_ptr(), bad_path.len()) };
+    let result: polyplug_abi::AbiError =
+        unsafe { ((*host).reload_bundle)(host, bad_path.as_ptr(), bad_path.len()) };
     assert_ne!(
-        result.code, polyplug_abi::AbiErrorCode::Ok,
+        result.code,
+        polyplug_abi::AbiErrorCode::Ok,
         "reload_bundle with invalid UTF-8 path must return error"
     );
     let err: String = read_last_error(host);
@@ -72,7 +76,8 @@ fn test_runtime_healthy_after_invalid_utf8() {
     // Now try a valid ASCII path (non-existent file is OK — just proves runtime didn't break)
     let good_path: &[u8] = b"/tmp/nonexistent_plugin_dir";
     // SAFETY: host non-null, good_path valid for its len bytes.
-    let result2: polyplug_abi::AbiError = unsafe { ((*host).load_bundle)(host, good_path.as_ptr(), good_path.len()) };
+    let result2: polyplug_abi::AbiError =
+        unsafe { ((*host).load_bundle)(host, good_path.as_ptr(), good_path.len()) };
     // We expect a 'path not found' error, not a panic. result2.code != Ok is expected.
     let err2: String = read_last_error(host);
     assert!(

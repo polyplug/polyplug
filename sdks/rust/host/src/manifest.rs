@@ -4,4 +4,6 @@
 //! rather than defining duplicates. This ensures single source of truth.
 
 // Re-export manifest types from polyplug core
-pub use polyplug::loader::{ManifestData, ManifestDependency, RawManifestDependency, parse_manifest};
+pub use polyplug::loader::{
+    ManifestData, ManifestDependency, RawManifestDependency, parse_manifest,
+};

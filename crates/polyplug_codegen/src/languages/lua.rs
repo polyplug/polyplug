@@ -23,8 +23,8 @@ impl LuaGenerator {
     /// Strip `Option<...>` wrapper if present.
     fn strip_option(rust_type: &str) -> &str {
         if let Some(inner) = rust_type.strip_prefix("Option<") {
-            if inner.ends_with('>') {
-                return &inner[..inner.len() - 1];
+            if let Some(stripped) = inner.strip_suffix('>') {
+                return stripped;
             }
         }
         rust_type
@@ -95,10 +95,7 @@ impl LuaGenerator {
         }
 
         // Strip Rust module paths (e.g., "crate::host::HostContractInstance" -> "HostContractInstance").
-        if let Some(short) = rust_type
-            .rsplit("::")
-            .next()
-        {
+        if let Some(short) = rust_type.rsplit("::").next() {
             // Only strip if it actually had a :: separator (avoid stripping single-word types).
             if rust_type.contains("::") {
                 return Self::rust_type_to_lua(short);
@@ -229,7 +226,11 @@ impl LuaGenerator {
     /// Generate a typedef for a function pointer type.
     ///
     /// Returns (typedef_line, type_name_to_use_in_struct).
-    fn generate_fn_ptr_typedef(struct_name: &str, field_name: &str, rust_type: &str) -> (String, String) {
+    fn generate_fn_ptr_typedef(
+        struct_name: &str,
+        field_name: &str,
+        rust_type: &str,
+    ) -> (String, String) {
         let fn_type = Self::convert_function_pointer(rust_type);
         let typedef_name = format!("{}_{}_fn", struct_name, field_name);
 
@@ -307,7 +308,7 @@ impl CodeGenerator for LuaGenerator {
             output.push_str(&format!("    // Expected size: {} bytes\n", size));
         }
 
-        output.push_str("\n");
+        output.push('\n');
 
         // Prepend typedefs before the struct.
         let mut result = typedefs;
@@ -415,8 +416,11 @@ mod tests {
     /// Test that fn ptr typedefs produce valid C types (not Rust syntax).
     #[test]
     fn lua_fn_ptr_typedef_uses_c_types() {
-        let (typedef, _type_name) =
-            LuaGenerator::generate_fn_ptr_typedef("TestStruct", "callback", "unsafeextern\"C\"fn(ptr:*constu8,len:usize)->u32");
+        let (typedef, _type_name) = LuaGenerator::generate_fn_ptr_typedef(
+            "TestStruct",
+            "callback",
+            "unsafeextern\"C\"fn(ptr:*constu8,len:usize)->u32",
+        );
         assert!(
             typedef.contains("uint32_t"),
             "u32 return type should be uint32_t: {}",
@@ -437,8 +441,11 @@ mod tests {
     /// Test that void-returning fn ptrs don't produce extra ')' chars.
     #[test]
     fn lua_fn_ptr_void_return_no_extra_parens() {
-        let (typedef, _type_name) =
-            LuaGenerator::generate_fn_ptr_typedef("Test", "destroy", "unsafeextern\"C\"fn(this:*constHostInterface,instance:GuestContractInstance)->()");
+        let (typedef, _type_name) = LuaGenerator::generate_fn_ptr_typedef(
+            "Test",
+            "destroy",
+            "unsafeextern\"C\"fn(this:*constHostInterface,instance:GuestContractInstance)->()",
+        );
         assert!(
             !typedef.contains("))"),
             "void return type should not produce double-parens: {}",

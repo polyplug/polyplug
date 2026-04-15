@@ -83,7 +83,11 @@ static TEST_ADD_FNS: [FnPtr; 1] = [FnPtr(plugin_add as *const ())];
 
 static TEST_ADD_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(TEST_ADD_CONTRACT_ID),
-    contract_version: Version { major: 1, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: create_instance_stub,
     destroy_instance: destroy_instance_stub,
@@ -104,7 +108,11 @@ static TEST_ADD_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
         ptr: b"test.add".as_ptr(),
         len: 8,
     },
-    version: Version { major: 1, minor: 0, patch: 0 },
+    version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
 };
 
 // ─── ABI Exports ─────────────────────────────────────────────────────────────

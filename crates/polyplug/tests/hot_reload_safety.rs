@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::{
-    DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor,
-    GuestContractHandle, StringView, Version, DispatchMechanisms, GuestContractId,
+    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractId, GuestContractInterface,
+    HostInterface, NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::BundleId;
 
@@ -39,7 +39,11 @@ unsafe extern "C" fn noop_destroy_instance(
 
 static INTERFACE_V1: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
-    contract_version: Version { major: 1, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
     destroy_instance: noop_destroy_instance,
@@ -53,7 +57,11 @@ static INTERFACE_V1: GuestContractInterface = GuestContractInterface {
 
 static INTERFACE_V2: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
-    contract_version: Version { major: 2, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 2,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
     destroy_instance: noop_destroy_instance,
@@ -71,7 +79,11 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
     PluginDescriptor {
         name: StringView::from_static(name.as_bytes()),
         contract_name: StringView::from_static(contract_name.as_bytes()),
-        version: Version { major: 1, minor: 0, patch: 0 },
+        version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
     }
 }
 
@@ -119,8 +131,10 @@ fn test_swap_interface_changes_interface_pointer() {
         .expect("swap_interface should succeed");
 
     // The same handle should now resolve to INTERFACE_V2.
-    let resolve_result_after: Result<*const GuestContractInterface, polyplug::error::RegistryError> =
-        registry.resolve_guest_contract(handle);
+    let resolve_result_after: Result<
+        *const GuestContractInterface,
+        polyplug::error::RegistryError,
+    > = registry.resolve_guest_contract(handle);
 
     // With the new model (no generation), the handle should still be valid after swap
     assert!(
@@ -132,10 +146,7 @@ fn test_swap_interface_changes_interface_pointer() {
     let interface_ptr_after: *const GuestContractInterface =
         resolve_result_after.expect("resolve after swap should succeed");
     let version_after: &Version = unsafe { &(*interface_ptr_after).contract_version };
-    assert_eq!(
-        version_after.major, 2,
-        "after swap: should have version 2"
-    );
+    assert_eq!(version_after.major, 2, "after swap: should have version 2");
 }
 
 // ─── Test 2: Direct swap verification ──────────────────────────────────────────
@@ -158,8 +169,9 @@ fn test_direct_swap_interface() {
     .expect("registration should succeed");
 
     // Resolve before swap
-    let interface_ptr_before: *const GuestContractInterface =
-        registry.resolve_guest_contract(handle).expect("resolve should succeed before swap");
+    let interface_ptr_before: *const GuestContractInterface = registry
+        .resolve_guest_contract(handle)
+        .expect("resolve should succeed before swap");
 
     // SAFETY: interface_ptr_before points to INTERFACE_V1 which is 'static.
     let version_before: &Version = unsafe { &(*interface_ptr_before).contract_version };
@@ -172,8 +184,9 @@ fn test_direct_swap_interface() {
         .expect("swap_interface should succeed");
 
     // Resolve after swap - the handle should still be valid
-    let interface_ptr_after: *const GuestContractInterface =
-        registry.resolve_guest_contract(handle).expect("resolve should succeed after swap");
+    let interface_ptr_after: *const GuestContractInterface = registry
+        .resolve_guest_contract(handle)
+        .expect("resolve should succeed after swap");
 
     // SAFETY: interface_ptr_after points to INTERFACE_V2 which is 'static.
     let version_after: &Version = unsafe { &(*interface_ptr_after).contract_version };

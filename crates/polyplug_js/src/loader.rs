@@ -18,24 +18,24 @@ use rquickjs::Persistent;
 use rquickjs::Runtime;
 use rquickjs::Value;
 
+use polyplug::Runtime as PolyplugRuntime;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::ManifestData;
 use polyplug::loader::BundleLoader;
-use polyplug_abi::HostInterface;
-use polyplug::Runtime as PolyplugRuntime;
+use polyplug::loader::ManifestData;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
-use polyplug_abi::DispatchType;
-use polyplug_abi::VmLoaderData;
 use polyplug_abi::BundleInitContext;
-use polyplug_abi::PluginDescriptor;
+use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
-use polyplug_abi::GuestContractInterface;
 use polyplug_abi::GuestContractInstance;
+use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostInterface;
+use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
-use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
+use polyplug_abi::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
+use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 use polyplug_abi::types::Version;
 use polyplug_utils::GuestContractId;
 
@@ -46,9 +46,9 @@ use crate::config::JsConfig;
 use core::cell::RefCell;
 use std::rc::Rc;
 
+use rquickjs::JsLifetime;
 use rquickjs::runtime::UserDataError;
 use rquickjs::runtime::UserDataGuard;
-use rquickjs::JsLifetime;
 
 /// Registration data collected from the JS plugin during polyplug_init.
 ///
@@ -57,7 +57,7 @@ use rquickjs::JsLifetime;
 struct JsRegistrationData {
     contract_id: u64,
     contract_version: u32,
-    fn_count: usize,
+    _fn_count: usize,
     contract_name: String,
     functions: Vec<PersistentFunction>,
 }
@@ -161,7 +161,9 @@ unsafe extern "C" fn js_dispatch(
     match call_result {
         Ok(0) => AbiError::ok(),
         Ok(code) => AbiError {
-            code: unsafe { core::mem::transmute(code as u32) },
+            // SAFETY: code is a non-zero i32 from a JS init call result.
+            // AbiErrorCode is #[repr(u32)], so transmuting from u32 is sound for any value.
+            code: unsafe { core::mem::transmute::<u32, AbiErrorCode>(code as u32) },
             message: StringView::null(),
         },
         Err(_) => AbiError {
@@ -182,20 +184,11 @@ fn pack_handle(h: GuestContractHandle) -> Option<u64> {
 }
 
 /// Helper to get HostInterface pointer from JS globals.
-fn get_host_interface_from_globals<'js>(
-    ctx: &Ctx<'js>,
-) -> Option<*const HostInterface> {
-    let polyplug_obj: Object<'js> = ctx
-        .globals()
-        .get::<&str, Object<'js>>("polyplug")
-        .ok()?;
+fn get_host_interface_from_globals<'js>(ctx: &Ctx<'js>) -> Option<*const HostInterface> {
+    let polyplug_obj: Object<'js> = ctx.globals().get::<&str, Object<'js>>("polyplug").ok()?;
 
-    let vtable_lo: u32 = polyplug_obj
-        .get::<&str, u32>("_hostVtableLo")
-        .ok()?;
-    let vtable_hi: u32 = polyplug_obj
-        .get::<&str, u32>("_hostVtableHi")
-        .ok()?;
+    let vtable_lo: u32 = polyplug_obj.get::<&str, u32>("_hostVtableLo").ok()?;
+    let vtable_hi: u32 = polyplug_obj.get::<&str, u32>("_hostVtableHi").ok()?;
 
     let host_interface_ptr: *const HostInterface =
         ((vtable_hi as u64) << 32 | vtable_lo as u64) as usize as *const HostInterface;
@@ -247,7 +240,9 @@ fn register_host_functions<'js>(
     .map_err(|e: rquickjs::Error| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
-            error: format!("JS runtime js-quickjs error: findByContract function creation failed: {e}"),
+            error: format!(
+                "JS runtime js-quickjs error: findByContract function creation failed: {e}"
+            ),
         })
     })?;
 
@@ -262,7 +257,13 @@ fn register_host_functions<'js>(
 
     let find_by_bundle_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |_ctx: Ctx<'js>, _blo: u32, _bhi: u32, _clo: u32, _chi: u32, _min_ver: u32| -> Option<u64> {
+        |_ctx: Ctx<'js>,
+         _blo: u32,
+         _bhi: u32,
+         _clo: u32,
+         _chi: u32,
+         _min_ver: u32|
+         -> Option<u64> {
             // Note: find_by_bundle was removed from HostInterface in the instance-based model.
             // Use find_by_contract instead.
             None
@@ -271,7 +272,9 @@ fn register_host_functions<'js>(
     .map_err(|e: rquickjs::Error| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
-            error: format!("JS runtime js-quickjs error: findByBundle function creation failed: {e}"),
+            error: format!(
+                "JS runtime js-quickjs error: findByBundle function creation failed: {e}"
+            ),
         })
     })?;
 
@@ -302,7 +305,9 @@ fn register_host_functions<'js>(
     .map_err(|e: rquickjs::Error| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
-            error: format!("JS runtime js-quickjs error: findAllByContract function creation failed: {e}"),
+            error: format!(
+                "JS runtime js-quickjs error: findAllByContract function creation failed: {e}"
+            ),
         })
     })?;
 
@@ -315,8 +320,9 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let resolve_guest_contract_fn: Function<'js> =
-        Function::new(ctx.clone(), |ctx: Ctx<'js>, packed: u64| -> Option<u64> {
+    let resolve_guest_contract_fn: Function<'js> = Function::new(
+        ctx.clone(),
+        |ctx: Ctx<'js>, packed: u64| -> Option<u64> {
             let index: u32 = packed as u32;
             let handle: GuestContractHandle = GuestContractHandle { index };
             let hvt: *const HostInterface = get_host_interface_from_globals(&ctx)?;
@@ -328,13 +334,16 @@ fn register_host_functions<'js>(
             } else {
                 Some(vtable_ptr as usize as u64)
             }
+        },
+    )
+    .map_err(|e: rquickjs::Error| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!(
+                "JS runtime js-quickjs error: resolveGuestContract function creation failed: {e}"
+            ),
         })
-        .map_err(|e: rquickjs::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!("JS runtime js-quickjs error: resolveGuestContract function creation failed: {e}"),
-            })
-        })?;
+    })?;
 
     polyplug_obj
         .set("resolveGuestContract", resolve_guest_contract_fn)
@@ -362,7 +371,9 @@ fn register_host_functions<'js>(
     .map_err(|e: rquickjs::Error| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
-            error: format!("JS runtime js-quickjs error: getHostContract function creation failed: {e}"),
+            error: format!(
+                "JS runtime js-quickjs error: getHostContract function creation failed: {e}"
+            ),
         })
     })?;
 
@@ -406,7 +417,7 @@ fn register_host_functions<'js>(
             let data: JsRegistrationData = JsRegistrationData {
                 contract_id,
                 contract_version: 0,
-                fn_count: fn_count_usize,
+                _fn_count: fn_count_usize,
                 contract_name,
                 functions,
             };
@@ -423,7 +434,9 @@ fn register_host_functions<'js>(
     .map_err(|e: rquickjs::Error| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
-            error: format!("JS runtime js-quickjs error: registerVtable function creation failed: {e}"),
+            error: format!(
+                "JS runtime js-quickjs error: registerVtable function creation failed: {e}"
+            ),
         })
     })?;
 
@@ -520,7 +533,9 @@ fn register_host_functions<'js>(
         .map_err(|e: rquickjs::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
-                error: format!("JS runtime js-quickjs error: readI32 function creation failed: {e}"),
+                error: format!(
+                    "JS runtime js-quickjs error: readI32 function creation failed: {e}"
+                ),
             })
         })?;
 
@@ -582,7 +597,9 @@ fn register_host_functions<'js>(
         .map_err(|e: rquickjs::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
-                error: format!("JS runtime js-quickjs error: readByte function creation failed: {e}"),
+                error: format!(
+                    "JS runtime js-quickjs error: readByte function creation failed: {e}"
+                ),
             })
         })?;
 
@@ -751,11 +768,7 @@ impl BundleLoader for JsLoader {
         "js-quickjs"
     }
 
-    fn load(
-        &self,
-        manifest: &ManifestData,
-        runtime: &PolyplugRuntime,
-    ) -> Result<(), RuntimeError> {
+    fn load(&self, manifest: &ManifestData, runtime: &PolyplugRuntime) -> Result<(), RuntimeError> {
         let bundle_id: u64 = manifest.id;
 
         let bundle_path: PathBuf = if !manifest.file.is_empty() {
@@ -916,7 +929,8 @@ impl BundleLoader for JsLoader {
             registration_slot.borrow_mut().take().ok_or_else(|| {
                 RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
-                    error: "JS runtime js-quickjs error: polyplug_init did not call registerVtable".to_owned(),
+                    error: "JS runtime js-quickjs error: polyplug_init did not call registerVtable"
+                        .to_owned(),
                 })
             })?;
 
@@ -933,19 +947,26 @@ impl BundleLoader for JsLoader {
 
         let plugin_interface: GuestContractInterface = GuestContractInterface {
             contract_id,
-            contract_version: Version { major: major_version, minor: 0, patch: 0 },
+            contract_version: Version {
+                major: major_version,
+                minor: 0,
+                patch: 0,
+            },
             dispatch_type: DispatchType::VirtualMachine,
             create_instance: js_create_instance,
             destroy_instance: js_destroy_instance,
             dispatch: DispatchMechanisms {
                 vm: VmDispatch {
                     call: js_dispatch,
-                    loader_data: VmLoaderData { data: loader_data_ptr as *mut core::ffi::c_void },
+                    loader_data: VmLoaderData {
+                        data: loader_data_ptr as *mut core::ffi::c_void,
+                    },
                 },
             },
         };
 
-        let static_interface: *const GuestContractInterface = Box::into_raw(Box::new(plugin_interface));
+        let static_interface: *const GuestContractInterface =
+            Box::into_raw(Box::new(plugin_interface));
 
         let contract_name_leaked: &'static str =
             Box::leak(registration_data.contract_name.into_boxed_str());
@@ -955,18 +976,26 @@ impl BundleLoader for JsLoader {
                 ptr: contract_name_leaked.as_ptr(),
                 len: contract_name_leaked.len(),
             },
-            version: Version { major: major_version, minor: 0, patch: 0 },
+            version: Version {
+                major: major_version,
+                minor: 0,
+                patch: 0,
+            },
         };
 
         // SAFETY: host_interface, descriptor, and static_interface are valid for this call.
         // The register_contract function uses self-passing pattern.
-        let abi_result: AbiError =
-            unsafe { ((*host_interface).register_contract)(host_interface, &descriptor, static_interface) };
+        let abi_result: AbiError = unsafe {
+            ((*host_interface).register_contract)(host_interface, &descriptor, static_interface)
+        };
 
         if !abi_result.is_ok() {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
-                error: format!("JS runtime js-quickjs error: register_contract returned error code {:?}", abi_result.code),
+                error: format!(
+                    "JS runtime js-quickjs error: register_contract returned error code {:?}",
+                    abi_result.code
+                ),
             }));
         }
 

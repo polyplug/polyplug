@@ -37,8 +37,8 @@ use rquickjs::Runtime;
 
 use polyplug::host_bridge::BridgeError;
 use polyplug::host_bridge::RuntimeLanguageBridge;
-use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::RuntimeLanguage;
 use polyplug_abi::StringView;
 
@@ -318,7 +318,9 @@ impl RuntimeLanguageBridge for JsHostBridge {
         match call_result {
             Ok(0) => AbiError::ok(),
             Ok(code) => AbiError {
-                code: unsafe { core::mem::transmute(code as u32) },
+                // SAFETY: code is a non-zero i32 from a JS host contract call result.
+                // AbiErrorCode is #[repr(u32)], so transmuting from u32 is sound for any value.
+                code: unsafe { core::mem::transmute::<u32, AbiErrorCode>(code as u32) },
                 message: StringView::null(),
             },
             Err(e) => {
@@ -365,7 +367,7 @@ unsafe impl Sync for JsHostBridge {}
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
-    
+
     use super::*;
 
     #[test]

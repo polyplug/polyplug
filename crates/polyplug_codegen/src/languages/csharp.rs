@@ -23,8 +23,8 @@ impl CSharpGenerator {
     /// Strip `Option<...>` wrapper if present.
     fn strip_option(rust_type: &str) -> &str {
         if let Some(inner) = rust_type.strip_prefix("Option<") {
-            if inner.ends_with('>') {
-                return &inner[..inner.len() - 1];
+            if let Some(stripped) = inner.strip_suffix('>') {
+                return stripped;
             }
         }
         rust_type
@@ -192,10 +192,7 @@ impl CSharpGenerator {
         }
 
         // Strip Rust module paths (e.g., "crate::host::HostContractInstance" -> "HostContractInstance").
-        if let Some(short) = rust_type
-            .rsplit("::")
-            .next()
-        {
+        if let Some(short) = rust_type.rsplit("::").next() {
             // Only strip if it actually had a :: separator (avoid stripping single-word types).
             if rust_type.contains("::") {
                 return Self::rust_type_to_csharp(short);
@@ -333,13 +330,10 @@ impl CodeGenerator for CSharpGenerator {
 
         // Emit size documentation comment if known (actual validation is in LayoutTests.cs).
         if let Some(size) = item.size_hint {
-            output.push_str(&format!(
-                "\n/// Expected size: {} bytes\n",
-                size
-            ));
+            output.push_str(&format!("\n/// Expected size: {} bytes\n", size));
         }
 
-        output.push_str("\n");
+        output.push('\n');
         output
     }
 
@@ -410,7 +404,8 @@ impl CodeGenerator for CSharpGenerator {
     }
 
     fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        "using System.Runtime.InteropServices;\nusing System.Text;\n\nnamespace Polyplug.Abi {\n\n".to_string()
+        "using System.Runtime.InteropServices;\nusing System.Text;\n\nnamespace Polyplug.Abi {\n\n"
+            .to_string()
     }
 
     fn generate_footer(&self, _ctx: &GenerationContext) -> String {
@@ -441,8 +436,8 @@ mod tests {
     #[test]
     fn csharp_delegate_uses_csharp_types() {
         let rust_type = "unsafeextern\"C\"fn(this:*constHostInterface,contract_id:u64)->AbiError";
-        let (return_type, params) = CSharpGenerator::parse_function_pointer(rust_type)
-            .expect("should parse fn ptr");
+        let (return_type, params) =
+            CSharpGenerator::parse_function_pointer(rust_type).expect("should parse fn ptr");
 
         assert_eq!(return_type, "AbiError");
         // Params must be C# types, not raw Rust syntax.

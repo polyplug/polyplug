@@ -17,7 +17,7 @@ use std::sync::RwLock;
 
 use polyplug_abi::RuntimeLanguage;
 use polyplug_abi::types::Version;
-use polyplug_abi::{GuestContractInterface, PluginDescriptor, GuestContractHandle};
+use polyplug_abi::{GuestContractHandle, GuestContractInterface, PluginDescriptor};
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::RegistryError;
@@ -66,7 +66,7 @@ pub struct BundleData {
 /// Live plugin registration data.
 pub(crate) struct PluginEntry {
     /// Plugin metadata — used by other crates for introspection.
-    pub descriptor: PluginDescriptor,
+    pub _descriptor: PluginDescriptor,
     /// Full contract name string for collision detection.
     pub contract_name: String,
     /// The bundle this registration originates from.
@@ -198,13 +198,13 @@ impl RuntimeStore {
 
         let slot: &mut PluginSlot = &mut data.slots[slot_idx as usize];
         slot.entry = Some(PluginEntry {
-            descriptor,
+            _descriptor: descriptor,
             contract_name,
             bundle_id,
         });
         // SAFETY: interface_ptr is a valid 'static pointer, we clone the interface
         // into an Arc for shared ownership.
-        slot.interface = Some(Arc::new(unsafe { (*interface_ptr).clone() }));
+        slot.interface = Some(Arc::new(unsafe { *interface_ptr }));
 
         // Update contract_index: push slot_idx into the Vec for this contract_id
         data.guest_contract_index
@@ -221,7 +221,11 @@ impl RuntimeStore {
                 descriptor: BundleDescriptor {
                     id: bundle_id,
                     name: String::new(),
-                    version: Version { major: 0, minor: 0, patch: 0 },
+                    version: Version {
+                        major: 0,
+                        minor: 0,
+                        patch: 0,
+                    },
                     runtime: RuntimeLanguage::Rust,
                     file_path: PathBuf::new(),
                     dependencies: Vec::new(),
@@ -247,7 +251,8 @@ impl RuntimeStore {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
-        let set: &mut HashSet<GuestContractId> = data.bundle_declared_deps.entry(bundle_id).or_default();
+        let set: &mut HashSet<GuestContractId> =
+            data.bundle_declared_deps.entry(bundle_id).or_default();
         for cid in contract_ids {
             set.insert(cid);
         }
@@ -255,7 +260,11 @@ impl RuntimeStore {
     }
 
     /// Returns true if `bundle_id` has declared `contract_id` as a dependency.
-    pub(crate) fn is_bundle_dependency_declared(&self, bundle_id: BundleId, contract_id: GuestContractId) -> bool {
+    pub(crate) fn is_bundle_dependency_declared(
+        &self,
+        bundle_id: BundleId,
+        contract_id: GuestContractId,
+    ) -> bool {
         let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -463,11 +472,11 @@ impl RuntimeStore {
         let mut count = 0;
         for &slot_idx in indices.iter() {
             let slot = &data.slots[slot_idx as usize];
-            if slot.entry.is_some() && let Some(ref interface) = slot.interface {
-                if interface.contract_version.major >= min_version {
+            if slot.entry.is_some()
+                && let Some(ref interface) = slot.interface
+                && interface.contract_version.major >= min_version {
                     count += 1;
                 }
-            }
         }
         count
     }
@@ -488,7 +497,11 @@ impl RuntimeStore {
     //  Delegates to find_guest_contract(). Kept for API compatibility.
     //  min_version encoding: (minor << 16 | patch), same as GuestContractInterface::contract_version.
     //  Pass 0 to accept any version.
-    pub fn find(&self, contract_id: GuestContractId, min_version: u32) -> Result<GuestContractHandle, RegistryError> {
+    pub fn find(
+        &self,
+        contract_id: GuestContractId,
+        min_version: u32,
+    ) -> Result<GuestContractHandle, RegistryError> {
         self.find_guest_contract(contract_id, min_version)
     }
 
@@ -497,7 +510,10 @@ impl RuntimeStore {
     /// Returns Err(InvalidHandle) if:
     /// - handle.index is out of bounds
     /// - the slot has no interface
-    pub fn resolve_guest_contract(&self, handle: GuestContractHandle) -> Result<*const GuestContractInterface, RegistryError> {
+    pub fn resolve_guest_contract(
+        &self,
+        handle: GuestContractHandle,
+    ) -> Result<*const GuestContractInterface, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -506,13 +522,17 @@ impl RuntimeStore {
 
         let slot_idx: usize = handle.index as usize;
         if slot_idx >= data.slots.len() {
-            return Err(RegistryError::InvalidHandle { index: handle.index });
+            return Err(RegistryError::InvalidHandle {
+                index: handle.index,
+            });
         }
 
         let slot: &PluginSlot = &data.slots[slot_idx];
         match slot.interface {
             Some(ref interface) => Ok(interface.as_ref() as *const GuestContractInterface),
-            None => Err(RegistryError::InvalidHandle { index: handle.index }),
+            None => Err(RegistryError::InvalidHandle {
+                index: handle.index,
+            }),
         }
     }
 
@@ -590,23 +610,26 @@ impl RuntimeStore {
             bundle_data.descriptor.dependencies = dependencies;
         } else {
             // Bundle has no plugins yet, create entry with empty plugin_slots
-            data.bundle_data.insert(bundle_id, BundleData {
-                plugin_slots: Vec::new(),
-                descriptor: BundleDescriptor {
-                    id: bundle_id,
-                    name: bundle_name.clone(),
-                    version,
-                    runtime,
-                    file_path,
-                    dependencies,
+            data.bundle_data.insert(
+                bundle_id,
+                BundleData {
+                    plugin_slots: Vec::new(),
+                    descriptor: BundleDescriptor {
+                        id: bundle_id,
+                        name: bundle_name.clone(),
+                        version,
+                        runtime,
+                        file_path,
+                        dependencies,
+                    },
                 },
-            });
+            );
         }
 
         // Add to bundle_name_index for multi-version support
         // Avoid duplicates when re-registering (e.g., during hot-reload).
         let name_entries = data.bundle_name_index.entry(bundle_name).or_default();
-        if !name_entries.iter().any(|id| *id == bundle_id) {
+        if !name_entries.contains(&bundle_id) {
             name_entries.push(bundle_id);
         }
 
@@ -696,22 +719,25 @@ impl RuntimeStore {
                 eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
-        data.bundle_data
-            .get(&bundle_id)
-            .map(|bd: &BundleData| {
-                // Clone descriptor fields manually since BundleDescriptor doesn't derive Clone
-                BundleDescriptor {
-                    id: bd.descriptor.id,
-                    name: bd.descriptor.name.clone(),
-                    version: bd.descriptor.version,
-                    runtime: bd.descriptor.runtime,
-                    file_path: bd.descriptor.file_path.clone(),
-                    dependencies: bd.descriptor.dependencies.iter().map(|d| BundleDependency {
+        data.bundle_data.get(&bundle_id).map(|bd: &BundleData| {
+            // Clone descriptor fields manually since BundleDescriptor doesn't derive Clone
+            BundleDescriptor {
+                id: bd.descriptor.id,
+                name: bd.descriptor.name.clone(),
+                version: bd.descriptor.version,
+                runtime: bd.descriptor.runtime,
+                file_path: bd.descriptor.file_path.clone(),
+                dependencies: bd
+                    .descriptor
+                    .dependencies
+                    .iter()
+                    .map(|d| BundleDependency {
                         name: d.name.clone(),
                         min_version: d.min_version,
-                    }).collect(),
-                }
-            })
+                    })
+                    .collect(),
+            }
+        })
     }
 
     /// Get all BundleIds for a given bundle name (multi-version support).
@@ -742,16 +768,18 @@ impl RuntimeStore {
 
     /// Get a clone of the Arc<GuestContractInterface> for `slot_index` to check strong_count.
     /// Returns None if the slot is empty or has no interface.
-    pub(crate) fn get_guest_contract_interface_arc(&self, slot_index: u32) -> Option<Arc<GuestContractInterface>> {
+    pub(crate) fn get_guest_contract_interface_arc(
+        &self,
+        slot_index: u32,
+    ) -> Option<Arc<GuestContractInterface>> {
         let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
         let slot: &PluginSlot = data.slots.get(slot_index as usize)?;
-        slot.interface.as_ref().map(|arc| Arc::clone(arc))
+        slot.interface.as_ref().map(Arc::clone)
     }
-
 
     /// Clear all registrations for testing.
     /// This is only available in test builds to allow test isolation.
@@ -781,8 +809,8 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
     use polyplug_abi::{
-        DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor, StringView,
-        Version, DispatchMechanisms, GuestContractInstance,
+        DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
+        HostInterface, NativeDispatch, PluginDescriptor, StringView, Version,
     };
 
     /// No-op create_instance callback.
@@ -803,7 +831,11 @@ mod tests {
     fn mock_interface(contract_id: u64) -> GuestContractInterface {
         GuestContractInterface {
             contract_id: GuestContractId::from_u64(contract_id),
-            contract_version: Version { major: 1, minor: 0, patch: 0 },
+            contract_version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
             dispatch_type: DispatchType::Native,
             create_instance: noop_create_instance,
             destroy_instance: noop_destroy_instance,
@@ -820,7 +852,11 @@ mod tests {
         PluginDescriptor {
             name: StringView::from_static(name.as_bytes()),
             contract_name: StringView::from_static(contract_name.as_bytes()),
-            version: Version { major: 1, minor: 0, patch: 0 },
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
         }
     }
 
@@ -866,7 +902,8 @@ mod tests {
 
         // Use a handle with out-of-bounds index
         let invalid: GuestContractHandle = GuestContractHandle { index: 999 };
-        let result: Result<*const GuestContractInterface, RegistryError> = registry.resolve_guest_contract(invalid);
+        let result: Result<*const GuestContractInterface, RegistryError> =
+            registry.resolve_guest_contract(invalid);
         assert!(
             matches!(result, Err(RegistryError::InvalidHandle { .. })),
             "expected InvalidHandle error"
@@ -940,8 +977,9 @@ mod tests {
         }
         .expect("registration should succeed");
 
-        let interface_ptr: *const GuestContractInterface =
-            registry.resolve_guest_contract(handle).expect("resolve_guest_contract should succeed");
+        let interface_ptr: *const GuestContractInterface = registry
+            .resolve_guest_contract(handle)
+            .expect("resolve_guest_contract should succeed");
         // SAFETY: interface_ptr points to a valid GuestContractInterface
         let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
         assert_eq!(contract_id, interface.contract_id);
@@ -978,18 +1016,30 @@ mod tests {
         // Register a plugin
         // SAFETY: interface is a local value for testing
         unsafe {
-            registry.register_guest_contract(descriptor, &interface, "contract".to_owned(), bundle_id)
-        }.expect("registration should succeed");
+            registry.register_guest_contract(
+                descriptor,
+                &interface,
+                "contract".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("registration should succeed");
 
         // Register bundle metadata
-        registry.register_bundle_metadata(
-            bundle_id,
-            "test-bundle".to_string(),
-            Version { major: 1, minor: 0, patch: 0 },
-            RuntimeLanguage::Rust,
-            PathBuf::from("/test"),
-            Vec::new(),
-        ).expect("metadata registration should succeed");
+        registry
+            .register_bundle_metadata(
+                bundle_id,
+                "test-bundle".to_string(),
+                Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                RuntimeLanguage::Rust,
+                PathBuf::from("/test"),
+                Vec::new(),
+            )
+            .expect("metadata registration should succeed");
 
         // O(1) lookup should return the slot
         let slots: Vec<u32> = registry.get_bundle_plugin_slots(bundle_id);
@@ -1006,20 +1056,36 @@ mod tests {
 
         // SAFETY: interface is a local value for testing
         unsafe {
-            registry.register_guest_contract(descriptor, &interface, "contract".to_owned(), bundle_id)
-        }.expect("registration should succeed");
+            registry.register_guest_contract(
+                descriptor,
+                &interface,
+                "contract".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("registration should succeed");
 
-        registry.register_bundle_metadata(
-            bundle_id,
-            "test-bundle".to_string(),
-            Version { major: 1, minor: 2, patch: 3 },
-            RuntimeLanguage::Python,
-            PathBuf::from("/path/to/bundle"),
-            vec![BundleDependency {
-                name: "dep-bundle".to_string(),
-                min_version: Some(Version { major: 1, minor: 0, patch: 0 }),
-            }],
-        ).expect("metadata registration should succeed");
+        registry
+            .register_bundle_metadata(
+                bundle_id,
+                "test-bundle".to_string(),
+                Version {
+                    major: 1,
+                    minor: 2,
+                    patch: 3,
+                },
+                RuntimeLanguage::Python,
+                PathBuf::from("/path/to/bundle"),
+                vec![BundleDependency {
+                    name: "dep-bundle".to_string(),
+                    min_version: Some(Version {
+                        major: 1,
+                        minor: 0,
+                        patch: 0,
+                    }),
+                }],
+            )
+            .expect("metadata registration should succeed");
 
         let desc: Option<BundleDescriptor> = registry.get_bundle_descriptor(bundle_id);
         assert!(desc.is_some(), "descriptor should be found");
@@ -1038,14 +1104,20 @@ mod tests {
         let bundle_id: BundleId = BundleId::new("test-bundle");
 
         // Register bundle metadata (no plugins needed for name index test)
-        registry.register_bundle_metadata(
-            bundle_id,
-            "test-bundle".to_string(),
-            Version { major: 1, minor: 0, patch: 0 },
-            RuntimeLanguage::Rust,
-            PathBuf::new(),
-            Vec::new(),
-        ).expect("metadata registration should succeed");
+        registry
+            .register_bundle_metadata(
+                bundle_id,
+                "test-bundle".to_string(),
+                Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                RuntimeLanguage::Rust,
+                PathBuf::new(),
+                Vec::new(),
+            )
+            .expect("metadata registration should succeed");
 
         let ids: Vec<BundleId> = registry.get_bundles_by_name("test-bundle");
         assert_eq!(ids.len(), 1);
@@ -1053,6 +1125,9 @@ mod tests {
 
         // Non-existent name returns empty
         let missing: Vec<BundleId> = registry.get_bundles_by_name("non-existent");
-        assert!(missing.is_empty(), "non-existent name should return empty vec");
+        assert!(
+            missing.is_empty(),
+            "non-existent name should return empty vec"
+        );
     }
 }

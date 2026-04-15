@@ -3,12 +3,12 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use polyplug_abi::{HostInterface, RuntimeLanguage};
 
 use crate::{
+    RuntimeConfig,
     compatibility::{CapabilityGraph, Compatibility},
     error::{GraphError, LoaderError, RuntimeError},
     loader::{BundleLoader, ManifestData},
     registry::runtime_store::RuntimeStore,
-    runtime::{Runtime, WarningCb, ReloadCb},
-    RuntimeConfig,
+    runtime::{ReloadCb, Runtime, WarningCb},
 };
 
 /// Builder for constructing a Runtime.
@@ -103,7 +103,7 @@ impl RuntimeBuilder {
         // The runtime field will be set when Runtime is created.
         // For now, it's null - the callbacks extract runtime from RuntimeContext.
         let host_abi: &'static HostInterface = Box::leak(Box::new(HostInterface {
-            runtime: std::ptr::null_mut(),
+            runtime: core::ptr::null_mut(),
             register_contract: crate::runtime::host_register_contract,
             alloc: crate::runtime::host_alloc,
             free: crate::runtime::host_free,
@@ -150,8 +150,7 @@ impl RuntimeBuilder {
             crate::loader::scanner::scan_dirs(&self.plugin_dirs);
 
         // Snapshot manifests for hot-reload cascade detection.
-        let mut manifests_map: HashMap<String, crate::loader::ManifestData> =
-            HashMap::new();
+        let mut manifests_map: HashMap<String, crate::loader::ManifestData> = HashMap::new();
         for (path, manifest) in &discovered {
             let mut stored_manifest: ManifestData = manifest.clone();
             stored_manifest.path = path.clone();
@@ -171,7 +170,7 @@ impl RuntimeBuilder {
             last_error: std::sync::Mutex::new(String::new()),
             host_contracts: std::sync::RwLock::new(HashMap::new()),
             singleton_instances: std::sync::RwLock::new(HashMap::new()),
-            host_runtime: self.host_runtime.into(),
+            host_runtime: self.host_runtime,
         };
 
         // If nothing discovered, return Runtime with empty bundles (no graph needed)

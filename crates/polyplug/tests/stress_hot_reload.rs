@@ -21,7 +21,10 @@ use polyplug::ReloadPhase;
 use polyplug::error::RuntimeError;
 use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug::runtime::Runtime;
-use polyplug_abi::{DispatchType, GuestContractInterface, HostInterface, NativeDispatch, DispatchMechanisms, Version, GuestContractId, StringView, PluginDescriptor, ReloadPhaseType};
+use polyplug_abi::{
+    DispatchMechanisms, DispatchType, GuestContractId, GuestContractInterface, HostInterface,
+    NativeDispatch, PluginDescriptor, ReloadPhaseType, StringView, Version,
+};
 use polyplug_utils::BundleId;
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
@@ -50,7 +53,11 @@ unsafe extern "C" fn noop_destroy_instance(
 
 static INTERFACE_MEM_A: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
-    contract_version: Version { major: 1, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
     destroy_instance: noop_destroy_instance,
@@ -64,7 +71,11 @@ static INTERFACE_MEM_A: GuestContractInterface = GuestContractInterface {
 
 static INTERFACE_MEM_B: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
-    contract_version: Version { major: 2, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 2,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
     destroy_instance: noop_destroy_instance,
@@ -78,7 +89,11 @@ static INTERFACE_MEM_B: GuestContractInterface = GuestContractInterface {
 
 static INTERFACE_QU_A: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64),
-    contract_version: Version { major: 1, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
     destroy_instance: noop_destroy_instance,
@@ -92,7 +107,11 @@ static INTERFACE_QU_A: GuestContractInterface = GuestContractInterface {
 
 static INTERFACE_QU_B: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64),
-    contract_version: Version { major: 2, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 2,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
     destroy_instance: noop_destroy_instance,
@@ -201,7 +220,11 @@ fn stress_memory_interface_swap_cycles() {
     let descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"stress-mem-plugin"),
         contract_name: StringView::from_static(b"stress.mem.contract"),
-        version: Version { major: 1, minor: 0, patch: 0 },
+        version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
     };
 
     // SAFETY: INTERFACE_MEM_A is 'static and valid for the lifetime of this test.
@@ -242,7 +265,11 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     let descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"swap-load-plugin"),
         contract_name: StringView::from_static(b"swap.load.contract"),
-        version: Version { major: 1, minor: 0, patch: 0 },
+        version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
     };
 
     // SAFETY: INTERFACE_QU_A is 'static and valid for the test lifetime.
@@ -271,7 +298,10 @@ fn stress_direct_swap_under_concurrent_reader_load() {
                 let find_result: Result<
                     polyplug_abi::GuestContractHandle,
                     polyplug::error::RegistryError,
-                > = reg_clone.find_guest_contract(GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64), 0_u32);
+                > = reg_clone.find_guest_contract(
+                    GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64),
+                    0_u32,
+                );
                 if let Ok(resolved_handle) = find_result {
                     let resolve_result: Result<
                         *const GuestContractInterface,

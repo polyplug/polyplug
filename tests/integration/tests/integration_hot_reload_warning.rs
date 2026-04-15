@@ -18,7 +18,7 @@ use std::sync::Mutex;
 
 use polyplug::ReloadPhase;
 use polyplug::runtime::Runtime;
-use polyplug_native::{NativeLoader, NativeConfig};
+use polyplug_native::{NativeConfig, NativeLoader};
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
 
@@ -69,10 +69,7 @@ fn test_warning_callback_invoked_during_reload() {
         .loader(NativeLoader::new(NativeConfig::default()))
         .config(hot_reload_config())
         .on_warning(move |msg: &str| {
-            warnings_clone
-                .lock()
-                .unwrap()
-                .push(msg.to_owned());
+            warnings_clone.lock().unwrap().push(msg.to_owned());
         })
         .build()
         .expect("build runtime");
@@ -90,13 +87,11 @@ fn test_warning_callback_invoked_during_reload() {
         .expect("reload should succeed");
 
     // Check that warnings were captured (callback mechanism works)
-    let captured_warnings: Vec<String> =
-        warnings.lock().unwrap().clone();
+    let captured_warnings: Vec<String> = warnings.lock().unwrap().clone();
 
     // The warning should have been emitted with "Potential UB" substring
-    let has_potential_ub_warning: bool = captured_warnings
-        .iter()
-        .any(|w| w.contains("Potential UB"));
+    let has_potential_ub_warning: bool =
+        captured_warnings.iter().any(|w| w.contains("Potential UB"));
 
     assert!(
         has_potential_ub_warning,
@@ -124,10 +119,7 @@ fn test_warning_timing_after_preparing_before_reloaded() {
         .on_warning({
             let events = Arc::clone(&events);
             move |msg: &str| {
-                events
-                    .lock()
-                    .unwrap()
-                    .push(format!("WARNING: {}", msg));
+                events.lock().unwrap().push(format!("WARNING: {}", msg));
             }
         })
         .on_reload({
@@ -138,10 +130,7 @@ fn test_warning_timing_after_preparing_before_reloaded() {
                     ReloadPhase::Reloaded { .. } => "Reloaded",
                     ReloadPhase::Failed { .. } => "Failed",
                 };
-                events
-                    .lock()
-                    .unwrap()
-                    .push(format!("PHASE: {}", label));
+                events.lock().unwrap().push(format!("PHASE: {}", label));
             }
         })
         .build()
@@ -159,8 +148,7 @@ fn test_warning_timing_after_preparing_before_reloaded() {
         .expect("reload should succeed");
 
     // Check event order
-    let captured_events: Vec<String> =
-        events.lock().unwrap().clone();
+    let captured_events: Vec<String> = events.lock().unwrap().clone();
 
     // Find indices of key events
     let preparing_idx: Option<usize> = captured_events
@@ -224,10 +212,7 @@ fn test_warning_message_content_structure() {
         .loader(NativeLoader::new(NativeConfig::default()))
         .config(hot_reload_config())
         .on_warning(move |msg: &str| {
-            warnings_clone
-                .lock()
-                .unwrap()
-                .push(msg.to_owned());
+            warnings_clone.lock().unwrap().push(msg.to_owned());
         })
         .build()
         .expect("build runtime");
@@ -249,8 +234,7 @@ fn test_warning_message_content_structure() {
     );
 
     // Check captured warnings
-    let captured_warnings: Vec<String> =
-        warnings.lock().unwrap().clone();
+    let captured_warnings: Vec<String> = warnings.lock().unwrap().clone();
 
     // Find the Potential UB warning
     let ub_warning: Option<&String> = captured_warnings
@@ -268,11 +252,13 @@ fn test_warning_message_content_structure() {
         );
         assert!(
             warning.contains("reload_plugin_v1"),
-            "Warning should mention bundle name. Got: {}", warning
+            "Warning should mention bundle name. Got: {}",
+            warning
         );
         assert!(
             warning.contains("Proceeding"),
-            "Warning should indicate reload proceeds anyway. Got: {}", warning
+            "Warning should indicate reload proceeds anyway. Got: {}",
+            warning
         );
     }
 }

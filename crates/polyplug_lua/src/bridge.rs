@@ -35,8 +35,8 @@ use mlua::Lua;
 
 use polyplug::host_bridge::BridgeError;
 use polyplug::host_bridge::RuntimeLanguageBridge;
-use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::RuntimeLanguage;
 use polyplug_abi::StringView;
 
@@ -293,7 +293,7 @@ unsafe impl Sync for LuaHostBridge {}
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
-    
+
     use super::*;
 
     #[test]

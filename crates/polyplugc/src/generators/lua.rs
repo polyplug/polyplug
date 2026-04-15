@@ -380,7 +380,9 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "    local err_{plugin_upper} = host.register_contract(host_ptr, {plugin_upper}_DESCRIPTOR, {plugin_upper}_INTERFACE)\n"
             ));
-            out.push_str(&format!("    if err_{plugin_upper}.code ~= AbiErrorCode.Ok then\n"));
+            out.push_str(&format!(
+                "    if err_{plugin_upper}.code ~= AbiErrorCode.Ok then\n"
+            ));
             out.push_str(&format!("        return err_{plugin_upper}.code\n"));
             out.push_str("    end\n\n");
         }
@@ -463,9 +465,7 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) 
         "    __index = {contract_struct}_methods,\n",
         contract_struct = contract_struct
     ));
-    out.push_str(&format!(
-        "    __gc = function(self) self:destroy() end\n"
-    ));
+    out.push_str("    __gc = function(self) self:destroy() end\n");
     out.push_str("}\n\n");
 
     // Factory function - resolves interface, creates instance
@@ -615,7 +615,9 @@ fn generate_guest_plugin_interface(
     out.push_str(&format!(
         "function {plugin_var}_create_instance_stub(host, args)\n"
     ));
-    out.push_str("    -- Default stub returns null instance - users override for stateful plugins.\n");
+    out.push_str(
+        "    -- Default stub returns null instance - users override for stateful plugins.\n",
+    );
     out.push_str("    return ffi.new(\"GuestContractInstance\", nil)\n");
     out.push_str("end\n");
     out.push_str(&format!(
@@ -677,8 +679,12 @@ fn generate_guest_plugin_interface(
             "    functions[{idx}] = ffi.cast(\"uintptr_t\", {fn_name}_fn)\n"
         ));
     }
-    out.push_str(&format!("    {plugin_var}_INTERFACE.dispatch.native.function_count = {function_count}\n"));
-    out.push_str(&format!("    {plugin_var}_INTERFACE.dispatch.native.functions = functions\n"));
+    out.push_str(&format!(
+        "    {plugin_var}_INTERFACE.dispatch.native.function_count = {function_count}\n"
+    ));
+    out.push_str(&format!(
+        "    {plugin_var}_INTERFACE.dispatch.native.functions = functions\n"
+    ));
     out.push_str("end\n");
 
     Ok(())
@@ -1527,7 +1533,9 @@ fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHost
     out.push_str("-- The implementation must have methods matching the contract.\n");
     out.push_str("--\n");
     out.push_str("-- Memory:\n");
-    out.push_str("-- The returned interface is cached and lives for the lifetime of the program.\n");
+    out.push_str(
+        "-- The returned interface is cached and lives for the lifetime of the program.\n",
+    );
     out.push_str(&format!("function M.{factory_name}(impl)\n"));
     out.push_str(&format!("    _{class_name}_impl = impl\n\n"));
 
@@ -1560,8 +1568,17 @@ fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHost
     ));
     out.push_str(&format!("    interface.header.contract_major = {major}\n"));
     out.push_str(&format!("    interface.header.contract_minor = {minor}\n"));
-    out.push_str(&format!("    interface.header.function_count = {fn_count}\n"));
-    out.push_str(&format!("    interface.header.singleton = {singleton}  -- {}\n", if singleton { "singleton" } else { "multi-instance" }));
+    out.push_str(&format!(
+        "    interface.header.function_count = {fn_count}\n"
+    ));
+    out.push_str(&format!(
+        "    interface.header.singleton = {singleton}  -- {}\n",
+        if singleton {
+            "singleton"
+        } else {
+            "multi-instance"
+        }
+    ));
     out.push_str("    interface.header.dispatch_type = 0  -- DispatchType.Native\n");
     out.push_str("    interface.dispatch.native.impl_ptr = nil  -- We use global _impl instead\n");
     out.push_str("    interface.dispatch.native.functions = functions\n\n");
@@ -1584,7 +1601,9 @@ fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHost
     out.push_str("--     dispatch_fn: Function to call for each contract function\n");
     out.push_str("--\n");
     out.push_str("-- Memory:\n");
-    out.push_str("-- The returned interface is cached and lives for the lifetime of the program.\n");
+    out.push_str(
+        "-- The returned interface is cached and lives for the lifetime of the program.\n",
+    );
     out.push_str(&format!(
         "function M.{factory_vm_name}(bridge_data, dispatch_fn)\n"
     ));
@@ -1595,8 +1614,17 @@ fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHost
     ));
     out.push_str(&format!("    interface.header.contract_major = {major}\n"));
     out.push_str(&format!("    interface.header.contract_minor = {minor}\n"));
-    out.push_str(&format!("    interface.header.function_count = {fn_count}\n"));
-    out.push_str(&format!("    interface.header.singleton = {singleton}  -- {}\n", if singleton { "singleton" } else { "multi-instance" }));
+    out.push_str(&format!(
+        "    interface.header.function_count = {fn_count}\n"
+    ));
+    out.push_str(&format!(
+        "    interface.header.singleton = {singleton}  -- {}\n",
+        if singleton {
+            "singleton"
+        } else {
+            "multi-instance"
+        }
+    ));
     out.push_str("    interface.header.dispatch_type = 1  -- DispatchType.VirtualMachine\n");
     out.push_str("    interface.dispatch.vm.call = dispatch_fn\n");
     out.push_str("    interface.dispatch.vm.bridge_data = bridge_data\n\n");
@@ -1640,7 +1668,7 @@ fn generate_lua_host_thunk(
     // Handle return value
     if has_return {
         out.push_str(
-            &"            -- SAFETY: out is a valid pointer per ABI contract.\n".to_string(),
+            "            -- SAFETY: out is a valid pointer per ABI contract.\n",
         );
         out.push_str("            ffi.copy(out, result, ffi.sizeof(result))\n");
     } else {

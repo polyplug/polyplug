@@ -13,15 +13,15 @@ use std::path::Path;
 
 use netcorehost::pdcstring::PdCString;
 
+use polyplug::Runtime;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug_abi::HostInterface;
-use polyplug::Runtime;
 
-use crate::context::init_context;
-use crate::context::InitFn;
 use crate::context::CLR_CONTEXT;
+use crate::context::InitFn;
+use crate::context::init_context;
 
 pub struct DotnetLoader {
     config: DotnetConfig,
@@ -45,13 +45,19 @@ pub(crate) fn check_version_compatibility(
     let req_major_str: &str = req_parts.next().ok_or_else(|| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: min_framework.to_owned(),
-            error: format!("invalid framework version '{}': missing major version", min_framework),
+            error: format!(
+                "invalid framework version '{}': missing major version",
+                min_framework
+            ),
         })
     })?;
     let required_major: u32 = req_major_str.parse().map_err(|_| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: min_framework.to_owned(),
-            error: format!("invalid framework version '{}': invalid major version '{}'", min_framework, req_major_str),
+            error: format!(
+                "invalid framework version '{}': invalid major version '{}'",
+                min_framework, req_major_str
+            ),
         })
     })?;
     // Lenient parsing: non-numeric minor version components are treated as 0.
@@ -70,7 +76,10 @@ pub(crate) fn check_version_compatibility(
     let found_major: u32 = found_major_str.parse().map_err(|_| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: tfm.to_owned(),
-            error: format!("invalid framework version '{}': invalid major version '{}'", tfm, found_major_str),
+            error: format!(
+                "invalid framework version '{}': invalid major version '{}'",
+                tfm, found_major_str
+            ),
         })
     })?;
     // Lenient parsing: non-numeric minor version components are treated as 0.
@@ -81,7 +90,10 @@ pub(crate) fn check_version_compatibility(
     if found_major != required_major {
         return Err(RuntimeError::Loader(LoaderError::InitFailed {
             bundle: min_framework.to_owned(),
-            error: format!("runtime version mismatch: required={}, found={}", min_framework, tfm),
+            error: format!(
+                "runtime version mismatch: required={}, found={}",
+                min_framework, tfm
+            ),
         }));
     }
     if found_minor > required_minor + 2 {
@@ -113,7 +125,10 @@ impl BundleLoader for DotnetLoader {
         if !bundle_path.exists() {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
-                error: format!("assembly not found at path '{}'", bundle_path.to_string_lossy()),
+                error: format!(
+                    "assembly not found at path '{}'",
+                    bundle_path.to_string_lossy()
+                ),
             }));
         }
 
@@ -123,7 +138,10 @@ impl BundleLoader for DotnetLoader {
         let abs_path: std::path::PathBuf = bundle_path.canonicalize().map_err(|_| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
-                error: format!("assembly canonicalize failed for path '{}'", bundle_path.to_string_lossy()),
+                error: format!(
+                    "assembly canonicalize failed for path '{}'",
+                    bundle_path.to_string_lossy()
+                ),
             })
         })?;
 
@@ -179,8 +197,7 @@ impl BundleLoader for DotnetLoader {
         // SAFETY: managed_init is a valid fn ptr from CLR. host_interface and ctx are non-null and valid.
         // InitFn signature: (host, ctx) -> u32
         // The HostInterface pointer is passed directly (self-passing pattern).
-        let result: u32 =
-            unsafe { (*managed_init)(host_interface, &ctx) };
+        let result: u32 = unsafe { (*managed_init)(host_interface, &ctx) };
         if result != 0 {
             // Clear bundle_id TLS on error.
             polyplug::runtime::clear_init_bundle_id();

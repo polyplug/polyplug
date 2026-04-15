@@ -17,23 +17,23 @@ pub use runtime_language::RuntimeLanguage;
 
 // ─── Runtime exports ──────────────────────────────────────────────────────────
 
-pub use runtime::{Compatibility, RuntimeConfig, ReloadPhase, ReloadPhaseType};
+pub use runtime::{Compatibility, ReloadPhase, ReloadPhaseType, RuntimeConfig};
 
 // ─── Type exports ───────────────────────────────────────────────────────────
 
-pub use types::{AbiError, AbiErrorCode, StringView, Version, Buffer, Array, DependencyInfo};
+pub use types::{AbiError, AbiErrorCode, Array, Buffer, DependencyInfo, StringView, Version};
 
 // ─── Dispatch exports ────────────────────────────────────────────────────────
 
-pub use dispatch::{DispatchType, DispatchMechanisms, NativeDispatch, VmDispatch, VmLoaderData};
+pub use dispatch::{DispatchMechanisms, DispatchType, NativeDispatch, VmDispatch, VmLoaderData};
 
 // ─── FFI Helper Function exports ────────────────────────────────────────────
 
-pub use types::{abi_error_ok, string_view_null, string_view_from_static};
+pub use types::{abi_error_ok, string_view_from_static, string_view_null};
 
 // ─── New exports from guest module ───────────────────────────────────────────
 
-pub use guest::{GuestContractInterface, GuestContractInstance};
+pub use guest::{GuestContractInstance, GuestContractInterface};
 
 // ─── ID type re-exports (from polyplug_utils) ──────────────────────────────────
 
@@ -41,7 +41,7 @@ pub use polyplug_utils::{GuestContractId, HostContractId};
 
 // ─── New exports from host module ────────────────────────────────────────────
 
-pub use host::{HostContractInterface, HostContractInstance, HostInterface, RuntimeInterface};
+pub use host::{HostContractInstance, HostContractInterface, HostInterface, RuntimeInterface};
 
 pub use plugin::{BundleInitContext, GuestContractHandle, PluginDescriptor};
 

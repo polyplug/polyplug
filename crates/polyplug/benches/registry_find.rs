@@ -15,17 +15,17 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 
 use polyplug::registry::RuntimeStore;
+use polyplug_abi::DispatchMechanisms;
 use polyplug_abi::DispatchType;
-use polyplug_abi::GuestContractInterface;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostInterface;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::DispatchMechanisms;
-use polyplug_abi::GuestContractHandle;
 use polyplug_abi::StringView;
-use polyplug_utils::GuestContractId;
 use polyplug_utils::BundleId;
+use polyplug_utils::GuestContractId;
 
 // ─── Instance lifecycle stubs for benchmarks ────────────────────────────────────
 
@@ -48,7 +48,11 @@ unsafe extern "C" fn bench_destroy_instance(
 
 static BENCH_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0x0000_0000_0000_0001_u64),
-    contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
+    contract_version: polyplug_abi::Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: bench_create_instance,
     destroy_instance: bench_destroy_instance,
@@ -64,7 +68,11 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
     PluginDescriptor {
         name: StringView::from_static(name.as_bytes()),
         contract_name: StringView::from_static(contract_name.as_bytes()),
-        version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
+        version: polyplug_abi::Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
     }
 }
 
@@ -72,7 +80,11 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
 fn make_interface(id: u64) -> GuestContractInterface {
     GuestContractInterface {
         contract_id: GuestContractId::from_u64(id),
-        contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
+        contract_version: polyplug_abi::Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
         dispatch_type: DispatchType::Native,
         create_instance: bench_create_instance,
         destroy_instance: bench_destroy_instance,
@@ -94,7 +106,12 @@ fn bench_registry_find_by_contract_single(c: &mut Criterion) {
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
     let _handle: GuestContractHandle = unsafe {
         registry
-            .register_guest_contract(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
+            .register_guest_contract(
+                descriptor,
+                &BENCH_INTERFACE,
+                "bench.contract".to_owned(),
+                BundleId::from_u64(0u64),
+            )
             .expect("registration should succeed")
     };
 
@@ -106,8 +123,10 @@ fn bench_registry_find_by_contract_single(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("find_by_contract", "single_slot"), |b| {
         b.iter(|| {
-            let result: Result<GuestContractHandle, _> =
-                registry.find(black_box(GuestContractId::from_u64(contract_id)), black_box(0u32));
+            let result: Result<GuestContractHandle, _> = registry.find(
+                black_box(GuestContractId::from_u64(contract_id)),
+                black_box(0u32),
+            );
             let _ = black_box(result);
         });
     });
@@ -132,13 +151,22 @@ fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"multi_plugin"),
             contract_name: StringView::from_static(b"multi.contract"),
-            version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
+            version: polyplug_abi::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
         };
 
         // SAFETY: interface is 'static (leaked), pointer is valid for Registry lifetime.
         unsafe {
             registry
-                .register_guest_contract(descriptor, *interface, "multi.contract".to_owned(), BundleId::from_u64(i as u64))
+                .register_guest_contract(
+                    descriptor,
+                    *interface,
+                    "multi.contract".to_owned(),
+                    BundleId::from_u64(i as u64),
+                )
                 .expect("registration should succeed");
         }
     }
@@ -153,8 +181,10 @@ fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
         BenchmarkId::new("find_by_contract", "10_impls_same_contract"),
         |b| {
             b.iter(|| {
-                let result: Result<GuestContractHandle, _> =
-                    registry.find(black_box(GuestContractId::from_u64(contract_id)), black_box(0u32));
+                let result: Result<GuestContractHandle, _> = registry.find(
+                    black_box(GuestContractId::from_u64(contract_id)),
+                    black_box(0u32),
+                );
                 let _ = black_box(result);
             });
         },
@@ -181,13 +211,22 @@ fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"plugin"),
             contract_name: StringView::from_static(b"contract"),
-            version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
+            version: polyplug_abi::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
         };
 
         // SAFETY: interface is 'static (leaked), pointer is valid for Registry lifetime.
         unsafe {
             registry
-                .register_guest_contract(descriptor, *interface, format!("contract.{}", i_u64), BundleId::from_u64(i_u64))
+                .register_guest_contract(
+                    descriptor,
+                    *interface,
+                    format!("contract.{}", i_u64),
+                    BundleId::from_u64(i_u64),
+                )
                 .expect("registration should succeed");
         }
     }
@@ -203,8 +242,10 @@ fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
         BenchmarkId::new("find_by_contract", "100_different_contracts"),
         |b| {
             b.iter(|| {
-                let result: Result<GuestContractHandle, _> =
-                    registry.find(black_box(GuestContractId::from_u64(target_contract_id)), black_box(0u32));
+                let result: Result<GuestContractHandle, _> = registry.find(
+                    black_box(GuestContractId::from_u64(target_contract_id)),
+                    black_box(0u32),
+                );
                 let _ = black_box(result);
             });
         },
@@ -222,7 +263,12 @@ fn bench_registry_find_by_contract_not_found(c: &mut Criterion) {
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
     let _handle: GuestContractHandle = unsafe {
         registry
-            .register_guest_contract(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
+            .register_guest_contract(
+                descriptor,
+                &BENCH_INTERFACE,
+                "bench.contract".to_owned(),
+                BundleId::from_u64(0u64),
+            )
             .expect("registration should succeed")
     };
 
@@ -234,8 +280,10 @@ fn bench_registry_find_by_contract_not_found(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("find_by_contract", "not_found"), |b| {
         b.iter(|| {
-            let result: Result<GuestContractHandle, _> =
-                registry.find(black_box(GuestContractId::from_u64(nonexistent_contract_id)), black_box(0u32));
+            let result: Result<GuestContractHandle, _> = registry.find(
+                black_box(GuestContractId::from_u64(nonexistent_contract_id)),
+                black_box(0u32),
+            );
             let _ = black_box(result);
         });
     });

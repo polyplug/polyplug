@@ -9,8 +9,8 @@ use std::sync::Barrier;
 use polyplug::error::RegistryError;
 use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::{
-    DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor,
-    GuestContractHandle, StringView, Version, DispatchMechanisms, GuestContractId,
+    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractId, GuestContractInterface,
+    HostInterface, NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::BundleId;
 
@@ -18,8 +18,16 @@ const THREADS: usize = 8_usize;
 const RESOLVER_THREADS: usize = 6_usize;
 const RESOLVE_ROUNDS: usize = 32_usize;
 const SWAP_ROUNDS: usize = 24_usize;
-const VERSION_V1: Version = Version { major: 1, minor: 0, patch: 0 };
-const VERSION_V2: Version = Version { major: 2, minor: 0, patch: 0 };
+const VERSION_V1: Version = Version {
+    major: 1,
+    minor: 0,
+    patch: 0,
+};
+const VERSION_V2: Version = Version {
+    major: 2,
+    minor: 0,
+    patch: 0,
+};
 
 const CONTRACT_IDS: [u64; THREADS] = [
     0x7171_0000_0000_1000_u64,
@@ -110,7 +118,11 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
     PluginDescriptor {
         name: StringView::from_static(name.as_bytes()),
         contract_name: StringView::from_static(contract_name.as_bytes()),
-        version: Version { major: 1, minor: 0, patch: 0 },
+        version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
     }
 }
 
@@ -144,8 +156,9 @@ fn stress_concurrent_register_find_resolve() {
                 let found: GuestContractHandle = reg_clone
                     .find_guest_contract(GuestContractId::from_u64(CONTRACT_IDS[idx]), 0_u32)
                     .expect("find_by_contract must succeed");
-                let interface_ptr: *const GuestContractInterface =
-                    reg_clone.resolve_guest_contract(found).expect("resolve must succeed");
+                let interface_ptr: *const GuestContractInterface = reg_clone
+                    .resolve_guest_contract(found)
+                    .expect("resolve must succeed");
                 // SAFETY: interface_ptr is from the registry and valid.
                 let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
                 // SAFETY: interface_ptr is from the registry and valid.
@@ -172,8 +185,9 @@ fn stress_concurrent_register_find_resolve() {
         let found: GuestContractHandle = registry
             .find_guest_contract(GuestContractId::from_u64(expected_cid), 0_u32)
             .expect("main-thread find must succeed");
-        let interface_ptr: *const GuestContractInterface =
-            registry.resolve_guest_contract(found).expect("main-thread resolve must succeed");
+        let interface_ptr: *const GuestContractInterface = registry
+            .resolve_guest_contract(found)
+            .expect("main-thread resolve must succeed");
         // SAFETY: interface_ptr is valid.
         let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
         assert_eq!(contract_id.id(), CONTRACT_IDS[idx]);
@@ -210,8 +224,8 @@ fn stress_concurrent_swaps_with_resolvers() {
         let resolver_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             ready_clone.wait();
             while !stop_clone.load(Ordering::Relaxed) {
-                let handle_result: Result<GuestContractHandle, RegistryError> =
-                    reg_clone.find_guest_contract(GuestContractId::from_u64(SWAP_CONTRACT_ID), 0_u32);
+                let handle_result: Result<GuestContractHandle, RegistryError> = reg_clone
+                    .find_guest_contract(GuestContractId::from_u64(SWAP_CONTRACT_ID), 0_u32);
                 if let Ok(found) = handle_result {
                     let resolve_result: Result<*const GuestContractInterface, RegistryError> =
                         reg_clone.resolve_guest_contract(found);

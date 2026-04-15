@@ -107,10 +107,8 @@ pub struct HostContractInterface {
     ///
     /// # Safety
     /// After calling destroy_instance, the instance handle is invalid.
-    pub destroy_instance: unsafe extern "C" fn(
-        this: *const HostContractInterface,
-        instance: HostContractInstance,
-    ),
+    pub destroy_instance:
+        unsafe extern "C" fn(this: *const HostContractInterface, instance: HostContractInstance),
     /// Union of dispatch mechanisms — access based on dispatch_type.
     ///
     /// For Native dispatch: use `dispatch.native.functions[fn_id]`.
@@ -131,8 +129,8 @@ unsafe impl Sync for HostContractInterface {}
 
 #[cfg(test)]
 mod tests {
-    use core::mem::{align_of, offset_of, size_of};
     use super::HostContractInterface;
+    use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn layout_host_contract_interface() {

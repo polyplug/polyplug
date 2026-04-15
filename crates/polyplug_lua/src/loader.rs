@@ -13,22 +13,22 @@ use mlua::Table;
 use mlua::Value;
 
 use crate::config::LuaConfig;
+use polyplug::Runtime;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::ManifestData;
 use polyplug::loader::BundleLoader;
-use polyplug_abi::HostInterface;
-use polyplug::Runtime;
+use polyplug::loader::ManifestData;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::GuestContractInterface;
 use polyplug_abi::GuestContractInstance;
-use polyplug_abi::VmLoaderData;
+use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostInterface;
+use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
-use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
+use polyplug_abi::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
+use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 use polyplug_abi::types::Version;
 use polyplug_utils::GuestContractId;
 
@@ -178,7 +178,10 @@ impl BundleLoader for LuaLoader {
             .map_err(|e: mlua::Error| {
                 RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
-                    error: format!("Lua VM init failed: failed to set guest package.path: {}", e),
+                    error: format!(
+                        "Lua VM init failed: failed to set guest package.path: {}",
+                        e
+                    ),
                 })
             })?;
 
@@ -199,11 +202,7 @@ impl BundleLoader for LuaLoader {
             std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
                 RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
-                    error: format!(
-                        "Lua script load failed at {}: {}",
-                        bundle_path.display(),
-                        e
-                    ),
+                    error: format!("Lua script load failed at {}: {}", bundle_path.display(), e),
                 })
             })?;
 
@@ -233,11 +232,7 @@ impl BundleLoader for LuaLoader {
         lua.load(&source).exec().map_err(|e: mlua::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
-                error: format!(
-                    "Lua script load failed at {}: {}",
-                    bundle_path.display(),
-                    e
-                ),
+                error: format!("Lua script load failed at {}: {}", bundle_path.display(), e),
             })
         })?;
 
@@ -303,7 +298,10 @@ impl BundleLoader for LuaLoader {
                 .map_err(|_: mlua::Error| {
                     RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
-                        error: format!("Lua plugin missing _polyplug_handlers: bundle={}", bundle_name),
+                        error: format!(
+                            "Lua plugin missing _polyplug_handlers: bundle={}",
+                            bundle_name
+                        ),
                     })
                 })?;
 
@@ -372,14 +370,20 @@ impl BundleLoader for LuaLoader {
         // Build GuestContractInterface with VM dispatch.
         let plugin_interface: GuestContractInterface = GuestContractInterface {
             contract_id: cid,
-            contract_version: Version { major: contract_version, minor: 0, patch: 0 },
+            contract_version: Version {
+                major: contract_version,
+                minor: 0,
+                patch: 0,
+            },
             dispatch_type: DispatchType::VirtualMachine,
             create_instance: lua_create_instance,
             destroy_instance: lua_destroy_instance,
             dispatch: DispatchMechanisms {
                 vm: VmDispatch {
                     call: lua_dispatch,
-                    loader_data: VmLoaderData { data: loader_data_ptr as *mut core::ffi::c_void },
+                    loader_data: VmLoaderData {
+                        data: loader_data_ptr as *mut core::ffi::c_void,
+                    },
                 },
             },
         };
@@ -387,7 +391,8 @@ impl BundleLoader for LuaLoader {
         // Leak the interface so it has 'static lifetime.
         // SAFETY: GuestContractInterface is leaked intentionally — the loader data must be 'static.
         // The interface is valid for the process lifetime (Lua plugins are never unloaded).
-        let static_interface: *const GuestContractInterface = Box::into_raw(Box::new(plugin_interface));
+        let static_interface: *const GuestContractInterface =
+            Box::into_raw(Box::new(plugin_interface));
 
         // Build static string slices for PluginDescriptor.
         // We leak String → &'static str so StringView ptrs remain valid indefinitely.
@@ -403,7 +408,11 @@ impl BundleLoader for LuaLoader {
                 ptr: contract_name_leaked.as_ptr(),
                 len: contract_name_leaked.len(),
             },
-            version: Version { major: contract_version, minor: 0, patch: 0 },
+            version: Version {
+                major: contract_version,
+                minor: 0,
+                patch: 0,
+            },
         };
 
         // Call register_contract via the HostInterface self-passing pattern.

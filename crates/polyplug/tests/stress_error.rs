@@ -12,14 +12,14 @@ use libloading::os::unix::RTLD_GLOBAL;
 use libloading::os::unix::RTLD_LAZY;
 
 use polyplug::registry::runtime_store::RuntimeStore;
-use polyplug_abi::{
-    AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    BundleInitContext, PluginDescriptor, GuestContractHandle, StringView,
-};
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
-use polyplug_utils::{GuestContractId, BundleId};
+use polyplug_abi::{
+    AbiError, AbiErrorCode, BundleInitContext, GuestContractHandle, GuestContractInstance,
+    GuestContractInterface, HostInterface, PluginDescriptor, StringView,
+};
+use polyplug_utils::{BundleId, GuestContractId};
 
 // --- Plugin environment variable ---------------------------------------------
 
@@ -86,7 +86,9 @@ unsafe extern "C" fn chain_resolve_guest_contract(
 ) -> *const GuestContractInterface {
     ERROR_REGISTRY.with(|cell| {
         let registry: core::cell::Ref<'_, RuntimeStore> = cell.borrow();
-        registry.resolve_guest_contract(handle).unwrap_or(core::ptr::null())
+        registry
+            .resolve_guest_contract(handle)
+            .unwrap_or(core::ptr::null())
     })
 }
 
@@ -123,11 +125,7 @@ unsafe extern "C" fn stub_resolve_host_contract_interface(
 }
 
 /// Stub alloc callback.
-unsafe extern "C" fn stub_alloc(
-    _this: *const HostInterface,
-    size: usize,
-    align: usize,
-) -> *mut u8 {
+unsafe extern "C" fn stub_alloc(_this: *const HostInterface, size: usize, align: usize) -> *mut u8 {
     polyplug_host_alloc(size, align)
 }
 
@@ -220,7 +218,10 @@ unsafe extern "C" fn noop_load_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op reload_bundle callback.
@@ -229,7 +230,10 @@ unsafe extern "C" fn noop_reload_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op register_host_contract callback.
@@ -237,7 +241,10 @@ unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostInterface,
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op register_loader callback.
@@ -246,7 +253,10 @@ unsafe extern "C" fn noop_register_loader(
     _runtime_name: StringView,
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op get_last_error callback.
@@ -259,9 +269,7 @@ unsafe extern "C" fn noop_get_last_error(
 }
 
 /// No-op get_error_len callback.
-unsafe extern "C" fn noop_get_error_len(
-    _this: *const HostInterface,
-) -> usize {
+unsafe extern "C" fn noop_get_error_len(_this: *const HostInterface) -> usize {
     0
 }
 
@@ -301,7 +309,14 @@ unsafe extern "C" fn registry_register_callback(
     let result: Result<GuestContractHandle, _> = ERROR_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, RuntimeStore> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
-        unsafe { registry.register_guest_contract(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
+        unsafe {
+            registry.register_guest_contract(
+                *desc,
+                interface,
+                contract_name.to_owned(),
+                BundleId::from_u64(iface.contract_id.id()),
+            )
+        }
     });
 
     match result {
@@ -377,10 +392,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
     // SAFETY: polyplug_init matches the expected ABI signature (2-arg).
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -400,7 +412,11 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
             &ctx as *const BundleInitContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
+    assert_eq!(
+        init_result.code,
+        AbiErrorCode::Ok,
+        "polyplug_init must succeed"
+    );
 
     let contract_id: GuestContractId = GuestContractId::new("error.test", 1);
     let handle: GuestContractHandle = ERROR_REGISTRY.with(|cell| {
@@ -446,12 +462,17 @@ fn stress_error_code_and_message_received_correctly() {
 
     // The dispatch wrapper returns Ok (success).
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok,
+        call_result.code,
+        AbiErrorCode::Ok,
         "dispatch wrapper must return Ok"
     );
 
     // The actual error is written to *out.
-    assert_eq!(out.code, AbiErrorCode::from_u32(99), "error code must be 99");
+    assert_eq!(
+        out.code,
+        AbiErrorCode::from_u32(99),
+        "error code must be 99"
+    );
     assert_eq!(out.message.len, 22_usize, "message length must be 22");
 
     // Read the message bytes.
@@ -497,7 +518,8 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     let result: AbiError = unsafe { dispatch_fn(core::ptr::null(), core::ptr::null_mut()) };
 
     assert_eq!(
-        result.code, AbiErrorCode::Panic,
+        result.code,
+        AbiErrorCode::Panic,
         "error_panic must return Panic (code={})",
         AbiErrorCode::Panic
     );
@@ -588,13 +610,15 @@ fn stress_error_chain_b_errors_a_propagates() {
 
     // error_chain_propagate itself returns Ok (wrapper success).
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok,
+        call_result.code,
+        AbiErrorCode::Ok,
         "error_chain_propagate wrapper must return Ok"
     );
 
     // The propagated error from fn 1 (error_panic) is Panic.
     assert_eq!(
-        out.code, AbiErrorCode::Panic,
+        out.code,
+        AbiErrorCode::Panic,
         "propagated error must be Panic (={})",
         AbiErrorCode::Panic
     );
@@ -636,10 +660,15 @@ fn stress_error_message_lifetime_valid_during_read() {
         unsafe { dispatch_fn(core::ptr::null(), &mut out as *mut AbiError as *mut ()) };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok,
+        call_result.code,
+        AbiErrorCode::Ok,
         "dispatch wrapper must return Ok"
     );
-    assert_eq!(out.code, AbiErrorCode::from_u32(99), "error code must be 99");
+    assert_eq!(
+        out.code,
+        AbiErrorCode::from_u32(99),
+        "error code must be 99"
+    );
     assert_eq!(out.message.len, 22_usize, "message length must be 22");
 
     // Read the message 1000 times to verify pointer stability.

@@ -18,11 +18,11 @@ use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
 use polyplug_abi::Buffer;
 use polyplug_abi::DispatchType;
+use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostInterface;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::GuestContractHandle;
-use polyplug_abi::GuestContractInterface;
-use polyplug_abi::GuestContractInstance;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
@@ -87,14 +87,20 @@ unsafe extern "C" fn bench_register_callback(
         core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
-    let result: Result<GuestContractHandle, _> = BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
-        // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
-        let borrowed = cell.borrow();
-        let registry = borrowed.as_ref().expect("registry not initialized");
-        unsafe {
-            registry.register_guest_contract(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id()))
-        }
-    });
+    let result: Result<GuestContractHandle, _> =
+        BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+            // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
+            let borrowed = cell.borrow();
+            let registry = borrowed.as_ref().expect("registry not initialized");
+            unsafe {
+                registry.register_guest_contract(
+                    *desc,
+                    interface,
+                    contract_name.to_owned(),
+                    BundleId::from_u64(iface.contract_id.id()),
+                )
+            }
+        });
 
     match result {
         Ok(_) => {
@@ -141,8 +147,11 @@ unsafe extern "C" fn bench_find_guest_contract(
     BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
         let registry = cell.borrow();
         let reg = registry.as_ref().expect("registry not initialized");
-        reg.find(polyplug_utils::GuestContractId::from_u64(contract_id), min_version)
-            .unwrap_or_else(|_| GuestContractHandle::null())
+        reg.find(
+            polyplug_utils::GuestContractId::from_u64(contract_id),
+            min_version,
+        )
+        .unwrap_or_else(|_| GuestContractHandle::null())
     })
 }
 
@@ -208,9 +217,7 @@ unsafe extern "C" fn bench_resolve_host_contract_interface(
 }
 
 /// Returns empty array of bundle IDs.
-unsafe extern "C" fn bench_list_bundles(
-    _this: *const HostInterface,
-) -> Array<BundleId> {
+unsafe extern "C" fn bench_list_bundles(_this: *const HostInterface) -> Array<BundleId> {
     Array::empty()
 }
 
@@ -526,8 +533,12 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
             };
 
             // SAFETY: bench_resolve_guest_contract returns a 'static GuestContractInterface pointer.
-            let interface_ptr: *const GuestContractInterface =
-                unsafe { black_box((host_interface.resolve_guest_contract)(&host_interface as *const HostInterface, handle)) };
+            let interface_ptr: *const GuestContractInterface = unsafe {
+                black_box((host_interface.resolve_guest_contract)(
+                    &host_interface as *const HostInterface,
+                    handle,
+                ))
+            };
 
             // SAFETY: interface_ptr is non-null (plugin is registered), fn 2 is in range.
             // fn 2 = memory_echo_string_view(args: *const StringView, out: *mut StringView).

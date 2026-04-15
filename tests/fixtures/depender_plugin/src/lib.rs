@@ -53,7 +53,8 @@ unsafe extern "C" fn create_instance_stub(
 unsafe extern "C" fn destroy_instance_stub(
     _host: *const HostInterface,
     _instance: GuestContractInstance,
-) {}
+) {
+}
 
 // SAFETY: init_count_fn is a C-compatible function with no side effects.
 unsafe extern "C" fn init_count_fn() -> u32 {
@@ -64,7 +65,11 @@ static FUNCTIONS: [FnPtr; 1] = [FnPtr(init_count_fn as *const ())];
 
 static INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(DEPENDER_TEST_CONTRACT_ID),
-    contract_version: Version { major: 1, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: create_instance_stub,
     destroy_instance: destroy_instance_stub,
@@ -85,7 +90,11 @@ static DESCRIPTOR: PluginDescriptor = PluginDescriptor {
         ptr: b"depender.test".as_ptr(),
         len: 13,
     },
-    version: Version { major: 1, minor: 0, patch: 0 },
+    version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
 };
 
 #[unsafe(no_mangle)]

@@ -1,10 +1,10 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use super::is_native_runtime;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -295,7 +295,9 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
 
     // ContractError class for host-side error handling
     out.push_str("class ContractError(Exception):\n");
-    out.push_str("    def __init__(self, message: str, code: int = AbiErrorCode.Generic) -> None:\n");
+    out.push_str(
+        "    def __init__(self, message: str, code: int = AbiErrorCode.Generic) -> None:\n",
+    );
     out.push_str("        super().__init__(message)\n");
     out.push_str("        self.code: int = code\n\n");
 
@@ -392,7 +394,9 @@ fn generate_host_caller_class_stub(out: &mut String, contract: &ResolvedContract
     out.push_str("    def __init__(self, handle: int, host: ctypes.c_void_p) -> None: ...\n");
     out.push_str("    def __del__(self) -> None: ...\n");
     out.push_str("    @classmethod\n");
-    out.push_str("    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]: ...\n");
+    out.push_str(
+        "    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]: ...\n",
+    );
     out.push_str("    def is_valid(self) -> bool: ...\n");
     out.push_str("    def reset(self) -> None: ...\n");
     out.push_str("    def __bool__(self) -> bool: ...\n");
@@ -464,7 +468,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("    return 1\n\n");
     out.push_str("def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n");
     out.push_str("    \"\"\"Initialize plugin with host interface.\n");
-    out.push_str("\n");
+    out.push('\n');
     out.push_str("    Args:\n");
     out.push_str("        host_ptr: Pointer to HostInterface\n");
     out.push_str("        ctx_ptr: Pointer to BundleInitContext\n");
@@ -485,7 +489,9 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
             ));
             out.push_str(&format!("        host_ptr, ctypes.byref({plugin_upper}_DESCRIPTOR), ctypes.byref({plugin_upper}_INTERFACE)\n"));
             out.push_str("    )\n");
-            out.push_str(&format!("    if err_{plugin_upper}.code != AbiErrorCode.Ok:\n"));
+            out.push_str(&format!(
+                "    if err_{plugin_upper}.code != AbiErrorCode.Ok:\n"
+            ));
             out.push_str("        raise RuntimeError(\"plugin registration failed\")\n\n");
         }
     } else {
@@ -612,7 +618,7 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     let struct_name: String = contract_name_to_struct(&contract.name);
     let caller_name: String = format!("{struct_name}Caller");
     let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
-    let contract_id_const: String = format!("{}_CONTRACT_ID", contract_upper);
+    let _contract_id_const: String = format!("{}_CONTRACT_ID", contract_upper);
 
     out.push_str(&format!("class {caller_name}:\n"));
     out.push_str(&format!(
@@ -659,9 +665,7 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
 
     // Factory method
     out.push_str("    @classmethod\n");
-    out.push_str(&format!(
-        "    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:\n"
-    ));
+    out.push_str("    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:\n");
     out.push_str("        \"\"\"Factory method - creates instance or None if failed.\n\n");
     out.push_str("        Args:\n");
     out.push_str("            handle: Contract handle from find_guest_contract\n");
@@ -685,7 +689,9 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
     out.push_str("        if self._instance.data is not None:\n");
     out.push_str("            iface_ptr.contents.destroy_instance(self._host, self._instance)\n");
-    out.push_str("        self._instance = iface_ptr.contents.create_instance(self._host, None)\n\n");
+    out.push_str(
+        "        self._instance = iface_ptr.contents.create_instance(self._host, None)\n\n",
+    );
 
     out.push_str("    def __bool__(self) -> bool:\n");
     out.push_str("        return self.is_valid()\n\n");
@@ -711,7 +717,9 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     out.push_str("        # SAFETY: interface_ is valid for the lifetime of this wrapper.\n");
     out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
     out.push_str("        interface: GuestContractInterface = iface_ptr.contents\n");
-    out.push_str(&format!("        if {fn_id} >= interface.function_count:\n"));
+    out.push_str(&format!(
+        "        if {fn_id} >= interface.function_count:\n"
+    ));
     out.push_str("            raise RuntimeError(\"function not available in interface\")\n");
     out.push_str("        functions_ptr: int = interface.dispatch.native.functions\n");
     out.push_str(&format!(
@@ -903,7 +911,11 @@ fn generate_guest_trait_stub_method(
     ));
 }
 
-fn generate_guest_contract_interface(out: &mut String, contract: &ResolvedContract, is_native: bool) {
+fn generate_guest_contract_interface(
+    out: &mut String,
+    contract: &ResolvedContract,
+    is_native: bool,
+) {
     let upper: String = contract_name_to_upper_snake(&contract.name);
     let lower: String = contract.name.replace('.', "_");
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
@@ -951,7 +963,9 @@ fn generate_guest_contract_interface(out: &mut String, contract: &ResolvedContra
             "def {abi_name}(instance: _GuestContractInstance, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
         ));
         out.push_str("    # Instance is ignored for stateless plugins (instance.data is null).\n");
-        out.push_str("    # For stateful plugins, users override create_instance and use instance.data.\n");
+        out.push_str(
+            "    # For stateful plugins, users override create_instance and use instance.data.\n",
+        );
         out.push_str(&format!("    impl: {trait_name} | None = _{upper}_IMPL\n"));
         out.push_str("    if impl is None:\n");
         out.push_str("        return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)\n");
@@ -991,7 +1005,9 @@ fn generate_guest_contract_interface(out: &mut String, contract: &ResolvedContra
     out.push_str(&format!(
         "def {upper}_create_instance_stub(host: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:\n"
     ));
-    out.push_str("    # Default stub returns null instance - users override for stateful plugins.\n");
+    out.push_str(
+        "    # Default stub returns null instance - users override for stateful plugins.\n",
+    );
     out.push_str("    return _guest_contract_instance_null()\n\n");
     out.push_str(&format!(
         "def {upper}_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContractInstance) -> None:\n"
@@ -1023,7 +1039,9 @@ fn generate_guest_contract_interface(out: &mut String, contract: &ResolvedContra
     out.push_str("    dispatch=_PluginDispatch(\n");
     out.push_str("        native=_NativeDispatch(\n");
     out.push_str(&format!("            function_count={fn_count},\n"));
-    out.push_str(&format!("            functions=ctypes.cast({upper}_FNS, ctypes.c_void_p),\n"));
+    out.push_str(&format!(
+        "            functions=ctypes.cast({upper}_FNS, ctypes.c_void_p),\n"
+    ));
     out.push_str("        )\n");
     out.push_str("    ),\n");
     out.push_str(")\n\n");
@@ -1081,7 +1099,9 @@ fn generate_guest_plugin_interface(
             "def {abi_name}(instance: _GuestContractInstance, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
         ));
         out.push_str("    # Instance is ignored for stateless plugins (instance.data is null).\n");
-        out.push_str("    # For stateful plugins, users override create_instance and use instance.data.\n");
+        out.push_str(
+            "    # For stateful plugins, users override create_instance and use instance.data.\n",
+        );
         out.push_str(&format!(
             "    impl: {plugin_upper}{trait_name} | None = _{plugin_lower}_IMPL\n"
         ));
@@ -1123,7 +1143,9 @@ fn generate_guest_plugin_interface(
     out.push_str(&format!(
         "def {plugin_upper}_create_instance_stub(host: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:\n"
     ));
-    out.push_str("    # Default stub returns null instance - users override for stateful plugins.\n");
+    out.push_str(
+        "    # Default stub returns null instance - users override for stateful plugins.\n",
+    );
     out.push_str("    return _GuestContractInstance(data=ctypes.c_void_p(0))\n\n");
     out.push_str(&format!(
         "def {plugin_upper}_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContractInstance) -> None:\n"
@@ -1155,7 +1177,9 @@ fn generate_guest_plugin_interface(
     out.push_str("    dispatch=_PluginDispatch(\n");
     out.push_str("        native=_NativeDispatch(\n");
     out.push_str(&format!("            function_count={fn_count},\n"));
-    out.push_str(&format!("            functions=ctypes.cast({plugin_upper}_FNS, ctypes.c_void_p),\n"));
+    out.push_str(&format!(
+        "            functions=ctypes.cast({plugin_upper}_FNS, ctypes.c_void_p),\n"
+    ));
     out.push_str("        )\n");
     out.push_str("    ),\n");
     out.push_str(")\n\n");
@@ -1227,7 +1251,9 @@ fn emit_guest_abi_call(out: &mut String, func: &ResolvedFunction) {
 
 fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction) {
     if !has_return_value(&func.returns) {
-        out.push_str("    return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)\n");
+        out.push_str(
+            "    return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)\n",
+        );
         return;
     }
     let ret_ty: String = python_return_type(&func.returns);
@@ -1235,7 +1261,9 @@ fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction) {
         "    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER({ret_ty}))\n"
     ));
     out.push_str("    out_ptr_t[0] = result\n");
-    out.push_str("    return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)\n");
+    out.push_str(
+        "    return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)\n",
+    );
 }
 
 fn needs_arg_pack(params: &[ResolvedParam]) -> bool {
@@ -2188,7 +2216,7 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     }
 
     // Static function pointer array
-    out.push_str(&"    functions = [\n".to_string());
+    out.push_str("    functions = [\n");
     for func in &contract.functions {
         let thunk_name: String = format!(
             "_{}_{}_thunk",
@@ -2279,8 +2307,7 @@ fn generate_python_host_thunk(
     let has_return: bool = func.returns.is_some();
 
     out.push_str(
-        &"    @ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n"
-            .to_string(),
+        "    @ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n",
     );
     out.push_str(&format!(
         "    def {thunk_name}(impl_ptr: int, args: int, out: int) -> AbiError:\n"
@@ -2309,17 +2336,18 @@ fn generate_python_host_thunk(
             None => String::from("None"),
         };
         out.push_str(
-            &"            # SAFETY: out is a valid pointer per ABI contract.\n".to_string(),
+            "            # SAFETY: out is a valid pointer per ABI contract.\n",
         );
         out.push_str(
-            &"            ctypes.memmove(out, ctypes.byref(result), ctypes.sizeof(result))\n"
-                .to_string(),
+            "            ctypes.memmove(out, ctypes.byref(result), ctypes.sizeof(result))\n",
         );
     } else {
         out.push_str("            _ = out\n");
     }
 
-    out.push_str("            return AbiError(code=AbiErrorCode.Ok, message=StringView(ptr=0, len=0))\n");
+    out.push_str(
+        "            return AbiError(code=AbiErrorCode.Ok, message=StringView(ptr=0, len=0))\n",
+    );
     out.push_str("        except Exception:\n");
     out.push_str(
         "            return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))\n",

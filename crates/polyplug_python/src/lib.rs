@@ -31,8 +31,8 @@ use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
-use polyplug_abi::HostInterface;
 use polyplug_abi::BundleInitContext;
+use polyplug_abi::HostInterface;
 use polyplug_abi::StringView;
 
 use crate::context::ensure_python_initialized;
@@ -153,10 +153,7 @@ impl BundleLoader for PythonLoader {
                 .map_err(|e| {
                     RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
-                        error: format!(
-                            "importlib.util import failed: {}",
-                            e
-                        ),
+                        error: format!("importlib.util import failed: {}", e),
                     })
                 })?;
 

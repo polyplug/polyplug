@@ -64,12 +64,13 @@ pub struct PackConfig {
 }
 
 pub fn pack(config: PackConfig) -> Result<(), PolyplugcError> {
-    let manifest = config
-        .api
-        .or(config.bundle)
-        .ok_or_else(|| PolyplugcError::ValidationFailed {
-            message: "Must specify --api or --bundle".to_owned(),
-        })?;
+    let manifest =
+        config
+            .api
+            .or(config.bundle)
+            .ok_or_else(|| PolyplugcError::ValidationFailed {
+                message: "Must specify --api or --bundle".to_owned(),
+            })?;
 
     let lang_enum: Lang = parse_lang(&config.lang)?;
 

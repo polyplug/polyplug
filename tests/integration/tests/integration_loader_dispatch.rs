@@ -151,7 +151,10 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
         // .NET loader returns InitFailed for assembly not found or CLR init failures
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
             assert_eq!(bundle, "dummy");
-            assert!(!error.is_empty(), "error message should describe the failure");
+            assert!(
+                !error.is_empty(),
+                "error message should describe the failure"
+            );
         }
         other => panic!("expected InitFailed for dummy.dll, got: {other:?}"),
     }
@@ -183,7 +186,10 @@ fn python_loader_loads_nonexistent_file_errors() {
         // Python loader returns InitFailed for import errors (file not found or not accessible).
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
             assert_eq!(bundle, "dummy");
-            assert!(!error.is_empty(), "error message should describe the failure");
+            assert!(
+                !error.is_empty(),
+                "error message should describe the failure"
+            );
         }
         other => panic!("expected InitFailed for dummy.py, got: {other:?}"),
     }
@@ -215,7 +221,10 @@ fn lua_loader_returns_error_for_missing_file() {
         // Lua loader returns InitFailed for script load failures (file not found).
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
             assert_eq!(bundle, "dummy");
-            assert!(!error.is_empty(), "error message should describe the failure");
+            assert!(
+                !error.is_empty(),
+                "error message should describe the failure"
+            );
         }
         other => panic!("expected InitFailed for missing file, got: {other:?}"),
     }

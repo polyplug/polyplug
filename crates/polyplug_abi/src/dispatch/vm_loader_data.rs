@@ -30,7 +30,9 @@ unsafe impl Sync for VmLoaderData {}
 impl VmLoaderData {
     /// Create a null loader data handle.
     pub fn null() -> Self {
-        Self { data: core::ptr::null_mut() }
+        Self {
+            data: core::ptr::null_mut(),
+        }
     }
 
     /// Check if this is a null handle.
@@ -41,8 +43,8 @@ impl VmLoaderData {
 
 #[cfg(test)]
 mod tests {
-    use core::mem::{size_of, align_of};
     use super::VmLoaderData;
+    use core::mem::{align_of, size_of};
 
     #[test]
     fn layout_vm_loader_data() {

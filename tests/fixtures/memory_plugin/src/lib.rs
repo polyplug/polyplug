@@ -212,7 +212,8 @@ unsafe extern "C" fn create_instance_stub(
 unsafe extern "C" fn destroy_instance_stub(
     _host: *const HostInterface,
     _instance: GuestContractInstance,
-) {}
+) {
+}
 
 // ─── Static Interface ────────────────────────────────────────────────────────────
 
@@ -242,7 +243,11 @@ static MEMORY_TEST_FNS: [FnPtr; 4] = [
 
 static MEMORY_TEST_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(MEMORY_TEST_CONTRACT_ID),
-    contract_version: Version { major: 1, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: create_instance_stub,
     destroy_instance: destroy_instance_stub,
@@ -263,7 +268,11 @@ static MEMORY_TEST_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
         ptr: b"memory.test".as_ptr(),
         len: 11,
     },
-    version: Version { major: 1, minor: 0, patch: 0 },
+    version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
 };
 
 // ─── ABI Exports ─────────────────────────────────────────────────────────────

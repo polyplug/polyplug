@@ -33,7 +33,8 @@ unsafe extern "C" fn create_instance_stub(
 unsafe extern "C" fn destroy_instance_stub(
     _host: *const HostInterface,
     _instance: GuestContractInstance,
-) {}
+) {
+}
 
 // SAFETY: version_check is a C-compatible static function returning a constant.
 unsafe extern "C" fn version_check() -> u32 {
@@ -56,7 +57,11 @@ static INTERFACE_FNS: [FnPtr; 1] = [FnPtr(version_check as *const ())];
 
 static INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(RELOAD_TEST_CONTRACT_ID),
-    contract_version: Version { major: 1, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: create_instance_stub,
     destroy_instance: destroy_instance_stub,
@@ -77,7 +82,11 @@ static DESCRIPTOR: PluginDescriptor = PluginDescriptor {
         ptr: b"reload.test".as_ptr(),
         len: 11,
     },
-    version: Version { major: 1, minor: 0, patch: 0 },
+    version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
 };
 
 #[unsafe(no_mangle)]

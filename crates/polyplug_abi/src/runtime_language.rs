@@ -1,4 +1,3 @@
-
 /// Runtime type identifier — identifies the language/runtime hosting plugins.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -7,9 +7,9 @@
 //! - `ReloadPhaseType` - type of reload phase for FFI
 
 mod compatibility;
-mod runtime_config;
 mod reload_phase;
+mod runtime_config;
 
 pub use compatibility::Compatibility;
-pub use runtime_config::RuntimeConfig;
 pub use reload_phase::{ReloadPhase, ReloadPhaseType};
+pub use runtime_config::RuntimeConfig;

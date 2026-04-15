@@ -25,7 +25,9 @@ unsafe impl Sync for HostContractInstance {}
 impl HostContractInstance {
     /// Create a null instance handle.
     pub fn null() -> Self {
-        Self { data: core::ptr::null_mut() }
+        Self {
+            data: core::ptr::null_mut(),
+        }
     }
 
     /// Check if this is a null handle.
@@ -36,8 +38,8 @@ impl HostContractInstance {
 
 #[cfg(test)]
 mod tests {
-    use core::mem::{size_of, align_of};
     use super::HostContractInstance;
+    use core::mem::{align_of, size_of};
 
     #[test]
     fn layout_host_contract_instance() {

@@ -3,7 +3,19 @@ use core::fmt;
 use crate::fnv1a_64;
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, serde::Serialize, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Hash,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Deserialize,
+    serde::Serialize,
+    Default,
+)]
 pub struct BundleId(u64);
 
 impl BundleId {

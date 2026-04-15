@@ -5,8 +5,8 @@ mod generated;
 
 use generated::contracts::DataReporterGuestContract;
 use generated::host_contract_callers::HostLoggerCaller;
-use generated::types::LogLevel;
 use generated::interfaces::set_reporter_impl;
+use generated::types::LogLevel;
 
 struct Plugin;
 
@@ -19,8 +19,8 @@ impl DataReporterGuestContract for Plugin {
         let logger: Option<HostLoggerCaller> =
             unsafe { HostLoggerCaller::from_host(get_host_vtable(), 1) };
 
-        if let Some(ref logger) = logger {
-            if logger.is_valid() {
+        if let Some(ref logger) = logger
+            && logger.is_valid() {
                 // Log with different levels - errors are ignored since logging is optional
                 let _ = logger.log(format!("[plugin] Starting report for: {}", s));
                 let _ = logger
@@ -30,29 +30,26 @@ impl DataReporterGuestContract for Plugin {
                     format!("[plugin] Input length: {}", s.len()),
                 );
             }
-        }
 
         let data = s.strip_prefix("TRANSFORMED:").unwrap_or(s);
         let parts: Vec<&str> = data.split('|').collect();
 
-        if let Some(ref logger) = logger {
-            if logger.is_valid() {
+        if let Some(ref logger) = logger
+            && logger.is_valid() {
                 let _ = logger.log_with_level(
                     LogLevel::Warn,
                     "[plugin] Step 2: Processing data".to_string(),
                 );
             }
-        }
 
         if parts.len() >= 3 {
-            if let Some(ref logger) = logger {
-                if logger.is_valid() {
+            if let Some(ref logger) = logger
+                && logger.is_valid() {
                     let _ = logger.log_with_level(
                         LogLevel::Error,
                         "[plugin] Step 3: Finalizing report".to_string(),
                     );
                 }
-            }
 
             alloc_string(&format!(
                 "Report: {} has value '{}' with count {}",

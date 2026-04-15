@@ -8,12 +8,12 @@
 //!
 //! This test crate is the crate root for the `integration_context` test binary.
 
-use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
-use polyplug_abi::HostInterface;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::BundleInitContext;
-use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostInterface;
+use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 
 /// Path to the compiled test_plugin shared library -- set by build.rs.
@@ -38,11 +38,7 @@ unsafe extern "C" fn noop_register(
 }
 
 /// No-op alloc callback.
-unsafe extern "C" fn noop_alloc(
-    _this: *const HostInterface,
-    size: usize,
-    align: usize,
-) -> *mut u8 {
+unsafe extern "C" fn noop_alloc(_this: *const HostInterface, size: usize, align: usize) -> *mut u8 {
     polyplug_abi::ffi::polyplug_host_alloc(size, align)
 }
 
@@ -186,9 +182,7 @@ unsafe extern "C" fn noop_get_last_error(
 }
 
 /// No-op get_error_len callback.
-unsafe extern "C" fn noop_get_error_len(
-    _this: *const HostInterface,
-) -> usize {
+unsafe extern "C" fn noop_get_error_len(_this: *const HostInterface) -> usize {
     0
 }
 
@@ -207,10 +201,7 @@ fn rust_plugin_receives_bundle_path() {
     //   `unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError`.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -268,7 +259,11 @@ fn rust_plugin_receives_bundle_path() {
         )
     };
 
-    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return Ok");
+    assert_eq!(
+        init_result.code,
+        AbiErrorCode::Ok,
+        "polyplug_init must return Ok"
+    );
 
     // Call polyplug_get_last_bundle_path to retrieve the stored StringView.
     // SAFETY: get_path_fn is a valid function pointer. The bundle_path_str

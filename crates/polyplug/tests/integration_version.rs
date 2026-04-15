@@ -2,12 +2,12 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_abi::runtime::Compatibility;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
+use polyplug_abi::runtime::Compatibility;
 use polyplug_utils::guest_contract_id;
 use std::fs;
 use std::path::PathBuf;

@@ -45,7 +45,11 @@ fn test_truncated_so() {
     fs::write(dir.join("libtruncated.so"), &so).expect("write truncated so");
     write_manifest(&dir, "truncated", "native", "libtruncated.so");
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8 path"));
-    assert_ne!(rc.code, polyplug_abi::AbiErrorCode::Ok, "truncated .so must produce error");
+    assert_ne!(
+        rc.code,
+        polyplug_abi::AbiErrorCode::Ok,
+        "truncated .so must produce error"
+    );
     cleanup(&dir);
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
@@ -61,7 +65,11 @@ fn test_wrong_magic_bytes() {
     fs::write(dir.join("libwrong.so"), &garbage).expect("write garbage");
     write_manifest(&dir, "wrong_magic", "native", "libwrong.so");
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8"));
-    assert_ne!(rc.code, polyplug_abi::AbiErrorCode::Ok, "wrong magic bytes must produce error");
+    assert_ne!(
+        rc.code,
+        polyplug_abi::AbiErrorCode::Ok,
+        "wrong magic bytes must produce error"
+    );
     cleanup(&dir);
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
@@ -75,7 +83,8 @@ fn test_missing_init_symbol() {
     assert!(!host.is_null());
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir);
     assert_ne!(
-        rc.code, polyplug_abi::AbiErrorCode::Ok,
+        rc.code,
+        polyplug_abi::AbiErrorCode::Ok,
         "plugin missing polyplug_init must produce error"
     );
     let mut buf: [u8; 256] = [0u8; 256];
@@ -99,7 +108,11 @@ fn test_so_file_missing_from_bundle() {
     let dir: PathBuf = make_tmpdir("missing_so");
     write_manifest(&dir, "missing_so", "native", "nonexistent.so");
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8"));
-    assert_ne!(rc.code, polyplug_abi::AbiErrorCode::Ok, "missing .so file must produce error");
+    assert_ne!(
+        rc.code,
+        polyplug_abi::AbiErrorCode::Ok,
+        "missing .so file must produce error"
+    );
     cleanup(&dir);
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
@@ -114,7 +127,11 @@ fn test_unknown_runtime() {
     fs::write(dir.join("dummy.so"), b"notareal").expect("write dummy");
     write_manifest(&dir, "unknown_runtime", "cobol", "dummy.so");
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8"));
-    assert_ne!(rc.code, polyplug_abi::AbiErrorCode::Ok, "unknown runtime must produce error");
+    assert_ne!(
+        rc.code,
+        polyplug_abi::AbiErrorCode::Ok,
+        "unknown runtime must produce error"
+    );
     cleanup(&dir);
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };

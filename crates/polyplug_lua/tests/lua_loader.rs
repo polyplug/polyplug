@@ -12,8 +12,8 @@ use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
-use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_lua::LuaConfig;
@@ -98,7 +98,7 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
-            bundle_dependencies: Vec::new(),
+        bundle_dependencies: Vec::new(),
     }
 }
 
@@ -172,10 +172,7 @@ fn load_syntax_error_returns_script_load_failed() {
     assert!(result.is_err(), "syntax error must produce an Err");
     let err: RuntimeError = result.expect_err("expected Err for syntax error");
     assert!(
-        matches!(
-            err,
-            RuntimeError::Loader(LoaderError::InitFailed { .. })
-        ),
+        matches!(err, RuntimeError::Loader(LoaderError::InitFailed { .. })),
         "expected InitFailed for syntax error, got: {:?}",
         err
     );
@@ -195,10 +192,7 @@ fn load_runtime_error_in_init_returns_init_raised_error() {
     assert!(result.is_err(), "runtime error in init must produce Err");
     let err: RuntimeError = result.expect_err("expected Err for runtime error in init");
     assert!(
-        matches!(
-            err,
-            RuntimeError::Loader(LoaderError::InitFailed { .. })
-        ),
+        matches!(err, RuntimeError::Loader(LoaderError::InitFailed { .. })),
         "expected InitFailed for runtime error in init, got: {:?}",
         err
     );
@@ -216,10 +210,7 @@ fn load_missing_polyplug_init_returns_typed_error() {
     assert!(result.is_err(), "missing init must produce Err");
     let err: RuntimeError = result.expect_err("expected Err for missing polyplug_init");
     assert!(
-        matches!(
-            err,
-            RuntimeError::Loader(LoaderError::InitFailed { .. })
-        ),
+        matches!(err, RuntimeError::Loader(LoaderError::InitFailed { .. })),
         "expected InitFailed for missing polyplug_init, got: {:?}",
         err
     );
@@ -235,10 +226,7 @@ fn load_nonexistent_path_returns_script_load_failed() {
     assert!(result.is_err(), "missing file must produce Err");
     let err: RuntimeError = result.expect_err("expected Err for nonexistent file");
     assert!(
-        matches!(
-            err,
-            RuntimeError::Loader(LoaderError::InitFailed { .. })
-        ),
+        matches!(err, RuntimeError::Loader(LoaderError::InitFailed { .. })),
         "expected InitFailed for missing file, got: {:?}",
         err
     );
@@ -396,7 +384,7 @@ fn concurrent_loaders_do_not_race() {
                     function_count: HashMap::new(),
                     dependencies: Vec::new(),
                     needs_reinit_on_dep_reload: false,
-            bundle_dependencies: Vec::new(),
+                    bundle_dependencies: Vec::new(),
                 };
                 loader.load(&manifest, &runtime)
             })
@@ -463,7 +451,8 @@ fn vtable_function_dispatch_returns_abi_ok() {
         )
     };
     assert_eq!(
-        result.code, AbiErrorCode::Ok,
+        result.code,
+        AbiErrorCode::Ok,
         "noop function must return Ok, got code={}",
         result.code
     );

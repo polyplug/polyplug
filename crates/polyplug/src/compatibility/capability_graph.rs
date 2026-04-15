@@ -9,8 +9,8 @@ use polyplug_abi::types::Version;
 use polyplug_utils::GuestContractId;
 
 use crate::compatibility::contract_capability::ContractCapability;
-use crate::error::GraphError;
 use crate::compatibility::{bundle_node::BundleNode, dependency_edge::DependencyEdge};
+use crate::error::GraphError;
 use crate::loader::ManifestData;
 use crate::loader::ManifestDependency;
 
@@ -72,8 +72,8 @@ impl CapabilityGraph {
                 match provider_map.get(&req.contract_id) {
                     Some((_, provider_idx)) => {
                         let edge: DependencyEdge = DependencyEdge {
-                            contract_name: req.contract_name.clone(),
-                            contract_id: req.contract_id,
+                            _contract_name: req.contract_name.clone(),
+                            _contract_id: req.contract_id,
                         };
                         edges_to_add.push((requirer_idx, *provider_idx, edge));
                     }

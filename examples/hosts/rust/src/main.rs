@@ -1,10 +1,10 @@
 use polyplug::ReloadPhase;
+use polyplug::RuntimeConfig;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
-use polyplug::RuntimeConfig;
 use polyplug_abi::GuestContractHandle;
-use polyplug_abi::StringView;
 use polyplug_abi::HostContractInterface;
+use polyplug_abi::StringView;
 use polyplug_abi::runtime::ReloadPhaseType;
 use polyplug_js::{JsConfig, JsLoader};
 use polyplug_lua::{LuaConfig, LuaLoader};
@@ -18,8 +18,8 @@ mod generated;
 
 use generated::host::host_callers::*;
 use generated::host::host_contracts::{HOSTLOGGER_CONTRACT_ID, HostLogger};
-use generated::host::types::*;
 use generated::host::interface_factories::create_host_logger_interface;
+use generated::host::types::*;
 
 struct ConsoleLogger;
 
@@ -68,22 +68,13 @@ fn run() -> Result<(), String> {
             .config(config)
             .on_reload(|phase: ReloadPhase| match phase.phase_type {
                 ReloadPhaseType::Preparing => {
-                    eprintln!(
-                        "[HOT-RELOAD] Preparing: (id=0x{:016X})",
-                        phase.bundle_id
-                    );
+                    eprintln!("[HOT-RELOAD] Preparing: (id=0x{:016X})", phase.bundle_id);
                 }
                 ReloadPhaseType::Reloaded => {
-                    eprintln!(
-                        "[HOT-RELOAD] Reloaded: (id=0x{:016X})",
-                        phase.bundle_id
-                    );
+                    eprintln!("[HOT-RELOAD] Reloaded: (id=0x{:016X})", phase.bundle_id);
                 }
                 ReloadPhaseType::Failed => {
-                    eprintln!(
-                        "[HOT-RELOAD] Failed: (id=0x{:016X})",
-                        phase.bundle_id
-                    );
+                    eprintln!("[HOT-RELOAD] Failed: (id=0x{:016X})", phase.bundle_id);
                 }
             })
             .build()

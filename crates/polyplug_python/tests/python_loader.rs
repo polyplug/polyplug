@@ -65,7 +65,7 @@ fn make_manifest(path: &PathBuf, name: &str) -> ManifestData {
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
-            bundle_dependencies: Vec::new(),
+        bundle_dependencies: Vec::new(),
     }
 }
 
@@ -339,7 +339,9 @@ fn test_import_error_returns_module_import_failed() {
                 "bundle name should contain 'bundle'; got: {bundle}"
             );
             assert!(
-                error.contains("import") || error.contains("module") || error.contains("_polyplug_nonexistent_module_xyz_123456"),
+                error.contains("import")
+                    || error.contains("module")
+                    || error.contains("_polyplug_nonexistent_module_xyz_123456"),
                 "error should mention import/module issue: {error}"
             );
         }
@@ -411,7 +413,7 @@ fn test_nonexistent_path_returns_import_failed() {
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
-            bundle_dependencies: Vec::new(),
+        bundle_dependencies: Vec::new(),
     };
     let err: RuntimeError = loader
         .load(&manifest, &runtime)
@@ -540,7 +542,7 @@ file = "bundle.py"
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
-            bundle_dependencies: Vec::new(),
+        bundle_dependencies: Vec::new(),
     };
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "sibling import failed: {result:?}");
@@ -588,7 +590,7 @@ file = "bundle.py"
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
-            bundle_dependencies: Vec::new(),
+        bundle_dependencies: Vec::new(),
     };
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "site-packages import failed: {result:?}");

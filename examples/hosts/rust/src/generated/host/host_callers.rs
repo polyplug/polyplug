@@ -6,16 +6,16 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_abi::AbiErrorCode;
+use super::types::*;
+use polyplug::ffi::polyplug_runtime_resolve_guest_contract;
 use polyplug_abi::AbiError;
-use polyplug_abi::GuestContractInterface;
-use polyplug_abi::HostInterface;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
-use polyplug_abi::StringView;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
-use polyplug::ffi::polyplug_runtime_resolve_guest_contract;
-use super::types::*;
+use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostInterface;
+use polyplug_abi::StringView;
 
 /// Host-side error type for contract calls.
 #[derive(Debug)]
@@ -29,7 +29,10 @@ pub struct ContractError {
 impl ContractError {
     /// Create a new error with the given code.
     pub fn new(code: AbiErrorCode) -> Self {
-        Self { code, message: String::new() }
+        Self {
+            code,
+            message: String::new(),
+        }
     }
 }
 
@@ -61,20 +64,22 @@ impl PipelineDecoderContract {
     /// - `None` if interface not found or `create_instance` failed
     pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
-        let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack())
-        };
+        let interface: *const GuestContractInterface =
+            unsafe { polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack()) };
         if interface.is_null() {
             return None;
         }
         // Create instance via factory function
-        let instance: GuestContractInstance = unsafe {
-            ((*interface).create_instance)(host, core::ptr::null())
-        };
+        let instance: GuestContractInstance =
+            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
         if instance.data.is_null() {
             return None;
         }
-        Some(PipelineDecoderContract { interface, instance, host })
+        Some(PipelineDecoderContract {
+            interface,
+            instance,
+            host,
+        })
     }
 
     /// Check if instance is valid (non-null data).
@@ -90,9 +95,8 @@ impl PipelineDecoderContract {
                 ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
-        self.instance = unsafe {
-            ((*self.interface).create_instance)(self.host, core::ptr::null())
-        };
+        self.instance =
+            unsafe { ((*self.interface).create_instance)(self.host, core::ptr::null()) };
     }
 
     /// Call `decode` (function_id=0)
@@ -109,7 +113,12 @@ impl PipelineDecoderContract {
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
             if 0_u32 >= vtable.dispatch.native.function_count {
-                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in vtable") }
+                AbiError {
+                    code: AbiErrorCode::FunctionNotAvailable,
+                    message: polyplug_abi::string_view_from_static(
+                        b"function not available in vtable",
+                    ),
+                }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
@@ -118,13 +127,17 @@ impl PipelineDecoderContract {
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
                         // - The vtable guarantees that the function at this index is a native dispatch function
                         //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
-                        let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                        let dispatch_fn: unsafe extern "C" fn(
+                            GuestContractInstance,
+                            *const (),
+                            *mut (),
+                        ) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
                     DispatchType::VirtualMachine => {
                         (vtable.dispatch.vm.call)(
                             vtable.dispatch.vm.loader_data,
-                            self.instance,  // instance parameter
+                            self.instance, // instance parameter
                             0_u32,
                             args_ptr,
                             out_ptr,
@@ -140,19 +153,28 @@ impl PipelineDecoderContract {
                 // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
                 // allocated by the plugin via host_alloc. We read it before freeing.
                 let s: String = unsafe {
-                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
                 // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
                 // We must free it after reading to avoid memory leak.
-                unsafe { polyplug_abi::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };
+                unsafe {
+                    polyplug_abi::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
                 s
             };
-            return Err(ContractError { code: err.code, message });
+            return Err(ContractError {
+                code: err.code,
+                message,
+            });
         }
         Ok(out_val)
     }
-
 }
 
 impl Drop for PipelineDecoderContract {
@@ -196,20 +218,22 @@ impl DataTransformerContract {
     /// - `None` if interface not found or `create_instance` failed
     pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
-        let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack())
-        };
+        let interface: *const GuestContractInterface =
+            unsafe { polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack()) };
         if interface.is_null() {
             return None;
         }
         // Create instance via factory function
-        let instance: GuestContractInstance = unsafe {
-            ((*interface).create_instance)(host, core::ptr::null())
-        };
+        let instance: GuestContractInstance =
+            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
         if instance.data.is_null() {
             return None;
         }
-        Some(DataTransformerContract { interface, instance, host })
+        Some(DataTransformerContract {
+            interface,
+            instance,
+            host,
+        })
     }
 
     /// Check if instance is valid (non-null data).
@@ -225,9 +249,8 @@ impl DataTransformerContract {
                 ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
-        self.instance = unsafe {
-            ((*self.interface).create_instance)(self.host, core::ptr::null())
-        };
+        self.instance =
+            unsafe { ((*self.interface).create_instance)(self.host, core::ptr::null()) };
     }
 
     /// Call `transform` (function_id=0)
@@ -244,7 +267,12 @@ impl DataTransformerContract {
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
             if 0_u32 >= vtable.dispatch.native.function_count {
-                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in vtable") }
+                AbiError {
+                    code: AbiErrorCode::FunctionNotAvailable,
+                    message: polyplug_abi::string_view_from_static(
+                        b"function not available in vtable",
+                    ),
+                }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
@@ -253,13 +281,17 @@ impl DataTransformerContract {
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
                         // - The vtable guarantees that the function at this index is a native dispatch function
                         //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
-                        let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                        let dispatch_fn: unsafe extern "C" fn(
+                            GuestContractInstance,
+                            *const (),
+                            *mut (),
+                        ) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
                     DispatchType::VirtualMachine => {
                         (vtable.dispatch.vm.call)(
                             vtable.dispatch.vm.loader_data,
-                            self.instance,  // instance parameter
+                            self.instance, // instance parameter
                             0_u32,
                             args_ptr,
                             out_ptr,
@@ -275,19 +307,28 @@ impl DataTransformerContract {
                 // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
                 // allocated by the plugin via host_alloc. We read it before freeing.
                 let s: String = unsafe {
-                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
                 // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
                 // We must free it after reading to avoid memory leak.
-                unsafe { polyplug_abi::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };
+                unsafe {
+                    polyplug_abi::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
                 s
             };
-            return Err(ContractError { code: err.code, message });
+            return Err(ContractError {
+                code: err.code,
+                message,
+            });
         }
         Ok(out_val)
     }
-
 }
 
 impl Drop for DataTransformerContract {
@@ -331,20 +372,22 @@ impl PipelineEncoderContract {
     /// - `None` if interface not found or `create_instance` failed
     pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
-        let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack())
-        };
+        let interface: *const GuestContractInterface =
+            unsafe { polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack()) };
         if interface.is_null() {
             return None;
         }
         // Create instance via factory function
-        let instance: GuestContractInstance = unsafe {
-            ((*interface).create_instance)(host, core::ptr::null())
-        };
+        let instance: GuestContractInstance =
+            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
         if instance.data.is_null() {
             return None;
         }
-        Some(PipelineEncoderContract { interface, instance, host })
+        Some(PipelineEncoderContract {
+            interface,
+            instance,
+            host,
+        })
     }
 
     /// Check if instance is valid (non-null data).
@@ -360,9 +403,8 @@ impl PipelineEncoderContract {
                 ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
-        self.instance = unsafe {
-            ((*self.interface).create_instance)(self.host, core::ptr::null())
-        };
+        self.instance =
+            unsafe { ((*self.interface).create_instance)(self.host, core::ptr::null()) };
     }
 
     /// Call `encode` (function_id=0)
@@ -379,7 +421,12 @@ impl PipelineEncoderContract {
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
             if 0_u32 >= vtable.dispatch.native.function_count {
-                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in vtable") }
+                AbiError {
+                    code: AbiErrorCode::FunctionNotAvailable,
+                    message: polyplug_abi::string_view_from_static(
+                        b"function not available in vtable",
+                    ),
+                }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
@@ -388,13 +435,17 @@ impl PipelineEncoderContract {
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
                         // - The vtable guarantees that the function at this index is a native dispatch function
                         //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
-                        let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                        let dispatch_fn: unsafe extern "C" fn(
+                            GuestContractInstance,
+                            *const (),
+                            *mut (),
+                        ) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
                     DispatchType::VirtualMachine => {
                         (vtable.dispatch.vm.call)(
                             vtable.dispatch.vm.loader_data,
-                            self.instance,  // instance parameter
+                            self.instance, // instance parameter
                             0_u32,
                             args_ptr,
                             out_ptr,
@@ -410,19 +461,28 @@ impl PipelineEncoderContract {
                 // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
                 // allocated by the plugin via host_alloc. We read it before freeing.
                 let s: String = unsafe {
-                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
                 // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
                 // We must free it after reading to avoid memory leak.
-                unsafe { polyplug_abi::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };
+                unsafe {
+                    polyplug_abi::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
                 s
             };
-            return Err(ContractError { code: err.code, message });
+            return Err(ContractError {
+                code: err.code,
+                message,
+            });
         }
         Ok(out_val)
     }
-
 }
 
 impl Drop for PipelineEncoderContract {
@@ -466,20 +526,22 @@ impl DataReporterContract {
     /// - `None` if interface not found or `create_instance` failed
     pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
-        let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack())
-        };
+        let interface: *const GuestContractInterface =
+            unsafe { polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack()) };
         if interface.is_null() {
             return None;
         }
         // Create instance via factory function
-        let instance: GuestContractInstance = unsafe {
-            ((*interface).create_instance)(host, core::ptr::null())
-        };
+        let instance: GuestContractInstance =
+            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
         if instance.data.is_null() {
             return None;
         }
-        Some(DataReporterContract { interface, instance, host })
+        Some(DataReporterContract {
+            interface,
+            instance,
+            host,
+        })
     }
 
     /// Check if instance is valid (non-null data).
@@ -495,9 +557,8 @@ impl DataReporterContract {
                 ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
-        self.instance = unsafe {
-            ((*self.interface).create_instance)(self.host, core::ptr::null())
-        };
+        self.instance =
+            unsafe { ((*self.interface).create_instance)(self.host, core::ptr::null()) };
     }
 
     /// Call `report` (function_id=0)
@@ -514,7 +575,12 @@ impl DataReporterContract {
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
             if 0_u32 >= vtable.dispatch.native.function_count {
-                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in vtable") }
+                AbiError {
+                    code: AbiErrorCode::FunctionNotAvailable,
+                    message: polyplug_abi::string_view_from_static(
+                        b"function not available in vtable",
+                    ),
+                }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
@@ -523,13 +589,17 @@ impl DataReporterContract {
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
                         // - The vtable guarantees that the function at this index is a native dispatch function
                         //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
-                        let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                        let dispatch_fn: unsafe extern "C" fn(
+                            GuestContractInstance,
+                            *const (),
+                            *mut (),
+                        ) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
                     DispatchType::VirtualMachine => {
                         (vtable.dispatch.vm.call)(
                             vtable.dispatch.vm.loader_data,
-                            self.instance,  // instance parameter
+                            self.instance, // instance parameter
                             0_u32,
                             args_ptr,
                             out_ptr,
@@ -545,19 +615,28 @@ impl DataReporterContract {
                 // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
                 // allocated by the plugin via host_alloc. We read it before freeing.
                 let s: String = unsafe {
-                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
                 // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
                 // We must free it after reading to avoid memory leak.
-                unsafe { polyplug_abi::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };
+                unsafe {
+                    polyplug_abi::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
                 s
             };
-            return Err(ContractError { code: err.code, message });
+            return Err(ContractError {
+                code: err.code,
+                message,
+            });
         }
         Ok(out_val)
     }
-
 }
 
 impl Drop for DataReporterContract {
@@ -601,20 +680,22 @@ impl PipelineValidatorContract {
     /// - `None` if interface not found or `create_instance` failed
     pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
-        let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack())
-        };
+        let interface: *const GuestContractInterface =
+            unsafe { polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack()) };
         if interface.is_null() {
             return None;
         }
         // Create instance via factory function
-        let instance: GuestContractInstance = unsafe {
-            ((*interface).create_instance)(host, core::ptr::null())
-        };
+        let instance: GuestContractInstance =
+            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
         if instance.data.is_null() {
             return None;
         }
-        Some(PipelineValidatorContract { interface, instance, host })
+        Some(PipelineValidatorContract {
+            interface,
+            instance,
+            host,
+        })
     }
 
     /// Check if instance is valid (non-null data).
@@ -630,9 +711,8 @@ impl PipelineValidatorContract {
                 ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
-        self.instance = unsafe {
-            ((*self.interface).create_instance)(self.host, core::ptr::null())
-        };
+        self.instance =
+            unsafe { ((*self.interface).create_instance)(self.host, core::ptr::null()) };
     }
 
     /// Call `validate` (function_id=0)
@@ -649,7 +729,12 @@ impl PipelineValidatorContract {
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
             if 0_u32 >= vtable.dispatch.native.function_count {
-                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in vtable") }
+                AbiError {
+                    code: AbiErrorCode::FunctionNotAvailable,
+                    message: polyplug_abi::string_view_from_static(
+                        b"function not available in vtable",
+                    ),
+                }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
@@ -658,13 +743,17 @@ impl PipelineValidatorContract {
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
                         // - The vtable guarantees that the function at this index is a native dispatch function
                         //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
-                        let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                        let dispatch_fn: unsafe extern "C" fn(
+                            GuestContractInstance,
+                            *const (),
+                            *mut (),
+                        ) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
                     DispatchType::VirtualMachine => {
                         (vtable.dispatch.vm.call)(
                             vtable.dispatch.vm.loader_data,
-                            self.instance,  // instance parameter
+                            self.instance, // instance parameter
                             0_u32,
                             args_ptr,
                             out_ptr,
@@ -680,19 +769,28 @@ impl PipelineValidatorContract {
                 // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
                 // allocated by the plugin via host_alloc. We read it before freeing.
                 let s: String = unsafe {
-                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
                 // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
                 // We must free it after reading to avoid memory leak.
-                unsafe { polyplug_abi::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };
+                unsafe {
+                    polyplug_abi::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
                 s
             };
-            return Err(ContractError { code: err.code, message });
+            return Err(ContractError {
+                code: err.code,
+                message,
+            });
         }
         Ok(out_val)
     }
-
 }
 
 impl Drop for PipelineValidatorContract {
@@ -707,4 +805,3 @@ impl Drop for PipelineValidatorContract {
         }
     }
 }
-

@@ -6,25 +6,25 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_abi::HostContractInterface;
-use polyplug_abi::HostContractInstance;
-use polyplug_abi::HostInterface;
-use polyplug_abi::GuestContractInstance;
-use polyplug_abi::VmLoaderData;
-use polyplug_abi::DispatchMechanisms;
-use polyplug_abi::NativeDispatch;
-use polyplug_abi::VmDispatch;
-use polyplug_abi::DispatchType;
-use polyplug_abi::StringView;
-use polyplug_abi::AbiError;
-use polyplug_abi::AbiErrorCode;
-use polyplug_abi::abi_error_ok;
-use polyplug_abi::string_view_from_static;
-use polyplug_abi::Version;
-use polyplug_abi::HostContractId;
-use core::ffi::c_void;
 use super::host_contracts::*;
 use super::types::*;
+use core::ffi::c_void;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
+use polyplug_abi::DispatchMechanisms;
+use polyplug_abi::DispatchType;
+use polyplug_abi::GuestContractInstance;
+use polyplug_abi::HostContractId;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
+use polyplug_abi::HostInterface;
+use polyplug_abi::NativeDispatch;
+use polyplug_abi::StringView;
+use polyplug_abi::Version;
+use polyplug_abi::VmDispatch;
+use polyplug_abi::VmLoaderData;
+use polyplug_abi::abi_error_ok;
+use polyplug_abi::string_view_from_static;
 
 /// Create a host contract vtable for `host.logger` with NATIVE dispatch.
 ///
@@ -34,8 +34,11 @@ use super::types::*;
 /// # Memory
 /// The returned vtable is leaked and lives for the lifetime of the program.
 /// The implementation Box is also leaked (its pointer is stored in the vtable).
-pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'static HostContractInterface {
-    static IMPL_PTR: std::sync::atomic::AtomicPtr<c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+pub fn create_host_logger_interface(
+    implementation: Box<dyn HostLogger>,
+) -> &'static HostContractInterface {
+    static IMPL_PTR: std::sync::atomic::AtomicPtr<c_void> =
+        std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
     let fat_ptr: *const dyn HostLogger = Box::into_raw(implementation);
     let wrapper: Box<*const dyn HostLogger> = Box::new(fat_ptr);
@@ -54,7 +57,10 @@ pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'st
             // SAFETY: args is a valid *const StringView per ABI contract.
             let message_sv: StringView = unsafe { *(args as *const StringView) };
             let message: &str = unsafe {
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(message_sv.ptr, message_sv.len))
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                    message_sv.ptr,
+                    message_sv.len,
+                ))
             };
             impl_ref.log(message);
             let _ = out;
@@ -78,10 +84,14 @@ pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'st
             let fat_ptr: *const *const dyn HostLogger = impl_ptr as *const *const dyn HostLogger;
             let impl_ref: &dyn HostLogger = unsafe { &**fat_ptr };
             // SAFETY: args is a valid *const HostLoggerLogWithLevelArgs per ABI contract.
-            let packed: &HostLoggerLogWithLevelArgs = unsafe { &*(args as *const HostLoggerLogWithLevelArgs) };
+            let packed: &HostLoggerLogWithLevelArgs =
+                unsafe { &*(args as *const HostLoggerLogWithLevelArgs) };
             let level: &LogLevel = &packed.level;
             let message: &str = unsafe {
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(packed.message.ptr, packed.message.len))
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                    packed.message.ptr,
+                    packed.message.len,
+                ))
             };
             impl_ref.log_with_level(level, message);
             let _ = out;
@@ -95,10 +105,8 @@ pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'st
         }
     }
 
-    static FUNCTIONS: [unsafe extern "C" fn(*const c_void, *const (), *mut ()) -> AbiError; 2] = [
-        host_logger_log_thunk,
-        host_logger_log_with_level_thunk,
-    ];
+    static FUNCTIONS: [unsafe extern "C" fn(*const c_void, *const (), *mut ()) -> AbiError; 2] =
+        [host_logger_log_thunk, host_logger_log_with_level_thunk];
 
     /// Create instance stub for `host.logger` host contract.
     /// For host contracts, the instance is the implementation object.
@@ -107,7 +115,9 @@ pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'st
         _this: *const HostContractInterface,
         _args: *const (),
     ) -> HostContractInstance {
-        HostContractInstance { data: IMPL_PTR.load(std::sync::atomic::Ordering::SeqCst) }
+        HostContractInstance {
+            data: IMPL_PTR.load(std::sync::atomic::Ordering::SeqCst),
+        }
     }
 
     /// Destroy instance stub for `host.logger` host contract.
@@ -122,7 +132,11 @@ pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'st
 
     let vtable: HostContractInterface = HostContractInterface {
         contract_id: HostContractId::from(0xF53EB5F2845853BB_u64),
-        contract_version: Version { major: 1, minor: 0, patch: 0 },
+        contract_version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
         singleton: false,
         dispatch_type: DispatchType::Native,
         runtime: std::ptr::null_mut(),
@@ -159,7 +173,8 @@ pub fn create_host_logger_interface_vm(
         out: *mut (),
     ) -> AbiError,
 ) -> &'static HostContractInterface {
-    static BRIDGE_DATA: std::sync::atomic::AtomicPtr<c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    static BRIDGE_DATA: std::sync::atomic::AtomicPtr<c_void> =
+        std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
     BRIDGE_DATA.store(bridge_data, std::sync::atomic::Ordering::SeqCst);
 
     /// Create instance stub for `host.logger` host contract (VM dispatch).
@@ -168,7 +183,9 @@ pub fn create_host_logger_interface_vm(
         _this: *const HostContractInterface,
         _args: *const (),
     ) -> HostContractInstance {
-        HostContractInstance { data: BRIDGE_DATA.load(std::sync::atomic::Ordering::SeqCst) }
+        HostContractInstance {
+            data: BRIDGE_DATA.load(std::sync::atomic::Ordering::SeqCst),
+        }
     }
 
     /// Destroy instance stub for `host.logger` host contract (VM dispatch).
@@ -181,7 +198,11 @@ pub fn create_host_logger_interface_vm(
 
     let vtable: HostContractInterface = HostContractInterface {
         contract_id: HostContractId::from(0xF53EB5F2845853BB_u64),
-        contract_version: Version { major: 1, minor: 0, patch: 0 },
+        contract_version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
         singleton: false,
         dispatch_type: DispatchType::VirtualMachine,
         runtime: std::ptr::null_mut(),
@@ -197,4 +218,3 @@ pub fn create_host_logger_interface_vm(
 
     Box::leak(Box::new(vtable))
 }
-

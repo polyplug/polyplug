@@ -14,8 +14,8 @@ use std::sync::Barrier;
 use polyplug::error::RegistryError;
 use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::{
-    DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor,
-    GuestContractHandle, StringView, Version, DispatchMechanisms, GuestContractId,
+    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractId, GuestContractInterface,
+    HostInterface, NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::BundleId;
 
@@ -60,9 +60,30 @@ macro_rules! make_interface {
 
 #[test]
 fn resolve_valid_handle_after_multiple_registrations() {
-    static INTERFACE_A: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0001_u64, Version { major: 1, minor: 0, patch: 0 });
-    static INTERFACE_B: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0002_u64, Version { major: 2, minor: 0, patch: 0 });
-    static INTERFACE_C: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0003_u64, Version { major: 3, minor: 0, patch: 0 });
+    static INTERFACE_A: GuestContractInterface = make_interface!(
+        0xEEEE_0000_0000_0001_u64,
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0
+        }
+    );
+    static INTERFACE_B: GuestContractInterface = make_interface!(
+        0xEEEE_0000_0000_0002_u64,
+        Version {
+            major: 2,
+            minor: 0,
+            patch: 0
+        }
+    );
+    static INTERFACE_C: GuestContractInterface = make_interface!(
+        0xEEEE_0000_0000_0003_u64,
+        Version {
+            major: 3,
+            minor: 0,
+            patch: 0
+        }
+    );
 
     let registry: RuntimeStore = RuntimeStore::new();
 
@@ -73,26 +94,42 @@ fn resolve_valid_handle_after_multiple_registrations() {
     // SAFETY: INTERFACE_A, INTERFACE_B, INTERFACE_C are 'static, pointers are valid for Registry lifetime.
     let handle_a: GuestContractHandle = unsafe {
         registry
-            .register_guest_contract(descriptor_a, &INTERFACE_A, "contract.a".to_owned(), BundleId::from_u64(1_u64))
+            .register_guest_contract(
+                descriptor_a,
+                &INTERFACE_A,
+                "contract.a".to_owned(),
+                BundleId::from_u64(1_u64),
+            )
             .expect("registration A should succeed")
     };
 
     // SAFETY: INTERFACE_B is 'static, pointer is valid for Registry lifetime.
     let handle_b: GuestContractHandle = unsafe {
         registry
-            .register_guest_contract(descriptor_b, &INTERFACE_B, "contract.b".to_owned(), BundleId::from_u64(2_u64))
+            .register_guest_contract(
+                descriptor_b,
+                &INTERFACE_B,
+                "contract.b".to_owned(),
+                BundleId::from_u64(2_u64),
+            )
             .expect("registration B should succeed")
     };
 
     // SAFETY: INTERFACE_C is 'static, pointer is valid for Registry lifetime.
     let handle_c: GuestContractHandle = unsafe {
         registry
-            .register_guest_contract(descriptor_c, &INTERFACE_C, "contract.c".to_owned(), BundleId::from_u64(3_u64))
+            .register_guest_contract(
+                descriptor_c,
+                &INTERFACE_C,
+                "contract.c".to_owned(),
+                BundleId::from_u64(3_u64),
+            )
             .expect("registration C should succeed")
     };
 
-    let interface_ptr_a: *const GuestContractInterface =
-        registry.resolve_guest_contract(handle_a).expect("resolve for handle_a should succeed");
+    let interface_ptr_a: *const GuestContractInterface = registry
+        .resolve_guest_contract(handle_a)
+        .expect("resolve for handle_a should succeed");
     // SAFETY: interface_ptr_a points to INTERFACE_A which is 'static.
     let contract_id_a: GuestContractId = unsafe { (*interface_ptr_a).contract_id };
     assert_eq!(
@@ -100,8 +137,9 @@ fn resolve_valid_handle_after_multiple_registrations() {
         "handle_a should return INTERFACE_A"
     );
 
-    let interface_ptr_b: *const GuestContractInterface =
-        registry.resolve_guest_contract(handle_b).expect("resolve for handle_b should succeed");
+    let interface_ptr_b: *const GuestContractInterface = registry
+        .resolve_guest_contract(handle_b)
+        .expect("resolve for handle_b should succeed");
     // SAFETY: interface_ptr_b points to INTERFACE_B which is 'static.
     let contract_id_b: GuestContractId = unsafe { (*interface_ptr_b).contract_id };
     assert_eq!(
@@ -109,8 +147,9 @@ fn resolve_valid_handle_after_multiple_registrations() {
         "handle_b should return INTERFACE_B"
     );
 
-    let interface_ptr_c: *const GuestContractInterface =
-        registry.resolve_guest_contract(handle_c).expect("resolve for handle_c should succeed");
+    let interface_ptr_c: *const GuestContractInterface = registry
+        .resolve_guest_contract(handle_c)
+        .expect("resolve for handle_c should succeed");
     // SAFETY: interface_ptr_c points to INTERFACE_C which is 'static.
     let contract_id_c: GuestContractId = unsafe { (*interface_ptr_c).contract_id };
     assert_eq!(
@@ -125,7 +164,14 @@ fn resolve_valid_handle_after_multiple_registrations() {
 
 #[test]
 fn resolve_vacant_slot_returns_invalid_handle() {
-    static INTERFACE: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0010_u64, Version { major: 1, minor: 0, patch: 0 });
+    static INTERFACE: GuestContractInterface = make_interface!(
+        0xEEEE_0000_0000_0010_u64,
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0
+        }
+    );
 
     let registry: RuntimeStore = RuntimeStore::new();
 
@@ -133,14 +179,17 @@ fn resolve_vacant_slot_returns_invalid_handle() {
     // SAFETY: INTERFACE is 'static, pointer is valid for Registry lifetime.
     let handle: GuestContractHandle = unsafe {
         registry
-            .register_guest_contract(descriptor, &INTERFACE, "contract.single".to_owned(), BundleId::from_u64(100_u64))
+            .register_guest_contract(
+                descriptor,
+                &INTERFACE,
+                "contract.single".to_owned(),
+                BundleId::from_u64(100_u64),
+            )
             .expect("registration should succeed")
     };
 
     // Test 1: Handle with index beyond slots length
-    let out_of_bounds_handle: GuestContractHandle = GuestContractHandle {
-        index: 9999_u32,
-    };
+    let out_of_bounds_handle: GuestContractHandle = GuestContractHandle { index: 9999_u32 };
     let result: Result<*const GuestContractInterface, RegistryError> =
         registry.resolve_guest_contract(out_of_bounds_handle);
     assert!(
@@ -149,9 +198,7 @@ fn resolve_vacant_slot_returns_invalid_handle() {
     );
 
     // Test 2: Handle pointing to slot that was never used (index 1 when only slot 0 exists)
-    let unused_slot_handle: GuestContractHandle = GuestContractHandle {
-        index: 1_u32,
-    };
+    let unused_slot_handle: GuestContractHandle = GuestContractHandle { index: 1_u32 };
     let result_unused: Result<*const GuestContractInterface, RegistryError> =
         registry.resolve_guest_contract(unused_slot_handle);
     assert!(
@@ -162,7 +209,10 @@ fn resolve_vacant_slot_returns_invalid_handle() {
     // Valid handle should still work
     let valid_result: Result<*const GuestContractInterface, RegistryError> =
         registry.resolve_guest_contract(handle);
-    assert!(valid_result.is_ok(), "valid handle should resolve successfully");
+    assert!(
+        valid_result.is_ok(),
+        "valid handle should resolve successfully"
+    );
 }
 
 // =============================================================================
@@ -206,14 +256,70 @@ const CONCURRENT_PLUGIN_NAMES: [&str; CONCURRENT_THREADS] = [
 ];
 
 static CONCURRENT_INTERFACES: [GuestContractInterface; CONCURRENT_THREADS] = [
-    make_interface!(CONCURRENT_CONTRACT_IDS[0], Version { major: 1, minor: 0, patch: 0 }),
-    make_interface!(CONCURRENT_CONTRACT_IDS[1], Version { major: 1, minor: 0, patch: 0 }),
-    make_interface!(CONCURRENT_CONTRACT_IDS[2], Version { major: 1, minor: 0, patch: 0 }),
-    make_interface!(CONCURRENT_CONTRACT_IDS[3], Version { major: 1, minor: 0, patch: 0 }),
-    make_interface!(CONCURRENT_CONTRACT_IDS[4], Version { major: 1, minor: 0, patch: 0 }),
-    make_interface!(CONCURRENT_CONTRACT_IDS[5], Version { major: 1, minor: 0, patch: 0 }),
-    make_interface!(CONCURRENT_CONTRACT_IDS[6], Version { major: 1, minor: 0, patch: 0 }),
-    make_interface!(CONCURRENT_CONTRACT_IDS[7], Version { major: 1, minor: 0, patch: 0 }),
+    make_interface!(
+        CONCURRENT_CONTRACT_IDS[0],
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0
+        }
+    ),
+    make_interface!(
+        CONCURRENT_CONTRACT_IDS[1],
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0
+        }
+    ),
+    make_interface!(
+        CONCURRENT_CONTRACT_IDS[2],
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0
+        }
+    ),
+    make_interface!(
+        CONCURRENT_CONTRACT_IDS[3],
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0
+        }
+    ),
+    make_interface!(
+        CONCURRENT_CONTRACT_IDS[4],
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0
+        }
+    ),
+    make_interface!(
+        CONCURRENT_CONTRACT_IDS[5],
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0
+        }
+    ),
+    make_interface!(
+        CONCURRENT_CONTRACT_IDS[6],
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0
+        }
+    ),
+    make_interface!(
+        CONCURRENT_CONTRACT_IDS[7],
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0
+        }
+    ),
 ];
 
 #[test]
@@ -257,7 +363,8 @@ fn resolve_concurrent_access_thread_safety() {
                 // SAFETY: interface_ptr points to a 'static GuestContractInterface.
                 let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
                 assert_eq!(
-                    contract_id.id(), expected_contract_id,
+                    contract_id.id(),
+                    expected_contract_id,
                     "thread {} got wrong contract_id",
                     idx
                 );
@@ -279,9 +386,30 @@ fn resolve_concurrent_access_thread_safety() {
 fn find_by_contract_multiple_implementations_returns_first() {
     const MULTI_CONTRACT_ID: u64 = 0xEEEE_2000_0000_0001_u64;
 
-    static INTERFACE_IMPL_A: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, Version { major: 1, minor: 0, patch: 0 });
-    static INTERFACE_IMPL_B: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, Version { major: 2, minor: 0, patch: 0 });
-    static INTERFACE_IMPL_C: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, Version { major: 3, minor: 0, patch: 0 });
+    static INTERFACE_IMPL_A: GuestContractInterface = make_interface!(
+        MULTI_CONTRACT_ID,
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0
+        }
+    );
+    static INTERFACE_IMPL_B: GuestContractInterface = make_interface!(
+        MULTI_CONTRACT_ID,
+        Version {
+            major: 2,
+            minor: 0,
+            patch: 0
+        }
+    );
+    static INTERFACE_IMPL_C: GuestContractInterface = make_interface!(
+        MULTI_CONTRACT_ID,
+        Version {
+            major: 3,
+            minor: 0,
+            patch: 0
+        }
+    );
 
     let registry: RuntimeStore = RuntimeStore::new();
 
@@ -347,8 +475,9 @@ fn find_by_contract_multiple_implementations_returns_first() {
         "find_by_contract should return first registered implementation"
     );
 
-    let interface_ptr: *const GuestContractInterface =
-        registry.resolve_guest_contract(found).expect("resolve should succeed");
+    let interface_ptr: *const GuestContractInterface = registry
+        .resolve_guest_contract(found)
+        .expect("resolve should succeed");
     // SAFETY: interface_ptr points to INTERFACE_IMPL_A which is 'static.
     let version: &Version = unsafe { &(*interface_ptr).contract_version };
     assert_eq!(
@@ -356,10 +485,12 @@ fn find_by_contract_multiple_implementations_returns_first() {
         "should resolve to first implementation's interface"
     );
 
-    let mut all_handles: [GuestContractHandle; 4] = [GuestContractHandle {
-        index: 0_u32,
-    }; 4];
-    let count: usize = registry.find_all_guest_contracts(GuestContractId::from_u64(MULTI_CONTRACT_ID), 0_u32, &mut all_handles);
+    let mut all_handles: [GuestContractHandle; 4] = [GuestContractHandle { index: 0_u32 }; 4];
+    let count: usize = registry.find_all_guest_contracts(
+        GuestContractId::from_u64(MULTI_CONTRACT_ID),
+        0_u32,
+        &mut all_handles,
+    );
     assert_eq!(
         count, 3,
         "find_all_by_contract should return all 3 implementations"
@@ -373,11 +504,21 @@ fn find_by_contract_multiple_implementations_returns_first() {
 #[test]
 fn swap_interface_during_active_resolve() {
     const SWAP_TEST_CONTRACT_ID: u64 = 0xEEEE_3000_0000_0001_u64;
-    const VERSION_V1: Version = Version { major: 1, minor: 0, patch: 0 };
-    const VERSION_V2: Version = Version { major: 2, minor: 0, patch: 0 };
+    const VERSION_V1: Version = Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    };
+    const VERSION_V2: Version = Version {
+        major: 2,
+        minor: 0,
+        patch: 0,
+    };
 
-    static INTERFACE_V1: GuestContractInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V1);
-    static INTERFACE_V2: GuestContractInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V2);
+    static INTERFACE_V1: GuestContractInterface =
+        make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V1);
+    static INTERFACE_V2: GuestContractInterface =
+        make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V2);
 
     let registry: RuntimeStore = RuntimeStore::new();
 
@@ -394,8 +535,9 @@ fn swap_interface_during_active_resolve() {
             .expect("initial registration should succeed")
     };
 
-    let interface_ptr_before: *const GuestContractInterface =
-        registry.resolve_guest_contract(handle).expect("resolve before swap should succeed");
+    let interface_ptr_before: *const GuestContractInterface = registry
+        .resolve_guest_contract(handle)
+        .expect("resolve before swap should succeed");
     // SAFETY: interface_ptr_before points to INTERFACE_V1 which is 'static.
     let version_before: &Version = unsafe { &(*interface_ptr_before).contract_version };
     assert_eq!(
@@ -410,8 +552,9 @@ fn swap_interface_during_active_resolve() {
         .expect("swap_interface should succeed");
 
     // The same handle should now resolve to V2 (no generation tracking)
-    let interface_ptr_after: *const GuestContractInterface =
-        registry.resolve_guest_contract(handle).expect("resolve should succeed after swap");
+    let interface_ptr_after: *const GuestContractInterface = registry
+        .resolve_guest_contract(handle)
+        .expect("resolve should succeed after swap");
 
     // SAFETY: interface_ptr_after points to INTERFACE_V2 which is 'static.
     let version_after: &Version = unsafe { &(*interface_ptr_after).contract_version };
@@ -426,6 +569,10 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
     PluginDescriptor {
         name: StringView::from_static(name.as_bytes()),
         contract_name: StringView::from_static(contract_name.as_bytes()),
-        version: Version { major: 1, minor: 0, patch: 0 },
+        version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
     }
 }

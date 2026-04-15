@@ -4,10 +4,10 @@
 //! - Host-side: type-safe Rust wrappers to call plugins (for app developers)
 //! - Guest-side: ABI entry point, allocator hookup, interface stubs (for plugin developers)
 
-use super::is_native_runtime;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -541,7 +541,10 @@ fn contract_name_to_upper_snake(name: &str) -> String {
 }
 
 /// Generate the full interfaces.rs content.
-fn generate_guest_interfaces_file(out: &mut String, ir: &ValidatedIr) -> Result<(), PolyplugcError> {
+fn generate_guest_interfaces_file(
+    out: &mut String,
+    ir: &ValidatedIr,
+) -> Result<(), PolyplugcError> {
     // Shared imports
     out.push_str("use std::sync::OnceLock;\n");
     out.push_str("use polyplug_guest::AbiError;\n");
@@ -569,10 +572,7 @@ fn generate_guest_interfaces_file(out: &mut String, ir: &ValidatedIr) -> Result<
     out.push_str("/// Falls back to a null message if allocation fails.\n");
     out.push_str("fn plugin_error_to_abi_error(e: GuestError) -> AbiError {\n");
     out.push_str("    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());\n");
-    out.push_str("    // SAFETY: GuestError.code is u32, AbiErrorCode is #[repr(u32)].\n");
-    out.push_str("    // Both types have the same size and alignment, so transmute is safe.\n");
-    out.push_str("    // Plugin-defined error codes (256+) are valid AbiErrorCode values.\n");
-    out.push_str("    AbiError { code: unsafe { std::mem::transmute(e.code) }, message }\n");
+    out.push_str("    AbiError { code: e.code, message }\n");
     out.push_str("}\n\n");
     for contract in &ir.contracts {
         let trait_name: String = contract_name_to_guest_trait(&contract.name);
@@ -690,9 +690,7 @@ fn generate_guest_contract_interface(
         "/// Default create_instance stub for {}.\n",
         contract.name
     ));
-    out.push_str(&format!(
-        "/// Returns null instance - users should override for stateful plugins.\n"
-    ));
+    out.push_str("/// Returns null instance - users should override for stateful plugins.\n");
     out.push_str("#[allow(clippy::unnecessary_cast)]\n");
     out.push_str(&format!(
         "unsafe extern \"C\" fn {upper}_create_instance_stub(\n"
@@ -709,9 +707,7 @@ fn generate_guest_contract_interface(
         "/// Default destroy_instance stub for {}.\n",
         contract.name
     ));
-    out.push_str(&format!(
-        "/// No-op - users should override for state cleanup before hot-reload.\n"
-    ));
+    out.push_str("/// No-op - users should override for state cleanup before hot-reload.\n");
     out.push_str(&format!(
         "unsafe extern \"C\" fn {upper}_destroy_instance_stub(\n"
     ));
@@ -728,7 +724,9 @@ fn generate_guest_contract_interface(
     out.push_str(&format!(
         "pub(crate) static {upper}_INTERFACE: GuestContractInterface = GuestContractInterface {{\n"
     ));
-    out.push_str(&format!("    contract_id: GuestContractId::from_u64({upper}_CONTRACT_ID),\n"));
+    out.push_str(&format!(
+        "    contract_id: GuestContractId::from_u64({upper}_CONTRACT_ID),\n"
+    ));
     out.push_str(&format!(
         "    contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"
     ));
@@ -738,13 +736,15 @@ fn generate_guest_contract_interface(
         "DispatchType::VirtualMachine"
     };
     out.push_str(&format!("    dispatch_type: {dispatch_type_str},\n"));
-    out.push_str(&format!("    create_instance: {upper}_create_instance_stub,\n"));
-    out.push_str(&format!("    destroy_instance: {upper}_destroy_instance_stub,\n"));
+    out.push_str(&format!(
+        "    create_instance: {upper}_create_instance_stub,\n"
+    ));
+    out.push_str(&format!(
+        "    destroy_instance: {upper}_destroy_instance_stub,\n"
+    ));
     out.push_str("    dispatch: DispatchMechanisms {\n");
     out.push_str("        native: NativeDispatch {\n");
-    out.push_str(&format!(
-        "            function_count: {fn_count}_u32,\n"
-    ));
+    out.push_str(&format!("            function_count: {fn_count}_u32,\n"));
     out.push_str(&format!(
         "            functions: {upper}_FNS.as_ptr() as *const *const (),\n"
     ));
@@ -820,9 +820,7 @@ fn generate_guest_plugin_interface(
         "/// Default create_instance stub for {}.\n",
         plugin_name
     ));
-    out.push_str(&format!(
-        "/// Returns null instance - users should override for stateful plugins.\n"
-    ));
+    out.push_str("/// Returns null instance - users should override for stateful plugins.\n");
     out.push_str("#[allow(clippy::unnecessary_cast)]\n");
     out.push_str(&format!(
         "unsafe extern \"C\" fn {plugin_upper}_create_instance_stub(\n"
@@ -839,9 +837,7 @@ fn generate_guest_plugin_interface(
         "/// Default destroy_instance stub for {}.\n",
         plugin_name
     ));
-    out.push_str(&format!(
-        "/// No-op - users should override for state cleanup before hot-reload.\n"
-    ));
+    out.push_str("/// No-op - users should override for state cleanup before hot-reload.\n");
     out.push_str(&format!(
         "unsafe extern \"C\" fn {plugin_upper}_destroy_instance_stub(\n"
     ));
@@ -857,7 +853,9 @@ fn generate_guest_plugin_interface(
     out.push_str(&format!(
         "pub static {plugin_upper}_INTERFACE: GuestContractInterface = GuestContractInterface {{\n"
     ));
-    out.push_str(&format!("    contract_id: GuestContractId::from_u64({plugin_upper}_CONTRACT_ID),\n"));
+    out.push_str(&format!(
+        "    contract_id: GuestContractId::from_u64({plugin_upper}_CONTRACT_ID),\n"
+    ));
     out.push_str(&format!(
         "    contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"
     ));
@@ -867,13 +865,15 @@ fn generate_guest_plugin_interface(
         "DispatchType::VirtualMachine"
     };
     out.push_str(&format!("    dispatch_type: {dispatch_type_str},\n"));
-    out.push_str(&format!("    create_instance: {plugin_upper}_create_instance_stub,\n"));
-    out.push_str(&format!("    destroy_instance: {plugin_upper}_destroy_instance_stub,\n"));
+    out.push_str(&format!(
+        "    create_instance: {plugin_upper}_create_instance_stub,\n"
+    ));
+    out.push_str(&format!(
+        "    destroy_instance: {plugin_upper}_destroy_instance_stub,\n"
+    ));
     out.push_str("    dispatch: DispatchMechanisms {\n");
     out.push_str("        native: NativeDispatch {\n");
-    out.push_str(&format!(
-        "            function_count: {fn_count}_u32,\n"
-    ));
+    out.push_str(&format!("            function_count: {fn_count}_u32,\n"));
     out.push_str(&format!(
         "            functions: {plugin_upper}_FNS.as_ptr() as *const *const (),\n"
     ));
@@ -915,7 +915,9 @@ fn generate_guest_abi_wrapper(
     // For stateful plugins, users would override create_instance to return a valid instance
     // and this wrapper would cast instance.data to the state type.
     out.push_str("    // Instance is ignored for stateless plugins (instance is null).\n");
-    out.push_str("    // For stateful plugins, users override create_instance and use instance.data.\n");
+    out.push_str(
+        "    // For stateful plugins, users override create_instance and use instance.data.\n",
+    );
     out.push_str("    let _ = instance;\n");
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
     out.push_str(&format!(
@@ -1046,7 +1048,9 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
             out.push_str(&format!(
                 "use super::interfaces::{plugin_upper}_CONTRACT_ID;\n"
             ));
-            out.push_str(&format!("use super::interfaces::{plugin_upper}_INTERFACE;\n"));
+            out.push_str(&format!(
+                "use super::interfaces::{plugin_upper}_INTERFACE;\n"
+            ));
         }
     } else {
         for contract in &ir.contracts {
@@ -1141,7 +1145,9 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "        (host.register_contract)(host, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_INTERFACE as *const GuestContractInterface)\n"
             ));
             out.push_str("    };\n");
-            out.push_str(&format!("    if err_{plugin_upper}.code != AbiErrorCode::Ok {{\n"));
+            out.push_str(&format!(
+                "    if err_{plugin_upper}.code != AbiErrorCode::Ok {{\n"
+            ));
             out.push_str(&format!("        return err_{plugin_upper};\n"));
             out.push_str("    }\n\n");
         }
@@ -1307,7 +1313,9 @@ fn generate_host_contract_caller(
     out.push_str("        if instance.data.is_null() {\n");
     out.push_str("            return None;\n");
     out.push_str("        }\n");
-    out.push_str(&format!("        Some({struct_name} {{ interface, instance, host }})\n"));
+    out.push_str(&format!(
+        "        Some({struct_name} {{ interface, instance, host }})\n"
+    ));
     out.push_str("    }\n\n");
     out.push_str("    /// Check if instance is valid (non-null data).\n");
     out.push_str("    pub fn is_valid(&self) -> bool {\n");
@@ -1318,7 +1326,9 @@ fn generate_host_contract_caller(
     out.push_str("    pub fn reset(&mut self) {\n");
     out.push_str("        if !self.instance.data.is_null() {\n");
     out.push_str("            unsafe {\n");
-    out.push_str("                ((*self.interface).destroy_instance)(self.host, self.instance);\n");
+    out.push_str(
+        "                ((*self.interface).destroy_instance)(self.host, self.instance);\n",
+    );
     out.push_str("            }\n");
     out.push_str("        }\n");
     out.push_str("        self.instance = unsafe {\n");
@@ -1340,7 +1350,9 @@ fn generate_host_contract_caller(
     out.push_str("        // The interface pointer is stored for the lifetime of this wrapper.\n");
     out.push_str("        if !self.instance.data.is_null() {\n");
     out.push_str("            unsafe {\n");
-    out.push_str("                ((*self.interface).destroy_instance)(self.host, self.instance);\n");
+    out.push_str(
+        "                ((*self.interface).destroy_instance)(self.host, self.instance);\n",
+    );
     out.push_str("            }\n");
     out.push_str("        }\n");
     out.push_str("    }\n");
@@ -1405,7 +1417,9 @@ fn generate_host_fn_caller(
     }
     out.push_str("        // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.\n");
     out.push_str("        let interface: &GuestContractInterface = unsafe { &*self.interface };\n");
-    out.push_str("        // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.\n");
+    out.push_str(
+        "        // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.\n",
+    );
     out.push_str("        let err: AbiError = unsafe {\n");
     out.push_str(&format!(
         "            if {fn_id}_u32 >= interface.dispatch.native.function_count {{\n"
@@ -1425,9 +1439,7 @@ fn generate_host_fn_caller(
     out.push_str("                        dispatch_fn(self.instance, args_ptr, out_ptr)\n");
     out.push_str("                    }\n");
     out.push_str("                    DispatchType::VirtualMachine => {\n");
-    out.push_str(&format!(
-        "                        (interface.dispatch.vm.call)(\n"
-    ));
+    out.push_str("                        (interface.dispatch.vm.call)(\n");
     out.push_str("                            interface.dispatch.vm.loader_data,\n");
     out.push_str("                            self.instance,  // instance parameter\n");
     out.push_str(&format!("                            {fn_id}_u32,\n"));
@@ -1912,7 +1924,9 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("/// The implementation must be `Send + Sync`.\n");
     out.push_str("///\n");
     out.push_str("/// # Memory\n");
-    out.push_str("/// The returned interface is leaked and lives for the lifetime of the program.\n");
+    out.push_str(
+        "/// The returned interface is leaked and lives for the lifetime of the program.\n",
+    );
     out.push_str(
         "/// The implementation Box is also leaked (its pointer is stored in the interface).\n",
     );
@@ -1921,9 +1935,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     ));
     // Static to store the implementation pointer for the create_instance stub
     // SAFETY: This is set once during factory call and read by the stub.
-    out.push_str(&format!(
-        "    static IMPL_PTR: std::sync::atomic::AtomicPtr<c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());\n\n"
-    ));
+    out.push_str("    static IMPL_PTR: std::sync::atomic::AtomicPtr<c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());\n\n");
     // Wrap the fat pointer in a Box so we can store a thin pointer to it in impl_ptr.
     // SAFETY: The fat pointer (*const dyn Trait) is 128 bits, but impl_ptr is 64 bits.
     // We wrap it in a Box<*const dyn Trait> and leak that, storing a pointer to the wrapper.
@@ -1936,7 +1948,9 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!(
         "    let impl_ptr: *const *const dyn {trait_name} = Box::into_raw(wrapper);\n"
     ));
-    out.push_str("    IMPL_PTR.store(impl_ptr as *mut c_void, std::sync::atomic::Ordering::SeqCst);\n\n");
+    out.push_str(
+        "    IMPL_PTR.store(impl_ptr as *mut c_void, std::sync::atomic::Ordering::SeqCst);\n\n",
+    );
 
     // Generate thunks for each function
     for func in &contract.functions {
@@ -1975,9 +1989,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     ));
     out.push_str("    /// For host contracts, the instance is the implementation object.\n");
     out.push_str("    /// This stub returns the impl_ptr as the instance data.\n");
-    out.push_str(&format!(
-        "    unsafe extern \"C\" fn {create_stub_name}(\n"
-    ));
+    out.push_str(&format!("    unsafe extern \"C\" fn {create_stub_name}(\n"));
     out.push_str("        _this: *const HostContractInterface,\n");
     out.push_str("        _args: *const (),\n");
     out.push_str("    ) -> HostContractInstance {\n");
@@ -1990,7 +2002,9 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
         contract.name
     ));
     out.push_str("    /// For singleton contracts, this is a no-op.\n");
-    out.push_str("    /// For multi-instance contracts, the host must provide a custom destructor.\n");
+    out.push_str(
+        "    /// For multi-instance contracts, the host must provide a custom destructor.\n",
+    );
     out.push_str(&format!(
         "    unsafe extern \"C\" fn {destroy_stub_name}(\n"
     ));
@@ -1998,7 +2012,9 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("        _instance: HostContractInstance,\n");
     out.push_str("    ) {\n");
     if singleton {
-        out.push_str("        // Singleton: no cleanup needed, implementation lives for program lifetime\n");
+        out.push_str(
+            "        // Singleton: no cleanup needed, implementation lives for program lifetime\n",
+        );
     } else {
         out.push_str("        // Multi-instance: host should provide custom destroy_instance\n");
     }
@@ -2007,8 +2023,12 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     // Create the HostContractInterface
     let patch: u32 = contract.version.patch;
     out.push_str("    let interface: HostContractInterface = HostContractInterface {\n");
-    out.push_str(&format!("        contract_id: HostContractId::from(0x{contract_id:016X}_u64),\n"));
-    out.push_str(&format!("        contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"));
+    out.push_str(&format!(
+        "        contract_id: HostContractId::from(0x{contract_id:016X}_u64),\n"
+    ));
+    out.push_str(&format!(
+        "        contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"
+    ));
     out.push_str(&format!("        singleton: {singleton},\n"));
     out.push_str("        dispatch_type: DispatchType::Native,\n");
     out.push_str("        runtime: std::ptr::null_mut(),\n");
@@ -2016,7 +2036,9 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!("        destroy_instance: {destroy_stub_name},\n"));
     out.push_str("        dispatch: DispatchMechanisms {\n");
     out.push_str("            native: NativeDispatch {\n");
-    out.push_str(&format!("                function_count: {fn_count}_u32,\n"));
+    out.push_str(&format!(
+        "                function_count: {fn_count}_u32,\n"
+    ));
     out.push_str("                functions: FUNCTIONS.as_ptr() as *const *const (),\n");
     out.push_str("            },\n");
     out.push_str("        },\n");
@@ -2037,7 +2059,9 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("/// * `dispatch_fn` - Function to call for each contract function\n");
     out.push_str("///\n");
     out.push_str("/// # Memory\n");
-    out.push_str("/// The returned interface is leaked and lives for the lifetime of the program.\n");
+    out.push_str(
+        "/// The returned interface is leaked and lives for the lifetime of the program.\n",
+    );
     out.push_str(&format!("pub fn {factory_vm_name}(\n"));
     out.push_str("    bridge_data: *mut c_void,\n");
     out.push_str("    dispatch_fn: unsafe extern \"C\" fn(\n");
@@ -2097,13 +2121,21 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("    }\n\n");
 
     out.push_str("    let interface: HostContractInterface = HostContractInterface {\n");
-    out.push_str(&format!("        contract_id: HostContractId::from(0x{contract_id:016X}_u64),\n"));
-    out.push_str(&format!("        contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"));
+    out.push_str(&format!(
+        "        contract_id: HostContractId::from(0x{contract_id:016X}_u64),\n"
+    ));
+    out.push_str(&format!(
+        "        contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"
+    ));
     out.push_str(&format!("        singleton: {singleton},\n"));
     out.push_str("        dispatch_type: DispatchType::VirtualMachine,\n");
     out.push_str("        runtime: std::ptr::null_mut(),\n");
-    out.push_str(&format!("        create_instance: {vm_create_stub_name},\n"));
-    out.push_str(&format!("        destroy_instance: {vm_destroy_stub_name},\n"));
+    out.push_str(&format!(
+        "        create_instance: {vm_create_stub_name},\n"
+    ));
+    out.push_str(&format!(
+        "        destroy_instance: {vm_destroy_stub_name},\n"
+    ));
     out.push_str("        dispatch: DispatchMechanisms {\n");
     out.push_str("            vm: VmDispatch {\n");
     out.push_str("                call: dispatch_fn,\n");
@@ -2418,7 +2450,9 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
 
     out.push_str(&format!("impl {caller_name} {{\n"));
 
-    out.push_str("    /// Factory method - creates caller from HostInterface or None if not found.\n");
+    out.push_str(
+        "    /// Factory method - creates caller from HostInterface or None if not found.\n",
+    );
     out.push_str("    ///\n");
     out.push_str("    /// # Safety\n");
     out.push_str("    /// The `host` pointer must be valid and non-null.\n");
@@ -2437,9 +2471,7 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
     out.push_str("        if instance.data.is_null() {\n");
     out.push_str("            return None;\n");
     out.push_str("        }\n");
-    out.push_str(&format!(
-        "        Some({caller_name} {{ instance }})\n"
-    ));
+    out.push_str(&format!("        Some({caller_name} {{ instance }})\n"));
     out.push_str("    }\n\n");
 
     out.push_str("    /// Check if caller is valid (instance data is non-null).\n");
@@ -2487,7 +2519,9 @@ fn generate_guest_host_contract_method(
     ));
 
     out.push_str("        if self.instance.data.is_null() {\n");
-    out.push_str("            return Err(HostContractError::new(AbiErrorCode::HostContractNotFound));\n");
+    out.push_str(
+        "            return Err(HostContractError::new(AbiErrorCode::HostContractNotFound));\n",
+    );
     out.push_str("        }\n");
 
     out.push_str("        // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.\n");
@@ -2495,10 +2529,10 @@ fn generate_guest_host_contract_method(
 
     // SAFETY: interface.dispatch is a union; accessing .native requires unsafe block.
     // The dispatch_type field indicates which union variant is active.
-    out.push_str("        let fn_count: u32 = unsafe { interface.dispatch.native.function_count };");
-    out.push_str(&format!(
-        "\n        if {fn_id}_u32 >= fn_count {{\n"
-    ));
+    out.push_str(
+        "        let fn_count: u32 = unsafe { interface.dispatch.native.function_count };",
+    );
+    out.push_str(&format!("\n        if fn_count < {fn_id}_u32 + 1 {{\n"));
     out.push_str(
         "            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));\n",
     );
@@ -2519,9 +2553,7 @@ fn generate_guest_host_contract_method(
     out.push_str("                    // - The interface guarantees that the function at this index is a native dispatch\n");
     out.push_str("                    //   with the exact signature: unsafe extern \"C\" fn(*const (), *const (), *mut ()) -> AbiError\n");
     out.push_str("                    let dispatch_fn: unsafe extern \"C\" fn(*const (), *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
-    out.push_str(
-        "                    dispatch_fn(core::ptr::null(), args_ptr, out_ptr)\n",
-    );
+    out.push_str("                    dispatch_fn(core::ptr::null(), args_ptr, out_ptr)\n");
     out.push_str("                }\n");
     out.push_str("                DispatchType::VirtualMachine => {\n");
     out.push_str(&format!(
@@ -3331,7 +3363,9 @@ mod tests {
         let out: String = generate_host_interface_factories_file(&ir);
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
         assert!(
-            out.contains("pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>)"),
+            out.contains(
+                "pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>)"
+            ),
             "missing native factory: {out}"
         );
         assert!(

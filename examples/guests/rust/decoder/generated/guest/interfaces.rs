@@ -28,10 +28,7 @@ use super::types::*;
 /// Falls back to a null message if allocation fails.
 fn plugin_error_to_abi_error(e: GuestError) -> AbiError {
     let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());
-    // SAFETY: GuestError.code is u32, AbiErrorCode is #[repr(u32)].
-    // Both types have the same size and alignment, so transmute is safe.
-    // Plugin-defined error codes (256+) are valid AbiErrorCode values.
-    AbiError { code: unsafe { std::mem::transmute(e.code) }, message }
+    AbiError { code: e.code, message }
 }
 
 use super::contracts::PipelineDecoderGuestContract;

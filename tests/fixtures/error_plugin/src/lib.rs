@@ -67,7 +67,7 @@ extern "C" fn error_return_with_message(_args: *const (), out: *mut ()) -> AbiEr
     unsafe {
         core::ptr::copy_nonoverlapping(msg.as_ptr(), ptr, len);
         let abi_error: AbiError = AbiError {
-            code: core::mem::transmute(99_u32),
+            code: core::mem::transmute::<u32, AbiErrorCode>(99_u32),
             message: StringView {
                 ptr: ptr as *const u8,
                 len,
@@ -112,8 +112,9 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     // SAFETY: chain_args.host is a valid HostInterface pointer provided by the host runtime.
     let host: &HostInterface = unsafe { &*chain_args.host };
     // SAFETY: host.find_guest_contract is a valid function pointer set by the host runtime.
-    let plugin: GuestContractHandle =
-        unsafe { (host.find_guest_contract)(chain_args.host, chain_args.target_contract_id, 0_u32) };
+    let plugin: GuestContractHandle = unsafe {
+        (host.find_guest_contract)(chain_args.host, chain_args.target_contract_id, 0_u32)
+    };
     // SAFETY: host.resolve_guest_contract returns a 'static GuestContractInterface pointer for the handle.
     let iface_ptr: *const GuestContractInterface =
         unsafe { (host.resolve_guest_contract)(chain_args.host, plugin) };
@@ -174,7 +175,8 @@ unsafe extern "C" fn create_instance_stub(
 unsafe extern "C" fn destroy_instance_stub(
     _host: *const HostInterface,
     _instance: GuestContractInstance,
-) {}
+) {
+}
 
 // ─── Static Interface ────────────────────────────────────────────────────────────
 
@@ -202,7 +204,11 @@ static ERROR_TEST_FNS: [FnPtr; 3] = [
 
 static ERROR_TEST_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(ERROR_TEST_CONTRACT_ID),
-    contract_version: Version { major: 1, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: create_instance_stub,
     destroy_instance: destroy_instance_stub,
@@ -223,7 +229,11 @@ static ERROR_TEST_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
         ptr: b"error.test".as_ptr(),
         len: 10,
     },
-    version: Version { major: 1, minor: 0, patch: 0 },
+    version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
 };
 
 // ─── ABI Exports ─────────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@
 
 use polyplug::runtime::Runtime;
 use polyplug_abi::{
-    DispatchType, HostContractInterface, HostInterface, DispatchMechanisms, NativeDispatch, Version,
+    DispatchMechanisms, DispatchType, HostContractInterface, HostInterface, NativeDispatch, Version,
 };
 use polyplug_utils::HostContractId;
 
@@ -45,7 +45,11 @@ fn create_static_interface(
     // since we never actually call the functions in these tests.
     let interface: Box<HostContractInterface> = Box::new(HostContractInterface {
         contract_id: HostContractId::from(contract_id),
-        contract_version: Version { major, minor, patch: 0 },
+        contract_version: Version {
+            major,
+            minor,
+            patch: 0,
+        },
         singleton,
         dispatch_type: DispatchType::Native,
         runtime: core::ptr::null_mut(),
@@ -71,7 +75,8 @@ fn register_host_contract_success() {
         .expect("runtime build should succeed");
 
     let contract_id: u64 = 0x1234_5678_9ABC_DEF0;
-    let interface: &'static HostContractInterface = create_static_interface(contract_id, 1, 0, true);
+    let interface: &'static HostContractInterface =
+        create_static_interface(contract_id, 1, 0, true);
 
     let result: Result<(), polyplug::error::HostContractError> =
         runtime.register_host_contract(contract_id, interface);
@@ -86,8 +91,10 @@ fn register_host_contract_duplicate_returns_error() {
         .expect("runtime build should succeed");
 
     let contract_id: u64 = 0xABCD_EF01_2345_6789;
-    let interface1: &'static HostContractInterface = create_static_interface(contract_id, 1, 0, true);
-    let interface2: &'static HostContractInterface = create_static_interface(contract_id, 2, 0, true);
+    let interface1: &'static HostContractInterface =
+        create_static_interface(contract_id, 1, 0, true);
+    let interface2: &'static HostContractInterface =
+        create_static_interface(contract_id, 2, 0, true);
 
     // First registration succeeds
     let result1: Result<(), polyplug::error::HostContractError> =
@@ -122,9 +129,12 @@ fn register_multiple_contracts() {
     let contract_id2: u64 = 0x2222_2222_2222_2222;
     let contract_id3: u64 = 0x3333_3333_3333_3333;
 
-    let interface1: &'static HostContractInterface = create_static_interface(contract_id1, 1, 0, true);
-    let interface2: &'static HostContractInterface = create_static_interface(contract_id2, 1, 0, true);
-    let interface3: &'static HostContractInterface = create_static_interface(contract_id3, 2, 0, true);
+    let interface1: &'static HostContractInterface =
+        create_static_interface(contract_id1, 1, 0, true);
+    let interface2: &'static HostContractInterface =
+        create_static_interface(contract_id2, 1, 0, true);
+    let interface3: &'static HostContractInterface =
+        create_static_interface(contract_id3, 2, 0, true);
 
     assert!(
         runtime
@@ -152,7 +162,8 @@ fn get_host_contract_found() {
         .expect("runtime build should succeed");
 
     let contract_id: u64 = 0xAAAA_AAAA_AAAA_AAAA;
-    let interface: &'static HostContractInterface = create_static_interface(contract_id, 1, 5, true);
+    let interface: &'static HostContractInterface =
+        create_static_interface(contract_id, 1, 5, true);
 
     runtime
         .register_host_contract(contract_id, interface)
@@ -163,7 +174,8 @@ fn get_host_contract_found() {
     assert!(result.is_some(), "lookup should return Some(interface)");
     let returned_interface: &HostContractInterface = result.expect("interface should be Some");
     assert_eq!(
-        returned_interface.contract_id.id(), contract_id,
+        returned_interface.contract_id.id(),
+        contract_id,
         "returned contract_id should match"
     );
     assert_eq!(
@@ -183,7 +195,8 @@ fn get_host_contract_not_found_returns_none() {
         .expect("runtime build should succeed");
 
     let nonexistent_id: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-    let result: Option<&'static HostContractInterface> = runtime.get_host_contract(nonexistent_id, 0);
+    let result: Option<&'static HostContractInterface> =
+        runtime.get_host_contract(nonexistent_id, 0);
 
     assert!(
         result.is_none(),
@@ -198,7 +211,8 @@ fn get_host_contract_after_unregister() {
         .expect("runtime build should succeed");
 
     let contract_id: u64 = 0xBBBB_BBBB_BBBB_BBBB;
-    let interface: &'static HostContractInterface = create_static_interface(contract_id, 1, 0, true);
+    let interface: &'static HostContractInterface =
+        create_static_interface(contract_id, 1, 0, true);
 
     runtime
         .register_host_contract(contract_id, interface)
@@ -247,7 +261,8 @@ fn get_host_contract_version_check_exact_match() {
 
     let contract_id: u64 = 0x1111_2222_3333_4444;
     // Register with version 1.5 (major=1, minor=5)
-    let interface: &'static HostContractInterface = create_static_interface(contract_id, 1, 5, true);
+    let interface: &'static HostContractInterface =
+        create_static_interface(contract_id, 1, 5, true);
 
     runtime
         .register_host_contract(contract_id, interface)
@@ -272,7 +287,8 @@ fn get_host_contract_version_check_lower_minor_succeeds() {
 
     let contract_id: u64 = 0x2222_3333_4444_5555;
     // Register with version 2.10 (major=2, minor=10)
-    let interface: &'static HostContractInterface = create_static_interface(contract_id, 2, 10, true);
+    let interface: &'static HostContractInterface =
+        create_static_interface(contract_id, 2, 10, true);
 
     runtime
         .register_host_contract(contract_id, interface)
@@ -297,7 +313,8 @@ fn get_host_contract_version_check_higher_minor_fails() {
 
     let contract_id: u64 = 0x3333_4444_5555_6666;
     // Register with version 1.3 (major=1, minor=3)
-    let interface: &'static HostContractInterface = create_static_interface(contract_id, 1, 3, true);
+    let interface: &'static HostContractInterface =
+        create_static_interface(contract_id, 1, 3, true);
 
     runtime
         .register_host_contract(contract_id, interface)
@@ -322,7 +339,8 @@ fn get_host_contract_version_check_higher_major_fails() {
 
     let contract_id: u64 = 0x4444_5555_6666_7777;
     // Register with version 1.0 (major=1, minor=0)
-    let interface: &'static HostContractInterface = create_static_interface(contract_id, 1, 0, true);
+    let interface: &'static HostContractInterface =
+        create_static_interface(contract_id, 1, 0, true);
 
     runtime
         .register_host_contract(contract_id, interface)
@@ -347,7 +365,8 @@ fn get_host_contract_version_check_zero_succeeds() {
 
     let contract_id: u64 = 0x5555_6666_7777_8888;
     // Register with any version
-    let interface: &'static HostContractInterface = create_static_interface(contract_id, 3, 7, true);
+    let interface: &'static HostContractInterface =
+        create_static_interface(contract_id, 3, 7, true);
 
     runtime
         .register_host_contract(contract_id, interface)
@@ -376,7 +395,8 @@ fn concurrent_register_and_lookup() {
     );
 
     let contract_id: u64 = 0x6666_7777_8888_9999;
-    let interface: &'static HostContractInterface = create_static_interface(contract_id, 1, 0, true);
+    let interface: &'static HostContractInterface =
+        create_static_interface(contract_id, 1, 0, true);
 
     // Register before spawning threads
     runtime
@@ -551,7 +571,8 @@ fn get_host_contract_with_contract_id_helper() {
     let major: u32 = 1;
     let contract_id: u64 = HostContractId::new(contract_name, major).id();
 
-    let interface: &'static HostContractInterface = create_static_interface(contract_id, major, 0, true);
+    let interface: &'static HostContractInterface =
+        create_static_interface(contract_id, major, 0, true);
 
     runtime
         .register_host_contract(contract_id, interface)
@@ -572,11 +593,17 @@ fn register_unregister_register_same_contract() {
         .expect("runtime build should succeed");
 
     let contract_id: u64 = 0x9999_AAAA_BBBB_CCCC;
-    let interface1: &'static HostContractInterface = create_static_interface(contract_id, 1, 0, true);
-    let interface2: &'static HostContractInterface = create_static_interface(contract_id, 2, 0, true);
+    let interface1: &'static HostContractInterface =
+        create_static_interface(contract_id, 1, 0, true);
+    let interface2: &'static HostContractInterface =
+        create_static_interface(contract_id, 2, 0, true);
 
     // Register v1
-    assert!(runtime.register_host_contract(contract_id, interface1).is_ok());
+    assert!(
+        runtime
+            .register_host_contract(contract_id, interface1)
+            .is_ok()
+    );
     assert!(runtime.get_host_contract(contract_id, 0).is_some());
 
     // Unregister
@@ -584,7 +611,11 @@ fn register_unregister_register_same_contract() {
     assert!(runtime.get_host_contract(contract_id, 0).is_none());
 
     // Register v2
-    assert!(runtime.register_host_contract(contract_id, interface2).is_ok());
+    assert!(
+        runtime
+            .register_host_contract(contract_id, interface2)
+            .is_ok()
+    );
 
     let result: Option<&'static HostContractInterface> = runtime.get_host_contract(contract_id, 0);
     assert!(result.is_some(), "should find re-registered contract");
@@ -604,7 +635,8 @@ fn get_host_contract_min_version_zero_matches_all() {
 
     let contract_id: u64 = 0xAAAA_BBBB_CCCC_DDDD;
     // Register with version 0.1 (very low version)
-    let interface: &'static HostContractInterface = create_static_interface(contract_id, 0, 1, true);
+    let interface: &'static HostContractInterface =
+        create_static_interface(contract_id, 0, 1, true);
 
     runtime
         .register_host_contract(contract_id, interface)

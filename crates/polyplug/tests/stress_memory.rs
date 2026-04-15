@@ -12,15 +12,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use polyplug::registry::runtime_store::RuntimeStore;
-use polyplug_abi::{
-    AbiErrorCode, AbiError, Buffer, HostInterface, GuestContractInterface, GuestContractInstance,
-    BundleInitContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
-    DispatchType, NativeDispatch, Array,
-};
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
-use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
+use polyplug_abi::{
+    AbiError, AbiErrorCode, Array, Buffer, BundleInitContext, DispatchMechanisms, DispatchType,
+    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostInterface,
+    NativeDispatch, PluginDescriptor, StringView, Version,
+};
+use polyplug_utils::{BundleId, GuestContractId, bundle_id, guest_contract_id};
 
 // --- Plugin environment variable ---------------------------------------------
 
@@ -129,9 +129,7 @@ unsafe extern "C" fn stub_get_host_contract(
 }
 
 /// Stub list_bundles -- returns empty array.
-unsafe extern "C" fn stub_list_bundles(
-    _this: *const HostInterface,
-) -> Array<BundleId> {
+unsafe extern "C" fn stub_list_bundles(_this: *const HostInterface) -> Array<BundleId> {
     Array::empty()
 }
 
@@ -157,7 +155,10 @@ unsafe extern "C" fn stub_load_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// Stub reload_bundle callback.
@@ -166,7 +167,10 @@ unsafe extern "C" fn stub_reload_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// Stub register_host_contract callback.
@@ -174,7 +178,10 @@ unsafe extern "C" fn stub_register_host_contract(
     _this: *const HostInterface,
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// Stub register_loader callback.
@@ -183,7 +190,10 @@ unsafe extern "C" fn stub_register_loader(
     _runtime_name: StringView,
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// Stub get_last_error callback.
@@ -196,18 +206,12 @@ unsafe extern "C" fn stub_get_last_error(
 }
 
 /// Stub get_error_len callback.
-unsafe extern "C" fn stub_get_error_len(
-    _this: *const HostInterface,
-) -> usize {
+unsafe extern "C" fn stub_get_error_len(_this: *const HostInterface) -> usize {
     0
 }
 
 /// Stub alloc callback.
-unsafe extern "C" fn stub_alloc(
-    _this: *const HostInterface,
-    size: usize,
-    align: usize,
-) -> *mut u8 {
+unsafe extern "C" fn stub_alloc(_this: *const HostInterface, size: usize, align: usize) -> *mut u8 {
     polyplug_host_alloc(size, align)
 }
 
@@ -258,7 +262,14 @@ unsafe extern "C" fn registry_register_callback(
     let result: Result<GuestContractHandle, _> = STRESS_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, RuntimeStore> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
-        unsafe { registry.register_guest_contract(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
+        unsafe {
+            registry.register_guest_contract(
+                *desc,
+                interface,
+                contract_name.to_owned(),
+                BundleId::from_u64(iface.contract_id.id()),
+            )
+        }
     });
 
     match result {
@@ -302,10 +313,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
     // SAFETY: polyplug_init matches the expected 2-arg ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -344,7 +352,11 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
             &ctx as *const BundleInitContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
+    assert_eq!(
+        init_result.code,
+        AbiErrorCode::Ok,
+        "polyplug_init must succeed"
+    );
 
     let contract_id: GuestContractId = GuestContractId::new("memory.test", 1);
     let handle: GuestContractHandle = STRESS_REGISTRY.with(|cell| {
@@ -405,7 +417,8 @@ fn stress_large_buffer_fill_and_read() {
     };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok,
+        call_result.code,
+        AbiErrorCode::Ok,
         "memory_fill_preallocated_buffer must return Ok"
     );
     assert_eq!(
@@ -465,7 +478,8 @@ fn stress_string_view_non_ascii_utf8() {
     };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok,
+        call_result.code,
+        AbiErrorCode::Ok,
         "memory_echo_string_view must return Ok"
     );
     assert_eq!(
@@ -534,7 +548,8 @@ fn stress_zero_length_buffer_and_string_view() {
     };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok,
+        call_result.code,
+        AbiErrorCode::Ok,
         "memory_zero_length_roundtrip must return Ok"
     );
     assert_eq!(
@@ -607,7 +622,8 @@ fn stress_concurrent_8_threads_no_shared_memory() {
                     )
                 };
                 assert_eq!(
-                    result.code, AbiErrorCode::Ok,
+                    result.code,
+                    AbiErrorCode::Ok,
                     "thread {}: fill must return Ok",
                     thread_idx
                 );
@@ -746,7 +762,8 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok,
+        call_result.code,
+        AbiErrorCode::Ok,
         "memory_alloc_buffer_via_host must return Ok"
     );
     assert!(
@@ -838,7 +855,8 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
     };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok,
+        call_result.code,
+        AbiErrorCode::Ok,
         "memory_fill_preallocated_buffer must return Ok"
     );
     assert_eq!(out, 64_u32, "written byte count must be 64");

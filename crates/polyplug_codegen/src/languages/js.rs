@@ -27,8 +27,8 @@ impl JsGenerator {
     /// Strip `Option<...>` wrapper if present.
     fn strip_option(rust_type: &str) -> &str {
         if let Some(inner) = rust_type.strip_prefix("Option<") {
-            if inner.ends_with('>') {
-                return &inner[..inner.len() - 1];
+            if let Some(stripped) = inner.strip_suffix('>') {
+                return stripped;
             }
         }
         rust_type
@@ -84,11 +84,11 @@ impl JsGenerator {
     fn named_type_layout(type_str: &str) -> Option<(usize, usize)> {
         match type_str {
             // Structs — sizes from Rust offset_of / std::mem::size_of
-            "StringView" => Some((16, 8)),   // { ptr(8), len(8) }
-            "Version" => Some((12, 4)),      // { major(4), minor(4), patch(4) }
-            "Buffer" => Some((24, 8)),       // { ptr(8), len(8), align(8) }
-            "AbiError" => Some((24, 8)),     // { code(4), _pad(4), message(16) }
-            "Array" => Some((24, 8)),        // { items(8), len(8), align(8) }
+            "StringView" => Some((16, 8)), // { ptr(8), len(8) }
+            "Version" => Some((12, 4)),    // { major(4), minor(4), patch(4) }
+            "Buffer" => Some((24, 8)),     // { ptr(8), len(8), align(8) }
+            "AbiError" => Some((24, 8)),   // { code(4), _pad(4), message(16) }
+            "Array" => Some((24, 8)),      // { items(8), len(8), align(8) }
             // All #[repr(u32)] enums — 4 bytes, 4-aligned
             "AbiErrorCode" | "DispatchType" | "Compatibility" | "ReloadPhaseType"
             | "ContractType" | "RuntimeLanguage" | "ParseVersionError" => Some((4, 4)),
@@ -255,7 +255,9 @@ impl CodeGenerator for JsGenerator {
         }
 
         // Total struct size constant — prefer size_hint from Rust if available.
-        let total_size = item.size_hint.unwrap_or_else(|| Self::align_up(offset, struct_align));
+        let total_size = item
+            .size_hint
+            .unwrap_or_else(|| Self::align_up(offset, struct_align));
         offset_constants.push_str(&format!(
             "export const {}_SIZE: number = {};\n\n",
             to_upper_snake_case(&item.name),

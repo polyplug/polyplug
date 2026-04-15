@@ -9,15 +9,15 @@ from abi import (
     VmLoaderData,
     GuestContractInstance,
     GuestContractInterface,
-    HostInterface,
-    RuntimeInterface,
     HostContractInstance,
     HostContractInterface,
+    HostInterface,
+    RuntimeInterface,
+    GuestContractHandle,
     BundleInitContext,
     PluginDescriptor,
-    GuestContractHandle,
-    RuntimeConfig,
     ReloadPhase,
+    RuntimeConfig,
     AbiError,
     Buffer,
     DependencyInfo,
@@ -46,6 +46,14 @@ def test_guest_contract_interface_size():
     assert ctypes.sizeof(GuestContractInterface) == 56, f"GuestContractInterface expected 56 bytes, got {ctypes.sizeof(GuestContractInterface)}"
 
 
+def test_host_contract_instance_size():
+    assert ctypes.sizeof(HostContractInstance) == 8, f"HostContractInstance expected 8 bytes, got {ctypes.sizeof(HostContractInstance)}"
+
+
+def test_host_contract_interface_size():
+    assert ctypes.sizeof(HostContractInterface) == 72, f"HostContractInterface expected 72 bytes, got {ctypes.sizeof(HostContractInterface)}"
+
+
 def test_host_interface_size():
     assert ctypes.sizeof(HostInterface) == 144, f"HostInterface expected 144 bytes, got {ctypes.sizeof(HostInterface)}"
 
@@ -54,12 +62,8 @@ def test_runtime_interface_size():
     assert ctypes.sizeof(RuntimeInterface) == 96, f"RuntimeInterface expected 96 bytes, got {ctypes.sizeof(RuntimeInterface)}"
 
 
-def test_host_contract_instance_size():
-    assert ctypes.sizeof(HostContractInstance) == 8, f"HostContractInstance expected 8 bytes, got {ctypes.sizeof(HostContractInstance)}"
-
-
-def test_host_contract_interface_size():
-    assert ctypes.sizeof(HostContractInterface) == 72, f"HostContractInterface expected 72 bytes, got {ctypes.sizeof(HostContractInterface)}"
+def test_guest_contract_handle_size():
+    assert ctypes.sizeof(GuestContractHandle) == 4, f"GuestContractHandle expected 4 bytes, got {ctypes.sizeof(GuestContractHandle)}"
 
 
 def test_bundle_init_context_size():
@@ -70,16 +74,12 @@ def test_plugin_descriptor_size():
     assert ctypes.sizeof(PluginDescriptor) == 48, f"PluginDescriptor expected 48 bytes, got {ctypes.sizeof(PluginDescriptor)}"
 
 
-def test_guest_contract_handle_size():
-    assert ctypes.sizeof(GuestContractHandle) == 4, f"GuestContractHandle expected 4 bytes, got {ctypes.sizeof(GuestContractHandle)}"
+def test_reload_phase_size():
+    assert ctypes.sizeof(ReloadPhase) == 48, f"ReloadPhase expected 48 bytes, got {ctypes.sizeof(ReloadPhase)}"
 
 
 def test_runtime_config_size():
     assert ctypes.sizeof(RuntimeConfig) == 16, f"RuntimeConfig expected 16 bytes, got {ctypes.sizeof(RuntimeConfig)}"
-
-
-def test_reload_phase_size():
-    assert ctypes.sizeof(ReloadPhase) == 48, f"ReloadPhase expected 48 bytes, got {ctypes.sizeof(ReloadPhase)}"
 
 
 def test_abi_error_size():

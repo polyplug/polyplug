@@ -6,13 +6,13 @@
 
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
-use polyplug_abi::HostInterface;
 use polyplug_abi::BundleInitContext;
-use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractHandle;
-use polyplug_abi::GuestContractInterface;
-use polyplug_abi::StringView;
 use polyplug_abi::GuestContractId;
+use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostInterface;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::StringView;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -56,11 +56,7 @@ unsafe extern "C" fn capture_register(
 }
 
 /// No-op alloc callback.
-unsafe extern "C" fn noop_alloc(
-    this: *const HostInterface,
-    size: usize,
-    align: usize,
-) -> *mut u8 {
+unsafe extern "C" fn noop_alloc(this: *const HostInterface, size: usize, align: usize) -> *mut u8 {
     let _ = this;
     polyplug_abi::ffi::polyplug_host_alloc(size, align)
 }
@@ -162,7 +158,10 @@ unsafe extern "C" fn noop_load_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op reload_bundle callback.
@@ -171,7 +170,10 @@ unsafe extern "C" fn noop_reload_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op register_host_contract callback.
@@ -179,7 +181,10 @@ unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostInterface,
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op register_loader callback.
@@ -188,7 +193,10 @@ unsafe extern "C" fn noop_register_loader(
     _runtime_name: StringView,
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op get_last_error callback.
@@ -201,9 +209,7 @@ unsafe extern "C" fn noop_get_last_error(
 }
 
 /// No-op get_error_len callback.
-unsafe extern "C" fn noop_get_error_len(
-    _this: *const HostInterface,
-) -> usize {
+unsafe extern "C" fn noop_get_error_len(_this: *const HostInterface) -> usize {
     0
 }
 
@@ -251,10 +257,7 @@ fn test_init_registers_interface() {
     // SAFETY: polyplug_init is a C function with the HostInterface ABI (2-arg signature).
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -299,7 +302,10 @@ fn test_init_registers_interface() {
         )
     };
 
-    assert!(result.code == AbiErrorCode::Ok, "polyplug_init must return Ok");
+    assert!(
+        result.code == AbiErrorCode::Ok,
+        "polyplug_init must return Ok"
+    );
 
     // Verify the interface was registered with correct data.
     let captured_id: u64 = CAPTURED_CONTRACT_ID

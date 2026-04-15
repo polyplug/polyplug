@@ -6,10 +6,10 @@
 
 use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::{
-    AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    BundleInitContext, PluginDescriptor, GuestContractHandle, StringView,
+    AbiError, AbiErrorCode, BundleInitContext, GuestContractHandle, GuestContractInstance,
+    GuestContractInterface, HostInterface, PluginDescriptor, StringView,
 };
-use polyplug_utils::{GuestContractId, BundleId};
+use polyplug_utils::{BundleId, GuestContractId};
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -52,7 +52,14 @@ unsafe extern "C" fn registry_register_callback(
     let result: Result<GuestContractHandle, _> = DISPATCH_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, RuntimeStore> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
-        unsafe { registry.register_guest_contract(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
+        unsafe {
+            registry.register_guest_contract(
+                *desc,
+                interface,
+                contract_name.to_owned(),
+                BundleId::from_u64(iface.contract_id.id()),
+            )
+        }
     });
 
     match result {
@@ -68,11 +75,7 @@ unsafe extern "C" fn registry_register_callback(
 }
 
 /// No-op alloc callback.
-unsafe extern "C" fn noop_alloc(
-    _this: *const HostInterface,
-    size: usize,
-    align: usize,
-) -> *mut u8 {
+unsafe extern "C" fn noop_alloc(_this: *const HostInterface, size: usize, align: usize) -> *mut u8 {
     polyplug_abi::ffi::polyplug_host_alloc(size, align)
 }
 
@@ -165,7 +168,10 @@ unsafe extern "C" fn noop_load_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op reload_bundle callback.
@@ -174,7 +180,10 @@ unsafe extern "C" fn noop_reload_bundle(
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op register_host_contract callback.
@@ -182,7 +191,10 @@ unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostInterface,
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op register_loader callback.
@@ -191,7 +203,10 @@ unsafe extern "C" fn noop_register_loader(
     _runtime_name: StringView,
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
-    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
 }
 
 /// No-op get_last_error callback.
@@ -204,9 +219,7 @@ unsafe extern "C" fn noop_get_last_error(
 }
 
 /// No-op get_error_len callback.
-unsafe extern "C" fn noop_get_error_len(
-    _this: *const HostInterface,
-) -> usize {
+unsafe extern "C" fn noop_get_error_len(_this: *const HostInterface) -> usize {
     0
 }
 
@@ -235,10 +248,7 @@ fn test_dispatch_add_function() {
     // SAFETY: polyplug_init matches the expected ABI.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -282,7 +292,11 @@ fn test_dispatch_add_function() {
             &ctx as *const BundleInitContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
+    assert_eq!(
+        init_result.code,
+        AbiErrorCode::Ok,
+        "polyplug_init must succeed"
+    );
 
     // Look up the test.add plugin.
     let contract_id: GuestContractId = GuestContractId::new("test.add", 1);
@@ -293,15 +307,19 @@ fn test_dispatch_add_function() {
     });
 
     // Resolve the interface.
-    let interface_ptr: *const GuestContractInterface =
-        DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve_guest_contract(handle).expect("handle must be valid"));
+    let interface_ptr: *const GuestContractInterface = DISPATCH_REGISTRY.with(|cell| {
+        cell.borrow()
+            .resolve_guest_contract(handle)
+            .expect("handle must be valid")
+    });
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // SAFETY: dispatch is a union, accessing .native requires unsafe since dispatch_type is Native.
     assert_eq!(
-        unsafe { interface.dispatch.native.function_count }, 1,
+        unsafe { interface.dispatch.native.function_count },
+        1,
         "test.add interface must have 1 function"
     );
 
@@ -326,7 +344,11 @@ fn test_dispatch_add_function() {
         )
     };
 
-    assert_eq!(call_result.code, AbiErrorCode::Ok, "add function must return Ok");
+    assert_eq!(
+        call_result.code,
+        AbiErrorCode::Ok,
+        "add function must return Ok"
+    );
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 
     // Leak the library.
@@ -343,10 +365,7 @@ fn test_dispatch_add_with_zero() {
     // SAFETY: polyplug_init matches the expected ABI (2-arg signature).
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -398,8 +417,11 @@ fn test_dispatch_add_with_zero() {
             .find(contract_id, 0)
             .expect("test.add must be registered")
     });
-    let interface_ptr: *const GuestContractInterface =
-        DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve_guest_contract(handle).expect("handle must be valid"));
+    let interface_ptr: *const GuestContractInterface = DISPATCH_REGISTRY.with(|cell| {
+        cell.borrow()
+            .resolve_guest_contract(handle)
+            .expect("handle must be valid")
+    });
 
     // SAFETY: interface_ptr is valid.
     let fn_ptr: *const () = unsafe { *(*interface_ptr).dispatch.native.functions.add(0) };
@@ -434,10 +456,7 @@ fn test_dispatch_add_wrapping_overflow() {
     // SAFETY: polyplug_init matches the expected ABI (2-arg signature).
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -488,8 +507,11 @@ fn test_dispatch_add_wrapping_overflow() {
             .find(contract_id, 0)
             .expect("test.add must be registered")
     });
-    let interface_ptr: *const GuestContractInterface =
-        DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve_guest_contract(handle).expect("handle must be valid"));
+    let interface_ptr: *const GuestContractInterface = DISPATCH_REGISTRY.with(|cell| {
+        cell.borrow()
+            .resolve_guest_contract(handle)
+            .expect("handle must be valid")
+    });
 
     // SAFETY: interface_ptr is valid.
     let fn_ptr: *const () = unsafe { *(*interface_ptr).dispatch.native.functions.add(0) };

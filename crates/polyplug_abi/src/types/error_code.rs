@@ -72,7 +72,11 @@ impl AbiErrorCode {
             100 => AbiErrorCode::HostContractNotFound,
             101 => AbiErrorCode::HostContractVersionMismatch,
             102 => AbiErrorCode::HostContractCallFailed,
-            other => unsafe { core::mem::transmute::<u32, AbiErrorCode>(other) },
+            other => {
+                // SAFETY: AbiErrorCode is #[repr(u32)], so any u32 value has a valid
+                // bit representation. Unknown codes are preserved for plugin-defined errors.
+                unsafe { core::mem::transmute::<u32, AbiErrorCode>(other) }
+            }
         }
     }
 }

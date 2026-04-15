@@ -67,8 +67,10 @@ fn test_b_in_flight_safety() {
     let rt_clone: Arc<Runtime> = Arc::clone(&rt);
     let caller: std::thread::JoinHandle<()> = std::thread::spawn(move || {
         for _ in 0..1000_u32 {
-            let handle_result: Result<polyplug_abi::GuestContractHandle, polyplug::error::RegistryError> =
-                rt_clone.find_by_contract(contract_id, 0);
+            let handle_result: Result<
+                polyplug_abi::GuestContractHandle,
+                polyplug::error::RegistryError,
+            > = rt_clone.find_by_contract(contract_id, 0);
             if let Ok(handle) = handle_result {
                 let vt_result: Result<
                     *const GuestContractInterface,
@@ -137,9 +139,8 @@ fn test_e_cascade_reload() {
         let handle: polyplug_abi::GuestContractHandle = rt
             .find_by_contract(dep_contract_id, 0)
             .expect("find depender");
-        let vt: *const GuestContractInterface = rt
-            .resolve_plugin(handle)
-            .expect("resolve depender");
+        let vt: *const GuestContractInterface =
+            rt.resolve_plugin(handle).expect("resolve depender");
         // SAFETY: interface is from resolve_plugin and slot 0 is a valid extern "C" fn.
         unsafe {
             let f: extern "C" fn() -> u32 = core::mem::transmute(*(*vt).dispatch.native.functions);

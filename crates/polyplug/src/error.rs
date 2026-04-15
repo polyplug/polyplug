@@ -173,9 +173,7 @@ pub enum HostContractError {
     #[error("duplicate host contract registration: contract_id=0x{contract_id:016X}")]
     DuplicateContract { contract_id: u64 },
 
-    #[error(
-        "host contract not found: contract_id=0x{contract_id:016X}, min_version={min_version}"
-    )]
+    #[error("host contract not found: contract_id=0x{contract_id:016X}, min_version={min_version}")]
     ContractNotFound { contract_id: u64, min_version: u32 },
 
     #[error(

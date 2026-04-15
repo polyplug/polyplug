@@ -84,7 +84,8 @@ pub struct RuntimeInterface {
     /// # Returns
     /// AbiError::OK on success, error code on failure.
     /// Use `get_last_error()` for detailed error message.
-    pub load_bundle: unsafe extern "C" fn(this: *const RuntimeInterface, path: *const c_char) -> AbiError,
+    pub load_bundle:
+        unsafe extern "C" fn(this: *const RuntimeInterface, path: *const c_char) -> AbiError,
     /// Reload a bundle (hot-reload).
     ///
     /// Triggers hot-reload of the specified bundle. The runtime will:
@@ -100,7 +101,8 @@ pub struct RuntimeInterface {
     ///
     /// # Returns
     /// AbiError::OK on success, error code on failure.
-    pub reload_bundle: unsafe extern "C" fn(this: *const RuntimeInterface, bundle_id: BundleId) -> AbiError,
+    pub reload_bundle:
+        unsafe extern "C" fn(this: *const RuntimeInterface, bundle_id: BundleId) -> AbiError,
     /// Unload a bundle.
     ///
     /// Removes the bundle and all its guest contracts from the registry.
@@ -112,7 +114,8 @@ pub struct RuntimeInterface {
     ///
     /// # Returns
     /// AbiError::OK on success, error code on failure.
-    pub unload_bundle: unsafe extern "C" fn(this: *const RuntimeInterface, bundle_id: BundleId) -> AbiError,
+    pub unload_bundle:
+        unsafe extern "C" fn(this: *const RuntimeInterface, bundle_id: BundleId) -> AbiError,
     /// Find a guest contract by contract_id and minimum version.
     ///
     /// Returns a GuestContractHandle that can be resolved to an interface.
@@ -199,9 +202,7 @@ pub struct RuntimeInterface {
     ///
     /// # Returns
     /// Array of BundleId. Caller owns and must free.
-    pub list_bundles: unsafe extern "C" fn(
-        this: *const RuntimeInterface,
-    ) -> Array<BundleId>,
+    pub list_bundles: unsafe extern "C" fn(this: *const RuntimeInterface) -> Array<BundleId>,
     /// Get dependencies (returns empty array for host context).
     ///
     /// Hosts have no bundle dependencies, so this returns an empty array.
@@ -212,9 +213,8 @@ pub struct RuntimeInterface {
     ///
     /// # Returns
     /// Empty Array of DependencyInfo. Caller owns and must free.
-    pub get_dependencies: unsafe extern "C" fn(
-        this: *const RuntimeInterface,
-    ) -> Array<DependencyInfo>,
+    pub get_dependencies:
+        unsafe extern "C" fn(this: *const RuntimeInterface) -> Array<DependencyInfo>,
     /// Destroy the runtime and free this interface.
     ///
     /// # Arguments

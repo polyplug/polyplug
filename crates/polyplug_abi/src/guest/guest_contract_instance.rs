@@ -92,8 +92,8 @@ impl GuestContractInstance {
 
 #[cfg(test)]
 mod tests {
-    use core::mem::{align_of, offset_of, size_of};
     use super::GuestContractInstance;
+    use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn layout_guest_contract_instance() {
