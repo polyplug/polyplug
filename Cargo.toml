@@ -99,10 +99,10 @@ clone_on_ref_ptr = "warn"
 unwrap_used = "deny"
 expect_used = "warn"
 std_instead_of_core = "warn"
-improper_ctypes_definitions = "deny"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
+improper_ctypes_definitions = "deny"
 
 [profile.release]
 opt-level = 3     # maximum optimization

@@ -12,7 +12,6 @@ use polyplug_native::{NativeConfig, NativeLoader};
 use polyplug_python::{PythonConfig, PythonLoader};
 use std::env;
 use std::path::PathBuf;
-use std::time::Duration;
 
 mod generated;
 

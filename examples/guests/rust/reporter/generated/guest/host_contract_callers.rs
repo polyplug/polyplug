@@ -133,7 +133,7 @@ impl HostLoggerCaller {
         }
 
         let args_val: HostLoggerLogWithLevelArgs = HostLoggerLogWithLevelArgs {
-            level: level,
+            level,
             message: alloc_string(&message).unwrap_or_else(|_| string_view_null()),
         };
         let args_ptr: *const () = &args_val as *const HostLoggerLogWithLevelArgs as *const ();

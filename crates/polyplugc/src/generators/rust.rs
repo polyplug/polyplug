@@ -2707,7 +2707,7 @@ fn emit_guest_host_contract_args_setup(
                 ));
             }
             _ => {
-                out.push_str(&format!("            {}: {},\n", param.name, param.name));
+                out.push_str(&format!("            {},\n", param.name));
             }
         }
     }
