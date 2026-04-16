@@ -20,36 +20,39 @@ impl DataReporterGuestContract for Plugin {
             unsafe { HostLoggerCaller::from_host(get_host_vtable(), 1) };
 
         if let Some(ref logger) = logger
-            && logger.is_valid() {
-                // Log with different levels - errors are ignored since logging is optional
-                let _ = logger.log(format!("[plugin] Starting report for: {}", s));
-                let _ = logger
-                    .log_with_level(LogLevel::Info, "[plugin] Step 1: Parsing input".to_string());
-                let _ = logger.log_with_level(
-                    LogLevel::Debug,
-                    format!("[plugin] Input length: {}", s.len()),
-                );
-            }
+            && logger.is_valid()
+        {
+            // Log with different levels - errors are ignored since logging is optional
+            let _ = logger.log(format!("[plugin] Starting report for: {}", s));
+            let _ =
+                logger.log_with_level(LogLevel::Info, "[plugin] Step 1: Parsing input".to_string());
+            let _ = logger.log_with_level(
+                LogLevel::Debug,
+                format!("[plugin] Input length: {}", s.len()),
+            );
+        }
 
         let data = s.strip_prefix("TRANSFORMED:").unwrap_or(s);
         let parts: Vec<&str> = data.split('|').collect();
 
         if let Some(ref logger) = logger
-            && logger.is_valid() {
-                let _ = logger.log_with_level(
-                    LogLevel::Warn,
-                    "[plugin] Step 2: Processing data".to_string(),
-                );
-            }
+            && logger.is_valid()
+        {
+            let _ = logger.log_with_level(
+                LogLevel::Warn,
+                "[plugin] Step 2: Processing data".to_string(),
+            );
+        }
 
         if parts.len() >= 3 {
             if let Some(ref logger) = logger
-                && logger.is_valid() {
-                    let _ = logger.log_with_level(
-                        LogLevel::Error,
-                        "[plugin] Step 3: Finalizing report".to_string(),
-                    );
-                }
+                && logger.is_valid()
+            {
+                let _ = logger.log_with_level(
+                    LogLevel::Error,
+                    "[plugin] Step 3: Finalizing report".to_string(),
+                );
+            }
 
             alloc_string(&format!(
                 "Report: {} has value '{}' with count {}",

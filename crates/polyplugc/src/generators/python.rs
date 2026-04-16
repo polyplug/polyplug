@@ -2335,9 +2335,7 @@ fn generate_python_host_thunk(
             Some(ret) => python_host_return_type_name(ret),
             None => String::from("None"),
         };
-        out.push_str(
-            "            # SAFETY: out is a valid pointer per ABI contract.\n",
-        );
+        out.push_str("            # SAFETY: out is a valid pointer per ABI contract.\n");
         out.push_str(
             "            ctypes.memmove(out, ctypes.byref(result), ctypes.sizeof(result))\n",
         );

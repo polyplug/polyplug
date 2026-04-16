@@ -13,7 +13,7 @@ use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface, HostInterface,
     NativeDispatch, PluginDescriptor, StringView, Version,
 };
-use polyplug_utils::{BundleId, GuestContractId, bundle_id, guest_contract_id};
+use polyplug_utils::GuestContractId;
 
 // --- Helpers -----------------------------------------------------------------
 
@@ -80,7 +80,7 @@ mod tests {
     use polyplug_abi::GuestContractHandle;
     use polyplug_abi::GuestContractInterface;
     use polyplug_abi::PluginDescriptor;
-    use polyplug_utils::{BundleId, GuestContractId, bundle_id, guest_contract_id};
+    use polyplug_utils::{BundleId, GuestContractId};
 
     // -- Test a ----------------------------------------------------------------
 

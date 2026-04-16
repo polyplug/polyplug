@@ -7,11 +7,10 @@ use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::{
-    AbiError, AbiErrorCode, Buffer, BundleInitContext, DispatchMechanisms, DispatchType,
-    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostInterface,
-    NativeDispatch, PluginDescriptor, StringView, Version,
+    AbiError, AbiErrorCode, Buffer, BundleInitContext, GuestContractHandle, GuestContractInstance,
+    GuestContractInterface, HostInterface, PluginDescriptor, StringView,
 };
-use polyplug_utils::{BundleId, GuestContractId, bundle_id, guest_contract_id};
+use polyplug_utils::{BundleId, GuestContractId};
 
 const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 

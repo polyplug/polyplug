@@ -474,9 +474,10 @@ impl RuntimeStore {
             let slot = &data.slots[slot_idx as usize];
             if slot.entry.is_some()
                 && let Some(ref interface) = slot.interface
-                && interface.contract_version.major >= min_version {
-                    count += 1;
-                }
+                && interface.contract_version.major >= min_version
+            {
+                count += 1;
+            }
         }
         count
     }

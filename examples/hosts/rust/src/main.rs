@@ -86,7 +86,7 @@ fn run() -> Result<(), String> {
         .register_host_contract(HOSTLOGGER_CONTRACT_ID, vtable)
         .map_err(|e| format!("failed to register host.logger contract: {e}"))?;
 
-    let bundles: Vec<(PathBuf, _)> = scanner::scan_dirs(&[plugin_path.clone()]);
+    let bundles: Vec<(PathBuf, _)> = scanner::scan_dirs(std::slice::from_ref(&plugin_path));
     if bundles.is_empty() {
         return Err("no plugins found".into());
     }

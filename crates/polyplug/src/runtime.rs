@@ -12,10 +12,10 @@
 //!  - find_by_contract() is a read-only RwLock read guard
 //!  - No locks in the hot path
 
+use core::str::FromStr;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use core::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
@@ -974,7 +974,8 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
         .find(|iface| {
             iface.contract_id.id() == contract_id
                 && iface.contract_version.major >= (min_version >> 16)
-        }).copied();
+        })
+        .copied();
 
     match interface {
         Some(interface) => {

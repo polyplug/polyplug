@@ -1667,9 +1667,7 @@ fn generate_lua_host_thunk(
 
     // Handle return value
     if has_return {
-        out.push_str(
-            "            -- SAFETY: out is a valid pointer per ABI contract.\n",
-        );
+        out.push_str("            -- SAFETY: out is a valid pointer per ABI contract.\n");
         out.push_str("            ffi.copy(out, result, ffi.sizeof(result))\n");
     } else {
         out.push_str("            local _ = out\n");

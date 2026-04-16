@@ -371,14 +371,18 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             ));
 
             // Instance lifecycle stubs
-            out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
+            out.push_str(
+                "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
+            );
             out.push_str(&format!(
                 "    private static GuestContractInstance {upper}_CreateInstanceStub(IntPtr rtCtx, IntPtr args) {{\n"
             ));
             out.push_str("        // Default stub returns null instance - users override for stateful plugins.\n");
             out.push_str("        return new GuestContractInstance { Data = IntPtr.Zero };\n");
             out.push_str("    }\n\n");
-            out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
+            out.push_str(
+                "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
+            );
             out.push_str(&format!(
                 "    private static void {upper}_DestroyInstanceStub(IntPtr rtCtx, GuestContractInstance instance) {{\n"
             ));

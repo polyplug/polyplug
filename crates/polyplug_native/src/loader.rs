@@ -4,14 +4,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use polyplug::Runtime;
 use polyplug::error::{LoaderError, RuntimeError};
 use polyplug::loader::{BundleLoader, ManifestData};
-use polyplug::Runtime;
+use polyplug_abi::HostInterface;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::plugin::BundleInitContext;
 use polyplug_abi::types::AbiError;
 use polyplug_abi::types::AbiErrorCode;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
-use polyplug_abi::HostInterface;
 use polyplug_utils::BundleId;
 
 use crate::config::NativeConfig;
@@ -62,19 +62,26 @@ impl BundleLoader for NativeLoader {
         // ─── Step 1: dlopen the library ────────────────────────────────────────────
         // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
         let library: libloading::Library = unsafe {
-            libloading::Library::new(&bundle_path).map_err(|e| RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!("failed to load plugin library at {}: {}", path_str, e),
-            }))?
+            libloading::Library::new(&bundle_path).map_err(|e| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!("failed to load plugin library at {}: {}", path_str, e),
+                })
+            })?
         };
 
         // ─── Step 2: Check ABI version sentinel BEFORE calling init ──────────────────────
         // SAFETY: polyplug_abi_version is a C function with signature `extern "C" fn() -> u32`.
         let abi_version_symbol: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
-            library.get(b"polyplug_abi_version\0").map_err(|_| RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!("missing symbol 'polyplug_abi_version' in bundle '{}'", path_str),
-            }))?
+            library.get(b"polyplug_abi_version\0").map_err(|_| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "missing symbol 'polyplug_abi_version' in bundle '{}'",
+                        path_str
+                    ),
+                })
+            })?
         };
         // SAFETY: abi_version_symbol was obtained from library.get() which validated the
         // symbol exists. The function has signature `extern "C" fn() -> u32` and returns
@@ -83,7 +90,10 @@ impl BundleLoader for NativeLoader {
         if found_version != POLYPLUG_ABI_VERSION {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
-                error: format!("ABI version mismatch in {}: expected={}, found={}", path_str, POLYPLUG_ABI_VERSION, found_version),
+                error: format!(
+                    "ABI version mismatch in {}: expected={}, found={}",
+                    path_str, POLYPLUG_ABI_VERSION, found_version
+                ),
             }));
         }
 
@@ -96,18 +106,15 @@ impl BundleLoader for NativeLoader {
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
-                unsafe extern "C" fn(
-                    *const HostInterface,
-                    *const BundleInitContext,
-                ) -> AbiError,
-            // SAFETY: polyplug_init is an exported C symbol from the plugin library,
-            // validated to exist by library.get(). The signature matches the ABI contract.
+                unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
+                // SAFETY: polyplug_init is an exported C symbol from the plugin library,
+                // validated to exist by library.get(). The signature matches the ABI contract.
             > = unsafe {
-                library
-                    .get(b"polyplug_init\0")
-                    .map_err(|_| RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                library.get(b"polyplug_init\0").map_err(|_| {
+                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
                         bundle: manifest.name.clone(),
-                    }))?
+                    })
+                })?
             };
             *sym
         };
@@ -155,10 +162,13 @@ impl BundleLoader for NativeLoader {
 
         // ─── Step 8: Store library handle ─────────────────────────────────────────────
         let bundle_id: BundleId = BundleId::new(&manifest.name);
-        self.libraries.lock().unwrap_or_else(|e| {
-            eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-            e.into_inner()
-        }).insert(bundle_id, library);
+        self.libraries
+            .lock()
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
+            .insert(bundle_id, library);
 
         Ok(())
     }
@@ -183,19 +193,26 @@ impl BundleLoader for NativeLoader {
         // ─── Step 1: Load new library (inline, same as load()) ───────────────────────────
         // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
         let new_library: libloading::Library = unsafe {
-            libloading::Library::new(&bundle_path).map_err(|e| RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!("failed to load plugin library at {}: {}", path_str, e),
-            }))?
+            libloading::Library::new(&bundle_path).map_err(|e| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!("failed to load plugin library at {}: {}", path_str, e),
+                })
+            })?
         };
 
         // ─── Step 2: Check ABI version sentinel ──────────────────────────────────────────
         // SAFETY: polyplug_abi_version is a C function with signature `extern "C" fn() -> u32`.
         let abi_version_symbol: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
-            new_library.get(b"polyplug_abi_version\0").map_err(|_| RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!("missing symbol 'polyplug_abi_version' in bundle '{}'", path_str),
-            }))?
+            new_library.get(b"polyplug_abi_version\0").map_err(|_| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "missing symbol 'polyplug_abi_version' in bundle '{}'",
+                        path_str
+                    ),
+                })
+            })?
         };
         // SAFETY: abi_version_symbol was obtained from new_library.get() which validated
         // the symbol exists. The function has signature `extern "C" fn() -> u32`.
@@ -203,7 +220,10 @@ impl BundleLoader for NativeLoader {
         if found_version != POLYPLUG_ABI_VERSION {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
-                error: format!("ABI version mismatch in {}: expected={}, found={}", path_str, POLYPLUG_ABI_VERSION, found_version),
+                error: format!(
+                    "ABI version mismatch in {}: expected={}, found={}",
+                    path_str, POLYPLUG_ABI_VERSION, found_version
+                ),
             }));
         }
 
@@ -215,18 +235,15 @@ impl BundleLoader for NativeLoader {
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
-                unsafe extern "C" fn(
-                    *const HostInterface,
-                    *const BundleInitContext,
-                ) -> AbiError,
-            // SAFETY: polyplug_init is an exported C symbol from the new plugin library,
-            // validated to exist by new_library.get(). The signature matches the ABI contract.
+                unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
+                // SAFETY: polyplug_init is an exported C symbol from the new plugin library,
+                // validated to exist by new_library.get(). The signature matches the ABI contract.
             > = unsafe {
-                new_library
-                    .get(b"polyplug_init\0")
-                    .map_err(|_| RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                new_library.get(b"polyplug_init\0").map_err(|_| {
+                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
                         bundle: manifest.name.clone(),
-                    }))?
+                    })
+                })?
             };
             *sym
         };
@@ -276,10 +293,15 @@ impl BundleLoader for NativeLoader {
         // SAFETY CONTRACT: Host must not have cached raw function pointers!
         // If they did, this will cause SIGSEGV - that's a HOST BUG.
         // The `on_reload_cb(ReloadPhase::Reloaded)` already fired, giving host a chance to clean up.
-        if let Some(old_library) = self.libraries.lock().unwrap_or_else(|e| {
-            eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-            e.into_inner()
-        }).remove(&bundle_id) {
+        if let Some(old_library) = self
+            .libraries
+            .lock()
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
+            .remove(&bundle_id)
+        {
             drop(old_library); // dlclose() - unmaps code pages
         }
 

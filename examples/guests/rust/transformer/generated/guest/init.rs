@@ -6,20 +6,20 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_guest::AbiError;
-use polyplug_guest::AbiErrorCode;
-use polyplug_guest::string_view_from_static;
-use polyplug_guest::abi_error_ok;
-use polyplug_guest::PluginDescriptor;
-use polyplug_guest::HostInterface;
-use polyplug_guest::GuestContractInterface;
-use polyplug_guest::StringView;
-use polyplug_guest::Version;
-use polyplug_guest::BundleInitContext;
-use polyplug_guest::store_host_vtable;
-use core::ffi::c_void;
 use super::interfaces::TRANSFORMER_CONTRACT_ID;
 use super::interfaces::TRANSFORMER_INTERFACE;
+use core::ffi::c_void;
+use polyplug_guest::AbiError;
+use polyplug_guest::AbiErrorCode;
+use polyplug_guest::BundleInitContext;
+use polyplug_guest::GuestContractInterface;
+use polyplug_guest::HostInterface;
+use polyplug_guest::PluginDescriptor;
+use polyplug_guest::StringView;
+use polyplug_guest::Version;
+use polyplug_guest::abi_error_ok;
+use polyplug_guest::store_host_vtable;
+use polyplug_guest::string_view_from_static;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:
@@ -36,10 +36,16 @@ pub unsafe extern "C" fn polyplug_init(
     ctx: *const BundleInitContext,
 ) -> AbiError {
     if host.is_null() {
-        return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b"host is null") };
+        return AbiError {
+            code: AbiErrorCode::Generic,
+            message: string_view_from_static(b"host is null"),
+        };
     }
     if ctx.is_null() {
-        return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b"ctx is null") };
+        return AbiError {
+            code: AbiErrorCode::Generic,
+            message: string_view_from_static(b"ctx is null"),
+        };
     }
     // SAFETY: ctx is non-null and valid for the lifetime of this call as guaranteed by the host.
     let ctx: &BundleInitContext = unsafe { &*ctx };
@@ -47,23 +53,41 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: host is non-null and valid per ABI contract.
     let host: &HostInterface = unsafe { &*host };
     // SAFETY: Called once during plugin init, before any host contract access.
-    unsafe { store_host_vtable(host as *const HostInterface); }
+    unsafe {
+        store_host_vtable(host as *const HostInterface);
+    }
 
     // Call user initialization to register plugin implementations
     unsafe extern "C" {
         fn polyplug_user_init();
     }
     // SAFETY: polyplug_user_init is a safe initialization function provided by user
-    unsafe { polyplug_user_init(); }
+    unsafe {
+        polyplug_user_init();
+    }
 
     let desc_TRANSFORMER: PluginDescriptor = PluginDescriptor {
-        name: StringView { ptr: b"transformer".as_ptr(), len: 11_usize },
-        contract_name: StringView { ptr: b"data.Transformer@1".as_ptr(), len: 18_usize },
-        version: Version { major: 1, minor: 0, patch: 0 },
+        name: StringView {
+            ptr: b"transformer".as_ptr(),
+            len: 11_usize,
+        },
+        contract_name: StringView {
+            ptr: b"data.Transformer@1".as_ptr(),
+            len: 18_usize,
+        },
+        version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
     };
     // SAFETY: desc and interface are 'static.
     let err_TRANSFORMER: AbiError = unsafe {
-        (host.register_contract)(host, &desc_TRANSFORMER as *const PluginDescriptor, &TRANSFORMER_INTERFACE as *const GuestContractInterface)
+        (host.register_contract)(
+            host,
+            &desc_TRANSFORMER as *const PluginDescriptor,
+            &TRANSFORMER_INTERFACE as *const GuestContractInterface,
+        )
     };
     if err_TRANSFORMER.code != AbiErrorCode::Ok {
         return err_TRANSFORMER;

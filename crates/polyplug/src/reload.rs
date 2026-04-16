@@ -125,10 +125,8 @@ impl Runtime {
                 // For each slot, find the NEW interface by contract_id and swap
                 for slot_idx in &slot_indices {
                     // Get contract_id for this slot (stable across reload)
-                    let contract_id: GuestContractId = self
-                        .registry
-                        .get_slot_guest_contract_id(*slot_idx)
-                        .ok_or({
+                    let contract_id: GuestContractId =
+                        self.registry.get_slot_guest_contract_id(*slot_idx).ok_or({
                             RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
                                 index: *slot_idx,
                             })

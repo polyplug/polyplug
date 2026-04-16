@@ -6,18 +6,18 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_guest::HostInterface;
-use polyplug_guest::HostContractInterface;
-use polyplug_guest::HostContractInstance;
-use polyplug_guest::GuestContractInstance;
-use polyplug_guest::DispatchType;
-use polyplug_guest::StringView;
+use super::types::*;
+use core::ffi::c_void;
 use polyplug_guest::AbiError;
 use polyplug_guest::AbiErrorCode;
+use polyplug_guest::DispatchType;
+use polyplug_guest::GuestContractInstance;
+use polyplug_guest::HostContractInstance;
+use polyplug_guest::HostContractInterface;
+use polyplug_guest::HostInterface;
+use polyplug_guest::StringView;
 use polyplug_guest::alloc_string;
 use polyplug_guest::string_view_null;
-use core::ffi::c_void;
-use super::types::*;
 
 /// Error type for host contract calls from guest.
 #[derive(Debug)]
@@ -31,7 +31,10 @@ pub struct HostContractError {
 impl HostContractError {
     /// Create a new error with the given code.
     pub fn new(code: AbiErrorCode) -> Self {
-        Self { code, message: String::new() }
+        Self {
+            code,
+            message: String::new(),
+        }
     }
 }
 
@@ -51,9 +54,8 @@ impl HostLoggerCaller {
         }
         // SAFETY: host is non-null and valid per ABI contract.
         let host: &HostInterface = unsafe { &*host };
-        let instance: HostContractInstance = unsafe {
-            (host.get_host_contract)(host, 0xF53EB5F2845853BB_u64, min_version)
-        };
+        let instance: HostContractInstance =
+            unsafe { (host.get_host_contract)(host, 0xF53EB5F2845853BB_u64, min_version) };
         if instance.data.is_null() {
             return None;
         }
@@ -71,14 +73,16 @@ impl HostLoggerCaller {
             return Err(HostContractError::new(AbiErrorCode::HostContractNotFound));
         }
         // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.
-        let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };
+        let interface: &HostContractInterface =
+            unsafe { &*(self.instance.data as *const HostContractInterface) };
 
         let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
         if fn_count < 0_u32 + 1 {
             return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));
         }
 
-        let message_view: StringView = alloc_string(&message).unwrap_or_else(|_| string_view_null());
+        let message_view: StringView =
+            alloc_string(&message).unwrap_or_else(|_| string_view_null());
         let args_ptr: *const () = &message_view as *const StringView as *const ();
         let out_ptr: *mut () = core::ptr::null_mut();
         let err: AbiError = unsafe {
@@ -89,12 +93,20 @@ impl HostLoggerCaller {
                     // - Function pointers have the same size and alignment as data pointers
                     // - The interface guarantees that the function at this index is a native dispatch
                     //   with the exact signature: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError
-                    let dispatch_fn: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                    let dispatch_fn: unsafe extern "C" fn(
+                        *const (),
+                        *const (),
+                        *mut (),
+                    ) -> AbiError = core::mem::transmute(fn_ptr);
                     dispatch_fn(core::ptr::null(), args_ptr, out_ptr)
                 }
-                DispatchType::VirtualMachine => {
-                    (interface.dispatch.vm.call)(interface.dispatch.vm.loader_data, GuestContractInstance::null(), 0_u32, args_ptr, out_ptr)
-                }
+                DispatchType::VirtualMachine => (interface.dispatch.vm.call)(
+                    interface.dispatch.vm.loader_data,
+                    GuestContractInstance::null(),
+                    0_u32,
+                    args_ptr,
+                    out_ptr,
+                ),
             }
         };
 
@@ -105,27 +117,42 @@ impl HostLoggerCaller {
                 // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
                 // allocated by the host via host_alloc. We read it before freeing.
                 let s: String = unsafe {
-                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
                 // SAFETY: err.message.ptr was allocated by the host via host_alloc with align 1.
                 // We must free it after reading to avoid memory leak.
-                unsafe { polyplug_guest::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };
+                unsafe {
+                    polyplug_guest::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
                 s
             };
-            return Err(HostContractError { code: err.code, message });
+            return Err(HostContractError {
+                code: err.code,
+                message,
+            });
         }
 
         Ok(())
     }
 
     /// Call host contract function `log_with_level` (function_id=1)
-    pub fn log_with_level(&self, level: LogLevel, message: String) -> Result<(), HostContractError> {
+    pub fn log_with_level(
+        &self,
+        level: LogLevel,
+        message: String,
+    ) -> Result<(), HostContractError> {
         if self.instance.data.is_null() {
             return Err(HostContractError::new(AbiErrorCode::HostContractNotFound));
         }
         // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.
-        let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };
+        let interface: &HostContractInterface =
+            unsafe { &*(self.instance.data as *const HostContractInterface) };
 
         let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
         if fn_count < 1_u32 + 1 {
@@ -146,12 +173,20 @@ impl HostLoggerCaller {
                     // - Function pointers have the same size and alignment as data pointers
                     // - The interface guarantees that the function at this index is a native dispatch
                     //   with the exact signature: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError
-                    let dispatch_fn: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                    let dispatch_fn: unsafe extern "C" fn(
+                        *const (),
+                        *const (),
+                        *mut (),
+                    ) -> AbiError = core::mem::transmute(fn_ptr);
                     dispatch_fn(core::ptr::null(), args_ptr, out_ptr)
                 }
-                DispatchType::VirtualMachine => {
-                    (interface.dispatch.vm.call)(interface.dispatch.vm.loader_data, GuestContractInstance::null(), 1_u32, args_ptr, out_ptr)
-                }
+                DispatchType::VirtualMachine => (interface.dispatch.vm.call)(
+                    interface.dispatch.vm.loader_data,
+                    GuestContractInstance::null(),
+                    1_u32,
+                    args_ptr,
+                    out_ptr,
+                ),
             }
         };
 
@@ -162,22 +197,30 @@ impl HostLoggerCaller {
                 // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
                 // allocated by the host via host_alloc. We read it before freeing.
                 let s: String = unsafe {
-                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
                 // SAFETY: err.message.ptr was allocated by the host via host_alloc with align 1.
                 // We must free it after reading to avoid memory leak.
-                unsafe { polyplug_guest::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };
+                unsafe {
+                    polyplug_guest::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
                 s
             };
-            return Err(HostContractError { code: err.code, message });
+            return Err(HostContractError {
+                code: err.code,
+                message,
+            });
         }
 
         Ok(())
     }
-
 }
 
 /// Contract ID constant for `host.logger` (FNV-1a of "host_contract:host.logger@1")
 pub const HOSTLOGGER_CONTRACT_ID: u64 = 0xF53EB5F2845853BB;
-

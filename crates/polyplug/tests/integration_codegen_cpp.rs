@@ -6,6 +6,11 @@
 //!
 //! This test crate is the crate root for the `integration_codegen_cpp` test binary.
 
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::Output;
+
 use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -18,11 +23,6 @@ use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::types::StringView;
 use polyplug_abi::types::abi_error_ok;
-use polyplug_utils::{BundleId, GuestContractId};
-use std::path::Path;
-use std::path::PathBuf;
-use std::process::Command;
-use std::process::Output;
 
 // ─── Env vars set by build.rs ─────────────────────────────────────────────────
 

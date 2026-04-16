@@ -6,35 +6,38 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use std::sync::OnceLock;
+use super::types::*;
 use polyplug_guest::AbiError;
 use polyplug_guest::AbiErrorCode;
-use polyplug_guest::GuestContractId;
-use polyplug_guest::GuestContractInterface;
-use polyplug_guest::GuestContractInstance;
-use polyplug_guest::HostInterface;
-use polyplug_guest::DispatchType;
-use polyplug_guest::NativeDispatch;
 use polyplug_guest::DispatchMechanisms;
+use polyplug_guest::DispatchType;
+use polyplug_guest::GuestContractId;
+use polyplug_guest::GuestContractInstance;
+use polyplug_guest::GuestContractInterface;
+use polyplug_guest::GuestError;
+use polyplug_guest::HostInterface;
+use polyplug_guest::NativeDispatch;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
-use polyplug_guest::GuestError;
-use polyplug_guest::alloc_string;
-use polyplug_guest::string_view_null;
-use polyplug_guest::string_view_from_static;
 use polyplug_guest::abi_error_ok;
-use super::types::*;
+use polyplug_guest::alloc_string;
+use polyplug_guest::string_view_from_static;
+use polyplug_guest::string_view_null;
+use std::sync::OnceLock;
 /// Convert a GuestError to an AbiError, allocating the message via host_alloc.
 /// Falls back to a null message if allocation fails.
 fn plugin_error_to_abi_error(e: GuestError) -> AbiError {
     let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());
-    AbiError { code: e.code, message }
+    AbiError {
+        code: e.code,
+        message,
+    }
 }
 
-use super::contracts::PipelineDecoderGuestContract;
-use super::contracts::DataTransformerGuestContract;
-use super::contracts::PipelineEncoderGuestContract;
 use super::contracts::DataReporterGuestContract;
+use super::contracts::DataTransformerGuestContract;
+use super::contracts::PipelineDecoderGuestContract;
+use super::contracts::PipelineEncoderGuestContract;
 use super::contracts::PipelineValidatorGuestContract;
 /// Wrapper for a function pointer stored in a static interface array.
 #[repr(transparent)]
@@ -53,33 +56,52 @@ pub const DECODER_CONTRACT_ID: u64 = 0xE1D7DE773BE6E7F7;
 pub static DECODER_IMPL: OnceLock<Box<dyn PipelineDecoderGuestContract>> = OnceLock::new();
 
 pub fn set_decoder_impl(impl_: Box<dyn PipelineDecoderGuestContract>) -> Result<(), &'static str> {
-    DECODER_IMPL.set(impl_).map_err(|_| "decoder already registered")
+    DECODER_IMPL
+        .set(impl_)
+        .map_err(|_| "decoder already registered")
 }
 
 /// ABI wrapper for decode (function_id = 0).
 // SAFETY: args and out pointers are validated at entry before dereferencing.
 #[allow(clippy::unnecessary_cast)]
-extern "C" fn decoder_decode_abi(instance: GuestContractInstance, args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn decoder_decode_abi(
+    instance: GuestContractInstance,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
     // Instance is ignored for stateless plugins (instance is null).
     // For stateful plugins, users override create_instance and use instance.data.
     let _ = instance;
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let impl_ref: &dyn PipelineDecoderGuestContract = match DECODER_IMPL.get() {
             Some(i) => i.as_ref(),
-            None => return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b"implementation not registered") },
+            None => {
+                return AbiError {
+                    code: AbiErrorCode::Generic,
+                    message: string_view_from_static(b"implementation not registered"),
+                };
+            }
         };
         if args.is_null() {
-            return AbiError { code: AbiErrorCode::InvalidPointer, message: string_view_from_static(b"args pointer is null") };
+            return AbiError {
+                code: AbiErrorCode::InvalidPointer,
+                message: string_view_from_static(b"args pointer is null"),
+            };
         }
         if out.is_null() {
-            return AbiError { code: AbiErrorCode::InvalidPointer, message: string_view_from_static(b"out pointer is null") };
+            return AbiError {
+                code: AbiErrorCode::InvalidPointer,
+                message: string_view_from_static(b"out pointer is null"),
+            };
         }
         // SAFETY: args is a valid *const StringView per ABI contract.
         let result = impl_ref.decode(unsafe { *(args as *const StringView) });
         match result {
             Ok(val) => {
                 // SAFETY: out is a valid *mut StringView per ABI contract.
-                unsafe { std::ptr::write(out as *mut StringView, val); }
+                unsafe {
+                    std::ptr::write(out as *mut StringView, val);
+                }
                 abi_error_ok()
             }
             Err(e) => plugin_error_to_abi_error(e),
@@ -90,9 +112,7 @@ extern "C" fn decoder_decode_abi(instance: GuestContractInstance, args: *const (
     }
 }
 
-static DECODER_FNS: [FnPtr; 1_usize] = [
-    FnPtr(decoder_decode_abi as *const ()),
-];
+static DECODER_FNS: [FnPtr; 1_usize] = [FnPtr(decoder_decode_abi as *const ())];
 
 /// Default create_instance stub for decoder.
 /// Returns null instance - users should override for stateful plugins.
@@ -115,7 +135,11 @@ unsafe extern "C" fn DECODER_destroy_instance_stub(
 
 pub static DECODER_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(DECODER_CONTRACT_ID),
-    contract_version: Version { major: 1, minor: 0, patch: 0 },
+    contract_version: Version {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    },
     dispatch_type: DispatchType::Native,
     create_instance: DECODER_create_instance_stub,
     destroy_instance: DECODER_destroy_instance_stub,
@@ -126,4 +150,3 @@ pub static DECODER_INTERFACE: GuestContractInterface = GuestContractInterface {
         },
     },
 };
-
