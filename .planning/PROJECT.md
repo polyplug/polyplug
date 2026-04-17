@@ -69,4 +69,4 @@ This enables:
 | 2026-04-03 | `guest_contract:` hash prefix | Consistent naming with Guest/Host terminology |
 
 ---
-*Last updated: 2026-04-13 (Phase 19 complete — ABI build script auto-generates SDK structs)*
+*Last updated: 2026-04-17 (v1.1 milestone shipped)*
