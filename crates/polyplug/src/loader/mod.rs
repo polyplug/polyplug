@@ -5,7 +5,7 @@
 
 mod bundle_loader;
 mod loaded_bundle;
-mod manifest;
+pub mod manifest;
 pub mod scanner;
 
 pub use bundle_loader::BundleLoader;

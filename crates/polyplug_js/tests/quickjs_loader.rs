@@ -14,6 +14,7 @@ use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::DispatchType;
+use polyplug_utils;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_js::JsConfig;
@@ -71,7 +72,7 @@ fn write_temp_bundle_with_name(
     let path: std::path::PathBuf = dir.path().join("bundle.js");
     std::fs::write(&path, content).expect("write bundle.js");
 
-    let bundle_id: u64 = polyplug_abi::bundle_id(name);
+    let bundle_id: u64 = polyplug_utils::bundle_id(name);
     let manifest: String = format!(
         r#"id = {}
 name = "{}"
@@ -101,7 +102,7 @@ fn make_runtime() -> Runtime {
 /// Create a ManifestData for a JS bundle.
 fn make_manifest(path: &std::path::PathBuf, name: &str) -> ManifestData {
     ManifestData {
-        id: polyplug_abi::bundle_id(name),
+        id: polyplug_utils::bundle_id(name),
         name: name.to_owned(),
         runtime: "js-quickjs".to_owned(),
         file: path.file_name().unwrap().to_string_lossy().into_owned(),
@@ -129,7 +130,7 @@ fn runtime_name_is_js_quickjs() {
 
 #[test]
 fn load_valid_bundle_registers_vtable() {
-    let contract_id: u64 = polyplug_abi::contract_id("test.noop", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.noop", 1);
 
     let bundle: String = make_bundle_js(contract_id, 1, "test.noop");
     let (_dir, path) = write_temp_bundle(&bundle);
@@ -151,7 +152,7 @@ fn load_valid_bundle_registers_vtable() {
 
 #[test]
 fn load_bundle_with_functions_registers_correct_count() {
-    let contract_id: u64 = polyplug_abi::contract_id("test.math", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.math", 1);
     let fn_count: u32 = 3;
 
     // Bundle with 3 functions
@@ -219,13 +220,13 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
 
 #[test]
 fn load_accepts_directory_path() {
-    let contract_id: u64 = polyplug_abi::contract_id("test.dir", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.dir", 1);
 
     let bundle: String = make_bundle_js(contract_id, 1, "test.dir");
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("bundle.js"), &bundle).expect("write bundle.js");
 
-    let bundle_id: u64 = polyplug_abi::bundle_id("test.dir");
+    let bundle_id: u64 = polyplug_utils::bundle_id("test.dir");
     let manifest_toml: String = format!(
         r#"id = {}
 name = "test.dir"
@@ -373,7 +374,7 @@ fn load_nonexistent_file_returns_error() {
 #[test]
 fn bundle_path_global_is_injected() {
     // The loader injects `globalThis.bundlePath` before evaluating the bundle.
-    let contract_id: u64 = polyplug_abi::contract_id("test.bundlepath", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.bundlepath", 1);
 
     // Bundle reads bundlePath; if it is undefined the throw will surface as Err.
     let bundle: String = format!(
@@ -426,7 +427,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
 #[test]
 fn polyplug_object_has_expected_methods() {
     // Verify all expected host methods are present on the polyplug global.
-    let contract_id: u64 = polyplug_abi::contract_id("test.methods", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.methods", 1);
 
     let bundle: String = format!(
         r#"
@@ -482,7 +483,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
 #[test]
 fn vtable_contract_id_roundtrip() {
     // Use a well-known FNV-1a contract — contract_id("image.decode", 1).
-    let contract_id: u64 = polyplug_abi::contract_id("image.decode", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("image.decode", 1);
 
     let bundle: String = make_bundle_js(contract_id, 1, "image.decode");
     let (_dir, path) = write_temp_bundle(&bundle);
@@ -504,7 +505,7 @@ fn vtable_contract_id_roundtrip() {
 
 #[test]
 fn vtable_uses_vm_dispatch() {
-    let contract_id: u64 = polyplug_abi::contract_id("test.vm_dispatch", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.vm_dispatch", 1);
     let fn_count: u32 = 2;
 
     let bundle: String = format!(
@@ -574,7 +575,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
 
 #[test]
 fn js_alloc_and_free_calls_host_vtable() {
-    let contract_id: u64 = polyplug_abi::contract_id("test.memory", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.memory", 1);
 
     // Bundle calls alloc then free.
     // alloc returns [ptr_lo, ptr_hi] tuple; free takes (ptr_lo, ptr_hi)
@@ -641,7 +642,7 @@ fn concurrent_loads_do_not_panic() {
             let errors_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&errors);
             std::thread::spawn(move || {
                 let contract_id: u64 =
-                    polyplug_abi::contract_id(&format!("test.concurrent.{i}"), 1);
+                    polyplug_utils::guest_contract_id(&format!("test.concurrent.{i}"), 1);
 
                 let bundle: String =
                     make_bundle_js(contract_id, 1, &format!("test.concurrent.{i}"));
@@ -685,7 +686,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     // registration slot stored in its userdata, ensuring complete isolation.
 
     // Create first runtime and load a plugin with contract_id A
-    let contract_id_a: u64 = polyplug_abi::contract_id("test.isolation.a", 1);
+    let contract_id_a: u64 = polyplug_utils::guest_contract_id("test.isolation.a", 1);
     let bundle_a: String = make_bundle_js(contract_id_a, 1, "test.isolation.a");
     let (_dir_a, path_a) = write_temp_bundle(&bundle_a);
 
@@ -708,7 +709,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     assert!(!handle_a.is_null(), "handle_a must be valid");
 
     // Create second runtime on the SAME thread and load a plugin with contract_id B
-    let contract_id_b: u64 = polyplug_abi::contract_id("test.isolation.b", 1);
+    let contract_id_b: u64 = polyplug_utils::guest_contract_id("test.isolation.b", 1);
     let bundle_b: String = make_bundle_js(contract_id_b, 1, "test.isolation.b");
     let (_dir_b, path_b) = write_temp_bundle(&bundle_b);
 
@@ -776,7 +777,7 @@ fn sequential_loads_of_different_contracts_all_succeed() {
     let runtime: Runtime = make_runtime();
 
     for i in 0..4_u32 {
-        let contract_id: u64 = polyplug_abi::contract_id(&format!("test.sequential.{i}"), 1);
+        let contract_id: u64 = polyplug_utils::guest_contract_id(&format!("test.sequential.{i}"), 1);
 
         let bundle: String = make_bundle_js(contract_id, 1, &format!("test.sequential.{i}"));
         let (_dir, path) = write_temp_bundle(&bundle);
@@ -798,7 +799,7 @@ fn dispatch_vm_call_works_correctly() {
     // can be called through the ABI dispatch mechanism.
     use polyplug_abi::AbiError;
 
-    let contract_id: u64 = polyplug_abi::contract_id("test.dispatch.call", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.dispatch.call", 1);
     let bundle: String = make_bundle_js(contract_id, 1, "test.dispatch.call");
     let (_dir, path) = write_temp_bundle(&bundle);
 
@@ -848,7 +849,7 @@ fn dispatch_vm_call_works_correctly() {
 #[test]
 fn stringview_to_string_handles_empty_string() {
     // Test that StringView.toString() handles empty strings (len=0).
-    let contract_id: u64 = polyplug_abi::contract_id("test.stringview.empty", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.stringview.empty", 1);
 
     let bundle: String = format!(
         r#"

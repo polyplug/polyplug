@@ -20,14 +20,13 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
-use polyplug_abi::types::Version;
+use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
 use polyplug_abi::{
     GuestContractHandle, GuestContractInterface, HostContractInstance, HostContractInterface,
-    HostInterface, PluginDescriptor, RuntimeLanguage,
+    HostInterface, PluginDescriptor, RuntimeLanguage, types::Version,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
-use crate::RuntimeConfig;
 use crate::error::HostContractError;
 use crate::error::LoaderError;
 use crate::error::RegistryError;
@@ -37,8 +36,7 @@ use crate::loader::LoadedBundle;
 use crate::loader::ManifestData;
 use crate::loader::ManifestDependency;
 use crate::registry::RuntimeStore;
-use crate::runtime_builder::RuntimeBuilder;
-use polyplug_abi::runtime::Compatibility;
+pub use crate::runtime_builder::RuntimeBuilder;
 
 // ─── TLS for Init Phase Bundle ID ─────────────────────────────────────────────
 
@@ -86,7 +84,7 @@ pub(crate) struct LoadOptions {
 pub struct Runtime {
     pub(crate) registry: Arc<RuntimeStore>,
     /// Loaded bundles, never dropped.
-    pub(crate) _bundles: Vec<LoadedBundle>,
+    pub(crate) bundles: Vec<LoadedBundle>,
     /// The static HostInterface given to plugins. Must be 'static.
     pub(crate) host_abi: &'static HostInterface,
     /// All register_guest_contracted loaders, keyed by runtime_name. Immutable after build().
@@ -378,17 +376,14 @@ impl Runtime {
         &mut self,
         loader: Box<dyn BundleLoader>,
     ) -> Result<(), RuntimeError> {
-        let names: Vec<String> = loader.runtime_names();
-        for name in &names {
-            if self.loaders.contains_key(name.as_str()) {
-                return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
-                    runtime_name: name.clone(),
-                }));
-            }
+        let name: &str = loader.runtime_name();
+        if self.loaders.contains_key(name) {
+            return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
+                runtime_name: name.to_string(),
+            }));
         }
-        if let Some(primary_name) = names.into_iter().next() {
-            self.loaders.insert(primary_name, loader);
-        }
+
+        self.loaders.insert(name.to_string(), loader);
         Ok(())
     }
 
@@ -930,15 +925,14 @@ pub(crate) unsafe extern "C" fn host_call_method(
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
-    // PLACEHOLDER: Full implementation requires instance -> contract mapping.
-    // For now, return an error indicating this is not yet implemented.
-    runtime.set_last_error(
-        "call_guest_method requires instance-contract mapping (not yet implemented)",
-    );
+    // Cross-instance dispatch not yet implemented.
+    // This would require a contract-instance mapping to route calls to the correct plugin.
+    // Use call_guest_method on the specific contract interface instead.
+    runtime.set_last_error("call_guest_method: cross-instance dispatch not yet implemented");
     AbiError {
-        code: AbiErrorCode::Generic,
+        code: AbiErrorCode::FunctionNotAvailable,
         message: StringView::from_static(
-            b"call_guest_method placeholder - needs instance-contract mapping",
+            b"call_guest_method: use contract interface for direct calls",
         ),
     }
 }

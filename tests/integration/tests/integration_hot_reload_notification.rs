@@ -12,6 +12,7 @@ use polyplug::runtime::RuntimeConfig;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::runtime::ReloadPhaseType;
 use polyplug_native::NativeLoader;
+use polyplug_utils;
 
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::GuestContractHandle = rt.find_by_contract(contract_id, 0).ok()?;
@@ -49,7 +50,7 @@ fn test_preparing_fires_before_vtable_swap() {
     rt.load_bundle(std::path::Path::new(v1_path))
         .expect("load v1");
 
-    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("reload.test", 1);
     let version_fn_v1: extern "C" fn() -> u32 =
         get_version_fn(&rt, contract_id).expect("resolve v1");
     assert_eq!(
@@ -116,7 +117,7 @@ fn test_reloaded_fires_after_vtable_swap() {
     rt.load_bundle(std::path::Path::new(v1_path))
         .expect("load v1");
 
-    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("reload.test", 1);
 
     let v2_path: PathBuf =
         PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so");
@@ -174,7 +175,7 @@ fn test_failed_fires_on_reload_error() {
     rt.load_bundle(std::path::Path::new(v1_path))
         .expect("load v1");
 
-    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("reload.test", 1);
     let version_fn_before: extern "C" fn() -> u32 =
         get_version_fn(&rt, contract_id).expect("resolve v1 before");
     assert_eq!(
@@ -236,7 +237,7 @@ fn test_old_vtable_kept_on_failure() {
     rt.load_bundle(std::path::Path::new(v1_path))
         .expect("load v1");
 
-    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("reload.test", 1);
     let version_fn_before: extern "C" fn() -> u32 =
         get_version_fn(&rt, contract_id).expect("resolve v1 before");
     assert_eq!(
@@ -356,7 +357,7 @@ fn test_callback_receives_correct_bundle_id() {
     rt.load_bundle(std::path::Path::new(v1_path))
         .expect("load v1");
 
-    let expected_bundle_id: u64 = polyplug_abi::bundle_id("reload_plugin_v1");
+    let expected_bundle_id: u64 = polyplug_utils::bundle_id("reload_plugin_v1");
 
     let v2_path: PathBuf =
         PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so");

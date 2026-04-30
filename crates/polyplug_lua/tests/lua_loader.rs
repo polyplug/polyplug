@@ -13,6 +13,7 @@ use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::AbiError;
+use polyplug_utils;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
@@ -35,7 +36,7 @@ fn write_temp_bundle(name: &str, content: &[u8]) -> (tempfile::TempDir, PathBuf)
     let path: PathBuf = dir.path().join("bundle.lua");
     std::fs::write(&path, content).expect("write bundle.lua");
 
-    let bundle_id: u64 = polyplug_abi::bundle_id(name);
+    let bundle_id: u64 = polyplug_utils::bundle_id(name);
     let manifest: String = format!(
         r#"id = {}
 name = "{}"
@@ -86,7 +87,7 @@ end
 
 /// Create a ManifestData for a Lua bundle at the given path.
 fn make_manifest(path: &Path, name: &str) -> ManifestData {
-    let bundle_id: u64 = polyplug_abi::bundle_id(name);
+    let bundle_id: u64 = polyplug_utils::bundle_id(name);
     ManifestData {
         id: bundle_id,
         name: name.to_owned(),
@@ -246,7 +247,7 @@ fn vtable_is_registered_after_load() {
         .load(&manifest, &runtime)
         .expect("valid bundle must load");
 
-    let contract_id: u64 = polyplug_abi::contract_id("test.loader", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
     let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(contract_id, 0);
     assert!(
@@ -277,7 +278,7 @@ fn vtable_function_count_matches_script() {
         .load(&manifest, &runtime)
         .expect("two-function bundle must load");
 
-    let contract_id: u64 = polyplug_abi::contract_id("test.two", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.two", 1);
     let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(contract_id, 0);
     let handle: GuestContractHandle = handle.expect("test.two@1 must be registered");
@@ -303,7 +304,7 @@ fn vtable_contract_id_matches_computed_hash() {
         .load(&manifest, &runtime)
         .expect("valid bundle must load");
 
-    let expected_cid: u64 = polyplug_abi::contract_id("test.loader", 1);
+    let expected_cid: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
     let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(expected_cid, 0);
     let handle: GuestContractHandle = handle.expect("test.loader@1 must be registered");
@@ -338,8 +339,8 @@ fn sequential_loads_both_succeed() {
         .expect("second sequential load must succeed");
 
     // Both contracts must be visible.
-    let cid1: u64 = polyplug_abi::contract_id("test.loader", 1);
-    let cid2: u64 = polyplug_abi::contract_id("test.two", 1);
+    let cid1: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
+    let cid2: u64 = polyplug_utils::guest_contract_id("test.two", 1);
 
     let handle1: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(cid1, 0);
@@ -374,7 +375,7 @@ fn concurrent_loaders_do_not_race() {
                     .build()
                     .expect("runtime build must succeed");
                 let manifest: ManifestData = ManifestData {
-                    id: polyplug_abi::bundle_id("lua_loader_thread_safety"),
+                    id: polyplug_utils::bundle_id("lua_loader_thread_safety"),
                     name: "lua_loader_thread_safety".to_owned(),
                     runtime: "lua".to_owned(),
                     file: p.file_name().unwrap().to_string_lossy().into_owned(),
@@ -417,7 +418,7 @@ fn vtable_function_dispatch_returns_abi_ok() {
         .load(&manifest, &runtime)
         .expect("valid bundle must load");
 
-    let contract_id: u64 = polyplug_abi::contract_id("test.loader", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
     let handle: GuestContractHandle = runtime
         .registry()
         .find(contract_id, 0)

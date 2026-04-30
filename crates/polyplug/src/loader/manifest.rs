@@ -9,10 +9,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::registry::runtime_store::BundleDependency;
+use serde::Deserializer;
+
 use polyplug_abi::types::Version;
 use polyplug_utils::{BundleId, GuestContractId};
-use serde::Deserializer;
+
+use crate::runtime_store::BundleDependency;
 
 const fn current_os() -> &'static str {
     if cfg!(target_os = "linux") {

@@ -21,7 +21,7 @@ use crate::config::NativeConfig;
 /// Handles .so/.dll/.dylib bundles using dlopen/LoadLibrary.
 /// Owns library handles internally — NOT stored in registry.
 pub struct NativeLoader {
-    _config: NativeConfig,
+    config: NativeConfig,
     /// Active library handles, keyed by BundleId.
     libraries: Mutex<HashMap<BundleId, libloading::Library>>,
 }
@@ -30,7 +30,7 @@ impl NativeLoader {
     /// Create a new NativeLoader.
     pub fn new(config: NativeConfig) -> Self {
         Self {
-            _config: config,
+            config,
             libraries: Mutex::new(HashMap::new()),
         }
     }

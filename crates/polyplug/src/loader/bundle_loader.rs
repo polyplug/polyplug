@@ -10,14 +10,6 @@ pub trait BundleLoader: Send + Sync {
     /// Must match the `runtime` field in `manifest.toml` exactly (case-sensitive).
     fn runtime_name(&self) -> &'static str;
 
-    /// All runtime identifiers this loader handles.
-    ///
-    /// Defaults to a single-element vec containing `runtime_name()`.
-    /// Override this method if your loader handles multiple runtime names.
-    fn runtime_names(&self) -> Vec<String> {
-        vec![self.runtime_name().to_owned()]
-    }
-
     /// Load a bundle for the first time.
     ///
     /// The manifest contains all metadata needed to load the bundle:

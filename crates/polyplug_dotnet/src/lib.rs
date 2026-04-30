@@ -9,7 +9,9 @@ pub use config::HostfxrLocation;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::StringView;
 
+use std::ffi::OsStr;
 use std::path::Path;
+use std::sync::Arc;
 
 use netcorehost::pdcstring::PdCString;
 
@@ -20,6 +22,7 @@ use polyplug::loader::BundleLoader;
 use polyplug_abi::HostInterface;
 
 use crate::context::CLR_CONTEXT;
+use crate::context::DotnetContext;
 use crate::context::InitFn;
 use crate::context::init_context;
 
@@ -148,7 +151,7 @@ impl BundleLoader for DotnetLoader {
         let bundle_dir: &Path = &manifest.path;
         let bundle_id: u64 = manifest.id;
 
-        let context: std::sync::Arc<crate::context::DotnetContext> = std::sync::Arc::clone(
+        let context: Arc<DotnetContext> = Arc::clone(
             CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir))?,
         );
 
@@ -157,14 +160,14 @@ impl BundleLoader for DotnetLoader {
         let bundle_name: String = stem.into_owned();
         let type_name_str: String = format!("{bundle_name}.Plugin, {bundle_name}");
 
-        let type_name_pdc: PdCString = PdCString::from_os_str(std::ffi::OsStr::new(&type_name_str))
+        let type_name_pdc: PdCString = PdCString::from_os_str(OsStr::new(&type_name_str))
             .map_err(|_| {
                 RuntimeError::Loader(LoaderError::InitSymbolMissing {
                     bundle: bundle_name.clone(),
                 })
             })?;
         let method_name_pdc: PdCString =
-            PdCString::from_os_str(std::ffi::OsStr::new("PolyplugInit")).map_err(|_| {
+            PdCString::from_os_str(OsStr::new("PolyplugInit")).map_err(|_| {
                 RuntimeError::Loader(LoaderError::InitSymbolMissing {
                     bundle: bundle_name.clone(),
                 })

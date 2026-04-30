@@ -490,7 +490,7 @@ fn stress_reload_callback_fires_on_every_cycle() {
     for (idx, ev) in recorded_events.iter().enumerate() {
         if ev.phase_type == ReloadPhaseType::Reloaded {
             assert!(
-                !ev.bundle_name.is_empty(),
+                !(ev.bundle_name.ptr.is_null() || ev.bundle_name.len == 0),
                 "event {idx}: bundle_name must not be empty"
             );
         }

@@ -7,8 +7,8 @@ use crate::{
     compatibility::{CapabilityGraph, Compatibility},
     error::{GraphError, LoaderError, RuntimeError},
     loader::{BundleLoader, ManifestData},
-    registry::runtime_store::RuntimeStore,
     runtime::{ReloadCb, Runtime, WarningCb},
+    runtime_store::RuntimeStore,
 };
 
 /// Builder for constructing a Runtime.
@@ -115,7 +115,7 @@ impl RuntimeBuilder {
             resolve_host_contract_interface: crate::runtime::host_resolve_host_contract_interface,
             list_bundles: crate::runtime::host_list_bundles,
             get_dependencies: crate::runtime::host_get_dependencies,
-            // Host operations (implemented in 18-02)
+            // Host operations
             load_bundle: crate::runtime::host_load_bundle,
             reload_bundle: crate::runtime::host_reload_bundle,
             register_host_contract: crate::runtime::host_register_host_contract,
@@ -128,21 +128,14 @@ impl RuntimeBuilder {
 
         // Register user-provided loaders, checking for duplicates.
         for loader in self.loaders {
-            let names: Vec<String> = loader.runtime_names();
-            // Check for duplicates across all runtime names this loader handles.
-            for name in &names {
-                if loader_map.contains_key(name.as_str()) {
-                    return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
-                        runtime_name: name.clone(),
-                    }));
-                }
+            let name: &str = loader.runtime_name();
+            if loader_map.contains_key(name) {
+                return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
+                    runtime_name: name.to_string(),
+                }));
             }
-            // Insert under the first name. Each JsLoader instance handles exactly ONE name
-            // (JsLoader::runtime_names() uses the default which returns vec![self.runtime_name()]).
-            // For all single-name loaders, this is semantically identical to the original code.
-            if let Some(primary_name) = names.into_iter().next() {
-                loader_map.insert(primary_name, loader);
-            }
+
+            loader_map.insert(name.to_string(), loader);
         }
 
         // Phase 1: Scan plugin directories for bundles
@@ -160,7 +153,7 @@ impl RuntimeBuilder {
         // Create Runtime first (before loading bundles) so we can pass it to loaders
         let runtime: Runtime = Runtime {
             registry: Arc::clone(&registry),
-            _bundles: Vec::new(),
+            bundles: Vec::new(),
             host_abi,
             loaders: loader_map,
             bundle_manifests: std::sync::Mutex::new(manifests_map),
