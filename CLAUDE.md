@@ -1,321 +1,719 @@
-<!-- GSD:project-start source:PROJECT.md -->
-## Project
+# AGENTS.md — polyplug
 
-**polyplug**
+This file defines the **mandatory, non-negotiable rules** for every agent, contributor, and AI assistant working on this codebase. No exceptions. No shortcuts. No "just this once."
 
-A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust. Enables host applications to load plugins written in Rust, Python, C#, Lua, JavaScript, or C++ through a unified FFI-based interface with hot-reload support.
+If you are unsure whether something violates a rule — it probably does. Ask first.
 
-**Core Value:** The core runtime is loader-agnostic — the `polyplug` crate knows about the `BundleLoader` trait and `PluginRegistry`, but NOT about `libloading`, `dlopen`, or any specific loader implementation.
+---
 
-### Constraints
+## Project Identity
 
-- **Architecture:** Core crate must have zero loader-specific code or dependencies
-- **Safety:** Hot-reload safety contract — hosts must not cache raw function pointers
-- **Compatibility:** Breaking changes acceptable — not published yet
-<!-- GSD:project-end -->
+- **Project name:** `polyplug`
+- **CLI tool name:** `polyplugc`
+- **Language:** Rust (host runtime, CLI, guest libs)
+- **Goal:** The universal, blazing-fast, cross-language plugin runtime platform
+- **Trust model**: See `TRUST_MODEL.md` for bundle identity, declared dependencies, and ABI freeze details.
 
-<!-- GSD:stack-start source:codebase/STACK.md -->
-## Technology Stack
+---
 
-## Languages
-- Rust 1.85 (Edition 2024) - Core runtime, FFI layer, loaders, CLI, and Rust SDKs
-- TypeScript/Deno - JavaScript SDK (`sdks/js/`)
-- Python 3.10+ - Python SDK and loaders (`sdks/python/`)
-- C# (.NET 10.0) - C# SDK (`sdks/csharp/`)
-- Lua (LuaJIT) - Lua SDK (`sdks/lua/`)
-- C++ (header-only) - C++ SDK (`sdks/cpp/`)
-## Runtime
-- Native C ABI via shared libraries (`.so`, `.dylib`, `.dll`)
-- Cargo workspace with multiple crate types (`cdylib`, `rlib`)
-- Cargo (Rust) - Workspace-based dependency management
-- Lockfile: `Cargo.lock` (present)
-- npm/Deno for TypeScript SDK
-- pip/setuptools for Python packages
-- NuGet for .NET packages
-- LuaRocks (implicit) for Lua
-## Frameworks
-- polyplug (custom) - Universal cross-language plugin runtime
-- Uses `#[repr(C)]` FFI for cross-language ABI boundary
-- Rust: Built-in `#[test]` + `criterion` for benchmarks
-- External toolchains tested via CI matrix (dotnet, python, lua, js-quickjs)
-- Just (justfile) - Task runner for build operations
-- polyplugc - CLI code generator for multi-language bindings
-- ast-grep - SDK consistency validation
-## Key Dependencies
-- `libloading` 0.9 - Dynamic library loading for native plugins
-- `pyo3` 0.28 - Python bindings (for Python loader)
-- `mlua` 0.11 (LuaJIT vendored) - Lua bindings (for Lua loader)
-- `rquickjs` 0.11 - QuickJS JavaScript engine (for JS loader)
-- `netcorehost` 0.20 - .NET runtime hosting (for .NET loader)
-- `arc-swap` 1.7 - Hot-reload atomic pointer swapping
-- `notify` 8.2 - File system watching for hot-reload
-- `serde` 1.0 + `toml` 0.9 - Manifest parsing and serialization
-- `thiserror` 2.0 + `anyhow` 1.0 - Error handling
-- `petgraph` 0.8 - Dependency graph algorithms
-- `syn` 2 + `quote` 1 - Code generation (proc-macro style)
-- `clap` 4.5 - CLI argument parsing (polyplugc)
-- `pelite` 0.10 - PE file parsing (Windows .NET hosting)
-- `tree-sitter` 0.25 + `tree-sitter-lua` 0.2 - Lua source parsing
-## Configuration
-- Cargo workspace with unified versions via `workspace.package`
-- Platform-specific Rust flags in `.cargo/config.toml` (target-cpu=native warning)
-- Release profile: opt-level=3, LTO=thin, strip=symbols
-- `Cargo.toml` - Workspace manifest
-- `justfile` - Build automation (46KB comprehensive task runner)
-- `sdk_validator.yaml` - SDK consistency rules
-- `abi.toml` (in `crates/polyplug_abi/`) - ABI type definitions
-## Platform Requirements
-- Rust 1.85+ toolchain
-- Python 3.10+ with dev headers (for Python loader)
-- Lua 5.4+ dev headers (for Lua loader)
-- .NET 10.0 SDK (for .NET loader and C# SDK)
-- Deno 1.38.0+ (for TypeScript SDK)
-- Platform-specific native libraries:
-- Loader cdylibs for each runtime language
-- .NET runtime 10.0 for .NET plugins
-<!-- GSD:stack-end -->
+## Non-Negotiable Rules
 
-<!-- GSD:conventions-start source:CONVENTIONS.md -->
-## Conventions
+- Violating any rule below is grounds for immediate rejection of the change. These are not style suggestions. They are hard requirements.
+- DONT ever timeout tasks! wait for them to complete system will notify you when the background tasks complete! DONT POLL
 
-## Naming Patterns
-- Source files: `snake_case.rs` (e.g., `runtime.rs`, `plugin_registry.rs`)
-- Test files: `snake_case.rs` matching test purpose (e.g., `integration_load.rs`, `stress_error.rs`)
-- Benchmark files: `snake_case.rs` (e.g., `vtable_dispatch.rs`)
-- Module directories: `snake_case` (e.g., `loader/`, `registry/`)
-- Public functions: `snake_case` (e.g., `find_by_contract`, `load_bundle`)
-- FFI exports: `polyplug_` prefix (e.g., `polyplug_runtime_create`, `polyplug_init`)
-- Callbacks: descriptive `snake_case` with purpose (e.g., `capture_register_callback`, `bench_find_by_contract`)
-- Test functions: `snake_case` with test prefix or descriptive name (e.g., `test_load_and_abi_version`, `stress_error_code_and_message_received_correctly`)
-- Local variables: `snake_case` (e.g., `bundle_id`, `contract_id`, `registry`)
-- Thread-local statics: `SCREAMING_SNAKE_CASE` (e.g., `CAPTURED_VTABLE_PTR`, `BENCH_REGISTRY`, `ERROR_REGISTRY`)
-- Constants: `SCREAMING_SNAKE_CASE` (e.g., `TEST_PLUGIN_SO`, `POLYPLUG_ABI_VERSION`, `FNV_OFFSET`)
-- Structs: `PascalCase` (e.g., `Runtime`, `PluginRegistry`, `HostContext`)
-- Enums: `PascalCase` with `PascalCase` variants (e.g., `RuntimeError`, `LoaderError`, `ReloadPhaseType`, `AbiErrorCode`)
-- Type aliases: `PascalCase` (e.g., `RuntimeError`, `WarningCb`, `ReloadCb`)
-- Traits: `PascalCase` (e.g., `BundleLoader`, `TestAddPlugin`)
-## Code Style
-- No explicit rustfmt configuration detected (uses default Rust style)
-- Max line length appears to follow standard Rust conventions
-- Indentation: 4 spaces
-- Use trailing commas in multi-line constructs
-- Clippy via workspace lints in `Cargo.toml`
-- Key lint rules enforced at workspace level:
-- Tests suppress `expect_used` with `#![allow(clippy::expect_used)]` at crate root
-- Rust edition 2024 (workspace-wide)
-- Minimum Rust version: 1.85
-## Import Organization
-- Grouped imports with braces: `use polyplug_abi::{AbiErrorCode, AbiError, HostInterface};`
-- Types explicitly imported, not glob-imported in public API
-- Test files may use more glob imports for brevity
-- Workspace dependencies use path aliases: `polyplug_utils`, `polyplug_abi`, `polyplug`
-- External crate imports from workspace deps: `thiserror`, `anyhow`, `serde`, `petgraph`
-## Error Handling
-- Use `thiserror::Error` derive for error types
-- Error enums organized by domain: `RuntimeError`, `LoaderError`, `RegistryError`, `GraphError`, `AllocatorError`, `HostContractError`
-- Error variants use structured fields with descriptive messages:
-- Error chaining via `#[error(transparent)]` and `#[from]`:
-- FFI boundary stores errors in `last_error: Mutex<String>` field, retrieved via `get_last_error()`
-- Public API returns `Result<T, RuntimeError>` or domain-specific error
-- Internal functions may use domain-specific errors
-- FFI functions return error codes (`u32`), with messages in thread-local storage
-- All FFI exports wrapped in `std::panic::catch_unwind` to prevent panics crossing ABI boundary
-- ABI error codes defined in `polyplug_abi`: `AbiErrorCode::Ok = 0`, `AbiErrorCode::Generic = 1`, `AbiErrorCode::Panic = 3`
-- `AbiError` struct: `{ code: u32, message: StringView }`
-## Async Patterns
-- No async runtime used (fully synchronous design)
-- Plugin dispatch is direct pointer dereference (zero overhead)
-- Thread-safe via `RwLock`, `Mutex`, and `Arc`
-- `#[inline(always)]` on hot-path functions like `find_by_contract`
-- `Arc<PluginRegistry>` for shared registry
-- `RwLock<HashMap>` for host contracts
-- `Mutex<HashMap>` for bundle manifests
-- `Mutex<String>` for last error storage
-- Thread-local `RefCell` for test state capture
-## Memory Management
-- `Arc<T>` for shared ownership across threads (e.g., `Arc<PluginRegistry>`, `Arc<VTableSlot>`)
-- `Box<dyn BundleLoader>` for trait object ownership
-- `Box::leak()` for static vtable references in tests
-- `core::mem::forget(library)` to prevent `dlclose` on loaded plugin libraries
-- `Arc` for shared, thread-safe ownership
-- `Mutex` and `RwLock` for interior mutability
-- `RefCell` for thread-local test state
-- Raw pointers for FFI boundary (e.g., `*const GuestContractInterface`, `*mut c_void`)
-- Host allocator functions: `polyplug_host_alloc(size, align)` and `polyplug_host_free(ptr, size, align)`
-- Plugin-allocated strings must be freed by caller after reading
-- Static string views (`from_static`) must NOT be freed
-- Vtables are `'static` (live for process lifetime after registration)
-- `PluginGuard` provides scoped access with RAII pattern
-- FFI callbacks receive `*const` pointers with explicit lifetime documentation
-## Documentation Patterns
-- Every module has `//!` doc comment describing purpose
-- Example from `crates/polyplug/src/runtime.rs`:
-- Public functions have `///` doc comments with purpose
-- `# Safety` section required for all unsafe functions (enforced by clippy lint)
-- Example safety documentation:
-- `// SAFETY:` comments before every unsafe block explaining why it's safe
-- `// ---` section separators for logical grouping in long files
-- Comment blocks use `// ───` Unicode dashes for visual sectioning
-- Test files have `//!` module doc explaining test purpose
-- Test functions have `///` doc comments describing what is tested
-- Step-by-step comments in complex tests (e.g., `// ── Step 1: Locate workspace root`)
-## Comments
-- Every unsafe operation requires a `// SAFETY:` comment
-- Complex FFI interactions need step-by-step comments
-- Non-obvious business logic (e.g., dependency enforcement rules)
-- Build.rs script logic with path resolution explanations
-- Not applicable (Rust project)
-- Use `///` for rustdoc
-- Use Unicode dash separators: `// ─── Section Name ───────────────────────`
-- Example pattern:
-## Function Design
-- Functions typically under 50 lines for clarity
-- Complex functions broken into helper functions
-- Hot-path functions marked `#[inline(always)]` for zero overhead
-- Prefer references over owned values when not transferring ownership
-- Use `&Path` for file paths
-- Use struct args for multi-parameter FFI calls (e.g., `AddArgs`, `ChainArgs`)
-- FFI uses raw pointers: `*const T`, `*mut T`
-- `Result<T, E>` for fallible operations
-- `Option<T>` for nullable results
-- `AbiError` for FFI boundary returns
-- Handle packing for FFI: `u64` packed from `GuestContractHandle { index, generation }`
-## Module Design
-- Public API exported from `lib.rs` via `pub use`
-- Internal modules marked `pub(crate)` or private
-- Re-export convenience types: `pub use reload::ReloadEvent;`
-- `lib.rs` acts as barrel file for crate exports
-- Submodules have their own `mod.rs` or direct file structure
-- Example pattern:
-- `pub` for public API
-- `pub(crate)` for internal shared functions
-- `pub(super)` or `pub(in path)` for restricted visibility
-- Private by default for implementation details
-<!-- GSD:conventions-end -->
+---
 
-<!-- GSD:architecture-start source:ARCHITECTURE.md -->
-## Architecture
+### 1. Module Structure
 
-## System Overview
-- Single API for all supported languages
-- Direct function pointer dispatch (zero overhead for native, minimal for VM-based)
-- Hot-reload with quiescence-based safety
-- Type-safe code generation for all bindings
-- Cross-platform support (Linux, macOS, Windows)
-## Pattern Overview
-- Trait-based loader abstraction (`BundleLoader`) for multi-language support
-- Generational index pattern for safe handle management (stale handle detection)
-- `ArcSwap` for atomic vtable swapping during hot-reload
-- Two-phase lifecycle: initialization (single-threaded, graph-based load order) then runtime (lock-free dispatch)
-- Code generation via `polyplugc` CLI for type-safe bindings
-## Layers
-- Purpose: FFI entry points for host language bindings
-- Location: `crates/polyplug/src/ffi.rs`
-- Contains: `#[no_mangle]` C ABI functions (`polyplug_runtime_create`, `polyplug_runtime_load_bundle`, etc.)
-- Depends on: Runtime, Registry
-- Used by: SDKs in `sdks/*/host/`
-- Purpose: Plugin lifecycle management, loader coordination, hot-reload
-- Location: `crates/polyplug/src/runtime.rs`, `runtime_builder.rs`, `reload.rs`
-- Contains: `Runtime` struct, `RuntimeBuilder` pattern, reload orchestration
-- Depends on: Registry, Loaders, Compatibility graph
-- Used by: FFI layer, Host SDKs
-- Purpose: VTable storage, handle validation, contract lookup
-- Location: `crates/polyplug/src/registry/plugin_registry.rs`
-- Contains: `PluginRegistry` with generational slots, `PluginGuard` for RAII vtable access
-- Depends on: ABI types (`GuestContractInterface`, `GuestContractHandle`)
-- Used by: Runtime, Host callbacks
-- Purpose: Language-specific bundle loading and initialization
-- Location: `crates/polyplug_native/src/loader.rs`, `crates/polyplug_python/src/lib.rs`, `crates/polyplug_js/src/loader.rs`, `crates/polyplug_lua/src/loader.rs`, `crates/polyplug_dotnet/src/lib.rs`
-- Contains: `NativeLoader`, `PythonLoader`, `JsLoader`, `LuaLoader`, `DotnetLoader` implementing `BundleLoader`
-- Depends on: Runtime (for registration), language-specific VMs (pyo3, rquickjs, mlua, netcorehost)
-- Used by: Runtime during `load_bundle()` and `reload_bundle()`
-- Purpose: C-compatible type definitions for host/plugin boundary
-- Location: `crates/polyplug_abi/src/`
-- Contains: `GuestContractInterface`, `HostInterface`, `GuestContractHandle`, `StringView`, `Buffer`, `AbiError`, `DispatchType`
-- Depends on: No internal dependencies (standalone)
-- Used by: All layers crossing FFI boundary
-- Purpose: Generate type-safe host/guest bindings from API definitions
-- Location: `crates/polyplugc/src/`, `crates/polyplug_codegen/src/`
-- Contains: Parser for `api.toml`/`bundle.toml`, IR validation, per-language generators
-- Depends on: polyplug_abi types for contract ID hashing
-- Used by: Plugin developers via `polyplugc generate` CLI
-## Data Flow
-## Key Abstractions
-- Purpose: Abstract loader interface for all language runtime types
-- Examples: `crates/polyplug_native/src/loader.rs:166-244`, `crates/polyplug_python/src/lib.rs:62-248`
-- Pattern: Trait with `runtime_name()`, `load()`, `reload()` methods
-- Purpose: Function dispatch table registered by plugins
-- Examples: `crates/polyplug_abi/src/plugin/plugin_interface.rs`
-- Pattern: `#[repr(C)]` struct with `contract_id`, `contract_version`, `function_count`, `dispatch_type`, dispatch union
-- Purpose: Safe handle to plugin vtable with stale detection
-- Examples: `crates/polyplug_abi/src/plugin/plugin_handle.rs`
-- Pattern: `{ index: u32, generation: u32 }` - validated against slot generation on each resolve
-- Purpose: Host capabilities exposed to plugins during init
-- Examples: `crates/polyplug_abi/src/host/host_vtable/host_vtable.rs`
-- Pattern: Function pointers for `register_plugin`, `alloc`, `free`, `find_by_contract`, `resolve_plugin`
-- Purpose: Dependency resolution for load ordering
-- Examples: `crates/polyplug/src/compatibility/capability_graph.rs`
-- Pattern: Directed graph with petgraph, cycle detection, topological sort
-- Purpose: Reference-counted vtable access for hot-reload safety
-- Examples: `crates/polyplug/src/registry/plugin_registry.rs` (internal)
-- Pattern: Wraps `Arc<VTableSlot>`, provides `vtable()` method, dropped after call
-## Entry Points
-- Location: `crates/polyplug/src/runtime.rs:99-103`
-- Triggers: `Runtime::builder().build()`
-- Responsibilities: Creates runtime, registers loaders, loads bundles
-- Location: `crates/polyplug/src/ffi.rs:135-526`
-- Triggers: C ABI calls from Python/C#/Lua/JS SDKs
-- Responsibilities: `polyplug_runtime_create`, `polyplug_runtime_load_bundle`, `polyplug_runtime_find_by_contract`, etc.
-- Location: Required symbol in plugin binary
-- Triggers: Loader after dlopen/import
-- Responsibilities: Register vtables via `host_vtable.register_plugin`
-- Location: `crates/polyplugc/src/lib.rs:15-56`
-- Triggers: CLI `polyplugc generate --bundle bundle.toml --lang rust --out src/generated`
-- Responsibilities: Parse API, validate IR, generate host/guest bindings
-## Error Handling
-- `RuntimeError` as top-level enum with variants for `Loader`, `Registry`, `Graph`, `Allocator`, `HostContract`
-- Each variant has detailed context (bundle name, contract ID, version mismatch)
-- FFI functions store errors in per-runtime `last_error: Mutex<String>` buffer
-- All FFI entry points wrapped in `catch_unwind` to prevent panics crossing ABI
-- `LoaderError`: Init failures, missing symbols, version mismatches, VM-specific errors
-- `RegistryError`: Stale handles, contract collisions, duplicate providers
-- `GraphError`: Dependency cycles, unsatisfied capabilities
-- `HostContractError`: Duplicate/missing host contracts
-## Cross-Cutting Concerns
-- Manifest parsing with required fields (`id`, `name`, `runtime`, `file`)
-- Version compatibility checks with `Compatibility::Strict/Relaxed/Yolo` modes
-- Function count validation against manifest `function_count` entries
-- Bundle ID tampering detection via `HostContext.bundle_id` verification
-- Bundle ID enforcement prevents plugins from accessing undeclared dependencies
-- ABI version sentinel (`POLYPLUG_ABI_VERSION`) rejects mismatched plugins
-- Panic isolation via `catch_unwind` at every FFI boundary
-- Host allocator (`polyplug_host_alloc`, `polyplug_host_free`) for all cross-boundary memory
-- `Buffer` type owns memory via host allocator
-- `StringView` is non-owning borrow (caller responsible for lifetime)
-- Registry uses `RwLock` for registration (rare) and read guards for dispatch (common)
-- `ArcSwap` for atomic vtable swaps during hot-reload
-- `Mutex` for loader-internal library handles
-- TLS for init-phase bundle context (dependency enforcement)
-<!-- GSD:architecture-end -->
+**Use `filename.rs` for single-file modules. Use `filename/mod.rs` ONLY when the module has (or immediately needs) submodules inside the same folder.**
 
-<!-- GSD:workflow-start source:GSD defaults -->
-## GSD Workflow Enforcement
+```
+// CORRECT — single-file module (no children)
+src/
+├── registry.rs
+├── graph.rs
+└── error.rs
 
-Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.
+// CORRECT — multi-file module (has submodules)
+src/
+└── loader/
+    ├── mod.rs
+    ├── manifest.rs
+    └── scanner.rs
 
-Use these entry points:
-- `/gsd:quick` for small fixes, doc updates, and ad-hoc tasks
-- `/gsd:debug` for investigation and bug fixing
-- `/gsd:execute-phase` for planned phase work
+// FORBIDDEN — folder wrapper for a single file with no children
+src/
+├── registry/
+│   └── mod.rs   ← FORBIDDEN when registry has no submodules
+├── graph/
+│   └── mod.rs   ← FORBIDDEN when graph has no submodules
+└── error/
+    └── mod.rs   ← FORBIDDEN when error has no submodules
+```
 
-Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
-<!-- GSD:workflow-end -->
+**Rule:** if a `folder/mod.rs` has zero sibling `.rs` files and zero subdirectories inside the folder, collapse it to `folder.rs` and delete the empty directory.
 
+**FORBIDDEN module pattern — never use this:**
 
+```rust
+// FORBIDDEN — NEVER DO THIS
+pub mod loader {
+    include!("loader.rs");
+}
+```
 
-<!-- GSD:profile-start -->
-## Developer Profile
+### 2. Import Placement
 
-> Profile not yet configured. Run `/gsd:profile-user` to generate your developer profile.
-> This section is managed by `generate-claude-profile` -- do not edit manually.
-<!-- GSD:profile-end -->
+**`use` statements are ONLY allowed at the top of a file. Using `use` inside functions, structs, or impl blocks is FORBIDDEN.**
+
+```rust
+// CORRECT — use at file top only
+use std::collections::HashMap;
+use crate::registry::Registry;
+
+pub fn do_something() {
+    // no use statements here
+}
+
+// FORBIDDEN — use inside function
+pub fn do_something() {
+    use std::collections::HashMap; // FORBIDDEN
+}
+
+// FORBIDDEN — use inside impl
+impl MyStruct {
+    use crate::registry::Registry; // FORBIDDEN
+}
+```
+
+---
+
+### 3. Explicit Types
+
+**ALWAYS add explicit type annotations. Do NOT rely on compiler type inference except in the two allowed cases below.**
+
+```rust
+// FORBIDDEN — type is unclear
+let data = calculate_something();
+let result = process(input);
+let config = load_config();
+let items = collect_all();
+
+// CORRECT — type is explicit
+let data: ContractIR = calculate_something();
+let result: AbiError = process(input);
+let config: RuntimeConfig = load_config();
+let items: Vec<PluginDescriptor> = collect_all();
+```
+
+**The ONLY exceptions — obviously clear cases:**
+
+```rust
+// CORRECT — struct construction, type is the struct name itself
+let descriptor = PluginDescriptor { name: "decoder", version: "1.0" };
+
+// CORRECT — numeric casting, type is the cast target
+let len = raw_len as u32;
+```
+
+**Everything else requires an explicit type annotation. When in doubt, annotate.**
+
+---
+
+### 4. Error Handling
+
+**NEVER use `.unwrap()` in production code. Ever. No exceptions.**
+
+**`.expect()` is ONLY allowed in test code (`#[cfg(test)]` blocks or `tests/` directory). Even there, prefer proper error handling.**
+
+```rust
+// FORBIDDEN in production code
+let plugin = registry.get(id).unwrap();
+let file = File::open(path).unwrap();
+let value = map.get(&key).unwrap();
+
+// FORBIDDEN in production code
+let plugin = registry.get(id).expect("plugin must exist"); // FORBIDDEN outside tests
+
+// CORRECT — propagate with ?
+let plugin: GuestContractHandle = registry.get(id)?;
+
+// CORRECT — handle explicitly
+let plugin: GuestContractHandle = match registry.get(id) {
+    Some(p) => p,
+    None => return Err(RuntimeError::PluginNotFound { id }),
+};
+```
+
+**ALWAYS use proper Error types. Never use string errors in production code.**
+
+```rust
+// FORBIDDEN
+return Err("plugin not found".to_string());
+return Err(anyhow::anyhow!("something went wrong"));  // only if anyhow is approved
+
+// CORRECT — define and use proper error types
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeError {
+    #[error("plugin not found: contract_id={contract_id}")]
+    PluginNotFound { contract_id: u64 },
+
+    #[error("version mismatch: required={required}, found={found}")]
+    VersionMismatch { required: Version, found: Version },
+
+    #[error("dependency cycle detected involving: {plugin_name}")]
+    DependencyCycle { plugin_name: String },
+
+    #[error("bundle load failed: {path}")]
+    BundleLoadFailed { path: String, #[source] source: std::io::Error },
+}
+```
+
+**Every module that can fail must define or re-export its error type explicitly.**
+
+---
+
+### 5. No Implicit Behaviour
+
+**Never rely on implicit behaviour. Be explicit in all things.**
+
+- Always specify visibility (`pub`, `pub(crate)`, `pub(super)`, or private — never leave it ambiguous)
+- Always specify lifetimes when they are not trivially inferred by the borrow checker
+- Always use fully qualified paths when there is any ambiguity
+- Always specify integer literal types when the type is not declared on the binding
+
+```rust
+// FORBIDDEN — ambiguous integer literal
+let id = 42;
+
+// CORRECT
+let id: u64 = 42;
+
+// FORBIDDEN — ambiguous visibility
+fn helper() { }
+
+// CORRECT
+pub(crate) fn helper() { }
+```
+
+---
+
+### 6. Safety
+
+**All `unsafe` blocks must have a `// SAFETY:` comment explaining exactly why the unsafe operation is sound.**
+
+```rust
+// FORBIDDEN — unsafe without justification
+unsafe {
+    std::ptr::write(out_ptr, result);
+}
+
+// CORRECT
+// SAFETY: out_ptr is guaranteed non-null and properly aligned by the ABI contract.
+// The caller (host runtime) allocates the buffer before calling this function.
+// The buffer is sized to hold exactly one T as enforced by codegen.
+unsafe {
+    std::ptr::write(out_ptr, result);
+}
+```
+
+**Generated code may use unsafe for performance. All unsafe in generated code must be justified in the generator source that produces it, not in the generated output itself.**
+
+---
+
+### 7. ABI Stability
+
+**The core ABI is frozen. Once released at v1, no ABI-visible struct or function signature may change.**
+
+- Never add fields to `#[repr(C)]` structs that are part of the frozen ABI
+- Never change the order of fields in ABI structs
+- Never change function signatures in the core ABI
+- All new functionality goes through the extension system
+
+If you believe an ABI change is necessary, stop and raise it as a discussion. Do not proceed unilaterally.
+
+---
+
+### 8. Memory Rules
+
+**All memory crossing plugin boundaries must use the host allocator (`host_alloc` / `host_free`).**
+
+- A plugin must never free memory it did not allocate
+- Generated code must never introduce copies of cross-boundary data that are not in the host allocator
+- GC language bindings must never place cross-boundary data on the managed heap
+
+---
+
+### 9. String Rules
+
+**All strings at the ABI boundary are UTF-8 `StringView`. No exceptions.**
+
+- C# generated code must transcode UTF-16 → UTF-8 at the boundary
+- Python generated code must encode to UTF-8 bytes before crossing
+- Never pass a null-terminated C string across the ABI — always use `StringView` (ptr + len)
+
+---
+
+### 10. Code Generation Rules
+
+**Generated code is held to the same rules as hand-written code with one exception: `unsafe` is permitted freely in generated code when justified in the generator source.**
+
+- Generated files must have a header comment marking them as generated
+- Generated files must never be edited by hand
+- If a generated file needs to change, fix the generator
+
+```rust
+// THIS FILE IS AUTO-GENERATED BY polyplugc
+// DO NOT EDIT BY HAND
+// Re-generate with: polyplugc generate --bundle bundle.toml --lang rust --out src/generated
+```
+
+**All code generators MUST produce identical ABI mechanisms. No exceptions.**
+
+Every generator (rust, python, lua, csharp, cpp, js_deno, js_quickjs) must generate code that:
+
+1. **Uses the same `polyplug_init` signature:**
+   ```rust
+   // All generators must produce this signature (language-specific syntax):
+   fn polyplug_init(rt_ctx: *mut c_void, host: *const HostInterface, ctx: *const PluginContext) -> AbiError
+   ```
+
+2. **Uses the same registration mechanism:**
+   ```rust
+   // All generators must call register_plugin via the HostInterface:
+   (host.register_plugin)(rt_ctx, &descriptor, &vtable)
+   ```
+
+3. **Never uses global state or thread-locals in generated code.**
+
+**Why this matters:** Different registration mechanisms (e.g., divergent `HostInterface` field layouts or calling conventions) break the ABI contract and cause runtime failures. All plugins, regardless of language, must interact with the host through the exact same ABI path.
+
+**Verification:** When adding or modifying a generator, compare its output with `rust.rs` to ensure ABI parity.
+
+---
+
+### 11. Dependency Version Management
+
+**All dependency versions must be declared in the workspace `Cargo.toml`. Crates must never specify a version inline — use `{ workspace = true }` instead.**
+
+The workspace `Cargo.toml` owns the version. Each crate `Cargo.toml` owns the features. Never mix them up.
+
+```toml
+# CORRECT — workspace Cargo.toml (owns versions, optional base features)
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+tokio = "1"
+thiserror = "1"
+
+# CORRECT — crate Cargo.toml (inherits version, may add crate-specific features)
+[dependencies]
+serde = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+thiserror = { workspace = true }
+
+# FORBIDDEN — version declared in crate Cargo.toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }   # FORBIDDEN — version belongs in workspace
+tokio = "1"                                         # FORBIDDEN — version belongs in workspace
+```
+
+**Rules:**
+
+- The workspace `Cargo.toml` is the single source of truth for dependency versions
+- Crates use `{ workspace = true }` and may extend with `features = [...]` as needed
+- Never declare a version number in a crate-level `Cargo.toml`
+- Never add `version = ...` alongside `workspace = true` — that is redundant and forbidden
+- Optional dependencies must also use `{ workspace = true, optional = true }` — version still lives in workspace
+
+```toml
+# FORBIDDEN — version alongside workspace = true
+serde = { workspace = true, version = "1" }  # FORBIDDEN
+
+# CORRECT — optional dep still uses workspace for version
+serde = { workspace = true, optional = true }
+```
+
+---
+
+### 12. Runtime Isolation
+
+**No thread-locals or globals for Runtime. The Runtime must be fully encapsulated and MUST NOT rely on any static, global, or thread-local data.**
+
+This is CRITICAL and MUST NEVER be broken. The design goal is that multiple polyplug runtimes can coexist in the same process, each with its own isolated state.
+
+```rust
+// FORBIDDEN — global or thread-local state for runtime
+static GLOBAL_REGISTRY: OnceLock<Registry> = OnceLock::new();
+thread_local! {
+    static CURRENT_RUNTIME: RefCell<Option<*mut Runtime>> = RefCell::new(None);
+}
+
+// CORRECT — all state owned by the Runtime instance
+pub struct Runtime {
+    registry: Registry,
+    bundles: HashMap<u64, LoadedBundle>,
+    config: RuntimeConfig,
+    // ... all state is instance-owned, no globals
+}
+```
+
+**Why this matters:**
+- Multiple runtimes in the same process must be fully isolated
+- Each runtime owns its own Registry, loaded bundles, and configuration
+- No shared state between runtime instances
+- Enables use cases like: testing with parallel isolated runtimes, embedding multiple plugin systems, sandboxing
+
+**Verification:** When reviewing code, grep for:
+- `static` declarations that hold runtime state
+- `thread_local!` macros
+- `OnceLock`, `LazyLock`, `Lazy` for runtime data
+- Any pattern that shares state across Runtime instances
+
+### Known Limitations (External Runtime Constraints)
+
+**Python Loader**: The CPython interpreter can only be initialized **once per process**. The `polyplug_python` loader uses `static PYTHON_INIT: OnceLock<()>` to ensure single initialization. This means:
+- Multiple `Runtime` instances in the same process share the same Python interpreter
+- Python plugins from different runtimes can see each other's modules/state
+- For full isolation with Python, use separate processes
+
+**CLR / .NET Loader**: The .NET CLR can only be initialized **once per process**. The `polyplug_dotnet` loader uses `static CLR_CONTEXT: OnceCell<...>` to ensure single initialization. This means:
+- Multiple `Runtime` instances in the same process share the same CLR runtime
+- .NET assemblies from different runtimes share the same loader cache
+- For full isolation with .NET, use separate processes
+
+**Lua, JavaScript (QuickJS), and Native loaders**: Fully compliant with runtime isolation. Each bundle gets its own isolated VM.
+
+---
+
+## Project Structure
+
+```
+polyplug/
+├── AGENTS.md                        this file
+├── crates/
+│   ├── polyplug/                    Rust runtime core
+│   │   └── src/
+│   │       ├── lib.rs               crate root
+│   │       ├── abi.rs
+│   │       ├── error.rs
+│   │       ├── ffi.rs
+│   │       ├── graph.rs
+│   │       ├── registry.rs
+│   │       ├── reload.rs
+│   │       ├── runtime.rs
+│   │       ├── version.rs
+│   │       ├── allocator/           has submodule: tracking
+│   │       │   ├── mod.rs
+│   │       │   └── tracking.rs
+│   │       ├── extensions/          has submodule: trace
+│   │       │   ├── mod.rs
+│   │       │   └── trace.rs
+│   │       └── loader/              has submodules: manifest, scanner
+│   │           ├── mod.rs
+│   │           ├── manifest.rs
+│   │           └── scanner.rs
+│   └── polyplugc/                   CLI codegen tool
+│       └── src/
+│           ├── main.rs              binary entry point
+│           ├── error.rs
+│           ├── ir.rs
+│           ├── pack.rs
+│           ├── parser.rs
+│           └── generators/          has submodules: rust, cpp, csharp, python, lua, js_*
+│               ├── mod.rs
+│               ├── rust.rs
+│               ├── cpp.rs
+│               ├── csharp.rs
+│               ├── python.rs
+│               ├── lua.rs
+│               ├── js_deno.rs
+│               └── js_quickjs.rs
+├── sdks/
+│   ├── cpp/
+│   │   ├── host/
+│   │   └── guest/
+│   ├── csharp/
+│   │   ├── host/
+│   │   └── guest/
+│   ├── python/
+│   │   ├── host/
+│   │   └── guest/
+│   ├── lua/
+│   │   ├── host/
+│   │   └── guest/
+│   └── js/
+│       ├── host/
+│       └── guest/
+└── examples/
+
+---
+
+## Quick Reference — Forbidden vs Correct
+
+| Forbidden | Correct |
+|---|---|
+| `folder/mod.rs` with no submodules | `folder.rs` (flat file) |
+| `use` inside function/impl | `use` at file top only |
+| `include!()` module pattern | proper `mod` declarations |
+| `let x = foo()` (inferred) | `let x: MyType = foo()` |
+| `.unwrap()` anywhere | `?` operator or explicit match |
+| `.expect()` in production | proper error types + `?` |
+| `return Err("string")` | `return Err(MyError::Variant)` |
+| `unsafe { ... }` no comment | `// SAFETY: ...` before every unsafe block |
+| modifying ABI structs | new functionality via extensions only |
+| editing generated files | fix the generator, re-run polyplugc |
+| different ABI mechanisms per generator | identical `polyplug_init` + `register_plugin` across all generators |
+| global state / thread-locals in generated code | pass `rt_ctx` through all ABI calls |
+| global state / thread-locals for Runtime | all state owned by Runtime instance |
+| dependency version in crate `Cargo.toml` | version in workspace `Cargo.toml`, `{ workspace = true }` in crate |
+| `version = ...` alongside `workspace = true` | omit version in crate entirely — workspace owns it |
+| type aliases for "convenience" (`pub type OldName = NewName`) | use canonical names everywhere |
+
+---
+
+## Enforcement
+
+Every pull request must pass:
+
+1. `cargo clippy -- -D warnings` — zero warnings tolerated
+2. `cargo fmt --check` — formatting must be clean
+3. `cargo test` — all tests must pass
+4. Manual review against this AGENTS.md checklist
+
+A reviewer finding any violation of this document must reject the PR immediately, regardless of how minor the violation appears. Consistency is non-negotiable.
+
+---
+
+### 13. No Re-exports That Obscure Module Boundaries
+
+**NEVER use `pub use` to re-export items from another crate. Re-exports should only be used for:**
+- Re-exporting from the same crate (e.g., `pub use crate::module::Type`)
+- Creating a convenient facade for a module's own types
+
+**FORBIDDEN — re-exporting from another crate (even public APIs):**
+```rust
+// FORBIDDEN — polyplug_codegen re-exporting polyplug_abi's types
+pub use polyplug_abi::ir::SomeType;
+
+// FORBIDDEN — re-exporting from a dependency's public API to supply to another crate
+pub use polyplug_utils::{bundle_id, contract_id, fnv1a_64};
+
+// FORBIDDEN — re-exporting from a dependency's private module
+pub use some_dep::internal_module::Type;
+```
+
+**CORRECT — consumers import directly from the source crate:**
+```rust
+// CORRECT — polyplugc imports directly from polyplug_utils
+use polyplug_utils::{bundle_id, contract_id, fnv1a_64};
+
+// CORRECT — re-exporting from same crate
+pub use crate::ir::Version;
+```
+
+**Why this matters:**
+- Re-exports create confusion about where types/functions are actually defined
+- They create tight coupling between crates through the re-exporting crate
+- They make refactoring harder — changing the source requires updating all re-exports
+- They obscure the actual module boundaries and dependencies
+- **Most importantly:** If crate A re-exports from crate B, and crate C uses crate A, crate C gets crate B's types through crate A. This creates a dependency chain that makes it unclear where things come from.
+
+**Rule:** If crate C needs something from crate B, it must depend on crate B directly and import from crate B. Never use crate A as a "pass-through" for crate B's exports.
+
+---
+
+### 14. No Backward Compatibility Code
+
+**NEVER add backward compatibility code, deprecated aliases, or migration shims.**
+
+This codebase does NOT maintain backward compatibility. Breaking changes are intentional and expected.
+
+**FORBIDDEN:**
+```rust
+// FORBIDDEN — deprecated constants for "backward compatibility"
+#[deprecated(since = "0.2.0", note = "Use AbiErrorCode::Ok instead")]
+pub const ABI_OK: u32 = AbiErrorCode::Ok as u32;
+
+// FORBIDDEN — type aliases for "migration"
+pub type OldTypeName = NewTypeName;
+
+// FORBIDDEN — compatibility wrappers
+pub fn old_function_name() { new_function_name() }
+```
+
+**CORRECT:**
+```rust
+// CORRECT — just use the new type directly
+pub enum AbiErrorCode { Ok = 0, ... }
+
+// CORRECT — consumers update their code
+use polyplug_abi::AbiErrorCode;
+let code = AbiErrorCode::Ok;
+```
+
+**Why this matters:**
+- Backward compatibility code creates technical debt
+- It obscures the actual API
+- It encourages not updating code
+- This codebase explicitly does NOT guarantee backward compatibility
+
+**When making breaking changes:**
+1. Remove the old code completely
+2. Update all usages in the same PR
+3. Do NOT leave deprecated shims
+
+---
+
+### 15. Deprecated Re-exports Are FORBIDDEN
+
+**NEVER create deprecated re-exports or "convenience" re-exports from other crates.**
+
+**FORBIDDEN:**
+```rust
+// FORBIDDEN — deprecated re-exports
+//! Deprecated - use `polyplug_abi::runtime::Compatibility` directly.
+pub use polyplug_abi::runtime::Compatibility;
+
+// FORBIDDEN — "convenience" re-exports from dependencies
+pub use polyplug_abi::SomeType;  // Let users import directly
+```
+
+**CORRECT:**
+```rust
+// CORRECT — users import directly from the source crate
+use polyplug_abi::runtime::Compatibility;
+```
+
+**Why this matters:**
+- Re-exports create confusion about where types actually live
+- They create tight coupling between crates
+- They make refactoring harder
+- They encourage not updating imports
+
+---
+
+### 16. Type Aliases Are FORBIDDEN
+
+**NEVER create type aliases. No exceptions.**
+
+Type aliases obscure the actual type, create confusion, and make refactoring harder. Always use the real type directly.
+
+**FORBIDDEN:**
+```rust
+// FORBIDDEN — type aliases for "convenience"
+pub type Handle = GuestContractHandle;
+pub type Result<T> = std::result::Result<T, MyError>;
+pub type PluginError = crate::error::Error;
+
+// FORBIDDEN — type aliases for "migration" or "backward compatibility"
+pub type OldName = NewName;
+
+// FORBIDDEN — deprecated aliases
+#[deprecated(note = "Use NewName")]
+pub type OldName = NewName;
+
+// FORBIDDEN — even simple type aliases
+pub type MyResult<T> = Result<T, Error>;
+```
+
+**CORRECT:**
+```rust
+// CORRECT — use the actual type directly
+fn do_something() -> std::result::Result<(), MyError> { }
+
+// CORRECT — import the type directly if needed
+use crate::error::Error;
+fn other_thing() -> Result<(), Error> { }
+```
+
+**Why this matters:**
+- Type aliases hide the actual type, making code harder to understand
+- They create confusion about which name is "real"
+- They make global refactoring painful — must update all aliases
+- IDEs and tools show the alias, not the underlying type
+- This codebase does NOT maintain backward compatibility — use the canonical name
+
+---
+
+### 17. ABI_* Constants Are FORBIDDEN
+
+**NEVER use `ABI_OK`, `ABI_ERROR_*`, or any `ABI_` prefixed constants. Use `AbiErrorCode` enum instead.**
+
+The `AbiErrorCode` enum is the canonical way to represent ABI error codes across all languages. Using raw constants creates inconsistency and makes the codebase harder to maintain.
+
+**FORBIDDEN:**
+```rust
+// FORBIDDEN — use AbiErrorCode enum
+if err.code == ABI_OK { }
+if err.code == ABI_ERROR_GENERIC { }
+return ABI_ERROR_INVALID_POINTER;
+
+// FORBIDDEN — in all SDKs (Python, JS, Lua, C#, C++)
+if err.code == ABI_OK:  # Python
+if (err.code == ABI_OK) { ... }  // JavaScript
+if err.code == ABI_OK then  -- Lua
+if (err.Code == AbiConstants.ABI_OK)  // C#
+```
+
+**CORRECT:**
+```rust
+// CORRECT — use AbiErrorCode enum
+use polyplug_abi::AbiErrorCode;
+if err.code == AbiErrorCode::Ok as u32 { }
+if err.code == AbiErrorCode::Generic as u32 { }
+return AbiErrorCode::InvalidPointer as u32;
+
+// Python
+if err.code == AbiErrorCode.Ok:
+
+// JavaScript
+if (err.code === AbiErrorCode.Ok) { ... }
+
+// Lua
+if err.code == AbiErrorCode.Ok then
+
+// C#
+if (err.Code == (uint)AbiErrorCode.Ok)
+
+// C++
+if (err.code == AbiErrorCode_Ok)
+```
+
+**Why this matters:**
+- Consistent error handling across all languages
+- Type-safe enum instead of magic numbers
+- Easier to extend with new error codes
+- Generated code uses the canonical form
+- No confusion between constants and enums
+
+---
+
+### 18. Test Failures Must Be Fixed, Never Skipped
+
+**NEVER skip, ignore, or mark tests as `#[ignore]` to avoid fixing failures.**
+
+- If a test fails, find and fix the root cause
+- If a test is flaky, fix the race condition or timing issue
+- If a test crashes (SIGSEGV, panic, etc.), debug and fix the underlying bug
+- `#[ignore]` is ONLY acceptable for tests that require unavailable external resources (e.g., specific hardware, paid services)
+
+**FORBIDDEN:**
+```rust
+#[test]
+#[ignore = "this test is flaky"]  // FORBIDDEN — fix the flakiness instead
+fn test_something() { }
+
+#[test]
+#[ignore = "causes SIGSEGV"]  // FORBIDDEN — debug and fix the crash
+fn test_something_else() { }
+```
+
+**In CI workflows:**
+- Never use `--skip` to avoid failing tests
+- Never use `--ignore` to exclude failing tests
+- If a test fails in CI but passes locally, investigate the environmental difference
+
+**Why this matters:**
+- Skipped tests hide bugs that will bite users in production
+- A test failure is a bug report — treat it as such
+- Technical debt compounds: every skipped test makes the codebase less trustworthy
