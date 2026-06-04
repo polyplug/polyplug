@@ -1,11 +1,10 @@
 #include "generated/guest/init.hpp"
-#include <polyplug/helpers.hpp>
 #include <string>
 #include <sstream>
 
 namespace polyplug_plugin {
 
-class TransformerImpl : public DataTransformerPlugin {
+class TransformerImpl : public DataTransformerGuestContract {
 public:
     StringView transform(StringView input) override {
         std::string_view sv = polyplug::abi::strip_prefix(input, "DECODED:");
@@ -17,13 +16,13 @@ public:
             for (auto& c : name) c = ::toupper(c);
             std::ostringstream oss;
             oss << "TRANSFORMED:" << name << "|" << value << " (transformed)|" << (count + 1);
-            return polyplug::guest::alloc_string(oss.str());
+            return polyplug::abi::alloc_string(oss.str());
         }
-        return polyplug::guest::alloc_string("ERROR:invalid input format");
+        return polyplug::abi::alloc_string("ERROR:invalid input format");
     }
 };
 
-DataTransformerPlugin* create_transformer_impl() {
+DataTransformerGuestContract* create_transformer_impl() {
     return new TransformerImpl();
 }
 

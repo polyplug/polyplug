@@ -11,7 +11,7 @@ use libloading::os::unix::RTLD_GLOBAL;
 #[cfg(unix)]
 use libloading::os::unix::RTLD_LAZY;
 
-use polyplug::registry::runtime_store::RuntimeStore;
+use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
@@ -434,7 +434,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
 
 // --- Tests -------------------------------------------------------------------
 
-/// Test 1: error_return_with_message writes an AbiError { code=99, message="test error from plugin" }
+/// Test 1: error_return_with_message writes an AbiError { code=Generic, message="test error from plugin" }
 /// to the out pointer, and the message must be freed after reading.
 #[test]
 fn stress_error_code_and_message_received_correctly() {
@@ -470,8 +470,8 @@ fn stress_error_code_and_message_received_correctly() {
     // The actual error is written to *out.
     assert_eq!(
         out.code,
-        AbiErrorCode::from_u32(99),
-        "error code must be 99"
+        AbiErrorCode::Generic,
+        "error code must be Generic"
     );
     assert_eq!(out.message.len, 22_usize, "message length must be 22");
 
@@ -666,8 +666,8 @@ fn stress_error_message_lifetime_valid_during_read() {
     );
     assert_eq!(
         out.code,
-        AbiErrorCode::from_u32(99),
-        "error code must be 99"
+        AbiErrorCode::Generic,
+        "error code must be Generic"
     );
     assert_eq!(out.message.len, 22_usize, "message length must be 22");
 

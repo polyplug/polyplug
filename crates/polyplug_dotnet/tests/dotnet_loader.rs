@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tempfile::NamedTempFile;
 
@@ -44,7 +45,7 @@ fn polyplug_dll_path() -> PathBuf {
         .expect("CARGO_MANIFEST_DIR resolution failed")
 }
 
-fn test_runtime() -> Runtime {
+fn test_runtime() -> Arc<Runtime> {
     RuntimeBuilder::new()
         .build()
         .expect("failed to build test runtime")
@@ -75,7 +76,7 @@ fn tfm_reader_nonexistent_file_returns_init_failed() {
     let result: Result<String, RuntimeError> =
         read_target_framework(Path::new("/nonexistent/path/that/does/not/exist.dll"));
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
                 error.contains("assembly") || error.contains("PE") || error.contains("not found"),
                 "error: {error}"
@@ -90,7 +91,7 @@ fn tfm_reader_empty_file_returns_init_failed() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"");
     let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
                 error.contains("assembly") || error.contains("PE"),
                 "error: {error}"
@@ -105,7 +106,7 @@ fn tfm_reader_random_bytes_returns_init_failed() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"\x00\x01\x02\x03this is not a valid PE binary");
     let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
                 error.contains("assembly") || error.contains("PE"),
                 "error: {error}"
@@ -122,7 +123,7 @@ fn tfm_reader_elf_magic_returns_init_failed() {
         temp_file_with_bytes(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00");
     let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
                 error.contains("assembly") || error.contains("PE"),
                 "error: {error}"
@@ -224,12 +225,12 @@ fn dotnet_loader_runtime_name_is_dotnet() {
 #[test]
 fn load_nonexistent_assembly_returns_init_failed() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
-    let runtime: Runtime = test_runtime();
+    let runtime: Arc<Runtime> = test_runtime();
     let path: PathBuf = PathBuf::from("/does/not/exist/Plugin.dll");
     let manifest: ManifestData = make_manifest(&path, "nonexistent");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
                 error.contains("assembly") || error.contains("not found"),
                 "error: {error}"
@@ -243,11 +244,11 @@ fn load_nonexistent_assembly_returns_init_failed() {
 fn load_invalid_pe_file_returns_init_failed() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"not a valid PE binary at all");
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
-    let runtime: Runtime = test_runtime();
+    let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(tmp.path(), "invalid_pe");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
                 error.contains("assembly") || error.contains("PE"),
                 "error: {error}"
@@ -265,7 +266,7 @@ fn load_with_invalid_hostfxr_path_and_missing_dll_returns_init_failed() {
         hostfxr: HostfxrLocation::Path(PathBuf::from("/nonexistent/libhostfxr.so")),
     };
     let loader: DotnetLoader = DotnetLoader::new(cfg);
-    let runtime: Runtime = test_runtime();
+    let runtime: Arc<Runtime> = test_runtime();
     let path: PathBuf = PathBuf::from("/no/such/Plugin.dll");
     let manifest: ManifestData = make_manifest(&path, "missing_dll");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
@@ -294,11 +295,11 @@ fn load_dll_net10_against_net6_requirement_returns_init_failed() {
         hostfxr: HostfxrLocation::Auto,
     };
     let loader: DotnetLoader = DotnetLoader::new(cfg);
-    let runtime: Runtime = test_runtime();
+    let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
                 error.contains("version") || error.contains("framework"),
                 "error: {error}"
@@ -316,7 +317,7 @@ fn load_dll_with_matching_version_passes_tfm_check() {
         "Polyplug.Host.dll not found — build sdks/csharp/host first"
     );
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
-    let runtime: Runtime = test_runtime();
+    let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
@@ -333,7 +334,7 @@ fn load_dll_with_matching_version_passes_tfm_check() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn load_with_bad_hostfxr_path_and_valid_dll_returns_init_failed() {
+fn load_with_bad_hostfxr_path_and_valid_dll_is_rejected() {
     let dll: PathBuf = polyplug_dll_path();
     assert!(
         dll.exists(),
@@ -344,9 +345,22 @@ fn load_with_bad_hostfxr_path_and_valid_dll_returns_init_failed() {
         hostfxr: HostfxrLocation::Path(PathBuf::from("/nonexistent/libhostfxr.so")),
     };
     let loader: DotnetLoader = DotnetLoader::new(cfg);
-    let runtime: Runtime = test_runtime();
+    let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
+    // CLR_CONTEXT is a process-wide OnceCell (see "Known Limitations" in CLAUDE.md):
+    // the CLR is initialized exactly once per process by whichever load runs first.
+    // This load can therefore fail at one of two stages, both of which are correct
+    // loader rejections:
+    //   1. If this is the first .NET load in the process, the bad hostfxr path is
+    //      honored and CLR init fails → InitFailed.
+    //   2. If the CLR was already initialized (by an earlier test in the same binary)
+    //      the bad path is ignored — the existing context is reused — and the load
+    //      reaches symbol resolution, where Polyplug.Host.dll is correctly rejected
+    //      because it is a host SDK assembly with no guest `PolyplugInit` entry point
+    //      → InitSymbolMissing.
+    // The contract under test is that the loader rejects the bundle, not which of the
+    // two ordering-dependent variants it produces.
     match result {
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
             assert!(
@@ -354,10 +368,18 @@ fn load_with_bad_hostfxr_path_and_valid_dll_returns_init_failed() {
                     || error.contains("host")
                     || bundle.contains("Polyplug")
                     || error.contains("init"),
-                "Error should mention the issue, got bundle={bundle}, error={error}"
+                "InitFailed should mention the issue, got bundle={bundle}, error={error}"
             );
         }
-        other => panic!("expected InitFailed, got {other:?}"),
+        Err(RuntimeError::Loader(LoaderError::InitSymbolMissing { bundle })) => {
+            assert!(
+                bundle.contains("Polyplug"),
+                "InitSymbolMissing should reference the assembly, got bundle={bundle}"
+            );
+        }
+        other => {
+            panic!("expected loader rejection (InitFailed or InitSymbolMissing), got {other:?}")
+        }
     }
 }
 
@@ -373,7 +395,7 @@ fn full_clr_init_reaches_init_symbol_check() {
         "Polyplug.Host.dll not found — build sdks/csharp/host first"
     );
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
-    let runtime: Runtime = test_runtime();
+    let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(

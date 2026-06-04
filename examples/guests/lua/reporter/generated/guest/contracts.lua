@@ -7,38 +7,42 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
--- Function pointer type for reporter (data.Reporter@1)
+-- Guest contract: reporter (data.Reporter@1)
 --   report(input: StringView) -> StringView
-local REPORTER_INTERFACE = ffi.new("GuestContractInterface")
-REPORTER_INTERFACE.contract_id = 0x76BB4643A9F5AD68
-REPORTER_INTERFACE.contract_version.major = 1
-REPORTER_INTERFACE.contract_version.minor = 0
-REPORTER_INTERFACE.contract_version.patch = 0
-REPORTER_INTERFACE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
--- Default create_instance stub for reporter - returns null instance.
-function REPORTER_create_instance_stub(host, args)
-    -- Default stub returns null instance - users override for stateful plugins.
-    return ffi.new("GuestContractInstance", nil)
-end
-REPORTER_INTERFACE.create_instance = REPORTER_create_instance_stub
--- Default destroy_instance stub for reporter - no-op.
-function REPORTER_destroy_instance_stub(host, instance)
-    -- Default stub is no-op - users override for cleanup before hot-reload.
-end
-REPORTER_INTERFACE.destroy_instance = REPORTER_destroy_instance_stub
-
-local REPORTER_DESCRIPTOR = ffi.new("PluginDescriptor")
-REPORTER_DESCRIPTOR.name = polyplug_guest.string_view("reporter")
-REPORTER_DESCRIPTOR.contract_name = polyplug_guest.string_view("data.Reporter@1")
-REPORTER_DESCRIPTOR.version.major = 1
-REPORTER_DESCRIPTOR.version.minor = 0
-REPORTER_DESCRIPTOR.version.patch = 0
-
-
+local REPORTER_IMPLS = {}
 function M.set_reporter_impl(report_fn)
-    local functions = ffi.new("PluginFunction[1]")
-    functions[0] = ffi.cast("uintptr_t", report_fn)
-    REPORTER_INTERFACE.dispatch.native.function_count = 1
-    REPORTER_INTERFACE.dispatch.native.functions = functions
+    REPORTER_IMPLS[0] = report_fn
 end
+function M._register_REPORTER()
+    local functions = {}
+    functions[0] = function(args_ptr, out_ptr)
+        local impl = REPORTER_IMPLS[0]
+        if impl == nil then return end
+        local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
+        local result = impl(args_sv[0])
+        if out_ptr ~= 0 and result ~= nil then
+            local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
+            out_sv[0] = result
+        end
+    end
+    _G._polyplug_handlers = _G._polyplug_handlers or {}
+    if _G._polyplug_handlers.contract_name == nil then
+        _G._polyplug_handlers.contract_name = "data.Reporter"
+        _G._polyplug_handlers.contract_version = 1
+        _G._polyplug_handlers.plugin_name = "reporter"
+        _G._polyplug_handlers.functions = functions
+    end
+end
+
+
+-- Registration entry point called by the LuaLoader.
+function polyplug_init(host_ptr, ctx_ptr)
+    if host_ptr == nil or ctx_ptr == nil then
+        return polyplug_guest.AbiErrorCode.Generic
+    end
+    polyplug_guest.store_host_interface(host_ptr)
+    M._register_REPORTER()
+    return polyplug_guest.AbiErrorCode.Ok
+end
+
 return M

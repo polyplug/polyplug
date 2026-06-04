@@ -48,13 +48,13 @@ fn main() {
         "libpolyplug.so"
     };
 
-    // POLYPLUG_SO — main polyplug library (required for deno test)
+    // POLYPLUG_SO — main polyplug library (required for deno test).
+    // The path is deterministic from target dir + profile + platform filename.
+    // Always emit the computed path; consumers check existence at runtime.
+    // Gating on `.exists()` here is racy: this build script may run before
+    // the `polyplug` cdylib is built, which would cache an empty value forever.
     let polyplug_so: PathBuf = target_dir.join(profile).join(polyplug_lib_filename);
-    if polyplug_so.exists() {
-        println!("cargo:rustc-env=POLYPLUG_SO={}", polyplug_so.display());
-    } else {
-        println!("cargo:rustc-env=POLYPLUG_SO=");
-    }
+    println!("cargo:rustc-env=POLYPLUG_SO={}", polyplug_so.display());
 
     // Platform-specific shared library filename for test_plugin
     let test_plugin_filename: &str = if cfg!(target_os = "macos") {
@@ -65,16 +65,13 @@ fn main() {
         "libtest_plugin.so"
     };
 
-    // TEST_PLUGIN_SO — native Rust test plugin (built by crates/polyplug/build.rs)
+    // TEST_PLUGIN_SO — native Rust test plugin (built by crates/polyplug/build.rs).
+    // Path is deterministic; always emit it, consumers check existence at runtime.
     let test_plugin_so: PathBuf = fixtures_dir.join(test_plugin_filename);
-    if test_plugin_so.exists() {
-        println!(
-            "cargo:rustc-env=TEST_PLUGIN_SO={}",
-            test_plugin_so.display()
-        );
-    } else {
-        println!("cargo:rustc-env=TEST_PLUGIN_SO=");
-    }
+    println!(
+        "cargo:rustc-env=TEST_PLUGIN_SO={}",
+        test_plugin_so.display()
+    );
 
     // TEST_PLUGIN_DIR — directory containing manifest.toml + .so for the native test plugin
     let test_plugin_dir: PathBuf = fixtures_dir.join("test_plugin_dir");
@@ -89,12 +86,11 @@ fn main() {
     } else {
         "libtest_plugin_cpp.so"
     };
+    // Path is deterministic; always emit it. The C++ plugin is only built when
+    // g++ is available, so consumers check existence at runtime and skip cleanly
+    // when the artifact is genuinely absent.
     let cpp_so: PathBuf = fixtures_dir.join(cpp_so_filename);
-    if cpp_so.exists() {
-        println!("cargo:rustc-env=TEST_PLUGIN_CPP_SO={}", cpp_so.display());
-    } else {
-        println!("cargo:rustc-env=TEST_PLUGIN_CPP_SO=");
-    }
+    println!("cargo:rustc-env=TEST_PLUGIN_CPP_SO={}", cpp_so.display());
 
     // TEST_CSHARP_PLUGIN_DLL — C# plugin (built by crates/polyplug/build.rs via dotnet)
     let csharp_dll: PathBuf =
@@ -160,14 +156,11 @@ fn main() {
     let reload_v1_so: PathBuf = fixtures_dir
         .join("reload_plugin_v1")
         .join(reload_so_filename);
-    if reload_v1_so.exists() {
-        println!(
-            "cargo:rustc-env=RELOAD_PLUGIN_V1_SO={}",
-            reload_v1_so.display()
-        );
-    } else {
-        println!("cargo:rustc-env=RELOAD_PLUGIN_V1_SO=");
-    }
+    // Path is deterministic; always emit it, consumers check existence at runtime.
+    println!(
+        "cargo:rustc-env=RELOAD_PLUGIN_V1_SO={}",
+        reload_v1_so.display()
+    );
 
     let reload_v2_so_filename: &str = if cfg!(target_os = "macos") {
         "libreload_plugin_v2.dylib"
@@ -177,14 +170,11 @@ fn main() {
     let reload_v2_so: PathBuf = fixtures_dir
         .join("reload_plugin_v2")
         .join(reload_v2_so_filename);
-    if reload_v2_so.exists() {
-        println!(
-            "cargo:rustc-env=RELOAD_PLUGIN_V2_SO={}",
-            reload_v2_so.display()
-        );
-    } else {
-        println!("cargo:rustc-env=RELOAD_PLUGIN_V2_SO=");
-    }
+    // Path is deterministic; always emit it, consumers check existence at runtime.
+    println!(
+        "cargo:rustc-env=RELOAD_PLUGIN_V2_SO={}",
+        reload_v2_so.display()
+    );
 
     // DEPENDER_PLUGIN_DIR — depender test plugin directory
     println!(
@@ -201,16 +191,13 @@ fn main() {
         .join("logger")
         .join("plugins");
 
-    // HOST_CONTRACT_RUST_PLUGIN — Rust worker plugin with host contract
+    // HOST_CONTRACT_RUST_PLUGIN — Rust worker plugin with host contract.
+    // Path is deterministic; always emit it, consumers check existence at runtime.
     let rust_worker_dir: PathBuf = host_contracts_dir.join("rust_worker");
-    if rust_worker_dir.join("manifest.toml").exists() {
-        println!(
-            "cargo:rustc-env=HOST_CONTRACT_RUST_PLUGIN={}",
-            rust_worker_dir.display()
-        );
-    } else {
-        println!("cargo:rustc-env=HOST_CONTRACT_RUST_PLUGIN=");
-    }
+    println!(
+        "cargo:rustc-env=HOST_CONTRACT_RUST_PLUGIN={}",
+        rust_worker_dir.display()
+    );
 
     // HOST_CONTRACT_CPP_PLUGIN — C++ worker plugin with host contract
     let cpp_worker_dir: PathBuf = host_contracts_dir.join("cpp_worker");
@@ -259,25 +246,19 @@ fn main() {
         println!("cargo:rustc-env=HOST_CONTRACT_PYTHON_PLUGIN=PYTHON_NOT_AVAILABLE");
     }
 
-    // HOST_CONTRACT_LUA_PLUGIN — Lua worker plugin with host contract
+    // HOST_CONTRACT_LUA_PLUGIN — Lua worker plugin with host contract.
+    // Path is deterministic; always emit it, consumers check existence at runtime.
     let lua_worker_dir: PathBuf = host_contracts_dir.join("lua_worker");
-    if lua_worker_dir.join("manifest.toml").exists() {
-        println!(
-            "cargo:rustc-env=HOST_CONTRACT_LUA_PLUGIN={}",
-            lua_worker_dir.display()
-        );
-    } else {
-        println!("cargo:rustc-env=HOST_CONTRACT_LUA_PLUGIN=");
-    }
+    println!(
+        "cargo:rustc-env=HOST_CONTRACT_LUA_PLUGIN={}",
+        lua_worker_dir.display()
+    );
 
-    // HOST_CONTRACT_JS_PLUGIN — JavaScript worker plugin with host contract
+    // HOST_CONTRACT_JS_PLUGIN — JavaScript worker plugin with host contract.
+    // Path is deterministic; always emit it, consumers check existence at runtime.
     let js_worker_dir: PathBuf = host_contracts_dir.join("js_worker");
-    if js_worker_dir.join("manifest.toml").exists() {
-        println!(
-            "cargo:rustc-env=HOST_CONTRACT_JS_PLUGIN={}",
-            js_worker_dir.display()
-        );
-    } else {
-        println!("cargo:rustc-env=HOST_CONTRACT_JS_PLUGIN=");
-    }
+    println!(
+        "cargo:rustc-env=HOST_CONTRACT_JS_PLUGIN={}",
+        js_worker_dir.display()
+    );
 }

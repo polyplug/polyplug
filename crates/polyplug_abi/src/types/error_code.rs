@@ -52,11 +52,17 @@ impl core::fmt::Display for AbiErrorCode {
 }
 
 impl AbiErrorCode {
-    /// Convert from a raw u32 error code.
+    /// Convert from a raw u32 error code arriving across the C ABI.
     ///
-    /// For known runtime codes (0-255), returns the corresponding enum variant.
-    /// For user-defined codes (256+), the value is preserved but the display
-    /// will show the numeric value.
+    /// Plugins are untrusted: any `u32` bit pattern can reach this function,
+    /// including values that are not declared discriminants of this frozen enum.
+    /// The conversion is therefore TOTAL and SAFE.
+    ///
+    /// Known runtime codes (0-8, 100-102) map to their corresponding variant.
+    /// Every other value — including plugin-defined codes (256+) and any
+    /// hostile/garbage value — maps to [`AbiErrorCode::Generic`], the
+    /// catch-all for an unspecified failure. No `unsafe`, no transmute: an
+    /// arbitrary `u32` is never reinterpreted as an enum discriminant.
     #[inline]
     pub const fn from_u32(code: u32) -> Self {
         match code {
@@ -72,11 +78,7 @@ impl AbiErrorCode {
             100 => AbiErrorCode::HostContractNotFound,
             101 => AbiErrorCode::HostContractVersionMismatch,
             102 => AbiErrorCode::HostContractCallFailed,
-            other => {
-                // SAFETY: AbiErrorCode is #[repr(u32)], so any u32 value has a valid
-                // bit representation. Unknown codes are preserved for plugin-defined errors.
-                unsafe { core::mem::transmute::<u32, AbiErrorCode>(other) }
-            }
+            _ => AbiErrorCode::Generic,
         }
     }
 }
@@ -84,5 +86,29 @@ impl AbiErrorCode {
 impl From<u32> for AbiErrorCode {
     fn from(code: u32) -> Self {
         Self::from_u32(code)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::types::error_code::AbiErrorCode;
+
+    #[test]
+    fn from_u32_maps_known_codes() {
+        assert_eq!(AbiErrorCode::from_u32(0), AbiErrorCode::Ok);
+        assert_eq!(AbiErrorCode::from_u32(8), AbiErrorCode::InvalidPointer);
+        assert_eq!(
+            AbiErrorCode::from_u32(102),
+            AbiErrorCode::HostContractCallFailed
+        );
+    }
+
+    #[test]
+    fn from_u32_unknown_codes_map_to_generic() {
+        // Unknown / plugin-defined / hostile codes never become invalid enum
+        // values; they collapse to the Generic catch-all.
+        assert_eq!(AbiErrorCode::from_u32(99), AbiErrorCode::Generic);
+        assert_eq!(AbiErrorCode::from_u32(256), AbiErrorCode::Generic);
+        assert_eq!(AbiErrorCode::from_u32(u32::MAX), AbiErrorCode::Generic);
     }
 }

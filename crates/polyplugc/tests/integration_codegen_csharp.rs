@@ -59,7 +59,7 @@ fn test_generate_csharp_files_exist() {
     let expected_files: &[&str] = &[
         "guest/Types.cs",
         "guest/Contracts.cs",
-        "guest/Vtables.cs",
+        "guest/Interfaces.cs",
         "guest/Init.cs",
         "guest/BundleConstants.cs",
         "manifest.toml",

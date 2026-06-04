@@ -5,7 +5,7 @@ from generated.guest.contracts import (
     polyplug_init,
 )
 from polyplug_guest import alloc_string
-from polyplug_abi.helpers import strip_prefix, split
+from polyplug_abi import strip_prefix, split
 
 
 class ValidatorImpl(VALIDATORPipelineValidatorPlugin):

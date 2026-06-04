@@ -9,21 +9,6 @@ use core::mem::align_of;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
 
-// ─── FNV-1a hash (compile-time constant for "memory.test@1") ─────────────────
-
-const fn fnv1a_64_const(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325_u64;
-    let mut i: usize = 0;
-    while i < bytes.len() {
-        hash ^= bytes[i] as u64;
-        hash = hash.wrapping_mul(0x00000100000001b3_u64);
-        i += 1;
-    }
-    hash
-}
-
-const MEMORY_TEST_CONTRACT_ID: u64 = fnv1a_64_const(b"memory.test@1");
-
 // ─── memory.test contract argument/result types ───────────────────────────────
 
 /// Arguments to `memory_fill_preallocated_buffer` (fn 0).
@@ -241,23 +226,27 @@ static MEMORY_TEST_FNS: [FnPtr; 4] = [
     FnPtr(memory_zero_length_roundtrip as *const ()),
 ];
 
-static MEMORY_TEST_INTERFACE: GuestContractInterface = GuestContractInterface {
-    contract_id: GuestContractId::from_u64(MEMORY_TEST_CONTRACT_ID),
-    contract_version: Version {
-        major: 1,
-        minor: 0,
-        patch: 0,
-    },
-    dispatch_type: DispatchType::Native,
-    create_instance: create_instance_stub,
-    destroy_instance: destroy_instance_stub,
-    dispatch: DispatchMechanisms {
-        native: NativeDispatch {
-            function_count: 4,
-            functions: MEMORY_TEST_FNS.as_ptr() as *const *const (),
+/// Build the memory.test interface with the canonical contract ID computed at
+/// runtime via `GuestContractId::new`, keeping it scheme-proof (no baked hash).
+fn memory_test_interface() -> GuestContractInterface {
+    GuestContractInterface {
+        contract_id: GuestContractId::new("memory.test", 1),
+        contract_version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
         },
-    },
-};
+        dispatch_type: DispatchType::Native,
+        create_instance: create_instance_stub,
+        destroy_instance: destroy_instance_stub,
+        dispatch: DispatchMechanisms {
+            native: NativeDispatch {
+                function_count: 4,
+                functions: MEMORY_TEST_FNS.as_ptr() as *const *const (),
+            },
+        },
+    }
+}
 
 static MEMORY_TEST_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
     name: StringView {
@@ -309,13 +298,17 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: host_abi is non-null and provided by the host runtime per ABI contract.
     let host: &HostInterface = unsafe { &*host_abi };
 
+    // The host copies the interface during this synchronous call, so a local
+    // value (carrying the runtime-computed contract ID) is sufficient.
+    let interface: GuestContractInterface = memory_test_interface();
+
     // SAFETY: register_contract is a valid function pointer set by the host.
-    // MEMORY_TEST_DESCRIPTOR and MEMORY_TEST_INTERFACE are 'static.
+    // MEMORY_TEST_DESCRIPTOR is 'static; `interface` outlives the synchronous call.
     unsafe {
         (host.register_contract)(
             host_abi,
             &MEMORY_TEST_DESCRIPTOR as *const PluginDescriptor,
-            &MEMORY_TEST_INTERFACE as *const GuestContractInterface,
+            &interface as *const GuestContractInterface,
         )
     }
 }

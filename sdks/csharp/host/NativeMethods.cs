@@ -14,20 +14,16 @@ internal static partial class NativeMethods
     // ─── FFI Entry Points (18-02: Only 2 exports) ─────────────────────────────────
 
     /// <summary>
-    /// Creates a new runtime instance with default configuration.
+    /// Creates a new runtime instance.
+    /// Pass a pointer to a <c>RuntimeConfig</c> struct to configure compatibility,
+    /// hot-reload, and the reload callback, or <c>nint.Zero</c> to use defaults.
+    /// The native side reads the config during the call; the caller may free it
+    /// once the call returns.
     /// Returns a HostInterface pointer that provides all runtime operations.
     /// </summary>
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_create")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint PolyplugRuntimeCreate();
-
-    /// <summary>
-    /// Creates a new runtime instance with the specified options.
-    /// Returns a HostInterface pointer that provides all runtime operations.
-    /// </summary>
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_create_with_options")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint PolyplugRuntimeCreateWithOptions(nint options);
+    internal static partial nint PolyplugRuntimeCreate(nint config);
 
     /// <summary>
     /// Destroys a runtime instance.
@@ -36,9 +32,4 @@ internal static partial class NativeMethods
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_destroy")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void PolyplugRuntimeDestroy(nint host);
-
-    // Hot-reload configuration (must be called before runtime creation)
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_on_reload")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial uint PolyplugRuntimeOnReload(nint callback);
 }

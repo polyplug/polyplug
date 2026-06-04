@@ -10,6 +10,7 @@
 
 #![allow(clippy::expect_used)]
 
+use core::ffi::c_void;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
@@ -22,7 +23,6 @@ use polyplug_abi::HostInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_utils::BundleId;
-use std::ffi::c_void;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -122,14 +122,14 @@ use polyplug_guest::HostInterface;
 use polyplug_guest::BundleInitContext;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
-use guest::contracts::TestAddPlugin;
+use guest::contracts::TestAddGuestContract;
 use guest::types::AddArgs;
 use guest::interfaces::TEST_ADDER_INTERFACE;
 use guest::interfaces::set_test_adder_impl;
 
 struct MyPlugin;
 
-impl TestAddPlugin for MyPlugin {
+impl TestAddGuestContract for MyPlugin {
     fn add(&self, args: &AddArgs) -> Result<u32, GuestError> {
         Ok(args.a.wrapping_add(args.b))
     }
@@ -475,6 +475,8 @@ fn smoke_rust_codegen_dispatch() {
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // Get function_count from the native dispatch structure
+    // SAFETY: interface is a valid GuestContractInterface with Native dispatch;
+    // reading the native union variant is sound for this contract.
     let function_count: u32 = unsafe { interface.dispatch.native.function_count };
     assert_eq!(
         function_count, 4_u32,

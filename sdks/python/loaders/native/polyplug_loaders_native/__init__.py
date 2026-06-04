@@ -3,7 +3,9 @@
 import ctypes
 from polyplug.runtime import Runtime
 
-_lib = None
+_RUNTIME_NAME: str = "native"
+
+_lib: ctypes.CDLL | None = None
 
 
 def _get_lib() -> ctypes.CDLL:
@@ -20,32 +22,19 @@ class _NativeConfig(ctypes.Structure):
 
 
 def register_native_loader(runtime: Runtime) -> None:
-    """Register the native (Rust/C++) loader with the runtime."""
-    lib = _get_lib()
+    """Register the native (Rust/C++) loader with the runtime.
+
+    Creates the loader via the loader cdylib's ``polyplug_native_loader_create``
+    export and registers it through the canonical ``HostInterface.register_loader``
+    function-pointer path.
+    """
+    lib: ctypes.CDLL = _get_lib()
     cfg = _NativeConfig(0)
-    loader_ptr = lib.polyplug_native_loader_create(ctypes.byref(cfg))
+    loader_ptr: int = lib.polyplug_native_loader_create(ctypes.byref(cfg))
     if not loader_ptr:
         raise RuntimeError("polyplug: native loader create failed")
 
-    backend = runtime._backend
-    if hasattr(backend, "ffi"):
-        ffi = backend.ffi
-        err = backend.lib.polyplug_runtime_register_loader(
-            ffi.cast("void*", runtime._runtime), ffi.cast("void*", loader_ptr)
-        )
-    else:
-        polyplug_lib = backend.lib
-        polyplug_lib.polyplug_runtime_register_loader.restype = ctypes.c_uint32
-        polyplug_lib.polyplug_runtime_register_loader.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-        ]
-        err = polyplug_lib.polyplug_runtime_register_loader(
-            runtime._runtime, loader_ptr
-        )
-
-    if err != 0:
-        raise RuntimeError(f"polyplug: native loader register failed: {err}")
+    runtime.register_loader(_RUNTIME_NAME, loader_ptr)
 
 
 __all__ = ["register_native_loader"]

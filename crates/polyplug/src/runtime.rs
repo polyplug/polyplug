@@ -32,11 +32,10 @@ use crate::error::LoaderError;
 use crate::error::RegistryError;
 use crate::error::RuntimeError;
 use crate::loader::BundleLoader;
-use crate::loader::LoadedBundle;
 use crate::loader::ManifestData;
 use crate::loader::ManifestDependency;
-use crate::registry::RuntimeStore;
 pub use crate::runtime_builder::RuntimeBuilder;
+use crate::runtime_store::RuntimeStore;
 
 // ─── TLS for Init Phase Bundle ID ─────────────────────────────────────────────
 
@@ -83,8 +82,6 @@ pub(crate) struct LoadOptions {
 /// The runtime instance.
 pub struct Runtime {
     pub(crate) registry: Arc<RuntimeStore>,
-    /// Loaded bundles, never dropped.
-    pub(crate) bundles: Vec<LoadedBundle>,
     /// The static HostInterface given to plugins. Must be 'static.
     pub(crate) host_abi: &'static HostInterface,
     /// All register_guest_contracted loaders, keyed by runtime_name. Immutable after build().
@@ -255,44 +252,15 @@ impl Runtime {
 
     /// Get the HostInterface pointer for passing to guest contracts.
     ///
-    /// Returns a HostInterface with the runtime pointer set.
+    /// Returns the runtime's `'static` HostInterface, whose `runtime` field was
+    /// patched once in `RuntimeBuilder::build` to point at this Runtime.
     /// The runtime pointer can be extracted via `(*host_interface).runtime`.
     ///
     /// # Safety
     /// The returned pointer is valid for the lifetime of the Runtime.
-    /// The HostInterface is leaked and lives until the Runtime is dropped.
     #[inline(always)]
     pub fn as_context_ptr(&self) -> *const HostInterface {
-        // Create a HostInterface with runtime pointer set and leak it.
-        // SAFETY: The pointer is used by guest code and lives for the process lifetime.
-        // This is a small leak (72 bytes per call) but necessary for correctness.
-        // GuestContractInterface functions receive `host: *const c_void` which is
-        // actually this HostInterface pointer.
-        let host_interface: Box<HostInterface> = Box::new(HostInterface {
-            runtime: self as *const Runtime as *mut core::ffi::c_void,
-            register_contract: host_register_contract,
-            alloc: host_alloc,
-            free: host_free,
-            find_guest_contract: host_find_guest_contract,
-            find_all_guest_contracts: host_find_all_guest_contracts,
-            resolve_guest_contract: host_resolve_guest_contract,
-            call_guest_method: host_call_method,
-            get_host_contract: host_get_host_contract,
-            resolve_host_contract_interface: host_resolve_host_contract_interface,
-            list_bundles: host_list_bundles,
-            get_dependencies: host_get_dependencies,
-            // Host operations (implemented in 18-02)
-            load_bundle: host_load_bundle,
-            reload_bundle: host_reload_bundle,
-            register_host_contract: host_register_host_contract,
-            register_loader: host_register_loader,
-            get_last_error: host_get_last_error,
-            get_error_len: host_get_error_len,
-        });
-        // SAFETY: We leak this HostInterface for the lifetime of the runtime.
-        // This is acceptable because the pointer is used by guest contract instances
-        // which are destroyed before the Runtime.
-        Box::into_raw(host_interface)
+        self.host_abi as *const HostInterface
     }
 
     #[inline(always)]
@@ -470,13 +438,31 @@ impl Runtime {
                 })
             })?;
 
+        // Declare this bundle's dependency contract_ids in the registry BEFORE
+        // calling the loader. The loader runs `polyplug_init`, during which the
+        // plugin may resolve its declared dependencies via `find_guest_contract`.
+        // Dependency enforcement (host_find_guest_contract) consults this set, so
+        // it must be populated before init runs — otherwise even declared lookups
+        // would be denied. See TRUST_MODEL.md §3/§4.
+        let declared_contract_ids: Vec<GuestContractId> = manifest
+            .dependencies
+            .iter()
+            .map(|dep: &crate::loader::RawManifestDependency| dep.contract_id)
+            .collect();
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+        if let Err(e) = self
+            .registry
+            .declare_bundle_dependencies(bundle_id, declared_contract_ids)
+        {
+            return Err(RuntimeError::Registry(e));
+        }
+
         let result: Result<(), RuntimeError> = loader.load(&manifest, self);
         if result.is_ok() {
             let bundle_name: String = manifest.name.clone();
-            let bundle_id: BundleId = BundleId::new(&manifest.name);
 
             // Parse bundle dependencies from new bundle-level format
-            let bundle_deps: Vec<crate::registry::runtime_store::BundleDependency> =
+            let bundle_deps: Vec<crate::runtime_store::BundleDependency> =
                 manifest.parsed_bundle_dependencies();
 
             // Parse version from manifest
@@ -571,7 +557,8 @@ pub(crate) fn validate_bundle_compatibility(
                 }
             };
 
-            let provided: Version = parse_manifest_version(&provider.version, &provider.name)?;
+            let provided: Version =
+                parse_manifest_version(&provider.version, &provider.name, path)?;
 
             if !provided.is_compatible_with(&required) {
                 match compatibility {
@@ -633,24 +620,26 @@ pub(crate) fn validate_bundle_compatibility(
     Ok(())
 }
 
-fn parse_manifest_version(v: &str, _bundle_name: &str) -> Result<Version, RuntimeError> {
+fn parse_manifest_version(
+    v: &str,
+    _bundle_name: &str,
+    manifest_path: &std::path::Path,
+) -> Result<Version, RuntimeError> {
     if v.is_empty() {
-        Ok(Version {
+        return Ok(Version {
             major: 0,
             minor: 0,
             patch: 0,
-        })
-    } else {
-        // Parse version string "major.minor.patch"
-        let parts: Vec<&str> = v.split('.').collect();
-        let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-        let patch = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-        Ok(Version {
-            major,
-            minor,
-            patch,
-        })
+        });
+    }
+    // A malformed version string is malformed manifest content: reject it with
+    // ManifestParse, mirroring how the dependency `required` version is parsed.
+    match Version::from_str(v) {
+        Ok(version) => Ok(version),
+        Err(e) => Err(RuntimeError::Loader(LoaderError::ManifestParse {
+            path: manifest_path.display().to_string(),
+            reason: format!("invalid version '{}': {:?}", v, e),
+        })),
     }
 }
 
@@ -824,6 +813,19 @@ pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     let registry: &RuntimeStore = &runtime.registry;
+
+    // Dependency enforcement during the init window: a plugin must not enumerate
+    // providers of a contract it did not declare. Outside the window
+    // (caller_bundle_id == 0, host-side lookups) enumeration is unrestricted.
+    let caller_bundle_id: u64 = get_init_bundle_id();
+    if caller_bundle_id != 0
+        && !registry.is_bundle_dependency_declared(
+            BundleId::from_u64(caller_bundle_id),
+            GuestContractId::from_u64(contract_id),
+        )
+    {
+        return Array::empty();
+    }
 
     // First, count matching contracts
     let count = registry.count_guest_contracts(GuestContractId::from_u64(contract_id), min_version);
@@ -1433,7 +1435,7 @@ mod tests {
 
     #[test]
     fn builder_creates_runtime() {
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
         let result: Result<GuestContractHandle, _> =
@@ -1462,7 +1464,7 @@ mod tests {
         // The self-passing pattern allows extracting runtime from (*this).runtime.
         //
         // HostInterface is pointer-sized (8 bytes on x86_64), ensuring ABI compatibility.
-        assert_eq!(std::mem::size_of::<*const HostInterface>(), 8);
+        assert_eq!(core::mem::size_of::<*const HostInterface>(), 8);
     }
 
     #[test]
@@ -1478,7 +1480,7 @@ mod tests {
 
     #[test]
     fn dep_enforcement_blocks_undeclared_contract() {
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
 
@@ -1487,7 +1489,7 @@ mod tests {
 
         // Create a HostInterface with runtime pointer
         let host_interface: HostInterface = HostInterface {
-            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
@@ -1546,7 +1548,7 @@ mod tests {
     }
 
     fn register_contract(
-        registry: &crate::registry::RuntimeStore,
+        registry: &crate::runtime_store::RuntimeStore,
         contract_id: u64,
         bundle_id: u64,
     ) -> GuestContractHandle {
@@ -1808,7 +1810,7 @@ mod tests {
         let contract: u64 = polyplug_utils::guest_contract_id("trust.test", 1_u32);
         let bundle_name: &str = "enforce_bundle";
         let bundle_path: PathBuf = create_bundle_dir(&temp, bundle_name, "enforce");
-        let runtime: Runtime = match Runtime::builder()
+        let runtime: Arc<Runtime> = match Runtime::builder()
             .loader(EnforceLoader {
                 contract_id: contract,
                 error_bundle_id: 0_u64,
@@ -1845,7 +1847,7 @@ mod tests {
         let contract: u64 = polyplug_utils::guest_contract_id("trust.tls", 1_u32);
         let observed: Arc<std::sync::Mutex<Option<bool>>> = Arc::new(std::sync::Mutex::new(None));
         let bundle_path: PathBuf = create_bundle_dir(&temp, "probe_bundle", "probe");
-        let runtime: Runtime = match Runtime::builder()
+        let runtime: Arc<Runtime> = match Runtime::builder()
             .loader(ProbeLoader {
                 observed_init: Arc::clone(&observed),
             })
@@ -1888,7 +1890,7 @@ mod tests {
         let _bundle_root: PathBuf = create_bundle_dir(&temp, "panic_bundle", "panic");
         let plugin_dir: PathBuf = temp.path().to_path_buf();
         let result = std::panic::catch_unwind(|| {
-            let _rt: Runtime = Runtime::builder()
+            let _rt: Arc<Runtime> = Runtime::builder()
                 .plugin_dir(plugin_dir)
                 .loader(PanicLoader)
                 .build()
@@ -1914,7 +1916,7 @@ mod tests {
                 inner_bundle: inner_bundle.clone(),
                 inner_load_completed: None,
             }));
-        let runtime: Runtime = match Runtime::builder()
+        let runtime: Arc<Runtime> = match Runtime::builder()
             .loader(ReentrantLoader {
                 state: Arc::clone(&state),
             })
@@ -1934,7 +1936,7 @@ mod tests {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
             };
-            guard.runtime_ptr = &runtime as *const Runtime as usize;
+            guard.runtime_ptr = Arc::as_ptr(&runtime) as usize;
         }
         let result: Result<(), crate::error::RuntimeError> = runtime.load_bundle_with(
             outer_bundle.as_path(),
@@ -1970,7 +1972,7 @@ mod tests {
         let state: Arc<std::sync::Mutex<LazyState>> = Arc::new(std::sync::Mutex::new(LazyState {
             observed_init: None,
         }));
-        let runtime: Runtime = match Runtime::builder()
+        let runtime: Arc<Runtime> = match Runtime::builder()
             .loader(LazyLoader {
                 state: Arc::clone(&state),
             })
@@ -2062,7 +2064,7 @@ mod tests {
 
     #[test]
     fn runtime_host_contracts_register_guest_contract_and_lookup() {
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
 
@@ -2084,7 +2086,7 @@ mod tests {
 
     #[test]
     fn runtime_host_contracts_duplicate_registration_fails() {
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
 
@@ -2112,7 +2114,7 @@ mod tests {
 
     #[test]
     fn runtime_host_contracts_unregister_guest_contract() {
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
 
@@ -2146,7 +2148,7 @@ mod tests {
 
     #[test]
     fn runtime_host_contracts_version_check() {
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
 
@@ -2183,7 +2185,7 @@ mod tests {
 
     #[test]
     fn runtime_host_runtime_default_is_rust() {
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
         assert_eq!(runtime.host_runtime(), RuntimeLanguage::Rust);
@@ -2191,7 +2193,7 @@ mod tests {
 
     #[test]
     fn runtime_host_runtime_can_be_set() {
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .host_runtime(RuntimeLanguage::Python)
             .build()
             .expect("runtime build should succeed");
@@ -2200,7 +2202,7 @@ mod tests {
 
     #[test]
     fn host_get_host_contract_callback_returns_register_guest_contracted_contract() {
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
 
@@ -2214,7 +2216,7 @@ mod tests {
 
         // Create a HostInterface with runtime pointer
         let host_interface: HostInterface = HostInterface {
-            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
@@ -2247,7 +2249,7 @@ mod tests {
 
     #[test]
     fn host_get_host_contract_callback_returns_null_for_unregister_guest_contracted() {
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
 
@@ -2255,7 +2257,7 @@ mod tests {
 
         // Create a HostInterface with runtime pointer
         let host_interface: HostInterface = HostInterface {
-            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
@@ -2353,7 +2355,7 @@ mod tests {
         // Reset thread-local counter before test
         LOCAL_INSTANCE_COUNTER.with(|counter| counter.set(0));
 
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
 
@@ -2367,7 +2369,7 @@ mod tests {
 
         // Create a HostInterface with runtime pointer
         let host_interface: HostInterface = HostInterface {
-            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
@@ -2442,7 +2444,7 @@ mod tests {
         // Reset thread-local counter before test
         LOCAL_INSTANCE_COUNTER.with(|counter| counter.set(100)); // Start at 100 for unique values
 
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
 
@@ -2456,7 +2458,7 @@ mod tests {
 
         // Create a HostInterface with runtime pointer
         let host_interface: HostInterface = HostInterface {
-            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
@@ -2535,7 +2537,7 @@ mod tests {
         // Reset thread-local counter
         LOCAL_INSTANCE_COUNTER.with(|counter| counter.set(0));
 
-        let runtime: Runtime = Runtime::builder()
+        let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
 
@@ -2556,7 +2558,7 @@ mod tests {
 
         // Create a HostInterface with runtime pointer
         let host_interface: HostInterface = HostInterface {
-            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
@@ -2582,6 +2584,7 @@ mod tests {
         let s1: HostContractInstance = unsafe {
             host_get_host_contract(&host_interface as *const HostInterface, singleton_id, 0)
         };
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let s2: HostContractInstance = unsafe {
             host_get_host_contract(&host_interface as *const HostInterface, singleton_id, 0)
         };
@@ -2591,6 +2594,7 @@ mod tests {
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let m1: HostContractInstance =
             unsafe { host_get_host_contract(&host_interface as *const HostInterface, multi_id, 0) };
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let m2: HostContractInstance =
             unsafe { host_get_host_contract(&host_interface as *const HostInterface, multi_id, 0) };
         assert_ne!(m1.data, m2.data, "multi-instance returns new instances");

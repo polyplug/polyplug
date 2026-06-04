@@ -13,6 +13,7 @@ use polyplug_python::{PythonConfig, PythonLoader};
 use std::env;
 use std::path::PathBuf;
 
+#[path = "../generated/mod.rs"]
 mod generated;
 
 use generated::host::host_callers::*;

@@ -79,12 +79,6 @@ impl CodeGenerator for LuaGenerator {
             content: contracts_lua,
             force_regenerate: false,
         });
-        let init_lua: String = generate_init_lua(ir);
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("guest/init.lua"),
-            content: init_lua,
-            force_regenerate: false,
-        });
 
         if ir.bundle.is_some() {
             files.files.push(GeneratedFile {
@@ -262,6 +256,12 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("    InvalidPointer = 8,\n");
     out.push_str("}\n\n");
 
+    // Null/not-found sentinel for find_guest_contract. GuestContractHandle is
+    // `#[repr(C)] { index: u32 }`; the null handle is index == u32::MAX. This
+    // matches polyplug.runtime.NULL_HANDLE; emitted locally so callers.lua has no
+    // dependency on the runtime module beyond the `runtime` arg passed to factories.
+    out.push_str("local NULL_HANDLE = 0xFFFFFFFF\n\n");
+
     // Contract ID constants
     out.push_str("-- Contract ID constants\n");
     for contract in &ir.contracts {
@@ -285,9 +285,13 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     }
     out.push('\n');
 
-    // Cached FFI types for hot path performance
+    // Cached FFI types for hot path performance.
+    // Native guest dispatch functions take the instance by value and return an
+    // AbiError (24-byte struct), matching GuestContractInterface native dispatch.
     out.push_str("-- Cached FFI types for hot path performance\n");
-    out.push_str("local DispatchFnType = ffi.typeof(\"uint32_t (*)(const void*, void*)\")\n\n");
+    out.push_str(
+        "local NativeDispatchFnType = ffi.typeof(\"AbiError (*)(GuestContractInstance, const void*, void*)\")\n\n",
+    );
 
     for contract in &ir.contracts {
         generate_host_contract_caller(&mut out, contract);
@@ -305,92 +309,56 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     out.push_str("local polyplug_guest = require(\"polyplug_guest\")\n\n");
     out.push_str("local M = {}\n\n");
 
+    // The LuaLoader (Rust side) drives registration: after it execs the bundle
+    // script and calls polyplug_init, it reads _G._polyplug_handlers and builds
+    // the GuestContractInterface itself, wrapping each Lua handler in an
+    // extern "C" trampoline. Guest code therefore NEVER constructs a
+    // GuestContractInterface cdata or ffi.cast()s a Lua function into a
+    // struct-returning C function pointer — LuaJIT cannot create callbacks for
+    // function types that return a struct by value (e.g. GuestContractInstance,
+    // StringView), so any such cast fails at load. We instead register pure Lua
+    // handlers, mirroring tests/fixtures/test_plugin_lua/test_plugin.lua.
+    //
+    // Each handler has the low-level dispatch signature (args_ptr, out_ptr),
+    // where both are i64 integers (see polyplug_lua::loader::lua_dispatch). The
+    // generated wrapper marshals args/out around the user's high-level impl.
+
+    // Collect the (plugin, contract) pairs to register, preserving order.
+    let mut registrations: Vec<(&str, &ResolvedContract)> = Vec::new();
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
             for contract_impl in &plugin.implements {
-                if let Some(contract) = ir.contracts.iter().find(|c| {
-                    let contract_full =
+                if let Some(contract) = ir.contracts.iter().find(|c: &&ResolvedContract| {
+                    let contract_full: String =
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
                     generate_guest_plugin_interface(&mut out, &plugin.name, contract)?;
+                    registrations.push((plugin.name.as_str(), contract));
                 }
             }
         }
     }
 
+    // Define the global polyplug_init the LuaLoader calls. It populates
+    // _G._polyplug_handlers with the per-contract dispatch tables. The example
+    // guests require this module and call set_<plugin>_impl at module top level,
+    // so the impls are already stored by the time polyplug_init runs.
+    out.push_str("\n-- Registration entry point called by the LuaLoader.\n");
+    out.push_str("function polyplug_init(host_ptr, ctx_ptr)\n");
+    out.push_str("    if host_ptr == nil or ctx_ptr == nil then\n");
+    out.push_str("        return polyplug_guest.AbiErrorCode.Generic\n");
+    out.push_str("    end\n");
+    out.push_str("    polyplug_guest.store_host_interface(host_ptr)\n");
+    for (plugin_name, _contract) in &registrations {
+        let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
+        out.push_str(&format!("    M._register_{plugin_var}()\n"));
+    }
+    out.push_str("    return polyplug_guest.AbiErrorCode.Ok\n");
+    out.push_str("end\n\n");
+
     out.push_str("return M\n");
     Ok(out)
-}
-
-fn generate_init_lua(ir: &ValidatedIr) -> String {
-    let mut out: String = String::new();
-    out.push_str("-- THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n");
-    out.push_str(
-        "-- Re-generate with: polyplugc generate --bundle bundle.toml --lang lua --out <dir>\n\n",
-    );
-    out.push_str("local ffi = require(\"ffi\")\n");
-    out.push_str("local polyplug_guest = require(\"polyplug_guest\")\n\n");
-
-    let has_trace: bool = ir.bundle.as_ref().is_some_and(|b: &ResolvedBundle| {
-        b.plugins
-            .iter()
-            .any(|p: &ResolvedPlugin| p.optional.contains(&"trace".to_owned()))
-    });
-
-    out.push_str("-- ABI error codes (match polyplug_abi.AbiErrorCode)\n");
-    out.push_str("local AbiErrorCode = {\n");
-    out.push_str("    Ok = 0,\n");
-    out.push_str("    Generic = 1,\n");
-    out.push_str("    InvalidPointer = 8,\n");
-    out.push_str("}\n\n");
-
-    if has_trace {
-        out.push_str("-- Optional: trace extension (host contracts will be used in future)\n\n");
-    } else {
-        out.push_str("-- No optional extensions requested.\n\n");
-    }
-
-    out.push_str("--- Register all plugin interfaces with the host.\n");
-    out.push_str("--- @param host_ptr userdata HostInterface pointer from host.\n");
-    out.push_str("--- @param ctx_ptr userdata BundleInitContext pointer from host.\n");
-    out.push_str("--- @return number error_code 0 on success, non-zero on failure.\n");
-    out.push_str("function polyplug_init(host_ptr, ctx_ptr)\n");
-    out.push_str("    if host_ptr == nil then\n");
-    out.push_str("        return AbiErrorCode.Generic\n");
-    out.push_str("    end\n");
-    out.push_str("    if ctx_ptr == nil then\n");
-    out.push_str("        return AbiErrorCode.Generic\n");
-    out.push_str("    end\n");
-    out.push_str("    polyplug_guest.store_host_vtable(host_ptr)\n");
-    out.push_str("    local ctx = polyplug_guest.cast_context(ctx_ptr)\n");
-    out.push_str("    local host = ffi.cast(\"HostInterface*\", host_ptr)\n\n");
-
-    if let Some(bundle) = &ir.bundle {
-        for plugin in &bundle.plugins {
-            let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
-            let contract_impl = plugin.implements.first().map(|s| s.as_str()).unwrap_or("");
-            let (contract_name, version_str) = contract_impl
-                .split_once('@')
-                .unwrap_or((contract_impl, "1.0.0"));
-            let (version_major, _version_minor_patch) =
-                version_str.split_once('.').unwrap_or((version_str, "0"));
-            let _contract_name_full = format!("{}@{}", contract_name, version_major);
-
-            out.push_str(&format!(
-                "    local err_{plugin_upper} = host.register_contract(host_ptr, {plugin_upper}_DESCRIPTOR, {plugin_upper}_INTERFACE)\n"
-            ));
-            out.push_str(&format!(
-                "    if err_{plugin_upper}.code ~= AbiErrorCode.Ok then\n"
-            ));
-            out.push_str(&format!("        return err_{plugin_upper}.code\n"));
-            out.push_str("    end\n\n");
-        }
-    }
-
-    out.push_str("    return AbiErrorCode.Ok\n");
-    out.push_str("end\n");
-    out
 }
 
 fn generate_lua_user_type(out: &mut String, ty: &ResolvedType) {
@@ -423,24 +391,29 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) 
         contract_struct = contract_struct
     ));
 
-    // is_valid method - checks instance.data is not null
+    // is_valid method - validity keys off the resolved interface pointer.
+    // Stateless contracts return a null `instance.data` from create_instance and
+    // use it as an opaque dispatch token, so instance data must NOT gate validity.
     out.push_str("    is_valid = function(self)\n");
-    out.push_str("        return self._instance ~= nil and self._instance.data ~= nil\n");
+    out.push_str("        return self._interface ~= nil and not self._destroyed\n");
     out.push_str("    end,\n\n");
 
-    // destroy method - calls destroy_instance and nullifies
+    // destroy method - calls destroy_instance and marks the wrapper destroyed.
     out.push_str("    destroy = function(self)\n");
-    out.push_str("        if self._instance ~= nil and self._instance.data ~= nil then\n");
+    out.push_str("        if self._interface ~= nil and not self._destroyed then\n");
     out.push_str("            self._interface.destroy_instance(self._host, self._instance)\n");
-    out.push_str("            self._instance.data = nil\n");
+    out.push_str("            self._destroyed = true\n");
     out.push_str("        end\n");
     out.push_str("    end,\n\n");
 
-    // reset method - destroy existing, create new instance
+    // reset method - destroy current instance, create a fresh one from the
+    // still-resolved interface. A null instance.data is valid for stateless
+    // contracts and is preserved as the opaque dispatch token.
     out.push_str("    reset = function(self)\n");
     out.push_str("        self:destroy()\n");
     out.push_str("        if self._interface ~= nil then\n");
     out.push_str("            self._instance = self._interface.create_instance(self._host, nil)\n");
+    out.push_str("            self._destroyed = false\n");
     out.push_str("        end\n");
     out.push_str("    end,\n\n");
 
@@ -480,21 +453,30 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) 
     out.push_str(&format!(
         "    local handle = runtime:find_guest_contract({contract_id_const}, 0)\n"
     ));
-    out.push_str("    if handle == nil then\n");
+    out.push_str("    -- find_guest_contract returns a u32 handle; the null/not-found sentinel\n");
+    out.push_str("    -- is index == u32::MAX (NULL_HANDLE), never nil.\n");
+    out.push_str("    if handle == NULL_HANDLE then\n");
     out.push_str("        return nil\n");
     out.push_str("    end\n");
-    out.push_str("    local interface = runtime:resolve_contract(handle)\n");
+    out.push_str("    local interface = runtime:resolve_guest_contract(handle)\n");
     out.push_str("    if interface == nil then\n");
     out.push_str("        return nil\n");
     out.push_str("    end\n");
+    out.push_str(
+        "    -- A null `instance.data` is valid: stateless contracts (and all VM-dispatch\n",
+    );
+    out.push_str(
+        "    -- guests) return a null handle from create_instance and use it as an opaque\n",
+    );
+    out.push_str(
+        "    -- dispatch token. Validity is keyed off the interface pointer, not the instance.\n",
+    );
     out.push_str("    local instance = interface.create_instance(host, nil)\n");
-    out.push_str("    if instance == nil or instance.data == nil then\n");
-    out.push_str("        return nil\n");
-    out.push_str("    end\n");
     out.push_str("    local wrapper = {\n");
     out.push_str("        _interface = interface,\n");
     out.push_str("        _instance = instance,\n");
-    out.push_str("        _host = host\n");
+    out.push_str("        _host = host,\n");
+    out.push_str("        _destroyed = false\n");
     out.push_str("    }\n");
     out.push_str(&format!(
         "    setmetatable(wrapper, {contract_struct}_mt)\n",
@@ -515,33 +497,42 @@ fn generate_host_caller_method(
     let sig_params: String = build_lua_sig_params(func);
     out.push_str(&format!("    {} = function(self{sig_params})\n", func.name));
 
-    // Instance validity check
-    out.push_str("        if self._instance == nil or self._instance.data == nil then\n");
-    out.push_str("            error(\"invalid caller: instance is nil\", 2)\n");
+    // Validity keys off the resolved interface pointer, NOT instance.data:
+    // stateless and VM-dispatch guests carry a null instance handle.
+    out.push_str("        if self._interface == nil or self._destroyed then\n");
+    out.push_str("            error(\"invalid caller: interface is nil\", 2)\n");
     out.push_str("        end\n");
 
     // Setup args and out
     emit_lua_host_args_setup(out, func, contract_prefix);
     emit_lua_host_out_setup(out, &func.returns);
 
-    // Interface validity check
-    out.push_str("        if self._interface == nil then\n");
-    out.push_str("            error(\"interface is nil\", 2)\n");
-    out.push_str("        end\n");
     out.push_str(&format!(
         "        if {fn_id} >= self._interface.dispatch.native.function_count then\n"
     ));
     out.push_str("            error(\"function not available in interface\", 2)\n");
     out.push_str("        end\n");
 
-    // Dispatch with instance as first argument
+    // Dispatch on the interface's dispatch_type. Native guests (C++/Rust/native
+    // Python) call the function pointer directly; VM guests (Lua, JS) route
+    // through the loader's vm.call trampoline. Both return an AbiError by value.
+    // DispatchType: 0 == Native, 1 == VirtualMachine.
+    out.push_str("        local err\n");
+    out.push_str("        if self._interface.dispatch_type == 0 then\n");
     out.push_str(&format!(
-        "        local fn_ptr = self._interface.dispatch.native.functions[{fn_id}]\n"
+        "            local fn_ptr = self._interface.dispatch.native.functions[{fn_id}]\n"
     ));
-    out.push_str("        local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
-    out.push_str("        local err = fn(self._instance, args_ptr, out_ptr)\n");
-    out.push_str("        if err ~= 0 then\n");
-    out.push_str("            error(\"polyplug call failed\", 2)\n");
+    out.push_str("            local fn = ffi.cast(NativeDispatchFnType, fn_ptr)\n");
+    out.push_str("            err = fn(self._instance, args_ptr, out_ptr)\n");
+    out.push_str("        else\n");
+    out.push_str(&format!(
+        "            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr)\n"
+    ));
+    out.push_str("        end\n");
+    out.push_str("        if err.code ~= AbiErrorCode.Ok then\n");
+    out.push_str(
+        "            error(\"polyplug call failed (code \" .. tonumber(err.code) .. \")\", 2)\n",
+    );
     out.push_str("        end\n");
 
     if has_return_value(&func.returns) {
@@ -559,17 +550,16 @@ fn generate_guest_plugin_interface(
 ) -> Result<(), PolyplugcError> {
     let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
     let contract_name_full: String = format!("{}@{}", contract.name, contract.version.major);
-    let function_count: usize = contract.functions.len();
+    let plugin_lower: String = plugin_name.to_lowercase().replace(['.', '-'], "_");
 
     out.push_str(&format!(
-        "-- Function pointer type for {plugin_name} ({contract_name_full})\n"
+        "-- Guest contract: {plugin_name} ({contract_name_full})\n"
     ));
     for func in &contract.functions {
-        let fn_name: String = func.name.replace('.', "_");
         let params: Vec<String> = func
             .params
             .iter()
-            .map(|p| format!("{}: {}", p.name, lua_type_name(&p.ty)))
+            .map(|p: &ResolvedParam| format!("{}: {}", p.name, lua_type_name(&p.ty)))
             .collect();
         let ret_ty: String = match &func.returns {
             Some(ty) => lua_type_name(ty),
@@ -577,117 +567,112 @@ fn generate_guest_plugin_interface(
         };
         out.push_str(&format!(
             "--   {fn_name}({}) -> {ret_ty}\n",
-            params.join(", ")
+            params.join(", "),
+            fn_name = func.name.replace('.', "_")
         ));
     }
 
-    out.push_str(&format!(
-        "local {plugin_var}_INTERFACE = ffi.new(\"GuestContractInterface\")\n"
-    ));
-    out.push_str(&format!(
-        "{plugin_var}_INTERFACE.contract_id = 0x{:016X}\n",
-        contract.contract_id
-    ));
-    out.push_str(&format!(
-        "{plugin_var}_INTERFACE.contract_version.major = {}\n",
-        contract.version.major
-    ));
-    out.push_str(&format!(
-        "{plugin_var}_INTERFACE.contract_version.minor = {}\n",
-        contract.version.minor
-    ));
-    out.push_str(&format!(
-        "{plugin_var}_INTERFACE.contract_version.patch = {}\n",
-        contract.version.patch
-    ));
-    let dispatch_type_str: &str = if true {
-        "polyplug_guest.DispatchType.VirtualMachine"
-    } else {
-        "polyplug_guest.DispatchType.Native"
-    };
-    out.push_str(&format!(
-        "{plugin_var}_INTERFACE.dispatch_type = {dispatch_type_str}\n"
-    ));
-    // Create/destroy instance stubs
-    out.push_str(&format!(
-        "-- Default create_instance stub for {plugin_name} - returns null instance.\n"
-    ));
-    out.push_str(&format!(
-        "function {plugin_var}_create_instance_stub(host, args)\n"
-    ));
-    out.push_str(
-        "    -- Default stub returns null instance - users override for stateful plugins.\n",
-    );
-    out.push_str("    return ffi.new(\"GuestContractInstance\", nil)\n");
-    out.push_str("end\n");
-    out.push_str(&format!(
-        "{plugin_var}_INTERFACE.create_instance = {plugin_var}_create_instance_stub\n"
-    ));
-    out.push_str(&format!(
-        "-- Default destroy_instance stub for {plugin_name} - no-op.\n"
-    ));
-    out.push_str(&format!(
-        "function {plugin_var}_destroy_instance_stub(host, instance)\n"
-    ));
-    out.push_str("    -- Default stub is no-op - users override for cleanup before hot-reload.\n");
-    out.push_str("end\n");
-    out.push_str(&format!(
-        "{plugin_var}_INTERFACE.destroy_instance = {plugin_var}_destroy_instance_stub\n\n"
-    ));
+    // Per-plugin storage for the user-supplied high-level implementations.
+    out.push_str(&format!("local {plugin_var}_IMPLS = {{}}\n"));
 
-    out.push_str(&format!(
-        "local {plugin_var}_DESCRIPTOR = ffi.new(\"PluginDescriptor\")\n"
-    ));
-    out.push_str(&format!(
-        "{plugin_var}_DESCRIPTOR.name = polyplug_guest.string_view(\"{plugin_name}\")\n"
-    ));
-    out.push_str(&format!(
-        "{plugin_var}_DESCRIPTOR.contract_name = polyplug_guest.string_view(\"{contract_name_full}\")\n"
-    ));
-    out.push_str(&format!(
-        "{plugin_var}_DESCRIPTOR.version.major = {}\n",
-        contract.version.major
-    ));
-    out.push_str(&format!(
-        "{plugin_var}_DESCRIPTOR.version.minor = {}\n",
-        contract.version.minor
-    ));
-    out.push_str(&format!(
-        "{plugin_var}_DESCRIPTOR.version.patch = {}\n\n",
-        contract.version.patch
-    ));
-
-    let set_impl_name: String = format!(
-        "set_{}_impl",
-        plugin_name.to_lowercase().replace(['.', '-'], "_")
-    );
-    out.push_str(&format!("\nfunction M.{set_impl_name}("));
+    // set_<plugin>_impl(fn0, fn1, ...) stores the high-level handlers in
+    // declaration order (matching contract function_id order).
+    let set_impl_name: String = format!("set_{plugin_lower}_impl");
     let impl_params: Vec<String> = contract
         .functions
         .iter()
-        .map(|f| format!("{}_fn", f.name))
+        .map(|f: &ResolvedFunction| format!("{}_fn", f.name.replace('.', "_")))
         .collect();
-    out.push_str(&impl_params.join(", "));
-    out.push_str(")\n");
-
     out.push_str(&format!(
-        "    local functions = ffi.new(\"PluginFunction[{function_count}]\")\n"
+        "function M.{set_impl_name}({})\n",
+        impl_params.join(", ")
     ));
     for (idx, func) in contract.functions.iter().enumerate() {
-        let fn_name: String = func.name.replace('.', "_");
         out.push_str(&format!(
-            "    functions[{idx}] = ffi.cast(\"uintptr_t\", {fn_name}_fn)\n"
+            "    {plugin_var}_IMPLS[{idx}] = {fn}_fn\n",
+            fn = func.name.replace('.', "_")
         ));
     }
-    out.push_str(&format!(
-        "    {plugin_var}_INTERFACE.dispatch.native.function_count = {function_count}\n"
-    ));
-    out.push_str(&format!(
-        "    {plugin_var}_INTERFACE.dispatch.native.functions = functions\n"
-    ));
     out.push_str("end\n");
 
+    // _register_<plugin>() builds the low-level dispatch handlers and appends
+    // them to _G._polyplug_handlers. Each handler has the signature
+    // (args_ptr, out_ptr) with i64 pointer integers, marshals the inputs,
+    // invokes the stored high-level impl, and writes the result to out_ptr.
+    out.push_str(&format!("function M._register_{plugin_var}()\n"));
+    out.push_str("    local functions = {}\n");
+    for (idx, func) in contract.functions.iter().enumerate() {
+        out.push_str(&format!(
+            "    functions[{idx}] = function(args_ptr, out_ptr)\n"
+        ));
+        emit_lua_guest_handler_body(out, func, &plugin_var, idx);
+        out.push_str("    end\n");
+    }
+    out.push_str("    _G._polyplug_handlers = _G._polyplug_handlers or {}\n");
+    out.push_str("    if _G._polyplug_handlers.contract_name == nil then\n");
+    out.push_str(&format!(
+        "        _G._polyplug_handlers.contract_name = \"{}\"\n",
+        contract.name
+    ));
+    out.push_str(&format!(
+        "        _G._polyplug_handlers.contract_version = {}\n",
+        contract.version.major
+    ));
+    out.push_str(&format!(
+        "        _G._polyplug_handlers.plugin_name = \"{plugin_name}\"\n"
+    ));
+    out.push_str("        _G._polyplug_handlers.functions = functions\n");
+    out.push_str("    end\n");
+    out.push_str("end\n\n");
+
     Ok(())
+}
+
+/// Emit the body of one low-level dispatch handler: marshal args from
+/// `args_ptr`, call the stored high-level impl, marshal the result to
+/// `out_ptr`. Pointers arrive as i64 integers (see lua_dispatch).
+fn emit_lua_guest_handler_body(
+    out: &mut String,
+    func: &ResolvedFunction,
+    plugin_var: &str,
+    idx: usize,
+) {
+    out.push_str(&format!("        local impl = {plugin_var}_IMPLS[{idx}]\n"));
+    out.push_str("        if impl == nil then return end\n");
+
+    // Marshal a single StringView input (the common pipeline shape). Other
+    // input shapes pass the raw args pointer through for the impl to read.
+    let single_string_view: bool = func.params.len() == 1
+        && matches!(
+            func.params[0].ty,
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView)
+        );
+
+    if single_string_view {
+        out.push_str(
+            "        local args_sv = ffi.cast(\"const StringView*\", ffi.cast(\"uintptr_t\", args_ptr))\n",
+        );
+        out.push_str("        local result = impl(args_sv[0])\n");
+    } else if func.params.is_empty() {
+        out.push_str("        local result = impl()\n");
+    } else {
+        // Fall back to handing the raw pointer integers to the impl.
+        out.push_str("        local result = impl(args_ptr, out_ptr)\n");
+    }
+
+    // Marshal a StringView return value into out_ptr. alloc_string returns a
+    // host-allocated StringView cdata; copy it into the caller's out slot.
+    if matches!(
+        func.returns,
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
+    ) {
+        out.push_str("        if out_ptr ~= 0 and result ~= nil then\n");
+        out.push_str(
+            "            local out_sv = ffi.cast(\"StringView*\", ffi.cast(\"uintptr_t\", out_ptr))\n",
+        );
+        out.push_str("            out_sv[0] = result\n");
+        out.push_str("        end\n");
+    }
 }
 
 fn build_lua_sig_params(func: &ResolvedFunction) -> String {
@@ -710,6 +695,52 @@ fn emit_lua_host_args_setup(out: &mut String, func: &ResolvedFunction, contract_
     if func.params.len() == 1 {
         let param: &ResolvedParam = &func.params[0];
         match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                // Accept a plain Lua string; marshal into a StringView (ptr + len)
+                // over a kept-alive byte buffer that outlives the dispatch call.
+                out.push_str(&format!(
+                    "    local {name}_bytes = tostring({name})\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    local {name}_view = ffi.new(\"StringView\")\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    {name}_view.ptr = ffi.cast(\"const uint8_t*\", {name}_bytes)\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    {name}_view.len = #{name}_bytes\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    local args_ptr = ffi.cast(\"const void*\", {name}_view)\n",
+                    name = param.name
+                ));
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str(&format!(
+                    "    local {name}_bytes = tostring({name})\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    local {name}_buf = ffi.new(\"Buffer\")\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    {name}_buf.ptr = ffi.cast(\"void*\", {name}_bytes)\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    {name}_buf.len = #{name}_bytes\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    local args_ptr = ffi.cast(\"const void*\", {name}_buf)\n",
+                    name = param.name
+                ));
+            }
             ResolvedTypeRef::UserDefined(_) => {
                 out.push_str(&format!(
                     "    local args_ptr = ffi.cast(\"const void*\", {} )\n",

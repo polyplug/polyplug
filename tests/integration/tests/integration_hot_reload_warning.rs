@@ -18,6 +18,7 @@ use std::sync::Mutex;
 
 use polyplug::ReloadPhase;
 use polyplug::runtime::Runtime;
+use polyplug_abi::runtime::ReloadPhaseType;
 use polyplug_native::{NativeConfig, NativeLoader};
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
@@ -34,14 +35,11 @@ fn v2_so_path() -> PathBuf {
 fn hot_reload_config() -> polyplug::RuntimeConfig {
     polyplug::RuntimeConfig {
         hot_reload_enabled: true,
-        hot_reload_max_retries: 3,
-        hot_reload_retry_interval_ms: 1000,
-        hot_reload_abort_on_max_retries: true,
-        compatibility: polyplug::Compatibility::Strict,
+        ..polyplug::RuntimeConfig::default()
     }
 }
 
-fn make_hot_reload_runtime() -> Runtime {
+fn make_hot_reload_runtime() -> Arc<Runtime> {
     Runtime::builder()
         .loader(NativeLoader::new(NativeConfig::default()))
         .config(hot_reload_config())
@@ -56,8 +54,8 @@ fn make_hot_reload_runtime() -> Runtime {
 /// HR-06: Host sees UB warning if Arc refs remain after Preparing callback returns.
 ///
 /// This test verifies the warning callback receives messages during reload.
-/// The Arc::strong_count check fires when get_interface_arc clones the Arc
-/// for checking, resulting in strong_count > 1 temporarily.
+/// The Arc::strong_count check fires when get_guest_contract_interface_arc clones
+/// the Arc for checking, resulting in strong_count > 1 temporarily.
 #[test]
 fn test_warning_callback_invoked_during_reload() {
     // Capture warning messages
@@ -65,7 +63,7 @@ fn test_warning_callback_invoked_during_reload() {
     let warnings_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&warnings);
 
     // Create runtime with warning callback
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(NativeConfig::default()))
         .config(hot_reload_config())
         .on_warning(move |msg: &str| {
@@ -82,7 +80,7 @@ fn test_warning_callback_invoked_during_reload() {
     warnings.lock().unwrap().clear();
 
     // Call reload_bundle - the warning check happens after Preparing callback
-    // Due to implementation (get_interface_arc clones Arc), strong_count > 1 triggers warning
+    // Due to implementation (get_guest_contract_interface_arc clones Arc), strong_count > 1 triggers warning
     rt.reload_bundle(v2_so_path().as_path())
         .expect("reload should succeed");
 
@@ -102,9 +100,9 @@ fn test_warning_callback_invoked_during_reload() {
 
 /// Test that warning check happens AFTER Preparing callback, BEFORE loader.reload().
 ///
-/// The warning check is at reload.rs lines 128-140:
-/// - After Preparing callback fires
-/// - Before loader.reload() is called
+/// During `Runtime::reload_bundle`, the warning check runs:
+/// - After the Preparing callback fires
+/// - Before `BundleLoader::reload` is called
 ///
 /// This test verifies the ordering by capturing both reload phases and warnings.
 #[test]
@@ -113,7 +111,7 @@ fn test_warning_timing_after_preparing_before_reloaded() {
     let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     // Create runtime with both callbacks
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(NativeConfig::default()))
         .config(hot_reload_config())
         .on_warning({
@@ -125,10 +123,10 @@ fn test_warning_timing_after_preparing_before_reloaded() {
         .on_reload({
             let events = Arc::clone(&events);
             move |phase: ReloadPhase| {
-                let label: &str = match phase {
-                    ReloadPhase::Preparing { .. } => "Preparing",
-                    ReloadPhase::Reloaded { .. } => "Reloaded",
-                    ReloadPhase::Failed { .. } => "Failed",
+                let label: &str = match phase.phase_type {
+                    ReloadPhaseType::Preparing => "Preparing",
+                    ReloadPhaseType::Reloaded => "Reloaded",
+                    ReloadPhaseType::Failed => "Failed",
                 };
                 events.lock().unwrap().push(format!("PHASE: {}", label));
             }
@@ -208,7 +206,7 @@ fn test_warning_message_content_structure() {
     let warnings_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&warnings);
 
     // Create runtime with warning callback
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(NativeConfig::default()))
         .config(hot_reload_config())
         .on_warning(move |msg: &str| {
@@ -270,7 +268,7 @@ fn test_warning_message_content_structure() {
 #[test]
 fn test_reload_works_without_warning_callback() {
     // Create runtime WITHOUT warning callback
-    let rt: Runtime = make_hot_reload_runtime();
+    let rt: Arc<Runtime> = make_hot_reload_runtime();
 
     // Load the v1 bundle
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))

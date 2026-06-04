@@ -26,8 +26,10 @@ fn test_deno_host_lib_integration() {
         return;
     }
 
-    if POLYPLUG_SO.is_empty() {
-        panic!("POLYPLUG_SO not set - libpolyplug.so not built. Run: cargo build -p polyplug");
+    if POLYPLUG_SO.is_empty() || !PathBuf::from(POLYPLUG_SO).exists() {
+        panic!(
+            "polyplug shared library not found at {POLYPLUG_SO:?} - it must be built before this test. Run: cargo build -p polyplug"
+        );
     }
 
     let manifest_dir: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

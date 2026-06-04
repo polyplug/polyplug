@@ -3,7 +3,7 @@
 use core::cell::RefCell;
 use std::sync::Arc;
 
-use polyplug::registry::runtime_store::RuntimeStore;
+use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::{

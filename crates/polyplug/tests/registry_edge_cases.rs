@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::Barrier;
 
 use polyplug::error::RegistryError;
-use polyplug::registry::runtime_store::RuntimeStore;
+use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractId, GuestContractInterface,
     HostInterface, NativeDispatch, PluginDescriptor, StringView, Version,
@@ -546,7 +546,7 @@ fn swap_interface_during_active_resolve() {
     );
 
     // Perform the swap - direct swap_interface takes Arc<GuestContractInterface>
-    let new_arc: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2.clone());
+    let new_arc: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2);
     registry
         .swap_guest_contract_interface(handle.index, new_arc)
         .expect("swap_interface should succeed");

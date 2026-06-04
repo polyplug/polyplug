@@ -7,38 +7,42 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
--- Function pointer type for decoder (pipeline.Decoder@1)
+-- Guest contract: decoder (pipeline.Decoder@1)
 --   decode(input: StringView) -> StringView
-local DECODER_INTERFACE = ffi.new("GuestContractInterface")
-DECODER_INTERFACE.contract_id = 0xE1D7DE773BE6E7F7
-DECODER_INTERFACE.contract_version.major = 1
-DECODER_INTERFACE.contract_version.minor = 0
-DECODER_INTERFACE.contract_version.patch = 0
-DECODER_INTERFACE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
--- Default create_instance stub for decoder - returns null instance.
-function DECODER_create_instance_stub(host, args)
-    -- Default stub returns null instance - users override for stateful plugins.
-    return ffi.new("GuestContractInstance", nil)
-end
-DECODER_INTERFACE.create_instance = DECODER_create_instance_stub
--- Default destroy_instance stub for decoder - no-op.
-function DECODER_destroy_instance_stub(host, instance)
-    -- Default stub is no-op - users override for cleanup before hot-reload.
-end
-DECODER_INTERFACE.destroy_instance = DECODER_destroy_instance_stub
-
-local DECODER_DESCRIPTOR = ffi.new("PluginDescriptor")
-DECODER_DESCRIPTOR.name = polyplug_guest.string_view("decoder")
-DECODER_DESCRIPTOR.contract_name = polyplug_guest.string_view("pipeline.Decoder@1")
-DECODER_DESCRIPTOR.version.major = 1
-DECODER_DESCRIPTOR.version.minor = 0
-DECODER_DESCRIPTOR.version.patch = 0
-
-
+local DECODER_IMPLS = {}
 function M.set_decoder_impl(decode_fn)
-    local functions = ffi.new("PluginFunction[1]")
-    functions[0] = ffi.cast("uintptr_t", decode_fn)
-    DECODER_INTERFACE.dispatch.native.function_count = 1
-    DECODER_INTERFACE.dispatch.native.functions = functions
+    DECODER_IMPLS[0] = decode_fn
 end
+function M._register_DECODER()
+    local functions = {}
+    functions[0] = function(args_ptr, out_ptr)
+        local impl = DECODER_IMPLS[0]
+        if impl == nil then return end
+        local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
+        local result = impl(args_sv[0])
+        if out_ptr ~= 0 and result ~= nil then
+            local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
+            out_sv[0] = result
+        end
+    end
+    _G._polyplug_handlers = _G._polyplug_handlers or {}
+    if _G._polyplug_handlers.contract_name == nil then
+        _G._polyplug_handlers.contract_name = "pipeline.Decoder"
+        _G._polyplug_handlers.contract_version = 1
+        _G._polyplug_handlers.plugin_name = "decoder"
+        _G._polyplug_handlers.functions = functions
+    end
+end
+
+
+-- Registration entry point called by the LuaLoader.
+function polyplug_init(host_ptr, ctx_ptr)
+    if host_ptr == nil or ctx_ptr == nil then
+        return polyplug_guest.AbiErrorCode.Generic
+    end
+    polyplug_guest.store_host_interface(host_ptr)
+    M._register_DECODER()
+    return polyplug_guest.AbiErrorCode.Ok
+end
+
 return M

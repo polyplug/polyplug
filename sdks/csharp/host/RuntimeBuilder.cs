@@ -25,7 +25,7 @@ public sealed class RuntimeBuilder
 
     public Runtime Build()
     {
-        nint handle = NativeMethods.PolyplugRuntimeCreate();
+        nint handle = Runtime.CreateNative();
         if (handle == nint.Zero)
         {
             Runtime.ThrowLastError("Failed to create runtime.");

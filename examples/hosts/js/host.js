@@ -2,11 +2,24 @@
 /**
  * @file host.js
  * @description Pipeline Host — Deno host demonstrating polyplug usage.
+ *
+ * Creates a runtime, registers the language loaders, scans the plugin
+ * directory, loads every bundle it can, and prints the contracts each loaded
+ * bundle provides (mirroring the C++ reference host's discovery output).
  */
 
-import { openPolyplug, runtimeNew, NULL_HANDLE, onReload, setConfig } from "../../../sdks/js/host/polyplug.js";
-import { RuntimeConfig } from "../../../sdks/js/host/polyplug/runtime_config.js";
-import { ContractIds } from "./generated/host/callers.ts";
+import { openPolyplug, runtimeNew, bundleId, contractId } from "../../../sdks/js/host/mod.js";
+import { registerNativeLoader } from "../../../sdks/js/loaders/native/mod.ts";
+import { registerLuaLoader } from "../../../sdks/js/loaders/lua/mod.ts";
+import { registerJsLoader } from "../../../sdks/js/loaders/js/mod.ts";
+import { registerPythonLoader } from "../../../sdks/js/loaders/python/mod.ts";
+import {
+  PipelineDecoderContract,
+  DataTransformerContract,
+  PipelineEncoderContract,
+  DataReporterContract,
+  PipelineValidatorContract,
+} from "./generated/host/callers.ts";
 
 const pluginPath = Deno.env.get("POLYPLUG_PLUGIN_PATH")
   ?? "../../../examples/plugins";
@@ -16,93 +29,139 @@ const libPath = Deno.env.get("POLYPLUG_LIB_PATH")
 
 console.error(`loading plugins from: ${pluginPath}\n`);
 
-const _instances = new Map();
-
-setConfig(new RuntimeConfig({
-    hotReloadMaxRetries: 5,
-    hotReloadRetryIntervalMs: 200,
-    hotReloadAbortOnMaxRetries: false
-}));
-
-onReload((phase) => {
-    if (phase.isPreparing()) {
-        console.error(`[HOT-RELOAD] Preparing: ${phase.bundleName} (bundle_id=0x${phase.bundleId.toString(16).padStart(16, '0')}, retry ${phase.retryCount})`);
-        if (_instances.has(phase.bundleId)) {
-            _instances.delete(phase.bundleId);
-            console.error(`[HOT-RELOAD] Cleared instances for bundle ${phase.bundleName}`);
-        }
-    } else if (phase.isReloaded()) {
-        console.error(`[HOT-RELOAD] Reloaded: ${phase.bundleName} (bundle_id=0x${phase.bundleId.toString(16).padStart(16, '0')})`);
-    } else if (phase.isFailed()) {
-        console.error(`[HOT-RELOAD] Failed: ${phase.bundleName} (bundle_id=0x${phase.bundleId.toString(16).padStart(16, '0')}) - ${phase.reason}`);
-    }
-});
-
-// Contract IDs are imported from generated code (polyplugc)
-
 const lib = openPolyplug(libPath);
 const rt = runtimeNew(lib);
 
-const bundleNames = [];
-for await (const entry of Deno.readDir(pluginPath)) {
-  if (!entry.isDirectory) continue;
-  const bundlePath = `${pluginPath}/${entry.name}`;
+// Register loaders for every runtime the example plugins may use. Loaders whose
+// backing cdylib is unavailable are skipped so the host still runs for the rest.
+const loaders = [
+  { name: "native", register: () => registerNativeLoader(rt) },
+  { name: "lua", register: () => registerLuaLoader(rt) },
+  { name: "js-quickjs", register: () => registerJsLoader(rt) },
+  { name: "python", register: () => registerPythonLoader(rt) },
+];
+for (const loader of loaders) {
   try {
-    rt.loadBundle(bundlePath);
-    bundleNames.push(entry.name);
-    console.error(`  loaded: ${entry.name}`);
+    loader.register();
   } catch (e) {
-    console.error(`  failed to load ${entry.name}: ${e.message}`);
+    console.error(`  loader ${loader.name} unavailable: ${e.message}`);
   }
 }
 
-if (bundleNames.length === 0) {
+/**
+ * Parse a manifest.toml for its name and provided contracts.
+ * @param {string} manifestPath - Path to manifest.toml.
+ * @returns {{ name: string, provides: string[] }}
+ */
+function parseManifest(manifestPath) {
+  const content = Deno.readTextFileSync(manifestPath);
+  const nameMatch = content.match(/name\s*=\s*"([^"]+)"/);
+  const name = nameMatch ? nameMatch[1] : "unknown";
+  const provides = [];
+  const listMatch = content.match(/provides\s*=\s*\[([^\]]*)\]/);
+  if (listMatch) {
+    for (const m of listMatch[1].matchAll(/"([^"]+)"/g)) {
+      provides.push(m[1]);
+    }
+  }
+  return { name, provides };
+}
+
+const bundleDirs = [];
+for (const entry of Deno.readDirSync(pluginPath)) {
+  if (entry.isDirectory) {
+    bundleDirs.push(`${pluginPath}/${entry.name}`);
+  }
+}
+bundleDirs.sort();
+
+if (bundleDirs.length === 0) {
   console.error(`no plugins found in ${pluginPath}`);
   Deno.exit(1);
 }
 
-console.error(`\ndiscovered ${bundleNames.length} bundles\n`);
+console.error(`discovered ${bundleDirs.length} bundles\n`);
+
+const loaded = [];
+for (const dir of bundleDirs) {
+  const info = parseManifest(`${dir}/manifest.toml`);
+  try {
+    rt.loadBundle(dir);
+    loaded.push(info);
+    console.error(`  loaded: ${info.name}`);
+  } catch (e) {
+    console.error(`  skipped ${info.name}: ${e.message.split("\n")[0]}`);
+  }
+}
+
+if (loaded.length === 0) {
+  console.error("no bundles could be loaded");
+  Deno.exit(1);
+}
 
 console.log("\n=== Pipeline Host (JavaScript/Deno) ===\n");
 
 const inputStr = "name,value,42";
 console.log(`Input: "${inputStr}"\n`);
 
-const decoderHandle = rt.findByContract(ContractIds.PIPELINE_DECODER_CONTRACT_ID, 0);
-if (decoderHandle !== NULL_HANDLE) {
-  const guard = rt.resolvePlugin(decoderHandle);
-  const result = guard.call(0, inputStr);
+const hex16 = (v) => v.toString(16).padStart(16, "0");
+
+for (const bundle of loaded) {
+  const bid = bundleId(bundle.name);
+  for (const contract of bundle.provides) {
+    const at = contract.lastIndexOf("@");
+    if (at === -1) continue;
+    const contractName = contract.slice(0, at);
+    const major = Number(contract.slice(at + 1));
+    const cid = contractId(contractName, major);
+    console.log(
+      `[${bundle.name}] provides ${contract} ` +
+      `(bundle_id=0x${hex16(bid)}, contract_id=0x${hex16(cid)})`
+    );
+  }
+}
+
+console.log("");
+
+// Dispatch the full data-processing pipeline through the generated host callers.
+// Each stage resolves its contract via findGuestContract + resolveGuestContractInterface,
+// then dispatches through HostInterface.call_guest_method. Stages whose contract is
+// not registered are skipped (mirrors the rust/python reference hosts).
+const decoder = PipelineDecoderContract.create(rt);
+if (decoder) {
+  const result = decoder.decode(inputStr);
   console.log(`[decoder] decode("${inputStr}") = "${result}"`);
+  decoder.destroy();
 }
 
 const decoded = `DECODED:${inputStr.replace(/,/g, "|")}`;
-const transformerHandle = rt.findByContract(ContractIds.DATA_TRANSFORMER_CONTRACT_ID, 0);
-if (transformerHandle !== NULL_HANDLE) {
-  const guard = rt.resolvePlugin(transformerHandle);
-  const result = guard.call(0, decoded);
+const transformer = DataTransformerContract.create(rt);
+if (transformer) {
+  const result = transformer.transform(decoded);
   console.log(`[transformer] transform("${decoded}") = "${result}"`);
+  transformer.destroy();
 }
 
 const transformed = "TRANSFORMED:NAME|value (transformed)|43";
-const encoderHandle = rt.findByContract(ContractIds.PIPELINE_ENCODER_CONTRACT_ID, 0);
-if (encoderHandle !== NULL_HANDLE) {
-  const guard = rt.resolvePlugin(encoderHandle);
-  const result = guard.call(0, transformed);
+const encoder = PipelineEncoderContract.create(rt);
+if (encoder) {
+  const result = encoder.encode(transformed);
   console.log(`[encoder] encode("${transformed}") = "${result}"`);
+  encoder.destroy();
 }
 
-const reporterHandle = rt.findByContract(ContractIds.DATA_REPORTER_CONTRACT_ID, 0);
-if (reporterHandle !== NULL_HANDLE) {
-  const guard = rt.resolvePlugin(reporterHandle);
-  const result = guard.call(0, transformed);
+const reporter = DataReporterContract.create(rt);
+if (reporter) {
+  const result = reporter.report(transformed);
   console.log(`[reporter] report("${transformed}") = "${result}"`);
+  reporter.destroy();
 }
 
-const validatorHandle = rt.findByContract(ContractIds.PIPELINE_VALIDATOR_CONTRACT_ID, 0);
-if (validatorHandle !== NULL_HANDLE) {
-  const guard = rt.resolvePlugin(validatorHandle);
-  const result = guard.call(0, decoded);
+const validator = PipelineValidatorContract.create(rt);
+if (validator) {
+  const result = validator.validate(decoded);
   console.log(`[validator] validate("${decoded}") = "${result}"`);
+  validator.destroy();
 }
 
 console.log("\ndone.");

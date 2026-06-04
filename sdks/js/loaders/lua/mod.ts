@@ -1,3 +1,5 @@
+import type { Runtime } from "../../host/polyplug/mod.js";
+
 let _lib: Deno.DynamicLibrary<typeof LUA_SYMBOLS> | null = null;
 
 const LUA_SYMBOLS = {
@@ -15,10 +17,10 @@ function getLib(): Deno.DynamicLibrary<typeof LUA_SYMBOLS> {
     return _lib;
 }
 
-export function registerLuaLoader(
-    rt: Deno.PointerValue,
-    registerFn: (rt: Deno.PointerValue, loader: Deno.PointerValue) => number
-): void {
+/**
+ * Register the Lua loader with a Runtime under the "lua" runtime name.
+ */
+export function registerLuaLoader(rt: Runtime): void {
     const lib = getLib();
     const cfgBuf = new Uint8Array([0]);
     const cfgPtr = Deno.UnsafePointer.of(cfgBuf);
@@ -26,8 +28,5 @@ export function registerLuaLoader(
     if (loaderPtr === null) {
         throw new Error("polyplug: lua loader create failed");
     }
-    const err = registerFn(rt, loaderPtr);
-    if (err !== 0) {
-        throw new Error(`polyplug: lua loader register failed: ${err}`);
-    }
+    rt.registerLoader("lua", loaderPtr);
 }

@@ -269,7 +269,7 @@ pub struct ResolvedFunction {
 #[derive(Debug)]
 pub struct ResolvedContract {
     pub name: String,
-    /// Precomputed FNV-1a hash of "name@major".
+    /// Precomputed FNV-1a hash of "guest_contract:name@major".
     pub contract_id: u64,
     pub version: Version,
     pub functions: Vec<ResolvedFunction>,

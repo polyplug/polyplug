@@ -45,9 +45,6 @@ pub enum RuntimeError {
     #[error("invalid UTF-8 in plugin-provided data: context={context}")]
     InvalidUtf8 { context: String },
 
-    #[error("file watcher error: {reason}")]
-    WatcherFailed { reason: String },
-
     #[error("hot-reload is disabled in runtime config")]
     HotReloadDisabled,
 }

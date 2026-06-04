@@ -9,7 +9,7 @@ use polyplug_abi::GuestContractHandle;
 use polyplug_abi::HostInterface;
 
 // Import the host_* functions directly for null-host tests
-use polyplug::{host_get_error_len, host_get_last_error, host_load_bundle};
+use polyplug::runtime::{host_get_error_len, host_get_last_error, host_load_bundle};
 
 #[test]
 fn test_runtime_free_null() {
@@ -80,6 +80,7 @@ fn test_resolve_guest_contract_null_handle() {
         "resolve_guest_contract(null handle) must return null"
     );
     // Verify no last_error was set
+    // SAFETY: host is valid (asserted above) and was returned by polyplug_runtime_create.
     let len: usize = unsafe { ((*host).get_error_len)(host) };
     assert_eq!(len, 0, "error_len must be 0 after null handle resolve");
     // SAFETY: host is valid and was allocated by polyplug_runtime_create(core::ptr::null()).

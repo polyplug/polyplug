@@ -477,3 +477,7 @@ tests/fixtures/*.dll
 *.egg-info/
 *.egg
 host-libs/python/loaders/polyplug-loaders-python/build/
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json

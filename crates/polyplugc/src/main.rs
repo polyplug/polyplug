@@ -228,6 +228,17 @@ fn write_files(output: &GenerateOutput, out_dir: &std::path::Path) -> Result<(),
             path: file_path.to_string_lossy().into_owned(),
             source: e,
         })?;
+
+        // Format Rust source files with rustfmt so generated output is already canonical.
+        // rustfmt is a best-effort post-pass: if it is absent or fails (e.g. syntax error
+        // in generated code that cargo will catch later), we do not abort the write.
+        if file_path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            let _ = std::process::Command::new("rustfmt")
+                .arg("--edition")
+                .arg("2024")
+                .arg(&file_path)
+                .status();
+        }
     }
 
     println!("generated {} files", output.files.len());

@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use polyplug::registry::runtime_store::RuntimeStore;
+use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractId, GuestContractInterface,
     HostInterface, NativeDispatch, PluginDescriptor, StringView, Version,
@@ -115,9 +115,10 @@ fn test_swap_interface_changes_interface_pointer() {
         "handle should be valid before swap"
     );
 
-    // SAFETY: interface pointer is valid.
     let interface_ptr_before: *const GuestContractInterface =
         resolve_result_before.expect("resolve before swap should succeed");
+    // SAFETY: interface_ptr_before was returned by resolve_guest_contract and points at
+    // a retained (retire-not-drop) interface that stays valid for the registry's lifetime.
     let version_before: &Version = unsafe { &(*interface_ptr_before).contract_version };
     assert_eq!(
         version_before.major, 1,
@@ -125,7 +126,7 @@ fn test_swap_interface_changes_interface_pointer() {
     );
 
     // Perform the swap - direct swap_interface
-    let new_arc: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2.clone());
+    let new_arc: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2);
     registry
         .swap_guest_contract_interface(handle.index, new_arc)
         .expect("swap_interface should succeed");
@@ -142,9 +143,10 @@ fn test_swap_interface_changes_interface_pointer() {
         "handle should still be valid after swap (no generation tracking)"
     );
 
-    // SAFETY: interface pointer is valid.
     let interface_ptr_after: *const GuestContractInterface =
         resolve_result_after.expect("resolve after swap should succeed");
+    // SAFETY: interface_ptr_after was returned by resolve_guest_contract and points at
+    // a retained (retire-not-drop) interface that stays valid for the registry's lifetime.
     let version_after: &Version = unsafe { &(*interface_ptr_after).contract_version };
     assert_eq!(version_after.major, 2, "after swap: should have version 2");
 }
@@ -178,7 +180,7 @@ fn test_direct_swap_interface() {
     assert_eq!(version_before.major, 1, "before swap: V1");
 
     // Perform direct swap
-    let new_arc: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2.clone());
+    let new_arc: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2);
     registry
         .swap_guest_contract_interface(handle.index, new_arc)
         .expect("swap_interface should succeed");

@@ -3,6 +3,7 @@
 //! Integration tests: multi-bundle discovery, graph resolution, load order, error cases.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use polyplug::compatibility::CapabilityGraph;
 use polyplug::error::GraphError;
@@ -297,7 +298,7 @@ fn unknown_runtime_fails_build() {
         },
     );
 
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .build();
 
@@ -323,7 +324,7 @@ fn explicit_load_bundle_missing_manifest_errors() {
     let bundle_dir: PathBuf = tmp.path().join("no_manifest_bundle");
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
 
-    let rt: Runtime = Runtime::builder().build().expect("build should succeed");
+    let rt: Arc<Runtime> = Runtime::builder().build().expect("build should succeed");
 
     let result: Result<(), RuntimeError> = rt.load_bundle(&bundle_dir);
     assert!(

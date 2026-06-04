@@ -10,9 +10,11 @@
 //! - Missing contracts return None
 //! - Unregister functionality
 
+use std::sync::Arc;
+
 use polyplug::runtime::Runtime;
 use polyplug_abi::{
-    DispatchMechanisms, DispatchType, HostContractInterface, HostInterface, NativeDispatch, Version,
+    DispatchMechanisms, DispatchType, HostContractInterface, NativeDispatch, Version,
 };
 use polyplug_utils::HostContractId;
 
@@ -70,7 +72,7 @@ fn create_static_interface(
 
 #[test]
 fn register_host_contract_success() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -86,7 +88,7 @@ fn register_host_contract_success() {
 
 #[test]
 fn register_host_contract_duplicate_returns_error() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -121,7 +123,7 @@ fn register_host_contract_duplicate_returns_error() {
 
 #[test]
 fn register_multiple_contracts() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -157,7 +159,7 @@ fn register_multiple_contracts() {
 
 #[test]
 fn get_host_contract_found() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -190,7 +192,7 @@ fn get_host_contract_found() {
 
 #[test]
 fn get_host_contract_not_found_returns_none() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -206,7 +208,7 @@ fn get_host_contract_not_found_returns_none() {
 
 #[test]
 fn get_host_contract_after_unregister() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -238,7 +240,7 @@ fn get_host_contract_after_unregister() {
 
 #[test]
 fn unregister_nonexistent_contract_returns_false() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -255,7 +257,7 @@ fn unregister_nonexistent_contract_returns_false() {
 
 #[test]
 fn get_host_contract_version_check_exact_match() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -281,7 +283,7 @@ fn get_host_contract_version_check_exact_match() {
 
 #[test]
 fn get_host_contract_version_check_lower_minor_succeeds() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -307,7 +309,7 @@ fn get_host_contract_version_check_lower_minor_succeeds() {
 
 #[test]
 fn get_host_contract_version_check_higher_minor_fails() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -333,7 +335,7 @@ fn get_host_contract_version_check_higher_minor_fails() {
 
 #[test]
 fn get_host_contract_version_check_higher_major_fails() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -359,7 +361,7 @@ fn get_host_contract_version_check_higher_major_fails() {
 
 #[test]
 fn get_host_contract_version_check_zero_succeeds() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -385,14 +387,11 @@ fn get_host_contract_version_check_zero_succeeds() {
 
 #[test]
 fn concurrent_register_and_lookup() {
-    use std::sync::Arc;
     use std::thread;
 
-    let runtime: Arc<Runtime> = Arc::new(
-        Runtime::builder()
-            .build()
-            .expect("runtime build should succeed"),
-    );
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .build()
+        .expect("runtime build should succeed");
 
     let contract_id: u64 = 0x6666_7777_8888_9999;
     let interface: &'static HostContractInterface =
@@ -439,14 +438,11 @@ fn concurrent_register_and_lookup() {
 
 #[test]
 fn concurrent_lookups_multiple_contracts() {
-    use std::sync::Arc;
     use std::thread;
 
-    let runtime: Arc<Runtime> = Arc::new(
-        Runtime::builder()
-            .build()
-            .expect("runtime build should succeed"),
-    );
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .build()
+        .expect("runtime build should succeed");
 
     // Register multiple contracts
     let contract_ids: [u64; 5] = [
@@ -497,14 +493,11 @@ fn concurrent_lookups_multiple_contracts() {
 
 #[test]
 fn concurrent_register_different_contracts() {
-    use std::sync::Arc;
     use std::thread;
 
-    let runtime: Arc<Runtime> = Arc::new(
-        Runtime::builder()
-            .build()
-            .expect("runtime build should succeed"),
-    );
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .build()
+        .expect("runtime build should succeed");
 
     let contract_ids: [u64; 10] = [
         0x2000_0000_0000_0001,
@@ -562,7 +555,7 @@ fn concurrent_register_different_contracts() {
 
 #[test]
 fn get_host_contract_with_contract_id_helper() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -588,7 +581,7 @@ fn get_host_contract_with_contract_id_helper() {
 
 #[test]
 fn register_unregister_register_same_contract() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 
@@ -629,7 +622,7 @@ fn register_unregister_register_same_contract() {
 
 #[test]
 fn get_host_contract_min_version_zero_matches_all() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
 

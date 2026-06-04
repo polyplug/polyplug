@@ -51,11 +51,6 @@ def get_host_interface() -> int:
     return _host_interface_ptr
 
 
-# Legacy aliases for backwards compatibility
-store_host_vtable = store_host_interface
-get_host_vtable = get_host_interface
-
-
 def _init_allocator(host_interface_ptr: int, rt_ctx: int) -> None:
     """Initialize the allocator with host interface pointers."""
     global _host_alloc, _host_free
@@ -80,8 +75,13 @@ def alloc_string(s: str) -> StringView:
     import ctypes
 
     encoded = s.encode("utf-8")
-    ptr = ctypes.cast(
-        _host_alloc, ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
-    )(len(encoded), 1)
+    # The host allocator uses the self-passing convention: alloc(this, size, align).
+    # `_host_alloc` is already the correctly typed HostInterface.alloc CFUNCTYPE
+    # field, so it must be called with the host interface pointer as the first
+    # argument. Dropping it (calling as (size, align)) shifts every argument by a
+    # register and corrupts the allocation request.
+    ptr = _host_alloc(_host_interface_ptr, len(encoded), 1)
     ctypes.memmove(ptr, encoded, len(encoded))
-    return StringView(ptr=ctypes.c_char_p(ptr), len=len(encoded))
+    # StringView.ptr is c_void_p; pass the raw integer address (ctypes returns
+    # the alloc result as an int) rather than a c_char_p, which is incompatible.
+    return StringView(ptr=ptr, len=len(encoded))

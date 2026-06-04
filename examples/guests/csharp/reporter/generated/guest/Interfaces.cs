@@ -18,14 +18,14 @@ public static class ReporterInterfaces {
         // For stateful plugins, users override create_instance and use instance.Data.
         try {
             if (argsPtr == IntPtr.Zero) {
-                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+                return new AbiError { Code = AbiErrorCode.InvalidPointer };
             }
             if (outPtr == IntPtr.Zero) {
-                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+                return new AbiError { Code = AbiErrorCode.InvalidPointer };
             }
             var impl = _impl_reporter ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, "not initialized");
             // call impl
-            return new AbiError { Code = 0 };
+            return new AbiError { Code = AbiErrorCode.Ok };
         } catch (Polyplug.Guest.GuestException ex) {
             var msg = StringHelpers.AllocString(ex.Message);
             return new AbiError { Code = ex.Code, Message = msg };

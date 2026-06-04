@@ -38,11 +38,25 @@ unsafe extern "C" fn null_destroy_instance(
 /// The interface must be `'static` because `Registry::register` stores a raw pointer
 /// that must remain valid for the registry's lifetime.
 fn make_static_interface(cid: GuestContractId) -> &'static GuestContractInterface {
+    make_static_interface_minor(cid, 0)
+}
+
+/// Like `make_static_interface`, but with a caller-chosen minor version.
+///
+/// `RuntimeStore::register_guest_contract` copies the interface into an
+/// `Arc<GuestContractInterface>` (`Arc::new(*ptr)`), so a resolved handle never
+/// points back at the original leaked allocation. Tests that must tell two
+/// otherwise-identical registrations apart distinguish them by interface *content*
+/// (here, the minor version) rather than by pointer identity.
+fn make_static_interface_minor(
+    cid: GuestContractId,
+    minor: u32,
+) -> &'static GuestContractInterface {
     Box::leak(Box::new(GuestContractInterface {
         contract_id: cid,
         contract_version: Version {
             major: 1,
-            minor: 0,
+            minor,
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
@@ -75,8 +89,9 @@ fn make_desc(plugin_name: &'static str, contract_name: &'static str) -> PluginDe
 mod tests {
     use super::make_desc;
     use super::make_static_interface;
+    use super::make_static_interface_minor;
     use polyplug::error::RegistryError;
-    use polyplug::registry::runtime_store::RuntimeStore;
+    use polyplug::runtime_store::RuntimeStore;
     use polyplug_abi::GuestContractHandle;
     use polyplug_abi::GuestContractInterface;
     use polyplug_abi::PluginDescriptor;
@@ -154,8 +169,10 @@ mod tests {
         let cid: GuestContractId = GuestContractId::new("audio.Decoder", 0);
         let bid_a: BundleId = BundleId::new("bundle-a");
         let bid_b: BundleId = BundleId::new("bundle-b");
-        let interface_a: &'static GuestContractInterface = make_static_interface(cid);
-        let interface_b: &'static GuestContractInterface = make_static_interface(cid);
+        // Distinguish the two registrations by interface content (minor version):
+        // the store copies interfaces on register, so pointer identity cannot be used.
+        let interface_a: &'static GuestContractInterface = make_static_interface_minor(cid, 7);
+        let interface_b: &'static GuestContractInterface = make_static_interface_minor(cid, 9);
 
         // SAFETY: interfaces are 'static.
         unsafe {
@@ -184,14 +201,24 @@ mod tests {
             .find_guest_contract_by_bundle(bid_b, cid, 0)
             .expect("find_by_bundle(bundle-b) should succeed");
 
-        // Resolve and verify the interface pointer belongs to bundle-b.
+        // Resolve and verify the interface content belongs to bundle-b, not bundle-a.
+        // The store copies interfaces on register (`Arc::new(*ptr)`), so we compare
+        // content (minor version) rather than pointer identity against the original.
         let resolved_ptr: *const GuestContractInterface = registry
             .resolve_guest_contract(found)
             .expect("resolve must succeed for a freshly registered handle");
 
+        // SAFETY: `resolved_ptr` points to a live interface owned by the registry,
+        // which outlives this borrow.
+        let resolved_minor: u32 = unsafe { (*resolved_ptr).contract_version.minor };
+
         assert_eq!(
-            resolved_ptr, interface_b as *const GuestContractInterface,
-            "resolved interface must be bundle-b's interface, not bundle-a's"
+            resolved_minor, interface_b.contract_version.minor,
+            "resolved interface must be bundle-b's interface (minor=9), not bundle-a's (minor=7)"
+        );
+        assert_ne!(
+            resolved_minor, interface_a.contract_version.minor,
+            "resolved interface must not be bundle-a's interface"
         );
     }
 

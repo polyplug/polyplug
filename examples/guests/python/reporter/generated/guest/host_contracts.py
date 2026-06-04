@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Self
-from polyplug_guest.abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractVTable, HostInterface, StringView
+from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractInterface, HostInterface, StringView
 
 from guest.types import LogLevel
 
@@ -32,22 +32,20 @@ class HostLoggerContract:
     def log(self, message: str) -> None:
         if self._interface == 0:
             return
-        header: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractVTable)).contents.header
-        if 0 >= header.function_count:
-            return
-        dispatch_type: int = header.dispatch_type
+        iface: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractInterface)).contents
+        dispatch_type: int = iface.dispatch_type
         message_bytes: bytes = message.encode('utf-8')
-        message_view: StringView = StringView(ptr=ctypes.c_char_p(message_bytes), len=len(message_bytes))
+        message_view: StringView = StringView(ptr=ctypes.cast(ctypes.c_char_p(message_bytes), ctypes.c_void_p), len=len(message_bytes))
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(message_view), ctypes.c_void_p)
         out_ptr: ctypes.c_void_p = ctypes.c_void_p()
         err: AbiError
         if dispatch_type == DispatchType.Native:
-            fn_ptr: int = ctypes.cast(header.dispatch.native.functions + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
-            impl_ptr: int = ctypes.cast(header.dispatch.native.impl_ptr, ctypes.c_void_p).value
+            fn_ptr: int = ctypes.cast(iface.dispatch.native.functions + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            impl_ptr: int = ctypes.cast(iface.dispatch.native.impl_ptr, ctypes.c_void_p).value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             err = dispatch_fn(impl_ptr, args_ptr, out_ptr)
         elif dispatch_type == DispatchType.VirtualMachine:
-            err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, 0, args_ptr, out_ptr)
+            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, 0, args_ptr, out_ptr)
         else:
             return
         if err.code != AbiErrorCode.Ok:
@@ -56,24 +54,22 @@ class HostLoggerContract:
     def log_with_level(self, level: LogLevel, message: str) -> None:
         if self._interface == 0:
             return
-        header: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractVTable)).contents.header
-        if 1 >= header.function_count:
-            return
-        dispatch_type: int = header.dispatch_type
+        iface: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractInterface)).contents
+        dispatch_type: int = iface.dispatch_type
         args_val: dict[str, Any] = {}
         args_val['level'] = level
         message_bytes: bytes = message.encode('utf-8')
-        args_val['message'] = StringView(ptr=ctypes.c_char_p(message_bytes), len=len(message_bytes))
+        args_val['message'] = StringView(ptr=ctypes.cast(ctypes.c_char_p(message_bytes), ctypes.c_void_p), len=len(message_bytes))
         args_ptr: ctypes.c_void_p = ctypes.c_void_p(ctypes.addressof(args_val))
         out_ptr: ctypes.c_void_p = ctypes.c_void_p()
         err: AbiError
         if dispatch_type == DispatchType.Native:
-            fn_ptr: int = ctypes.cast(header.dispatch.native.functions + 1 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
-            impl_ptr: int = ctypes.cast(header.dispatch.native.impl_ptr, ctypes.c_void_p).value
+            fn_ptr: int = ctypes.cast(iface.dispatch.native.functions + 1 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            impl_ptr: int = ctypes.cast(iface.dispatch.native.impl_ptr, ctypes.c_void_p).value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             err = dispatch_fn(impl_ptr, args_ptr, out_ptr)
         elif dispatch_type == DispatchType.VirtualMachine:
-            err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, 1, args_ptr, out_ptr)
+            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, 1, args_ptr, out_ptr)
         else:
             return
         if err.code != AbiErrorCode.Ok:

@@ -69,7 +69,10 @@ impl JsGenerator {
         }
 
         match rust_type {
-            "u64" | "i64" => String::from("bigint"),
+            // `#[repr(transparent)]` u64 newtypes from polyplug_utils.
+            "u64" | "i64" | "BundleId" | "GuestContractId" | "HostContractId" => {
+                String::from("bigint")
+            }
             "u32" | "i32" | "u16" | "i16" | "u8" | "i8" => String::from("number"),
             "usize" | "isize" => String::from("number"),
             "bool" => String::from("boolean"),

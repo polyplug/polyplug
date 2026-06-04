@@ -18,8 +18,9 @@ public struct AddArgs
 
 public static class Plugin
 {
-    // test.add contract ID = FNV-1a("test.add@1") = 0xCC4232FAB0410D2B
-    private const ulong TEST_ADD_CONTRACT_ID = 0xCC4232FAB0410D2BUL;
+    // test.add contract ID = FNV-1a("guest_contract:test.add@1") = 0x40244DF59FCBECB6
+    // Must match polyplug_utils::guest_contract_id("test.add", 1).
+    private const ulong TEST_ADD_CONTRACT_ID = 0x40244DF59FCBECB6UL;
 
     private static readonly nint[] s_functions = new nint[4];
     private static GuestContractInterface s_interface;
@@ -44,10 +45,10 @@ public static class Plugin
             s_interface = new GuestContractInterface
             {
                 ContractId = TEST_ADD_CONTRACT_ID,
-                ContractVersion = new Version { Major = 1, Minor = 0, Patch = 0 },
+                ContractVersion = new Polyplug.Abi.Version { Major = 1, Minor = 0, Patch = 0 },
                 DispatchType = DispatchType.Native,
-                CreateInstance = null,
-                DestroyInstance = null,
+                CreateInstance = nint.Zero,
+                DestroyInstance = nint.Zero,
                 Dispatch = new DispatchMechanisms
                 {
                     Native = new NativeDispatch { FunctionCount = 4, Functions = s_functionsPtr }
@@ -61,7 +62,7 @@ public static class Plugin
                 {
                     Name = new StringView { Ptr = (nint)namePtr, Len = (nuint)s_nameBytes.Length },
                     ContractName = new StringView { Ptr = (nint)contractPtr, Len = (nuint)s_contractBytes.Length },
-                    Version = new Version { Major = 1, Minor = 0, Patch = 0 }
+                    Version = new Polyplug.Abi.Version { Major = 1, Minor = 0, Patch = 0 }
                 };
             }
         }
@@ -76,7 +77,7 @@ public static class Plugin
             var outPtr = (uint*)result;
             *outPtr = addArgs->A + addArgs->B;
         }
-        return new AbiError { Code = (uint)AbiErrorCode.Ok };
+        return new AbiError { Code = AbiErrorCode.Ok };
     }
 
     [UnmanagedCallersOnly]
@@ -88,7 +89,7 @@ public static class Plugin
             var outPtr = (uint*)result;
             *outPtr = addArgs->A + addArgs->B;
         }
-        return new AbiError { Code = (uint)AbiErrorCode.Ok };
+        return new AbiError { Code = AbiErrorCode.Ok };
     }
 
     [UnmanagedCallersOnly]
@@ -102,13 +103,13 @@ public static class Plugin
                 *outPtr = new StringView { Ptr = (nint)ptr, Len = (nuint)s_versionBytes.Length };
             }
         }
-        return new AbiError { Code = (uint)AbiErrorCode.Ok };
+        return new AbiError { Code = AbiErrorCode.Ok };
     }
 
     [UnmanagedCallersOnly]
     public static AbiError Reset(nint args, nint result)
     {
-        return new AbiError { Code = (uint)AbiErrorCode.Ok };
+        return new AbiError { Code = AbiErrorCode.Ok };
     }
 
     [UnmanagedCallersOnly(EntryPoint = "PolyplugInit")]
@@ -124,8 +125,10 @@ public static class Plugin
             fixed (PluginDescriptor* descPtr = &s_descriptor)
             fixed (GuestContractInterface* ifacePtr = &s_interface)
             {
-                var result = host->RegisterContract((nint)host, (nint)descPtr, (nint)ifacePtr);
-                return result.Code;
+                var registerContract =
+                    (delegate* unmanaged[Cdecl]<nint, nint, nint, AbiError>)host->RegisterContract;
+                AbiError result = registerContract((nint)host, (nint)descPtr, (nint)ifacePtr);
+                return (uint)result.Code;
             }
         }
     }

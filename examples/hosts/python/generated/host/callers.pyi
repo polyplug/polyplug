@@ -6,7 +6,7 @@ from __future__ import annotations
 import ctypes
 from typing import Callable, Optional
 
-from polyplug.abi import AbiErrorCode, NULL_HANDLE, GuestContractInterface, StringView
+from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostInterface, StringView
 
 class ContractError(Exception): ...
 
@@ -16,10 +16,8 @@ PIPELINE_ENCODER_CONTRACT_ID: int
 DATA_REPORTER_CONTRACT_ID: int
 PIPELINE_VALIDATOR_CONTRACT_ID: int
 
-class _GuestContractInstance(ctypes.Structure): ...
-
 POLYPLUG_ABI_VERSION: int
-_DISPATCH_FN_TYPE = Callable[[_GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p], int]
+_DISPATCH_FN_TYPE = Callable[[GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p], int]
 
 class PipelineDecoderContractCaller:
     def __init__(self, handle: int, host: ctypes.c_void_p) -> None: ...

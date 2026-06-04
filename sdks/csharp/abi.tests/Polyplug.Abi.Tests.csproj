@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Target framework -->
+    <TargetFramework>net10.0</TargetFramework>
+
+    <!-- Assembly and namespace -->
+    <AssemblyName>Polyplug.Abi.Tests</AssemblyName>
+    <RootNamespace>Polyplug.Abi.Tests</RootNamespace>
+
+    <!-- Test project, not published to NuGet -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\abi\Polyplug.Abi.csproj" />
+  </ItemGroup>
+</Project>

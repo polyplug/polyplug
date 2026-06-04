@@ -13,7 +13,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::OnceLock;
 use tempfile::TempDir;
 
 struct NoopLoader;
@@ -38,25 +37,6 @@ impl BundleLoader for NoopLoader {
     ) -> Result<(), polyplug::error::RuntimeError> {
         Err(polyplug::error::RuntimeError::HotReloadDisabled)
     }
-}
-
-static WARNING_SINK: OnceLock<Arc<Mutex<Vec<String>>>> = OnceLock::new();
-
-fn shared_warning_sink() -> Arc<Mutex<Vec<String>>> {
-    Arc::clone(WARNING_SINK.get_or_init(|| Arc::new(Mutex::new(Vec::new()))))
-}
-
-#[allow(dead_code)]
-fn ensure_warning_registered() {
-    static REGISTER: OnceLock<()> = OnceLock::new();
-    REGISTER.get_or_init(|| {
-        let sink: Arc<Mutex<Vec<String>>> = shared_warning_sink();
-        let _: Result<_, _> = Runtime::builder()
-            .on_warning(move |msg: &str| {
-                sink.lock().expect("lock").push(msg.to_owned());
-            })
-            .build();
-    });
 }
 
 fn write_bundle_manifest(
@@ -136,7 +116,7 @@ fn compatible_exact_version_strict_loads_ok() {
         &[],
         &[("test.contract", cid, "1.0")],
     );
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
@@ -165,7 +145,7 @@ fn compatible_superset_version_strict_loads_ok() {
         &[],
         &[("test.contract", cid, "1.0")],
     );
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
@@ -193,7 +173,7 @@ fn compatible_superset_version_relaxed_loads_ok() {
         &[],
         &[("test.contract", cid, "1.0")],
     );
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
@@ -221,7 +201,7 @@ fn compatible_superset_version_yolo_loads_ok() {
         &[],
         &[("test.contract", cid, "1.0")],
     );
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
@@ -254,7 +234,7 @@ fn too_old_strict_returns_version_mismatch() {
         &[],
         &[("test.contract", cid, "1.2")],
     );
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
@@ -270,8 +250,7 @@ fn too_old_strict_returns_version_mismatch() {
 
 #[test]
 fn too_old_relaxed_warns_and_loads() {
-    let sink: Arc<Mutex<Vec<String>>> = shared_warning_sink();
-    sink.lock().expect("lock").clear();
+    let sink: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let tmp: TempDir = TempDir::new().expect("tmp");
     let cid: u64 = guest_contract_id("test.contract", 1);
     // Provider at 1.0, consumer requires 1.2
@@ -292,7 +271,7 @@ fn too_old_relaxed_warns_and_loads() {
         &[("test.contract", cid, "1.2")],
     );
     let sink_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&sink);
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
@@ -330,7 +309,7 @@ fn too_old_yolo_loads_silently() {
         &[],
         &[("test.contract", cid, "1.2")],
     );
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
@@ -363,7 +342,7 @@ fn major_mismatch_strict_returns_version_mismatch() {
         &[],
         &[("test.contract", cid, "2.0")],
     );
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
@@ -379,8 +358,7 @@ fn major_mismatch_strict_returns_version_mismatch() {
 
 #[test]
 fn major_mismatch_relaxed_warns_and_loads() {
-    let sink: Arc<Mutex<Vec<String>>> = shared_warning_sink();
-    sink.lock().expect("lock").clear();
+    let sink: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let tmp: TempDir = TempDir::new().expect("tmp");
     let cid: u64 = guest_contract_id("test.contract", 1);
     // Provider at 1.0, consumer requires 2.0
@@ -401,7 +379,7 @@ fn major_mismatch_relaxed_warns_and_loads() {
         &[("test.contract", cid, "2.0")],
     );
     let sink_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&sink);
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
@@ -439,7 +417,7 @@ fn major_mismatch_yolo_loads_silently() {
         &[],
         &[("test.contract", cid, "2.0")],
     );
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
@@ -473,7 +451,7 @@ fn function_count_mismatch_strict_returns_error() {
         &[],
         &[("test.contract", cid, "1.0")],
     );
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
@@ -491,8 +469,7 @@ fn function_count_mismatch_strict_returns_error() {
 
 #[test]
 fn function_count_mismatch_relaxed_warns_and_loads() {
-    let sink: Arc<Mutex<Vec<String>>> = shared_warning_sink();
-    sink.lock().expect("lock").clear();
+    let sink: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let tmp: TempDir = TempDir::new().expect("tmp");
     let cid: u64 = guest_contract_id("test.contract", 1);
     // Provider: NO function_count entry (empty {})
@@ -513,7 +490,7 @@ fn function_count_mismatch_relaxed_warns_and_loads() {
         &[("test.contract", cid, "1.0")],
     );
     let sink_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&sink);
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
@@ -549,7 +526,7 @@ fn function_count_mismatch_yolo_ignored() {
         &[],
         &[("test.contract", cid, "1.0")],
     );
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
@@ -585,7 +562,7 @@ fn malformed_version_returns_manifest_parse_error() {
         &[],
         &[("test.contract", cid, "1.0")],
     );
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)

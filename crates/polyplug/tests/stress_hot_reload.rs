@@ -19,13 +19,17 @@ use std::sync::Mutex;
 
 use polyplug::ReloadPhase;
 use polyplug::error::RuntimeError;
-use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug::runtime::Runtime;
+use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractId, GuestContractInterface, HostInterface,
     NativeDispatch, PluginDescriptor, ReloadPhaseType, StringView, Version,
 };
 use polyplug_utils::BundleId;
+
+mod common;
+
+use common::TestNativeLoader;
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
 
@@ -141,9 +145,10 @@ fn hot_reload_config() -> polyplug::RuntimeConfig {
     }
 }
 
-fn make_hot_reload_runtime() -> Runtime {
+fn make_hot_reload_runtime() -> Arc<Runtime> {
     Runtime::builder()
         .config(hot_reload_config())
+        .loader(TestNativeLoader::new())
         .build()
         .expect("runtime build must succeed")
 }
@@ -151,6 +156,10 @@ fn make_hot_reload_runtime() -> Runtime {
 fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::GuestContractHandle = rt.find_guest_contract(contract_id, 0).ok()?;
     let interface_ptr: *const GuestContractInterface = rt.resolve_guest_contract(handle).ok()?;
+    // SAFETY: interface_ptr was returned by resolve_guest_contract and points at a retained
+    // (retire-not-drop) interface valid for the runtime's lifetime. dispatch.native is the
+    // active variant for these native test interfaces, and functions[0] is the version fn
+    // matching the `extern "C" fn() -> u32` signature the test plugins export.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*interface_ptr).dispatch.native.functions;
         core::mem::transmute(*fns)
@@ -168,7 +177,7 @@ fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() 
 fn stress_rapid_reload_cycles_100() {
     const CYCLES: u32 = 100_u32;
 
-    let rt: Runtime = make_hot_reload_runtime();
+    let rt: Arc<Runtime> = make_hot_reload_runtime();
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 
@@ -246,7 +255,7 @@ fn stress_memory_interface_swap_cycles() {
             &INTERFACE_MEM_A
         };
 
-        let new_arc: Arc<GuestContractInterface> = Arc::new(new_interface.clone());
+        let new_arc: Arc<GuestContractInterface> = Arc::new(*new_interface);
         registry
             .swap_guest_contract_interface(handle.index, new_arc)
             .unwrap_or_else(|e| panic!("swap_interface failed at cycle {cycle}: {e}"));
@@ -332,7 +341,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
             &INTERFACE_QU_A
         };
 
-        let new_arc: Arc<GuestContractInterface> = Arc::new(new_interface.clone());
+        let new_arc: Arc<GuestContractInterface> = Arc::new(*new_interface);
         registry
             .swap_guest_contract_interface(handle.index, new_arc)
             .unwrap_or_else(|e| panic!("swap_interface failed at round {round}: {e}"));
@@ -355,7 +364,7 @@ fn stress_interface_handoff_correctness_no_torn_reads() {
     const DISPATCHER_THREADS: usize = 6_usize;
     const RELOAD_ROUNDS: u32 = 80_u32;
 
-    let rt: Arc<Runtime> = Arc::new(make_hot_reload_runtime());
+    let rt: Arc<Runtime> = make_hot_reload_runtime();
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 
@@ -387,6 +396,10 @@ fn stress_interface_handoff_correctness_no_torn_reads() {
                     > = rt_clone.resolve_guest_contract(plugin_handle);
 
                     if let Ok(vt_ptr) = resolve_result {
+                        // SAFETY: vt_ptr was returned by resolve_guest_contract and points at a
+                        // retained (retire-not-drop) interface valid for the runtime's lifetime.
+                        // dispatch.native is the active variant and functions[0] is the version fn
+                        // matching the `extern "C" fn() -> u32` signature the test plugins export.
                         let version: u32 = unsafe {
                             let fn_ptr: *const () = *(*vt_ptr).dispatch.native.functions;
                             let version_fn: extern "C" fn() -> u32 = core::mem::transmute(fn_ptr);
@@ -442,11 +455,12 @@ fn stress_reload_callback_fires_on_every_cycle() {
     let events: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let events_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&events);
 
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .config(polyplug::RuntimeConfig {
             hot_reload_enabled: true,
             ..polyplug::RuntimeConfig::default()
         })
+        .loader(TestNativeLoader::new())
         .on_reload(move |ev: ReloadPhase| {
             events_clone
                 .lock()
@@ -504,7 +518,7 @@ fn stress_reload_callback_fires_on_every_cycle() {
 fn stress_concurrent_reload_threads_no_panic() {
     const ROUNDS_PER_THREAD: u32 = 40_u32;
 
-    let rt: Arc<Runtime> = Arc::new(make_hot_reload_runtime());
+    let rt: Arc<Runtime> = make_hot_reload_runtime();
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 

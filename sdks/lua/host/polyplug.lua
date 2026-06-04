@@ -63,9 +63,8 @@ end
 M.NULL_HANDLE = runtime.NULL_HANDLE
 M.AbiErrorCode = abi.AbiErrorCode
 
-M.contract_id = abi.contract_id
 M.bundle_id = abi.bundle_id
-M.extension_id = abi.extension_id
+M.guest_contract_id = abi.guest_contract_id
 M.host_contract_id = runtime.host_contract_id
 
 M.Runtime = runtime.Runtime

@@ -4,7 +4,7 @@
 // Run with: dotnet test
 
 using System;
-using Polyplug;
+using Polyplug.Host;
 
 namespace Polyplug.Tests;
 
@@ -222,89 +222,6 @@ public static class ReloadPhaseTests
 }
 
 /// <summary>
-/// Unit tests for RuntimeConfig class.
-/// </summary>
-public static class RuntimeConfigTests
-{
-    public static void DefaultConstructorSetsDefaultValues()
-    {
-        var config = new RuntimeConfig();
-
-        if (config.HotReloadMaxRetries != 3u)
-        {
-            throw new Exception("default HotReloadMaxRetries should be 3");
-        }
-        if (config.HotReloadRetryIntervalMs != 1000UL)
-        {
-            throw new Exception("default HotReloadRetryIntervalMs should be 1000");
-        }
-        if (!config.HotReloadAbortOnMaxRetries)
-        {
-            throw new Exception("default HotReloadAbortOnMaxRetries should be true");
-        }
-    }
-
-    public static void ParameterizedConstructorSetsCustomValues()
-    {
-        var config = new RuntimeConfig(10u, 5000UL, false);
-
-        if (config.HotReloadMaxRetries != 10u)
-        {
-            throw new Exception("custom HotReloadMaxRetries should be 10");
-        }
-        if (config.HotReloadRetryIntervalMs != 5000UL)
-        {
-            throw new Exception("custom HotReloadRetryIntervalMs should be 5000");
-        }
-        if (config.HotReloadAbortOnMaxRetries)
-        {
-            throw new Exception("custom HotReloadAbortOnMaxRetries should be false");
-        }
-    }
-
-    public static void PropertiesCanBeModified()
-    {
-        var config = new RuntimeConfig();
-        config.HotReloadMaxRetries = 5u;
-        config.HotReloadRetryIntervalMs = 2000UL;
-        config.HotReloadAbortOnMaxRetries = false;
-
-        if (config.HotReloadMaxRetries != 5u)
-        {
-            throw new Exception("modified HotReloadMaxRetries should be 5");
-        }
-        if (config.HotReloadRetryIntervalMs != 2000UL)
-        {
-            throw new Exception("modified HotReloadRetryIntervalMs should be 2000");
-        }
-        if (config.HotReloadAbortOnMaxRetries)
-        {
-            throw new Exception("modified HotReloadAbortOnMaxRetries should be false");
-        }
-    }
-
-    public static void AllowsZeroRetries()
-    {
-        var config = new RuntimeConfig { HotReloadMaxRetries = 0u };
-
-        if (config.HotReloadMaxRetries != 0u)
-        {
-            throw new Exception("HotReloadMaxRetries should allow 0");
-        }
-    }
-
-    public static void AllowsLargeRetryInterval()
-    {
-        var config = new RuntimeConfig { HotReloadRetryIntervalMs = ulong.MaxValue };
-
-        if (config.HotReloadRetryIntervalMs != ulong.MaxValue)
-        {
-            throw new Exception("HotReloadRetryIntervalMs should allow large values");
-        }
-    }
-}
-
-/// <summary>
 /// Test runner entry point.
 /// </summary>
 public static class TestRunner
@@ -351,15 +268,6 @@ public static class TestRunner
 
         Console.WriteLine("\n=== ReloadPhase ToString ===");
         RunTest(ReloadPhaseTests.ToStringIncludesAllRelevantFields, "ToStringIncludesAllRelevantFields");
-
-        Console.WriteLine("\n=== RuntimeConfig Default Values ===");
-        RunTest(RuntimeConfigTests.DefaultConstructorSetsDefaultValues, "DefaultConstructorSetsDefaultValues");
-
-        Console.WriteLine("\n=== RuntimeConfig Custom Values ===");
-        RunTest(RuntimeConfigTests.ParameterizedConstructorSetsCustomValues, "ParameterizedConstructorSetsCustomValues");
-        RunTest(RuntimeConfigTests.PropertiesCanBeModified, "PropertiesCanBeModified");
-        RunTest(RuntimeConfigTests.AllowsZeroRetries, "AllowsZeroRetries");
-        RunTest(RuntimeConfigTests.AllowsLargeRetryInterval, "AllowsLargeRetryInterval");
 
         Console.WriteLine("\n========================================");
         Console.WriteLine($"Tests passed: {_passed}");

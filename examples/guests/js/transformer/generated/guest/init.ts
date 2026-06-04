@@ -5,7 +5,13 @@
 import {
     TRANSFORMER_INTERFACE
 } from './contracts';
-import { storeHostVtable } from 'polyplug-guest';
+
+// Inline host vtable storage — replaces 'polyplug-guest' import
+// because QuickJS loader exposes 'polyplug' global, not 'polyplug-guest' module.
+function storeHostVtable(lo: number, hi: number): void {
+    (globalThis as any).polyplug._hostVtableLo = lo;
+    (globalThis as any).polyplug._hostVtableHi = hi;
+}
 
 // ABI error codes (match polyplug_abi.AbiErrorCode)
 const AbiErrorCode = {
@@ -43,12 +49,12 @@ export function polyplug_init(
 
     // Get polyplug host interface from globalThis
     const polyplug = (globalThis as any).polyplug;
-    if (!polyplug || !polyplug.register_contract) {
+    if (!polyplug || !polyplug.registerVtable) {
         return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };
     }
 
     // Register plugin: transformer
-    polyplug.register_contract(
+    polyplug.registerVtable(
         TRANSFORMER_INTERFACE.contractLo,
         TRANSFORMER_INTERFACE.contractHi,
         TRANSFORMER_INTERFACE,

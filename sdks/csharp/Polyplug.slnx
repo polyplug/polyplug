@@ -1,9 +1,11 @@
 <Solution>
   <Folder Name="/abi/">
     <Project Path="abi\Polyplug.Abi.csproj" />
+    <Project Path="abi.tests\Polyplug.Abi.Tests.csproj" />
   </Folder>
   <Folder Name="/host/">
     <Project Path="host\Polyplug.Host.csproj" />
+    <Project Path="host.tests\Polyplug.Host.Tests.csproj" />
   </Folder>
   <Folder Name="/guest/">
     <Project Path="guest\Polyplug.Guest.csproj" />

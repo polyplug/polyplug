@@ -6,9 +6,9 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_abi::StringView;
-use polyplug_abi::Buffer;
 use super::types::*;
+use polyplug_abi::Buffer;
+use polyplug_abi::StringView;
 
 /// Host trait for contract `host.logger` (id=0xF53EB5F2845853BB)
 /// Hosts implement this trait to provide functionality to plugins.
@@ -19,4 +19,3 @@ pub trait HostLogger: Send + Sync {
 
 /// Contract ID constant for `host.logger` (FNV-1a of "host_contract:host.logger@1")
 pub const HOSTLOGGER_CONTRACT_ID: u64 = 0xF53EB5F2845853BB;
-

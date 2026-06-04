@@ -338,19 +338,19 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                 out.push_str("        try {\n");
                 if has_params {
                     out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
-                    out.push_str("                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n");
+                    out.push_str("                return new AbiError { Code = AbiErrorCode.InvalidPointer };\n");
                     out.push_str("            }\n");
                 }
                 if has_return {
                     out.push_str("            if (outPtr == IntPtr.Zero) {\n");
-                    out.push_str("                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n");
+                    out.push_str("                return new AbiError { Code = AbiErrorCode.InvalidPointer };\n");
                     out.push_str("            }\n");
                 }
                 out.push_str(&format!(
                     "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, \"not initialized\");\n"
                 ));
                 out.push_str("            // call impl\n");
-                out.push_str("            return new AbiError { Code = 0 };\n");
+                out.push_str("            return new AbiError { Code = AbiErrorCode.Ok };\n");
                 out.push_str("        } catch (Polyplug.Guest.GuestException ex) {\n");
                 out.push_str("            var msg = StringHelpers.AllocString(ex.Message);\n");
                 out.push_str(
@@ -516,12 +516,16 @@ fn generate_cs_guest_plugin_interface(
         out.push_str("        try {\n");
         if has_params {
             out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
-            out.push_str("                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n");
+            out.push_str(
+                "                return new AbiError { Code = AbiErrorCode.InvalidPointer };\n",
+            );
             out.push_str("            }\n");
         }
         if has_return {
             out.push_str("            if (outPtr == IntPtr.Zero) {\n");
-            out.push_str("                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n");
+            out.push_str(
+                "                return new AbiError { Code = AbiErrorCode.InvalidPointer };\n",
+            );
             out.push_str("            }\n");
         }
         out.push_str(&format!(
@@ -529,7 +533,7 @@ fn generate_cs_guest_plugin_interface(
             lower = plugin_lower
         ));
         out.push_str("            // call impl\n");
-        out.push_str("            return new AbiError { Code = 0 };\n");
+        out.push_str("            return new AbiError { Code = AbiErrorCode.Ok };\n");
         out.push_str("        } catch (Polyplug.Guest.GuestException ex) {\n");
         out.push_str("            var msg = StringHelpers.AllocString(ex.Message);\n");
         out.push_str("            return new AbiError { Code = ex.Code, Message = msg };\n");
@@ -663,7 +667,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
 
     out.push_str("public static class Plugin {\n");
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = \"polyplug_init\")]\n");
-    out.push_str("    public static uint PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {\n");
+    out.push_str("    public static AbiErrorCode PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {\n");
     out.push_str("        if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;\n");
     out.push_str("        HostInterfaceStorage.StoreHostInterface(hostPtr);\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
@@ -853,7 +857,7 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
             contract.name, contract.contract_id
         ));
         out.push_str(&format!(
-            "public sealed class {caller_name} : IDisposable {{\n"
+            "public sealed unsafe class {caller_name} : IDisposable {{\n"
         ));
         out.push_str("    private readonly GuestContractInterface* _interface;\n");
         out.push_str("    private GuestContractInstance _instance;\n");
@@ -870,39 +874,53 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("        _disposed = false;\n");
         out.push_str("    }\n\n");
 
+        // create_instance / destroy_instance are IntPtr fn pointers in the ABI struct.
+        // Cast them to the canonical native dispatch signature before calling.
+        let create_cast: &str = "((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)";
+        let destroy_cast: &str = "((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)";
+
         // Factory method
         out.push_str(
             "    /// <summary>Factory method - resolves contract and creates instance.</summary>\n",
         );
         out.push_str(&format!(
-            "    public static {caller_name}? Create(Runtime rt, HostInterface* host) {{\n"
+            "    public static {caller_name}? Create(Runtime rt) {{\n"
         ));
         out.push_str(&format!(
             "        var handle = rt.FindGuestContract({class_name}Constants.{contract_upper}_CONTRACT_ID, 0);\n"
         ));
-        out.push_str("        if (handle == ulong.MaxValue) { return null; }\n");
-        out.push_str("        var iface = rt.ResolveContract(handle);\n");
+        // GuestContractHandle is `#[repr(C)] { index: u32 }`; FindGuestContract returns a
+        // uint and the null handle sentinel is index == u32::MAX (0xFFFFFFFF).
+        out.push_str("        if (handle == uint.MaxValue) { return null; }\n");
+        out.push_str("        var host = (HostInterface*)rt.HostHandle;\n");
+        out.push_str(
+            "        var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);\n",
+        );
         out.push_str("        if (iface == null) { return null; }\n");
-        out.push_str("        var inst = iface->CreateInstance((nint)host, nint.Zero);\n");
-        out.push_str("        if (inst.Data == nint.Zero) { return null; }\n");
+        // A null instance handle is valid: stateless contracts return a null handle
+        // from create_instance and use it as an opaque dispatch token.
+        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;\n");
+        out.push_str("        var inst = createFn(host, null);\n");
         out.push_str(&format!(
             "        return new {caller_name}(iface, inst, host);\n"
         ));
         out.push_str("    }\n\n");
 
         // IsValid property
-        out.push_str("    /// <summary>Check if this caller instance is still valid.</summary>\n");
-        out.push_str("    public bool IsValid => !_disposed && _instance.Data != nint.Zero;\n\n");
+        out.push_str("    /// <summary>Check if this caller holds a resolved contract interface.</summary>\n");
+        out.push_str("    public bool IsValid => !_disposed && _interface != null;\n\n");
 
         // Reset method - destroy existing, create new
         out.push_str(
             "    /// <summary>Reset instance - destroy existing and create new.</summary>\n",
         );
         out.push_str("    public void Reset() {\n");
-        out.push_str("        if (!_disposed && _instance.Data != nint.Zero) {\n");
-        out.push_str("            _interface->DestroyInstance((nint)_host, _instance);\n");
+        out.push_str("        if (!_disposed) {\n");
+        out.push_str(&format!("            {destroy_cast}(_host, _instance);\n"));
         out.push_str("        }\n");
-        out.push_str("        _instance = _interface->CreateInstance((nint)_host, nint.Zero);\n");
+        out.push_str(&format!(
+            "        _instance = {create_cast}(_host, null);\n"
+        ));
         out.push_str("    }\n\n");
 
         // Dispose pattern
@@ -911,10 +929,8 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         );
         out.push_str("    public void Dispose() {\n");
         out.push_str("        if (!_disposed) {\n");
-        out.push_str("            if (_instance.Data != nint.Zero) {\n");
-        out.push_str("                _interface->DestroyInstance((nint)_host, _instance);\n");
-        out.push_str("                _instance.Data = nint.Zero;\n");
-        out.push_str("            }\n");
+        out.push_str(&format!("            {destroy_cast}(_host, _instance);\n"));
+        out.push_str("            _instance.Data = nint.Zero;\n");
         out.push_str("            _disposed = true;\n");
         out.push_str("        }\n");
         out.push_str("    }\n\n");
@@ -960,15 +976,16 @@ fn generate_host_fn_caller(
         "    public {ret} {method_name}({params_sig}) {{\n"
     ));
 
-    // Instance validity check
-    out.push_str("        if (_disposed || _instance.Data == nint.Zero) {\n");
+    // Instance validity check. A null instance handle is valid (stateless
+    // contracts); only a disposed wrapper is an error.
+    out.push_str("        if (_disposed) {\n");
     let caller_name = format!("{}Caller", _contract_struct);
     out.push_str(&format!(
         "            throw new ObjectDisposedException(nameof({caller_name}));\n"
     ));
     out.push_str("        }\n\n");
 
-    out.push_str("        unsafe {\n");
+    out.push_str("        {\n");
     out.push_str(&format!(
         "            if ({fn_id}u >= _interface->Dispatch.Native.FunctionCount) {{\n"
     ));
@@ -1019,7 +1036,7 @@ fn generate_host_fn_caller(
 
     // Dispatch with instance as first argument
     out.push_str("            AbiError err = dispatch(_instance, argsPtr, outPtr);\n");
-    out.push_str("            if (err.Code != 0u) {\n");
+    out.push_str("            if (err.Code != AbiErrorCode.Ok) {\n");
     out.push_str("                throw new InvalidOperationException($\"plugin call failed: code={err.Code}\");\n");
     out.push_str("            }\n");
     if has_return {
@@ -1138,11 +1155,12 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("public sealed class {} {{\n", class_name));
+    out.push_str("    private readonly IntPtr _instance;\n");
     out.push_str("    private readonly IntPtr _interface;\n\n");
 
     // Private constructor
     out.push_str(&format!(
-        "    private {}(IntPtr interface) {{ _interface = interface; }}\n\n",
+        "    private {}(IntPtr instance, IntPtr iface) {{ _instance = instance; _interface = iface; }}\n\n",
         class_name
     ));
 
@@ -1158,14 +1176,21 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     out.push_str("        unsafe {\n");
     out.push_str("            var hostInterface = (HostInterface*)host;\n");
     out.push_str(&format!(
-        "            var interface = hostInterface->GetHostContract(host, 0x{:016X}UL, minVersion);\n",
+        "            var instance = hostInterface->GetHostContract(host, 0x{:016X}UL, minVersion);\n",
         contract.contract_id
     ));
-    out.push_str("            if (interface == IntPtr.Zero) {\n");
+    out.push_str("            if (instance == IntPtr.Zero) {\n");
     out.push_str("                return null;\n");
     out.push_str("            }\n");
     out.push_str(&format!(
-        "            return new {}(interface);\n",
+        "            var iface = hostInterface->ResolveHostContractInterface(host, 0x{:016X}UL, minVersion);\n",
+        contract.contract_id
+    ));
+    out.push_str("            if (iface == IntPtr.Zero) {\n");
+    out.push_str("                return null;\n");
+    out.push_str("            }\n");
+    out.push_str(&format!(
+        "            return new {}(instance, iface);\n",
         class_name
     ));
     out.push_str("        }\n");
@@ -1229,11 +1254,11 @@ fn generate_cs_guest_host_contract_method(
     }
     out.push_str("        }\n\n");
 
-    // Get header and check function count
+    // Get interface and check function count
     out.push_str("        unsafe {\n");
-    out.push_str("            var header = &((HostContractVTable*)_interface)->Header;\n");
+    out.push_str("            var contract = (HostContractInterface*)_interface;\n");
     out.push_str(&format!(
-        "            if ({fn_id}u >= header->FunctionCount) {{\n"
+        "            if ({fn_id}u >= contract->Dispatch.Native.FunctionCount) {{\n"
     ));
     if has_return {
         out.push_str(&format!(
@@ -1253,19 +1278,21 @@ fn generate_cs_guest_host_contract_method(
 
     // Dispatch call
     out.push_str("            AbiError err;\n");
-    out.push_str("            switch (header->DispatchType) {\n");
+    out.push_str("            switch (contract->DispatchType) {\n");
     out.push_str("                case DispatchType.Native: {\n");
     out.push_str(&format!(
-        "                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)header->Dispatch.Native.Functions[{fn_id}u];\n"
+        "                    var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[{fn_id}u];\n"
     ));
-    out.push_str(
-        "                    err = fn_(header->Dispatch.Native.ImplPtr, argsPtr, outPtr);\n",
-    );
+    out.push_str("                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)fnPtr;\n");
+    out.push_str("                    err = fn_(_interface, argsPtr, outPtr);\n");
     out.push_str("                    break;\n");
     out.push_str("                }\n");
     out.push_str("                case DispatchType.VirtualMachine: {\n");
+    out.push_str(
+        "                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;\n",
+    );
     out.push_str(&format!(
-        "                    err = header->Dispatch.VM.Call(header->Dispatch.VM.BridgeData, {fn_id}u, argsPtr, outPtr);\n"
+        "                    err = vmFn(contract->Dispatch.Vm.LoaderData, {fn_id}u, argsPtr, outPtr);\n"
     ));
     out.push_str("                    break;\n");
     out.push_str("                }\n");
@@ -1744,17 +1771,52 @@ fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostC
     let minor: u32 = contract.version.minor;
     let singleton: bool = contract.singleton;
 
+    let impl_field: String = format!("s_{}_impl", iface_name.trim_start_matches('I'));
+    let create_stub: String = format!(
+        "{}_create_instance_stub",
+        contract.name.replace('.', "_").to_lowercase()
+    );
+    let destroy_stub: String = format!(
+        "{}_destroy_instance_stub",
+        contract.name.replace('.', "_").to_lowercase()
+    );
+    let version_lit: String = format!(
+        "new Polyplug.Abi.Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }}",
+        major = major,
+        minor = minor,
+        patch = contract.version.patch
+    );
+    let singleton_lit: &str = if singleton { "true" } else { "false" };
+
     // Generate thunks for each function (must be outside the factory method)
     for func in &contract.functions {
         generate_cs_host_thunk(out, func, &contract.name, &iface_name);
     }
 
-    // Static implementation storage
+    // Static implementation storage and the pinned native function-pointer array.
+    out.push_str(&format!("private static {}? {};\n", iface_name, impl_field));
     out.push_str(&format!(
-        "private static {}? s_{}_impl;\n\n",
-        iface_name,
+        "private static GCHandle s_{}_functionsHandle;\n\n",
         iface_name.trim_start_matches('I')
     ));
+
+    // Instance lifecycle stubs. For host contracts the implementation lives in a
+    // static field, so the instance handle is an unused opaque token (null).
+    out.push_str("[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
+    out.push_str(&format!(
+        "private static HostContractInstance {}(IntPtr self, IntPtr args) {{\n",
+        create_stub
+    ));
+    out.push_str("    _ = self; _ = args;\n");
+    out.push_str("    return new HostContractInstance { Data = IntPtr.Zero };\n");
+    out.push_str("}\n\n");
+    out.push_str("[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
+    out.push_str(&format!(
+        "private static void {}(IntPtr self, HostContractInstance instance) {{\n",
+        destroy_stub
+    ));
+    out.push_str("    _ = self; _ = instance;\n");
+    out.push_str("}\n\n");
 
     // NATIVE dispatch factory
     out.push_str(&format!(
@@ -1766,14 +1828,11 @@ fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostC
     out.push_str("/// The implementation must implement the interface.\n");
     out.push_str("/// </remarks>\n");
     out.push_str(&format!(
-        "public static HostContractVTable {}<T>(T impl) where T: {} {{\n",
+        "public static unsafe HostContractInterface {}<T>(T impl) where T: {} {{\n",
         factory_name, iface_name
     ));
     out.push_str("    // Store implementation reference in a static field\n");
-    out.push_str(&format!(
-        "    s_{}_impl = impl;\n\n",
-        iface_name.trim_start_matches('I')
-    ));
+    out.push_str(&format!("    {} = impl;\n\n", impl_field));
 
     // Static function pointer array
     out.push_str(&format!(
@@ -1787,32 +1846,40 @@ fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostC
             func.name
         );
         out.push_str(&format!(
-            "        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>){}\n",
+            "        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)&{},\n",
             thunk_name
         ));
     }
     out.push_str("    };\n\n");
 
-    // Pin the function array
-    out.push_str("    var functionsHandle = GCHandle.Alloc(functions, GCHandleType.Pinned);\n\n");
+    // Pin the function array for the lifetime of the interface.
+    out.push_str(&format!(
+        "    s_{}_functionsHandle = GCHandle.Alloc(functions, GCHandleType.Pinned);\n\n",
+        iface_name.trim_start_matches('I')
+    ));
 
     // Create the interface
-    out.push_str("    return new HostContractVTable {\n");
-    out.push_str("        Header = new HostContractVTableHeader {\n");
-    out.push_str("            VTableVersion = 1,\n");
+    out.push_str("    return new HostContractInterface {\n");
+    out.push_str(&format!("        ContractId = 0x{contract_id:016X}UL,\n"));
+    out.push_str(&format!("        ContractVersion = {version_lit},\n"));
+    out.push_str(&format!("        Singleton = {singleton_lit},\n"));
+    out.push_str("        DispatchType = DispatchType.Native,\n");
+    out.push_str("        Runtime = IntPtr.Zero,\n");
     out.push_str(&format!(
-        "            ContractId = 0x{contract_id:016X}UL,\n"
+        "        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&{},\n",
+        create_stub
     ));
-    out.push_str(&format!("            ContractMajor = {major}u,\n"));
-    out.push_str(&format!("            ContractMinor = {minor}u,\n"));
-    out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
-    out.push_str(&format!("            Singleton = {singleton},\n"));
-    out.push_str("            DispatchType = DispatchType.Native,\n");
-    out.push_str("        },\n");
-    out.push_str("        Dispatch = new HostContractDispatch {\n");
-    out.push_str("            Native = new NativeHostContractDispatch {\n");
-    out.push_str("                ImplPtr = IntPtr.Zero,  // We use static field instead\n");
-    out.push_str("                Functions = functionsHandle.AddrOfPinnedObject(),\n");
+    out.push_str(&format!(
+        "        DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, HostContractInstance, void>)&{},\n",
+        destroy_stub
+    ));
+    out.push_str("        Dispatch = new DispatchMechanisms {\n");
+    out.push_str("            Native = new NativeDispatch {\n");
+    out.push_str(&format!("                FunctionCount = {fn_count}u,\n"));
+    out.push_str(&format!(
+        "                Functions = s_{}_functionsHandle.AddrOfPinnedObject(),\n",
+        iface_name.trim_start_matches('I')
+    ));
     out.push_str("            },\n");
     out.push_str("        },\n");
     out.push_str("    };\n");
@@ -1825,30 +1892,33 @@ fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostC
     ));
     out.push_str("/// <remarks>\n");
     out.push_str("/// Used when the host implementation is in a VM language (Python, Lua, JS).\n");
+    out.push_str("/// `dispatchFn` is a `delegate* unmanaged[Cdecl]<...>` cast to IntPtr.\n");
     out.push_str("/// </remarks>\n");
     out.push_str(&format!(
-        "public static HostContractVTable {}(\n",
+        "public static unsafe HostContractInterface {}(\n",
         factory_vm_name
     ));
-    out.push_str("    IntPtr bridgeData,\n");
-    out.push_str("    VmHostContractDispatchFn dispatchFn\n");
+    out.push_str("    IntPtr loaderData,\n");
+    out.push_str("    IntPtr dispatchFn\n");
     out.push_str(") {\n");
-    out.push_str("    return new HostContractVTable {\n");
-    out.push_str("        Header = new HostContractVTableHeader {\n");
-    out.push_str("            VTableVersion = 1,\n");
+    out.push_str("    return new HostContractInterface {\n");
+    out.push_str(&format!("        ContractId = 0x{contract_id:016X}UL,\n"));
+    out.push_str(&format!("        ContractVersion = {version_lit},\n"));
+    out.push_str(&format!("        Singleton = {singleton_lit},\n"));
+    out.push_str("        DispatchType = DispatchType.VirtualMachine,\n");
+    out.push_str("        Runtime = IntPtr.Zero,\n");
     out.push_str(&format!(
-        "            ContractId = 0x{contract_id:016X}UL,\n"
+        "        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&{},\n",
+        create_stub
     ));
-    out.push_str(&format!("            ContractMajor = {major}u,\n"));
-    out.push_str(&format!("            ContractMinor = {minor}u,\n"));
-    out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
-    out.push_str(&format!("            Singleton = {singleton},\n"));
-    out.push_str("            DispatchType = DispatchType.VirtualMachine,\n");
-    out.push_str("        },\n");
-    out.push_str("        Dispatch = new HostContractDispatch {\n");
-    out.push_str("            Vm = new VmHostContractDispatch {\n");
+    out.push_str(&format!(
+        "        DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, HostContractInstance, void>)&{},\n",
+        destroy_stub
+    ));
+    out.push_str("        Dispatch = new DispatchMechanisms {\n");
+    out.push_str("            Vm = new VmDispatch {\n");
     out.push_str("                Call = dispatchFn,\n");
-    out.push_str("                BridgeData = bridgeData,\n");
+    out.push_str("                LoaderData = new VmLoaderData { Data = loaderData },\n");
     out.push_str("            },\n");
     out.push_str("        },\n");
     out.push_str("    };\n");
@@ -1868,12 +1938,33 @@ fn generate_cs_host_thunk(
         func.name
     );
     let has_return: bool = func.returns.is_some();
+    let pack_struct: String = format!(
+        "{}{}Args",
+        iface_name.trim_start_matches('I'),
+        pascal_case(&func.name)
+    );
+
+    // For multi-parameter functions, emit the ABI-packed argument struct (class scope).
+    if func.params.len() > 1 {
+        out.push_str("[StructLayout(LayoutKind.Sequential)]\n");
+        out.push_str(&format!("private struct {} {{\n", pack_struct));
+        for param in &func.params {
+            let ty_name: String = cs_host_abi_type_name(&param.ty);
+            out.push_str(&format!(
+                "    public {} {};\n",
+                ty_name,
+                pascal_case(&param.name)
+            ));
+        }
+        out.push_str("}\n\n");
+    }
 
     out.push_str("[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
         "private static AbiError {}(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr) {{\n",
         thunk_name
     ));
+    out.push_str("    _ = implPtr;\n");
     out.push_str("    try {\n");
     out.push_str(&format!(
         "        var impl = s_{}_impl ?? throw new InvalidOperationException(\"implementation not set\");\n",
@@ -1882,7 +1973,7 @@ fn generate_cs_host_thunk(
 
     // Generate argument extraction
     if !func.params.is_empty() {
-        generate_cs_host_thunk_args(out, func);
+        generate_cs_host_thunk_args(out, func, &pack_struct);
     } else {
         out.push_str("        _ = argsPtr;\n");
     }
@@ -1911,7 +2002,7 @@ fn generate_cs_host_thunk(
 }
 
 /// Generate argument extraction for a host thunk.
-fn generate_cs_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
+fn generate_cs_host_thunk_args(out: &mut String, func: &ResolvedFunction, pack_struct: &str) {
     if func.params.len() == 1 {
         let param: &ResolvedParam = &func.params[0];
         let ty_name: String = cs_host_abi_type_name(&param.ty);
@@ -1922,24 +2013,14 @@ fn generate_cs_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
                     param.name
                 ));
                 out.push_str(&format!(
-                    "        var {} = StringHelpers.StringViewToString({}_sv);\n",
+                    "        var {} = StringHelpers.ToString({}_sv);\n",
                     param.name, param.name
                 ));
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
                 out.push_str(&format!(
-                    "        var {}_buf = Marshal.PtrToStructure<Buffer>(argsPtr);\n",
+                    "        var {} = Marshal.PtrToStructure<Buffer>(argsPtr);\n",
                     param.name
-                ));
-                out.push_str(&format!(
-                    "        var {} = StringHelpers.BufferToByteArray({}_buf);\n",
-                    param.name, param.name
-                ));
-            }
-            ResolvedTypeRef::UserDefined(_) => {
-                out.push_str(&format!(
-                    "        var {} = Marshal.PtrToStructure<{}>(argsPtr);\n",
-                    param.name, ty_name
                 ));
             }
             _ => {
@@ -1950,25 +2031,16 @@ fn generate_cs_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
             }
         }
     } else {
-        // Multiple params - use arg-pack struct
-        let pack_struct: String = format!("{}Args", func.name.to_uppercase());
+        // Multiple params - decode the ABI-packed struct.
         out.push_str(&format!(
             "        var packed = Marshal.PtrToStructure<{}>(argsPtr);\n",
             pack_struct
         ));
-        // Extract each param from the packed struct
         for param in &func.params {
             match &param.ty {
                 ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                     out.push_str(&format!(
-                        "        var {} = StringHelpers.StringViewToString(packed.{});\n",
-                        param.name,
-                        pascal_case(&param.name)
-                    ));
-                }
-                ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
-                    out.push_str(&format!(
-                        "        var {} = StringHelpers.BufferToByteArray(packed.{});\n",
+                        "        var {} = StringHelpers.ToString(packed.{});\n",
                         param.name,
                         pascal_case(&param.name)
                     ));
@@ -1992,7 +2064,11 @@ fn generate_cs_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_re
     } else {
         func.params
             .iter()
-            .map(|p: &ResolvedParam| p.name.clone())
+            .map(|p: &ResolvedParam| match &p.ty {
+                // UserDefined params are passed `ref` in the interface signature.
+                ResolvedTypeRef::UserDefined(_) => format!("ref {}", p.name),
+                _ => p.name.clone(),
+            })
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -2556,6 +2632,10 @@ mod tests {
             "missing class: {out}"
         );
         assert!(
+            out.contains("private readonly IntPtr _instance"),
+            "missing instance field: {out}"
+        );
+        assert!(
             out.contains("private readonly IntPtr _interface"),
             "missing interface field: {out}"
         );
@@ -2570,6 +2650,46 @@ mod tests {
         assert!(
             out.contains("public bool IsValid => _interface != IntPtr.Zero"),
             "missing IsValid property: {out}"
+        );
+
+        // Must use real ABI types — no phantom types
+        assert!(
+            out.contains("HostContractInterface*"),
+            "must use HostContractInterface*, not a phantom type: {out}"
+        );
+        assert!(
+            out.contains("ResolveHostContractInterface"),
+            "must resolve interface via ResolveHostContractInterface: {out}"
+        );
+        assert!(
+            out.contains("GetHostContract"),
+            "must get instance via GetHostContract: {out}"
+        );
+        assert!(
+            out.contains("contract->DispatchType"),
+            "must read DispatchType from contract: {out}"
+        );
+
+        // Phantom types must NOT appear
+        assert!(
+            !out.contains("HostContractVTable"),
+            "must not reference nonexistent HostContractVTable: {out}"
+        );
+        assert!(
+            !out.contains("header->Header"),
+            "must not reference phantom header->Header: {out}"
+        );
+        assert!(
+            !out.contains("header->Dispatch.Native.ImplPtr"),
+            "must not reference phantom ImplPtr: {out}"
+        );
+        assert!(
+            !out.contains("header->Dispatch.VM.BridgeData"),
+            "must not reference phantom BridgeData: {out}"
+        );
+        assert!(
+            !out.contains("header->Dispatch.VM.Call("),
+            "must not call dispatch via phantom VM.Call: {out}"
         );
     }
 
@@ -2781,8 +2901,16 @@ mod tests {
             "missing interface constraint: {out}"
         );
         assert!(
-            out.contains("VmHostContractDispatchFn"),
-            "missing VM dispatch type: {out}"
+            out.contains("HostContractInterface"),
+            "factories must return the canonical HostContractInterface: {out}"
+        );
+        assert!(
+            out.contains("new VmDispatch {"),
+            "VM factory must build the canonical VmDispatch: {out}"
+        );
+        assert!(
+            !out.contains("HostContractVTable"),
+            "must not reference the nonexistent HostContractVTable type: {out}"
         );
     }
 

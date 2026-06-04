@@ -14,11 +14,12 @@ use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::DispatchType;
-use polyplug_utils;
 use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
+use polyplug_utils::GuestContractId;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -92,7 +93,7 @@ fn make_loader() -> JsLoader {
 }
 
 /// Create a minimal Runtime with the JsLoader registered.
-fn make_runtime() -> Runtime {
+fn make_runtime() -> Arc<Runtime> {
     RuntimeBuilder::new()
         .loader(make_loader())
         .build()
@@ -100,13 +101,20 @@ fn make_runtime() -> Runtime {
 }
 
 /// Create a ManifestData for a JS bundle.
-fn make_manifest(path: &std::path::PathBuf, name: &str) -> ManifestData {
+fn make_manifest(path: &std::path::Path, name: &str) -> ManifestData {
     ManifestData {
         id: polyplug_utils::bundle_id(name),
         name: name.to_owned(),
         runtime: "js-quickjs".to_owned(),
-        file: path.file_name().unwrap().to_string_lossy().into_owned(),
-        path: path.parent().unwrap().to_path_buf(),
+        file: path
+            .file_name()
+            .expect("bundle path must have a file name")
+            .to_string_lossy()
+            .into_owned(),
+        path: path
+            .parent()
+            .expect("bundle path must have a parent directory")
+            .to_path_buf(),
         version: String::new(),
         provides: Vec::new(),
         function_count: HashMap::new(),
@@ -114,6 +122,49 @@ fn make_manifest(path: &std::path::PathBuf, name: &str) -> ManifestData {
         needs_reinit_on_dep_reload: false,
         bundle_dependencies: Vec::new(),
     }
+}
+
+/// Verify a VM-dispatch vtable exposes exactly `expected` functions by probing
+/// fn_ids: indices `0..expected` must return `Ok`, and index `expected` must
+/// return `FunctionNotAvailable`.
+fn assert_vm_function_count(vtable: &GuestContractInterface, expected: u32) {
+    use polyplug_abi::AbiError;
+    use polyplug_abi::AbiErrorCode;
+
+    assert_eq!(vtable.dispatch_type, DispatchType::VirtualMachine);
+    for fn_id in 0..expected {
+        // SAFETY: dispatch.vm.call is js_dispatch; the noop functions ignore the
+        // null args/out pointers.
+        let result: AbiError = unsafe {
+            (vtable.dispatch.vm.call)(
+                vtable.dispatch.vm.loader_data,
+                GuestContractInstance::null(),
+                fn_id,
+                core::ptr::null::<()>(),
+                core::ptr::null_mut::<()>(),
+            )
+        };
+        assert_eq!(
+            result.code,
+            AbiErrorCode::Ok,
+            "fn_id {fn_id} must dispatch to Ok"
+        );
+    }
+    // SAFETY: dispatch.vm.call is js_dispatch.
+    let missing: AbiError = unsafe {
+        (vtable.dispatch.vm.call)(
+            vtable.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            expected,
+            core::ptr::null::<()>(),
+            core::ptr::null_mut::<()>(),
+        )
+    };
+    assert_eq!(
+        missing.code,
+        AbiErrorCode::FunctionNotAvailable,
+        "fn_id {expected} must report FunctionNotAvailable"
+    );
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -135,7 +186,7 @@ fn load_valid_bundle_registers_vtable() {
     let bundle: String = make_bundle_js(contract_id, 1, "test.noop");
     let (_dir, path) = write_temp_bundle(&bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
@@ -145,7 +196,7 @@ fn load_valid_bundle_registers_vtable() {
     // Verify the plugin was registered by querying the registry.
     let handle: GuestContractHandle = runtime
         .registry()
-        .find(contract_id, 0)
+        .find(GuestContractId::from_u64(contract_id), 0)
         .expect("plugin must be registered");
     assert!(!handle.is_null(), "handle must be valid");
 }
@@ -192,7 +243,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     );
     let (_dir, path) = write_temp_bundle(&bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
@@ -202,18 +253,18 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     // Verify the plugin was registered.
     let handle: GuestContractHandle = runtime
         .registry()
-        .find(contract_id, 0)
+        .find(GuestContractId::from_u64(contract_id), 0)
         .expect("plugin must be registered");
     assert!(!handle.is_null(), "handle must be valid");
 
-    // Verify function_count
+    // Verify function count by probing the VM dispatch.
     let vtable_ptr: *const GuestContractInterface = runtime
         .registry()
-        .resolve(handle)
+        .resolve_guest_contract(handle)
         .expect("resolve must succeed");
     // SAFETY: vtable_ptr is a valid pointer returned by resolve.
     let vtable_ref: &GuestContractInterface = unsafe { &*vtable_ptr };
-    assert_eq!(vtable_ref.function_count, fn_count);
+    assert_vm_function_count(vtable_ref, fn_count);
 }
 
 // ── Directory path fallback ───────────────────────────────────────────────────
@@ -237,7 +288,7 @@ file = "bundle.js"
     );
     std::fs::write(dir.path().join("manifest.toml"), &manifest_toml).expect("write manifest.toml");
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = ManifestData {
@@ -262,7 +313,7 @@ file = "bundle.js"
     // Verify the plugin was registered.
     let handle: GuestContractHandle = runtime
         .registry()
-        .find(contract_id, 0)
+        .find(GuestContractId::from_u64(contract_id), 0)
         .expect("plugin must be registered");
     assert!(!handle.is_null(), "handle must be valid");
 }
@@ -274,7 +325,7 @@ fn load_syntax_error_returns_error() {
     let bundle: &str = "this is not valid javascript }{{{";
     let (_dir, path) = write_temp_bundle(bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
@@ -299,7 +350,7 @@ fn load_runtime_error_returns_error() {
     let bundle: &str = "throw new Error('intentional runtime error');";
     let (_dir, path) = write_temp_bundle(bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
@@ -323,7 +374,7 @@ fn load_bundle_without_polyplug_init_returns_error() {
     let bundle: &str = "var x = 1 + 2;";
     let (_dir, path) = write_temp_bundle(bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
@@ -349,7 +400,7 @@ fn load_nonexistent_file_returns_error() {
     let path: std::path::PathBuf =
         std::path::PathBuf::from("/tmp/polyplug_js_test_nonexistent_bundle_xyz.js");
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = ManifestData {
@@ -357,7 +408,10 @@ fn load_nonexistent_file_returns_error() {
         name: "nonexistent".to_owned(),
         runtime: "js-quickjs".to_owned(),
         file: "bundle.js".to_owned(),
-        path: path.parent().unwrap().to_path_buf(),
+        path: path
+            .parent()
+            .expect("bundle path must have a parent directory")
+            .to_path_buf(),
         version: String::new(),
         provides: Vec::new(),
         function_count: HashMap::new(),
@@ -411,7 +465,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     );
     let (_dir, path) = write_temp_bundle(&bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
@@ -432,7 +486,7 @@ fn polyplug_object_has_expected_methods() {
     let bundle: String = format!(
         r#"
 var methods = ['findByContract', 'findByBundle', 'findAllByContract',
-                'resolvePlugin', 'getHostContract', 'registerVtable', 'alloc', 'free'];
+                'resolveGuestContract', 'getHostContract', 'registerVtable', 'alloc', 'free'];
 for (var i = 0; i < methods.length; i++) {{
     if (typeof polyplug[methods[i]] !== 'function') {{
         throw new Error('missing method: ' + methods[i]);
@@ -467,7 +521,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     );
     let (_dir, path) = write_temp_bundle(&bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
@@ -488,7 +542,7 @@ fn vtable_contract_id_roundtrip() {
     let bundle: String = make_bundle_js(contract_id, 1, "image.decode");
     let (_dir, path) = write_temp_bundle(&bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
     loader.load(&manifest, &runtime).expect("load must succeed");
@@ -496,7 +550,7 @@ fn vtable_contract_id_roundtrip() {
     // Verify the plugin was registered with the correct contract_id.
     let handle: GuestContractHandle = runtime
         .registry()
-        .find(contract_id, 0)
+        .find(GuestContractId::from_u64(contract_id), 0)
         .expect("plugin must be registered");
     assert!(!handle.is_null(), "handle must be valid");
 }
@@ -543,7 +597,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     );
     let (_dir, path) = write_temp_bundle(&bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
@@ -552,19 +606,19 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     // Verify the plugin was registered and get its vtable.
     let handle: GuestContractHandle = runtime
         .registry()
-        .find(contract_id, 0)
+        .find(GuestContractId::from_u64(contract_id), 0)
         .expect("plugin must be registered");
     assert!(!handle.is_null(), "handle must be valid");
 
     let vtable_ptr: *const GuestContractInterface = runtime
         .registry()
-        .resolve(handle)
+        .resolve_guest_contract(handle)
         .expect("resolve must succeed");
 
     // SAFETY: vtable_ptr is a valid pointer returned by resolve.
     let vtable_ref: &GuestContractInterface = unsafe { &*vtable_ptr };
 
-    assert_eq!(vtable_ref.function_count, fn_count);
+    assert_vm_function_count(vtable_ref, fn_count);
     assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
     // SAFETY: dispatch_type is VirtualMachine, so accessing .vm is valid.
     // The dispatch function pointer is always non-null (it's js_dispatch).
@@ -616,7 +670,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     );
     let (_dir, path) = write_temp_bundle(&bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
@@ -648,7 +702,7 @@ fn concurrent_loads_do_not_panic() {
                     make_bundle_js(contract_id, 1, &format!("test.concurrent.{i}"));
                 let (_dir, path) = write_temp_bundle(&bundle);
 
-                let runtime: Runtime = RuntimeBuilder::new()
+                let runtime: Arc<Runtime> = RuntimeBuilder::new()
                     .loader(JsLoader::new(JsConfig {}))
                     .build()
                     .expect("runtime build must succeed");
@@ -690,7 +744,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     let bundle_a: String = make_bundle_js(contract_id_a, 1, "test.isolation.a");
     let (_dir_a, path_a) = write_temp_bundle(&bundle_a);
 
-    let runtime_a: Runtime = RuntimeBuilder::new()
+    let runtime_a: Arc<Runtime> = RuntimeBuilder::new()
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("runtime_a build must succeed");
@@ -704,7 +758,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     // Verify plugin A is registered in runtime_a
     let handle_a: GuestContractHandle = runtime_a
         .registry()
-        .find(contract_id_a, 0)
+        .find(GuestContractId::from_u64(contract_id_a), 0)
         .expect("plugin A must be registered in runtime_a");
     assert!(!handle_a.is_null(), "handle_a must be valid");
 
@@ -713,7 +767,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     let bundle_b: String = make_bundle_js(contract_id_b, 1, "test.isolation.b");
     let (_dir_b, path_b) = write_temp_bundle(&bundle_b);
 
-    let runtime_b: Runtime = RuntimeBuilder::new()
+    let runtime_b: Arc<Runtime> = RuntimeBuilder::new()
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("runtime_b build must succeed");
@@ -727,7 +781,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     // Verify plugin B is registered in runtime_b
     let handle_b: GuestContractHandle = runtime_b
         .registry()
-        .find(contract_id_b, 0)
+        .find(GuestContractId::from_u64(contract_id_b), 0)
         .expect("plugin B must be registered in runtime_b");
     assert!(!handle_b.is_null(), "handle_b must be valid");
 
@@ -736,7 +790,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     // the registration data, causing this check to fail.
     let handle_a_still_valid: GuestContractHandle = runtime_a
         .registry()
-        .find(contract_id_a, 0)
+        .find(GuestContractId::from_u64(contract_id_a), 0)
         .expect("plugin A must still be registered in runtime_a");
     assert!(
         !handle_a_still_valid.is_null(),
@@ -744,8 +798,9 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     );
 
     // Verify runtime_b does NOT have plugin A (isolation)
-    let handle_a_in_b: Result<GuestContractHandle, polyplug::error::RegistryError> =
-        runtime_b.registry().find(contract_id_a, 0);
+    let handle_a_in_b: Result<GuestContractHandle, polyplug::error::RegistryError> = runtime_b
+        .registry()
+        .find(GuestContractId::from_u64(contract_id_a), 0);
     assert!(
         handle_a_in_b.is_err()
             || handle_a_in_b
@@ -757,8 +812,9 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     );
 
     // Verify runtime_a does NOT have plugin B (isolation)
-    let handle_b_in_a: Result<GuestContractHandle, polyplug::error::RegistryError> =
-        runtime_a.registry().find(contract_id_b, 0);
+    let handle_b_in_a: Result<GuestContractHandle, polyplug::error::RegistryError> = runtime_a
+        .registry()
+        .find(GuestContractId::from_u64(contract_id_b), 0);
     assert!(
         handle_b_in_a.is_err()
             || handle_b_in_a
@@ -774,10 +830,11 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
 fn sequential_loads_of_different_contracts_all_succeed() {
     // Sequential re-use of the same JsLoader for multiple bundles.
     let loader: JsLoader = JsLoader::new(JsConfig {});
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
 
     for i in 0..4_u32 {
-        let contract_id: u64 = polyplug_utils::guest_contract_id(&format!("test.sequential.{i}"), 1);
+        let contract_id: u64 =
+            polyplug_utils::guest_contract_id(&format!("test.sequential.{i}"), 1);
 
         let bundle: String = make_bundle_js(contract_id, 1, &format!("test.sequential.{i}"));
         let (_dir, path) = write_temp_bundle(&bundle);
@@ -798,12 +855,13 @@ fn dispatch_vm_call_works_correctly() {
     // This test actually invokes dispatch.vm.call to verify the JS function
     // can be called through the ABI dispatch mechanism.
     use polyplug_abi::AbiError;
+    use polyplug_abi::AbiErrorCode;
 
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.dispatch.call", 1);
     let bundle: String = make_bundle_js(contract_id, 1, "test.dispatch.call");
     let (_dir, path) = write_temp_bundle(&bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
@@ -812,12 +870,12 @@ fn dispatch_vm_call_works_correctly() {
 
     let handle: GuestContractHandle = runtime
         .registry()
-        .find(contract_id, 0)
+        .find(GuestContractId::from_u64(contract_id), 0)
         .expect("plugin must be registered");
 
     let vtable_ptr: *const GuestContractInterface = runtime
         .registry()
-        .resolve(handle)
+        .resolve_guest_contract(handle)
         .expect("resolve must succeed");
 
     // SAFETY: vtable_ptr is a valid pointer returned by resolve.
@@ -830,6 +888,7 @@ fn dispatch_vm_call_works_correctly() {
     let call_result: AbiError = unsafe {
         (vtable_ref.dispatch.vm.call)(
             vtable_ref.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
             0, // fn_id = 0 (first function)
             core::ptr::null::<()>(),
             core::ptr::null_mut::<()>(),
@@ -891,7 +950,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     );
     let (_dir, path) = write_temp_bundle(&bundle);
 
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");

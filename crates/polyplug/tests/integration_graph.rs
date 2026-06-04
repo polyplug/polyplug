@@ -9,13 +9,12 @@
 //! - contract_id lookup returns correct handles
 //! - Stale handles are detected after replacement
 
-use polyplug::registry::runtime_store::RuntimeStore;
+use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::{
-    AbiError, AbiErrorCode, BundleInitContext, DispatchMechanisms, DispatchType,
-    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostInterface,
-    NativeDispatch, PluginDescriptor, StringView, Version,
+    AbiError, AbiErrorCode, BundleInitContext, GuestContractHandle, GuestContractInstance,
+    GuestContractInterface, HostInterface, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -334,11 +333,8 @@ fn test_single_contract_registration_and_lookup() {
         "interface contract_id must match"
     );
     // SAFETY: dispatch.native is valid because dispatch_type is Native
-    assert_eq!(
-        unsafe { interface.dispatch.native.function_count },
-        1,
-        "test.add must have 1 function"
-    );
+    let function_count: u32 = unsafe { interface.dispatch.native.function_count };
+    assert_eq!(function_count, 1, "test.add must have 1 function");
 
     core::mem::forget(lib);
 }
@@ -424,7 +420,7 @@ fn test_invalid_handle_detected() {
     let lib: libloading::Library = load_and_init_plugin();
 
     let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
-    let handle: GuestContractHandle = GRAPH_REGISTRY.with(|cell| {
+    let _handle: GuestContractHandle = GRAPH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(test_add_id, 0)
             .expect("must find test.add")

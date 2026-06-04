@@ -26,24 +26,28 @@ public sealed class Runtime
     private GetLastErrorDelegate? _getLastErrorFn;
     private GetErrorLenDelegate? _getErrorLenFn;
     private RegisterHostContractDelegate? _registerHostContractFn;
+    private RegisterLoaderDelegate? _registerLoaderFn;
     private FreeDelegate? _freeFn;
 
     // ─── Function pointer delegate types (18-03) ─────────────────────────────────
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate uint LoadBundleDelegate(nint host, nint path, nuint pathLen);
+    private delegate AbiError LoadBundleDelegate(nint host, nint path, nuint pathLen);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate uint ReloadBundleDelegate(nint host, nint path, nuint pathLen);
+    private delegate AbiError ReloadBundleDelegate(nint host, nint path, nuint pathLen);
+
+    // GuestContractHandle is `#[repr(C)] { index: u32 }` (4 bytes). A single-field
+    // 4-byte repr(C) struct crosses the C ABI as a `uint`, so the handle is marshaled
+    // as `uint`, not `ulong`. The null handle is `index == u32::MAX` (0xFFFFFFFF).
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate uint FindGuestContractDelegate(nint host, ulong contractId, uint minVersion);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate ulong FindGuestContractDelegate(nint host, ulong contractId, uint minVersion);
+    private delegate Polyplug.Abi.Array FindAllGuestContractsDelegate(nint host, ulong contractId, uint minVersion);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate nint FindAllGuestContractsDelegate(nint host, ulong contractId, uint minVersion);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate nint ResolveGuestContractDelegate(nint host, ulong packedHandle);
+    private delegate nint ResolveGuestContractDelegate(nint host, uint handle);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate nuint GetLastErrorDelegate(nint host, nint buf, nuint bufLen);
@@ -52,7 +56,10 @@ public sealed class Runtime
     private delegate nuint GetErrorLenDelegate(nint host);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate uint RegisterHostContractDelegate(nint host, nint interfacePtr);
+    private delegate AbiError RegisterHostContractDelegate(nint host, nint interfacePtr);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate AbiError RegisterLoaderDelegate(nint host, StringView runtimeName, nint loaderPtr);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeDelegate(nint host, nint ptr, nuint size, nuint align);
@@ -63,7 +70,7 @@ public sealed class Runtime
     /// </summary>
     public Runtime()
     {
-        _host = NativeMethods.PolyplugRuntimeCreate();
+        _host = CreateNative();
         if (_host == nint.Zero)
         {
             ThrowLastError("Failed to create runtime.");
@@ -171,8 +178,35 @@ public sealed class Runtime
             {
                 Compatibility = Compatibility.Strict,
                 HotReloadEnabled = true,
-                OnReload = s_reloadTrampoline,
+                OnReload = Marshal.GetFunctionPointerForDelegate(s_reloadTrampoline),
             };
+        }
+    }
+
+    /// <summary>
+    /// Calls <c>polyplug_runtime_create</c>, marshaling a configured
+    /// <see cref="RuntimeConfig"/> when one was set via <see cref="OnReload"/>.
+    /// The native core copies the config during the call, so the unmanaged copy
+    /// is freed once create returns. The reload trampoline delegate is kept alive
+    /// for the process lifetime by <c>s_reloadCallbackHandle</c> / <c>s_reloadTrampoline</c>.
+    /// </summary>
+    internal static nint CreateNative()
+    {
+        RuntimeConfig? config = BuildRuntimeConfig();
+        if (config is null)
+        {
+            return NativeMethods.PolyplugRuntimeCreate(nint.Zero);
+        }
+
+        nint configPtr = Marshal.AllocHGlobal(Marshal.SizeOf<RuntimeConfig>());
+        try
+        {
+            Marshal.StructureToPtr(config.Value, configPtr, fDeleteOld: false);
+            return NativeMethods.PolyplugRuntimeCreate(configPtr);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(configPtr);
         }
     }
 
@@ -186,6 +220,7 @@ public sealed class Runtime
         _getLastErrorFn = Marshal.GetDelegateForFunctionPointer<GetLastErrorDelegate>(_hostStruct.GetLastError);
         _getErrorLenFn = Marshal.GetDelegateForFunctionPointer<GetErrorLenDelegate>(_hostStruct.GetErrorLen);
         _registerHostContractFn = Marshal.GetDelegateForFunctionPointer<RegisterHostContractDelegate>(_hostStruct.RegisterHostContract);
+        _registerLoaderFn = Marshal.GetDelegateForFunctionPointer<RegisterLoaderDelegate>(_hostStruct.RegisterLoader);
         _freeFn = Marshal.GetDelegateForFunctionPointer<FreeDelegate>(_hostStruct.Free);
     }
 
@@ -244,8 +279,8 @@ public sealed class Runtime
 
     public static void ThrowLastError(string fallbackMessage)
     {
-        // Create a temporary HostInterface to get error (global state)
-        nint tempHost = NativeMethods.PolyplugRuntimeCreate();
+        // Create a temporary HostInterface with default config to read the error.
+        nint tempHost = NativeMethods.PolyplugRuntimeCreate(nint.Zero);
         if (tempHost == nint.Zero)
         {
             throw new InvalidOperationException(fallbackMessage);
@@ -298,11 +333,8 @@ public sealed class Runtime
         EnsureHost();
         InvokeWithUtf8(path, (ptr, len) =>
         {
-            uint result = _loadBundleFn!(_host, ptr, len);
-            if (result != 0u)
-            {
-                ThrowLastError("Failed to load bundle.");
-            }
+            AbiError result = _loadBundleFn!(_host, ptr, len);
+            CheckAbiError(result, "Failed to load bundle.");
         });
     }
 
@@ -311,75 +343,122 @@ public sealed class Runtime
         EnsureHost();
         InvokeWithUtf8(path, (ptr, len) =>
         {
-            uint result = _reloadBundleFn!(_host, ptr, len);
-            if (result != 0u)
-            {
-                ThrowLastError("Failed to reload bundle.");
-            }
+            AbiError result = _reloadBundleFn!(_host, ptr, len);
+            CheckAbiError(result, "Failed to reload bundle.");
         });
     }
 
+    /// <summary>
+    /// Inspect an <see cref="AbiError"/> returned by value from a host call.
+    /// On a non-Ok code, frees the error message (allocated by the callee via
+    /// the host allocator) after copying it, then throws.
+    /// </summary>
+    private void CheckAbiError(AbiError error, string fallbackMessage)
+    {
+        if (error.Code == AbiErrorCode.Ok)
+        {
+            return;
+        }
+
+        string message = StringViewToString(error.Message);
+        if (error.Message.Ptr != nint.Zero && error.Message.Len != nuint.Zero)
+        {
+            _freeFn!(_host, error.Message.Ptr, error.Message.Len, 1);
+        }
+
+        throw new InvalidOperationException(string.IsNullOrEmpty(message) ? fallbackMessage : message);
+    }
+
+    /// <summary>
+    /// The runtime's <c>HostInterface*</c> pointer, passed to guest contract
+    /// factory functions (create_instance / destroy_instance) for host allocation.
+    /// </summary>
+    public nint HostHandle
+    {
+        get
+        {
+            EnsureHost();
+            return _host;
+        }
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ulong FindGuestContract(ulong contractId, uint minVersion)
+    public uint FindGuestContract(ulong contractId, uint minVersion)
     {
         EnsureHost();
         return _findGuestContractFn!(_host, contractId, minVersion);
     }
 
-    public ulong[] FindAllByContract(ulong contractId, uint minVersion)
+    public uint[] FindAllByContract(ulong contractId, uint minVersion)
     {
         EnsureHost();
 
-        // Call find_all_guest_contracts which returns Array<GuestContractHandle>*
-        nint arrayPtr = _findAllFn!(_host, contractId, minVersion);
-        if (arrayPtr == nint.Zero)
+        // find_all_guest_contracts returns Array<GuestContractHandle> by value
+        // (items pointer, len, align). The caller owns the items buffer and must
+        // free it via host->free using the returned size and alignment.
+        Polyplug.Abi.Array array = _findAllFn!(_host, contractId, minVersion);
+        if (array.Items == nint.Zero || array.Len == nuint.Zero)
         {
             return [];
         }
 
-        // Array layout: data (nint), len (nuint)
-        nint dataPtr = Marshal.ReadIntPtr(arrayPtr);
-        nuint arrayLen = Marshal.PtrToStructure<nuint>(arrayPtr + IntPtr.Size);
-
-        if (arrayLen == nuint.Zero || dataPtr == nint.Zero)
-        {
-            return [];
-        }
-
-        int count = checked((int)arrayLen.ToUInt64());
-        ulong[] handles = new ulong[count];
+        // Each GuestContractHandle is `#[repr(C)] { index: u32 }` = 4 bytes, so the
+        // array has a 4-byte element stride and each element is read as a uint.
+        int count = checked((int)array.Len.ToUInt64());
+        uint[] handles = new uint[count];
         for (int i = 0; i < count; i++)
         {
-            handles[i] = Marshal.PtrToStructure<ulong>(dataPtr + i * 8);
+            handles[i] = (uint)Marshal.ReadInt32(array.Items + i * 4);
         }
 
-        // Free the array via host->free
-        _freeFn!(_host, dataPtr, (nuint)(count * 8), 8);
+        _freeFn!(_host, array.Items, (nuint)(count * 4), array.Align);
 
         return handles;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public nint ResolveGuestContract(ulong packedHandle)
+    public nint ResolveGuestContract(uint handle)
     {
         EnsureHost();
-        if (packedHandle == ulong.MaxValue)
+        // Null handle sentinel is index == u32::MAX (0xFFFFFFFF).
+        if (handle == uint.MaxValue)
         {
             return nint.Zero;
         }
 
-        return _resolveFn!(_host, packedHandle);
+        return _resolveFn!(_host, handle);
     }
 
     public void RegisterHostContract(nint hostInterface)
     {
         EnsureHost();
 
-        uint result = _registerHostContractFn!(_host, hostInterface);
-        if (result != 0u)
+        AbiError result = _registerHostContractFn!(_host, hostInterface);
+        CheckAbiError(result, "Failed to register host contract.");
+    }
+
+    /// <summary>
+    /// Register a language loader with the runtime.
+    /// </summary>
+    /// <param name="runtimeName">Runtime name the loader handles (e.g. "native", "python").</param>
+    /// <param name="loaderPtr">Opaque loader pointer from the loader cdylib's create function.</param>
+    /// <returns>Zero on success, non-zero AbiError code on failure.</returns>
+    public uint RegisterLoader(string runtimeName, nint loaderPtr)
+    {
+        EnsureHost();
+
+        uint result = 0u;
+        InvokeWithUtf8(runtimeName, (ptr, len) =>
         {
-            ThrowLastError("Failed to register host contract.");
-        }
+            StringView name = new StringView { Ptr = ptr, Len = len };
+            AbiError error = _registerLoaderFn!(_host, name, loaderPtr);
+            result = (uint)error.Code;
+            if (error.Code != AbiErrorCode.Ok && error.Message.Ptr != nint.Zero && error.Message.Len != nuint.Zero)
+            {
+                _freeFn!(_host, error.Message.Ptr, error.Message.Len, 1);
+            }
+        });
+        return result;
     }
 
     private static void InvokeWithUtf8(string value, Action<nint, nuint> action)

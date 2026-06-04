@@ -14,7 +14,7 @@ use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
 
-use polyplug::registry::RuntimeStore;
+use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::DispatchMechanisms;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;

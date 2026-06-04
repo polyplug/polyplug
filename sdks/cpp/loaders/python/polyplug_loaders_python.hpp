@@ -11,7 +11,6 @@ extern "C" {
     struct PolyplugPythonConfig { const uint8_t* min_version_ptr; size_t min_version_len; };
     void* polyplug_python_loader_create(const PolyplugPythonConfig* cfg);
     void  polyplug_python_loader_free(void* ptr);
-    uint32_t polyplug_runtime_register_loader(void* rt, void* loader);
 }
 
 namespace polyplug::loaders {
@@ -22,9 +21,16 @@ inline void register_python(Runtime& rt, std::string_view min_version = "3.11") 
         min_version.size()
     };
     void* loader = polyplug_python_loader_create(&cfg);
-    if (!loader) throw std::runtime_error("polyplug: python loader create failed");
-    uint32_t err = polyplug_runtime_register_loader(rt.handle(), loader);
-    if (err != 0) throw std::runtime_error("polyplug: python loader register failed");
+    if (loader == nullptr) {
+        throw std::runtime_error("polyplug: python loader create failed");
+    }
+    const HostInterface* host = rt.host();
+    static const char runtime_name[] = "python";
+    StringView name{reinterpret_cast<const uint8_t*>(runtime_name), sizeof(runtime_name) - 1};
+    AbiError err = host->register_loader(host, name, loader);
+    if (err.code != AbiErrorCode::Ok) {
+        throw std::runtime_error("polyplug: python loader register failed: " + rt.get_last_error());
+    }
 }
 
 } // namespace polyplug::loaders

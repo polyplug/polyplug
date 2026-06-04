@@ -179,10 +179,10 @@ fn python_array_field_generates_void_ptr_and_size_t() {
     );
 }
 
-// ─── C# Delegate Tests ─────────────────────────────────────────────────────────
+// ─── C# Blittable Fn Ptr Tests ─────────────────────────────────────────────────
 
 #[test]
-fn csharp_fn_ptr_field_produces_delegate() {
+fn csharp_fn_ptr_field_produces_intptr() {
     let generator = CSharpGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_fn_ptr_struct(
@@ -194,13 +194,13 @@ fn csharp_fn_ptr_field_produces_delegate() {
     let output = generator.generate_struct(&item, &ctx);
 
     assert!(
-        output.contains("delegate"),
-        "C# generator must produce delegate for fn ptr fields. Got:\n{output}"
+        output.contains("public IntPtr Callback;"),
+        "C# generator must emit IntPtr for fn ptr fields. Got:\n{output}"
     );
 }
 
 #[test]
-fn csharp_delegate_has_unmanaged_function_pointer_attribute() {
+fn csharp_fn_ptr_field_emits_no_managed_delegate() {
     let generator = CSharpGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_fn_ptr_struct(
@@ -211,28 +211,31 @@ fn csharp_delegate_has_unmanaged_function_pointer_attribute() {
 
     let output = generator.generate_struct(&item, &ctx);
 
+    // No managed delegate in the ABI struct keeps it blittable so ABI unions
+    // stay overlappable in .NET (TypeLoadException otherwise).
     assert!(
-        output.contains("UnmanagedFunctionPointer"),
-        "C# delegate must have [UnmanagedFunctionPointer] attribute. Got:\n{output}"
+        !output.contains("delegate"),
+        "C# ABI structs must not declare managed delegates. Got:\n{output}"
     );
 }
 
 #[test]
-fn csharp_delegate_before_struct() {
+fn csharp_all_fn_ptr_fields_become_intptr() {
     let generator = CSharpGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_host_interface_struct();
 
     let output = generator.generate_struct(&item, &ctx);
 
-    // Delegate definitions should appear before the struct.
-    let delegate_pos = output.find("delegate").expect("Should contain delegate");
-    let struct_pos = output
-        .find("public struct HostInterface")
-        .expect("Should contain struct");
     assert!(
-        delegate_pos < struct_pos,
-        "Delegate definitions must appear before the struct definition"
+        output.contains("public IntPtr RegisterContract;")
+            && output.contains("public IntPtr Alloc;")
+            && output.contains("public IntPtr Free;"),
+        "every fn ptr field must be IntPtr. Got:\n{output}"
+    );
+    assert!(
+        !output.contains("delegate"),
+        "no managed delegate definitions must be emitted. Got:\n{output}"
     );
 }
 
@@ -265,10 +268,10 @@ fn lua_fn_ptr_field_produces_typed_typedef() {
 
     let output = generator.generate_struct(&item, &ctx);
 
-    // Lua should produce a typed function pointer typedef, not void*.
+    // Lua should produce a valid, named C function-pointer typedef, not void*.
     assert!(
-        output.contains("(*)("),
-        "Lua generator must produce typed fn ptr typedef. Got:\n{output}"
+        output.contains("(*TestStruct_callback_fn)("),
+        "Lua generator must produce a named typed fn ptr typedef. Got:\n{output}"
     );
 }
 
@@ -398,7 +401,7 @@ fn python_optional_fn_ptr_generates_cfunctype() {
 }
 
 #[test]
-fn csharp_optional_fn_ptr_generates_delegate() {
+fn csharp_optional_fn_ptr_becomes_intptr() {
     let generator = CSharpGenerator::new();
     let ctx = GenerationContext::new();
     let item = make_optional_fn_ptr_struct();
@@ -406,8 +409,12 @@ fn csharp_optional_fn_ptr_generates_delegate() {
     let output = generator.generate_struct(&item, &ctx);
 
     assert!(
-        output.contains("delegate"),
-        "Option<fn ptr> must produce delegate. Got:\n{output}"
+        output.contains("public IntPtr OnReload;"),
+        "Option<fn ptr> must become a blittable IntPtr. Got:\n{output}"
+    );
+    assert!(
+        !output.contains("delegate"),
+        "Option<fn ptr> must not produce a managed delegate. Got:\n{output}"
     );
 }
 

@@ -11,6 +11,8 @@ local AbiErrorCode = {
     InvalidPointer = 8,
 }
 
+local NULL_HANDLE = 0xFFFFFFFF
+
 -- Contract ID constants
 local PIPELINE_DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7ULL
 local DATA_TRANSFORMER_CONTRACT_ID = 0x4775991362CD68EEULL
@@ -27,18 +29,18 @@ M.DATA_REPORTER_CONTRACT_ID = DATA_REPORTER_CONTRACT_ID
 M.PIPELINE_VALIDATOR_CONTRACT_ID = PIPELINE_VALIDATOR_CONTRACT_ID
 
 -- Cached FFI types for hot path performance
-local DispatchFnType = ffi.typeof("uint32_t (*)(const void*, void*)")
+local NativeDispatchFnType = ffi.typeof("AbiError (*)(GuestContractInstance, const void*, void*)")
 
 -- Methods for PipelineDecoderContract (instance wrapper)
 local PipelineDecoderContract_methods = {
     is_valid = function(self)
-        return self._instance ~= nil and self._instance.data ~= nil
+        return self._interface ~= nil and not self._destroyed
     end,
 
     destroy = function(self)
-        if self._instance ~= nil and self._instance.data ~= nil then
+        if self._interface ~= nil and not self._destroyed then
             self._interface.destroy_instance(self._host, self._instance)
-            self._instance.data = nil
+            self._destroyed = true
         end
     end,
 
@@ -46,28 +48,34 @@ local PipelineDecoderContract_methods = {
         self:destroy()
         if self._interface ~= nil then
             self._instance = self._interface.create_instance(self._host, nil)
+            self._destroyed = false
         end
     end,
 
     decode = function(self, input)
-        if self._instance == nil or self._instance.data == nil then
-            error("invalid caller: instance is nil", 2)
+        if self._interface == nil or self._destroyed then
+            error("invalid caller: interface is nil", 2)
         end
-    local input_val = ffi.new("StringView", input)
-    local args_ptr = ffi.cast("const void*", input_val)
+    local input_bytes = tostring(input)
+    local input_view = ffi.new("StringView")
+    input_view.ptr = ffi.cast("const uint8_t*", input_bytes)
+    input_view.len = #input_bytes
+    local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        if self._interface == nil then
-            error("interface is nil", 2)
-        end
         if 0 >= self._interface.dispatch.native.function_count then
             error("function not available in interface", 2)
         end
-        local fn_ptr = self._interface.dispatch.native.functions[0]
-        local fn = ffi.cast(DispatchFnType, fn_ptr)
-        local err = fn(self._instance, args_ptr, out_ptr)
-        if err ~= 0 then
-            error("polyplug call failed", 2)
+        local err
+        if self._interface.dispatch_type == 0 then
+            local fn_ptr = self._interface.dispatch.native.functions[0]
+            local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
+            err = fn(self._instance, args_ptr, out_ptr)
+        else
+            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr)
+        end
+        if err.code ~= AbiErrorCode.Ok then
+            error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
         end
         return out_val
     end,
@@ -82,22 +90,25 @@ local PipelineDecoderContract_mt = {
 
 -- Factory function for PipelineDecoderContract (instance wrapper)
 function M.PipelineDecoderContract_create(runtime, host)
-    local handle = runtime:find_by_contract(PIPELINE_DECODER_CONTRACT_ID, 0)
-    if handle == nil then
+    local handle = runtime:find_guest_contract(PIPELINE_DECODER_CONTRACT_ID, 0)
+    -- find_guest_contract returns a u32 handle; the null/not-found sentinel
+    -- is index == u32::MAX (NULL_HANDLE), never nil.
+    if handle == NULL_HANDLE then
         return nil
     end
-    local interface = runtime:resolve_contract(handle)
+    local interface = runtime:resolve_guest_contract(handle)
     if interface == nil then
         return nil
     end
+    -- A null `instance.data` is valid: stateless contracts (and all VM-dispatch
+    -- guests) return a null handle from create_instance and use it as an opaque
+    -- dispatch token. Validity is keyed off the interface pointer, not the instance.
     local instance = interface.create_instance(host, nil)
-    if instance == nil or instance.data == nil then
-        return nil
-    end
     local wrapper = {
         _interface = interface,
         _instance = instance,
-        _host = host
+        _host = host,
+        _destroyed = false
     }
     setmetatable(wrapper, PipelineDecoderContract_mt)
     return wrapper
@@ -106,13 +117,13 @@ end
 -- Methods for DataTransformerContract (instance wrapper)
 local DataTransformerContract_methods = {
     is_valid = function(self)
-        return self._instance ~= nil and self._instance.data ~= nil
+        return self._interface ~= nil and not self._destroyed
     end,
 
     destroy = function(self)
-        if self._instance ~= nil and self._instance.data ~= nil then
+        if self._interface ~= nil and not self._destroyed then
             self._interface.destroy_instance(self._host, self._instance)
-            self._instance.data = nil
+            self._destroyed = true
         end
     end,
 
@@ -120,28 +131,34 @@ local DataTransformerContract_methods = {
         self:destroy()
         if self._interface ~= nil then
             self._instance = self._interface.create_instance(self._host, nil)
+            self._destroyed = false
         end
     end,
 
     transform = function(self, input)
-        if self._instance == nil or self._instance.data == nil then
-            error("invalid caller: instance is nil", 2)
+        if self._interface == nil or self._destroyed then
+            error("invalid caller: interface is nil", 2)
         end
-    local input_val = ffi.new("StringView", input)
-    local args_ptr = ffi.cast("const void*", input_val)
+    local input_bytes = tostring(input)
+    local input_view = ffi.new("StringView")
+    input_view.ptr = ffi.cast("const uint8_t*", input_bytes)
+    input_view.len = #input_bytes
+    local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        if self._interface == nil then
-            error("interface is nil", 2)
-        end
         if 0 >= self._interface.dispatch.native.function_count then
             error("function not available in interface", 2)
         end
-        local fn_ptr = self._interface.dispatch.native.functions[0]
-        local fn = ffi.cast(DispatchFnType, fn_ptr)
-        local err = fn(self._instance, args_ptr, out_ptr)
-        if err ~= 0 then
-            error("polyplug call failed", 2)
+        local err
+        if self._interface.dispatch_type == 0 then
+            local fn_ptr = self._interface.dispatch.native.functions[0]
+            local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
+            err = fn(self._instance, args_ptr, out_ptr)
+        else
+            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr)
+        end
+        if err.code ~= AbiErrorCode.Ok then
+            error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
         end
         return out_val
     end,
@@ -156,22 +173,25 @@ local DataTransformerContract_mt = {
 
 -- Factory function for DataTransformerContract (instance wrapper)
 function M.DataTransformerContract_create(runtime, host)
-    local handle = runtime:find_by_contract(DATA_TRANSFORMER_CONTRACT_ID, 0)
-    if handle == nil then
+    local handle = runtime:find_guest_contract(DATA_TRANSFORMER_CONTRACT_ID, 0)
+    -- find_guest_contract returns a u32 handle; the null/not-found sentinel
+    -- is index == u32::MAX (NULL_HANDLE), never nil.
+    if handle == NULL_HANDLE then
         return nil
     end
-    local interface = runtime:resolve_contract(handle)
+    local interface = runtime:resolve_guest_contract(handle)
     if interface == nil then
         return nil
     end
+    -- A null `instance.data` is valid: stateless contracts (and all VM-dispatch
+    -- guests) return a null handle from create_instance and use it as an opaque
+    -- dispatch token. Validity is keyed off the interface pointer, not the instance.
     local instance = interface.create_instance(host, nil)
-    if instance == nil or instance.data == nil then
-        return nil
-    end
     local wrapper = {
         _interface = interface,
         _instance = instance,
-        _host = host
+        _host = host,
+        _destroyed = false
     }
     setmetatable(wrapper, DataTransformerContract_mt)
     return wrapper
@@ -180,13 +200,13 @@ end
 -- Methods for PipelineEncoderContract (instance wrapper)
 local PipelineEncoderContract_methods = {
     is_valid = function(self)
-        return self._instance ~= nil and self._instance.data ~= nil
+        return self._interface ~= nil and not self._destroyed
     end,
 
     destroy = function(self)
-        if self._instance ~= nil and self._instance.data ~= nil then
+        if self._interface ~= nil and not self._destroyed then
             self._interface.destroy_instance(self._host, self._instance)
-            self._instance.data = nil
+            self._destroyed = true
         end
     end,
 
@@ -194,28 +214,34 @@ local PipelineEncoderContract_methods = {
         self:destroy()
         if self._interface ~= nil then
             self._instance = self._interface.create_instance(self._host, nil)
+            self._destroyed = false
         end
     end,
 
     encode = function(self, input)
-        if self._instance == nil or self._instance.data == nil then
-            error("invalid caller: instance is nil", 2)
+        if self._interface == nil or self._destroyed then
+            error("invalid caller: interface is nil", 2)
         end
-    local input_val = ffi.new("StringView", input)
-    local args_ptr = ffi.cast("const void*", input_val)
+    local input_bytes = tostring(input)
+    local input_view = ffi.new("StringView")
+    input_view.ptr = ffi.cast("const uint8_t*", input_bytes)
+    input_view.len = #input_bytes
+    local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        if self._interface == nil then
-            error("interface is nil", 2)
-        end
         if 0 >= self._interface.dispatch.native.function_count then
             error("function not available in interface", 2)
         end
-        local fn_ptr = self._interface.dispatch.native.functions[0]
-        local fn = ffi.cast(DispatchFnType, fn_ptr)
-        local err = fn(self._instance, args_ptr, out_ptr)
-        if err ~= 0 then
-            error("polyplug call failed", 2)
+        local err
+        if self._interface.dispatch_type == 0 then
+            local fn_ptr = self._interface.dispatch.native.functions[0]
+            local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
+            err = fn(self._instance, args_ptr, out_ptr)
+        else
+            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr)
+        end
+        if err.code ~= AbiErrorCode.Ok then
+            error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
         end
         return out_val
     end,
@@ -230,22 +256,25 @@ local PipelineEncoderContract_mt = {
 
 -- Factory function for PipelineEncoderContract (instance wrapper)
 function M.PipelineEncoderContract_create(runtime, host)
-    local handle = runtime:find_by_contract(PIPELINE_ENCODER_CONTRACT_ID, 0)
-    if handle == nil then
+    local handle = runtime:find_guest_contract(PIPELINE_ENCODER_CONTRACT_ID, 0)
+    -- find_guest_contract returns a u32 handle; the null/not-found sentinel
+    -- is index == u32::MAX (NULL_HANDLE), never nil.
+    if handle == NULL_HANDLE then
         return nil
     end
-    local interface = runtime:resolve_contract(handle)
+    local interface = runtime:resolve_guest_contract(handle)
     if interface == nil then
         return nil
     end
+    -- A null `instance.data` is valid: stateless contracts (and all VM-dispatch
+    -- guests) return a null handle from create_instance and use it as an opaque
+    -- dispatch token. Validity is keyed off the interface pointer, not the instance.
     local instance = interface.create_instance(host, nil)
-    if instance == nil or instance.data == nil then
-        return nil
-    end
     local wrapper = {
         _interface = interface,
         _instance = instance,
-        _host = host
+        _host = host,
+        _destroyed = false
     }
     setmetatable(wrapper, PipelineEncoderContract_mt)
     return wrapper
@@ -254,13 +283,13 @@ end
 -- Methods for DataReporterContract (instance wrapper)
 local DataReporterContract_methods = {
     is_valid = function(self)
-        return self._instance ~= nil and self._instance.data ~= nil
+        return self._interface ~= nil and not self._destroyed
     end,
 
     destroy = function(self)
-        if self._instance ~= nil and self._instance.data ~= nil then
+        if self._interface ~= nil and not self._destroyed then
             self._interface.destroy_instance(self._host, self._instance)
-            self._instance.data = nil
+            self._destroyed = true
         end
     end,
 
@@ -268,28 +297,34 @@ local DataReporterContract_methods = {
         self:destroy()
         if self._interface ~= nil then
             self._instance = self._interface.create_instance(self._host, nil)
+            self._destroyed = false
         end
     end,
 
     report = function(self, input)
-        if self._instance == nil or self._instance.data == nil then
-            error("invalid caller: instance is nil", 2)
+        if self._interface == nil or self._destroyed then
+            error("invalid caller: interface is nil", 2)
         end
-    local input_val = ffi.new("StringView", input)
-    local args_ptr = ffi.cast("const void*", input_val)
+    local input_bytes = tostring(input)
+    local input_view = ffi.new("StringView")
+    input_view.ptr = ffi.cast("const uint8_t*", input_bytes)
+    input_view.len = #input_bytes
+    local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        if self._interface == nil then
-            error("interface is nil", 2)
-        end
         if 0 >= self._interface.dispatch.native.function_count then
             error("function not available in interface", 2)
         end
-        local fn_ptr = self._interface.dispatch.native.functions[0]
-        local fn = ffi.cast(DispatchFnType, fn_ptr)
-        local err = fn(self._instance, args_ptr, out_ptr)
-        if err ~= 0 then
-            error("polyplug call failed", 2)
+        local err
+        if self._interface.dispatch_type == 0 then
+            local fn_ptr = self._interface.dispatch.native.functions[0]
+            local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
+            err = fn(self._instance, args_ptr, out_ptr)
+        else
+            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr)
+        end
+        if err.code ~= AbiErrorCode.Ok then
+            error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
         end
         return out_val
     end,
@@ -304,22 +339,25 @@ local DataReporterContract_mt = {
 
 -- Factory function for DataReporterContract (instance wrapper)
 function M.DataReporterContract_create(runtime, host)
-    local handle = runtime:find_by_contract(DATA_REPORTER_CONTRACT_ID, 0)
-    if handle == nil then
+    local handle = runtime:find_guest_contract(DATA_REPORTER_CONTRACT_ID, 0)
+    -- find_guest_contract returns a u32 handle; the null/not-found sentinel
+    -- is index == u32::MAX (NULL_HANDLE), never nil.
+    if handle == NULL_HANDLE then
         return nil
     end
-    local interface = runtime:resolve_contract(handle)
+    local interface = runtime:resolve_guest_contract(handle)
     if interface == nil then
         return nil
     end
+    -- A null `instance.data` is valid: stateless contracts (and all VM-dispatch
+    -- guests) return a null handle from create_instance and use it as an opaque
+    -- dispatch token. Validity is keyed off the interface pointer, not the instance.
     local instance = interface.create_instance(host, nil)
-    if instance == nil or instance.data == nil then
-        return nil
-    end
     local wrapper = {
         _interface = interface,
         _instance = instance,
-        _host = host
+        _host = host,
+        _destroyed = false
     }
     setmetatable(wrapper, DataReporterContract_mt)
     return wrapper
@@ -328,13 +366,13 @@ end
 -- Methods for PipelineValidatorContract (instance wrapper)
 local PipelineValidatorContract_methods = {
     is_valid = function(self)
-        return self._instance ~= nil and self._instance.data ~= nil
+        return self._interface ~= nil and not self._destroyed
     end,
 
     destroy = function(self)
-        if self._instance ~= nil and self._instance.data ~= nil then
+        if self._interface ~= nil and not self._destroyed then
             self._interface.destroy_instance(self._host, self._instance)
-            self._instance.data = nil
+            self._destroyed = true
         end
     end,
 
@@ -342,28 +380,34 @@ local PipelineValidatorContract_methods = {
         self:destroy()
         if self._interface ~= nil then
             self._instance = self._interface.create_instance(self._host, nil)
+            self._destroyed = false
         end
     end,
 
     validate = function(self, input)
-        if self._instance == nil or self._instance.data == nil then
-            error("invalid caller: instance is nil", 2)
+        if self._interface == nil or self._destroyed then
+            error("invalid caller: interface is nil", 2)
         end
-    local input_val = ffi.new("StringView", input)
-    local args_ptr = ffi.cast("const void*", input_val)
+    local input_bytes = tostring(input)
+    local input_view = ffi.new("StringView")
+    input_view.ptr = ffi.cast("const uint8_t*", input_bytes)
+    input_view.len = #input_bytes
+    local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        if self._interface == nil then
-            error("interface is nil", 2)
-        end
         if 0 >= self._interface.dispatch.native.function_count then
             error("function not available in interface", 2)
         end
-        local fn_ptr = self._interface.dispatch.native.functions[0]
-        local fn = ffi.cast(DispatchFnType, fn_ptr)
-        local err = fn(self._instance, args_ptr, out_ptr)
-        if err ~= 0 then
-            error("polyplug call failed", 2)
+        local err
+        if self._interface.dispatch_type == 0 then
+            local fn_ptr = self._interface.dispatch.native.functions[0]
+            local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
+            err = fn(self._instance, args_ptr, out_ptr)
+        else
+            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr)
+        end
+        if err.code ~= AbiErrorCode.Ok then
+            error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
         end
         return out_val
     end,
@@ -378,22 +422,25 @@ local PipelineValidatorContract_mt = {
 
 -- Factory function for PipelineValidatorContract (instance wrapper)
 function M.PipelineValidatorContract_create(runtime, host)
-    local handle = runtime:find_by_contract(PIPELINE_VALIDATOR_CONTRACT_ID, 0)
-    if handle == nil then
+    local handle = runtime:find_guest_contract(PIPELINE_VALIDATOR_CONTRACT_ID, 0)
+    -- find_guest_contract returns a u32 handle; the null/not-found sentinel
+    -- is index == u32::MAX (NULL_HANDLE), never nil.
+    if handle == NULL_HANDLE then
         return nil
     end
-    local interface = runtime:resolve_contract(handle)
+    local interface = runtime:resolve_guest_contract(handle)
     if interface == nil then
         return nil
     end
+    -- A null `instance.data` is valid: stateless contracts (and all VM-dispatch
+    -- guests) return a null handle from create_instance and use it as an opaque
+    -- dispatch token. Validity is keyed off the interface pointer, not the instance.
     local instance = interface.create_instance(host, nil)
-    if instance == nil or instance.data == nil then
-        return nil
-    end
     local wrapper = {
         _interface = interface,
         _instance = instance,
-        _host = host
+        _host = host,
+        _destroyed = false
     }
     setmetatable(wrapper, PipelineValidatorContract_mt)
     return wrapper

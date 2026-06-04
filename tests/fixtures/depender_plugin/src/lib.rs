@@ -28,9 +28,6 @@ unsafe impl Sync for FnPtr {}
 // Tracks how many times polyplug_init was called (for cascade reload test).
 static INIT_COUNT: AtomicU32 = AtomicU32::new(0_u32);
 
-// DEPENDER_TEST_CONTRACT_ID = fnv1a_64(b"depender.test@1") = 0x54DC2212C30F900D
-const DEPENDER_TEST_CONTRACT_ID: u64 = 0x54DC2212C30F900D_u64;
-
 const POLYPLUG_ABI_VERSION: u32 = 1_u32;
 
 // ─── Instance lifecycle (stub for test plugin) ────────────────────────────────
@@ -63,23 +60,27 @@ unsafe extern "C" fn init_count_fn() -> u32 {
 
 static FUNCTIONS: [FnPtr; 1] = [FnPtr(init_count_fn as *const ())];
 
-static INTERFACE: GuestContractInterface = GuestContractInterface {
-    contract_id: GuestContractId::from_u64(DEPENDER_TEST_CONTRACT_ID),
-    contract_version: Version {
-        major: 1,
-        minor: 0,
-        patch: 0,
-    },
-    dispatch_type: DispatchType::Native,
-    create_instance: create_instance_stub,
-    destroy_instance: destroy_instance_stub,
-    dispatch: DispatchMechanisms {
-        native: NativeDispatch {
-            function_count: 1,
-            functions: FUNCTIONS.as_ptr() as *const *const (),
+/// Build the depender.test interface with the canonical contract ID computed at
+/// runtime via `GuestContractId::new`, keeping it scheme-proof (no baked hash).
+fn depender_test_interface() -> GuestContractInterface {
+    GuestContractInterface {
+        contract_id: GuestContractId::new("depender.test", 1),
+        contract_version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
         },
-    },
-};
+        dispatch_type: DispatchType::Native,
+        create_instance: create_instance_stub,
+        destroy_instance: destroy_instance_stub,
+        dispatch: DispatchMechanisms {
+            native: NativeDispatch {
+                function_count: 1,
+                functions: FUNCTIONS.as_ptr() as *const *const (),
+            },
+        },
+    }
+}
 
 static DESCRIPTOR: PluginDescriptor = PluginDescriptor {
     name: StringView {
@@ -127,13 +128,16 @@ pub unsafe extern "C" fn polyplug_init(
     INIT_COUNT.fetch_add(1_u32, Ordering::SeqCst);
     // SAFETY: host_abi is a valid non-null pointer from the host runtime, outlives this call.
     let host: &HostInterface = unsafe { &*host_abi };
+    // The host copies the interface during this synchronous call, so a local
+    // value (carrying the runtime-computed contract ID) is sufficient.
+    let interface: GuestContractInterface = depender_test_interface();
     // SAFETY: register_contract is a valid function pointer set by the host.
-    // DESCRIPTOR and INTERFACE are 'static.
+    // DESCRIPTOR is 'static; `interface` outlives the synchronous call.
     unsafe {
         (host.register_contract)(
             host_abi,
             &DESCRIPTOR as *const PluginDescriptor,
-            &INTERFACE as *const GuestContractInterface,
+            &interface as *const GuestContractInterface,
         )
     }
 }

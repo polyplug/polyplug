@@ -11,9 +11,10 @@ using System.Runtime.InteropServices;
 /// Plugins use this class to call host-provided functionality.
 /// </summary>
 public sealed class HostLoggerContract {
+    private readonly IntPtr _instance;
     private readonly IntPtr _interface;
 
-    private HostLoggerContract(IntPtr interface) { _interface = interface; }
+    private HostLoggerContract(IntPtr instance, IntPtr iface) { _instance = instance; _interface = iface; }
 
     /// <summary>Factory method - creates caller from HostInterface or null if not found.</summary>
     public static HostLoggerContract? FromHost(IntPtr host, uint minVersion = 0) {
@@ -22,11 +23,15 @@ public sealed class HostLoggerContract {
         }
         unsafe {
             var hostInterface = (HostInterface*)host;
-            var interface = hostInterface->GetHostContract(host, 0xF53EB5F2845853BBUL, minVersion);
-            if (interface == IntPtr.Zero) {
+            var instance = hostInterface->GetHostContract(host, 0xF53EB5F2845853BBUL, minVersion);
+            if (instance == IntPtr.Zero) {
                 return null;
             }
-            return new HostLoggerContract(interface);
+            var iface = hostInterface->ResolveHostContractInterface(host, 0xF53EB5F2845853BBUL, minVersion);
+            if (iface == IntPtr.Zero) {
+                return null;
+            }
+            return new HostLoggerContract(instance, iface);
         }
     }
 
@@ -40,8 +45,8 @@ public sealed class HostLoggerContract {
         }
 
         unsafe {
-            var header = &((HostContractVTable*)_interface)->Header;
-            if (0u >= header->FunctionCount) {
+            var contract = (HostContractInterface*)_interface;
+            if (0u >= contract->Dispatch.Native.FunctionCount) {
                 return;
             }
 
@@ -50,14 +55,16 @@ public sealed class HostLoggerContract {
             var outPtr = IntPtr.Zero;
 
             AbiError err;
-            switch (header->DispatchType) {
+            switch (contract->DispatchType) {
                 case DispatchType.Native: {
-                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)header->Dispatch.Native.Functions[0u];
-                    err = fn_(header->Dispatch.Native.ImplPtr, argsPtr, outPtr);
+                    var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[0u];
+                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)fnPtr;
+                    err = fn_(_interface, argsPtr, outPtr);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    err = header->Dispatch.VM.Call(header->Dispatch.VM.BridgeData, 0u, argsPtr, outPtr);
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
+                    err = vmFn(contract->Dispatch.Vm.LoaderData, 0u, argsPtr, outPtr);
                     break;
                 }
                 default:
@@ -78,8 +85,8 @@ public sealed class HostLoggerContract {
         }
 
         unsafe {
-            var header = &((HostContractVTable*)_interface)->Header;
-            if (1u >= header->FunctionCount) {
+            var contract = (HostContractInterface*)_interface;
+            if (1u >= contract->Dispatch.Native.FunctionCount) {
                 return;
             }
 
@@ -91,14 +98,16 @@ public sealed class HostLoggerContract {
             var outPtr = IntPtr.Zero;
 
             AbiError err;
-            switch (header->DispatchType) {
+            switch (contract->DispatchType) {
                 case DispatchType.Native: {
-                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)header->Dispatch.Native.Functions[1u];
-                    err = fn_(header->Dispatch.Native.ImplPtr, argsPtr, outPtr);
+                    var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[1u];
+                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)fnPtr;
+                    err = fn_(_interface, argsPtr, outPtr);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    err = header->Dispatch.VM.Call(header->Dispatch.VM.BridgeData, 1u, argsPtr, outPtr);
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
+                    err = vmFn(contract->Dispatch.Vm.LoaderData, 1u, argsPtr, outPtr);
                     break;
                 }
                 default:

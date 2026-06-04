@@ -46,7 +46,7 @@ public static partial class JsLoaderExtensions
                 throw new InvalidOperationException("polyplug: js loader create failed");
             }
 
-            uint err = runtime.RegisterLoader(loaderPtr);
+            uint err = runtime.RegisterLoader("js-quickjs", loaderPtr);
             if (err != 0u)
             {
                 Runtime.ThrowLastError($"polyplug: js loader register failed: {err}");

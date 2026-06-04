@@ -9,5 +9,9 @@
   <ItemGroup>
     <ProjectReference Include="../../../sdks/csharp/host/Polyplug.Host.csproj" />
     <ProjectReference Include="../../../sdks/csharp/guest/Polyplug.Guest.csproj" />
+    <ProjectReference Include="../../../sdks/csharp/loaders/Native/Polyplug.Loaders.Native.csproj" />
+    <ProjectReference Include="../../../sdks/csharp/loaders/Python/Polyplug.Loaders.Python.csproj" />
+    <ProjectReference Include="../../../sdks/csharp/loaders/Lua/Polyplug.Loaders.Lua.csproj" />
+    <ProjectReference Include="../../../sdks/csharp/loaders/Js/Polyplug.Loaders.Js.csproj" />
   </ItemGroup>
 </Project>

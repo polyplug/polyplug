@@ -18,7 +18,6 @@
 
 use std::sync::Arc;
 
-use polyplug_abi::guest::GuestContractInterface;
 use polyplug_abi::runtime::ReloadPhase;
 use polyplug_abi::types::StringView;
 use polyplug_utils::{BundleId, GuestContractId};
@@ -64,10 +63,13 @@ impl Runtime {
             return Err(RuntimeError::HotReloadDisabled);
         }
 
-        let bundle_dir: &std::path::Path = if path.is_file() {
-            path.parent().unwrap_or(path)
-        } else {
+        // `path` points to the bundle's shared-library file; its parent directory
+        // holds the manifest. A directory path is accepted as the bundle dir
+        // directly (the loader resolves the .so from the manifest's `file`).
+        let bundle_dir: &std::path::Path = if path.is_dir() {
             path
+        } else {
+            path.parent().unwrap_or(path)
         };
 
         let manifest: ManifestData =
@@ -86,6 +88,24 @@ impl Runtime {
             })?;
 
         let bundle_id: BundleId = BundleId::new(&manifest.name);
+
+        // Validate that the requested library file exists before doing any work.
+        // A missing file is a reload failure that must fire the Failed callback so
+        // the host learns the active version was kept.
+        if !path.is_dir() && !path.exists() {
+            let err: RuntimeError = RuntimeError::Loader(crate::error::LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("bundle library not found at {}", path.display()),
+            });
+            if let Some(cb) = self.on_reload_cb() {
+                cb(ReloadPhase::failed(
+                    bundle_id,
+                    string_view(&manifest.name),
+                    string_view(&err.to_string()),
+                ));
+            }
+            return Err(err);
+        }
 
         // Store slot indices before reload (for warning check and interface swap)
         let slot_indices: Vec<u32> = self.registry.get_bundle_plugin_slots(bundle_id);
@@ -120,36 +140,14 @@ impl Runtime {
 
         match result {
             Ok(()) => {
-                // ─── Swap interfaces after init succeeds (HR-05) ──────────────
-                // New interfaces were registered during init inside loader.reload()
-                // For each slot, find the NEW interface by contract_id and swap
-                for slot_idx in &slot_indices {
-                    // Get contract_id for this slot (stable across reload)
-                    let contract_id: GuestContractId =
-                        self.registry.get_slot_guest_contract_id(*slot_idx).ok_or({
-                            RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
-                                index: *slot_idx,
-                            })
-                        })?;
-
-                    // Find NEW interface handle (registered during init)
-                    let new_handle: polyplug_abi::plugin::GuestContractHandle =
-                        self.registry.find_guest_contract(contract_id, 0)?;
-
-                    // Get Arc to NEW interface
-                    let new_interface: Arc<GuestContractInterface> = self
-                        .registry
-                        .get_guest_contract_interface_arc(new_handle.index)
-                        .ok_or({
-                            RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
-                                index: new_handle.index,
-                            })
-                        })?;
-
-                    // Atomic swap - old slot now points to new interface
-                    self.registry
-                        .swap_guest_contract_interface(*slot_idx, new_interface)?;
-                }
+                // ─── Reconcile interfaces after init succeeds (HR-05) ─────────
+                // loader.reload() called polyplug_init, which registered the new
+                // version's interfaces into fresh slots (registration never
+                // vacates the old slots). Move each new interface into its
+                // pre-reload slot and retire the duplicate new slot, atomically.
+                self.registry
+                    .apply_reload_swap(bundle_id, &slot_indices)
+                    .map_err(RuntimeError::Registry)?;
 
                 // Fire Reloaded callback
                 if let Some(cb) = self.on_reload_cb() {
@@ -232,7 +230,7 @@ mod tests {
         let bundle_id = BundleId::new("test-bundle");
         let name = StringView::from_static(b"test");
         let original = ReloadPhase::preparing(bundle_id, name);
-        let cloned = original.clone();
+        let cloned: ReloadPhase = original;
 
         assert_eq!(original.phase_type, cloned.phase_type);
         assert_eq!(original.bundle_id, cloned.bundle_id);

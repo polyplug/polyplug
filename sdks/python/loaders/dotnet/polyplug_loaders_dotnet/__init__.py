@@ -22,34 +22,19 @@ class _DotnetConfig(ctypes.Structure):
     ]
 
 
+_RUNTIME_NAME: str = "dotnet"
+
+
 def register_dotnet_loader(runtime: Runtime, min_framework: str = "10.0") -> None:
-    """Register the .NET loader with the runtime."""
-    lib = _get_lib()
-    b = min_framework.encode("utf-8")
-    cfg = _DotnetConfig(b, len(b))
-    loader_ptr = lib.polyplug_dotnet_loader_create(ctypes.byref(cfg))
+    """Register the .NET loader with the runtime via HostInterface.register_loader."""
+    lib: ctypes.CDLL = _get_lib()
+    framework_bytes: bytes = min_framework.encode("utf-8")
+    cfg = _DotnetConfig(framework_bytes, len(framework_bytes))
+    loader_ptr: int = lib.polyplug_dotnet_loader_create(ctypes.byref(cfg))
     if not loader_ptr:
         raise RuntimeError("polyplug: dotnet loader create failed")
 
-    backend = runtime._backend
-    if hasattr(backend, "ffi"):
-        ffi = backend.ffi
-        err = backend.lib.polyplug_runtime_register_loader(
-            ffi.cast("void*", runtime._runtime), ffi.cast("void*", loader_ptr)
-        )
-    else:
-        polyplug_lib = backend.lib
-        polyplug_lib.polyplug_runtime_register_loader.restype = ctypes.c_uint32
-        polyplug_lib.polyplug_runtime_register_loader.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-        ]
-        err = polyplug_lib.polyplug_runtime_register_loader(
-            runtime._runtime, loader_ptr
-        )
-
-    if err != 0:
-        raise RuntimeError(f"polyplug: dotnet loader register failed: {err}")
+    runtime.register_loader(_RUNTIME_NAME, loader_ptr)
 
 
 __all__ = ["register_dotnet_loader"]

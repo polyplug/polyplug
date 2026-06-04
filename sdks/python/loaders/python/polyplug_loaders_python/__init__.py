@@ -22,34 +22,19 @@ class _PythonConfig(ctypes.Structure):
     ]
 
 
+_RUNTIME_NAME: str = "python"
+
+
 def register_python_loader(runtime: Runtime, min_version: str = "3.11") -> None:
-    """Register the Python loader with the runtime."""
-    lib = _get_lib()
-    b = min_version.encode("utf-8")
-    cfg = _PythonConfig(b, len(b))
-    loader_ptr = lib.polyplug_python_loader_create(ctypes.byref(cfg))
+    """Register the Python loader with the runtime via HostInterface.register_loader."""
+    lib: ctypes.CDLL = _get_lib()
+    version_bytes: bytes = min_version.encode("utf-8")
+    cfg = _PythonConfig(version_bytes, len(version_bytes))
+    loader_ptr: int = lib.polyplug_python_loader_create(ctypes.byref(cfg))
     if not loader_ptr:
         raise RuntimeError("polyplug: python loader create failed")
 
-    backend = runtime._backend
-    if hasattr(backend, "ffi"):
-        ffi = backend.ffi
-        err = backend.lib.polyplug_runtime_register_loader(
-            ffi.cast("void*", runtime._runtime), ffi.cast("void*", loader_ptr)
-        )
-    else:
-        polyplug_lib = backend.lib
-        polyplug_lib.polyplug_runtime_register_loader.restype = ctypes.c_uint32
-        polyplug_lib.polyplug_runtime_register_loader.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-        ]
-        err = polyplug_lib.polyplug_runtime_register_loader(
-            runtime._runtime, loader_ptr
-        )
-
-    if err != 0:
-        raise RuntimeError(f"polyplug: python loader register failed: {err}")
+    runtime.register_loader(_RUNTIME_NAME, loader_ptr)
 
 
 __all__ = ["register_python_loader"]

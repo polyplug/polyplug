@@ -40,12 +40,17 @@ The model is built on three pillars: **Bundle Identity**, **Declared Dependencie
 Every plugin bundle is uniquely identified by a `bundle_id`. This 64-bit identifier is the FNV1a-64 hash of the bundle name string provided in the `bundle.toml` (or `manifest.toml`).
 
 ### ID Computation
-The hash is computed using the FNV-1a algorithm, implemented in `crates/polyplug/src/abi/mod.rs`.
+The hash is computed using the FNV-1a algorithm, implemented in `crates/polyplug_utils/src/`.
 ```rust
+// crates/polyplug_utils/src/lib.rs
 pub fn bundle_id(name: &str) -> u64 {
-    fnv1a_64(name.as_bytes())
+    BundleId::new(name).id() // BundleId::new => fnv1a_64(name.as_bytes())
 }
 ```
+Contract IDs are namespaced before hashing to keep guest and host contracts in disjoint ID
+spaces: `guest_contract_id(name, major)` hashes `"guest_contract:<name>@<major>"` and
+`host_contract_id(name, major)` hashes `"host_contract:<name>@<major>"`
+(see `crates/polyplug_utils/src/guest_contract_id.rs` and `host_contract_id.rs`).
 The use of a 64-bit hash space ensures that for typical deployment sizes (hundreds or thousands of plugins), the probability of a collision is mathematically negligible.
 
 ### Deployment Constraints
@@ -76,14 +81,32 @@ min_version = 1
 ```
 
 ### The Registration Flow
-When a bundle is loaded, the `BundleLoader` performs the following steps:
-1. Parses the manifest dependencies.
-2. Converts contract names to `contract_id` hashes.
-3. Calls `registry.declare_deps(bundle_id, contract_ids)`.
-4. If `declare_deps` fails (e.g., due to an internal registry error), the bundle load is aborted.
+Dependency declaration is wired into `Runtime::load_bundle` (see
+`crates/polyplug/src/runtime.rs`). Before the loader runs the plugin's
+`polyplug_init`, the runtime:
+1. Reads the `[[dependency]]` entries parsed from `manifest.toml` into
+   `ManifestData::dependencies` (each `RawManifestDependency` carries an explicit
+   `contract_id: GuestContractId`).
+2. Collects those `contract_id`s for the bundle.
+3. Calls `RuntimeStore::declare_bundle_dependencies(bundle_id, contract_ids)` to
+   record them in the registry's allowed-set.
+4. If `declare_bundle_dependencies` fails (an internal registry error), the bundle
+   load is aborted with `RuntimeError::Registry(..)` before init ever runs.
+
+This step happens **before** the loader's `load()` call so that the allowed-set is
+populated by the time the plugin's `polyplug_init` resolves any contract.
 
 ### Enforcement Mechanism
-The `Registry` maintains a `HashMap<u64, HashSet<u64>>` mapping `bundle_id` to its allowed `contract_id` set. During the initialization phase, every `find_by_contract` call checks this set. If a plugin attempts to resolve a contract it did not declare, the runtime returns a null handle, preventing the plugin from ever obtaining the vtable.
+`RuntimeStore` maintains a `HashMap<BundleId, HashSet<GuestContractId>>` mapping
+each `bundle_id` to its declared `contract_id` set (`bundle_declared_deps`). During
+the initialization window, the host's `find_guest_contract` callback
+(`host_find_guest_contract`) consults this set via
+`RuntimeStore::is_bundle_dependency_declared`. If a plugin attempts to resolve a
+contract it did not declare, the callback returns a **null `GuestContractHandle`**
+— the C ABI for `find_guest_contract` returns a bare handle with no error channel,
+so a null handle is the denial signal, and the plugin never obtains the vtable. A
+declared contract resolves normally. When a bundle is unloaded, its entry in
+`bundle_declared_deps` is removed.
 
 ## 4. Enforcement Window
 
@@ -110,11 +133,29 @@ Returns null if undeclared    |  Direct pointer dispatch
     +-- Denied?  -> Null      |
 ```
 
-### The BundleInitGuard
-The transition is managed by a thread-local RAII guard called `BundleInitGuard`.
-- **Entrance**: When `load_bundle` is about to call `polyplug_init`, it sets the thread-local `INIT_BUNDLE_ID` to the current bundle's ID.
-- **Enforcement**: The host callbacks (`host_find_by_contract`, etc.) check this thread-local. If it's non-zero, they verify the contract against the declared dependencies.
-- **Exit**: When `polyplug_init` returns, the guard is dropped, resetting `INIT_BUNDLE_ID` to 0.
+### The Init-Window Bundle ID
+The window is delimited by a per-thread `INIT_BUNDLE_ID` cell
+(`crates/polyplug/src/runtime.rs`), driven by the loaders:
+- **Entrance**: Immediately before calling `polyplug_init`, the loader sets the
+  thread-local `INIT_BUNDLE_ID` to the bundle's ID via `set_init_bundle_id`. Every
+  loader (native, Python, .NET, Lua, JavaScript) does this on the same thread that
+  runs init.
+- **Enforcement**: `host_find_guest_contract` reads `INIT_BUNDLE_ID` via
+  `get_init_bundle_id`. When it is non-zero (a bundle's init is in flight), the
+  callback verifies the requested `contract_id` against that bundle's declared
+  dependencies and returns a null handle on a violation. When it is zero — i.e. a
+  host-side lookup outside any init window — no dependency check runs.
+- **Exit**: After `polyplug_init` returns, the loader calls `clear_init_bundle_id`,
+  resetting `INIT_BUNDLE_ID` to 0 so subsequent host-side lookups are unrestricted.
+
+This state is deliberately a thread-local rather than `Runtime`-instance state. The
+init window is a transient, **re-entrant, per-thread** phase (a loader's init may
+itself trigger a nested `load_bundle` on the same thread), and loads are
+synchronous on the calling thread — so the window naturally tracks the thread of
+control. It holds no durable runtime data (the registry, loaded bundles, and config
+all remain instance-owned per the runtime-isolation rule); two runtimes never run
+init concurrently on the same thread, and runs on different threads get independent
+cells.
 
 ### Why Hot-paths are Unchecked
 Once a plugin has successfully obtained a `GuestContractHandle` during Phase 1, it has effectively "cleared customs." Since the registry and the plugin's dependency set are immutable for the life of the process, there is no architectural reason to re-verify the same contract on every hot-path call.
@@ -134,7 +175,7 @@ Polyplug allows multiple bundles to implement the same contract, enabling a rich
 ### Implementation Integrity
 - **DuplicateProvider Rule**: The same `bundle_id` cannot register the same `contract_id` twice. This prevents internal ambiguity within a single bundle.
 - **Cross-Bundle Multi-impl**: Different bundles *can* implement the same contract. The registry tracks these in a `Vec<u32>` of slot indices per contract ID.
-- **Stale Handle Protection**: Every `GuestContractHandle` contains a generation counter. The `resolve_guard` (or `resolve_plugin` in C) compares the handle's generation against the registry slot. If they mismatch (e.g., after a bundle is unloaded and a new one takes its slot), the resolution returns `AbiErrorCode::StaleHandle`.
+- **Handle Validation**: A `GuestContractHandle` is a bare slot index (`{ index: u32 }`) with no generation counter. `resolve_guest_contract` validates the handle by bounds-checking the index and confirming the slot still holds an interface; an out-of-bounds index or an empty slot returns `RegistryError::InvalidHandle`. After a hot-reload swap the same handle remains valid and resolves to the interface now occupying that slot (under the retire-not-drop model, the previously resolved raw pointer also remains valid and continues to serve the old version). The `AbiErrorCode::StaleHandle` variant exists in the ABI but is not produced by the current resolution path.
 
 ### Multi-impl Scenario
 Consider an application that supports multiple audio decoders. Both `flac-bundle` and `mp3-bundle` might register the same `audio.Decoder` contract.
@@ -148,31 +189,32 @@ The following table summarizes the sizes and alignments of the core ABI types on
 
 | Type | Size (bytes) | Alignment (bytes) | Key Fields |
 |------|--------------|-------------------|------------|
-| `HostInterface` | 56 | 8 | 7 function pointers |
+| `HostInterface` | 144 | 8 | `runtime` opaque ptr + 17 function pointers |
 | `GuestContractInterface` | 24 | 8 | `contract_id`, `functions` ptr |
-| `GuestContractHandle` | 8 | 4 | `index`, `generation` |
+| `GuestContractHandle` | 4 | 4 | `index` (u32, no generation) |
 | `StringView` | 16 | 8 | `ptr`, `len` |
-| `Buffer` | 24 | 8 | `ptr`, `len`, `cap` |
 | `AbiError` | 24 | 8 | `code`, `message` (StringView) |
-| `PluginDescriptor` | 48 | 8 | `name`, `contract_name`, `version` |
 
-### Rust-only Safety: `PluginGuard`
-While the C ABI deals in raw handles and pointers, the Rust guest and host libraries use `PluginGuard` for safe access.
-```rust
-// The guard ensures the vtable stays valid while we are using it.
-// It is !Send to prevent cross-thread use of a resolved vtable.
-pub struct PluginGuard {
-    pub(crate) slot: Arc<VTableSlot>,
-    _not_send: PhantomData<Cell<()>>,
-}
+`HostInterface`'s 17 function pointers (offsets verified in
+`crates/polyplug_abi/src/host/host_interface.rs`): `register_contract`, `alloc`, `free`,
+`find_guest_contract`, `find_all_guest_contracts`, `resolve_guest_contract`,
+`call_guest_method`, `get_host_contract`, `resolve_host_contract_interface`, `list_bundles`,
+`get_dependencies`, `load_bundle`, `reload_bundle`, `register_host_contract`,
+`register_loader`, `get_last_error`, `get_error_len`. There is no `get_extension`,
+`find_by_bundle`, or `resolve_plugin` pointer in `HostInterface`.
 
-impl PluginGuard {
-    pub fn vtable(&self) -> *const GuestContractInterface {
-        self.slot.0
-    }
-}
-```
-If a bundle is unloaded, any new `resolve_guard` calls for that handle will fail with `RegistryError::StaleHandle`.
+### Pointer Validity After Resolution
+The C ABI deals in raw handles and pointers: `find_guest_contract` returns a
+`GuestContractHandle` (a slot index) and `resolve_guest_contract` turns it into a
+`*const GuestContractInterface` borrowed from the slot's `Arc<GuestContractInterface>`.
+
+There is no `PluginGuard`/`VTableSlot` RAII guard in the runtime. Pointer validity is
+guaranteed instead by the retire-not-drop model: the runtime never frees a superseded
+interface `Arc` (it is moved into `retired_interfaces`) or a superseded native library (it
+is moved into the loader's `retired` list) while the runtime lives. Consequently a
+`*const GuestContractInterface` stays valid for the runtime's lifetime even across reloads
+and unloads, continuing to serve the version it resolved. To observe a new version after a
+reload, a caller must re-`find_guest_contract` and re-`resolve_guest_contract`.
 ## 6. Threat Model
 
 The polyplug trust model is a **Software Architecture Enforcement Tool**, not a security sandbox. It is designed to prevent architectural erosion in large-scale systems.
@@ -232,30 +274,71 @@ Even with trusted plugins, malformed or corrupted plugin binaries are a real sce
 The core polyplug ABI is frozen as of Epic 9.7. This freeze ensures that bundles compiled today remain binary-compatible with future versions of the runtime.
 
 ### Frozen Surface Areas
-The following structures have fixed layouts and sizes. Any modification to these (e.g., adding a field or changing field order) is a breaking change.
-- **`HostInterface` (56 bytes)**: Contains 7 function pointers (`alloc`, `free`, `find_by_contract`, `find_by_bundle`, `find_all_by_contract`, `resolve_plugin`, `get_extension`).
+The following structures have fixed layouts and sizes. Any modification to these (e.g., adding a field or changing field order) is a breaking change. Sizes are verified by the layout tests in `crates/polyplug_abi`.
+- **`HostInterface` (144 bytes)**: An opaque `runtime` pointer followed by 17 function pointers (full list in §5).
 - **`GuestContractInterface` (24 bytes)**: Fixed header before the function pointer array.
-- **`GuestContractHandle` (8 bytes)**: 4-byte index, 4-byte generation.
+- **`GuestContractHandle` (4 bytes)**: a single 4-byte `index` (no generation field).
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
-- **`Buffer` (24 bytes)**: 8-byte pointer, 8-byte length, 8-byte capacity.
 
-### Extensibility via `get_extension`
-To support future features without breaking the ABI, the `HostInterface` includes `get_extension(extension_id)`. This allows the host to expose new capability-specific VTables to plugins that know how to ask for them.
+### Extensibility via host contracts
+To support future capabilities without breaking the ABI, the host exposes contracts through
+`HostInterface::get_host_contract(contract_id, min_version)` (and
+`resolve_host_contract_interface`). New host-side capabilities are added as new host contracts
+that plugins resolve by ID, rather than by extending the frozen `HostInterface` struct. There
+is no `get_extension` entry point.
 
 ## Hot-Reload Safety Guarantees
 
-- vtable swaps are atomic at the ArcSwap level — readers always see a consistent VTableSlot
-- old library handles are held alive by Arc reference counting until all in-flight calls release their PluginGuard
-- the quiescence spin is bounded to 5 seconds; if the bound is exceeded the reload fails with QuiescenceTimeout without touching the live vtable
-- cascade reload depth is capped at 16 levels; deeper cascades fail with ReloadFailed and leave all plugins in their pre-reload state
-- non-native language bundles (Python, Lua, JS, .NET) are explicitly not reloadable in this version; reload_bundle() returns ReloadFailed with a clear reason string
+polyplug uses a **retire-not-drop** model for hot-reload. Superseded interfaces and
+libraries are never freed while the runtime lives — they are retained so that any
+raw pointer handed out before the reload stays valid for the lifetime of the runtime.
+
+- **Interface swap is a single write-locked operation.** `RuntimeStore::apply_reload_swap`
+  moves each freshly-registered `Arc<GuestContractInterface>` into the bundle's existing
+  pre-reload slot under one write lock, so concurrent readers observe either the complete
+  old state or the complete new state — never a half-swapped registry.
+- **Superseded interfaces are retired, not dropped.** The old `Arc<GuestContractInterface>`
+  is pushed onto `RuntimeStore`'s `retired_interfaces` list and held alive for the lifetime
+  of the runtime. A `*const GuestContractInterface` obtained from `resolve_guest_contract`
+  therefore stays valid even across reloads; it keeps serving the old version. Callers must
+  re-find (`find_guest_contract`) and re-resolve to observe the new version.
+- **Superseded native libraries are retired, not `dlclose`d.** The native loader moves the
+  old `libloading::Library` into its `retired` list instead of unloading it, keeping the old
+  code pages mapped so any in-flight raw function pointer stays valid.
+- **Retired interfaces and libraries intentionally accumulate** for the lifetime of the
+  runtime. This is a deliberate trade of memory for pointer-validity safety in the absence
+  of generation/quiescence tracking.
+- **Reload failure leaves the active version untouched.** If `loader.reload()` (which calls
+  `polyplug_init`) fails, no interface swap occurs and the pre-reload state remains live.
+- **Phase callbacks.** `reload_bundle` fires the host's `on_reload` callback with a
+  `ReloadPhase { phase_type, bundle_id, bundle_name, reason }`: `Preparing` before the
+  swap (host must destroy all live instances here), `Reloaded` after a successful swap, and
+  `Failed` (with a reason string) on any failure. After the `Preparing` callback returns,
+  the runtime emits an informational warning if `Arc::strong_count > 1` for any slot
+  (instances may not have been destroyed) but proceeds with the reload regardless.
+- **Hot-reload must be enabled in config.** `reload_bundle` and the native loader's
+  `reload()` both return `RuntimeError::HotReloadDisabled` when `hot_reload_enabled` is false.
+- **VM-backed bundles are not reloadable.** The Python, .NET, Lua, and JavaScript loaders all
+  return `RuntimeError::HotReloadDisabled` from `reload()` (Python and .NET due to
+  process-level single-initialization constraints of their interpreters/CLR; Lua and JS are
+  disabled in this version).
+
+> **Note:** There is no generation counter, no `ArcSwap`, no `PluginGuard`/`VTableSlot`
+> quiescence spin, no `QuiescenceTimeout`, and no cascade-depth cap in the current code. An
+> earlier ref-counted reclamation design that used those mechanisms was removed in favor of
+> the retire-not-drop model described above.
 
 ## 8. Future Work
 
 The trust model continues to evolve as polyplug expands its reach into more dynamic environments.
 
-### Hot-Reload ✅ done (Epic 17)
-Hot-reload is implemented. The generation counter in `GuestContractHandle` detects stale handles. Arc-swap guards ensure the old vtable stays alive until all in-flight calls complete. Quiescence timeout is 5 seconds. See the Hot-Reload Safety Guarantees section above.
+### Hot-Reload ✅ done
+Hot-reload is implemented for native bundles using the retire-not-drop model: superseded
+interfaces and libraries are retained for the lifetime of the runtime so previously resolved
+pointers stay valid, and the active version is swapped under a single write lock. Reload is
+driven explicitly by `reload_bundle`; there is no file-watcher and no automatic retry (both
+were deliberately removed). VM-backed bundles (Python, .NET, Lua, JS) are not reloadable and
+return `HotReloadDisabled`. See the Hot-Reload Safety Guarantees section above.
 
 ### Scripting and JS Bindings ✅ done (Epics 10–11, 11.5)
 Python, Lua, JavaScript (QuickJS and Deno/V8) plugins are implemented. All respect the same trust model rules — scripted plugins have their own bundle ID and declare dependencies in `bundle.toml`. The runtime enforces these through the same `INIT_BUNDLE_ID` mechanism used by native code.

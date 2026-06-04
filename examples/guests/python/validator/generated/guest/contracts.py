@@ -5,8 +5,8 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version
-from polyplug_guest import store_host_vtable
+from polyplug_abi import AbiErrorCode, AbiError, DispatchType, DispatchMechanisms, NativeDispatch, HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version
+from polyplug_guest import store_host_interface, _init_allocator
 
 if TYPE_CHECKING:
     from ctypes import _Pointer as _CtypesPointer
@@ -21,71 +21,69 @@ class _AbiError(ctypes.Structure):
         ('message_len', ctypes.c_size_t),
     ]
 
-_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, ctypes.c_void_p, ctypes.c_void_p)
-_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], _AbiError]
+class _GuestContractInstance(ctypes.Structure):
+    _fields_ = [
+        ('data', ctypes.c_void_p),
+        ('contract_id', ctypes.c_uint64),
+    ]
 
-class VALIDATORPipelineValidatorGuestContract:
+_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, _GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)
+_DISPATCH_FN_TYPE: TypeAlias = Callable[[int, int], _AbiError]
+_ABI_ERROR_SIZE: int = ctypes.sizeof(_AbiError)
+
+def _wrap_sret(impl: _DISPATCH_FN_TYPE) -> Callable[[int, _GuestContractInstance, int, int], None]:
+    """Adapt an (args, out) -> _AbiError impl to the sret + instance convention."""
+    def _sret_wrapper(sret_ptr: int, instance: _GuestContractInstance, args_ptr: int, out_ptr: int) -> None:
+        _ = instance  # stateless plugins ignore the instance handle
+        err: _AbiError = impl(args_ptr, out_ptr)
+        ctypes.memmove(sret_ptr, ctypes.addressof(err), _ABI_ERROR_SIZE)
+    return _sret_wrapper
+
+class VALIDATORPipelineValidatorPlugin:
     def validate(self, input: StringView) -> StringView:
         raise NotImplementedError
 
-_validator_IMPL: VALIDATORPipelineValidatorGuestContract | None = None
-def set_validator_impl(impl: VALIDATORPipelineValidatorGuestContract) -> None:
+_validator_IMPL: VALIDATORPipelineValidatorPlugin | None = None
+def set_validator_impl(impl: VALIDATORPipelineValidatorPlugin) -> None:
     global _validator_IMPL
     _validator_IMPL = impl
 
 VALIDATOR_PLUGIN_NAME_BYTES: bytes = b"validator"
 VALIDATOR_CONTRACT_NAME_BYTES: bytes = b"pipeline.Validator@1"
-VALIDATOR_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p(VALIDATOR_PLUGIN_NAME_BYTES)
-VALIDATOR_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(VALIDATOR_CONTRACT_NAME_BYTES)
+VALIDATOR_PLUGIN_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p(VALIDATOR_PLUGIN_NAME_BYTES), ctypes.c_void_p)
+VALIDATOR_CONTRACT_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p(VALIDATOR_CONTRACT_NAME_BYTES), ctypes.c_void_p)
 VALIDATOR_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
     name=StringView(ptr=VALIDATOR_PLUGIN_NAME_C, len=len(VALIDATOR_PLUGIN_NAME_BYTES)),
     contract_name=StringView(ptr=VALIDATOR_CONTRACT_NAME_C, len=len(VALIDATOR_CONTRACT_NAME_BYTES)),
     version=Version(major=1, minor=0, patch=0),
 )
 
-def validator_validate_abi(instance: _GuestContractInstance, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:
-    # Instance is ignored for stateless plugins (instance.data is null).
-    # For stateful plugins, users override create_instance and use instance.data.
-    impl: VALIDATORPipelineValidatorGuestContract | None = _validator_IMPL
+def validator_validate_abi(args_ptr: int, out_ptr: int) -> _AbiError:
+    impl: VALIDATORPipelineValidatorPlugin | None = _validator_IMPL
     if impl is None:
         return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)
-    if args_ptr.value is None or args_ptr.value == 0:
+    if not args_ptr:
         return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)
-    if out_ptr.value is None or out_ptr.value == 0:
+    if not out_ptr:
         return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)
-    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
-    input: StringView = args_ptr_t.contents
+    input: StringView = StringView.from_address(args_ptr)
     result = impl.validate(input)
-    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
+    out_ptr_t: Any = ctypes.cast(ctypes.c_void_p(out_ptr), ctypes.POINTER(StringView))
     out_ptr_t[0] = result
     return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)
 
-VALIDATOR_validator_validate_abi_CFUNC = _DISPATCH_FN_CTYPE(validator_validate_abi)
+VALIDATOR_validator_validate_abi_CFUNC = _DISPATCH_FN_CTYPE(_wrap_sret(validator_validate_abi))
 
 VALIDATOR_FNS = (ctypes.c_void_p * 1) (
     ctypes.cast(VALIDATOR_validator_validate_abi_CFUNC, ctypes.c_void_p),
 )
 
-# Default create_instance stub for validator - returns null instance.
-def VALIDATOR_create_instance_stub(host: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:
-    # Default stub returns null instance - users override for stateful plugins.
-    return _GuestContractInstance(data=ctypes.c_void_p(0))
-
-def VALIDATOR_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContractInstance) -> None:
-    # Default stub is no-op - users override for cleanup before hot-reload.
-    pass
-
-VALIDATOR_CREATE_INSTANCE_CFUNC = _CREATE_INSTANCE_FN_CTYPE(VALIDATOR_create_instance_stub)
-VALIDATOR_DESTROY_INSTANCE_CFUNC = _DESTROY_INSTANCE_FN_CTYPE(VALIDATOR_destroy_instance_stub)
-
 VALIDATOR_INTERFACE: GuestContractInterface = GuestContractInterface(
     contract_id=0x45173A959EEC57C5,
-    contract_version=0,
-    dispatch_type=DispatchType.VirtualMachine,
-    create_instance=ctypes.cast(VALIDATOR_CREATE_INSTANCE_CFUNC, ctypes.c_void_p),
-    destroy_instance=ctypes.cast(VALIDATOR_DESTROY_INSTANCE_CFUNC, ctypes.c_void_p),
-    dispatch=_PluginDispatch(
-        native=_NativeDispatch(
+    contract_version=Version(major=1, minor=0, patch=0),
+    dispatch_type=DispatchType.Native,
+    dispatch=DispatchMechanisms(
+        native=NativeDispatch(
             function_count=1,
             functions=ctypes.cast(VALIDATOR_FNS, ctypes.c_void_p),
         )
@@ -106,7 +104,8 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
         return
     if ctx_ptr == 0:
         return
-    store_host_vtable(host_ptr)
+    store_host_interface(host_ptr)
+    _init_allocator(host_ptr, ctx_ptr)
     ctx: BundleInitContext = BundleInitContext.from_address(ctx_ptr)
     host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
     err_VALIDATOR: AbiError = host.contents.register_contract(

@@ -334,7 +334,7 @@ test-host-cpp:
         echo "SKIPPED (build failed)"; \
         exit 0; \
     fi
-    @g++ -std=c++17 -I{{sdks_dir}}/cpp/host \
+    @g++ -std=c++17 -I{{sdks_dir}}/cpp/abi -I{{sdks_dir}}/cpp/host \
         tests/integration/cpp/hot_reload_test.cpp \
         -o /tmp/polyplug_test_cpp 2>/dev/null && \
         /tmp/polyplug_test_cpp
@@ -346,7 +346,7 @@ test-host-python:
         echo "SKIPPED (build failed)"; \
         exit 0; \
     fi
-    @cd tests/integration/python && python3 test_hot_reload.py
+    @cd tests/integration/python && PYTHONPATH="../../../sdks/python/host:../../../sdks/python/polyplug_abi:../../../sdks/python" python3 test_hot_reload.py
 
 # Run C# host-lib tests
 test-host-csharp:
@@ -368,7 +368,9 @@ test-host-lua:
         echo "SKIPPED (build failed)"; \
         exit 0; \
     fi
-    @if command -v luajit >/dev/null 2>&1; then \
+    @if ! [ -f {{sdks_dir}}/lua/host/tests/test_reload_notification.lua ]; then \
+        echo "NOT IMPLEMENTED: sdks/lua/host/tests/test_reload_notification.lua not found"; \
+    elif command -v luajit >/dev/null 2>&1; then \
         cd {{sdks_dir}}/lua/host/tests && luajit test_reload_notification.lua; \
     else \
         echo "luajit not installed, skipping"; \
@@ -381,7 +383,9 @@ test-host-js:
         echo "SKIPPED (build failed)"; \
         exit 0; \
     fi
-    @if command -v deno >/dev/null 2>&1; then \
+    @if ! [ -f {{sdks_dir}}/js/host/tests/reload_notification_test.ts ]; then \
+        echo "NOT IMPLEMENTED: sdks/js/host/tests/reload_notification_test.ts not found"; \
+    elif command -v deno >/dev/null 2>&1; then \
         cd {{sdks_dir}}/js/host/tests && deno test reload_notification_test.ts; \
     else \
         echo "deno not installed, skipping"; \
@@ -430,7 +434,7 @@ validate-sdks:
 # Build all example plugins (all languages) and hosts
 build-examples:
     @echo "=== Building All Examples ==="
-    @cd examples && bash build_all.sh || (echo "Note: Some plugins may have failed (e.g., JS requires rolldown). This is expected." && exit 0)
+    @cd examples && bash build_all.sh
 
 # Build and run all example hosts
 verify-examples: build-examples

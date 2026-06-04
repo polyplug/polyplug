@@ -11,7 +11,6 @@ extern "C" {
     struct PolyplugDotnetConfig { const uint8_t* min_framework_ptr; size_t min_framework_len; };
     void* polyplug_dotnet_loader_create(const PolyplugDotnetConfig* cfg);
     void  polyplug_dotnet_loader_free(void* ptr);
-    uint32_t polyplug_runtime_register_loader(void* rt, void* loader);
 }
 
 namespace polyplug::loaders {
@@ -22,9 +21,16 @@ inline void register_dotnet(Runtime& rt, std::string_view min_framework = "10.0"
         min_framework.size()
     };
     void* loader = polyplug_dotnet_loader_create(&cfg);
-    if (!loader) throw std::runtime_error("polyplug: dotnet loader create failed");
-    uint32_t err = polyplug_runtime_register_loader(rt.handle(), loader);
-    if (err != 0) throw std::runtime_error("polyplug: dotnet loader register failed");
+    if (loader == nullptr) {
+        throw std::runtime_error("polyplug: dotnet loader create failed");
+    }
+    const HostInterface* host = rt.host();
+    static const char runtime_name[] = "dotnet";
+    StringView name{reinterpret_cast<const uint8_t*>(runtime_name), sizeof(runtime_name) - 1};
+    AbiError err = host->register_loader(host, name, loader);
+    if (err.code != AbiErrorCode::Ok) {
+        throw std::runtime_error("polyplug: dotnet loader register failed: " + rt.get_last_error());
+    }
 }
 
 } // namespace polyplug::loaders

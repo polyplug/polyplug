@@ -1,3 +1,5 @@
+import type { Runtime } from "../../host/polyplug/mod.js";
+
 let _lib: Deno.DynamicLibrary<typeof PYTHON_SYMBOLS> | null = null;
 
 const PYTHON_SYMBOLS = {
@@ -15,25 +17,22 @@ function getLib(): Deno.DynamicLibrary<typeof PYTHON_SYMBOLS> {
     return _lib;
 }
 
-export function registerPythonLoader(
-    rt: Deno.PointerValue,
-    registerFn: (rt: Deno.PointerValue, loader: Deno.PointerValue) => number,
-    minVersion: string = "3.11"
-): void {
+/**
+ * Register the Python loader with a Runtime under the "python" runtime name.
+ * The PolyplugPythonConfig is a { min_version_ptr, min_version_len } struct.
+ */
+export function registerPythonLoader(rt: Runtime, minVersion: string = "3.11"): void {
     const lib = getLib();
     const encoded = new TextEncoder().encode(minVersion);
+    const versionPtr = Deno.UnsafePointer.of(encoded);
     const cfgBuf = new Uint8Array(16);
-    const ptr = Deno.UnsafePointer.of(encoded);
     const view = new DataView(cfgBuf.buffer);
-    view.setBigUint64(0, BigInt(Deno.UnsafePointer.value(ptr)), true);
+    view.setBigUint64(0, BigInt(Deno.UnsafePointer.value(versionPtr)), true);
     view.setBigUint64(8, BigInt(encoded.length), true);
     const cfgPtr = Deno.UnsafePointer.of(cfgBuf);
     const loaderPtr = lib.symbols.polyplug_python_loader_create(cfgPtr);
     if (loaderPtr === null) {
         throw new Error("polyplug: python loader create failed");
     }
-    const err = registerFn(rt, loaderPtr);
-    if (err !== 0) {
-        throw new Error(`polyplug: python loader register failed: ${err}`);
-    }
+    rt.registerLoader("python", loaderPtr);
 }

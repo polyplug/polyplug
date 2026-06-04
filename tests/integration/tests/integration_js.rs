@@ -3,6 +3,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
@@ -10,21 +11,22 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
 use polyplug_utils::guest_contract_id;
+use std::sync::Arc;
 
 #[test]
 fn js_quickjs_loader_runtime_name() {
     let loader: JsLoader = JsLoader::new(JsConfig {});
     assert_eq!(loader.runtime_name(), "js-quickjs");
-    assert_eq!(loader.runtime_names(), vec!["js-quickjs".to_owned()]);
 }
 
 #[test]
 fn js_quickjs_registered_in_runtime_builder() {
-    let result: Result<polyplug::runtime::Runtime, RuntimeError> =
+    let result: Result<Arc<polyplug::runtime::Runtime>, RuntimeError> =
         polyplug::runtime::Runtime::builder()
             .loader(JsLoader::new(JsConfig {}))
             .build();
@@ -37,7 +39,7 @@ fn js_quickjs_registered_in_runtime_builder() {
 
 #[test]
 fn js_quickjs_duplicate_runtime_name_is_rejected() {
-    let result: Result<polyplug::runtime::Runtime, RuntimeError> =
+    let result: Result<Arc<polyplug::runtime::Runtime>, RuntimeError> =
         polyplug::runtime::Runtime::builder()
             .loader(JsLoader::new(JsConfig {}))
             .loader(JsLoader::new(JsConfig {}))
@@ -61,7 +63,7 @@ struct AddArgs {
 
 #[test]
 fn js_quickjs_load_bundle_and_call() {
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
@@ -74,17 +76,12 @@ fn js_quickjs_load_bundle_and_call() {
 
     let contract_id: u64 = guest_contract_id("test.add", 1);
     let handle: GuestContractHandle = rt
-        .find_by_contract(contract_id, 0)
+        .find_guest_contract(contract_id, 0)
         .expect("test.add must be registered after load");
     let vtable_ptr: *const GuestContractInterface = rt
-        .resolve_plugin(handle)
-        .expect("handle must be valid")
-        .vtable();
+        .resolve_guest_contract(handle)
+        .expect("handle must be valid");
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
-    assert_eq!(
-        vtable.function_count, 4,
-        "test.add must register 4 functions"
-    );
     assert_eq!(
         vtable.dispatch_type,
         DispatchType::VirtualMachine,
@@ -96,6 +93,7 @@ fn js_quickjs_load_bundle_and_call() {
     let result: AbiError = unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
             0,
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),

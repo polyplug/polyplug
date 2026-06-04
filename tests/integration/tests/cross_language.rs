@@ -40,6 +40,7 @@ use polyplug_python::PythonLoader;
 use polyplug_utils::BundleId;
 use polyplug_utils::guest_contract_id;
 use std::path::Path;
+use std::sync::Arc;
 
 // ─── Test fixture paths ───────────────────────────────────────────────────────
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -327,11 +328,7 @@ fn test_rust_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -364,7 +361,6 @@ fn test_rust_host_rust_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -423,11 +419,7 @@ fn test_cpp_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -460,7 +452,6 @@ fn test_cpp_host_rust_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -519,11 +510,7 @@ fn test_csharp_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -556,7 +543,6 @@ fn test_csharp_host_rust_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -615,11 +601,7 @@ fn test_python_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -652,7 +634,6 @@ fn test_python_host_rust_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -711,11 +692,7 @@ fn test_lua_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -748,7 +725,6 @@ fn test_lua_host_rust_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -807,11 +783,7 @@ fn test_js_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -844,7 +816,6 @@ fn test_js_host_rust_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -909,11 +880,7 @@ fn test_rust_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -946,7 +913,6 @@ fn test_rust_host_cpp_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -1005,11 +971,7 @@ fn test_cpp_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -1042,7 +1004,6 @@ fn test_cpp_host_cpp_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -1101,11 +1062,7 @@ fn test_csharp_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -1138,7 +1095,6 @@ fn test_csharp_host_cpp_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -1197,11 +1153,7 @@ fn test_python_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -1234,7 +1186,6 @@ fn test_python_host_cpp_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -1293,11 +1244,7 @@ fn test_lua_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -1330,7 +1277,6 @@ fn test_lua_host_cpp_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -1389,11 +1335,7 @@ fn test_js_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostInterface,
-            *const BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -1426,7 +1368,6 @@ fn test_js_host_cpp_guest() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
             &host_interface as *const HostInterface,
             &ctx as *const BundleInitContext,
         )
@@ -1478,7 +1419,7 @@ fn test_rust_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(DotnetLoader::new(DotnetConfig {
             min_framework: String::from("net10.0"),
             hostfxr: HostfxrLocation::Auto,
@@ -1505,7 +1446,7 @@ fn test_cpp_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(DotnetLoader::new(DotnetConfig {
             min_framework: String::from("net10.0"),
             hostfxr: HostfxrLocation::Auto,
@@ -1532,7 +1473,7 @@ fn test_csharp_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(DotnetLoader::new(DotnetConfig {
             min_framework: String::from("net10.0"),
             hostfxr: HostfxrLocation::Auto,
@@ -1587,7 +1528,7 @@ fn test_python_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(DotnetLoader::new(DotnetConfig {
             min_framework: String::from("net10.0"),
             hostfxr: HostfxrLocation::Auto,
@@ -1614,7 +1555,7 @@ fn test_lua_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(DotnetLoader::new(DotnetConfig {
             min_framework: String::from("net10.0"),
             hostfxr: HostfxrLocation::Auto,
@@ -1641,7 +1582,7 @@ fn test_js_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(DotnetLoader::new(DotnetConfig {
             min_framework: String::from("net10.0"),
             hostfxr: HostfxrLocation::Auto,
@@ -1673,7 +1614,7 @@ fn test_rust_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1694,7 +1635,7 @@ fn test_cpp_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1715,7 +1656,7 @@ fn test_csharp_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1736,7 +1677,7 @@ fn test_python_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1757,7 +1698,7 @@ fn test_lua_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1778,7 +1719,7 @@ fn test_js_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1799,7 +1740,7 @@ fn test_js_host_python_guest() {
 
 #[test]
 fn test_rust_host_lua_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1816,7 +1757,7 @@ fn test_rust_host_lua_guest() {
 
 #[test]
 fn test_cpp_host_lua_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1833,7 +1774,7 @@ fn test_cpp_host_lua_guest() {
 
 #[test]
 fn test_csharp_host_lua_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1850,7 +1791,7 @@ fn test_csharp_host_lua_guest() {
 
 #[test]
 fn test_python_host_lua_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1867,7 +1808,7 @@ fn test_python_host_lua_guest() {
 
 #[test]
 fn test_lua_host_lua_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1884,7 +1825,7 @@ fn test_lua_host_lua_guest() {
 
 #[test]
 fn test_js_host_lua_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -1906,7 +1847,7 @@ fn test_js_host_lua_guest() {
 
 #[test]
 fn test_rust_host_js_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
@@ -1923,7 +1864,7 @@ fn test_rust_host_js_guest() {
 
 #[test]
 fn test_cpp_host_js_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
@@ -1940,7 +1881,7 @@ fn test_cpp_host_js_guest() {
 
 #[test]
 fn test_csharp_host_js_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
@@ -1957,7 +1898,7 @@ fn test_csharp_host_js_guest() {
 
 #[test]
 fn test_python_host_js_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
@@ -1974,7 +1915,7 @@ fn test_python_host_js_guest() {
 
 #[test]
 fn test_lua_host_js_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
@@ -1991,7 +1932,7 @@ fn test_lua_host_js_guest() {
 
 #[test]
 fn test_js_host_js_guest() {
-    let runtime: Runtime = Runtime::builder()
+    let runtime: Arc<Runtime> = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");

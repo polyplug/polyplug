@@ -91,7 +91,8 @@ impl CppGenerator {
         }
 
         match rust_type {
-            "u64" => String::from("uint64_t"),
+            // `#[repr(transparent)]` u64 newtypes from polyplug_utils.
+            "u64" | "BundleId" | "GuestContractId" | "HostContractId" => String::from("uint64_t"),
             "u32" => String::from("uint32_t"),
             "u16" => String::from("uint16_t"),
             "u8" => String::from("uint8_t"),
@@ -241,7 +242,7 @@ impl CppGenerator {
         let fn_type = Self::convert_function_pointer(rust_type);
         let typedef_name = format!("{}_{}_fn", struct_name, field_name);
 
-        let typedef = format!("typedef {} {};\n", fn_type, typedef_name);
+        let typedef = format!("using {} = {};\n", typedef_name, fn_type);
 
         let mut extra = String::new();
         if Self::is_option(rust_type) {
@@ -250,6 +251,54 @@ impl CppGenerator {
 
         (format!("{}{}", typedef, extra), typedef_name)
     }
+
+    /// Resolve a field's by-value dependency, if any.
+    ///
+    /// Returns the C++ type name that must be a complete type before the
+    /// enclosing struct/union can be defined. Pointer fields, arrays, function
+    /// pointers, and primitive types impose no ordering constraint and yield
+    /// `None`.
+    pub fn value_dependency(rust_type: &str) -> Option<String> {
+        let inner = Self::strip_option(rust_type);
+
+        if Self::is_array(inner)
+            || inner.starts_with('*')
+            || inner.contains("extern\"C\"fn")
+            || inner.contains("extern\"C\"")
+        {
+            return None;
+        }
+
+        let cpp = Self::rust_type_to_cpp(inner);
+        // A by-value dependency is a named aggregate type — i.e. anything that
+        // did not map to a primitive, pointer, or void.
+        let is_named = cpp.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+        if is_named { Some(cpp) } else { None }
+    }
+
+    /// Format a C++ forward declaration for a struct, enum, or union by name.
+    ///
+    /// Enums require their fixed underlying type so they can be used by value
+    /// after only a forward declaration.
+    pub fn forward_declaration(name: &str, kind: ForwardKind) -> String {
+        match kind {
+            ForwardKind::Struct => format!("struct {};\n", name),
+            ForwardKind::Union => format!("union {};\n", name),
+            ForwardKind::Enum(repr) => {
+                format!("enum class {} : {};\n", name, Self::rust_type_to_cpp(&repr))
+            }
+        }
+    }
+}
+
+/// Kind of aggregate being forward-declared in generated C++ output.
+pub enum ForwardKind {
+    /// A `struct`.
+    Struct,
+    /// A `union`.
+    Union,
+    /// An `enum class` with the given Rust `repr` for its fixed underlying type.
+    Enum(String),
 }
 
 impl CodeGenerator for CppGenerator {
@@ -399,7 +448,20 @@ impl CodeGenerator for CppGenerator {
     }
 
     fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        "#pragma once\n#include <cstdint>\n#include <cstddef>\n\n".to_string()
+        let mut header = String::from("#pragma once\n");
+        header.push_str("#include <cstdint>\n");
+        header.push_str("#include <cstddef>\n");
+        header.push_str("#include <cstring>\n");
+        header.push_str("#include <string>\n");
+        header.push_str("#include <string_view>\n");
+        header.push_str("#include <vector>\n\n");
+        // Host allocator entry points exported by the polyplug runtime.
+        // The inline helpers below (and guest operator new/delete) call these.
+        header.push_str("extern \"C\" {\n");
+        header.push_str("uint8_t* polyplug_host_alloc(size_t size, size_t align);\n");
+        header.push_str("void polyplug_host_free(uint8_t* ptr, size_t size, size_t align);\n");
+        header.push_str("}\n\n");
+        header
     }
 }
 
@@ -491,6 +553,69 @@ mod tests {
             !typedef.contains("()"),
             "return type () should not appear in typedef: {}",
             typedef
+        );
+    }
+
+    /// Function-pointer aliases must use the `using Name = Type;` form so the
+    /// pointer name is bound — a bare `typedef Ret(*)(...) Name;` is invalid C++.
+    #[test]
+    fn cpp_fn_ptr_typedef_uses_using_alias() {
+        let (typedef, type_name) = CppGenerator::generate_fn_ptr_typedef(
+            "Test",
+            "callback",
+            "unsafeextern\"C\"fn(ptr:*constu8)->u32",
+        );
+        assert!(
+            typedef.starts_with(&format!("using {} = ", type_name)),
+            "fn ptr should be a using-alias: {}",
+            typedef
+        );
+        assert!(
+            !typedef.contains("typedef"),
+            "fn ptr should not use the invalid typedef form: {}",
+            typedef
+        );
+    }
+
+    /// By-value aggregate fields impose an ordering dependency; pointers,
+    /// arrays, function pointers, and primitives do not.
+    #[test]
+    fn cpp_value_dependency_detects_aggregates() {
+        assert_eq!(
+            CppGenerator::value_dependency("Version"),
+            Some(String::from("Version"))
+        );
+        assert_eq!(
+            CppGenerator::value_dependency("Option<DispatchMechanisms>"),
+            Some(String::from("DispatchMechanisms"))
+        );
+        assert_eq!(CppGenerator::value_dependency("u32"), None);
+        assert_eq!(CppGenerator::value_dependency("*const HostInterface"), None);
+        assert_eq!(CppGenerator::value_dependency("Array<u8>"), None);
+        assert_eq!(
+            CppGenerator::value_dependency("unsafeextern\"C\"fn(ptr:*constu8)->u32"),
+            None
+        );
+    }
+
+    /// Forward declarations must carry the kind and, for enums, a fixed
+    /// underlying type so the enum can be used by value after the declaration.
+    #[test]
+    fn cpp_forward_declaration_formats() {
+        assert_eq!(
+            CppGenerator::forward_declaration("Buffer", ForwardKind::Struct),
+            "struct Buffer;\n"
+        );
+        assert_eq!(
+            CppGenerator::forward_declaration("DispatchMechanisms", ForwardKind::Union),
+            "union DispatchMechanisms;\n"
+        );
+        assert_eq!(
+            CppGenerator::forward_declaration(
+                "DispatchType",
+                ForwardKind::Enum(String::from("u32"))
+            ),
+            "enum class DispatchType : uint32_t;\n"
         );
     }
 }

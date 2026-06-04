@@ -161,9 +161,9 @@ unsafe extern "C" fn js_dispatch(
     match call_result {
         Ok(0) => AbiError::ok(),
         Ok(code) => AbiError {
-            // SAFETY: code is a non-zero i32 from a JS init call result.
-            // AbiErrorCode is #[repr(u32)], so transmuting from u32 is sound for any value.
-            code: unsafe { core::mem::transmute::<u32, AbiErrorCode>(code as u32) },
+            // Safe: from_u32 does an exhaustive match; unknown codes map to Generic.
+            // Previous transmute::<u32, AbiErrorCode> caused SIGABRT on invalid discriminants.
+            code: AbiErrorCode::from_u32(code as u32),
             message: StringView::null(),
         },
         Err(_) => AbiError {

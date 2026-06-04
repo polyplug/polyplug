@@ -43,7 +43,7 @@ public:
             return;
         }
 
-        if (0_u32 >= interface_->dispatch.native.function_count) {
+        if (0U >= interface_->dispatch.native.function_count) {
             return;
         }
 
@@ -53,17 +53,17 @@ public:
         AbiError err;
         switch (interface_->dispatch_type) {
             case DispatchType::Native: {
-                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0_u32]);
+                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
                 err = fn_(instance_, args_ptr, out_ptr);
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0_u32, args_ptr, out_ptr);
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr);
                 break;
             }
         }
 
-        if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
+        if (err.code != AbiErrorCode::Ok) {
             return;
         }
 
@@ -75,7 +75,7 @@ public:
             return;
         }
 
-        if (1_u32 >= interface_->dispatch.native.function_count) {
+        if (1U >= interface_->dispatch.native.function_count) {
             return;
         }
 
@@ -86,17 +86,17 @@ public:
         AbiError err;
         switch (interface_->dispatch_type) {
             case DispatchType::Native: {
-                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[1_u32]);
+                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[1U]);
                 err = fn_(instance_, args_ptr, out_ptr);
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 1_u32, args_ptr, out_ptr);
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 1U, args_ptr, out_ptr);
                 break;
             }
         }
 
-        if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
+        if (err.code != AbiErrorCode::Ok) {
             return;
         }
 

@@ -25,7 +25,7 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 /// `this`, `descriptor`, and `interface` must be valid non-null pointers for
 /// the duration of this call (guaranteed by the ABI contract).
 unsafe extern "C" fn capture_register(
-    this: *const HostInterface,
+    _this: *const HostInterface,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {

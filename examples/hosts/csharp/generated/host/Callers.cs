@@ -18,7 +18,7 @@ public static class PipelineDecoderContractConstants {
 /// Host caller for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
 /// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
-public sealed class PipelineDecoderContractCaller : IDisposable {
+public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
     private readonly GuestContractInterface* _interface;
     private GuestContractInstance _instance;
     private readonly HostInterface* _host;
@@ -32,44 +32,43 @@ public sealed class PipelineDecoderContractCaller : IDisposable {
     }
 
     /// <summary>Factory method - resolves contract and creates instance.</summary>
-    public static PipelineDecoderContractCaller? Create(Runtime rt, HostInterface* host) {
-        var handle = rt.FindByContract(PipelineDecoderContractConstants.PIPELINE_DECODER_CONTRACT_ID, 0);
-        if (handle == ulong.MaxValue) { return null; }
-        var iface = rt.ResolveContract(handle);
+    public static PipelineDecoderContractCaller? Create(Runtime rt) {
+        var handle = rt.FindGuestContract(PipelineDecoderContractConstants.PIPELINE_DECODER_CONTRACT_ID, 0);
+        if (handle == uint.MaxValue) { return null; }
+        var host = (HostInterface*)rt.HostHandle;
+        var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var inst = iface->CreateInstance((nint)host, nint.Zero);
-        if (inst.Data == nint.Zero) { return null; }
+        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;
+        var inst = createFn(host, null);
         return new PipelineDecoderContractCaller(iface, inst, host);
     }
 
-    /// <summary>Check if this caller instance is still valid.</summary>
-    public bool IsValid => !_disposed && _instance.Data != nint.Zero;
+    /// <summary>Check if this caller holds a resolved contract interface.</summary>
+    public bool IsValid => !_disposed && _interface != null;
 
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
-        if (!_disposed && _instance.Data != nint.Zero) {
-            _interface->DestroyInstance((nint)_host, _instance);
+        if (!_disposed) {
+            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
         }
-        _instance = _interface->CreateInstance((nint)_host, nint.Zero);
+        _instance = ((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            if (_instance.Data != nint.Zero) {
-                _interface->DestroyInstance((nint)_host, _instance);
-                _instance.Data = nint.Zero;
-            }
+            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            _instance.Data = nint.Zero;
             _disposed = true;
         }
     }
 
     public Polyplug.Abi.StringView Decode(Polyplug.Abi.StringView input) {
-        if (_disposed || _instance.Data == nint.Zero) {
+        if (_disposed) {
             throw new ObjectDisposedException(nameof(PipelineDecoderContractCaller));
         }
 
-        unsafe {
+        {
             if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
@@ -81,7 +80,7 @@ public sealed class PipelineDecoderContractCaller : IDisposable {
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
             AbiError err = dispatch(_instance, argsPtr, outPtr);
-            if (err.Code != 0u) {
+            if (err.Code != AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
             return result;
@@ -99,7 +98,7 @@ public static class DataTransformerContractConstants {
 /// Host caller for contract `data.Transformer` (id=0x4775991362CD68EE)
 /// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
-public sealed class DataTransformerContractCaller : IDisposable {
+public sealed unsafe class DataTransformerContractCaller : IDisposable {
     private readonly GuestContractInterface* _interface;
     private GuestContractInstance _instance;
     private readonly HostInterface* _host;
@@ -113,44 +112,43 @@ public sealed class DataTransformerContractCaller : IDisposable {
     }
 
     /// <summary>Factory method - resolves contract and creates instance.</summary>
-    public static DataTransformerContractCaller? Create(Runtime rt, HostInterface* host) {
-        var handle = rt.FindByContract(DataTransformerContractConstants.DATA_TRANSFORMER_CONTRACT_ID, 0);
-        if (handle == ulong.MaxValue) { return null; }
-        var iface = rt.ResolveContract(handle);
+    public static DataTransformerContractCaller? Create(Runtime rt) {
+        var handle = rt.FindGuestContract(DataTransformerContractConstants.DATA_TRANSFORMER_CONTRACT_ID, 0);
+        if (handle == uint.MaxValue) { return null; }
+        var host = (HostInterface*)rt.HostHandle;
+        var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var inst = iface->CreateInstance((nint)host, nint.Zero);
-        if (inst.Data == nint.Zero) { return null; }
+        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;
+        var inst = createFn(host, null);
         return new DataTransformerContractCaller(iface, inst, host);
     }
 
-    /// <summary>Check if this caller instance is still valid.</summary>
-    public bool IsValid => !_disposed && _instance.Data != nint.Zero;
+    /// <summary>Check if this caller holds a resolved contract interface.</summary>
+    public bool IsValid => !_disposed && _interface != null;
 
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
-        if (!_disposed && _instance.Data != nint.Zero) {
-            _interface->DestroyInstance((nint)_host, _instance);
+        if (!_disposed) {
+            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
         }
-        _instance = _interface->CreateInstance((nint)_host, nint.Zero);
+        _instance = ((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            if (_instance.Data != nint.Zero) {
-                _interface->DestroyInstance((nint)_host, _instance);
-                _instance.Data = nint.Zero;
-            }
+            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            _instance.Data = nint.Zero;
             _disposed = true;
         }
     }
 
     public Polyplug.Abi.StringView Transform(Polyplug.Abi.StringView input) {
-        if (_disposed || _instance.Data == nint.Zero) {
+        if (_disposed) {
             throw new ObjectDisposedException(nameof(DataTransformerContractCaller));
         }
 
-        unsafe {
+        {
             if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
@@ -162,7 +160,7 @@ public sealed class DataTransformerContractCaller : IDisposable {
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
             AbiError err = dispatch(_instance, argsPtr, outPtr);
-            if (err.Code != 0u) {
+            if (err.Code != AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
             return result;
@@ -180,7 +178,7 @@ public static class PipelineEncoderContractConstants {
 /// Host caller for contract `pipeline.Encoder` (id=0xFC50F9D1D3DB629F)
 /// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
-public sealed class PipelineEncoderContractCaller : IDisposable {
+public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
     private readonly GuestContractInterface* _interface;
     private GuestContractInstance _instance;
     private readonly HostInterface* _host;
@@ -194,44 +192,43 @@ public sealed class PipelineEncoderContractCaller : IDisposable {
     }
 
     /// <summary>Factory method - resolves contract and creates instance.</summary>
-    public static PipelineEncoderContractCaller? Create(Runtime rt, HostInterface* host) {
-        var handle = rt.FindByContract(PipelineEncoderContractConstants.PIPELINE_ENCODER_CONTRACT_ID, 0);
-        if (handle == ulong.MaxValue) { return null; }
-        var iface = rt.ResolveContract(handle);
+    public static PipelineEncoderContractCaller? Create(Runtime rt) {
+        var handle = rt.FindGuestContract(PipelineEncoderContractConstants.PIPELINE_ENCODER_CONTRACT_ID, 0);
+        if (handle == uint.MaxValue) { return null; }
+        var host = (HostInterface*)rt.HostHandle;
+        var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var inst = iface->CreateInstance((nint)host, nint.Zero);
-        if (inst.Data == nint.Zero) { return null; }
+        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;
+        var inst = createFn(host, null);
         return new PipelineEncoderContractCaller(iface, inst, host);
     }
 
-    /// <summary>Check if this caller instance is still valid.</summary>
-    public bool IsValid => !_disposed && _instance.Data != nint.Zero;
+    /// <summary>Check if this caller holds a resolved contract interface.</summary>
+    public bool IsValid => !_disposed && _interface != null;
 
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
-        if (!_disposed && _instance.Data != nint.Zero) {
-            _interface->DestroyInstance((nint)_host, _instance);
+        if (!_disposed) {
+            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
         }
-        _instance = _interface->CreateInstance((nint)_host, nint.Zero);
+        _instance = ((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            if (_instance.Data != nint.Zero) {
-                _interface->DestroyInstance((nint)_host, _instance);
-                _instance.Data = nint.Zero;
-            }
+            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            _instance.Data = nint.Zero;
             _disposed = true;
         }
     }
 
     public Polyplug.Abi.StringView Encode(Polyplug.Abi.StringView input) {
-        if (_disposed || _instance.Data == nint.Zero) {
+        if (_disposed) {
             throw new ObjectDisposedException(nameof(PipelineEncoderContractCaller));
         }
 
-        unsafe {
+        {
             if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
@@ -243,7 +240,7 @@ public sealed class PipelineEncoderContractCaller : IDisposable {
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
             AbiError err = dispatch(_instance, argsPtr, outPtr);
-            if (err.Code != 0u) {
+            if (err.Code != AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
             return result;
@@ -261,7 +258,7 @@ public static class DataReporterContractConstants {
 /// Host caller for contract `data.Reporter` (id=0x76BB4643A9F5AD68)
 /// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
-public sealed class DataReporterContractCaller : IDisposable {
+public sealed unsafe class DataReporterContractCaller : IDisposable {
     private readonly GuestContractInterface* _interface;
     private GuestContractInstance _instance;
     private readonly HostInterface* _host;
@@ -275,44 +272,43 @@ public sealed class DataReporterContractCaller : IDisposable {
     }
 
     /// <summary>Factory method - resolves contract and creates instance.</summary>
-    public static DataReporterContractCaller? Create(Runtime rt, HostInterface* host) {
-        var handle = rt.FindByContract(DataReporterContractConstants.DATA_REPORTER_CONTRACT_ID, 0);
-        if (handle == ulong.MaxValue) { return null; }
-        var iface = rt.ResolveContract(handle);
+    public static DataReporterContractCaller? Create(Runtime rt) {
+        var handle = rt.FindGuestContract(DataReporterContractConstants.DATA_REPORTER_CONTRACT_ID, 0);
+        if (handle == uint.MaxValue) { return null; }
+        var host = (HostInterface*)rt.HostHandle;
+        var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var inst = iface->CreateInstance((nint)host, nint.Zero);
-        if (inst.Data == nint.Zero) { return null; }
+        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;
+        var inst = createFn(host, null);
         return new DataReporterContractCaller(iface, inst, host);
     }
 
-    /// <summary>Check if this caller instance is still valid.</summary>
-    public bool IsValid => !_disposed && _instance.Data != nint.Zero;
+    /// <summary>Check if this caller holds a resolved contract interface.</summary>
+    public bool IsValid => !_disposed && _interface != null;
 
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
-        if (!_disposed && _instance.Data != nint.Zero) {
-            _interface->DestroyInstance((nint)_host, _instance);
+        if (!_disposed) {
+            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
         }
-        _instance = _interface->CreateInstance((nint)_host, nint.Zero);
+        _instance = ((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            if (_instance.Data != nint.Zero) {
-                _interface->DestroyInstance((nint)_host, _instance);
-                _instance.Data = nint.Zero;
-            }
+            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            _instance.Data = nint.Zero;
             _disposed = true;
         }
     }
 
     public Polyplug.Abi.StringView Report(Polyplug.Abi.StringView input) {
-        if (_disposed || _instance.Data == nint.Zero) {
+        if (_disposed) {
             throw new ObjectDisposedException(nameof(DataReporterContractCaller));
         }
 
-        unsafe {
+        {
             if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
@@ -324,7 +320,7 @@ public sealed class DataReporterContractCaller : IDisposable {
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
             AbiError err = dispatch(_instance, argsPtr, outPtr);
-            if (err.Code != 0u) {
+            if (err.Code != AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
             return result;
@@ -342,7 +338,7 @@ public static class PipelineValidatorContractConstants {
 /// Host caller for contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 /// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
-public sealed class PipelineValidatorContractCaller : IDisposable {
+public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
     private readonly GuestContractInterface* _interface;
     private GuestContractInstance _instance;
     private readonly HostInterface* _host;
@@ -356,44 +352,43 @@ public sealed class PipelineValidatorContractCaller : IDisposable {
     }
 
     /// <summary>Factory method - resolves contract and creates instance.</summary>
-    public static PipelineValidatorContractCaller? Create(Runtime rt, HostInterface* host) {
-        var handle = rt.FindByContract(PipelineValidatorContractConstants.PIPELINE_VALIDATOR_CONTRACT_ID, 0);
-        if (handle == ulong.MaxValue) { return null; }
-        var iface = rt.ResolveContract(handle);
+    public static PipelineValidatorContractCaller? Create(Runtime rt) {
+        var handle = rt.FindGuestContract(PipelineValidatorContractConstants.PIPELINE_VALIDATOR_CONTRACT_ID, 0);
+        if (handle == uint.MaxValue) { return null; }
+        var host = (HostInterface*)rt.HostHandle;
+        var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var inst = iface->CreateInstance((nint)host, nint.Zero);
-        if (inst.Data == nint.Zero) { return null; }
+        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;
+        var inst = createFn(host, null);
         return new PipelineValidatorContractCaller(iface, inst, host);
     }
 
-    /// <summary>Check if this caller instance is still valid.</summary>
-    public bool IsValid => !_disposed && _instance.Data != nint.Zero;
+    /// <summary>Check if this caller holds a resolved contract interface.</summary>
+    public bool IsValid => !_disposed && _interface != null;
 
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
-        if (!_disposed && _instance.Data != nint.Zero) {
-            _interface->DestroyInstance((nint)_host, _instance);
+        if (!_disposed) {
+            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
         }
-        _instance = _interface->CreateInstance((nint)_host, nint.Zero);
+        _instance = ((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            if (_instance.Data != nint.Zero) {
-                _interface->DestroyInstance((nint)_host, _instance);
-                _instance.Data = nint.Zero;
-            }
+            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            _instance.Data = nint.Zero;
             _disposed = true;
         }
     }
 
     public Polyplug.Abi.StringView Validate(Polyplug.Abi.StringView input) {
-        if (_disposed || _instance.Data == nint.Zero) {
+        if (_disposed) {
             throw new ObjectDisposedException(nameof(PipelineValidatorContractCaller));
         }
 
-        unsafe {
+        {
             if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
@@ -405,7 +400,7 @@ public sealed class PipelineValidatorContractCaller : IDisposable {
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
             AbiError err = dispatch(_instance, argsPtr, outPtr);
-            if (err.Code != 0u) {
+            if (err.Code != AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
             return result;

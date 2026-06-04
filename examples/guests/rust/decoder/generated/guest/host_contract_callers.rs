@@ -40,6 +40,12 @@ impl HostContractError {
 
 /// Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 pub struct HostLoggerCaller {
+    /// Vtable for the host contract: provides dispatch metadata and function pointers.
+    /// Resolved via `HostInterface::resolve_host_contract_interface`.
+    interface: *const HostContractInterface,
+    /// Per-instance state for the host contract, produced by
+    /// `HostInterface::get_host_contract`. Passed as the first argument to native
+    /// dispatch functions (the host thunk dereferences it as the implementation pointer).
     instance: HostContractInstance,
 }
 
@@ -54,27 +60,37 @@ impl HostLoggerCaller {
         }
         // SAFETY: host is non-null and valid per ABI contract.
         let host: &HostInterface = unsafe { &*host };
-        let instance: HostContractInstance =
-            unsafe { (host.get_host_contract)(host, 0xF53EB5F2845853BB_u64, min_version) };
-        if instance.data.is_null() {
+        // Resolve the contract vtable. This is the source of dispatch metadata
+        // (dispatch_type, function_count, functions) — NOT the instance.
+        let interface: *const HostContractInterface = unsafe {
+            (host.resolve_host_contract_interface)(host, 0xF53EB5F2845853BB_u64, min_version)
+        };
+        if interface.is_null() {
             return None;
         }
-        Some(HostLoggerCaller { instance })
+        // Obtain the per-instance state. Native dispatch functions receive this
+        // pointer as their first argument; the host thunk dereferences it.
+        let instance: HostContractInstance =
+            unsafe { (host.get_host_contract)(host, 0xF53EB5F2845853BB_u64, min_version) };
+        Some(HostLoggerCaller {
+            interface,
+            instance,
+        })
     }
 
-    /// Check if caller is valid (instance data is non-null).
+    /// Check if caller is valid (resolved interface is non-null).
     pub fn is_valid(&self) -> bool {
-        !self.instance.data.is_null()
+        !self.interface.is_null()
     }
 
     /// Call host contract function `log` (function_id=0)
     pub fn log(&self, message: String) -> Result<(), HostContractError> {
-        if self.instance.data.is_null() {
+        if self.interface.is_null() {
             return Err(HostContractError::new(AbiErrorCode::HostContractNotFound));
         }
-        // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.
-        let interface: &HostContractInterface =
-            unsafe { &*(self.instance.data as *const HostContractInterface) };
+        // SAFETY: self.interface is non-null (checked above) and points to a valid
+        // HostContractInterface produced by resolve_host_contract_interface.
+        let interface: &HostContractInterface = unsafe { &*self.interface };
 
         let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
         if fn_count < 0_u32 + 1 {
@@ -98,7 +114,9 @@ impl HostLoggerCaller {
                         *const (),
                         *mut (),
                     ) -> AbiError = core::mem::transmute(fn_ptr);
-                    dispatch_fn(core::ptr::null(), args_ptr, out_ptr)
+                    // The native thunk receives the per-instance state as its first
+                    // argument and dereferences it as the implementation pointer.
+                    dispatch_fn(self.instance.data as *const (), args_ptr, out_ptr)
                 }
                 DispatchType::VirtualMachine => (interface.dispatch.vm.call)(
                     interface.dispatch.vm.loader_data,
@@ -147,12 +165,12 @@ impl HostLoggerCaller {
         level: LogLevel,
         message: String,
     ) -> Result<(), HostContractError> {
-        if self.instance.data.is_null() {
+        if self.interface.is_null() {
             return Err(HostContractError::new(AbiErrorCode::HostContractNotFound));
         }
-        // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.
-        let interface: &HostContractInterface =
-            unsafe { &*(self.instance.data as *const HostContractInterface) };
+        // SAFETY: self.interface is non-null (checked above) and points to a valid
+        // HostContractInterface produced by resolve_host_contract_interface.
+        let interface: &HostContractInterface = unsafe { &*self.interface };
 
         let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
         if fn_count < 1_u32 + 1 {
@@ -178,7 +196,9 @@ impl HostLoggerCaller {
                         *const (),
                         *mut (),
                     ) -> AbiError = core::mem::transmute(fn_ptr);
-                    dispatch_fn(core::ptr::null(), args_ptr, out_ptr)
+                    // The native thunk receives the per-instance state as its first
+                    // argument and dereferences it as the implementation pointer.
+                    dispatch_fn(self.instance.data as *const (), args_ptr, out_ptr)
                 }
                 DispatchType::VirtualMachine => (interface.dispatch.vm.call)(
                     interface.dispatch.vm.loader_data,

@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
@@ -13,16 +14,17 @@ use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::AbiError;
-use polyplug_utils;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
+use polyplug_utils::GuestContractId;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn make_runtime() -> Runtime {
+fn make_runtime() -> Arc<Runtime> {
     RuntimeBuilder::new()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
@@ -92,8 +94,15 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
         id: bundle_id,
         name: name.to_owned(),
         runtime: "lua".to_owned(),
-        file: path.file_name().unwrap().to_string_lossy().into_owned(),
-        path: path.parent().unwrap().to_path_buf(),
+        file: path
+            .file_name()
+            .expect("bundle path must have a file name")
+            .to_string_lossy()
+            .into_owned(),
+        path: path
+            .parent()
+            .expect("bundle path must have a parent directory")
+            .to_path_buf(),
         version: String::new(),
         provides: Vec::new(),
         function_count: HashMap::new(),
@@ -106,7 +115,7 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
 /// Load the supplied Lua source via `LuaLoader::load` and return the result.
 fn load_script(path: &Path, name: &str) -> Result<(), RuntimeError> {
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(path, name);
     loader.load(&manifest, &runtime)
 }
@@ -241,29 +250,73 @@ fn load_nonexistent_path_returns_script_load_failed() {
 fn vtable_is_registered_after_load() {
     let (_dir, path) = write_temp_bundle("lua_loader_vtable", valid_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_vtable");
     loader
         .load(&manifest, &runtime)
         .expect("valid bundle must load");
 
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
-    let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
-        runtime.registry().find(contract_id, 0);
+    let handle: Result<GuestContractHandle, polyplug::error::RegistryError> = runtime
+        .registry()
+        .find(GuestContractId::from_u64(contract_id), 0);
     assert!(
         handle.is_ok(),
         "registry must contain test.loader@1 after load"
     );
     let handle: GuestContractHandle = handle.expect("handle must be Ok");
     let vtable_ptr: Result<*const GuestContractInterface, polyplug::error::RegistryError> =
-        runtime.registry().resolve(handle);
+        runtime.registry().resolve_guest_contract(handle);
     assert!(vtable_ptr.is_ok(), "handle must resolve to a vtable");
     // SAFETY: vtable_ptr is a 'static pointer produced by LuaLoader; the Lua VM
     // and leaked GuestContractInterface outlive this test.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr.expect("vtable must resolve") };
+    // valid_plugin_script has exactly one function: fn_id 0 must dispatch to Ok,
+    // and fn_id 1 must report FunctionNotAvailable.
+    assert_function_count(vtable, 1);
+}
+
+/// Verify a VM-dispatch vtable exposes exactly `expected` functions by probing
+/// fn_ids: indices `0..expected` must return `Ok`, and index `expected` must
+/// return `FunctionNotAvailable`.
+fn assert_function_count(vtable: &GuestContractInterface, expected: u32) {
     assert_eq!(
-        vtable.function_count, 1,
-        "valid_plugin_script has exactly one function"
+        vtable.dispatch_type,
+        polyplug_abi::DispatchType::VirtualMachine,
+        "Lua loader must use VM dispatch"
+    );
+    for fn_id in 0..expected {
+        // SAFETY: dispatch.vm.call is a valid function pointer; the noop functions
+        // ignore the null args/out pointers.
+        let result: AbiError = unsafe {
+            (vtable.dispatch.vm.call)(
+                vtable.dispatch.vm.loader_data,
+                GuestContractInstance::null(),
+                fn_id,
+                core::ptr::null::<()>(),
+                core::ptr::null_mut::<()>(),
+            )
+        };
+        assert_eq!(
+            result.code,
+            AbiErrorCode::Ok,
+            "fn_id {fn_id} must dispatch to Ok"
+        );
+    }
+    // SAFETY: dispatch.vm.call is a valid function pointer.
+    let missing: AbiError = unsafe {
+        (vtable.dispatch.vm.call)(
+            vtable.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            expected,
+            core::ptr::null::<()>(),
+            core::ptr::null_mut::<()>(),
+        )
+    };
+    assert_eq!(
+        missing.code,
+        AbiErrorCode::FunctionNotAvailable,
+        "fn_id {expected} must report FunctionNotAvailable"
     );
 }
 
@@ -272,24 +325,23 @@ fn vtable_is_registered_after_load() {
 fn vtable_function_count_matches_script() {
     let (_dir, path) = write_temp_bundle("lua_loader_two_fn", two_function_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_two_fn");
     loader
         .load(&manifest, &runtime)
         .expect("two-function bundle must load");
 
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.two", 1);
-    let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
-        runtime.registry().find(contract_id, 0);
+    let handle: Result<GuestContractHandle, polyplug::error::RegistryError> = runtime
+        .registry()
+        .find(GuestContractId::from_u64(contract_id), 0);
     let handle: GuestContractHandle = handle.expect("test.two@1 must be registered");
     let vtable_ptr: Result<*const GuestContractInterface, polyplug::error::RegistryError> =
-        runtime.registry().resolve(handle);
+        runtime.registry().resolve_guest_contract(handle);
     // SAFETY: see vtable_is_registered_after_load.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr.expect("vtable must resolve") };
-    assert_eq!(
-        vtable.function_count, 2,
-        "two_function_plugin_script must register 2 functions"
-    );
+    // two_function_plugin_script must register exactly 2 functions.
+    assert_function_count(vtable, 2);
 }
 
 /// The contract_id stored in the vtable must match the FNV-1a hash computed
@@ -298,22 +350,24 @@ fn vtable_function_count_matches_script() {
 fn vtable_contract_id_matches_computed_hash() {
     let (_dir, path) = write_temp_bundle("lua_loader_cid", valid_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_cid");
     loader
         .load(&manifest, &runtime)
         .expect("valid bundle must load");
 
     let expected_cid: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
-    let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
-        runtime.registry().find(expected_cid, 0);
+    let handle: Result<GuestContractHandle, polyplug::error::RegistryError> = runtime
+        .registry()
+        .find(GuestContractId::from_u64(expected_cid), 0);
     let handle: GuestContractHandle = handle.expect("test.loader@1 must be registered");
     let vtable_ptr: Result<*const GuestContractInterface, polyplug::error::RegistryError> =
-        runtime.registry().resolve(handle);
+        runtime.registry().resolve_guest_contract(handle);
     // SAFETY: see vtable_is_registered_after_load.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr.expect("vtable must resolve") };
     assert_eq!(
-        vtable.contract_id, expected_cid,
+        vtable.contract_id,
+        GuestContractId::from_u64(expected_cid),
         "contract_id in vtable must match FNV-1a hash of 'test.loader@1'"
     );
 }
@@ -328,7 +382,7 @@ fn sequential_loads_both_succeed() {
     let (_dir2, path2) = write_temp_bundle("lua_loader_seq2", two_function_plugin_script());
 
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest1: ManifestData = make_manifest(&path1, "lua_loader_seq1");
     let manifest2: ManifestData = make_manifest(&path2, "lua_loader_seq2");
     loader
@@ -343,11 +397,11 @@ fn sequential_loads_both_succeed() {
     let cid2: u64 = polyplug_utils::guest_contract_id("test.two", 1);
 
     let handle1: Result<GuestContractHandle, polyplug::error::RegistryError> =
-        runtime.registry().find(cid1, 0);
+        runtime.registry().find(GuestContractId::from_u64(cid1), 0);
     assert!(handle1.is_ok(), "test.loader must be registered");
 
     let handle2: Result<GuestContractHandle, polyplug::error::RegistryError> =
-        runtime.registry().find(cid2, 0);
+        runtime.registry().find(GuestContractId::from_u64(cid2), 0);
     assert!(handle2.is_ok(), "test.two must be registered");
 }
 
@@ -370,7 +424,7 @@ fn concurrent_loaders_do_not_race() {
             let p: std::sync::Arc<PathBuf> = std::sync::Arc::clone(&path_arc);
             std::thread::spawn(move || {
                 let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-                let runtime: Runtime = RuntimeBuilder::new()
+                let runtime: Arc<Runtime> = RuntimeBuilder::new()
                     .loader(LuaLoader::new(LuaConfig::default()))
                     .build()
                     .expect("runtime build must succeed");
@@ -378,8 +432,15 @@ fn concurrent_loaders_do_not_race() {
                     id: polyplug_utils::bundle_id("lua_loader_thread_safety"),
                     name: "lua_loader_thread_safety".to_owned(),
                     runtime: "lua".to_owned(),
-                    file: p.file_name().unwrap().to_string_lossy().into_owned(),
-                    path: p.parent().unwrap().to_path_buf(),
+                    file: p
+                        .file_name()
+                        .expect("bundle path must have a file name")
+                        .to_string_lossy()
+                        .into_owned(),
+                    path: p
+                        .parent()
+                        .expect("bundle path must have a parent directory")
+                        .to_path_buf(),
                     version: String::new(),
                     provides: Vec::new(),
                     function_count: HashMap::new(),
@@ -412,7 +473,7 @@ fn concurrent_loaders_do_not_race() {
 fn vtable_function_dispatch_returns_abi_ok() {
     let (_dir, path) = write_temp_bundle("lua_loader_dispatch", valid_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_dispatch");
     loader
         .load(&manifest, &runtime)
@@ -421,18 +482,14 @@ fn vtable_function_dispatch_returns_abi_ok() {
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
     let handle: GuestContractHandle = runtime
         .registry()
-        .find(contract_id, 0)
+        .find(GuestContractId::from_u64(contract_id), 0)
         .expect("test.loader@1 must be registered");
     let vtable_ptr: *const GuestContractInterface = runtime
         .registry()
-        .resolve(handle)
+        .resolve_guest_contract(handle)
         .expect("handle must resolve to vtable");
     // SAFETY: vtable_ptr is a 'static leaked GuestContractInterface from LuaLoader.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
-    assert!(
-        vtable.function_count >= 1,
-        "vtable must have at least one function"
-    );
 
     // With VM dispatch, we call through the dispatch.vm.call function.
     assert_eq!(
@@ -446,6 +503,7 @@ fn vtable_function_dispatch_returns_abi_ok() {
     let result: AbiError = unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
             0, // fn_id = 0 (first function)
             core::ptr::null::<()>(),
             core::ptr::null_mut::<()>(),

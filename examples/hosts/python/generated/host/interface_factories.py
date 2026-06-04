@@ -5,17 +5,17 @@
 from __future__ import annotations
 import ctypes
 from typing import Callable, Any
-from polyplug.abi import (
-    HostContractVTable,
-    HostContractVTableHeader,
-    HostContractDispatch,
-    NativeHostContractDispatch,
-    VmHostContractDispatch,
-    DispatchType,
-    StringView,
-    Buffer,
+from polyplug_abi import (
     AbiError,
     AbiErrorCode,
+    Buffer,
+    DispatchMechanisms,
+    DispatchType,
+    HostContractInterface,
+    NativeDispatch,
+    StringView,
+    Version,
+    VmDispatch,
 )
 from host.contracts import *
 
@@ -26,7 +26,7 @@ from host.contracts import *
 #
 # Memory:
 # The returned interface is cached and lives for the lifetime of the program.
-def create_host_logger_interface(impl: HostLogger) -> HostContractVTable:
+def create_host_logger_interface(impl: HostLogger) -> HostContractInterface:
     global _HostLogger_impl
     _HostLogger_impl = impl
 
@@ -69,23 +69,16 @@ def create_host_logger_interface(impl: HostLogger) -> HostContractVTable:
         ctypes.cast(ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(_host_logger_log_with_level_thunk), ctypes.c_void_p),
     ]
 
-    interface = HostContractVTable(
-        header=HostContractVTableHeader(
-            vtable_version=1,
-            contract_id=0xF53EB5F2845853BB,
-            contract_major=1,
-            contract_minor=0,
-            function_count=2,
-            singleton=false,
-            dispatch_type=DispatchType.Native,
-        ),
-        dispatch=HostContractDispatch(
-            native=NativeHostContractDispatch(
-                impl_ptr=0,  # We use global _impl instead
-                functions=functions,
-            ),
-        ),
-    )
+    interface = HostContractInterface()
+    interface.contract_id = 0xF53EB5F2845853BB
+    interface.contract_version = Version(major=1, minor=0, patch=0)
+    interface.singleton = false
+    interface.dispatch_type = DispatchType.Native
+    interface.runtime = 0  # Set by runtime during registration
+    interface.create_instance = ctypes.cast(None, type(interface.create_instance))
+    interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))
+    interface.dispatch.native.function_count = 2
+    interface.dispatch.native.functions = ctypes.cast(functions, ctypes.c_void_p)
 
     return interface
 
@@ -102,26 +95,18 @@ _HostLogger_impl: HostLogger | None = None
 # Memory:
 # The returned interface is cached and lives for the lifetime of the program.
 def create_host_logger_interface_vm(
-    bridge_data: int,
-    dispatch_fn: Callable[[int, int, int, int], AbiError],
-) -> HostContractVTable:
-    interface = HostContractVTable(
-        header=HostContractVTableHeader(
-            vtable_version=1,
-            contract_id=0xF53EB5F2845853BB,
-            contract_major=1,
-            contract_minor=0,
-            function_count=2,
-            singleton=false,
-            dispatch_type=DispatchType.VirtualMachine,
-        ),
-        dispatch=HostContractDispatch(
-            vm=VmHostContractDispatch(
-                call=dispatch_fn,
-                bridge_data=bridge_data,
-            ),
-        ),
-    )
+    dispatch_fn: Callable[[int, int, int, int], int],
+) -> HostContractInterface:
+    interface = HostContractInterface()
+    interface.contract_id = 0xF53EB5F2845853BB
+    interface.contract_version = Version(major=1, minor=0, patch=0)
+    interface.singleton = false
+    interface.dispatch_type = DispatchType.VirtualMachine
+    interface.runtime = 0  # Set by runtime during registration
+    interface.create_instance = ctypes.cast(None, type(interface.create_instance))
+    interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))
+    interface.dispatch.vm.call = ctypes.cast(dispatch_fn, type(interface.dispatch.vm.call))
+    interface.dispatch.vm.loader_data = VmDispatch().loader_data
 
     return interface
 

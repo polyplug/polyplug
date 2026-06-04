@@ -1,16 +1,16 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
-use polyplug::plugin_registry::PluginGuard;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
-use polyplug_abi::AbiErrorCode::Ok;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_native::NativeLoader;
 
-const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
+fn test_add_contract_id() -> u64 {
+    polyplug_utils::guest_contract_id("test.add", 1)
+}
 
 #[repr(C)]
 pub struct AddArgs {
@@ -20,12 +20,12 @@ pub struct AddArgs {
 
 #[derive(Debug)]
 pub struct ContractError {
-    pub code: u32,
+    pub code: AbiErrorCode,
     pub message: String,
 }
 
 impl ContractError {
-    pub fn new(code: u32) -> Self {
+    pub fn new(code: AbiErrorCode) -> Self {
         Self {
             code,
             message: String::new(),
@@ -34,16 +34,17 @@ impl ContractError {
 }
 
 pub struct TestAddContract {
-    guard: PluginGuard,
+    vtable: *const GuestContractInterface,
 }
 
 impl TestAddContract {
     pub fn create(runtime: &'static Runtime, min_version: u32) -> Option<Self> {
         let handle: GuestContractHandle = runtime
-            .find_by_contract(TEST_ADD_CONTRACT_ID, min_version)
+            .find_guest_contract(test_add_contract_id(), min_version)
             .ok()?;
-        let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
-        Some(Self { guard })
+        // `runtime` is `&'static`, so the resolved vtable pointer stays valid for its lifetime.
+        let vtable: *const GuestContractInterface = runtime.resolve_guest_contract(handle).ok()?;
+        Some(Self { vtable })
     }
 
     pub fn is_valid(&self) -> bool {
@@ -60,11 +61,11 @@ impl TestAddContract {
         // SAFETY: args_ptr points to a valid AddArgs and out_ptr to a valid u32.
         let args_ptr: *const () = &args as *const AddArgs as *const ();
         let out_ptr: *mut () = &mut out_val as *mut u32 as *mut ();
-        let vtable_ptr: *const GuestContractInterface = self.guard.vtable();
+        let vtable_ptr: *const GuestContractInterface = self.vtable;
         // SAFETY: vtable_ptr is valid for the duration of the call.
         let err: AbiError = unsafe {
             let vtable: &GuestContractInterface = &*vtable_ptr;
-            if 0_u32 >= vtable.function_count {
+            if 0_u32 >= vtable.dispatch.native.function_count {
                 AbiError {
                     code: AbiErrorCode::FunctionNotAvailable,
                     message: polyplug_abi::StringView::null(),
@@ -92,7 +93,7 @@ impl TestAddContract {
 }
 
 fn create_static_runtime() -> &'static Runtime {
-    let rt: Runtime = Runtime::builder()
+    let rt: std::sync::Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .build()
         .expect("build runtime");

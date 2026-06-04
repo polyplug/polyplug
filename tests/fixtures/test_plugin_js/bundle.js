@@ -44,19 +44,21 @@ function divide(argsPtr, outPtr) {
 }
 
 function polyplug_init(rt_ctx, host_vtable, ctx) {
-    var interface = {
-        contractLo: 0xB0410D2B >>> 0,
-        contractHi: 0xCC4232FA >>> 0,
+    // Canonical contract id: fnv1a_64("guest_contract:test.add@1") = 0x40244DF59FCBECB6.
+    // Passed split into 32-bit halves; the loader recomposes (hi << 32 | lo).
+    var vtable = {
+        contractLo: 0x9FCBECB6 >>> 0,
+        contractHi: 0x40244DF5 >>> 0,
         fnCount: 4,
         contractName: "test.add",
         functions: [add, subtract, multiply, divide]
     };
     polyplug.registerVtable(
-        interface.contractLo,
-        interface.contractHi,
-        interface,
-        interface.fnCount,
-        interface.contractName
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
     );
     return { code: 0, message: null };
 }

@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 use polyplug::error::LoaderError;
@@ -45,7 +47,7 @@ file = "bundle.py"
 }
 
 /// Create a minimal Runtime with the PythonLoader registered.
-fn make_runtime() -> Runtime {
+fn make_runtime() -> Arc<Runtime> {
     RuntimeBuilder::new()
         .loader(PythonLoader::default())
         .build()
@@ -53,13 +55,20 @@ fn make_runtime() -> Runtime {
 }
 
 /// Create a ManifestData for a Python bundle.
-fn make_manifest(path: &PathBuf, name: &str) -> ManifestData {
+fn make_manifest(path: &Path, name: &str) -> ManifestData {
     ManifestData {
         id: bundle_id(name),
         name: name.to_owned(),
         runtime: "python".to_owned(),
-        file: path.file_name().unwrap().to_string_lossy().into_owned(),
-        path: path.parent().unwrap().to_path_buf(),
+        file: path
+            .file_name()
+            .expect("bundle path must have a file name")
+            .to_string_lossy()
+            .into_owned(),
+        path: path
+            .parent()
+            .expect("bundle path must have a parent directory")
+            .to_path_buf(),
         version: String::new(),
         provides: Vec::new(),
         function_count: HashMap::new(),
@@ -72,7 +81,7 @@ fn make_manifest(path: &PathBuf, name: &str) -> ManifestData {
 /// A Python plugin source that registers one vtable via `polyplug_init`.
 ///
 /// The ctypes bridge mirrors the ABI contract expected by PythonLoader:
-///   `polyplug_init(rt_ctx: int, host_vtable: int, ctx: int) -> None`
+///   `polyplug_init(host_interface: int, ctx: int) -> None` (self-passing pattern)
 const VALID_PLUGIN_SRC: &str = r#"
 import ctypes
 
@@ -82,8 +91,14 @@ class _StringView(ctypes.Structure):
 class _AbiError(ctypes.Structure):
     _fields_ = [
         ("code",    ctypes.c_uint32),
-        ("_pad",    ctypes.c_uint32),
         ("message", _StringView),
+    ]
+
+class _Version(ctypes.Structure):
+    _fields_ = [
+        ("major", ctypes.c_uint32),
+        ("minor", ctypes.c_uint32),
+        ("patch", ctypes.c_uint32),
     ]
 
 class _PluginDescriptor(ctypes.Structure):
@@ -95,9 +110,14 @@ class _PluginDescriptor(ctypes.Structure):
         ("version_patch", ctypes.c_uint32),
     ]
 
-# New GuestContractInterface structure matching the current ABI
+# GuestContractInterface layout matching the current ABI:
+# contract_id (u64), contract_version (Version), dispatch_type (u32),
+# create_instance (fn ptr), destroy_instance (fn ptr), dispatch (union).
 class _NativeDispatch(ctypes.Structure):
-    _fields_ = [("functions", ctypes.c_void_p)]
+    _fields_ = [
+        ("function_count", ctypes.c_uint32),
+        ("functions",      ctypes.c_void_p),
+    ]
 
 class _VmDispatch(ctypes.Structure):
     _fields_ = [
@@ -105,7 +125,7 @@ class _VmDispatch(ctypes.Structure):
         ("loader_data", ctypes.c_void_p),
     ]
 
-class _PluginDispatch(ctypes.Union):
+class _DispatchMechanisms(ctypes.Union):
     _fields_ = [
         ("native", _NativeDispatch),
         ("vm",     _VmDispatch),
@@ -113,13 +133,12 @@ class _PluginDispatch(ctypes.Union):
 
 class _GuestContractInterface(ctypes.Structure):
     _fields_ = [
-        ("rt_ctx",          ctypes.c_void_p),
-        ("contract_id",     ctypes.c_uint64),
-        ("contract_version", ctypes.c_uint32),
-        ("function_count",  ctypes.c_uint32),
-        ("dispatch_type",   ctypes.c_uint32),  # 0 = Native, 1 = VM
-        ("_pad",            ctypes.c_uint32),
-        ("dispatch",        _PluginDispatch),
+        ("contract_id",      ctypes.c_uint64),
+        ("contract_version", _Version),
+        ("dispatch_type",    ctypes.c_uint32),  # 0 = Native, 1 = VM
+        ("create_instance",  ctypes.c_void_p),
+        ("destroy_instance", ctypes.c_void_p),
+        ("dispatch",         _DispatchMechanisms),
     ]
 
 _NAME_BYTES        = b"test_plugin\x00"
@@ -136,45 +155,39 @@ _DESC.version_minor = 0
 _DESC.version_patch = 0
 
 _INTERFACE = _GuestContractInterface()
-_INTERFACE.rt_ctx          = None
-_INTERFACE.contract_id     = 0xDEADBEEFCAFEBABE
-_INTERFACE.contract_version = 0
-_INTERFACE.function_count  = 0
-_INTERFACE.dispatch_type   = 0  # Native
-_INTERFACE._pad            = 0
-_INTERFACE.dispatch.native.functions = ctypes.cast(_FUNCTIONS_ARR, ctypes.c_void_p).value
+_INTERFACE.contract_id            = 0xDEADBEEFCAFEBABE
+_INTERFACE.contract_version.major = 1
+_INTERFACE.contract_version.minor = 0
+_INTERFACE.contract_version.patch = 0
+_INTERFACE.dispatch_type          = 0  # Native
+_INTERFACE.create_instance        = None
+_INTERFACE.destroy_instance       = None
+_INTERFACE.dispatch.native.function_count = 0
+_INTERFACE.dispatch.native.functions      = ctypes.cast(_FUNCTIONS_ARR, ctypes.c_void_p).value
 
-# HostInterface function pointer types
+# HostInterface register_contract signature: (this, descriptor, interface) -> AbiError.
 _RegisterFn = ctypes.CFUNCTYPE(
     _AbiError,
     ctypes.c_void_p,
     ctypes.c_void_p,
     ctypes.c_void_p,
 )
-_AllocFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
-_FreeFn = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
-_FindByContractFn = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-_FindByBundleFn = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint32)
-_FindAllByContractFn = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_size_t)
-_ResolveGuestContractFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64)
-_GetHostContractFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
 
 class _HostInterface(ctypes.Structure):
+    # Only the first two fields are needed to reach register_contract; the
+    # function-pointer offset matches the canonical layout (runtime @ 0,
+    # register_contract @ 8).
     _fields_ = [
-        ("register_plugin", _RegisterFn),
-        ("alloc", _AllocFn),
-        ("free", _FreeFn),
-        ("find_by_contract", _FindByContractFn),
-        ("find_by_bundle", _FindByBundleFn),
-        ("find_all_by_contract", _FindAllByContractFn),
-        ("resolve_guest_contract", _ResolveGuestContractFn),
-        ("get_host_contract", _GetHostContractFn),
+        ("runtime", ctypes.c_void_p),
+        ("register_contract", _RegisterFn),
     ]
 
-def polyplug_init(rt_ctx: int, host_vtable: int, _ctx: int) -> None:
-    host = _HostInterface.from_address(host_vtable)
-    host.register_plugin(
-        ctypes.c_void_p(rt_ctx),
+def polyplug_init(host_interface: int, _ctx: int) -> None:
+    host = _HostInterface.from_address(host_interface)
+    # Self-passing pattern: register_contract receives the HostInterface pointer
+    # itself as its `this` argument.
+    host.register_contract(
+        ctypes.c_void_p(host_interface),
         ctypes.addressof(_DESC),
         ctypes.addressof(_INTERFACE),
     )
@@ -182,7 +195,7 @@ def polyplug_init(rt_ctx: int, host_vtable: int, _ctx: int) -> None:
 
 /// A Python plugin that defines `polyplug_init` but raises an exception inside it.
 const RAISING_PLUGIN_SRC: &str = r#"
-def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
+def polyplug_init(_host_interface: int, _ctx: int) -> None:
     raise RuntimeError("intentional test error")
 "#;
 
@@ -202,13 +215,13 @@ def polyplug_init(:
 const IMPORT_ERROR_PLUGIN_SRC: &str = r#"
 import _polyplug_nonexistent_module_xyz_123456
 
-def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
+def polyplug_init(_host_interface: int, _ctx: int) -> None:
     pass
 "#;
 
 /// A minimal no-op plugin (defines polyplug_init but does nothing).
 const NOOP_PLUGIN_SRC: &str = r#"
-def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
+def polyplug_init(_host_interface: int, _ctx: int) -> None:
     pass
 "#;
 
@@ -219,7 +232,7 @@ def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
 fn test_interpreter_initializes_without_panic() {
     let (_dir, path) = write_bundle("noop_init", NOOP_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "noop_init");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "unexpected error: {result:?}");
@@ -231,7 +244,7 @@ fn test_interpreter_initializes_without_panic() {
 fn test_default_config_version_check_passes() {
     let (_dir, path) = write_bundle("ver_check", NOOP_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::new(PythonConfig::default());
-    let runtime: Runtime = RuntimeBuilder::new()
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
         .loader(loader)
         .build()
         .expect("runtime build must succeed");
@@ -253,7 +266,7 @@ fn test_version_too_old_returns_version_mismatch() {
         min_version: (99, 0),
     };
     let loader: PythonLoader = PythonLoader::new(config.clone());
-    let runtime: Runtime = RuntimeBuilder::new()
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
         .loader(loader)
         .build()
         .expect("runtime build must succeed");
@@ -263,9 +276,11 @@ fn test_version_too_old_returns_version_mismatch() {
         .expect_err("expected version mismatch");
     match err {
         RuntimeError::Loader(LoaderError::InitFailed { bundle, error }) => {
-            assert!(
-                bundle.contains("bundle"),
-                "bundle name should contain 'bundle'; got: {bundle}"
+            // The version mismatch is a process-level Python check, not bundle
+            // specific; the loader reports it against the runtime name "python".
+            assert_eq!(
+                bundle, "python",
+                "version mismatch is reported against the runtime name; got: {bundle}"
             );
             assert!(
                 error.contains("version"),
@@ -286,7 +301,7 @@ fn test_version_too_old_returns_version_mismatch() {
 fn test_valid_plugin_registers_in_registry() {
     let (_dir, path) = write_bundle("valid_plugin", VALID_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "valid_plugin");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "load failed: {result:?}");
@@ -302,7 +317,7 @@ fn test_valid_plugin_registers_in_registry() {
 fn test_syntax_error_returns_module_import_failed() {
     let (_dir, path) = write_bundle("syntax_err", SYNTAX_ERROR_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "syntax_err");
     let err: RuntimeError = loader
         .load(&manifest, &runtime)
@@ -327,7 +342,7 @@ fn test_syntax_error_returns_module_import_failed() {
 fn test_import_error_returns_module_import_failed() {
     let (_dir, path) = write_bundle("import_err", IMPORT_ERROR_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "import_err");
     let err: RuntimeError = loader
         .load(&manifest, &runtime)
@@ -354,7 +369,7 @@ fn test_import_error_returns_module_import_failed() {
 fn test_missing_init_returns_init_symbol_missing() {
     let (_dir, path) = write_bundle("no_init", MISSING_INIT_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "no_init");
     let err: RuntimeError = loader
         .load(&manifest, &runtime)
@@ -375,7 +390,7 @@ fn test_missing_init_returns_init_symbol_missing() {
 fn test_raising_init_returns_init_raised_exception() {
     let (_dir, path) = write_bundle("raising_init", RAISING_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "raising_init");
     let err: RuntimeError = loader
         .load(&manifest, &runtime)
@@ -401,7 +416,7 @@ fn test_raising_init_returns_init_raised_exception() {
 fn test_nonexistent_path_returns_import_failed() {
     let dir: TempDir = TempDir::new().expect("tempdir");
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = ManifestData {
         id: 0,
         name: "does_not_exist".to_owned(),
@@ -437,7 +452,7 @@ fn test_nonexistent_path_returns_import_failed() {
 #[test]
 fn test_gil_released_between_sequential_loads() {
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     for i in 0u32..4u32 {
         let name: String = format!("gil_seq_{i}");
         let (_dir, path) = write_bundle(&name, NOOP_PLUGIN_SRC);
@@ -464,8 +479,8 @@ fn test_second_loader_reuses_interpreter() {
     let loader_a: PythonLoader = PythonLoader::default();
     let loader_b: PythonLoader = PythonLoader::default();
 
-    let runtime_a: Runtime = make_runtime();
-    let runtime_b: Runtime = make_runtime();
+    let runtime_a: Arc<Runtime> = make_runtime();
+    let runtime_b: Arc<Runtime> = make_runtime();
 
     let manifest1: ManifestData = make_manifest(&path1, "reuse1");
     let manifest2: ManifestData = make_manifest(&path2, "reuse2");
@@ -491,7 +506,7 @@ fn test_runtime_name() {
 fn test_plugin_path_with_underscore_digits_loads() {
     let (_dir, path) = write_bundle("plugin_42_ok", NOOP_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "plugin_42_ok");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
@@ -513,7 +528,7 @@ fn test_bundle_dir_added_to_sys_path() {
     let plugin_src: &str = r#"
 import my_helper
 
-def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
+def polyplug_init(_host_interface: int, _ctx: int) -> None:
     assert my_helper.HELPER_VALUE == 42
 "#;
     let path: PathBuf = dir.path().join("bundle.py");
@@ -530,7 +545,7 @@ file = "bundle.py"
     fs::write(dir.path().join("manifest.toml"), &manifest_toml).expect("write manifest.toml");
 
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = ManifestData {
         id: bundle_id("imports_helper"),
         name: "imports_helper".to_owned(),
@@ -561,7 +576,7 @@ fn test_site_packages_dir_added_to_sys_path() {
     let plugin_src: &str = r#"
 import fakelib
 
-def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
+def polyplug_init(_host_interface: int, _ctx: int) -> None:
     assert fakelib.FAKE == 99
 "#;
     let path: PathBuf = dir.path().join("bundle.py");
@@ -578,7 +593,7 @@ file = "bundle.py"
     fs::write(dir.path().join("manifest.toml"), &manifest_toml).expect("write manifest.toml");
 
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = ManifestData {
         id: bundle_id("uses_site_pkg"),
         name: "uses_site_pkg".to_owned(),
@@ -602,7 +617,7 @@ file = "bundle.py"
 fn test_error_contains_bundle_name() {
     let (_dir, path) = write_bundle("named_raising_plugin", RAISING_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "named_raising_plugin");
     let err: RuntimeError = loader
         .load(&manifest, &runtime)
@@ -625,9 +640,9 @@ class _StringView(ctypes.Structure):
     _fields_ = [("ptr", ctypes.c_void_p), ("len", ctypes.c_size_t)]
 
 class _BundleInitContext(ctypes.Structure):
-    _fields_ = [("bundle_path", _StringView), ("host_abi_version", ctypes.c_uint32), ("bundle_id", ctypes.c_uint64)]
+    _fields_ = [("bundle_id", ctypes.c_uint64), ("bundle_path", _StringView)]
 
-def polyplug_init(_rt_ctx: int, _host_vtable: int, ctx_addr: int) -> None:
+def polyplug_init(_host_interface: int, ctx_addr: int) -> None:
     ctx = _BundleInitContext.from_address(ctx_addr)
     # ptr must be non-null and len must be > 0
     assert ctx.bundle_path.ptr is not None and ctx.bundle_path.ptr != 0
@@ -636,7 +651,7 @@ def polyplug_init(_rt_ctx: int, _host_vtable: int, ctx_addr: int) -> None:
 
     let (_dir, path) = write_bundle("ctx_check", plugin_src);
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "ctx_check");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "context check plugin failed: {result:?}");
@@ -647,7 +662,7 @@ def polyplug_init(_rt_ctx: int, _host_vtable: int, ctx_addr: int) -> None:
 #[test]
 fn test_many_sequential_loads_no_state_leak() {
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
     for i in 0u32..16u32 {
         let name: String = format!("stress_{i}");
         let (_dir, path) = write_bundle(&name, NOOP_PLUGIN_SRC);
@@ -664,7 +679,7 @@ fn test_valid_load_after_failed_load_succeeds() {
     let (_dir1, bad_path) = write_bundle("bad_recover", SYNTAX_ERROR_PLUGIN_SRC);
     let (_dir2, good_path) = write_bundle("good_after_bad", NOOP_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Runtime = make_runtime();
+    let runtime: Arc<Runtime> = make_runtime();
 
     let bad_manifest: ManifestData = make_manifest(&bad_path, "bad_recover");
     let good_manifest: ManifestData = make_manifest(&good_path, "good_after_bad");

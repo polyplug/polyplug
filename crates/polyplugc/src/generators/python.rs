@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
-use super::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -157,7 +156,7 @@ fn generate_python_types_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import ClassVar\n");
-    out.push_str("from polyplug_guest.abi import StringView\n\n");
+    out.push_str("from polyplug_abi import StringView\n\n");
     if !ir.enums.is_empty() {
         out.push_str("import enum\n\n");
     }
@@ -192,7 +191,7 @@ fn generate_python_types_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import ClassVar\n");
-    out.push_str("from polyplug_guest.abi import Buffer, StringView\n\n");
+    out.push_str("from polyplug_abi import Buffer, StringView\n\n");
     if !ir.enums.is_empty() {
         out.push_str("import enum\n\n");
     }
@@ -225,7 +224,7 @@ fn generate_host_types_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import ClassVar\n\n");
-    out.push_str("from polyplug.abi import StringView\n\n");
+    out.push_str("from polyplug_abi import StringView\n\n");
     if !ir.enums.is_empty() {
         out.push_str("import enum\n\n");
     }
@@ -258,7 +257,7 @@ fn generate_host_types_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import ClassVar\n\n");
-    out.push_str("from polyplug.abi import StringView\n\n");
+    out.push_str("from polyplug_abi import StringView\n\n");
     if !ir.enums.is_empty() {
         out.push_str("import enum\n\n");
     }
@@ -291,7 +290,7 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional, TypeAlias\n\n");
-    out.push_str("from polyplug.abi import AbiErrorCode, NULL_HANDLE, GuestContractInterface, StringView\n\n");
+    out.push_str("from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostInterface, StringView\n\n");
 
     // ContractError class for host-side error handling
     out.push_str("class ContractError(Exception):\n");
@@ -327,20 +326,18 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("        ('message_len', ctypes.c_size_t),\n");
     out.push_str("    ]\n\n");
 
-    // Instance type for dispatch calls
-    out.push_str("# GuestContractInstance type for instance-based dispatch\n");
-    out.push_str("class _GuestContractInstance(ctypes.Structure):\n");
-    out.push_str("    _fields_ = [\n");
-    out.push_str("        ('data', ctypes.c_void_p),\n");
-    out.push_str("        ('contract_id', ctypes.c_uint64),\n");
-    out.push_str("    ]\n\n");
-
-    // Instance-based dispatch function type (instance, args, out)
+    // Native dispatch function type matching the canonical ABI signature
+    //   fn(instance: GuestContractInstance, args, out) -> AbiError
+    // emitted by the rust / cpp guest generators. The 24-byte AbiError return uses
+    // the System V sret convention; ctypes synthesizes the hidden sret pointer when
+    // the restype is a ctypes.Structure, so the logical signature is declared here.
+    // GuestContractInstance is the canonical type from polyplug_abi so it matches the
+    // instance returned by create_instance.
     out.push_str(
-        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, _GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)\n",
+        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)\n",
     );
     out.push_str(
-        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[_GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p], _AbiError]\n\n"
+        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p], _AbiError]\n\n"
     );
 
     for contract in &ir.contracts {
@@ -356,7 +353,7 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional\n\n");
-    out.push_str("from polyplug.abi import AbiErrorCode, NULL_HANDLE, GuestContractInterface, StringView\n\n");
+    out.push_str("from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostInterface, StringView\n\n");
     out.push_str("class ContractError(Exception): ...\n\n");
 
     // Contract ID constants in stub
@@ -372,12 +369,9 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
         out.push_str(&format!("from host.types import {}\n\n", import_list));
     }
 
-    // Instance type stub
-    out.push_str("class _GuestContractInstance(ctypes.Structure): ...\n\n");
-
     out.push_str("POLYPLUG_ABI_VERSION: int\n");
-    // Instance-based dispatch type (instance, args, out)
-    out.push_str("_DISPATCH_FN_TYPE = Callable[[_GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p], int]\n\n");
+    // Native dispatch type (instance, args, out) -> AbiError (sret handled by ctypes).
+    out.push_str("_DISPATCH_FN_TYPE = Callable[[GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p], int]\n\n");
 
     for contract in &ir.contracts {
         generate_host_caller_class_stub(&mut out, contract);
@@ -412,8 +406,8 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version\n");
-    out.push_str("from polyplug_guest import store_host_vtable\n\n");
+    out.push_str("from polyplug_abi import AbiErrorCode, AbiError, DispatchType, DispatchMechanisms, NativeDispatch, HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version\n");
+    out.push_str("from polyplug_guest import store_host_interface, _init_allocator\n\n");
     out.push_str("if TYPE_CHECKING:\n");
     out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
     out.push_str("    ctypes.POINTER = _CtypesPointer  # type: ignore[assignment]\n\n");
@@ -432,12 +426,32 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("        ('message_ptr', ctypes.c_void_p),\n");
     out.push_str("        ('message_len', ctypes.c_size_t),\n");
     out.push_str("    ]\n\n");
+    // GuestContractInstance passed by value as the first dispatch argument.
+    out.push_str("class _GuestContractInstance(ctypes.Structure):\n");
+    out.push_str("    _fields_ = [\n");
+    out.push_str("        ('data', ctypes.c_void_p),\n");
+    out.push_str("        ('contract_id', ctypes.c_uint64),\n");
+    out.push_str("    ]\n\n");
+    // Native dispatch matches the canonical ABI signature
+    //   fn(instance: GuestContractInstance, args, out) -> AbiError
+    // exactly as the rust / cpp guest generators emit. The 24-byte AbiError
+    // return uses the System V sret convention: a hidden pointer prepended before
+    // the declared parameters. ctypes callbacks cannot return a ctypes.Structure
+    // by value, so dispatch fns are declared void-return with the hidden sret
+    // pointer as an explicit leading parameter, and _wrap_sret memmoves the
+    // AbiError result into it.
     out.push_str(
-        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, ctypes.c_void_p, ctypes.c_void_p)\n",
+        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, _GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)\n",
     );
-    out.push_str(
-        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], _AbiError]\n\n",
-    );
+    out.push_str("_DISPATCH_FN_TYPE: TypeAlias = Callable[[int, int], _AbiError]\n");
+    out.push_str("_ABI_ERROR_SIZE: int = ctypes.sizeof(_AbiError)\n\n");
+    out.push_str("def _wrap_sret(impl: _DISPATCH_FN_TYPE) -> Callable[[int, _GuestContractInstance, int, int], None]:\n");
+    out.push_str("    \"\"\"Adapt an (args, out) -> _AbiError impl to the sret + instance convention.\"\"\"\n");
+    out.push_str("    def _sret_wrapper(sret_ptr: int, instance: _GuestContractInstance, args_ptr: int, out_ptr: int) -> None:\n");
+    out.push_str("        _ = instance  # stateless plugins ignore the instance handle\n");
+    out.push_str("        err: _AbiError = impl(args_ptr, out_ptr)\n");
+    out.push_str("        ctypes.memmove(sret_ptr, ctypes.addressof(err), _ABI_ERROR_SIZE)\n");
+    out.push_str("    return _sret_wrapper\n\n");
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -448,19 +462,14 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
                     &contract_full == contract_impl
                 }) {
                     generate_guest_plugin_trait(&mut out, &plugin.name, contract);
-                    generate_guest_plugin_interface(
-                        &mut out,
-                        &plugin.name,
-                        contract,
-                        is_native_runtime(&bundle.runtime),
-                    );
+                    generate_guest_plugin_interface(&mut out, &plugin.name, contract);
                 }
             }
         }
     } else {
         for contract in &ir.contracts {
             generate_guest_contract_trait(&mut out, contract);
-            generate_guest_contract_interface(&mut out, contract, true);
+            generate_guest_contract_interface(&mut out, contract);
         }
     }
 
@@ -477,7 +486,8 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("        return\n");
     out.push_str("    if ctx_ptr == 0:\n");
     out.push_str("        return\n");
-    out.push_str("    store_host_vtable(host_ptr)\n");
+    out.push_str("    store_host_interface(host_ptr)\n");
+    out.push_str("    _init_allocator(host_ptr, ctx_ptr)\n");
     out.push_str("    ctx: BundleInitContext = BundleInitContext.from_address(ctx_ptr)\n");
     out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))\n");
 
@@ -518,7 +528,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any\n");
-    out.push_str("from polyplug_guest.abi import HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView\n\n");
+    out.push_str("from polyplug_abi import HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -648,20 +658,22 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     out.push_str("            raise ValueError(\"Contract not found\")\n");
     out.push_str("        # Cast to GuestContractInterface pointer\n");
     out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
-    out.push_str("        # Create instance via factory function\n");
-    out.push_str("        self._instance: _GuestContractInstance = iface_ptr.contents.create_instance(host, None)\n");
-    out.push_str("        if self._instance.data is None:\n");
-    out.push_str("            raise ValueError(\"create_instance failed\")\n");
+    out.push_str("        # Create instance via factory function. A null instance is valid:\n");
+    out.push_str("        # stateless contracts return a null handle and use it as an opaque\n");
+    out.push_str("        # dispatch token. Validity is keyed off the interface pointer, never\n");
+    out.push_str("        # off instance data.\n");
+    out.push_str("        self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)\n");
     out.push_str("        self._host: ctypes.c_void_p = host\n\n");
 
     // __del__ destructor: calls destroy_instance
     out.push_str("    def __del__(self) -> None:\n");
     out.push_str("        \"\"\"Destroy instance via destroy_instance factory.\"\"\"\n");
-    out.push_str("        # SAFETY: instance was created by create_instance and is valid.\n");
-    out.push_str("        if self._instance.data is not None:\n");
+    out.push_str("        # SAFETY: the interface pointer is valid for the wrapper lifetime;\n");
+    out.push_str("        # destroy_instance tolerates a null instance for stateless contracts.\n");
+    out.push_str("        if getattr(self, \"_interface\", None):\n");
     out.push_str("            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
     out.push_str("            iface_ptr.contents.destroy_instance(self._host, self._instance)\n");
-    out.push_str("            self._instance.data = None  # Prevent reuse after cleanup.\n\n");
+    out.push_str("            self._interface = None  # Prevent reuse after cleanup.\n\n");
 
     // Factory method
     out.push_str("    @classmethod\n");
@@ -680,15 +692,14 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
 
     // is_valid check
     out.push_str("    def is_valid(self) -> bool:\n");
-    out.push_str("        \"\"\"Check if instance is valid (non-null data).\"\"\"\n");
-    out.push_str("        return self._instance.data is not None\n\n");
+    out.push_str("        \"\"\"Check if this caller holds a resolved contract interface.\"\"\"\n");
+    out.push_str("        return bool(getattr(self, \"_interface\", None))\n\n");
 
     // reset method
     out.push_str("    def reset(self) -> None:\n");
     out.push_str("        \"\"\"Destroy current instance and create a new one.\"\"\"\n");
     out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
-    out.push_str("        if self._instance.data is not None:\n");
-    out.push_str("            iface_ptr.contents.destroy_instance(self._host, self._instance)\n");
+    out.push_str("        iface_ptr.contents.destroy_instance(self._host, self._instance)\n");
     out.push_str(
         "        self._instance = iface_ptr.contents.create_instance(self._host, None)\n\n",
     );
@@ -713,12 +724,12 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     emit_python_host_args_setup(out, func, contract_struct);
     emit_python_host_out_setup(out, &func.returns);
 
-    // Instance-based dispatch: use interface_ and instance_
-    out.push_str("        # SAFETY: interface_ is valid for the lifetime of this wrapper.\n");
+    // Native dispatch: read the function pointer array from the resolved interface.
+    out.push_str("        # SAFETY: the interface pointer is valid for the wrapper lifetime.\n");
     out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
     out.push_str("        interface: GuestContractInterface = iface_ptr.contents\n");
     out.push_str(&format!(
-        "        if {fn_id} >= interface.function_count:\n"
+        "        if {fn_id} >= interface.dispatch.native.function_count:\n"
     ));
     out.push_str("            raise RuntimeError(\"function not available in interface\")\n");
     out.push_str("        functions_ptr: int = interface.dispatch.native.functions\n");
@@ -728,9 +739,12 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     out.push_str(
         "        dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
     );
-    // Instance-based dispatch: pass instance as first argument
-    out.push_str("        # SAFETY: instance_ was created by create_instance and is valid.\n");
-    out.push_str("        # args_ptr points to valid args, out_ptr points to valid return type per ABI contract.\n");
+    // Native dispatch passes the instance handle by value as the first argument,
+    // matching the canonical fn(instance, args, out) -> AbiError signature.
+    out.push_str("        # SAFETY: instance is valid for the wrapper lifetime; args_ptr points\n");
+    out.push_str(
+        "        # to valid args, out_ptr to a valid return-type buffer per the ABI contract.\n",
+    );
     out.push_str("        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)\n");
     out.push_str("        if err.code != AbiErrorCode.Ok:\n");
     out.push_str("            raise RuntimeError(\"polyplug call failed\")\n");
@@ -781,12 +795,16 @@ fn emit_python_host_args_setup(out: &mut String, func: &ResolvedFunction, contra
         let param: &ResolvedParam = &func.params[0];
         let ty_name: String = python_type_name(&param.ty);
         match &param.ty {
-            ResolvedTypeRef::UserDefined(_) => {
+            // Struct-like params (user-defined structs, StringView, Buffer) are passed
+            // by the caller as ctypes Structures already — take their address directly.
+            ResolvedTypeRef::UserDefined(_)
+            | ResolvedTypeRef::AbiType(AbiBuiltin::StringView | AbiBuiltin::Buffer) => {
                 out.push_str(&format!(
                     "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref({}), ctypes.c_void_p)\n",
                     param.name
                 ));
             }
+            // Scalar params arrive as Python values; wrap them in their ctypes scalar.
             _ => {
                 out.push_str(&format!(
                     "        {name}_val: {ty} = {ty}({name})\n",
@@ -871,18 +889,17 @@ fn generate_guest_contract_trait(out: &mut String, contract: &ResolvedContract) 
 }
 
 fn generate_guest_plugin_trait(out: &mut String, plugin_name: &str, contract: &ResolvedContract) {
-    let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
-    let trait_name: String = contract_name_to_guest_trait(&contract.name);
-    out.push_str(&format!("class {plugin_upper}{trait_name}:\n"));
+    let class_name: String = plugin_guest_trait_name(plugin_name, &contract.name);
+    out.push_str(&format!("class {class_name}:\n"));
     for func in &contract.functions {
         generate_guest_trait_method(out, func, &contract_name_to_struct(&contract.name));
     }
     out.push_str(&format!(
-        "\n_{plugin_lower}_IMPL: {plugin_upper}{trait_name} | None = None\n"
+        "\n_{plugin_lower}_IMPL: {class_name} | None = None\n"
     ));
     out.push_str(&format!(
-        "def set_{plugin_lower}_impl(impl: {plugin_upper}{trait_name}) -> None:\n"
+        "def set_{plugin_lower}_impl(impl: {class_name}) -> None:\n"
     ));
     out.push_str(&format!("    global _{plugin_lower}_IMPL\n"));
     out.push_str(&format!("    _{plugin_lower}_IMPL = impl\n\n"));
@@ -911,11 +928,7 @@ fn generate_guest_trait_stub_method(
     ));
 }
 
-fn generate_guest_contract_interface(
-    out: &mut String,
-    contract: &ResolvedContract,
-    is_native: bool,
-) {
+fn generate_guest_contract_interface(out: &mut String, contract: &ResolvedContract) {
     let upper: String = contract_name_to_upper_snake(&contract.name);
     let lower: String = contract.name.replace('.', "_");
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
@@ -926,12 +939,6 @@ fn generate_guest_contract_interface(
     let version_major: u32 = contract.version.major;
     let version_minor: u32 = contract.version.minor;
     let version_patch: u32 = contract.version.patch;
-    let contract_version: u32 = (version_minor << 16) | version_patch;
-    let dispatch_type: &str = if is_native {
-        "DispatchType.Native"
-    } else {
-        "DispatchType.VirtualMachine"
-    };
 
     out.push_str(&format!(
         "{upper}_PLUGIN_NAME_BYTES: bytes = b\"{plugin_name}\"\n"
@@ -940,10 +947,10 @@ fn generate_guest_contract_interface(
         "{upper}_CONTRACT_NAME_BYTES: bytes = b\"{contract_name}\"\n"
     ));
     out.push_str(&format!(
-        "{upper}_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p({upper}_PLUGIN_NAME_BYTES)\n"
+        "{upper}_PLUGIN_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p({upper}_PLUGIN_NAME_BYTES), ctypes.c_void_p)\n"
     ));
     out.push_str(&format!(
-        "{upper}_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p({upper}_CONTRACT_NAME_BYTES)\n"
+        "{upper}_CONTRACT_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p({upper}_CONTRACT_NAME_BYTES), ctypes.c_void_p)\n"
     ));
     out.push_str(&format!(
         "{upper}_DESCRIPTOR: PluginDescriptor = PluginDescriptor(\n"
@@ -960,21 +967,17 @@ fn generate_guest_contract_interface(
         let has_return: bool = has_return_value(&func.returns);
         let has_params: bool = !func.params.is_empty();
         out.push_str(&format!(
-            "def {abi_name}(instance: _GuestContractInstance, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
+            "def {abi_name}(args_ptr: int, out_ptr: int) -> _AbiError:\n"
         ));
-        out.push_str("    # Instance is ignored for stateless plugins (instance.data is null).\n");
-        out.push_str(
-            "    # For stateful plugins, users override create_instance and use instance.data.\n",
-        );
         out.push_str(&format!("    impl: {trait_name} | None = _{upper}_IMPL\n"));
         out.push_str("    if impl is None:\n");
         out.push_str("        return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)\n");
         if has_params {
-            out.push_str("    if args_ptr.value is None or args_ptr.value == 0:\n");
+            out.push_str("    if not args_ptr:\n");
             out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
         }
         if has_return {
-            out.push_str("    if out_ptr.value is None or out_ptr.value == 0:\n");
+            out.push_str("    if not out_ptr:\n");
             out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
         }
         emit_guest_abi_args_unpack(out, func, &struct_name);
@@ -982,7 +985,7 @@ fn generate_guest_contract_interface(
         emit_guest_abi_return(out, func);
         out.push('\n');
         out.push_str(&format!(
-            "{upper}_{abi_name}_CFUNC = _DISPATCH_FN_CTYPE({abi_name})\n\n"
+            "{upper}_{abi_name}_CFUNC = _DISPATCH_FN_CTYPE(_wrap_sret({abi_name}))\n\n"
         ));
     }
 
@@ -995,32 +998,12 @@ fn generate_guest_contract_interface(
     }
     out.push_str(")\n\n");
 
-    // Instance lifecycle stubs
-    out.push_str(&format!(
-        "# Default create_instance stub for {} - returns null instance.\n",
-        contract.name
-    ));
-    out.push_str("def _guest_contract_instance_null() -> _GuestContractInstance:\n");
-    out.push_str("    return _GuestContractInstance(data=ctypes.c_void_p(0))\n\n");
-    out.push_str(&format!(
-        "def {upper}_create_instance_stub(host: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:\n"
-    ));
-    out.push_str(
-        "    # Default stub returns null instance - users override for stateful plugins.\n",
-    );
-    out.push_str("    return _guest_contract_instance_null()\n\n");
-    out.push_str(&format!(
-        "def {upper}_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContractInstance) -> None:\n"
-    ));
-    out.push_str("    # Default stub is no-op - users override for cleanup before hot-reload.\n");
-    out.push_str("    pass\n\n");
-    out.push_str(&format!(
-        "{upper}_CREATE_INSTANCE_CFUNC = _CREATE_INSTANCE_FN_CTYPE({upper}_create_instance_stub)\n"
-    ));
-    out.push_str(&format!(
-        "{upper}_DESTROY_INSTANCE_CFUNC = _DESTROY_INSTANCE_FN_CTYPE({upper}_destroy_instance_stub)\n\n"
-    ));
-
+    // Native dispatch with no instance lifecycle: create_instance /
+    // destroy_instance are left as their default NULL function pointers (ctypes
+    // callbacks cannot return the 16-byte GuestContractInstance struct by value,
+    // so they cannot be expressed in Python). The host runtime substitutes
+    // built-in stateless stubs for null lifecycle pointers at registration time,
+    // so host callers can still safely call create_instance / destroy_instance.
     out.push_str(&format!(
         "{upper}_INTERFACE: GuestContractInterface = GuestContractInterface(\n"
     ));
@@ -1028,16 +1011,12 @@ fn generate_guest_contract_interface(
         "    contract_id=0x{:016X},\n",
         contract.contract_id
     ));
-    out.push_str(&format!("    contract_version={contract_version},\n"));
-    out.push_str(&format!("    dispatch_type={dispatch_type},\n"));
     out.push_str(&format!(
-        "    create_instance=ctypes.cast({upper}_CREATE_INSTANCE_CFUNC, ctypes.c_void_p),\n"
+        "    contract_version=Version(major={version_major}, minor={version_minor}, patch={version_patch}),\n"
     ));
-    out.push_str(&format!(
-        "    destroy_instance=ctypes.cast({upper}_DESTROY_INSTANCE_CFUNC, ctypes.c_void_p),\n"
-    ));
-    out.push_str("    dispatch=_PluginDispatch(\n");
-    out.push_str("        native=_NativeDispatch(\n");
+    out.push_str("    dispatch_type=DispatchType.Native,\n");
+    out.push_str("    dispatch=DispatchMechanisms(\n");
+    out.push_str("        native=NativeDispatch(\n");
     out.push_str(&format!("            function_count={fn_count},\n"));
     out.push_str(&format!(
         "            functions=ctypes.cast({upper}_FNS, ctypes.c_void_p),\n"
@@ -1051,23 +1030,16 @@ fn generate_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
-    is_native: bool,
 ) {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
-    let trait_name: String = contract_name_to_guest_trait(&contract.name);
+    let plugin_class: String = plugin_guest_trait_name(plugin_name, &contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
     let fn_count: usize = contract.functions.len();
     let contract_name: String = format!("{}@{}", contract.name, contract.version.major);
     let version_major: u32 = contract.version.major;
     let version_minor: u32 = contract.version.minor;
     let version_patch: u32 = contract.version.patch;
-    let contract_version: u32 = (version_minor << 16) | version_patch;
-    let dispatch_type: &str = if is_native {
-        "DispatchType.Native"
-    } else {
-        "DispatchType.VirtualMachine"
-    };
 
     out.push_str(&format!(
         "{plugin_upper}_PLUGIN_NAME_BYTES: bytes = b\"{plugin_name}\"\n"
@@ -1076,10 +1048,10 @@ fn generate_guest_plugin_interface(
         "{plugin_upper}_CONTRACT_NAME_BYTES: bytes = b\"{contract_name}\"\n"
     ));
     out.push_str(&format!(
-        "{plugin_upper}_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p({plugin_upper}_PLUGIN_NAME_BYTES)\n"
+        "{plugin_upper}_PLUGIN_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p({plugin_upper}_PLUGIN_NAME_BYTES), ctypes.c_void_p)\n"
     ));
     out.push_str(&format!(
-        "{plugin_upper}_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p({plugin_upper}_CONTRACT_NAME_BYTES)\n"
+        "{plugin_upper}_CONTRACT_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p({plugin_upper}_CONTRACT_NAME_BYTES), ctypes.c_void_p)\n"
     ));
     out.push_str(&format!(
         "{plugin_upper}_DESCRIPTOR: PluginDescriptor = PluginDescriptor(\n"
@@ -1096,23 +1068,19 @@ fn generate_guest_plugin_interface(
         let has_return: bool = has_return_value(&func.returns);
         let has_params: bool = !func.params.is_empty();
         out.push_str(&format!(
-            "def {abi_name}(instance: _GuestContractInstance, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
+            "def {abi_name}(args_ptr: int, out_ptr: int) -> _AbiError:\n"
         ));
-        out.push_str("    # Instance is ignored for stateless plugins (instance.data is null).\n");
-        out.push_str(
-            "    # For stateful plugins, users override create_instance and use instance.data.\n",
-        );
         out.push_str(&format!(
-            "    impl: {plugin_upper}{trait_name} | None = _{plugin_lower}_IMPL\n"
+            "    impl: {plugin_class} | None = _{plugin_lower}_IMPL\n"
         ));
         out.push_str("    if impl is None:\n");
         out.push_str("        return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)\n");
         if has_params {
-            out.push_str("    if args_ptr.value is None or args_ptr.value == 0:\n");
+            out.push_str("    if not args_ptr:\n");
             out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
         }
         if has_return {
-            out.push_str("    if out_ptr.value is None or out_ptr.value == 0:\n");
+            out.push_str("    if not out_ptr:\n");
             out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
         }
         emit_guest_abi_args_unpack(out, func, &struct_name);
@@ -1120,7 +1088,7 @@ fn generate_guest_plugin_interface(
         emit_guest_abi_return(out, func);
         out.push('\n');
         out.push_str(&format!(
-            "{plugin_upper}_{abi_name}_CFUNC = _DISPATCH_FN_CTYPE({abi_name})\n\n"
+            "{plugin_upper}_{abi_name}_CFUNC = _DISPATCH_FN_CTYPE(_wrap_sret({abi_name}))\n\n"
         ));
     }
 
@@ -1135,30 +1103,12 @@ fn generate_guest_plugin_interface(
     }
     out.push_str(")\n\n");
 
-    // Instance lifecycle stubs
-    out.push_str(&format!(
-        "# Default create_instance stub for {} - returns null instance.\n",
-        plugin_name
-    ));
-    out.push_str(&format!(
-        "def {plugin_upper}_create_instance_stub(host: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:\n"
-    ));
-    out.push_str(
-        "    # Default stub returns null instance - users override for stateful plugins.\n",
-    );
-    out.push_str("    return _GuestContractInstance(data=ctypes.c_void_p(0))\n\n");
-    out.push_str(&format!(
-        "def {plugin_upper}_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContractInstance) -> None:\n"
-    ));
-    out.push_str("    # Default stub is no-op - users override for cleanup before hot-reload.\n");
-    out.push_str("    pass\n\n");
-    out.push_str(&format!(
-        "{plugin_upper}_CREATE_INSTANCE_CFUNC = _CREATE_INSTANCE_FN_CTYPE({plugin_upper}_create_instance_stub)\n"
-    ));
-    out.push_str(&format!(
-        "{plugin_upper}_DESTROY_INSTANCE_CFUNC = _DESTROY_INSTANCE_FN_CTYPE({plugin_upper}_destroy_instance_stub)\n\n"
-    ));
-
+    // Native dispatch with no instance lifecycle: create_instance /
+    // destroy_instance are left as their default NULL function pointers (ctypes
+    // callbacks cannot return the 16-byte GuestContractInstance struct by value,
+    // so they cannot be expressed in Python). The host runtime substitutes
+    // built-in stateless stubs for null lifecycle pointers at registration time,
+    // so host callers can still safely call create_instance / destroy_instance.
     out.push_str(&format!(
         "{plugin_upper}_INTERFACE: GuestContractInterface = GuestContractInterface(\n"
     ));
@@ -1166,16 +1116,12 @@ fn generate_guest_plugin_interface(
         "    contract_id=0x{:016X},\n",
         contract.contract_id
     ));
-    out.push_str(&format!("    contract_version={contract_version},\n"));
-    out.push_str(&format!("    dispatch_type={dispatch_type},\n"));
     out.push_str(&format!(
-        "    create_instance=ctypes.cast({plugin_upper}_CREATE_INSTANCE_CFUNC, ctypes.c_void_p),\n"
+        "    contract_version=Version(major={version_major}, minor={version_minor}, patch={version_patch}),\n"
     ));
-    out.push_str(&format!(
-        "    destroy_instance=ctypes.cast({plugin_upper}_DESTROY_INSTANCE_CFUNC, ctypes.c_void_p),\n"
-    ));
-    out.push_str("    dispatch=_PluginDispatch(\n");
-    out.push_str("        native=_NativeDispatch(\n");
+    out.push_str("    dispatch_type=DispatchType.Native,\n");
+    out.push_str("    dispatch=DispatchMechanisms(\n");
+    out.push_str("        native=NativeDispatch(\n");
     out.push_str(&format!("            function_count={fn_count},\n"));
     out.push_str(&format!(
         "            functions=ctypes.cast({plugin_upper}_FNS, ctypes.c_void_p),\n"
@@ -1193,38 +1139,18 @@ fn emit_guest_abi_args_unpack(out: &mut String, func: &ResolvedFunction, contrac
     if func.params.len() == 1 {
         let param: &ResolvedParam = &func.params[0];
         let ty_name: String = python_type_name(&param.ty);
-        match &param.ty {
-            ResolvedTypeRef::UserDefined(_) => {
-                out.push_str(&format!(
-                    "    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER({ty}))\n",
-                    ty = ty_name
-                ));
-                out.push_str(&format!(
-                    "    {name}: {ty} = args_ptr_t.contents\n",
-                    name = param.name,
-                    ty = ty_name
-                ));
-            }
-            _ => {
-                out.push_str(&format!(
-                    "    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER({ty}))\n",
-                    ty = ty_name
-                ));
-                out.push_str(&format!(
-                    "    {name}: {ty} = args_ptr_t.contents\n",
-                    name = param.name,
-                    ty = ty_name
-                ));
-            }
-        }
+        out.push_str(&format!(
+            "    {name}: {ty} = {ty}.from_address(args_ptr)\n",
+            name = param.name,
+            ty = ty_name
+        ));
         return;
     }
     let pack_struct: String = arg_pack_struct_name(contract_struct, &func.name);
     out.push_str(&format!(
-        "    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER({pack_struct}))\n",
+        "    args_val: {pack_struct} = {pack_struct}.from_address(args_ptr)\n",
         pack_struct = pack_struct
     ));
-    out.push_str("    args_val = args_ptr_t.contents\n");
     for param in &func.params {
         out.push_str(&format!("    {} = args_val.{}\n", param.name, param.name));
     }
@@ -1258,7 +1184,7 @@ fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction) {
     }
     let ret_ty: String = python_return_type(&func.returns);
     out.push_str(&format!(
-        "    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER({ret_ty}))\n"
+        "    out_ptr_t: Any = ctypes.cast(ctypes.c_void_p(out_ptr), ctypes.POINTER({ret_ty}))\n"
     ));
     out.push_str("    out_ptr_t[0] = result\n");
     out.push_str(
@@ -1336,9 +1262,8 @@ fn contract_name_to_struct(name: &str) -> String {
     format!("{converted}Contract")
 }
 
-fn contract_name_to_guest_trait(name: &str) -> String {
-    let base: String = name
-        .split('.')
+fn contract_name_to_camel(name: &str) -> String {
+    name.split('.')
         .map(|p: &str| {
             let mut chars: core::str::Chars<'_> = p.chars();
             match chars.next() {
@@ -1347,8 +1272,21 @@ fn contract_name_to_guest_trait(name: &str) -> String {
             }
         })
         .collect::<Vec<_>>()
-        .join("");
-    format!("{base}GuestContract")
+        .join("")
+}
+
+fn contract_name_to_guest_trait(name: &str) -> String {
+    format!("{}GuestContract", contract_name_to_camel(name))
+}
+
+/// Per-plugin guest trait class name, e.g. `DECODERPipelineDecoderPlugin`.
+/// Matches the names the hand-authored example guests import.
+fn plugin_guest_trait_name(plugin_name: &str, contract_name: &str) -> String {
+    let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
+    format!(
+        "{plugin_upper}{}Plugin",
+        contract_name_to_camel(contract_name)
+    )
 }
 
 fn contract_name_to_upper_snake(name: &str) -> String {
@@ -1712,14 +1650,8 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
     } else {
         out.push_str("            return\n");
     }
-    out.push_str("        header: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractVTable)).contents.header\n");
-    out.push_str(&format!("        if {fn_id} >= header.function_count:\n"));
-    if has_return {
-        out.push_str("            return None\n");
-    } else {
-        out.push_str("            return\n");
-    }
-    out.push_str("        dispatch_type: int = header.dispatch_type\n");
+    out.push_str("        iface: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractInterface)).contents\n");
+    out.push_str("        dispatch_type: int = iface.dispatch_type\n");
 
     emit_python_guest_host_contract_args_setup(out, func);
     emit_python_guest_host_contract_out_setup(out, &func.returns);
@@ -1727,10 +1659,10 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
     out.push_str("        err: AbiError\n");
     out.push_str("        if dispatch_type == DispatchType.Native:\n");
     out.push_str(&format!(
-        "            fn_ptr: int = ctypes.cast(header.dispatch.native.functions + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
+        "            fn_ptr: int = ctypes.cast(iface.dispatch.native.functions + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
     ));
     out.push_str(
-        "            impl_ptr: int = ctypes.cast(header.dispatch.native.impl_ptr, ctypes.c_void_p).value\n"
+        "            impl_ptr: int = ctypes.cast(iface.dispatch.native.impl_ptr, ctypes.c_void_p).value\n"
     );
     out.push_str(
         "            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
@@ -1738,7 +1670,7 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
     out.push_str("            err = dispatch_fn(impl_ptr, args_ptr, out_ptr)\n");
     out.push_str("        elif dispatch_type == DispatchType.VirtualMachine:\n");
     out.push_str(&format!(
-        "            err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr)\n"
+        "            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr)\n"
     ));
     out.push_str("        else:\n");
     if has_return {
@@ -1774,7 +1706,7 @@ fn emit_python_guest_host_contract_args_setup(out: &mut String, func: &ResolvedF
                     name = param.name
                 ));
                 out.push_str(&format!(
-                    "        {name}_view: StringView = StringView(ptr=ctypes.c_char_p({name}_bytes), len=len({name}_bytes))\n",
+                    "        {name}_view: StringView = StringView(ptr=ctypes.cast(ctypes.c_char_p({name}_bytes), ctypes.c_void_p), len=len({name}_bytes))\n",
                     name = param.name
                 ));
                 out.push_str(&format!(
@@ -1824,7 +1756,7 @@ fn emit_python_guest_host_contract_args_setup(out: &mut String, func: &ResolvedF
                     name = param.name
                 ));
                 out.push_str(&format!(
-                    "        args_val['{name}'] = StringView(ptr=ctypes.c_char_p({name}_bytes), len=len({name}_bytes))\n",
+                    "        args_val['{name}'] = StringView(ptr=ctypes.cast(ctypes.c_char_p({name}_bytes), ctypes.c_void_p), len=len({name}_bytes))\n",
                     name = param.name
                 ));
             }
@@ -1877,7 +1809,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Self\n");
-    out.push_str("from polyplug_guest.abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractVTable, HostInterface, StringView\n\n");
+    out.push_str("from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractInterface, HostInterface, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_guest_host_contract_type_imports(ir);
     if !type_imports.is_empty() {
@@ -2155,17 +2087,17 @@ fn generate_python_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Any\n");
-    out.push_str("from polyplug.abi import (\n");
-    out.push_str("    HostContractVTable,\n");
-    out.push_str("    HostContractVTableHeader,\n");
-    out.push_str("    HostContractDispatch,\n");
-    out.push_str("    NativeHostContractDispatch,\n");
-    out.push_str("    VmHostContractDispatch,\n");
-    out.push_str("    DispatchType,\n");
-    out.push_str("    StringView,\n");
-    out.push_str("    Buffer,\n");
+    out.push_str("from polyplug_abi import (\n");
     out.push_str("    AbiError,\n");
     out.push_str("    AbiErrorCode,\n");
+    out.push_str("    Buffer,\n");
+    out.push_str("    DispatchMechanisms,\n");
+    out.push_str("    DispatchType,\n");
+    out.push_str("    HostContractInterface,\n");
+    out.push_str("    NativeDispatch,\n");
+    out.push_str("    StringView,\n");
+    out.push_str("    Version,\n");
+    out.push_str("    VmDispatch,\n");
     out.push_str(")\n");
     out.push_str("from host.contracts import *\n\n");
 
@@ -2187,11 +2119,11 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
         "create_{}_interface_vm",
         contract.name.replace('.', "_").to_lowercase()
     );
-    let fn_count: usize = contract.functions.len();
     let contract_id: u64 = contract.contract_id;
     let major: u32 = contract.version.major;
     let minor: u32 = contract.version.minor;
     let singleton: bool = contract.singleton;
+    let fn_count: usize = contract.functions.len();
 
     // NATIVE dispatch factory
     out.push_str(&format!(
@@ -2205,7 +2137,7 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     out.push_str("# Memory:\n");
     out.push_str("# The returned interface is cached and lives for the lifetime of the program.\n");
     out.push_str(&format!(
-        "def {factory_name}(impl: {class_name}) -> HostContractVTable:\n"
+        "def {factory_name}(impl: {class_name}) -> HostContractInterface:\n"
     ));
     out.push_str(&format!("    global _{class_name}_impl\n"));
     out.push_str(&format!("    _{class_name}_impl = impl\n\n"));
@@ -2229,24 +2161,29 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     }
     out.push_str("    ]\n\n");
 
-    // Create the interface
-    out.push_str("    interface = HostContractVTable(\n");
-    out.push_str("        header=HostContractVTableHeader(\n");
-    out.push_str("            vtable_version=1,\n");
-    out.push_str(&format!("            contract_id=0x{contract_id:016X},\n"));
-    out.push_str(&format!("            contract_major={major},\n"));
-    out.push_str(&format!("            contract_minor={minor},\n"));
-    out.push_str(&format!("            function_count={fn_count},\n"));
-    out.push_str(&format!("            singleton={singleton},\n"));
-    out.push_str("            dispatch_type=DispatchType.Native,\n");
-    out.push_str("        ),\n");
-    out.push_str("        dispatch=HostContractDispatch(\n");
-    out.push_str("            native=NativeHostContractDispatch(\n");
-    out.push_str("                impl_ptr=0,  # We use global _impl instead\n");
-    out.push_str("                functions=functions,\n");
-    out.push_str("            ),\n");
-    out.push_str("        ),\n");
-    out.push_str("    )\n\n");
+    // Create the interface using the real ABI struct
+    out.push_str("    interface = HostContractInterface()\n");
+    out.push_str(&format!(
+        "    interface.contract_id = 0x{contract_id:016X}\n"
+    ));
+    out.push_str(&format!(
+        "    interface.contract_version = Version(major={major}, minor={minor}, patch=0)\n"
+    ));
+    out.push_str(&format!("    interface.singleton = {singleton}\n"));
+    out.push_str("    interface.dispatch_type = DispatchType.Native\n");
+    out.push_str("    interface.runtime = 0  # Set by runtime during registration\n");
+    out.push_str(
+        "    interface.create_instance = ctypes.cast(None, type(interface.create_instance))\n",
+    );
+    out.push_str(
+        "    interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))\n",
+    );
+    out.push_str(&format!(
+        "    interface.dispatch.native.function_count = {fn_count}\n"
+    ));
+    out.push_str(
+        "    interface.dispatch.native.functions = ctypes.cast(functions, ctypes.c_void_p)\n\n",
+    );
     out.push_str("    return interface\n\n");
 
     // Global implementation storage
@@ -2269,26 +2206,26 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     out.push_str("# Memory:\n");
     out.push_str("# The returned interface is cached and lives for the lifetime of the program.\n");
     out.push_str(&format!("def {factory_vm_name}(\n"));
-    out.push_str("    bridge_data: int,\n");
-    out.push_str("    dispatch_fn: Callable[[int, int, int, int], AbiError],\n");
-    out.push_str(") -> HostContractVTable:\n");
-    out.push_str("    interface = HostContractVTable(\n");
-    out.push_str("        header=HostContractVTableHeader(\n");
-    out.push_str("            vtable_version=1,\n");
-    out.push_str(&format!("            contract_id=0x{contract_id:016X},\n"));
-    out.push_str(&format!("            contract_major={major},\n"));
-    out.push_str(&format!("            contract_minor={minor},\n"));
-    out.push_str(&format!("            function_count={fn_count},\n"));
-    out.push_str(&format!("            singleton={singleton},\n"));
-    out.push_str("            dispatch_type=DispatchType.VirtualMachine,\n");
-    out.push_str("        ),\n");
-    out.push_str("        dispatch=HostContractDispatch(\n");
-    out.push_str("            vm=VmHostContractDispatch(\n");
-    out.push_str("                call=dispatch_fn,\n");
-    out.push_str("                bridge_data=bridge_data,\n");
-    out.push_str("            ),\n");
-    out.push_str("        ),\n");
-    out.push_str("    )\n\n");
+    out.push_str("    dispatch_fn: Callable[[int, int, int, int], int],\n");
+    out.push_str(") -> HostContractInterface:\n");
+    out.push_str("    interface = HostContractInterface()\n");
+    out.push_str(&format!(
+        "    interface.contract_id = 0x{contract_id:016X}\n"
+    ));
+    out.push_str(&format!(
+        "    interface.contract_version = Version(major={major}, minor={minor}, patch=0)\n"
+    ));
+    out.push_str(&format!("    interface.singleton = {singleton}\n"));
+    out.push_str("    interface.dispatch_type = DispatchType.VirtualMachine\n");
+    out.push_str("    interface.runtime = 0  # Set by runtime during registration\n");
+    out.push_str(
+        "    interface.create_instance = ctypes.cast(None, type(interface.create_instance))\n",
+    );
+    out.push_str(
+        "    interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))\n",
+    );
+    out.push_str("    interface.dispatch.vm.call = ctypes.cast(dispatch_fn, type(interface.dispatch.vm.call))\n");
+    out.push_str("    interface.dispatch.vm.loader_data = VmDispatch().loader_data\n\n");
     out.push_str("    return interface\n\n");
 }
 
@@ -2932,7 +2869,7 @@ mod tests {
             bundle: None,
         };
         let result: String = generate_guest_host_contracts_file(&ir);
-        assert!(result.contains("from polyplug_guest.abi import"));
+        assert!(result.contains("from polyplug_abi import"));
         assert!(!result.contains("class"));
     }
 

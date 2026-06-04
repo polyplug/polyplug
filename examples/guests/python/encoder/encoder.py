@@ -5,7 +5,7 @@ from generated.guest.contracts import (
     polyplug_init,
 )
 from polyplug_guest import alloc_string
-from polyplug_abi.helpers import strip_prefix
+from polyplug_abi import strip_prefix
 
 
 class EncoderImpl(ENCODERPipelineEncoderPlugin):

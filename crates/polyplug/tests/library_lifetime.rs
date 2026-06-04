@@ -11,6 +11,11 @@ use polyplug::loader::ManifestData;
 use polyplug::loader::parse_manifest;
 use polyplug::runtime::Runtime;
 use polyplug_utils::bundle_id;
+use std::sync::Arc;
+
+mod common;
+
+use common::TestNativeLoader;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
@@ -31,8 +36,10 @@ fn library_handle_outlives_load_call() {
         parse_manifest(plugin_dir).expect("parse_manifest for test_plugin_dir");
     manifest.id = bundle_id(&manifest.name);
 
-    // Create a runtime with default settings
-    let runtime: Runtime = Runtime::builder()
+    // Create a runtime with a native loader registered (the core crate is
+    // loader-agnostic, so loading native bundles requires registering one).
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .loader(TestNativeLoader::new())
         .build()
         .expect("runtime build should succeed");
 

@@ -12,7 +12,7 @@ use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
 
-use polyplug::registry::runtime_store::RuntimeStore;
+use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
@@ -27,7 +27,6 @@ use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_utils::BundleId;
-use polyplug_utils::GuestContractId;
 
 // ─── Plugin paths from build.rs ──────────────────────────────────────────────
 
@@ -92,6 +91,10 @@ unsafe extern "C" fn bench_register_callback(
             // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
             let borrowed = cell.borrow();
             let registry = borrowed.as_ref().expect("registry not initialized");
+            // SAFETY: `interface` is a 'static pointer captured from a loaded plugin library
+            // that outlives the registry, and `desc` is valid for the duration of this call
+            // per the register_contract ABI contract, so register_guest_contract's
+            // preconditions are met.
             unsafe {
                 registry.register_guest_contract(
                     *desc,
@@ -114,23 +117,6 @@ unsafe extern "C" fn bench_register_callback(
             message: StringView::null(),
         },
     }
-}
-
-// ─── Instance lifecycle stubs for benchmarks ──────────────────────────────────
-
-/// Stub create_instance for benchmarks - returns null instance.
-unsafe extern "C" fn bench_create_instance(
-    _this: *const HostInterface,
-    _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
-}
-
-/// Stub destroy_instance for benchmarks - no cleanup needed.
-unsafe extern "C" fn bench_destroy_instance(
-    _this: *const HostInterface,
-    _instance: GuestContractInstance,
-) {
 }
 
 // ─── Stub HostInterface functions for cross-plugin dispatch ──────────────────────
@@ -228,6 +214,67 @@ unsafe extern "C" fn bench_get_dependencies(
     Array::empty()
 }
 
+/// load_bundle stub — returns error (not used in benches).
+unsafe extern "C" fn bench_load_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Generic,
+        message: StringView::null(),
+    }
+}
+
+/// reload_bundle stub — returns error (not used in benches).
+unsafe extern "C" fn bench_reload_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Generic,
+        message: StringView::null(),
+    }
+}
+
+/// register_host_contract stub — returns error (not used in benches).
+unsafe extern "C" fn bench_register_host_contract(
+    _this: *const HostInterface,
+    _interface: *const polyplug_abi::HostContractInterface,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Generic,
+        message: StringView::null(),
+    }
+}
+
+/// register_loader stub — returns error (not used in benches).
+unsafe extern "C" fn bench_register_loader(
+    _this: *const HostInterface,
+    _runtime_name: StringView,
+    _loader_ptr: *mut core::ffi::c_void,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Generic,
+        message: StringView::null(),
+    }
+}
+
+/// get_last_error stub — returns 0 (not used in benches).
+unsafe extern "C" fn bench_get_last_error(
+    _this: *const HostInterface,
+    _buf: *mut u8,
+    _buf_len: usize,
+) -> usize {
+    0
+}
+
+/// get_error_len stub — returns 0 (not used in benches).
+unsafe extern "C" fn bench_get_error_len(_this: *const HostInterface) -> usize {
+    0
+}
+
 /// Alloc wrapper that ignores this (uses global allocator).
 ///
 /// # Safety
@@ -290,6 +337,12 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
         resolve_host_contract_interface: bench_resolve_host_contract_interface,
         list_bundles: bench_list_bundles,
         get_dependencies: bench_get_dependencies,
+        load_bundle: bench_load_bundle,
+        reload_bundle: bench_reload_bundle,
+        register_host_contract: bench_register_host_contract,
+        register_loader: bench_register_loader,
+        get_last_error: bench_get_last_error,
+        get_error_len: bench_get_error_len,
     };
 
     let plugin_ctx: polyplug_abi::BundleInitContext = polyplug_abi::BundleInitContext {
@@ -508,6 +561,12 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
         resolve_host_contract_interface: bench_resolve_host_contract_interface,
         list_bundles: bench_list_bundles,
         get_dependencies: bench_get_dependencies,
+        load_bundle: bench_load_bundle,
+        reload_bundle: bench_reload_bundle,
+        register_host_contract: bench_register_host_contract,
+        register_loader: bench_register_loader,
+        get_last_error: bench_get_last_error,
+        get_error_len: bench_get_error_len,
     };
 
     // Input StringView pointing to a static byte string — no allocation needed.

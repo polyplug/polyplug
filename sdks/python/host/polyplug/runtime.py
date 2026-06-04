@@ -18,6 +18,7 @@ from typing import Any, Callable, Optional, Protocol, runtime_checkable
 # Import all FFI struct types from the auto-generated abi module.
 # The polyplug_abi package re-exports from sdks/python/abi/abi.py (per D-28).
 from polyplug_abi import (
+    AbiError,
     AbiErrorCode,
     Compatibility,
     DispatchMechanisms,
@@ -35,6 +36,12 @@ from polyplug_abi import (
     VmDispatch,
 )
 
+# The ABI-level ReloadPhase ctypes Structure (48-byte struct passed by value to
+# the on_reload callback). The `polyplug_abi` package re-exports a higher-level
+# Python `ReloadPhase` wrapper class under the same name, so the raw ctypes
+# Structure is imported from its defining module to disambiguate.
+from polyplug_abi.abi import ReloadPhase as AbiReloadPhase
+
 _LIB_NAME: str = "polyplug"
 
 # ─── Compatibility Constants ─────────────────────────────────────────────────────
@@ -46,7 +53,8 @@ COMPATIBILITY_YOLO: int = Compatibility.Yolo
 
 # DispatchType enum values for host contracts
 DISPATCH_TYPE_VIRTUAL_MACHINE: int = DispatchType.VirtualMachine
-_NULL_HANDLE: int = (1 << 64) - 1
+# GuestContractHandle is `#[repr(C)] { index: u32 }`; the null handle is index == u32::MAX.
+_NULL_HANDLE: int = (1 << 32) - 1
 
 _BACKEND: str = "ctypes"
 _cffi_available: bool = False
@@ -69,7 +77,7 @@ class Backend(Protocol):
     All operations go through HostInterface struct fields.
     """
 
-    def create_host_interface(self) -> int: ...
+    def create_host_interface(self, config_ptr: int = 0) -> int: ...
     def destroy_host_interface(self, host: int) -> None: ...
     def load_host_interface(self, host: int) -> HostInterface: ...
     def create_uint64_array(self, cap: int) -> Any: ...
@@ -84,24 +92,21 @@ class CTypesBackend:
         self._setup_bindings()
 
     def _setup_bindings(self) -> None:
-        # Only two FFI exports (18-02)
-        self.lib.polyplug_runtime_create.argtypes = []
+        # Only two FFI exports: create (takes optional *const RuntimeConfig,
+        # null for defaults) and destroy.
+        self.lib.polyplug_runtime_create.argtypes = [self.ctypes.c_void_p]
         self.lib.polyplug_runtime_create.restype = self.ctypes.c_void_p
 
         self.lib.polyplug_runtime_destroy.argtypes = [self.ctypes.c_void_p]
         self.lib.polyplug_runtime_destroy.restype = None
 
-        # Options-based create for hot-reload config
-        self.lib.polyplug_runtime_create_with_options.argtypes = [self.ctypes.c_void_p]
-        self.lib.polyplug_runtime_create_with_options.restype = self.ctypes.c_void_p
+    def create_host_interface(self, config_ptr: int = 0) -> int:
+        """Create runtime and return HostInterface pointer.
 
-    def create_host_interface(self) -> int:
-        """Create runtime and return HostInterface pointer."""
-        return self.lib.polyplug_runtime_create() or 0
-
-    def create_host_interface_with_options(self, options_ptr: int) -> int:
-        """Create runtime with options and return HostInterface pointer."""
-        return self.lib.polyplug_runtime_create_with_options(options_ptr) or 0
+        Args:
+            config_ptr: Address of a RuntimeConfig struct, or 0 for defaults.
+        """
+        return self.lib.polyplug_runtime_create(config_ptr or None) or 0
 
     def destroy_host_interface(self, host: int) -> None:
         """Destroy HostInterface and runtime."""
@@ -119,9 +124,8 @@ class CFFIBackend:
     """cffi ABI mode backend for HostInterface operations."""
 
     CDEF = """
-        void* polyplug_runtime_create(void);
+        void* polyplug_runtime_create(const void* config);
         void polyplug_runtime_destroy(void* host);
-        void* polyplug_runtime_create_with_options(const void* options);
     """
 
     def __init__(self, lib_path: str) -> None:
@@ -130,15 +134,18 @@ class CFFIBackend:
         self.ffi.cdef(self.CDEF)
         self.lib = self.ffi.dlopen(lib_path)
 
-    def create_host_interface(self) -> int:
-        """Create runtime and return HostInterface pointer."""
-        return self.ffi.cast("uintptr_t", self.lib.polyplug_runtime_create())
+    def create_host_interface(self, config_ptr: int = 0) -> int:
+        """Create runtime and return HostInterface pointer.
 
-    def create_host_interface_with_options(self, options_ptr: int) -> int:
-        """Create runtime with options and return HostInterface pointer."""
-        return self.ffi.cast("uintptr_t", self.lib.polyplug_runtime_create_with_options(
-            self.ffi.cast("void*", options_ptr)
-        ))
+        Args:
+            config_ptr: Address of a RuntimeConfig struct, or 0 for defaults.
+        """
+        return int(
+            self.ffi.cast(
+                "uintptr_t",
+                self.lib.polyplug_runtime_create(self.ffi.cast("void*", config_ptr)),
+            )
+        )
 
     def destroy_host_interface(self, host: int) -> None:
         """Destroy HostInterface and runtime."""
@@ -183,78 +190,6 @@ def _read_c_string(ptr: int, length: int) -> str:
     return ctypes.string_at(ptr, length).decode("utf-8", errors="replace")
 
 
-# ─── Function pointer types for HostInterface calls ───────────────────────────────
-
-# load_bundle: fn(host: *const HostInterface, path: *const u8, path_len: usize) -> AbiError
-_LOAD_BUNDLE_FN = ctypes.CFUNCTYPE(
-    ctypes.c_uint32,  # AbiError.code
-    ctypes.c_void_p,  # HostInterface*
-    ctypes.POINTER(ctypes.c_uint8),  # path
-    ctypes.c_size_t,  # path_len
-)
-
-# reload_bundle: fn(host: *const HostInterface, path: *const u8, path_len: usize) -> AbiError
-_RELOAD_BUNDLE_FN = ctypes.CFUNCTYPE(
-    ctypes.c_uint32,
-    ctypes.c_void_p,
-    ctypes.POINTER(ctypes.c_uint8),
-    ctypes.c_size_t,
-)
-
-# find_guest_contract: fn(host: *const HostInterface, contract_id: u64, min_version: u32) -> GuestContractHandle
-_FIND_GUEST_CONTRACT_FN = ctypes.CFUNCTYPE(
-    ctypes.c_uint64,  # GuestContractHandle (packed)
-    ctypes.c_void_p,
-    ctypes.c_uint64,
-    ctypes.c_uint32,
-)
-
-# find_all_guest_contracts: fn(host: *const HostInterface, contract_id: u64, min_version: u32) -> Array<Handle>
-_FIND_ALL_GUEST_CONTRACTS_FN = ctypes.CFUNCTYPE(
-    ctypes.c_void_p,  # Array<GuestContractHandle> pointer
-    ctypes.c_void_p,
-    ctypes.c_uint64,
-    ctypes.c_uint32,
-)
-
-# resolve_guest_contract: fn(host: *const HostInterface, handle: GuestContractHandle) -> *const GuestContractInterface
-_RESOLVE_GUEST_CONTRACT_FN = ctypes.CFUNCTYPE(
-    ctypes.c_void_p,
-    ctypes.c_void_p,
-    ctypes.c_uint64,
-)
-
-# get_last_error: fn(host: *const HostInterface, buf: *mut u8, buf_len: usize) -> usize
-_GET_LAST_ERROR_FN = ctypes.CFUNCTYPE(
-    ctypes.c_size_t,
-    ctypes.c_void_p,
-    ctypes.POINTER(ctypes.c_uint8),
-    ctypes.c_size_t,
-)
-
-# get_error_len: fn(host: *const HostInterface) -> usize
-_GET_ERROR_LEN_FN = ctypes.CFUNCTYPE(
-    ctypes.c_size_t,
-    ctypes.c_void_p,
-)
-
-# register_host_contract: fn(host: *const HostInterface, interface: *const HostContractInterface) -> AbiError
-_REGISTER_HOST_CONTRACT_FN = ctypes.CFUNCTYPE(
-    ctypes.c_uint32,
-    ctypes.c_void_p,
-    ctypes.c_void_p,
-)
-
-# free: fn(host: *const HostInterface, ptr: *mut u8, size: usize, align: usize)
-_FREE_FN = ctypes.CFUNCTYPE(
-    None,
-    ctypes.c_void_p,
-    ctypes.c_void_p,
-    ctypes.c_size_t,
-    ctypes.c_size_t,
-)
-
-
 class Runtime:
     """polyplug runtime for loading and managing plugins.
 
@@ -282,26 +217,34 @@ class Runtime:
         self._host: int = host_ptr
         self._host_struct: HostInterface = self._backend.load_host_interface(host_ptr)
 
-        # Cache function pointer wrappers
-        self._load_bundle_fn = _LOAD_BUNDLE_FN(self._host_struct.load_bundle)
-        self._reload_bundle_fn = _RELOAD_BUNDLE_FN(self._host_struct.reload_bundle)
-        self._find_guest_contract_fn = _FIND_GUEST_CONTRACT_FN(self._host_struct.find_guest_contract)
-        self._find_all_fn = _FIND_ALL_GUEST_CONTRACTS_FN(self._host_struct.find_all_guest_contracts)
-        self._resolve_fn = _RESOLVE_GUEST_CONTRACT_FN(self._host_struct.resolve_guest_contract)
-        self._get_last_error_fn = _GET_LAST_ERROR_FN(self._host_struct.get_last_error)
-        self._get_error_len_fn = _GET_ERROR_LEN_FN(self._host_struct.get_error_len)
-        self._register_host_contract_fn = _REGISTER_HOST_CONTRACT_FN(self._host_struct.register_host_contract)
-        self._free_fn = _FREE_FN(self._host_struct.free)
+        # The HostInterface struct fields are already fully-typed C function
+        # pointers (CFUNCTYPE with the canonical ABI signatures from abi.py:
+        # functions returning AbiError do so BY VALUE as a 24-byte struct).
+        # Cache them directly — re-wrapping in a hand-rolled CFUNCTYPE would
+        # both duplicate the signature and risk drift from the canonical type.
+        self._load_bundle_fn = self._host_struct.load_bundle
+        self._reload_bundle_fn = self._host_struct.reload_bundle
+        self._find_guest_contract_fn = self._host_struct.find_guest_contract
+        self._find_all_fn = self._host_struct.find_all_guest_contracts
+        self._resolve_fn = self._host_struct.resolve_guest_contract
+        self._get_last_error_fn = self._host_struct.get_last_error
+        self._get_error_len_fn = self._host_struct.get_error_len
+        self._register_host_contract_fn = self._host_struct.register_host_contract
+        self._register_loader_fn = self._host_struct.register_loader
+        self._free_fn = self._host_struct.free
 
     def _create_runtime_with_options(self) -> int:
-        """Create runtime using polyplug_runtime_create_with_options.
+        """Create runtime via polyplug_runtime_create with a RuntimeConfig.
 
-        The new RuntimeConfig (16 bytes, per D-22) has:
+        The RuntimeConfig (16 bytes) has:
         - compatibility (u32)
         - hot_reload_enabled (bool/u8)
         - on_reload (fn pointer or null)
+
+        The runtime only borrows the config for the duration of the build,
+        but the config is retained on the instance so the C callback wrapper
+        (referenced by `on_reload`) is not garbage-collected while in use.
         """
-        # Build RuntimeConfig directly (16 bytes, auto-generated from abi.py)
         config = RuntimeConfig()
         config.hot_reload_enabled = False
         config.compatibility = COMPATIBILITY_STRICT
@@ -318,7 +261,8 @@ class Runtime:
         else:
             config.on_reload = ctypes.cast(None, type(config.on_reload))
 
-        return self._backend.create_host_interface_with_options(ctypes.addressof(config))
+        self._runtime_config: RuntimeConfig = config
+        return self._backend.create_host_interface(ctypes.addressof(config))
 
     def __del__(self) -> None:
         host_ptr: int = getattr(self, "_host", 0)
@@ -347,32 +291,19 @@ class Runtime:
     def _make_c_callback(cls) -> ctypes.CFUNCTYPE:
         """Internal: Create a C-compatible callback wrapper."""
 
-        @ctypes.CFUNCTYPE(
-            None,
-            ctypes.c_uint32,
-            ctypes.c_uint64,
-            ctypes.c_void_p,
-            ctypes.c_size_t,
-            ctypes.c_uint32,
-            ctypes.c_void_p,
-            ctypes.c_size_t,
-        )
-        def c_callback(
-            phase_type: int,
-            bundle_id: int,
-            bundle_name_ptr: int,
-            bundle_name_len: int,
-            retry_count: int,
-            reason_ptr: int,
-            reason_len: int,
-        ) -> None:
+        @ctypes.CFUNCTYPE(None, AbiReloadPhase)
+        def c_callback(abi_phase: AbiReloadPhase) -> None:
             if cls._on_reload_cb is not None:
+                reason: str = _read_c_string(
+                    abi_phase.reason.ptr, abi_phase.reason.len
+                )
                 phase = ReloadPhase(
-                    type=ReloadPhaseType(phase_type),
-                    bundle_id=bundle_id,
-                    bundle_name=_read_c_string(bundle_name_ptr, bundle_name_len),
-                    retry_count=retry_count,
-                    reason=_read_c_string(reason_ptr, reason_len) if reason_len > 0 else None,
+                    type=ReloadPhaseType(abi_phase.phase_type),
+                    bundle_id=abi_phase.bundle_id,
+                    bundle_name=_read_c_string(
+                        abi_phase.bundle_name.ptr, abi_phase.bundle_name.len
+                    ),
+                    reason=reason if reason else None,
                 )
                 cls._on_reload_cb(phase)
 
@@ -410,16 +341,16 @@ class Runtime:
         host: int = self._ensure_host()
         path_bytes: bytes = str(Path(path)).encode("utf-8")
         buf = (ctypes.c_uint8 * len(path_bytes))(*path_bytes)
-        code: int = self._load_bundle_fn(host, buf, len(path_bytes))
-        self._check_error(code, "load_bundle")
+        err: AbiError = self._load_bundle_fn(host, buf, len(path_bytes))
+        self._check_error(err.code, "load_bundle")
 
     def reload_bundle(self, path: str | Path) -> None:
         """Hot-reload a plugin bundle."""
         host: int = self._ensure_host()
         path_bytes: bytes = str(Path(path)).encode("utf-8")
         buf = (ctypes.c_uint8 * len(path_bytes))(*path_bytes)
-        code: int = self._reload_bundle_fn(host, buf, len(path_bytes))
-        self._check_error(code, "reload_bundle")
+        err: AbiError = self._reload_bundle_fn(host, buf, len(path_bytes))
+        self._check_error(err.code, "reload_bundle")
 
     def find_guest_contract(self, contract_id: int, min_version: int) -> int:
         """Find a guest contract by contract_id and minimum version."""
@@ -442,23 +373,25 @@ class Runtime:
         if array_len == 0 or array_data == 0:
             return []
 
-        # Read handles from array
+        # GuestContractHandle is `#[repr(C)] { index: u32 }` = 4 bytes, so the array
+        # has a 4-byte element stride and each element is read as a u32 index.
         handles = []
         for i in range(array_len):
-            handle = ctypes.c_uint64.from_address(array_data + i * 8).value
+            handle = ctypes.c_uint32.from_address(array_data + i * 4).value
             handles.append(handle)
 
-        # Free the array via host->free
-        self._free_fn(host, array_data, array_len * 8, 8)
+        # Free the array via host->free (size = len * 4, align = 4).
+        self._free_fn(host, array_data, array_len * 4, 4)
 
         return handles
 
-    def resolve_guest_contract(self, packed_handle: int) -> int:
-        """Resolve a packed handle to a GuestContractInterface pointer."""
-        if packed_handle == _NULL_HANDLE:
+    def resolve_guest_contract(self, handle: int) -> int:
+        """Resolve a guest contract handle to a GuestContractInterface pointer."""
+        # Null handle sentinel is index == u32::MAX (0xFFFFFFFF).
+        if handle == _NULL_HANDLE:
             raise RuntimeError("null plugin handle")
         host: int = self._ensure_host()
-        return self._resolve_fn(host, packed_handle)
+        return self._resolve_fn(host, handle)
 
     def release_plugin(self, resolve_handle: int) -> None:
         """Release a resolve handle (no-op in HostInterface model, managed by registry)."""
@@ -529,7 +462,26 @@ class Runtime:
 
         # Register via HostInterface
         interface_ptr = ctypes.addressof(interface)
-        code: int = self._register_host_contract_fn(host, interface_ptr)
-        if code == 2:
+        err: AbiError = self._register_host_contract_fn(host, interface_ptr)
+        if err.code == AbiErrorCode.DuplicateProvider:
             raise RuntimeError(f"duplicate host contract: contract_id={contract_id}")
-        self._check_error(code, "register_host_contract")
+        self._check_error(err.code, "register_host_contract")
+
+    def register_loader(self, runtime_name: str, loader_ptr: int) -> None:
+        """Register a language loader with the runtime via HostInterface.
+
+        Args:
+            runtime_name: Runtime name the loader handles (e.g. "native", "python").
+            loader_ptr: Opaque loader pointer from the loader cdylib's create function.
+        """
+        host: int = self._ensure_host()
+        name_bytes: bytes = runtime_name.encode("utf-8")
+        # Keep the buffer alive for the duration of the call; the host reads it synchronously.
+        name_buf: ctypes.Array[ctypes.c_char] = ctypes.create_string_buffer(
+            name_bytes, len(name_bytes)
+        )
+        name_view: StringView = StringView(
+            ptr=ctypes.cast(name_buf, ctypes.c_void_p), len=len(name_bytes)
+        )
+        err: AbiError = self._register_loader_fn(host, name_view, loader_ptr)
+        self._check_error(err.code, "register_loader")

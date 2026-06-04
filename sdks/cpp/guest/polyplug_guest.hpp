@@ -7,7 +7,7 @@
 //   #include <polyplug_guest.hpp>
 //
 // This pulls in all guest-side headers in dependency order:
-//   1. abi/polyplug/abi.hpp      — C ABI structs, constants, and allocator decls
+//   1. abi/polyplug/abi.hpp      — C ABI structs, constants, allocator decls, and StringView helpers
 //   2. polyplug/contract.hpp     — Abstract base class for contract implementations
 //   3. polyplug/guest.hpp        — operator new/delete overrides + POLYPLUG_GUEST_MAIN
 //
@@ -17,6 +17,5 @@
 #pragma once
 
 #include "../abi/polyplug/abi.hpp"
-#include "../abi/polyplug/string_view_helper.hpp"
 #include "polyplug/contract.hpp"
 #include "polyplug/guest.hpp"

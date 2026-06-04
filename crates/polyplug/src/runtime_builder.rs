@@ -1,3 +1,4 @@
+use core::ffi::c_void;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use polyplug_abi::{HostInterface, RuntimeLanguage};
@@ -96,12 +97,13 @@ impl RuntimeBuilder {
     //  For MVP: scans plugin_dirs for .so/.dll/.dylib files,
     //  loads them in sorted order, registers interfaces.
     //  Full capability graph resolution is a future enhancement.
-    pub fn build(self) -> Result<Runtime, RuntimeError> {
+    pub fn build(self) -> Result<Arc<Runtime>, RuntimeError> {
         let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::new());
 
         // Build the static HostInterface. This must be 'static.
-        // The runtime field will be set when Runtime is created.
-        // For now, it's null - the callbacks extract runtime from RuntimeContext.
+        // The `runtime` field is null here and patched once below, after the
+        // Runtime is placed inside its Arc, so callbacks can recover the Runtime
+        // via `(*this).runtime`.
         let host_abi: &'static HostInterface = Box::leak(Box::new(HostInterface {
             runtime: core::ptr::null_mut(),
             register_contract: crate::runtime::host_register_contract,
@@ -153,7 +155,6 @@ impl RuntimeBuilder {
         // Create Runtime first (before loading bundles) so we can pass it to loaders
         let runtime: Runtime = Runtime {
             registry: Arc::clone(&registry),
-            bundles: Vec::new(),
             host_abi,
             loaders: loader_map,
             bundle_manifests: std::sync::Mutex::new(manifests_map),
@@ -166,7 +167,20 @@ impl RuntimeBuilder {
             host_runtime: self.host_runtime,
         };
 
-        // If nothing discovered, return Runtime with empty bundles (no graph needed)
+        let runtime: Arc<Runtime> = Arc::new(runtime);
+
+        // Patch the HostInterface.runtime field to point at the Arc's target.
+        // SAFETY: `host_abi` is the unique leaked HostInterface for this Runtime and
+        // no plugin has received it yet (bundle loading happens after this write), so
+        // this is a single writer with no concurrent reader. `Arc::as_ptr` stays valid
+        // for the lifetime of the Arc, and the HostInterface lives at least as long
+        // (callbacks only run while the Runtime — and thus the Arc — is alive).
+        unsafe {
+            (*(host_abi as *const HostInterface as *mut HostInterface)).runtime =
+                Arc::as_ptr(&runtime) as *mut c_void;
+        }
+
+        // If nothing discovered, return Runtime with no loaded bundles (no graph needed)
         if !discovered.is_empty() {
             // Phase 2: Build capability graph
             let graph: CapabilityGraph = CapabilityGraph::from_manifests(&discovered)

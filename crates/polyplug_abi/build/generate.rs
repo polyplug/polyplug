@@ -11,8 +11,8 @@ use crate::mapper::map_all_abi_types;
 use crate::types::AbiTypes;
 use polyplug_codegen::data::Item;
 use polyplug_codegen::languages::{
-    CSharpGenerator, CodeGenerator, CppGenerator, GenerationContext, JsGenerator, LuaGenerator,
-    PythonGenerator,
+    CSharpGenerator, CodeGenerator, CppGenerator, ForwardKind, GenerationContext, JsGenerator,
+    LuaGenerator, PythonGenerator,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -261,6 +261,85 @@ public static unsafe class StringHelpers
         };
     }
 }
+"#;
+
+/// Lua contract-ID / hash helper function definitions (function M.* only).
+///
+/// Provenance: mirrors the canonical FNV-1a 64-bit scheme implemented in
+/// `crates/polyplug_utils/src/{lib,guest_contract_id,host_contract_id,bundle_id}.rs`.
+/// Each function is self-contained (no shared module-level locals) because the
+/// Lua helper extractor only preserves `function M.*` blocks.
+const HELPER_LUA_HASHING: &str = r#"
+--- Compute FNV-1a 64-bit hash of a Lua string.
+-- @param str string Input string.
+-- @return cdata uint64_t FNV-1a 64-bit hash.
+function M.fnv1a_64(str)
+    local bit = require("bit")
+    local h = 0xcbf29ce484222325ULL
+    for i = 1, #str do
+        h = bit.bxor(h, str:byte(i))
+        h = h * 0x00000100000001B3ULL
+    end
+    return h
+end
+
+--- Compute a bundle ID from its name using FNV-1a 64-bit hash.
+-- @param name string     Bundle name.
+-- @return cdata uint64_t Bundle ID hash.
+function M.bundle_id(name)
+    return M.fnv1a_64(name)
+end
+
+--- Calculate guest contract ID from name and major version.
+-- @param name string          Contract name.
+-- @param major_version number Major version.
+-- @return cdata uint64_t      Guest contract ID hash.
+function M.guest_contract_id(name, major_version)
+    return M.fnv1a_64("guest_contract:" .. name .. "@" .. tostring(major_version))
+end
+
+--- Calculate host contract ID from name and major version.
+-- @param name string          Contract name.
+-- @param major_version number Major version.
+-- @return cdata uint64_t      Host contract ID hash.
+function M.host_contract_id(name, major_version)
+    return M.fnv1a_64("host_contract:" .. name .. "@" .. tostring(major_version))
+end
+"#;
+
+/// Python contract-ID / hash helper definitions appended to abi.py.
+///
+/// Provenance: mirrors the canonical FNV-1a 64-bit scheme implemented in
+/// `crates/polyplug_utils/src/{lib,guest_contract_id,host_contract_id,bundle_id}.rs`.
+const HELPER_PYTHON_HASHING: &str = r#"
+# ─── FNV-1a 64-bit Hash / Contract-ID Helpers ─────────────────────────────────
+
+FNV_OFFSET: int = 0xCBF29CE484222325
+FNV_PRIME: int = 0x00000100000001B3
+
+
+def fnv1a_64(data: bytes) -> int:
+    """Compute FNV-1a 64-bit hash of a byte sequence."""
+    hash_val: int = FNV_OFFSET
+    for byte in data:
+        hash_val ^= byte
+        hash_val = (hash_val * FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
+    return hash_val
+
+
+def guest_contract_id(name: str, major_version: int) -> int:
+    """Calculate guest contract ID from name and major version."""
+    return fnv1a_64(f"guest_contract:{name}@{major_version}".encode("utf-8"))
+
+
+def host_contract_id(name: str, major_version: int) -> int:
+    """Calculate host contract ID from name and major version."""
+    return fnv1a_64(f"host_contract:{name}@{major_version}".encode("utf-8"))
+
+
+def bundle_id(name: str) -> int:
+    """Compute a bundle ID from its name using FNV-1a 64-bit hash."""
+    return fnv1a_64(name.encode("utf-8"))
 "#;
 
 /// Lua helper function definitions (function M.* only, no module boilerplate).
@@ -642,14 +721,60 @@ pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
         TargetLang::JavaScript => Box::new(JsGenerator::new()),
     };
 
-    let ctx: GenerationContext = GenerationContext::new();
+    // Map every enum name to its Rust `repr` so generators that reference enum
+    // fields by their underlying integer type (Python ctypes) can size them.
+    let enum_reprs: std::collections::HashMap<String, String> = all_items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Enum(e) => Some((e.name.clone(), e.repr.clone())),
+            _ => None,
+        })
+        .collect();
+
+    let ctx: GenerationContext = GenerationContext::new().with_enum_reprs(enum_reprs);
     let mut output: String = String::new();
 
     // Prepend auto-generated header before the codegen header.
     output.push_str(&generate_auto_header(lang));
     output.push_str(&generator.generate_header(&ctx));
 
-    for item in &all_items {
+    // Languages whose bindings reference types eagerly at definition time
+    // (C++ by-value fields, Python ctypes CFUNCTYPE/Structure references)
+    // require every referenced aggregate to be defined before use.
+    //
+    // * C++ emits forward declarations and dependency-sorts definitions.
+    // * Python has no forward-declaration mechanism for ctypes, so it relies
+    //   solely on dependency-ordered emission.
+    let emit_items: Vec<Item> = match lang {
+        TargetLang::Cpp => {
+            output.push_str(&cpp_forward_declarations(&all_items));
+            cpp_dependency_ordered(all_items)
+        }
+        TargetLang::Python => python_dependency_ordered(all_items),
+        TargetLang::Lua => {
+            // LuaJIT's cdef parser requires every aggregate to be declared
+            // before it is referenced (in a typedef, by value, or by pointer).
+            // Emit forward declarations for all aggregates so function-pointer
+            // typedefs and pointer fields may reference any type, then
+            // dependency-sort the definitions so every by-value field
+            // references an already-completed type.
+            output.push_str(&lua_forward_declarations(&all_items));
+            lua_dependency_ordered(all_items)
+        }
+        _ => all_items,
+    };
+
+    // Lua emits all C declarations inside a single `ffi.cdef[[ ... ]]` block,
+    // while constants are plain Lua statements (`M.X = ffi.cast(...)`) that must
+    // live OUTSIDE that block. Emit aggregates first, close the cdef block, then
+    // emit constants in module scope.
+    let lua_consts: &mut Vec<&Item> = &mut Vec::new();
+
+    for item in &emit_items {
+        if lang == TargetLang::Lua && matches!(item, Item::Const(_)) {
+            lua_consts.push(item);
+            continue;
+        }
         let code: String = match item {
             Item::Const(c) => generator.generate_const(c, &ctx),
             Item::Struct(s) => generator.generate_struct(s, &ctx),
@@ -662,8 +787,303 @@ pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
         output.push_str(&code);
     }
 
+    if lang == TargetLang::Lua {
+        // Close the ffi.cdef block opened by the header before emitting Lua
+        // statements (constants) in module scope.
+        output.push_str("]]\n\n");
+        for item in lua_consts.iter() {
+            if let Item::Const(c) = item {
+                output.push_str(&generator.generate_const(c, &ctx));
+            }
+        }
+        output.push('\n');
+    }
+
     output.push_str(&generator.generate_footer(&ctx));
     output
+}
+
+/// Emit C++ forward declarations for every struct, union, and enum item.
+///
+/// Forward declarations resolve all pointer and function-pointer references,
+/// leaving only by-value field dependencies for `cpp_dependency_ordered` to
+/// satisfy via emission order.
+fn cpp_forward_declarations(items: &[Item]) -> String {
+    let mut output = String::from("// ─── Forward declarations ───\n");
+    for item in items {
+        let decl = match item {
+            Item::Struct(s) => CppGenerator::forward_declaration(&s.name, ForwardKind::Struct),
+            Item::Union(u) => CppGenerator::forward_declaration(&u.name, ForwardKind::Union),
+            Item::Enum(e) => {
+                CppGenerator::forward_declaration(&e.name, ForwardKind::Enum(e.repr.clone()))
+            }
+            Item::Const(_) | Item::Function(_) => continue,
+        };
+        output.push_str(&decl);
+    }
+    output.push('\n');
+    output
+}
+
+/// Emit LuaJIT-cdef forward declarations for every struct, union, and enum.
+///
+/// LuaJIT's cdef parser is not lazy: a type must be declared before it is named
+/// in a typedef, by value, or by pointer. A forward `typedef struct X X;` (and
+/// the enum/union equivalents) declares the tag and aliases it so any later
+/// reference resolves, and the subsequent combined `typedef struct X { ... } X;`
+/// completes the type without conflict.
+fn lua_forward_declarations(items: &[Item]) -> String {
+    let mut output = String::from("    // ─── Forward declarations ───\n");
+    for item in items {
+        let decl: String = match item {
+            Item::Struct(s) => format!("    typedef struct {} {};\n", s.name, s.name),
+            Item::Union(u) => format!("    typedef union {} {};\n", u.name, u.name),
+            Item::Enum(e) => format!("    typedef enum {} {};\n", e.name, e.name),
+            Item::Const(_) | Item::Function(_) => continue,
+        };
+        output.push_str(&decl);
+    }
+    output.push('\n');
+    output
+}
+
+/// Order LuaJIT-cdef items so every by-value field references an
+/// already-completed type.
+///
+/// Forward declarations (emitted by `lua_forward_declarations`) resolve all
+/// pointer and function-pointer references, leaving only by-value struct,
+/// union, and enum fields to satisfy via emission order. Constants and
+/// definitions with satisfied dependencies keep their relative source order.
+fn lua_dependency_ordered(items: Vec<Item>) -> Vec<Item> {
+    use std::collections::HashSet;
+
+    // Aggregates that can complete a by-value dependency: structs, unions, and
+    // enums (an enum field needs its size, i.e. its definition, first).
+    let aggregate_names: HashSet<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Struct(s) => Some(s.name.clone()),
+            Item::Union(u) => Some(u.name.clone()),
+            Item::Enum(e) => Some(e.name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    let dependencies = |item: &Item| -> Vec<String> {
+        let field_types: Vec<&str> = match item {
+            Item::Struct(s) => s.fields.iter().map(|f| f.rust_type.as_str()).collect(),
+            Item::Union(u) => u.variants.iter().map(|v| v.type_name.as_str()).collect(),
+            _ => Vec::new(),
+        };
+        field_types
+            .iter()
+            .filter_map(|rust_type| LuaGenerator::value_dependency(rust_type))
+            .filter(|dep| aggregate_names.contains(dep))
+            .collect()
+    };
+
+    let mut ordered: Vec<Item> = Vec::with_capacity(items.len());
+    let mut emitted: HashSet<String> = HashSet::new();
+    let mut pending: Vec<Item> = items;
+
+    loop {
+        let mut progressed = false;
+        let mut next_pending: Vec<Item> = Vec::new();
+
+        for item in pending {
+            let name: Option<String> = match &item {
+                Item::Struct(s) => Some(s.name.clone()),
+                Item::Union(u) => Some(u.name.clone()),
+                Item::Enum(e) => Some(e.name.clone()),
+                _ => None,
+            };
+
+            let ready: bool = dependencies(&item).iter().all(|dep| emitted.contains(dep));
+            if ready {
+                if let Some(name) = name {
+                    emitted.insert(name);
+                }
+                ordered.push(item);
+                progressed = true;
+            } else {
+                next_pending.push(item);
+            }
+        }
+
+        if next_pending.is_empty() {
+            break;
+        }
+        if !progressed {
+            // A dependency cycle (or unresolved dependency) remains. Emit the
+            // rest in source order rather than dropping items.
+            ordered.extend(next_pending);
+            break;
+        }
+        pending = next_pending;
+    }
+
+    ordered
+}
+
+/// Order C++ items so that every by-value field dependency is defined before
+/// the struct or union that uses it.
+///
+/// Enums and constants carry no aggregate dependencies and keep their relative
+/// order. Structs and unions are topologically sorted by their by-value field
+/// dependencies (resolved via `CppGenerator::value_dependency`).
+fn cpp_dependency_ordered(items: Vec<Item>) -> Vec<Item> {
+    use std::collections::HashSet;
+
+    // Names of aggregates whose definitions still need to be emitted.
+    let aggregate_names: HashSet<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Struct(s) => Some(s.name.clone()),
+            Item::Union(u) => Some(u.name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    // By-value dependencies for each struct/union, restricted to aggregates we
+    // are emitting (enums are satisfied by their forward declaration).
+    let dependencies = |item: &Item| -> Vec<String> {
+        let fields: Vec<&str> = match item {
+            Item::Struct(s) => s.fields.iter().map(|f| f.rust_type.as_str()).collect(),
+            Item::Union(u) => u.variants.iter().map(|v| v.type_name.as_str()).collect(),
+            _ => Vec::new(),
+        };
+        fields
+            .iter()
+            .filter_map(|rust_type| CppGenerator::value_dependency(rust_type))
+            .filter(|dep| aggregate_names.contains(dep))
+            .collect()
+    };
+
+    let mut ordered: Vec<Item> = Vec::with_capacity(items.len());
+    let mut emitted: HashSet<String> = HashSet::new();
+    let mut pending: Vec<Item> = items;
+
+    // Stable topological emission: repeatedly emit every item whose aggregate
+    // dependencies are already emitted. Non-aggregate items and aggregates with
+    // satisfied dependencies flush in source order each pass.
+    loop {
+        let mut progressed = false;
+        let mut next_pending: Vec<Item> = Vec::new();
+
+        for item in pending {
+            let name = match &item {
+                Item::Struct(s) => Some(s.name.clone()),
+                Item::Union(u) => Some(u.name.clone()),
+                _ => None,
+            };
+
+            let ready = dependencies(&item).iter().all(|dep| emitted.contains(dep));
+            if ready {
+                if let Some(name) = name {
+                    emitted.insert(name);
+                }
+                ordered.push(item);
+                progressed = true;
+            } else {
+                next_pending.push(item);
+            }
+        }
+
+        if next_pending.is_empty() {
+            break;
+        }
+        if !progressed {
+            // A dependency cycle (or unresolved dependency) remains. Emit the
+            // rest in source order rather than dropping items.
+            ordered.extend(next_pending);
+            break;
+        }
+        pending = next_pending;
+    }
+
+    ordered
+}
+
+/// Order Python items so that every name referenced eagerly by ctypes is
+/// defined before use.
+///
+/// Python's ctypes has no forward-declaration mechanism: a `Structure`
+/// `_fields_` entry referencing another aggregate, and a `CFUNCTYPE` typedef
+/// referencing its return/parameter types, all evaluate those names at
+/// definition time. Constants carry no dependencies and keep their relative
+/// order. Structs, enums, and unions are topologically sorted by the named
+/// aggregates they reference by value (resolved via
+/// `PythonGenerator::type_dependencies`). Pointer fields impose no constraint.
+fn python_dependency_ordered(items: Vec<Item>) -> Vec<Item> {
+    use std::collections::HashSet;
+
+    let aggregate_names: HashSet<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Struct(s) => Some(s.name.clone()),
+            Item::Enum(e) => Some(e.name.clone()),
+            Item::Union(u) => Some(u.name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    let dependencies = |item: &Item| -> Vec<String> {
+        let field_types: Vec<&str> = match item {
+            Item::Struct(s) => s.fields.iter().map(|f| f.rust_type.as_str()).collect(),
+            Item::Union(u) => u.variants.iter().map(|v| v.type_name.as_str()).collect(),
+            _ => Vec::new(),
+        };
+        field_types
+            .iter()
+            .flat_map(|rust_type| PythonGenerator::type_dependencies(rust_type))
+            .filter(|dep| aggregate_names.contains(dep))
+            .collect()
+    };
+
+    let mut ordered: Vec<Item> = Vec::with_capacity(items.len());
+    let mut emitted: HashSet<String> = HashSet::new();
+    let mut pending: Vec<Item> = items;
+
+    // Stable topological emission: repeatedly emit every item whose aggregate
+    // dependencies are already emitted. Constants and aggregates with satisfied
+    // dependencies flush in source order each pass.
+    loop {
+        let mut progressed = false;
+        let mut next_pending: Vec<Item> = Vec::new();
+
+        for item in pending {
+            let name: Option<String> = match &item {
+                Item::Struct(s) => Some(s.name.clone()),
+                Item::Enum(e) => Some(e.name.clone()),
+                Item::Union(u) => Some(u.name.clone()),
+                _ => None,
+            };
+
+            let ready: bool = dependencies(&item).iter().all(|dep| emitted.contains(dep));
+            if ready {
+                if let Some(name) = name {
+                    emitted.insert(name);
+                }
+                ordered.push(item);
+                progressed = true;
+            } else {
+                next_pending.push(item);
+            }
+        }
+
+        if next_pending.is_empty() {
+            break;
+        }
+        if !progressed {
+            // A dependency cycle (or unresolved dependency) remains. Emit the
+            // rest in source order rather than dropping items.
+            ordered.extend(next_pending);
+            break;
+        }
+        pending = next_pending;
+    }
+
+    ordered
 }
 
 impl TargetLang {
@@ -690,12 +1110,15 @@ fn get_inline_helpers(lang: TargetLang) -> Vec<(String, String)> {
                 HELPER_CSHARP_STRING_HELPERS.to_string(),
             ),
         ],
-        TargetLang::Lua => vec![("string_view_helper.lua".to_string(), HELPER_LUA.to_string())],
+        TargetLang::Lua => vec![
+            ("string_view_helper.lua".to_string(), HELPER_LUA.to_string()),
+            ("hashing.lua".to_string(), HELPER_LUA_HASHING.to_string()),
+        ],
         TargetLang::JavaScript => {
             vec![("string_view_helper.ts".to_string(), HELPER_JS.to_string())]
         }
         TargetLang::Cpp => vec![("string_view_helper.hpp".to_string(), HELPER_CPP.to_string())],
-        TargetLang::Python => vec![],
+        TargetLang::Python => vec![("hashing.py".to_string(), HELPER_PYTHON_HASHING.to_string())],
     }
 }
 
@@ -850,8 +1273,39 @@ fn merge_helpers_into_generated(
         TargetLang::Lua => merge_lua_helpers(generated_code, helpers),
         TargetLang::JavaScript => merge_js_helpers(generated_code, helpers),
         TargetLang::Cpp => merge_cpp_helpers(generated_code, helpers),
-        TargetLang::Python => generated_code.to_string(),
+        TargetLang::Python => merge_python_helpers(generated_code, helpers),
     }
+}
+
+/// Merge Python helper functions into the generated abi.py.
+///
+/// The helper content is module-level Python (constants + functions). It is
+/// appended after the generated type definitions; import lines are stripped
+/// because all required imports already live at the top of the generated file.
+fn merge_python_helpers(generated_code: &str, helpers: &[(String, String)]) -> String {
+    let mut result: String = generated_code.to_string();
+    result.push_str("\n\n# ─── Helper Methods (preserved from helper files) ───\n");
+
+    for (_filename, contents) in helpers {
+        let cleaned: String = strip_auto_generated_header(contents);
+        let trimmed: &str = cleaned.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let body: String = trimmed
+            .lines()
+            .filter(|line| {
+                let lt: &str = line.trim();
+                !lt.starts_with("import ") && !lt.starts_with("from ")
+            })
+            .collect::<Vec<&str>>()
+            .join("\n");
+        result.push('\n');
+        result.push_str(&body);
+        result.push('\n');
+    }
+
+    result
 }
 
 /// Merge C# helper classes into the generated Abi.cs namespace.
@@ -1163,9 +1617,10 @@ fn generate_layout_tests(
     std::fs::create_dir_all(&python_dir)?;
     std::fs::write(python_dir.join("test_layout.py"), python_tests)?;
 
-    // C#: LayoutTests.cs with xUnit.
+    // C#: LayoutTests.cs with xUnit. Written to the dedicated test project so
+    // the shipped Polyplug.Abi library does not glob-compile an xunit-dependent file.
     let csharp_tests = generate_csharp_layout_tests(&sized_structs);
-    let csharp_dir = workspace_root.join("sdks/csharp/abi");
+    let csharp_dir = workspace_root.join("sdks/csharp/abi.tests");
     std::fs::create_dir_all(&csharp_dir)?;
     std::fs::write(csharp_dir.join("LayoutTests.cs"), csharp_tests)?;
 

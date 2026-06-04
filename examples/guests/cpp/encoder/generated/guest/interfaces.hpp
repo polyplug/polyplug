@@ -28,10 +28,10 @@ inline AbiError encoder_encode_abi(GuestContractInstance instance, const void* a
     (void)instance;  // Suppress unused warning for stateless plugins.
     try {
         if (args == nullptr) {
-            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
+            return AbiError{AbiErrorCode::InvalidPointer, StringView{nullptr, 0}};
         }
         if (out == nullptr) {
-            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
+            return AbiError{AbiErrorCode::InvalidPointer, StringView{nullptr, 0}};
         }
         // SAFETY: args is a valid const void* pointing to a StringView per ABI contract.
 // The host guarantees proper alignment and size before calling this wrapper.
@@ -39,14 +39,14 @@ auto result = g_encoder_impl->encode(*static_cast<const StringView*>(args));
         // SAFETY: out is a valid void* pointing to a StringView per ABI contract.
         // The host guarantees proper alignment and size before calling this wrapper.
         *static_cast<StringView*>(out) = result;
-        return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+        return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};
     } catch (const std::exception& e) {
         // SAFETY: e.what() returns a valid null-terminated C string; reinterpret_cast preserves pointer validity.
-        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(e.what()), std::strlen(e.what())}};
+        return AbiError{AbiErrorCode::Generic, StringView{reinterpret_cast<const uint8_t*>(e.what()), std::strlen(e.what())}};
     } catch (...) {
         // SAFETY: panic_msg is a static constexpr string literal with known length 15.
         static constexpr const char* panic_msg = "plugin panicked";
-        return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};
+        return AbiError{AbiErrorCode::Panic, StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};
     }
 }
 
@@ -57,7 +57,7 @@ static void* const ENCODER_FNS[] = {
 // Default create_instance stub for encoder - returns null instance.
 static GuestContractInstance ENCODER_create_instance_stub(const HostInterface* host, const void* args) noexcept {
     (void)host; (void)args;  // Unused in default stub.
-    return GuestContractInstance{nullptr};  // Null instance for stateless plugins.
+    return GuestContractInstance{nullptr, 0U};  // Null instance for stateless plugins.
 }
 
 // Default destroy_instance stub for encoder - no-op.
@@ -72,7 +72,7 @@ static GuestContractInterface ENCODER_INTERFACE = {
     DispatchType::Native,
     ENCODER_create_instance_stub,
     ENCODER_destroy_instance_stub,
-    PluginDispatch{ .native = NativeDispatch{ 1U, ENCODER_FNS } }
+    DispatchMechanisms{ .native = NativeDispatch{ 1U, ENCODER_FNS } }
 };
 
 }  // namespace polyplug_plugin

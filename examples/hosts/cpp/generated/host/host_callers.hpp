@@ -27,17 +27,19 @@ public:
     /// # Returns
     /// - `std::optional<Self>` if interface found and instance created
     /// - `std::nullopt` if interface not found or `create_instance` failed
-    static std::optional<PipelineDecoderContract> create(uint64_t handle, const HostInterface* host) noexcept {
-        // Resolve the interface from the handle via FFI
-        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
-        if (!iface) {
+    static std::optional<PipelineDecoderContract> create(GuestContractHandle handle, const HostInterface* host) noexcept {
+        if (host == nullptr) {
             return std::nullopt;
         }
-        // Create instance via factory function
+        // Resolve the interface from the handle via HostInterface method.
+        const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);
+        if (iface == nullptr) {
+            return std::nullopt;
+        }
+        // Create instance via factory function.
+        // A null `instance.data` is valid: stateless contracts return a null
+        // handle from `create_instance` and use it as an opaque dispatch token.
         GuestContractInstance instance = iface->create_instance(host, nullptr);
-        if (instance.data == nullptr) {
-            return std::nullopt;
-        }
         return PipelineDecoderContract(iface, instance, host);
     }
 
@@ -71,11 +73,13 @@ public:
     PipelineDecoderContract(const PipelineDecoderContract&) = delete;
     PipelineDecoderContract& operator=(const PipelineDecoderContract&) = delete;
 
-    /// Check if instance is valid (non-null data).
-    explicit operator bool() const noexcept { return instance_.data != nullptr; }
+    /// Check if this caller holds a resolved contract interface.
+    /// Keys off the interface pointer, not `instance_.data`: stateless
+    /// contracts legitimately use a null instance as an opaque dispatch token.
+    explicit operator bool() const noexcept { return interface_ != nullptr; }
 
-    /// Check if instance is valid.
-    bool is_valid() const noexcept { return instance_.data != nullptr; }
+    /// Check if this caller holds a resolved contract interface.
+    bool is_valid() const noexcept { return interface_ != nullptr; }
 
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
@@ -93,18 +97,28 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{AbiErrorCode::InvalidPointer, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0_u32 >= interface_->function_count) {
+        if (0U >= interface_->dispatch.native.function_count) {
             static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
+            polyplug::check_abi_error(AbiError{AbiErrorCode::FunctionNotAvailable, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
-        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
-        // SAFETY: instance_ was created by create_instance and is valid.
-        // args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
-        AbiError err = fn_(instance_, args_ptr, out_ptr);
+        AbiError err{};
+        switch (interface_->dispatch_type) {
+            case DispatchType::Native: {
+                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+                // SAFETY: instance_ is the token returned by create_instance and is valid.
+                // args_ptr/out_ptr match the ABI contract for this function.
+                err = fn_(instance_, args_ptr, out_ptr);
+                break;
+            }
+            case DispatchType::VirtualMachine: {
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr);
+                break;
+            }
+        }
         polyplug::check_abi_error(err);
         return out;
     }
@@ -139,17 +153,19 @@ public:
     /// # Returns
     /// - `std::optional<Self>` if interface found and instance created
     /// - `std::nullopt` if interface not found or `create_instance` failed
-    static std::optional<DataTransformerContract> create(uint64_t handle, const HostInterface* host) noexcept {
-        // Resolve the interface from the handle via FFI
-        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
-        if (!iface) {
+    static std::optional<DataTransformerContract> create(GuestContractHandle handle, const HostInterface* host) noexcept {
+        if (host == nullptr) {
             return std::nullopt;
         }
-        // Create instance via factory function
+        // Resolve the interface from the handle via HostInterface method.
+        const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);
+        if (iface == nullptr) {
+            return std::nullopt;
+        }
+        // Create instance via factory function.
+        // A null `instance.data` is valid: stateless contracts return a null
+        // handle from `create_instance` and use it as an opaque dispatch token.
         GuestContractInstance instance = iface->create_instance(host, nullptr);
-        if (instance.data == nullptr) {
-            return std::nullopt;
-        }
         return DataTransformerContract(iface, instance, host);
     }
 
@@ -183,11 +199,13 @@ public:
     DataTransformerContract(const DataTransformerContract&) = delete;
     DataTransformerContract& operator=(const DataTransformerContract&) = delete;
 
-    /// Check if instance is valid (non-null data).
-    explicit operator bool() const noexcept { return instance_.data != nullptr; }
+    /// Check if this caller holds a resolved contract interface.
+    /// Keys off the interface pointer, not `instance_.data`: stateless
+    /// contracts legitimately use a null instance as an opaque dispatch token.
+    explicit operator bool() const noexcept { return interface_ != nullptr; }
 
-    /// Check if instance is valid.
-    bool is_valid() const noexcept { return instance_.data != nullptr; }
+    /// Check if this caller holds a resolved contract interface.
+    bool is_valid() const noexcept { return interface_ != nullptr; }
 
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
@@ -205,18 +223,28 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{AbiErrorCode::InvalidPointer, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0_u32 >= interface_->function_count) {
+        if (0U >= interface_->dispatch.native.function_count) {
             static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
+            polyplug::check_abi_error(AbiError{AbiErrorCode::FunctionNotAvailable, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
-        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
-        // SAFETY: instance_ was created by create_instance and is valid.
-        // args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
-        AbiError err = fn_(instance_, args_ptr, out_ptr);
+        AbiError err{};
+        switch (interface_->dispatch_type) {
+            case DispatchType::Native: {
+                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+                // SAFETY: instance_ is the token returned by create_instance and is valid.
+                // args_ptr/out_ptr match the ABI contract for this function.
+                err = fn_(instance_, args_ptr, out_ptr);
+                break;
+            }
+            case DispatchType::VirtualMachine: {
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr);
+                break;
+            }
+        }
         polyplug::check_abi_error(err);
         return out;
     }
@@ -251,17 +279,19 @@ public:
     /// # Returns
     /// - `std::optional<Self>` if interface found and instance created
     /// - `std::nullopt` if interface not found or `create_instance` failed
-    static std::optional<PipelineEncoderContract> create(uint64_t handle, const HostInterface* host) noexcept {
-        // Resolve the interface from the handle via FFI
-        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
-        if (!iface) {
+    static std::optional<PipelineEncoderContract> create(GuestContractHandle handle, const HostInterface* host) noexcept {
+        if (host == nullptr) {
             return std::nullopt;
         }
-        // Create instance via factory function
+        // Resolve the interface from the handle via HostInterface method.
+        const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);
+        if (iface == nullptr) {
+            return std::nullopt;
+        }
+        // Create instance via factory function.
+        // A null `instance.data` is valid: stateless contracts return a null
+        // handle from `create_instance` and use it as an opaque dispatch token.
         GuestContractInstance instance = iface->create_instance(host, nullptr);
-        if (instance.data == nullptr) {
-            return std::nullopt;
-        }
         return PipelineEncoderContract(iface, instance, host);
     }
 
@@ -295,11 +325,13 @@ public:
     PipelineEncoderContract(const PipelineEncoderContract&) = delete;
     PipelineEncoderContract& operator=(const PipelineEncoderContract&) = delete;
 
-    /// Check if instance is valid (non-null data).
-    explicit operator bool() const noexcept { return instance_.data != nullptr; }
+    /// Check if this caller holds a resolved contract interface.
+    /// Keys off the interface pointer, not `instance_.data`: stateless
+    /// contracts legitimately use a null instance as an opaque dispatch token.
+    explicit operator bool() const noexcept { return interface_ != nullptr; }
 
-    /// Check if instance is valid.
-    bool is_valid() const noexcept { return instance_.data != nullptr; }
+    /// Check if this caller holds a resolved contract interface.
+    bool is_valid() const noexcept { return interface_ != nullptr; }
 
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
@@ -317,18 +349,28 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{AbiErrorCode::InvalidPointer, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0_u32 >= interface_->function_count) {
+        if (0U >= interface_->dispatch.native.function_count) {
             static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
+            polyplug::check_abi_error(AbiError{AbiErrorCode::FunctionNotAvailable, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
-        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
-        // SAFETY: instance_ was created by create_instance and is valid.
-        // args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
-        AbiError err = fn_(instance_, args_ptr, out_ptr);
+        AbiError err{};
+        switch (interface_->dispatch_type) {
+            case DispatchType::Native: {
+                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+                // SAFETY: instance_ is the token returned by create_instance and is valid.
+                // args_ptr/out_ptr match the ABI contract for this function.
+                err = fn_(instance_, args_ptr, out_ptr);
+                break;
+            }
+            case DispatchType::VirtualMachine: {
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr);
+                break;
+            }
+        }
         polyplug::check_abi_error(err);
         return out;
     }
@@ -363,17 +405,19 @@ public:
     /// # Returns
     /// - `std::optional<Self>` if interface found and instance created
     /// - `std::nullopt` if interface not found or `create_instance` failed
-    static std::optional<DataReporterContract> create(uint64_t handle, const HostInterface* host) noexcept {
-        // Resolve the interface from the handle via FFI
-        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
-        if (!iface) {
+    static std::optional<DataReporterContract> create(GuestContractHandle handle, const HostInterface* host) noexcept {
+        if (host == nullptr) {
             return std::nullopt;
         }
-        // Create instance via factory function
+        // Resolve the interface from the handle via HostInterface method.
+        const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);
+        if (iface == nullptr) {
+            return std::nullopt;
+        }
+        // Create instance via factory function.
+        // A null `instance.data` is valid: stateless contracts return a null
+        // handle from `create_instance` and use it as an opaque dispatch token.
         GuestContractInstance instance = iface->create_instance(host, nullptr);
-        if (instance.data == nullptr) {
-            return std::nullopt;
-        }
         return DataReporterContract(iface, instance, host);
     }
 
@@ -407,11 +451,13 @@ public:
     DataReporterContract(const DataReporterContract&) = delete;
     DataReporterContract& operator=(const DataReporterContract&) = delete;
 
-    /// Check if instance is valid (non-null data).
-    explicit operator bool() const noexcept { return instance_.data != nullptr; }
+    /// Check if this caller holds a resolved contract interface.
+    /// Keys off the interface pointer, not `instance_.data`: stateless
+    /// contracts legitimately use a null instance as an opaque dispatch token.
+    explicit operator bool() const noexcept { return interface_ != nullptr; }
 
-    /// Check if instance is valid.
-    bool is_valid() const noexcept { return instance_.data != nullptr; }
+    /// Check if this caller holds a resolved contract interface.
+    bool is_valid() const noexcept { return interface_ != nullptr; }
 
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
@@ -429,18 +475,28 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{AbiErrorCode::InvalidPointer, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0_u32 >= interface_->function_count) {
+        if (0U >= interface_->dispatch.native.function_count) {
             static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
+            polyplug::check_abi_error(AbiError{AbiErrorCode::FunctionNotAvailable, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
-        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
-        // SAFETY: instance_ was created by create_instance and is valid.
-        // args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
-        AbiError err = fn_(instance_, args_ptr, out_ptr);
+        AbiError err{};
+        switch (interface_->dispatch_type) {
+            case DispatchType::Native: {
+                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+                // SAFETY: instance_ is the token returned by create_instance and is valid.
+                // args_ptr/out_ptr match the ABI contract for this function.
+                err = fn_(instance_, args_ptr, out_ptr);
+                break;
+            }
+            case DispatchType::VirtualMachine: {
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr);
+                break;
+            }
+        }
         polyplug::check_abi_error(err);
         return out;
     }
@@ -475,17 +531,19 @@ public:
     /// # Returns
     /// - `std::optional<Self>` if interface found and instance created
     /// - `std::nullopt` if interface not found or `create_instance` failed
-    static std::optional<PipelineValidatorContract> create(uint64_t handle, const HostInterface* host) noexcept {
-        // Resolve the interface from the handle via FFI
-        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
-        if (!iface) {
+    static std::optional<PipelineValidatorContract> create(GuestContractHandle handle, const HostInterface* host) noexcept {
+        if (host == nullptr) {
             return std::nullopt;
         }
-        // Create instance via factory function
+        // Resolve the interface from the handle via HostInterface method.
+        const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);
+        if (iface == nullptr) {
+            return std::nullopt;
+        }
+        // Create instance via factory function.
+        // A null `instance.data` is valid: stateless contracts return a null
+        // handle from `create_instance` and use it as an opaque dispatch token.
         GuestContractInstance instance = iface->create_instance(host, nullptr);
-        if (instance.data == nullptr) {
-            return std::nullopt;
-        }
         return PipelineValidatorContract(iface, instance, host);
     }
 
@@ -519,11 +577,13 @@ public:
     PipelineValidatorContract(const PipelineValidatorContract&) = delete;
     PipelineValidatorContract& operator=(const PipelineValidatorContract&) = delete;
 
-    /// Check if instance is valid (non-null data).
-    explicit operator bool() const noexcept { return instance_.data != nullptr; }
+    /// Check if this caller holds a resolved contract interface.
+    /// Keys off the interface pointer, not `instance_.data`: stateless
+    /// contracts legitimately use a null instance as an opaque dispatch token.
+    explicit operator bool() const noexcept { return interface_ != nullptr; }
 
-    /// Check if instance is valid.
-    bool is_valid() const noexcept { return instance_.data != nullptr; }
+    /// Check if this caller holds a resolved contract interface.
+    bool is_valid() const noexcept { return interface_ != nullptr; }
 
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
@@ -541,18 +601,28 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{AbiErrorCode::InvalidPointer, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0_u32 >= interface_->function_count) {
+        if (0U >= interface_->dispatch.native.function_count) {
             static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
+            polyplug::check_abi_error(AbiError{AbiErrorCode::FunctionNotAvailable, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
-        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
-        // SAFETY: instance_ was created by create_instance and is valid.
-        // args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
-        AbiError err = fn_(instance_, args_ptr, out_ptr);
+        AbiError err{};
+        switch (interface_->dispatch_type) {
+            case DispatchType::Native: {
+                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+                // SAFETY: instance_ is the token returned by create_instance and is valid.
+                // args_ptr/out_ptr match the ABI contract for this function.
+                err = fn_(instance_, args_ptr, out_ptr);
+                break;
+            }
+            case DispatchType::VirtualMachine: {
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr);
+                break;
+            }
+        }
         polyplug::check_abi_error(err);
         return out;
     }

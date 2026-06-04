@@ -18,11 +18,11 @@ extern "C" uint32_t polyplug_abi_version() { return 1U; }
 extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx) {
     if (!host || !ctx) {
         static constexpr const char* err_msg = "null parameter in polyplug_init";
-        return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};
+        return AbiError{AbiErrorCode::Generic, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};
     }
 
     // Store host interface for later access via polyplug::get_host_interface()
-    polyplug::store_host_vtable(host);
+    polyplug::store_host_interface(host);
 
     // Register plugin: reporter
     polyplug_plugin::set_reporter_impl(polyplug_plugin::create_reporter_impl());
@@ -32,7 +32,7 @@ extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitCon
         { 1U, 0U, 0U }  // version (Version)
     };
     AbiError err_REPORTER = host->register_contract(host, &desc_REPORTER, &polyplug_plugin::REPORTER_INTERFACE);
-    if (err_REPORTER.code != 0U) return err_REPORTER;
+    if (err_REPORTER.code != AbiErrorCode::Ok) return err_REPORTER;
 
-    return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+    return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};
 }

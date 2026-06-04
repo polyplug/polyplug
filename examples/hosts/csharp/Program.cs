@@ -1,10 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using Polyplug.Host;
 using Polyplug.Guest;
 using Polyplug.Abi;
 using Polyplug.Generated;
+using Polyplug.Loaders.Native;
+using Polyplug.Loaders.Python;
+using Polyplug.Loaders.Lua;
+using Polyplug.Loaders.Js;
 
 class Program
 {
@@ -14,6 +20,7 @@ class Program
     {
         try
         {
+            InstallNativeLibraryResolver();
             Run();
             return 0;
         }
@@ -21,6 +28,55 @@ class Program
         {
             Console.Error.WriteLine($"error: {e.Message}");
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// Resolve polyplug core + loader cdylibs from the cargo target directory.
+    /// The verify_hosts.sh harness exports POLYPLUG_LIB_PATH (core) and
+    /// POLYPLUG_NATIVE_LIB_PATH (native loader); every other loader cdylib lives
+    /// in the same directory. Without this, the default OS loader can pick up a
+    /// stale libpolyplug.so left in the assembly output directory.
+    /// </summary>
+    private static void InstallNativeLibraryResolver()
+    {
+        string? corePath = Environment.GetEnvironmentVariable("POLYPLUG_LIB_PATH");
+        if (string.IsNullOrEmpty(corePath))
+        {
+            return;
+        }
+
+        string? depsDir = Path.GetDirectoryName(Path.GetFullPath(corePath));
+        if (depsDir is null)
+        {
+            return;
+        }
+
+        DllImportResolver resolver = (string libraryName, Assembly assembly, DllImportSearchPath? searchPath) =>
+        {
+            string fileName = libraryName switch
+            {
+                "polyplug" => Path.GetFileName(corePath),
+                _ => $"lib{libraryName}.so",
+            };
+            string candidate = Path.Combine(depsDir, fileName);
+            if (File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out nint handle))
+            {
+                return handle;
+            }
+            return nint.Zero;
+        };
+
+        foreach (Assembly assembly in new[]
+        {
+            typeof(Runtime).Assembly,
+            typeof(NativeLoaderExtensions).Assembly,
+            typeof(PythonLoaderExtensions).Assembly,
+            typeof(LuaLoaderExtensions).Assembly,
+            typeof(JsLoaderExtensions).Assembly,
+        })
+        {
+            NativeLibrary.SetDllImportResolver(assembly, resolver);
         }
     }
 
@@ -54,13 +110,6 @@ class Program
 
         Console.Error.WriteLine($"loading plugins from: {pluginPath}\n");
 
-        Runtime.SetConfig(new RuntimeLanguageConfig
-        {
-            HotReloadMaxRetries = 5,
-            HotReloadRetryIntervalMs = 200,
-            HotReloadAbortOnMaxRetries = false
-        });
-
         Runtime.OnReload(phase =>
         {
             if (phase.IsPreparing())
@@ -88,6 +137,11 @@ class Program
         var rt = new RuntimeBuilder()
             .PluginDir(pluginPath)
             .Build();
+
+        rt.RegisterNativeLoader();
+        rt.RegisterPythonLoader();
+        rt.RegisterLuaLoader();
+        rt.RegisterJsLoader();
 
         var bundles = Directory.GetDirectories(pluginPath)
             .Where(dir => File.Exists(Path.Combine(dir, "manifest.toml")))

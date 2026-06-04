@@ -21,17 +21,28 @@ use crate::config::NativeConfig;
 /// Handles .so/.dll/.dylib bundles using dlopen/LoadLibrary.
 /// Owns library handles internally — NOT stored in registry.
 pub struct NativeLoader {
-    config: NativeConfig,
     /// Active library handles, keyed by BundleId.
     libraries: Mutex<HashMap<BundleId, libloading::Library>>,
+    /// Libraries superseded by a hot-reload, retained for the loader's lifetime.
+    ///
+    /// On reload the old library is NOT `dlclose`d: a concurrent caller may still
+    /// hold a raw function pointer resolved from the old version's vtable, and
+    /// unmapping its code pages would turn that pointer into a dangling one
+    /// (SIGSEGV). Retaining the handle keeps the code pages mapped, honoring the
+    /// documented guarantee that the old vtable stays alive until all in-flight
+    /// calls complete (TRUST_MODEL.md §Hot-Reload Safety Guarantees).
+    retired: Mutex<Vec<libloading::Library>>,
 }
 
 impl NativeLoader {
     /// Create a new NativeLoader.
-    pub fn new(config: NativeConfig) -> Self {
+    ///
+    /// `config` is accepted for API/FFI symmetry with the other loaders; native
+    /// plugins require no configuration, so `NativeConfig` (empty) is not stored.
+    pub fn new(_config: NativeConfig) -> Self {
         Self {
-            config,
             libraries: Mutex::new(HashMap::new()),
+            retired: Mutex::new(Vec::new()),
         }
     }
 }
@@ -289,10 +300,13 @@ impl BundleLoader for NativeLoader {
             }));
         }
 
-        // ─── Step 8: Remove and DROP old library ─────────────────────────────────────────
-        // SAFETY CONTRACT: Host must not have cached raw function pointers!
-        // If they did, this will cause SIGSEGV - that's a HOST BUG.
-        // The `on_reload_cb(ReloadPhase::Reloaded)` already fired, giving host a chance to clean up.
+        // ─── Step 8: Remove and RETIRE old library ───────────────────────────────────────
+        // The old library is retained (not dlclose'd): a concurrent caller may
+        // still hold a raw function pointer resolved from the old vtable, and
+        // unmapping its code pages would dangle that pointer (SIGSEGV). Moving the
+        // handle into `retired` keeps the code pages mapped for the loader's
+        // lifetime, honoring the documented hot-reload guarantee that the old
+        // vtable stays alive until all in-flight calls complete.
         if let Some(old_library) = self
             .libraries
             .lock()
@@ -302,7 +316,13 @@ impl BundleLoader for NativeLoader {
             })
             .remove(&bundle_id)
         {
-            drop(old_library); // dlclose() - unmaps code pages
+            self.retired
+                .lock()
+                .unwrap_or_else(|e| {
+                    eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+                    e.into_inner()
+                })
+                .push(old_library);
         }
 
         // ─── Step 9: Store new library ───────────────────────────────────────────────────

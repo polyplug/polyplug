@@ -1,7 +1,8 @@
 //! C# code generator — produces C# bindings from ABI items.
 //!
-//! Generates typed delegate definitions for function pointer fields,
-//! correct Array<T> representations, and PascalCase naming per D-35.
+//! Emits `IntPtr` for all function pointer fields (blittable, no managed
+//! delegates in ABI structs), correct Array<T> representations, and
+//! PascalCase naming per D-35.
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
 use crate::languages::{CodeGenerator, GenerationContext};
@@ -38,117 +39,6 @@ impl CSharpGenerator {
     /// Check if a rust_type represents Array<T>.
     fn is_array(rust_type: &str) -> bool {
         rust_type.starts_with("Array<")
-    }
-
-    /// Convert a compact fn ptr parameter string to a C# type.
-    ///
-    /// The compact format from `quote!()` is `name:type` with no spaces,
-    /// e.g., `this:*constHostInterface` or `size:usize`.
-    /// This splits on `:` and converts only the type part.
-    fn convert_fn_param(param: &str) -> String {
-        let parts: Vec<&str> = param.splitn(2, ':').collect();
-        let type_part = if parts.len() == 2 { parts[1] } else { parts[0] };
-        Self::rust_type_to_csharp(type_part.trim())
-    }
-
-    /// Parse a function pointer type string and return (return_type, param_types).
-    fn parse_function_pointer(type_name: &str) -> Option<(String, Vec<String>)> {
-        let type_str = Self::strip_option(type_name);
-
-        let fn_start = type_str.find("fn(")?;
-        let params_start = fn_start + 3;
-
-        let mut depth = 1i32;
-        let mut params_end = params_start;
-        for (i, c) in type_str[params_start..].chars().enumerate() {
-            match c {
-                '(' | '<' | '[' => depth += 1,
-                ')' | '>' | ']' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        params_end = params_start + i;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let params_str = &type_str[params_start..params_end];
-        let return_type = if type_str.len() > params_end + 1 {
-            let after = &type_str[params_end + 1..];
-            let trimmed = after.trim_start_matches('-').trim_start_matches('>').trim();
-            if trimmed.is_empty() {
-                "void".to_string()
-            } else {
-                Self::rust_type_to_csharp(trimmed)
-            }
-        } else {
-            "void".to_string()
-        };
-
-        let mut params = Vec::new();
-        let mut current = String::new();
-        let mut pdepth = 0i32;
-        for c in params_str.chars() {
-            match c {
-                '(' | '<' | '[' => {
-                    pdepth += 1;
-                    current.push(c);
-                }
-                ')' | '>' | ']' => {
-                    pdepth -= 1;
-                    current.push(c);
-                }
-                ',' if pdepth == 0 => {
-                    let p = current.trim();
-                    if !p.is_empty() {
-                        params.push(Self::convert_fn_param(p));
-                    }
-                    current.clear();
-                }
-                _ => {
-                    current.push(c);
-                }
-            }
-        }
-        if !current.trim().is_empty() {
-            params.push(Self::convert_fn_param(current.trim()));
-        }
-
-        Some((return_type, params))
-    }
-
-    /// Generate a delegate definition for a function pointer field.
-    ///
-    /// Returns (delegate_definition, delegate_type_name).
-    fn generate_delegate(struct_name: &str, field_name: &str, rust_type: &str) -> (String, String) {
-        let (return_type, params) = Self::parse_function_pointer(rust_type)
-            .unwrap_or_else(|| ("void".to_string(), Vec::new()));
-
-        let delegate_name = format!(
-            "{}{}Delegate",
-            Self::to_pascal_case(struct_name),
-            Self::to_pascal_case(field_name)
-        );
-
-        let param_list: String = params
-            .iter()
-            .enumerate()
-            .map(|(i, t)| format!("{} arg{}", t, i))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let mut definition = format!(
-            "[UnmanagedFunctionPointer(CallingConvention.Cdecl)]\npublic delegate {} {}({});\n\n",
-            return_type, delegate_name, param_list
-        );
-
-        if Self::is_option(rust_type) {
-            definition.push_str("// Nullable delegate (reference type, can be null).\n");
-        }
-
-        (definition, delegate_name)
     }
 
     fn rust_type_to_csharp(rust_type: &str) -> String {
@@ -200,7 +90,8 @@ impl CSharpGenerator {
         }
 
         match rust_type {
-            "u64" => String::from("ulong"),
+            // `#[repr(transparent)]` u64 newtypes from polyplug_utils.
+            "u64" | "BundleId" | "GuestContractId" | "HostContractId" => String::from("ulong"),
             "u32" => String::from("uint"),
             "u16" => String::from("ushort"),
             "u8" => String::from("byte"),
@@ -266,24 +157,11 @@ impl CodeGenerator for CSharpGenerator {
 
     fn generate_struct(&self, item: &StructInfo, _ctx: &GenerationContext) -> String {
         let mut output = String::new();
-        let mut delegates = String::new();
-
-        // Pre-scan fields for function pointer types — collect delegate definitions.
-        for field in &item.fields {
-            if Self::is_function_pointer(&field.rust_type) {
-                let (delegate_def, _type_name) =
-                    Self::generate_delegate(&item.name, &field.name, &field.rust_type);
-                delegates.push_str(&delegate_def);
-            }
-        }
 
         if let Some(doc) = &item.doc {
             output.push_str(&Self::format_xml_doc(doc));
             output.push('\n');
         }
-
-        // Emit delegate definitions before the struct.
-        output.push_str(&delegates);
 
         // Use Size attribute if size hint is known.
         if let Some(size) = item.size_hint {
@@ -312,12 +190,11 @@ impl CodeGenerator for CSharpGenerator {
                 continue;
             }
 
-            // Handle function pointer fields — use the delegate type.
+            // Handle function pointer fields — emit IntPtr (blittable, no managed
+            // delegate in the ABI struct so unions stay overlappable in .NET).
             if Self::is_function_pointer(&field.rust_type) {
-                let (_, delegate_type) =
-                    Self::generate_delegate(&item.name, &field.name, &field.rust_type);
                 let field_name = Self::to_pascal_case(&field.name);
-                output.push_str(&format!("    public {} {};\n", delegate_type, field_name));
+                output.push_str(&format!("    public IntPtr {};\n", field_name));
                 continue;
             }
 
@@ -432,35 +309,10 @@ mod tests {
     use super::*;
     use crate::data::{FieldInfo, StructInfo};
 
-    /// Test that delegate definitions use proper C# types (not raw Rust syntax).
+    /// Test that struct fn ptr fields are emitted as blittable IntPtr, with no
+    /// managed delegate definitions (so ABI unions stay overlappable in .NET).
     #[test]
-    fn csharp_delegate_uses_csharp_types() {
-        let rust_type = "unsafeextern\"C\"fn(this:*constHostInterface,contract_id:u64)->AbiError";
-        let (return_type, params) =
-            CSharpGenerator::parse_function_pointer(rust_type).expect("should parse fn ptr");
-
-        assert_eq!(return_type, "AbiError");
-        // Params must be C# types, not raw Rust syntax.
-        assert!(
-            !params.iter().any(|p| p.contains("*const")),
-            "params should not contain raw pointer syntax: {:?}",
-            params
-        );
-        assert!(
-            params.iter().any(|p| p == "IntPtr"),
-            "pointer param should be IntPtr, got: {:?}",
-            params
-        );
-        assert!(
-            params.iter().any(|p| p == "ulong"),
-            "u64 param should be ulong, got: {:?}",
-            params
-        );
-    }
-
-    /// Test that struct with fn ptr fields generates delegate definitions.
-    #[test]
-    fn csharp_struct_with_fn_ptr_generates_delegate() {
+    fn csharp_struct_with_fn_ptr_emits_intptr() {
         let generator = CSharpGenerator::new();
         let ctx = GenerationContext::new();
         let item = StructInfo {
@@ -484,18 +336,18 @@ mod tests {
 
         let output = generator.generate_struct(&item, &ctx);
         assert!(
-            output.contains("[UnmanagedFunctionPointer(CallingConvention.Cdecl)]"),
-            "should emit UnmanagedFunctionPointer attribute: {}",
+            output.contains("public IntPtr Callback;"),
+            "fn ptr field should be IntPtr: {}",
             output
         );
         assert!(
-            output.contains("delegate"),
-            "should emit delegate: {}",
+            !output.contains("delegate"),
+            "should not emit any managed delegate: {}",
             output
         );
         assert!(
-            output.contains("IntPtr"),
-            "pointer param should be IntPtr: {}",
+            output.contains("public uint Value;"),
+            "non-pointer field should keep its mapped type: {}",
             output
         );
     }

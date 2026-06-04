@@ -8,6 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use core::ffi::c_void;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
@@ -23,7 +24,6 @@ use polyplug_abi::string_view_null;
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplug_utils::BundleId;
 use polyplugc::generate;
-use std::ffi::c_void;
 
 // ─── Helper: compile target dir ──────────────────────────────────────────────
 
@@ -100,7 +100,7 @@ polyplug_guest = {{ path = "{}" }}
 
 /// Write a `src/lib.rs` that:
 ///   - Declares generated modules (types, contracts, interfaces) but NOT init.
-///   - Defines `MyPlugin` and implements `TestAddPlugin`.
+///   - Defines `MyPlugin` and implements `TestAddGuestContract`.
 ///   - Exports a custom `polyplug_init` that sets `TEST_ADDER_IMPL` then registers the interface.
 fn write_plugin_lib_rs(src_dir: &Path) {
     let content: &str = r#"// THIS FILE IS WRITTEN BY integration_codegen_rust TEST — DO NOT EDIT BY HAND
@@ -121,14 +121,14 @@ use polyplug_guest::BundleInitContext;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
 use polyplug_guest::string_view_null;
-use guest::contracts::TestAddPlugin;
+use guest::contracts::TestAddGuestContract;
 use guest::types::AddArgs;
 use guest::interfaces::TEST_ADDER_INTERFACE;
 use guest::interfaces::set_test_adder_impl;
 
 struct MyPlugin;
 
-impl TestAddPlugin for MyPlugin {
+impl TestAddGuestContract for MyPlugin {
     fn add(&self, args: &AddArgs) -> Result<u32, GuestError> {
         Ok(args.a.wrapping_add(args.b))
     }
@@ -470,6 +470,8 @@ fn test_rust_codegen_compile_and_run() {
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // Get function_count from the native dispatch structure
+    // SAFETY: interface is a valid GuestContractInterface with Native dispatch;
+    // reading the native union variant is sound for this contract.
     let function_count: u32 = unsafe { interface.dispatch.native.function_count };
     assert_eq!(
         function_count, 4_u32,

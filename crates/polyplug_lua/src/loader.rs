@@ -396,8 +396,16 @@ impl BundleLoader for LuaLoader {
 
         // Build static string slices for PluginDescriptor.
         // We leak String → &'static str so StringView ptrs remain valid indefinitely.
+        //
+        // The descriptor's human-readable `contract_name` must be the canonical
+        // `"<name>@<major>"` form so it matches what every other language registers
+        // (rust/cpp/python/js generated code emit this full form directly). The bare
+        // `contract_name_str` + `contract_version` are the hash inputs already consumed
+        // by `GuestContractId::new` above; reusing the bare name in the descriptor would
+        // diverge from the other loaders and trip the registry's collision check.
+        let contract_display_name: String = format!("{}@{}", contract_name_str, contract_version);
         let plugin_name_leaked: &'static str = Box::leak(plugin_name_str.into_boxed_str());
-        let contract_name_leaked: &'static str = Box::leak(contract_name_str.into_boxed_str());
+        let contract_name_leaked: &'static str = Box::leak(contract_display_name.into_boxed_str());
 
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView {

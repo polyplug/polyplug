@@ -57,7 +57,7 @@ public static partial class DotnetLoaderExtensions
                     throw new InvalidOperationException("polyplug: dotnet loader create failed");
                 }
 
-                uint err = runtime.RegisterLoader(loaderPtr);
+                uint err = runtime.RegisterLoader("dotnet", loaderPtr);
                 if (err != 0u)
                 {
                     Runtime.ThrowLastError($"polyplug: dotnet loader register failed: {err}");

@@ -39,9 +39,10 @@ end
 -- It does NOT call register_plugin directly — the LuaLoader (Rust) does that
 -- after reading _G._polyplug_handlers and creating Rust-side trampolines.
 function polyplug_init(registrar_ptr, ctx_ptr)
+    -- The loader derives the contract_id canonically from contract_name +
+    -- contract_version via guest_contract_id("test.add", 1); no id is baked here.
     _G._polyplug_handlers = {
         contract_name = "test.add",
-        contract_id_hex = "0xCC4232FAB0410D2B",
         contract_version = 1,
         plugin_name = "test-plugin-lua",
         -- Functions in declaration order (must match contract function_id order):

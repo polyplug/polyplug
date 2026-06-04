@@ -7,38 +7,42 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
--- Function pointer type for encoder (pipeline.Encoder@1)
+-- Guest contract: encoder (pipeline.Encoder@1)
 --   encode(input: StringView) -> StringView
-local ENCODER_INTERFACE = ffi.new("GuestContractInterface")
-ENCODER_INTERFACE.contract_id = 0xFC50F9D1D3DB629F
-ENCODER_INTERFACE.contract_version.major = 1
-ENCODER_INTERFACE.contract_version.minor = 0
-ENCODER_INTERFACE.contract_version.patch = 0
-ENCODER_INTERFACE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
--- Default create_instance stub for encoder - returns null instance.
-function ENCODER_create_instance_stub(host, args)
-    -- Default stub returns null instance - users override for stateful plugins.
-    return ffi.new("GuestContractInstance", nil)
-end
-ENCODER_INTERFACE.create_instance = ENCODER_create_instance_stub
--- Default destroy_instance stub for encoder - no-op.
-function ENCODER_destroy_instance_stub(host, instance)
-    -- Default stub is no-op - users override for cleanup before hot-reload.
-end
-ENCODER_INTERFACE.destroy_instance = ENCODER_destroy_instance_stub
-
-local ENCODER_DESCRIPTOR = ffi.new("PluginDescriptor")
-ENCODER_DESCRIPTOR.name = polyplug_guest.string_view("encoder")
-ENCODER_DESCRIPTOR.contract_name = polyplug_guest.string_view("pipeline.Encoder@1")
-ENCODER_DESCRIPTOR.version.major = 1
-ENCODER_DESCRIPTOR.version.minor = 0
-ENCODER_DESCRIPTOR.version.patch = 0
-
-
+local ENCODER_IMPLS = {}
 function M.set_encoder_impl(encode_fn)
-    local functions = ffi.new("PluginFunction[1]")
-    functions[0] = ffi.cast("uintptr_t", encode_fn)
-    ENCODER_INTERFACE.dispatch.native.function_count = 1
-    ENCODER_INTERFACE.dispatch.native.functions = functions
+    ENCODER_IMPLS[0] = encode_fn
 end
+function M._register_ENCODER()
+    local functions = {}
+    functions[0] = function(args_ptr, out_ptr)
+        local impl = ENCODER_IMPLS[0]
+        if impl == nil then return end
+        local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
+        local result = impl(args_sv[0])
+        if out_ptr ~= 0 and result ~= nil then
+            local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
+            out_sv[0] = result
+        end
+    end
+    _G._polyplug_handlers = _G._polyplug_handlers or {}
+    if _G._polyplug_handlers.contract_name == nil then
+        _G._polyplug_handlers.contract_name = "pipeline.Encoder"
+        _G._polyplug_handlers.contract_version = 1
+        _G._polyplug_handlers.plugin_name = "encoder"
+        _G._polyplug_handlers.functions = functions
+    end
+end
+
+
+-- Registration entry point called by the LuaLoader.
+function polyplug_init(host_ptr, ctx_ptr)
+    if host_ptr == nil or ctx_ptr == nil then
+        return polyplug_guest.AbiErrorCode.Generic
+    end
+    polyplug_guest.store_host_interface(host_ptr)
+    M._register_ENCODER()
+    return polyplug_guest.AbiErrorCode.Ok
+end
+
 return M

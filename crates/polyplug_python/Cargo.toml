@@ -17,6 +17,12 @@ polyplug_abi = { workspace = true }
 polyplug_utils = { workspace = true }
 pyo3 = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libloading = { workspace = true }
+
+[build-dependencies]
+pyo3-build-config = { workspace = true }
+
 [dev-dependencies]
 polyplug = { workspace = true }
 polyplug_abi = { workspace = true }

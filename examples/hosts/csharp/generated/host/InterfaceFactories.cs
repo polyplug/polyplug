@@ -12,10 +12,11 @@ namespace Polyplug.Generated;
 public static class InterfaceFactories {
 [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
 private static AbiError host_logger_log_thunk(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr) {
+    _ = implPtr;
     try {
         var impl = s_HostLogger_impl ?? throw new InvalidOperationException("implementation not set");
         var message_sv = Marshal.PtrToStructure<StringView>(argsPtr);
-        var message = StringHelpers.StringViewToString(message_sv);
+        var message = StringHelpers.ToString(message_sv);
         impl.Log(message);
         _ = outPtr;
         return new AbiError { Code = AbiErrorCode.Ok };
@@ -25,14 +26,21 @@ private static AbiError host_logger_log_thunk(IntPtr implPtr, IntPtr argsPtr, In
     }
 }
 
+[StructLayout(LayoutKind.Sequential)]
+private struct HostLoggerLogWithLevelArgs {
+    public LogLevel Level;
+    public StringView Message;
+}
+
 [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
 private static AbiError host_logger_log_with_level_thunk(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr) {
+    _ = implPtr;
     try {
         var impl = s_HostLogger_impl ?? throw new InvalidOperationException("implementation not set");
-        var packed = Marshal.PtrToStructure<LOG_WITH_LEVELArgs>(argsPtr);
+        var packed = Marshal.PtrToStructure<HostLoggerLogWithLevelArgs>(argsPtr);
         var level = packed.Level;
-        var message = StringHelpers.StringViewToString(packed.Message);
-        impl.LogWithLevel(level, message);
+        var message = StringHelpers.ToString(packed.Message);
+        impl.LogWithLevel(ref level, message);
         _ = outPtr;
         return new AbiError { Code = AbiErrorCode.Ok };
     } catch (Exception ex) {
@@ -42,6 +50,18 @@ private static AbiError host_logger_log_with_level_thunk(IntPtr implPtr, IntPtr 
 }
 
 private static IHostLogger? s_HostLogger_impl;
+private static GCHandle s_HostLogger_functionsHandle;
+
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static HostContractInstance host_logger_create_instance_stub(IntPtr self, IntPtr args) {
+    _ = self; _ = args;
+    return new HostContractInstance { Data = IntPtr.Zero };
+}
+
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static void host_logger_destroy_instance_stub(IntPtr self, HostContractInstance instance) {
+    _ = self; _ = instance;
+}
 
 /// <summary>
 /// Create a host contract interface for `host.logger` with NATIVE dispatch.
@@ -50,31 +70,29 @@ private static IHostLogger? s_HostLogger_impl;
 /// Takes a reference to the implementation and creates an interface.
 /// The implementation must implement the interface.
 /// </remarks>
-public static HostContractVTable CreateHostLoggerInterface<T>(T impl) where T: IHostLogger {
+public static unsafe HostContractInterface CreateHostLoggerInterface<T>(T impl) where T: IHostLogger {
     // Store implementation reference in a static field
     s_HostLogger_impl = impl;
 
     var functions = new IntPtr[2] {
-        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)host_logger_log_thunk
-        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)host_logger_log_with_level_thunk
+        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)&host_logger_log_thunk,
+        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)&host_logger_log_with_level_thunk,
     };
 
-    var functionsHandle = GCHandle.Alloc(functions, GCHandleType.Pinned);
+    s_HostLogger_functionsHandle = GCHandle.Alloc(functions, GCHandleType.Pinned);
 
-    return new HostContractVTable {
-        Header = new HostContractVTableHeader {
-            VTableVersion = 1,
-            ContractId = 0xF53EB5F2845853BBUL,
-            ContractMajor = 1u,
-            ContractMinor = 0u,
-            FunctionCount = 2u,
-            Singleton = false,
-            DispatchType = DispatchType.Native,
-        },
-        Dispatch = new HostContractDispatch {
-            Native = new NativeHostContractDispatch {
-                ImplPtr = IntPtr.Zero,  // We use static field instead
-                Functions = functionsHandle.AddrOfPinnedObject(),
+    return new HostContractInterface {
+        ContractId = 0xF53EB5F2845853BBUL,
+        ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
+        Singleton = false,
+        DispatchType = DispatchType.Native,
+        Runtime = IntPtr.Zero,
+        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&host_logger_create_instance_stub,
+        DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, HostContractInstance, void>)&host_logger_destroy_instance_stub,
+        Dispatch = new DispatchMechanisms {
+            Native = new NativeDispatch {
+                FunctionCount = 2u,
+                Functions = s_HostLogger_functionsHandle.AddrOfPinnedObject(),
             },
         },
     };
@@ -85,25 +103,24 @@ public static HostContractVTable CreateHostLoggerInterface<T>(T impl) where T: I
 /// </summary>
 /// <remarks>
 /// Used when the host implementation is in a VM language (Python, Lua, JS).
+/// `dispatchFn` is a `delegate* unmanaged[Cdecl]<...>` cast to IntPtr.
 /// </remarks>
-public static HostContractVTable CreateHostLoggerInterfaceVm(
-    IntPtr bridgeData,
-    VmHostContractDispatchFn dispatchFn
+public static unsafe HostContractInterface CreateHostLoggerInterfaceVm(
+    IntPtr loaderData,
+    IntPtr dispatchFn
 ) {
-    return new HostContractVTable {
-        Header = new HostContractVTableHeader {
-            VTableVersion = 1,
-            ContractId = 0xF53EB5F2845853BBUL,
-            ContractMajor = 1u,
-            ContractMinor = 0u,
-            FunctionCount = 2u,
-            Singleton = false,
-            DispatchType = DispatchType.VirtualMachine,
-        },
-        Dispatch = new HostContractDispatch {
-            Vm = new VmHostContractDispatch {
+    return new HostContractInterface {
+        ContractId = 0xF53EB5F2845853BBUL,
+        ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
+        Singleton = false,
+        DispatchType = DispatchType.VirtualMachine,
+        Runtime = IntPtr.Zero,
+        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&host_logger_create_instance_stub,
+        DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, HostContractInstance, void>)&host_logger_destroy_instance_stub,
+        Dispatch = new DispatchMechanisms {
+            Vm = new VmDispatch {
                 Call = dispatchFn,
-                BridgeData = bridgeData,
+                LoaderData = new VmLoaderData { Data = loaderData },
             },
         },
     };

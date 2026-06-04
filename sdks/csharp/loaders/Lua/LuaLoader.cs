@@ -46,7 +46,7 @@ public static partial class LuaLoaderExtensions
                 throw new InvalidOperationException("polyplug: lua loader create failed");
             }
 
-            uint err = runtime.RegisterLoader(loaderPtr);
+            uint err = runtime.RegisterLoader("lua", loaderPtr);
             if (err != 0u)
             {
                 Runtime.ThrowLastError($"polyplug: lua loader register failed: {err}");

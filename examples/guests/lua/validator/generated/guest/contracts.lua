@@ -7,38 +7,42 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
--- Function pointer type for validator (pipeline.Validator@1)
+-- Guest contract: validator (pipeline.Validator@1)
 --   validate(input: StringView) -> StringView
-local VALIDATOR_INTERFACE = ffi.new("GuestContractInterface")
-VALIDATOR_INTERFACE.contract_id = 0x45173A959EEC57C5
-VALIDATOR_INTERFACE.contract_version.major = 1
-VALIDATOR_INTERFACE.contract_version.minor = 0
-VALIDATOR_INTERFACE.contract_version.patch = 0
-VALIDATOR_INTERFACE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
--- Default create_instance stub for validator - returns null instance.
-function VALIDATOR_create_instance_stub(host, args)
-    -- Default stub returns null instance - users override for stateful plugins.
-    return ffi.new("GuestContractInstance", nil)
-end
-VALIDATOR_INTERFACE.create_instance = VALIDATOR_create_instance_stub
--- Default destroy_instance stub for validator - no-op.
-function VALIDATOR_destroy_instance_stub(host, instance)
-    -- Default stub is no-op - users override for cleanup before hot-reload.
-end
-VALIDATOR_INTERFACE.destroy_instance = VALIDATOR_destroy_instance_stub
-
-local VALIDATOR_DESCRIPTOR = ffi.new("PluginDescriptor")
-VALIDATOR_DESCRIPTOR.name = polyplug_guest.string_view("validator")
-VALIDATOR_DESCRIPTOR.contract_name = polyplug_guest.string_view("pipeline.Validator@1")
-VALIDATOR_DESCRIPTOR.version.major = 1
-VALIDATOR_DESCRIPTOR.version.minor = 0
-VALIDATOR_DESCRIPTOR.version.patch = 0
-
-
+local VALIDATOR_IMPLS = {}
 function M.set_validator_impl(validate_fn)
-    local functions = ffi.new("PluginFunction[1]")
-    functions[0] = ffi.cast("uintptr_t", validate_fn)
-    VALIDATOR_INTERFACE.dispatch.native.function_count = 1
-    VALIDATOR_INTERFACE.dispatch.native.functions = functions
+    VALIDATOR_IMPLS[0] = validate_fn
 end
+function M._register_VALIDATOR()
+    local functions = {}
+    functions[0] = function(args_ptr, out_ptr)
+        local impl = VALIDATOR_IMPLS[0]
+        if impl == nil then return end
+        local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
+        local result = impl(args_sv[0])
+        if out_ptr ~= 0 and result ~= nil then
+            local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
+            out_sv[0] = result
+        end
+    end
+    _G._polyplug_handlers = _G._polyplug_handlers or {}
+    if _G._polyplug_handlers.contract_name == nil then
+        _G._polyplug_handlers.contract_name = "pipeline.Validator"
+        _G._polyplug_handlers.contract_version = 1
+        _G._polyplug_handlers.plugin_name = "validator"
+        _G._polyplug_handlers.functions = functions
+    end
+end
+
+
+-- Registration entry point called by the LuaLoader.
+function polyplug_init(host_ptr, ctx_ptr)
+    if host_ptr == nil or ctx_ptr == nil then
+        return polyplug_guest.AbiErrorCode.Generic
+    end
+    polyplug_guest.store_host_interface(host_ptr)
+    M._register_VALIDATOR()
+    return polyplug_guest.AbiErrorCode.Ok
+end
+
 return M

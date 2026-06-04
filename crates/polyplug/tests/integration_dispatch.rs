@@ -4,7 +4,7 @@
 //!
 //! This test crate is the crate root for the `integration_dispatch` test binary.
 
-use polyplug::registry::runtime_store::RuntimeStore;
+use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
     AbiError, AbiErrorCode, BundleInitContext, GuestContractHandle, GuestContractInstance,
     GuestContractInterface, HostInterface, PluginDescriptor, StringView,
@@ -317,11 +317,8 @@ fn test_dispatch_add_function() {
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // SAFETY: dispatch is a union, accessing .native requires unsafe since dispatch_type is Native.
-    assert_eq!(
-        unsafe { interface.dispatch.native.function_count },
-        1,
-        "test.add interface must have 1 function"
-    );
+    let function_count: u32 = unsafe { interface.dispatch.native.function_count };
+    assert_eq!(function_count, 1, "test.add interface must have 1 function");
 
     // Call function_id 0 (the `add` function).
     let args: AddArgs = AddArgs { a: 3, b: 5 };

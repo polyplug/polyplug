@@ -10,13 +10,14 @@ pub mod js;
 pub mod lua;
 pub mod python;
 
-pub use cpp::CppGenerator;
+pub use cpp::{CppGenerator, ForwardKind};
 pub use csharp::CSharpGenerator;
 pub use js::JsGenerator;
 pub use lua::LuaGenerator;
 pub use python::PythonGenerator;
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use std::collections::HashMap;
 
 /// Context passed to code generators during generation.
 #[derive(Debug, Clone, Default)]
@@ -27,6 +28,11 @@ pub struct GenerationContext {
     pub generate_docs: bool,
     /// Whether to generate helper functions (e.g., FNV-1a hash).
     pub generate_helpers: bool,
+    /// Map of enum type name to its Rust `repr` (e.g. "u32", "u8").
+    ///
+    /// Used by generators (notably Python ctypes) that must reference an enum
+    /// field by its underlying integer type rather than the enum class itself.
+    pub enum_reprs: HashMap<String, String>,
 }
 
 impl GenerationContext {
@@ -36,12 +42,20 @@ impl GenerationContext {
             namespace: None,
             generate_docs: true,
             generate_helpers: true,
+            enum_reprs: HashMap::new(),
         }
     }
 
     /// Set the namespace for generated code.
     pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
         self.namespace = Some(namespace.into());
+        self
+    }
+
+    /// Register the enum name to Rust `repr` mapping used for sized field
+    /// references.
+    pub fn with_enum_reprs(mut self, enum_reprs: HashMap<String, String>) -> Self {
+        self.enum_reprs = enum_reprs;
         self
     }
 }

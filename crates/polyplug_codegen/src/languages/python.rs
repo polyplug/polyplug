@@ -155,6 +155,86 @@ impl PythonGenerator {
         (typedef, callback_name)
     }
 
+    /// Return the named aggregate types (structs, enums, unions) that a field
+    /// of `rust_type` references *by value* in the generated ctypes bindings.
+    ///
+    /// ctypes resolves names eagerly: a `Structure` `_fields_` entry referencing
+    /// another `Structure`/`IntEnum`, and a `CFUNCTYPE(ret, params...)` typedef,
+    /// all require those names to already be defined. Pointer fields map to
+    /// `c_void_p`/`c_char_p` and impose no ordering constraint, so they are not
+    /// dependencies. The returned names are the Python identifiers as emitted.
+    pub fn type_dependencies(rust_type: &str) -> Vec<String> {
+        let mut deps: Vec<String> = Vec::new();
+
+        if Self::is_function_pointer(rust_type) {
+            // Function pointer: the CFUNCTYPE typedef references its return type
+            // and every parameter type by name, so all named types are deps.
+            if let Some((return_type, params)) = Self::parse_function_pointer(rust_type) {
+                if let Some(name) = Self::named_dependency(&return_type) {
+                    deps.push(name);
+                }
+                for param in &params {
+                    if let Some(name) = Self::named_dependency(param) {
+                        deps.push(name);
+                    }
+                }
+            }
+            return deps;
+        }
+
+        if Self::is_array(rust_type) {
+            // Array<T> expands into void* + size_t fields — no named dependency.
+            return deps;
+        }
+
+        let py_type: String = Self::rust_type_to_python(rust_type);
+        if let Some(name) = Self::named_dependency(&py_type) {
+            deps.push(name);
+        }
+        deps
+    }
+
+    /// Map a Rust `repr` (e.g. "u32") to its ctypes integer type. Defaults to
+    /// `ctypes.c_int` for unknown reprs, matching the default C enum width.
+    fn repr_to_ctypes(repr: &str) -> &'static str {
+        match repr {
+            "u8" => "ctypes.c_uint8",
+            "u16" => "ctypes.c_uint16",
+            "u32" => "ctypes.c_uint32",
+            "u64" => "ctypes.c_uint64",
+            "i8" => "ctypes.c_int8",
+            "i16" => "ctypes.c_int16",
+            "i32" => "ctypes.c_int32",
+            "i64" => "ctypes.c_int64",
+            _ => "ctypes.c_int",
+        }
+    }
+
+    /// Resolve a struct/union field's `rust_type` to the ctypes type used in
+    /// `_fields_`. Enum-typed fields map to the enum's underlying integer type
+    /// (a plain `enum.IntEnum` has no ctypes size and cannot be a field type);
+    /// IntEnum values remain assignable to such integer fields. All other types
+    /// defer to `rust_type_to_python`.
+    fn field_type_to_python(rust_type: &str, ctx: &GenerationContext) -> String {
+        let py_type: String = Self::rust_type_to_python(rust_type);
+        if let Some(repr) = ctx.enum_reprs.get(&py_type) {
+            return Self::repr_to_ctypes(repr).to_string();
+        }
+        py_type
+    }
+
+    /// If `py_type` is a bare named aggregate identifier (not a `ctypes.*`
+    /// primitive, not `None`), return that name; otherwise `None`.
+    fn named_dependency(py_type: &str) -> Option<String> {
+        if py_type == "None" || py_type.starts_with("ctypes.") {
+            return None;
+        }
+        match py_type.chars().next() {
+            Some(c) if c.is_ascii_uppercase() => Some(py_type.to_string()),
+            _ => None,
+        }
+    }
+
     fn rust_type_to_python(rust_type: &str) -> String {
         // Handle Option<...> wrapper.
         if Self::is_option(rust_type) {
@@ -194,7 +274,10 @@ impl PythonGenerator {
         }
 
         match rust_type {
-            "u64" => String::from("ctypes.c_uint64"),
+            // `#[repr(transparent)]` u64 newtypes from polyplug_utils.
+            "u64" | "BundleId" | "GuestContractId" | "HostContractId" => {
+                String::from("ctypes.c_uint64")
+            }
             "u32" => String::from("ctypes.c_uint32"),
             "u16" => String::from("ctypes.c_uint16"),
             "u8" => String::from("ctypes.c_uint8"),
@@ -251,7 +334,7 @@ impl CodeGenerator for PythonGenerator {
         format!("{}: int = {}\n", item.name, item.value)
     }
 
-    fn generate_struct(&self, item: &StructInfo, _ctx: &GenerationContext) -> String {
+    fn generate_struct(&self, item: &StructInfo, ctx: &GenerationContext) -> String {
         let mut output = String::new();
         let mut typedefs = String::new();
 
@@ -302,7 +385,7 @@ impl CodeGenerator for PythonGenerator {
                 continue;
             }
 
-            let py_type = Self::rust_type_to_python(&field.rust_type);
+            let py_type: String = Self::field_type_to_python(&field.rust_type, ctx);
             output.push_str(&format!("        (\"{}\", {}),\n", field.name, py_type));
         }
         output.push_str("    ]\n");
@@ -345,7 +428,7 @@ impl CodeGenerator for PythonGenerator {
         output
     }
 
-    fn generate_union(&self, item: &UnionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_union(&self, item: &UnionInfo, ctx: &GenerationContext) -> String {
         let mut output = String::new();
 
         output.push_str("\n\nclass ");
@@ -360,7 +443,7 @@ impl CodeGenerator for PythonGenerator {
 
         output.push_str("    _fields_ = [\n");
         for variant in &item.variants {
-            let py_type = Self::rust_type_to_python(&variant.type_name);
+            let py_type: String = Self::field_type_to_python(&variant.type_name, ctx);
             output.push_str(&format!("        (\"{}\", {}),\n", variant.name, py_type));
         }
         output.push_str("    ]\n");

@@ -46,7 +46,7 @@ public static partial class NativeLoaderExtensions
                 throw new InvalidOperationException("polyplug: native loader create failed");
             }
 
-            uint err = runtime.RegisterLoader(loaderPtr);
+            uint err = runtime.RegisterLoader("native", loaderPtr);
             if (err != 0u)
             {
                 Runtime.ThrowLastError($"polyplug: native loader register failed: {err}");

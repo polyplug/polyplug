@@ -8,7 +8,7 @@ using Polyplug.Abi;
 
 public static class Plugin {
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "polyplug_init")]
-    public static uint PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {
+    public static AbiErrorCode PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {
         if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;
         HostInterfaceStorage.StoreHostInterface(hostPtr);
         System.Threading.Thread.BeginThreadAffinity();

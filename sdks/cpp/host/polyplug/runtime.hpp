@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "polyplug/abi.hpp"
+#include "../../abi/polyplug/abi.hpp"
 #include "error.hpp"
 #include "handle.hpp"
 

@@ -11,16 +11,15 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use polyplug::registry::runtime_store::RuntimeStore;
+use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
 use polyplug_abi::{
-    AbiError, AbiErrorCode, Array, Buffer, BundleInitContext, DispatchMechanisms, DispatchType,
-    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostInterface,
-    NativeDispatch, PluginDescriptor, StringView, Version,
+    AbiError, AbiErrorCode, Array, Buffer, BundleInitContext, GuestContractHandle,
+    GuestContractInstance, GuestContractInterface, HostInterface, PluginDescriptor, StringView,
 };
-use polyplug_utils::{BundleId, GuestContractId, bundle_id, guest_contract_id};
+use polyplug_utils::{BundleId, GuestContractId};
 
 // --- Plugin environment variable ---------------------------------------------
 
@@ -453,7 +452,7 @@ fn stress_string_view_non_ascii_utf8() {
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // Non-ASCII UTF-8: "cafe" encoded as bytes.
+    // Non-ASCII UTF-8: "café" encoded as bytes (é = 0xC3 0xA9, two bytes).
     let input_bytes: &[u8] = b"caf\xc3\xa9";
     let input_sv: StringView = StringView {
         ptr: input_bytes.as_ptr(),
@@ -496,7 +495,7 @@ fn stress_string_view_non_ascii_utf8() {
     let returned_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_sv.ptr, out_sv.len) };
     let returned_str: &str =
         core::str::from_utf8(returned_bytes).expect("echoed StringView must be valid UTF-8");
-    assert_eq!(returned_str, "cafe", "echoed string must equal input");
+    assert_eq!(returned_str, "café", "echoed string must equal input");
 
     // TrackingAllocator verifies the tracking layer is balanced (no allocs/frees through it).
     let tracker: TrackingAllocator = TrackingAllocator::new();

@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use polyplug::error::LoaderError;
-use polyplug::error::RuntimeError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
@@ -31,19 +31,23 @@ impl BundleLoader for StubLoader {
     fn load(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), RuntimeError> {
         Ok(())
     }
+
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), RuntimeError> {
+        Ok(())
+    }
 }
 
 // ─── ManifestData parsing ──────────────────────────────────────────────────────
 
 #[test]
-fn manifest_defaults_to_native_when_field_absent() {
+fn manifest_missing_runtime_field_is_error() {
     let toml_src: &str = "";
-    let data: ManifestData = ManifestData::parse_from_str(toml_src)
-        .expect("empty TOML should parse to ManifestData with defaults");
-    assert_eq!(
-        data.runtime, "native",
-        "absent runtime field must default to \"native\""
-    );
+    let result: Result<ManifestData, RuntimeError> =
+        ManifestData::parse_from_str(toml_src).map_err(RuntimeError::from);
+    match result {
+        Err(RuntimeError::Loader(LoaderError::ManifestParse { .. })) => {}
+        other => panic!("expected ManifestParse error for absent runtime field, got: {other:?}"),
+    }
 }
 
 #[test]
@@ -66,7 +70,7 @@ fn manifest_reads_dotnet_runtime_field() {
 
 #[test]
 fn builder_builds_with_no_extra_loaders() {
-    let result: Result<Runtime, RuntimeError> = Runtime::builder().build();
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder().build();
     assert!(
         result.is_ok(),
         "RuntimeBuilder::build() with no extra loaders must succeed: {:?}",
@@ -76,7 +80,7 @@ fn builder_builds_with_no_extra_loaders() {
 
 #[test]
 fn builder_builds_with_stub_loader() {
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .loader(StubLoader {
             name: "my_custom_runtime",
         })
@@ -91,7 +95,7 @@ fn builder_builds_with_stub_loader() {
 #[test]
 fn duplicate_loader_detected_in_build() {
     // Registering two loaders with the same runtime_name must fail at build().
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .loader(StubLoader {
             name: "conflict_runtime",
         })
@@ -110,7 +114,7 @@ fn duplicate_loader_detected_in_build() {
 
 #[test]
 fn single_native_loader_succeeds_in_build() {
-    let result: Result<Runtime, RuntimeError> = Runtime::builder()
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .loader(StubLoader { name: "native" })
         .build();
     assert!(
@@ -130,7 +134,7 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
     });
     assert_eq!(loader.runtime_name(), "dotnet");
 
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(DotnetLoader::new(polyplug_dotnet::DotnetConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -144,6 +148,7 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
         provides: Vec::new(),
         function_count: HashMap::new(),
         dependencies: Vec::new(),
+        bundle_dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
     let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);
@@ -165,7 +170,7 @@ fn python_loader_loads_nonexistent_file_errors() {
     let loader: PythonLoader = PythonLoader::new(polyplug_python::PythonConfig::default());
     assert_eq!(loader.runtime_name(), "python");
 
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(PythonLoader::new(polyplug_python::PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -179,6 +184,7 @@ fn python_loader_loads_nonexistent_file_errors() {
         provides: Vec::new(),
         function_count: HashMap::new(),
         dependencies: Vec::new(),
+        bundle_dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
     let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);
@@ -200,7 +206,7 @@ fn lua_loader_returns_error_for_missing_file() {
     let loader: LuaLoader = LuaLoader::new(polyplug_lua::LuaConfig::default());
     assert_eq!(loader.runtime_name(), "lua");
 
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(LuaLoader::new(polyplug_lua::LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
@@ -214,6 +220,7 @@ fn lua_loader_returns_error_for_missing_file() {
         provides: Vec::new(),
         function_count: HashMap::new(),
         dependencies: Vec::new(),
+        bundle_dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
     let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);

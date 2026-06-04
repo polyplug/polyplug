@@ -10,6 +10,27 @@ export LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps:${LD_LIBRARY_PATH:-}"
 export POLYPLUG_LIB_PATH="$WORKSPACE_DIR/target/release/deps/libpolyplug.so"
 export POLYPLUG_NATIVE_LIB_PATH="$WORKSPACE_DIR/target/release/deps/libpolyplug_native.so"
 
+# Loader cdylib paths for hosts that dlopen loaders by env var (JS/Deno). Each
+# loader SDK reads POLYPLUG_<LANG>_LIB, falling back to the bare soname resolved
+# via LD_LIBRARY_PATH. Set them explicitly so the host does not depend on the
+# loader probe order.
+DEPS_DIR="$WORKSPACE_DIR/target/release/deps"
+export POLYPLUG_NATIVE_LIB="$DEPS_DIR/libpolyplug_native.so"
+export POLYPLUG_LUA_LIB="$DEPS_DIR/libpolyplug_lua.so"
+export POLYPLUG_JS_LIB="$DEPS_DIR/libpolyplug_js.so"
+export POLYPLUG_PYTHON_LIB="$DEPS_DIR/libpolyplug_python.so"
+
+# Python host import path: host package + the standalone polyplug_abi package
+# (its parent dir, so `import polyplug_abi` resolves) + sdks/python/ (so
+# polyplug_abi/abi.py can `from abi.abi import *`) + the native and python
+# loader packages (so the example can register both loaders).
+PYTHON_HOST_PATH="$WORKSPACE_DIR/sdks/python/host:$WORKSPACE_DIR/sdks/python/polyplug_abi:$WORKSPACE_DIR/sdks/python:$WORKSPACE_DIR/sdks/python/loaders/native:$WORKSPACE_DIR/sdks/python/loaders/python"
+
+# Lua host search path: host modules + the abi modules (polyplug_abi.lua and
+# abi.lua live in sdks/lua/abi) + the four loader package dirs (native, lua, js,
+# python) + this directory's host modules.
+LUA_HOST_PATH="$WORKSPACE_DIR/sdks/lua/host/?.lua;$WORKSPACE_DIR/sdks/lua/abi/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/native/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/lua/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/js/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/python/?.lua;$SCRIPT_DIR/hosts/lua/?.lua;;"
+
 echo "=== polyplug Examples Verification ==="
 echo "Library path: $WORKSPACE_DIR/target/release/deps"
 echo ""
@@ -29,7 +50,7 @@ echo ""
 # Run Python host
 echo "=== Python Host ==="
 if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
-    if PYTHONPATH="$WORKSPACE_DIR/sdks/python/host:$WORKSPACE_DIR/sdks/python/host/loaders/polyplug-loaders-native" python3 hosts/python/host.py 2>&1; then
+    if PYTHONPATH="$PYTHON_HOST_PATH" python3 hosts/python/host.py 2>&1; then
         echo "✓ python host passed"
     else
         echo "✗ python host failed"
@@ -43,7 +64,7 @@ echo ""
 # Run Lua host
 echo "=== Lua Host ==="
 if command -v luajit &> /dev/null && [ -f "hosts/lua/host.lua" ]; then
-    if LUA_PATH="$WORKSPACE_DIR/sdks/lua/host/?.lua;$PWD/hosts/lua/?.lua;;" luajit hosts/lua/host.lua 2>&1; then
+    if LUA_PATH="$LUA_HOST_PATH" luajit hosts/lua/host.lua 2>&1; then
         echo "✓ lua host passed"
     else
         echo "✗ lua host failed"
@@ -103,7 +124,7 @@ PIPELINE_OK=0
 
 if [ -f "$WORKSPACE_DIR/target/release/pipeline_host" ]; then
     OUTPUT=$("$WORKSPACE_DIR/target/release/pipeline_host" 2>&1)
-    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+    if echo "$OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
         echo "✓ rust host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))
     else
@@ -112,8 +133,8 @@ if [ -f "$WORKSPACE_DIR/target/release/pipeline_host" ]; then
 fi
 
 if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
-    OUTPUT=$(PYTHONPATH="$WORKSPACE_DIR/sdks/python/host" python3 hosts/python/host.py 2>&1)
-    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+    OUTPUT=$(PYTHONPATH="$PYTHON_HOST_PATH" python3 hosts/python/host.py 2>&1)
+    if echo "$OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
         echo "✓ python host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))
     else
@@ -122,8 +143,8 @@ if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
 fi
 
 if command -v luajit &> /dev/null && [ -f "hosts/lua/host.lua" ]; then
-    OUTPUT=$(LUA_PATH="$WORKSPACE_DIR/sdks/lua/host/?.lua;;" luajit hosts/lua/host.lua 2>&1)
-    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+    OUTPUT=$(LUA_PATH="$LUA_HOST_PATH" luajit hosts/lua/host.lua 2>&1)
+    if echo "$OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
         echo "✓ lua host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))
     else
@@ -133,7 +154,7 @@ fi
 
 if command -v deno &> /dev/null && [ -f "hosts/js/host.js" ]; then
     OUTPUT=$(deno run --allow-read --allow-ffi --allow-env hosts/js/host.js 2>&1)
-    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+    if echo "$OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
         echo "✓ javascript host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))
     else
@@ -143,7 +164,7 @@ fi
 
 if command -v dotnet &> /dev/null && [ -f "hosts/csharp/Host.csproj" ]; then
     OUTPUT=$(cd hosts/csharp && dotnet run 2>&1)
-    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+    if echo "$OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
         echo "✓ csharp host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))
     else
@@ -153,7 +174,7 @@ fi
 
 if [ -f "hosts/cpp/host" ]; then
     OUTPUT=$(LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps" hosts/cpp/host 2>&1)
-    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+    if echo "$OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
         echo "✓ cpp host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))
     else

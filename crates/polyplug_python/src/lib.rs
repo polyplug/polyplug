@@ -17,6 +17,7 @@ pub mod bridge;
 pub mod config;
 pub(crate) mod context;
 pub mod ffi;
+pub(crate) mod isolation;
 pub use bridge::PythonHostBridge;
 pub use config::PythonConfig;
 
@@ -111,6 +112,13 @@ impl BundleLoader for PythonLoader {
         // Set bundle_id in TLS for dependency enforcement during init.
         polyplug::runtime::set_init_bundle_id(bundle_id);
 
+        // Serialize the snapshot→exec→isolate critical section against other
+        // concurrent Python loads sharing this process's interpreter. CPython
+        // releases the GIL during import I/O, so two parallel loads would
+        // otherwise interleave their sys.modules mutations and corrupt each
+        // other's per-bundle isolation. Held for the whole `Python::attach`.
+        let _load_guard: std::sync::MutexGuard<'_, ()> = crate::context::acquire_load_lock();
+
         // Step 3: Load the Python module and call polyplug_init.
         Python::attach(|py| {
             // Step 3a: Prepend bundle directory (and site-packages) to sys.path.
@@ -197,6 +205,11 @@ impl BundleLoader for PythonLoader {
                     })
                 })?;
 
+            // Snapshot sys.modules before executing the bundle so that, after
+            // init, exactly the modules this bundle introduced can be isolated.
+            let modules_before: std::collections::HashSet<String> =
+                crate::isolation::snapshot_loaded_modules(py, &bundle_name)?;
+
             // Step 3b: Execute the module.
             spec.getattr("loader")
                 .and_then(|loader: pyo3::Bound<'_, pyo3::PyAny>| loader.getattr("exec_module"))
@@ -247,6 +260,19 @@ impl BundleLoader for PythonLoader {
                         error: format!("polyplug_init call failed: {}", e),
                     })
                 })?;
+
+            // Isolate this bundle's freshly imported modules under a unique
+            // per-bundle prefix so the next bundle imports its own generated
+            // package instead of this one's cached copy. Re-keying keeps the
+            // native dispatch CFUNCTYPE trampolines alive for the runtime's
+            // lifetime while freeing the generic module names.
+            crate::isolation::isolate_bundle_modules(
+                py,
+                &bundle_name,
+                bundle_id,
+                &bundle_dir_str,
+                &modules_before,
+            )?;
 
             Ok::<(), RuntimeError>(())
         })?;

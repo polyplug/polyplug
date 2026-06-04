@@ -147,13 +147,16 @@ fn init_clr() -> Option<InitFn> {
         .get_function_with_unmanaged_callers_only::<InitFn>(&type_name, &method_name)
         .ok()?;
 
-    std::mem::forget(context);
+    core::mem::forget(context);
 
     Some(*init_fn)
 }
 
 fn get_init_fn() -> Option<InitFn> {
-    let mut guard = CLR_INIT_FN.lock().unwrap();
+    let mut guard: std::sync::MutexGuard<'_, Option<InitFn>> = match CLR_INIT_FN.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     if guard.is_none() {
         *guard = init_clr();
     }
@@ -173,8 +176,12 @@ fn bench_clr_dispatch(c: &mut Criterion) {
 
     group.bench_function("clr_init_call", |b| {
         b.iter(|| {
+            // SAFETY: init_fn is the CsharpPlugin.Plugin::PolyplugInit entry point loaded
+            // from the CLR via get_function_with_unmanaged_callers_only. Its three pointer
+            // parameters are nullable by ABI contract; the managed side treats null as a
+            // no-op and returns an AbiError code, so null pointers are sound here.
             let result: u32 =
-                unsafe { init_fn(std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
+                unsafe { init_fn(core::ptr::null_mut(), core::ptr::null(), core::ptr::null()) };
             black_box(result)
         })
     });
@@ -182,8 +189,12 @@ fn bench_clr_dispatch(c: &mut Criterion) {
     group.bench_function("clr_init_10_calls", |b| {
         b.iter(|| {
             for _ in 0..10 {
+                // SAFETY: init_fn is the CsharpPlugin.Plugin::PolyplugInit entry point loaded
+                // from the CLR via get_function_with_unmanaged_callers_only. Its three pointer
+                // parameters are nullable by ABI contract; the managed side treats null as a
+                // no-op and returns an AbiError code, so null pointers are sound here.
                 let result: u32 =
-                    unsafe { init_fn(std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
+                    unsafe { init_fn(core::ptr::null_mut(), core::ptr::null(), core::ptr::null()) };
                 black_box(result);
             }
             black_box(())
@@ -240,8 +251,10 @@ fn bench_dispatch_signature(c: &mut Criterion) {
 
     group.bench_function("dispatch_with_null_pointers", |b| {
         b.iter(|| {
+            // SAFETY: init_fn is the local noop_init, which ignores all three pointer
+            // arguments and returns 0. Passing null pointers is therefore sound.
             let result: u32 =
-                unsafe { init_fn(std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
+                unsafe { init_fn(core::ptr::null_mut(), core::ptr::null(), core::ptr::null()) };
             black_box(result)
         })
     });
@@ -251,6 +264,9 @@ fn bench_dispatch_signature(c: &mut Criterion) {
             let mut rt_ctx: u64 = 0;
             let host_vtable: u64 = 0;
             let ctx: u64 = 0;
+            // SAFETY: init_fn is the local noop_init, which ignores its arguments. The three
+            // pointers reference live stack locals (rt_ctx, host_vtable, ctx) that outlive the
+            // call, so they are valid and properly aligned for the duration of the dispatch.
             let result: u32 = unsafe {
                 init_fn(
                     &mut rt_ctx as *mut u64 as *mut core::ffi::c_void,
@@ -282,6 +298,9 @@ fn bench_computation_dispatch(c: &mut Criterion) {
 
     group.bench_function("computation_100_iterations", |b| {
         b.iter(|| {
+            // SAFETY: compute_fn is the local compute_sum, which only performs integer
+            // arithmetic on its scalar arguments and dereferences no pointers. Calling it
+            // with the value arguments (0, 0) is sound.
             let result: i64 = unsafe { compute_fn(0, 0) };
             black_box(result)
         })

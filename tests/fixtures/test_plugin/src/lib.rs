@@ -5,10 +5,6 @@
 
 use polyplug_abi::*;
 
-// ─── FNV-1a hash (compile-time constant for "test.add@1") ────────────────────
-// Computed: fnv1a_64(b"test.add@1") = 0xCC4232FAB0410D2B
-const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B;
-
 // ─── test.add contract types ─────────────────────────────────────────────────
 
 /// Arguments to the `add` function.
@@ -81,23 +77,27 @@ unsafe impl Sync for FnPtr {}
 // function_id 0 = add(args: AddArgs) -> u32
 static TEST_ADD_FNS: [FnPtr; 1] = [FnPtr(plugin_add as *const ())];
 
-static TEST_ADD_INTERFACE: GuestContractInterface = GuestContractInterface {
-    contract_id: GuestContractId::from_u64(TEST_ADD_CONTRACT_ID),
-    contract_version: Version {
-        major: 1,
-        minor: 0,
-        patch: 0,
-    },
-    dispatch_type: DispatchType::Native,
-    create_instance: create_instance_stub,
-    destroy_instance: destroy_instance_stub,
-    dispatch: DispatchMechanisms {
-        native: NativeDispatch {
-            function_count: 1,
-            functions: TEST_ADD_FNS.as_ptr() as *const *const (),
+/// Build the test.add interface with the canonical contract ID computed at
+/// runtime via `GuestContractId::new`, keeping it scheme-proof (no baked hash).
+fn test_add_interface() -> GuestContractInterface {
+    GuestContractInterface {
+        contract_id: GuestContractId::new("test.add", 1),
+        contract_version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
         },
-    },
-};
+        dispatch_type: DispatchType::Native,
+        create_instance: create_instance_stub,
+        destroy_instance: destroy_instance_stub,
+        dispatch: DispatchMechanisms {
+            native: NativeDispatch {
+                function_count: 1,
+                functions: TEST_ADD_FNS.as_ptr() as *const *const (),
+            },
+        },
+    }
+}
 
 static TEST_ADD_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
     name: StringView {
@@ -154,13 +154,17 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: host_abi is non-null and provided by the host runtime per ABI contract.
     let host: &HostInterface = unsafe { &*host_abi };
 
+    // The host copies the interface during this synchronous call, so a local
+    // value (carrying the runtime-computed contract ID) is sufficient.
+    let interface: GuestContractInterface = test_add_interface();
+
     // SAFETY: register_contract is a valid function pointer set by the host.
-    // TEST_ADD_DESCRIPTOR and TEST_ADD_INTERFACE are 'static.
+    // TEST_ADD_DESCRIPTOR is 'static; `interface` outlives the synchronous call.
     unsafe {
         (host.register_contract)(
             host_abi,
             &TEST_ADD_DESCRIPTOR as *const PluginDescriptor,
-            &TEST_ADD_INTERFACE as *const GuestContractInterface,
+            &interface as *const GuestContractInterface,
         )
     }
 }

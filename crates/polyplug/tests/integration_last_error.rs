@@ -8,7 +8,7 @@
 
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
-use polyplug::host_get_last_error;
+use polyplug::runtime::host_get_last_error;
 use polyplug_abi::HostInterface;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -253,6 +253,7 @@ fn last_error_per_runtime_isolation() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
     let host1: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host1.is_null(), "runtime 1 creation must succeed");
+    // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
     let host2: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host2.is_null(), "runtime 2 creation must succeed");
 
@@ -277,8 +278,9 @@ fn last_error_per_runtime_isolation() {
     assert_eq!(peek_error_len(host1), 0, "host1 error cleared");
     assert_eq!(peek_error_len(host2), 0, "host2 still has no error");
 
-    // SAFETY: host1 and host2 were allocated by polyplug_runtime_create.
+    // SAFETY: host1 was allocated by polyplug_runtime_create and is destroyed once.
     unsafe { polyplug_runtime_destroy(host1) };
+    // SAFETY: host2 was allocated by polyplug_runtime_create and is destroyed once.
     unsafe { polyplug_runtime_destroy(host2) };
 }
 

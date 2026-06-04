@@ -1,82 +1,190 @@
 //! FFI native loader integration tests.
 //!
 //! These tests exercise the polyplug C FFI surface (the same API that Lua and Deno
-//! hosts use) for native plugin loading. They require `polyplug_native` to register
-//! the native loader.
+//! hosts use) for native plugin loading. The FFI exposes only two free functions —
+//! `polyplug_runtime_create` and `polyplug_runtime_destroy` — and routes every other
+//! operation through the `HostInterface` function-pointer table.
 
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
-use polyplug::ffi::{
-    OpaqueRuntime, ResolveHandle, polyplug_runtime_create, polyplug_runtime_destroy,
-    polyplug_runtime_error_message_len, polyplug_runtime_find_all_by_contract,
-    polyplug_runtime_find_by_contract, polyplug_runtime_last_error, polyplug_runtime_load_bundle,
-    polyplug_runtime_release_plugin, polyplug_runtime_resolve_plugin,
-};
+use core::ffi::c_void;
+
+use polyplug::ffi::{polyplug_runtime_create, polyplug_runtime_destroy};
+use polyplug::loader::BundleLoader;
+use polyplug_abi::{Array, GuestContractHandle, GuestContractInterface, HostInterface, StringView};
+use polyplug_native::NativeLoader;
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
-const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B;
-const NULL_HANDLE: u64 = u64::MAX;
 
-fn read_last_error(rt: *const OpaqueRuntime) -> String {
-    let len: usize = unsafe { polyplug_runtime_error_message_len(rt) };
+fn test_add_contract_id() -> u64 {
+    polyplug_utils::guest_contract_id("test.add", 1)
+}
+
+fn read_last_error(host: *const HostInterface) -> String {
+    // SAFETY: host is a valid HostInterface pointer for the lifetime of this call.
+    let len: usize = unsafe { ((*host).get_error_len)(host) };
     if len == 0 {
         return String::new();
     }
     let mut buf: Vec<u8> = vec![0u8; len];
-    let _written: usize = unsafe { polyplug_runtime_last_error(rt, buf.as_mut_ptr(), len) };
+    // SAFETY: buf has capacity `len` and host is valid.
+    let written: usize = unsafe { ((*host).get_last_error)(host, buf.as_mut_ptr(), len) };
+    buf.truncate(written);
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-fn create_runtime_with_native_loader() -> *mut OpaqueRuntime {
-    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
-    assert!(!rt.is_null(), "polyplug_runtime_create returned null");
-    rt
+/// Register the native loader through the HostInterface `register_loader` pointer.
+fn register_native_loader(host: *const HostInterface) {
+    // Double-box so the fat trait-object pointer survives the thin `*mut c_void`.
+    let trait_obj: Box<dyn BundleLoader> = Box::new(NativeLoader::new(Default::default()));
+    let loader_ptr: *mut c_void = Box::into_raw(Box::new(trait_obj)) as *mut c_void;
+    let runtime_name: StringView = StringView::from_static(b"native");
+    // SAFETY: host is valid, runtime_name borrows a 'static slice, loader_ptr is a freshly
+    // leaked Box<Box<dyn BundleLoader>> that the runtime takes ownership of.
+    let err = unsafe { ((*host).register_loader)(host, runtime_name, loader_ptr) };
+    assert_eq!(
+        err.code,
+        polyplug_abi::AbiErrorCode::Ok,
+        "register_loader failed: {}",
+        read_last_error(host)
+    );
+}
+
+fn load_bundle(host: *const HostInterface, dir: &str) -> polyplug_abi::AbiError {
+    let bytes: &[u8] = dir.as_bytes();
+    // SAFETY: host is valid; bytes points to `len` valid UTF-8 bytes.
+    unsafe { ((*host).load_bundle)(host, bytes.as_ptr(), bytes.len()) }
+}
+
+#[test]
+fn test_runtime_create_and_destroy() {
+    // SAFETY: null config selects defaults.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    assert!(!host.is_null(), "polyplug_runtime_create returned null");
+
+    // SAFETY: host is non-null and points to a valid HostInterface.
+    let runtime: *mut c_void = unsafe { (*host).runtime };
+    assert!(!runtime.is_null(), "HostInterface.runtime must be set");
+
+    // SAFETY: host was produced by polyplug_runtime_create and not yet destroyed.
+    unsafe { polyplug_runtime_destroy(host) };
+}
+
+#[test]
+fn test_load_bundle_fails_without_registered_loader() {
+    // SAFETY: null config selects defaults.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    assert!(!host.is_null(), "polyplug_runtime_create returned null");
+
+    let err: polyplug_abi::AbiError = load_bundle(host, TEST_PLUGIN_DIR);
+    assert_ne!(
+        err.code,
+        polyplug_abi::AbiErrorCode::Ok,
+        "load_bundle must fail when no loader is registered"
+    );
+    assert!(
+        !read_last_error(host).is_empty(),
+        "an error message must be retrievable after a failed load"
+    );
+
+    // SAFETY: host is valid and not yet destroyed.
+    unsafe { polyplug_runtime_destroy(host) };
 }
 
 #[test]
 fn test_native_loader_ffi_workflow() {
-    let rt: *mut OpaqueRuntime = create_runtime_with_native_loader();
+    // SAFETY: null config selects defaults.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    assert!(!host.is_null(), "polyplug_runtime_create returned null");
 
-    // 1. Load bundle
-    let path_bytes: &[u8] = TEST_PLUGIN_DIR.as_bytes();
-    let result: u32 =
-        unsafe { polyplug_runtime_load_bundle(rt, path_bytes.as_ptr(), path_bytes.len()) };
-    assert_eq!(result, 0, "load_bundle failed: {}", read_last_error(rt));
+    register_native_loader(host);
 
-    // 2. Find by contract
-    let handle: u64 = unsafe { polyplug_runtime_find_by_contract(rt, TEST_ADD_CONTRACT_ID, 0) };
-    assert_ne!(
-        handle, NULL_HANDLE,
-        "Expected valid handle, got NULL_HANDLE"
+    // 1. Load the native test bundle.
+    let err: polyplug_abi::AbiError = load_bundle(host, TEST_PLUGIN_DIR);
+    assert_eq!(
+        err.code,
+        polyplug_abi::AbiErrorCode::Ok,
+        "load_bundle failed: {}",
+        read_last_error(host)
     );
 
-    // 3. Resolve to vtable (returns ResolveHandle, access .vtable field)
-    let resolve_handle: *const ResolveHandle =
-        unsafe { polyplug_runtime_resolve_plugin(rt, handle) };
-    assert!(
-        !resolve_handle.is_null(),
-        "polyplug_runtime_resolve_plugin returned null: {}",
-        read_last_error(rt)
-    );
-    // SAFETY: resolve_handle is non-null and valid, vtable field is the GuestContractInterface pointer
-    let vtable: *const polyplug_abi::GuestContractInterface = unsafe { (*resolve_handle).vtable };
-    assert!(!vtable.is_null(), "vtable must be non-null");
+    let contract_id: u64 = test_add_contract_id();
 
-    // 4. Find all by contract
-    let mut out_buf: [u64; 8] = [0u64; 8];
-    let count: usize = unsafe {
-        polyplug_runtime_find_all_by_contract(rt, TEST_ADD_CONTRACT_ID, 0, out_buf.as_mut_ptr(), 8)
+    // 2. Find the contract by id.
+    // SAFETY: host is valid.
+    let handle: GuestContractHandle =
+        unsafe { ((*host).find_guest_contract)(host, contract_id, 0) };
+    assert!(!handle.is_null(), "expected a valid handle for test.add");
+
+    // 3. Resolve the handle to a vtable pointer.
+    // SAFETY: host is valid and handle came from find_guest_contract.
+    let vtable: *const GuestContractInterface =
+        unsafe { ((*host).resolve_guest_contract)(host, handle) };
+    assert!(!vtable.is_null(), "resolve_guest_contract returned null");
+
+    // 4. Find all providers and free the returned array via the host allocator.
+    // SAFETY: host is valid.
+    let all: Array<GuestContractHandle> =
+        unsafe { ((*host).find_all_guest_contracts)(host, contract_id, 0) };
+    assert!(all.len >= 1, "expected at least one provider for test.add");
+    assert!(!all.items.is_null(), "provider array must be allocated");
+    // SAFETY: `all` was allocated by the host allocator; free with matching size/align.
+    unsafe {
+        ((*host).free)(
+            host,
+            all.items as *mut u8,
+            all.len * core::mem::size_of::<GuestContractHandle>(),
+            all.align,
+        )
     };
-    assert!(
-        count >= 1,
-        "Expected at least 1 result for test.add contract"
+
+    // SAFETY: host is valid and not yet destroyed.
+    unsafe { polyplug_runtime_destroy(host) };
+}
+
+#[test]
+fn test_unknown_contract_returns_null_handle() {
+    // SAFETY: null config selects defaults.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    assert!(!host.is_null(), "polyplug_runtime_create returned null");
+
+    register_native_loader(host);
+
+    let err: polyplug_abi::AbiError = load_bundle(host, TEST_PLUGIN_DIR);
+    assert_eq!(
+        err.code,
+        polyplug_abi::AbiErrorCode::Ok,
+        "load_bundle failed: {}",
+        read_last_error(host)
     );
-    assert_ne!(out_buf[0], NULL_HANDLE);
 
-    // 5. Release the resolve handle
-    unsafe { polyplug_runtime_release_plugin(resolve_handle) };
+    // SAFETY: host is valid; the id is intentionally unknown.
+    let handle: GuestContractHandle =
+        unsafe { ((*host).find_guest_contract)(host, 0xDEAD_BEEF_DEAD_BEEF, 0) };
+    assert!(
+        handle.is_null(),
+        "unknown contract must yield the null handle"
+    );
 
-    // Cleanup runtime
-    unsafe { polyplug_runtime_destroy(rt) };
+    // SAFETY: host is valid and not yet destroyed.
+    unsafe { polyplug_runtime_destroy(host) };
+}
+
+#[test]
+fn test_resolve_null_handle_returns_null() {
+    // SAFETY: null config selects defaults.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    assert!(!host.is_null(), "polyplug_runtime_create returned null");
+
+    // SAFETY: host is valid; resolving the null handle must not dispatch.
+    let vtable: *const GuestContractInterface =
+        unsafe { ((*host).resolve_guest_contract)(host, GuestContractHandle::null()) };
+    assert!(
+        vtable.is_null(),
+        "resolving the null handle must yield null"
+    );
+
+    // SAFETY: host is valid and not yet destroyed.
+    unsafe { polyplug_runtime_destroy(host) };
 }

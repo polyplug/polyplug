@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
 
-use polyplug::registry::runtime_store::RuntimeStore;
+use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::BundleInitContext;
@@ -23,6 +23,10 @@ use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::types::StringView;
 use polyplug_abi::types::abi_error_ok;
+
+mod common;
+
+use common::polyplugc_bin;
 
 // ─── Env vars set by build.rs ─────────────────────────────────────────────────
 
@@ -44,7 +48,7 @@ fn workspace_root() -> PathBuf {
 /// Run `polyplugc generate --api <api_toml> --lang cpp --out <out_dir>`.
 /// Returns the `Output` for inspection.
 fn run_polyplugc_cpp(api_toml: &Path, out_dir: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_polyplugc"))
+    Command::new(polyplugc_bin())
         .arg("generate")
         .arg("--api")
         .arg(api_toml)
@@ -308,7 +312,7 @@ fn test_cpp_codegen_files_exist() {
     std::fs::create_dir_all(&out_dir).expect("failed to create out_dir");
 
     // ── 2. Run polyplugc to generate C++ bindings ─────────────────────────────
-    let gen_output: Output = Command::new(env!("CARGO_BIN_EXE_polyplugc"))
+    let gen_output: Output = Command::new(polyplugc_bin())
         .arg("generate")
         .arg("--bundle")
         .arg(&bundle_toml)
@@ -388,9 +392,11 @@ fn test_cpp_codegen_files_exist() {
 
 // ─── Part B: Runtime dispatch through C++ plugin (skips if SO unavailable) ───
 
-/// Contract id for `test.add@1` (FNV-1a hash, matches C++ plugin).
-const TEST_ADD_CONTRACT_ID: polyplug_utils::GuestContractId =
-    polyplug_utils::GuestContractId::from_u64(0xCC4232FAB0410D2B_u64);
+/// Contract id for `test.add@1`, computed from the canonical scheme
+/// (`fnv1a_64("guest_contract:test.add@1")`) so it tracks the plugin fixtures.
+fn test_add_contract_id() -> polyplug_utils::GuestContractId {
+    polyplug_utils::GuestContractId::new("test.add", 1)
+}
 
 #[test]
 fn test_cpp_plugin_dispatch() {
@@ -445,7 +451,7 @@ fn test_cpp_plugin_dispatch() {
     // ── 5. Look up interface for test.add by contract_id ─────────────────────────
     let handle: GuestContractHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
-            .find(TEST_ADD_CONTRACT_ID, 0_u32)
+            .find(test_add_contract_id(), 0_u32)
             .expect("test.add must be registered after polyplug_init")
     });
 
@@ -548,7 +554,7 @@ fn test_cpp_host_loads_rust_plugin() {
 
     let handle: GuestContractHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
-            .find(TEST_ADD_CONTRACT_ID, 0_u32)
+            .find(test_add_contract_id(), 0_u32)
             .expect("test.add must be registered from Rust plugin")
     });
 
@@ -645,7 +651,7 @@ fn test_exception_isolation_cpp() {
 
     let handle: GuestContractHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
-            .find(TEST_ADD_CONTRACT_ID, 0_u32)
+            .find(test_add_contract_id(), 0_u32)
             .expect("test.add registered from throwing plugin")
     });
 

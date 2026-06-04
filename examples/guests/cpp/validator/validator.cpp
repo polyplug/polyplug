@@ -1,11 +1,10 @@
 #include "generated/guest/init.hpp"
-#include <polyplug/helpers.hpp>
 #include <string>
 #include <sstream>
 
 namespace polyplug_plugin {
 
-class ValidatorImpl : public PipelineValidatorPlugin {
+class ValidatorImpl : public PipelineValidatorGuestContract {
 public:
     StringView validate(StringView input) override {
         std::string_view sv = polyplug::abi::strip_prefix(input, "DECODED:");
@@ -15,14 +14,14 @@ public:
         if (std::getline(iss, name, '|') && std::getline(iss, value, '|') && std::getline(iss, count_str, '|') && !name.empty() && !value.empty()) {
             try {
                 std::stoi(count_str);
-                return polyplug::guest::alloc_string("VALID:" + s);
+                return polyplug::abi::alloc_string("VALID:" + s);
             } catch (...) {}
         }
-        return polyplug::guest::alloc_string("INVALID:expected name|value|count");
+        return polyplug::abi::alloc_string("INVALID:expected name|value|count");
     }
 };
 
-PipelineValidatorPlugin* create_validator_impl() {
+PipelineValidatorGuestContract* create_validator_impl() {
     return new ValidatorImpl();
 }
 

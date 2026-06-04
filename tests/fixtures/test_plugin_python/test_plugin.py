@@ -4,14 +4,10 @@
 from __future__ import annotations
 
 import ctypes
-import sys
-from pathlib import Path
 
-# Add sdks/python/guest and sdks/python/polyplug_abi to path for this fixture
-_REPO_ROOT = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(_REPO_ROOT / "sdks" / "python" / "guest"))
-sys.path.insert(0, str(_REPO_ROOT / "sdks" / "python" / "polyplug_abi"))
-
+# polyplug_guest and polyplug_abi are provisioned into the bundle's
+# site-packages/ by tests/fixtures/build_all.sh; the PythonLoader prepends
+# <bundle_dir>/site-packages to sys.path before importing this module.
 from polyplug_guest import (
     AbiErrorCode,
     AbiError,
@@ -25,12 +21,14 @@ from polyplug_abi import (
     HostInterface,
     Version,
     DispatchType,
+    guest_contract_id,
 )
 
 # ── Contract constants ────────────────────────────────────────────────────────
 
-# FNV-1a("test.add@1") = 0xCC4232FAB0410D2B (from tests/fixtures/test_api.toml)
-_TEST_ADD_CONTRACT_ID: int = 0xCC4232FAB0410D2B
+# Canonical scheme: fnv1a_64("guest_contract:test.add@1"). Computed via the SDK
+# helper rather than baked so the id stays aligned with guest_contract_id().
+_TEST_ADD_CONTRACT_ID: int = guest_contract_id("test.add", 1)
 
 # ── ABI arg-pack struct ───────────────────────────────────────────────────────
 
@@ -138,12 +136,13 @@ _native_dispatch = NativeDispatch(
 )
 _dispatch = DispatchMechanisms(native=_native_dispatch)
 
+# create_instance / destroy_instance are left at their default NULL function
+# pointers (ctypes rejects an explicit None for CFUNCTYPE fields); this contract
+# uses native dispatch with no instance lifecycle.
 _VTABLE = GuestContractInterface(
     contract_id=_TEST_ADD_CONTRACT_ID,
     contract_version=Version(major=1, minor=0, patch=0),
     dispatch_type=DispatchType.Native,
-    create_instance=None,
-    destroy_instance=None,
     dispatch=_dispatch,
 )
 

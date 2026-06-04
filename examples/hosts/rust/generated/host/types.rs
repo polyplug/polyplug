@@ -28,18 +28,37 @@ pub struct HostLoggerLogWithLevelArgs {
 }
 
 pub const PIPELINE_DECODER_CONTRACT_ID: u64 = 0xe1d7de773be6e7f7;
-pub const PIPELINE_DECODER_REQUIRED_VERSION: Version = Version { major: 1, minor: 0, patch: 0 };
+pub const PIPELINE_DECODER_REQUIRED_VERSION: Version = Version {
+    major: 1,
+    minor: 0,
+    patch: 0,
+};
 pub const PIPELINE_DECODER_REQUIRED_FUNCTION_COUNT: u32 = 1;
 pub const DATA_TRANSFORMER_CONTRACT_ID: u64 = 0x4775991362cd68ee;
-pub const DATA_TRANSFORMER_REQUIRED_VERSION: Version = Version { major: 1, minor: 0, patch: 0 };
+pub const DATA_TRANSFORMER_REQUIRED_VERSION: Version = Version {
+    major: 1,
+    minor: 0,
+    patch: 0,
+};
 pub const DATA_TRANSFORMER_REQUIRED_FUNCTION_COUNT: u32 = 1;
 pub const PIPELINE_ENCODER_CONTRACT_ID: u64 = 0xfc50f9d1d3db629f;
-pub const PIPELINE_ENCODER_REQUIRED_VERSION: Version = Version { major: 1, minor: 0, patch: 0 };
+pub const PIPELINE_ENCODER_REQUIRED_VERSION: Version = Version {
+    major: 1,
+    minor: 0,
+    patch: 0,
+};
 pub const PIPELINE_ENCODER_REQUIRED_FUNCTION_COUNT: u32 = 1;
 pub const DATA_REPORTER_CONTRACT_ID: u64 = 0x76bb4643a9f5ad68;
-pub const DATA_REPORTER_REQUIRED_VERSION: Version = Version { major: 1, minor: 0, patch: 0 };
+pub const DATA_REPORTER_REQUIRED_VERSION: Version = Version {
+    major: 1,
+    minor: 0,
+    patch: 0,
+};
 pub const DATA_REPORTER_REQUIRED_FUNCTION_COUNT: u32 = 1;
 pub const PIPELINE_VALIDATOR_CONTRACT_ID: u64 = 0x45173a959eec57c5;
-pub const PIPELINE_VALIDATOR_REQUIRED_VERSION: Version = Version { major: 1, minor: 0, patch: 0 };
+pub const PIPELINE_VALIDATOR_REQUIRED_VERSION: Version = Version {
+    major: 1,
+    minor: 0,
+    patch: 0,
+};
 pub const PIPELINE_VALIDATOR_REQUIRED_FUNCTION_COUNT: u32 = 1;
-

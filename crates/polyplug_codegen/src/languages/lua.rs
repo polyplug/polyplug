@@ -40,6 +40,28 @@ impl LuaGenerator {
         rust_type.starts_with("Array<")
     }
 
+    /// Return the named aggregate this field references *by value*, if any.
+    ///
+    /// LuaJIT can reference a forward-declared type by pointer, but a by-value
+    /// field requires the referenced struct/union/enum to be fully defined
+    /// first. Pointer fields, arrays, and function pointers impose no ordering
+    /// constraint and yield `None`; primitives also yield `None`.
+    pub fn value_dependency(rust_type: &str) -> Option<String> {
+        let inner: &str = Self::strip_option(rust_type);
+
+        if Self::is_array(inner) || inner.starts_with('*') || Self::is_function_pointer(inner) {
+            return None;
+        }
+
+        let lua: String = Self::rust_type_to_lua(inner);
+        // A by-value dependency is a named aggregate — anything that did not map
+        // to a primitive (lowercase, e.g. `uint32_t`), pointer, or `void`.
+        match lua.chars().next() {
+            Some(c) if c.is_ascii_uppercase() => Some(lua),
+            _ => None,
+        }
+    }
+
     fn rust_type_to_lua(rust_type: &str) -> String {
         // Handle Option<...> wrapper — unwrap for type resolution.
         if Self::is_option(rust_type) {
@@ -53,7 +75,10 @@ impl LuaGenerator {
         }
 
         if rust_type.contains("extern\"C\"fn") || rust_type.contains("extern\"C\"") {
-            return Self::convert_function_pointer(rust_type);
+            // Nested/anonymous function pointer (e.g. a fn-ptr parameter): emit
+            // the unnamed C declarator `RET (*)(PARAMS)`.
+            let (return_type, params): (String, String) = Self::convert_function_pointer(rust_type);
+            return format!("{} (*)({})", return_type, params);
         }
 
         if rust_type.starts_with("*const*const") {
@@ -103,7 +128,8 @@ impl LuaGenerator {
         }
 
         match rust_type {
-            "u64" => String::from("uint64_t"),
+            // `#[repr(transparent)]` u64 newtypes from polyplug_utils.
+            "u64" | "BundleId" | "GuestContractId" | "HostContractId" => String::from("uint64_t"),
             "u32" => String::from("uint32_t"),
             "u16" => String::from("uint16_t"),
             "u8" => String::from("uint8_t"),
@@ -121,7 +147,12 @@ impl LuaGenerator {
         }
     }
 
-    fn convert_function_pointer(type_name: &str) -> String {
+    /// Parse a function pointer rust_type into its C return type and the
+    /// joined C parameter list (without surrounding parentheses).
+    ///
+    /// The declarator name is spliced in by the caller so the resulting
+    /// typedef is valid C: `typedef RET (*NAME)(PARAMS);`.
+    fn convert_function_pointer(type_name: &str) -> (String, String) {
         let type_str = Self::strip_option(type_name);
 
         let fn_start = type_str.find("fn(").unwrap_or(0);
@@ -144,7 +175,7 @@ impl LuaGenerator {
             }
         }
 
-        let lua_return = if type_str.len() > params_end + 1 {
+        let lua_return: String = if type_str.len() > params_end + 1 {
             let after = &type_str[params_end + 1..];
             let trimmed = after.trim_start_matches('-').trim_start_matches('>').trim();
             if trimmed.is_empty() {
@@ -157,17 +188,13 @@ impl LuaGenerator {
         };
 
         if params_start == 0 || params_end <= params_start {
-            return format!("{}(*)()", lua_return);
+            return (lua_return, String::new());
         }
 
         let params_str = &type_str[params_start..params_end];
-        let params = Self::parse_function_params(params_str);
+        let params: Vec<String> = Self::parse_function_params(params_str);
 
-        if params.is_empty() {
-            return format!("{}(*)()", lua_return);
-        }
-
-        format!("{}(*)({})", lua_return, params.join(", "))
+        (lua_return, params.join(", "))
     }
 
     fn parse_function_params(params_str: &str) -> Vec<String> {
@@ -231,10 +258,15 @@ impl LuaGenerator {
         field_name: &str,
         rust_type: &str,
     ) -> (String, String) {
-        let fn_type = Self::convert_function_pointer(rust_type);
-        let typedef_name = format!("{}_{}_fn", struct_name, field_name);
+        let (return_type, params): (String, String) = Self::convert_function_pointer(rust_type);
+        let typedef_name: String = format!("{}_{}_fn", struct_name, field_name);
 
-        let typedef = format!("    typedef {} {};\n", fn_type, typedef_name);
+        // Valid C function-pointer typedef: the declarator name lives inside
+        // the `(*name)` group, e.g. `typedef AbiError (*Foo_bar_fn)(int);`.
+        let typedef: String = format!(
+            "    typedef {} (*{})({});\n",
+            return_type, typedef_name, params
+        );
 
         (typedef, typedef_name)
     }
@@ -398,7 +430,10 @@ impl CodeGenerator for LuaGenerator {
     }
 
     fn generate_footer(&self, _ctx: &GenerationContext) -> String {
-        "]]\n\nreturn M\n".to_string()
+        // The `ffi.cdef[[ ... ]]` block is opened by `generate_header` and
+        // closed by the orchestrator before emitting Lua-statement constants,
+        // so the footer only returns the module table.
+        "return M\n".to_string()
     }
 }
 
@@ -447,13 +482,8 @@ mod tests {
             "unsafeextern\"C\"fn(this:*constHostInterface,instance:GuestContractInstance)->()",
         );
         assert!(
-            !typedef.contains("))"),
-            "void return type should not produce double-parens: {}",
-            typedef
-        );
-        assert!(
-            typedef.contains("void(*)"),
-            "void return type should produce void(*): {}",
+            typedef.contains("void (*Test_destroy_fn)("),
+            "void return type should produce a named C function-pointer typedef: {}",
             typedef
         );
     }

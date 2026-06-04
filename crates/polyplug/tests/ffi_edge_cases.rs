@@ -13,12 +13,15 @@ use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::HostInterface;
+use polyplug_utils::guest_contract_id;
+
+mod common;
+
+use common::register_native_loader;
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
 const RELOAD_PLUGIN_V1_DIR: &str = env!("RELOAD_PLUGIN_V1_DIR");
 const TEST_PLUGIN_CPP_SO: &str = env!("TEST_PLUGIN_CPP_SO");
-
-const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // resolve_guest_contract edge cases
@@ -67,6 +70,9 @@ fn test_resolve_plugin_stale_handle() {
     let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
+    // SAFETY: host is a valid HostInterface from polyplug_runtime_create.
+    unsafe { register_native_loader(host) };
+
     // Load a plugin to get a valid slot
     let path_bytes: &[u8] = TEST_PLUGIN_DIR.as_bytes();
     // SAFETY: host is valid; path_bytes is valid UTF-8 for the duration of the call.
@@ -79,7 +85,7 @@ fn test_resolve_plugin_stale_handle() {
     );
 
     // Find the plugin to get a valid handle
-    let contract_id: u64 = TEST_ADD_CONTRACT_ID;
+    let contract_id: u64 = guest_contract_id("test.add", 1);
     // SAFETY: host is valid.
     let handle: GuestContractHandle =
         unsafe { ((*host).find_guest_contract)(host, contract_id, 0) };
@@ -134,6 +140,9 @@ fn test_find_all_guest_contracts_single_plugin() {
     let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
+    // SAFETY: host is a valid HostInterface from polyplug_runtime_create.
+    unsafe { register_native_loader(host) };
+
     // Load reload_plugin_v1 which provides "reload.test@1"
     let v1_path_bytes: &[u8] = RELOAD_PLUGIN_V1_DIR.as_bytes();
     // SAFETY: host is valid; v1_path_bytes is valid UTF-8.
@@ -145,8 +154,7 @@ fn test_find_all_guest_contracts_single_plugin() {
         "reload_plugin_v1 load must succeed"
     );
 
-    // reload.test@1 contract_id from build.rs
-    let contract_id: u64 = 16526955377754357857_u64;
+    let contract_id: u64 = guest_contract_id("reload.test", 1);
 
     // SAFETY: host is valid.
     let arr: polyplug_abi::Array<GuestContractHandle> =
@@ -187,6 +195,9 @@ fn test_find_all_guest_contracts_multiple_plugins() {
     // SAFETY: polyplug_runtime_create returns a valid HostInterface or null on OOM.
     let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
+
+    // SAFETY: host is a valid HostInterface from polyplug_runtime_create.
+    unsafe { register_native_loader(host) };
 
     // Load test_plugin (Rust) which provides "test.add@1"
     let rust_path_bytes: &[u8] = TEST_PLUGIN_DIR.as_bytes();
@@ -241,7 +252,7 @@ fn test_find_all_guest_contracts_multiple_plugins() {
 
     // SAFETY: host is valid.
     let arr: polyplug_abi::Array<GuestContractHandle> =
-        unsafe { ((*host).find_all_guest_contracts)(host, TEST_ADD_CONTRACT_ID, 0) };
+        unsafe { ((*host).find_all_guest_contracts)(host, guest_contract_id("test.add", 1), 0) };
     assert_eq!(arr.len, 2, "find_all must find both plugins");
 
     // Free the array via host->free

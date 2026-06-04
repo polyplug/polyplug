@@ -1,3 +1,5 @@
+import type { Runtime } from "../../host/polyplug/mod.js";
+
 let _lib: Deno.DynamicLibrary<typeof JS_SYMBOLS> | null = null;
 
 const JS_SYMBOLS = {
@@ -15,10 +17,11 @@ function getLib(): Deno.DynamicLibrary<typeof JS_SYMBOLS> {
     return _lib;
 }
 
-export function registerJsLoader(
-    rt: Deno.PointerValue,
-    registerFn: (rt: Deno.PointerValue, loader: Deno.PointerValue) => number
-): void {
+/**
+ * Register the JavaScript (QuickJS) loader with a Runtime under the
+ * "js-quickjs" runtime name.
+ */
+export function registerJsLoader(rt: Runtime): void {
     const lib = getLib();
     const cfgBuf = new Uint8Array([0]);
     const cfgPtr = Deno.UnsafePointer.of(cfgBuf);
@@ -26,8 +29,5 @@ export function registerJsLoader(
     if (loaderPtr === null) {
         throw new Error("polyplug: js loader create failed");
     }
-    const err = registerFn(rt, loaderPtr);
-    if (err !== 0) {
-        throw new Error(`polyplug: js loader register failed: ${err}`);
-    }
+    rt.registerLoader("js-quickjs", loaderPtr);
 }

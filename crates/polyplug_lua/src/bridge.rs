@@ -411,7 +411,7 @@ mod tests {
         let bridge: LuaHostBridge = LuaHostBridge::new();
 
         let result: AbiError =
-            bridge.call_host_contract(9999, 0, std::ptr::null(), std::ptr::null_mut());
+            bridge.call_host_contract(9999, 0, core::ptr::null(), core::ptr::null_mut());
         assert_eq!(result.code, AbiErrorCode::HostContractNotFound);
     }
 
@@ -433,7 +433,7 @@ mod tests {
 
         // Call it
         let result: AbiError =
-            bridge.call_host_contract(1234, 5, std::ptr::null(), std::ptr::null_mut());
+            bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut());
         assert!(result.is_ok());
     }
 
@@ -455,7 +455,7 @@ mod tests {
 
         // Call it - should return error
         let result: AbiError =
-            bridge.call_host_contract(1234, 0, std::ptr::null(), std::ptr::null_mut());
+            bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut());
         assert_eq!(result.code, AbiErrorCode::HostContractCallFailed);
     }
 }

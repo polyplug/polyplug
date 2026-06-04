@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import ClassVar
-from polyplug_guest.abi import Buffer, StringView
+from polyplug_abi import Buffer, StringView
 
 import enum
 

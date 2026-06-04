@@ -151,23 +151,22 @@ impl BundleLoader for DotnetLoader {
         let bundle_dir: &Path = &manifest.path;
         let bundle_id: u64 = manifest.id;
 
-        let context: Arc<DotnetContext> = Arc::clone(
-            CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir))?,
-        );
+        let context: Arc<DotnetContext> =
+            Arc::clone(CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir))?);
 
         let stem: std::borrow::Cow<'_, str> =
             abs_path.file_stem().unwrap_or_default().to_string_lossy();
         let bundle_name: String = stem.into_owned();
         let type_name_str: String = format!("{bundle_name}.Plugin, {bundle_name}");
 
-        let type_name_pdc: PdCString = PdCString::from_os_str(OsStr::new(&type_name_str))
-            .map_err(|_| {
+        let type_name_pdc: PdCString =
+            PdCString::from_os_str(OsStr::new(&type_name_str)).map_err(|_| {
                 RuntimeError::Loader(LoaderError::InitSymbolMissing {
                     bundle: bundle_name.clone(),
                 })
             })?;
-        let method_name_pdc: PdCString =
-            PdCString::from_os_str(OsStr::new("PolyplugInit")).map_err(|_| {
+        let method_name_pdc: PdCString = PdCString::from_os_str(OsStr::new("PolyplugInit"))
+            .map_err(|_| {
                 RuntimeError::Loader(LoaderError::InitSymbolMissing {
                     bundle: bundle_name.clone(),
                 })

@@ -1,35 +1,153 @@
 #!/usr/bin/env bash
 # build_all.sh — rebuilds all pre-compiled test fixtures
-# Run this after making changes to fixture source code
-set -e
+# Run this after making changes to fixture source code.
+#
+# Rust fixtures are workspace members; this script builds them in --release and
+# copies each produced cdylib to every location the tests consume it from:
+#   - the fixtures root  (tests/fixtures/lib<name>.so), read via the *_SO env
+#     vars set by crates/polyplug/build.rs
+#   - the bundle subdir  (tests/fixtures/<dir>/lib<name>.so) that pairs the .so
+#     with a manifest.toml, read via the *_DIR env vars
+#
+# Rust build failures are fatal (set -e). The C# step is tolerated because its
+# toolchain may be unavailable, but its failure is reported clearly.
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 echo "Rebuilding test fixtures from ${WORKSPACE_ROOT}"
 
-# Rust plugin fixture
-echo "Building Rust test_plugin..."
-cargo build -p test_plugin --release --manifest-path "${WORKSPACE_ROOT}/Cargo.toml" 2>&1 || echo "  Skipped: test_plugin not found"
+# Platform-specific cdylib extension (matches crates/polyplug/build.rs).
+case "$(uname -s)" in
+    Darwin) LIB_EXT="dylib" ;;
+    MINGW* | MSYS* | CYGWIN*) LIB_EXT="dll" ;;
+    *) LIB_EXT="so" ;;
+esac
 
-# C++ fixtures (compiled by build.rs automatically via cc crate)
-echo "C++ fixtures are compiled by crates/polyplug/build.rs automatically during cargo build."
+RELEASE_DIR="${WORKSPACE_ROOT}/target/release"
 
-# C# fixture
+# Rust fixture plugins (workspace members). Each entry is "<package>:<bundle_dir>".
+# An empty <bundle_dir> means the plugin has no manifest.toml subdir copy.
+RUST_FIXTURES=(
+    "test_plugin:test_plugin_dir"
+    "memory_plugin:"
+    "error_plugin:"
+    "reload_plugin_v1:reload_plugin_v1"
+    "reload_plugin_v2:reload_plugin_v2"
+    "depender_plugin:depender_plugin"
+    "no_init_plugin:no_init_plugin"
+)
+
+echo "Building Rust fixture plugins (--release)..."
+CARGO_BUILD_ARGS=()
+for entry in "${RUST_FIXTURES[@]}"; do
+    CARGO_BUILD_ARGS+=("-p" "${entry%%:*}")
+done
+cargo build --release --manifest-path "${WORKSPACE_ROOT}/Cargo.toml" "${CARGO_BUILD_ARGS[@]}"
+
+echo "Installing Rust fixture cdylibs..."
+for entry in "${RUST_FIXTURES[@]}"; do
+    pkg="${entry%%:*}"
+    bundle_dir="${entry#*:}"
+    lib_name="lib${pkg}.${LIB_EXT}"
+    src="${RELEASE_DIR}/${lib_name}"
+
+    if [[ ! -f "${src}" ]]; then
+        echo "  ERROR: expected cdylib not produced: ${src}" >&2
+        exit 1
+    fi
+
+    # Fixtures root copy (consumed via the *_SO env vars).
+    cp "${src}" "${SCRIPT_DIR}/${lib_name}"
+    echo "  ${lib_name} -> tests/fixtures/${lib_name}"
+
+    # Bundle subdir copy (manifest.toml + .so, consumed via the *_DIR env vars).
+    if [[ -n "${bundle_dir}" ]]; then
+        cp "${src}" "${SCRIPT_DIR}/${bundle_dir}/${lib_name}"
+        echo "  ${lib_name} -> tests/fixtures/${bundle_dir}/${lib_name}"
+    fi
+done
+
+# ─── C++ fixtures ─────────────────────────────────────────────────────────────
+# libtest_plugin_cpp / libtest_plugin_cpp_throw are hand-written C++ plugins
+# (sources under tests/fixtures/test_plugin_cpp/ and test_plugin_cpp_throw/).
+# Each entry is "<source_dir>:<lib_basename>". g++ is required; its absence is
+# fatal here because these fixtures are exercised by the C++ FFI tests.
+CPP_FIXTURES=(
+    "test_plugin_cpp:test_plugin_cpp"
+    "test_plugin_cpp_throw:test_plugin_cpp_throw"
+)
+
+if ! command -v g++ &>/dev/null; then
+    echo "  ERROR: g++ not found; required to build C++ fixtures." >&2
+    exit 1
+fi
+
+echo "Building C++ fixture plugins..."
+for entry in "${CPP_FIXTURES[@]}"; do
+    src_dir="${entry%%:*}"
+    base="${entry#*:}"
+    src="${SCRIPT_DIR}/${src_dir}/${base}.cpp"
+    out="${SCRIPT_DIR}/lib${base}.${LIB_EXT}"
+
+    if [[ ! -f "${src}" ]]; then
+        echo "  ERROR: expected C++ source not found: ${src}" >&2
+        exit 1
+    fi
+
+    g++ -std=c++20 -fPIC -shared -O2 "${src}" -o "${out}"
+    echo "  lib${base}.${LIB_EXT} -> tests/fixtures/lib${base}.${LIB_EXT}"
+done
+
+# C# fixture. Tolerated because dotnet may be unavailable, but report clearly.
 if command -v dotnet &>/dev/null; then
     echo "Building C# csharp_plugin..."
-    cd "${SCRIPT_DIR}/csharp_plugin" && dotnet build -c Release 2>&1
+    if ! ( cd "${SCRIPT_DIR}/csharp_plugin" && dotnet build -c Release ); then
+        echo "  WARNING: C# csharp_plugin build failed (continuing)." >&2
+    fi
 else
     echo "  Skipped: dotnet not available"
 fi
 
-# Python and Lua: source-only, no build needed
-echo "Python (.py) and Lua (.lua) fixtures are source-only, no build required."
+# ─── VM fixture provisioning ──────────────────────────────────────────────────
+# The Python and Lua plugin scripts are source-only (no compile step), but they
+# require their guest SDK packages at load time. The PythonLoader prepends
+# <bundle_dir>/site-packages to sys.path and the LuaLoader prepends <bundle_dir>
+# to package.path, so — mirroring examples/build_all.sh — each bundle SHIPS its
+# dependencies inside the bundle directory. These copies are idempotent.
+SDK_DIR="${WORKSPACE_ROOT}/sdks"
 
-# js-quickjs fixture: bundle.js is hand-written, no build needed
+# Python: vendor polyplug_guest, polyplug_abi, and the polyplug.abi namespace
+# (the polyplug_abi shim re-exports `from polyplug.abi.abi import *`) into the
+# bundle's site-packages/ — the only extra path the PythonLoader provisions.
+echo "Provisioning Python fixture site-packages..."
+PY_SITE="${SCRIPT_DIR}/test_plugin_python/site-packages"
+rm -rf "${PY_SITE}"
+mkdir -p "${PY_SITE}/polyplug/abi"
+cp -r "${SDK_DIR}/python/guest/polyplug_guest" "${PY_SITE}/polyplug_guest"
+cp -r "${SDK_DIR}/python/polyplug_abi/polyplug_abi" "${PY_SITE}/polyplug_abi"
+cp "${SDK_DIR}/python/abi/abi.py" "${PY_SITE}/polyplug/abi/abi.py"
+: > "${PY_SITE}/polyplug/__init__.py"
+: > "${PY_SITE}/polyplug/abi/__init__.py"
+echo "  -> tests/fixtures/test_plugin_python/site-packages/"
+
+# Lua: vendor polyplug_guest, polyplug_abi, and the polyplug.abi namespace (the
+# polyplug_abi shim does require("polyplug.abi")) into the bundle directory,
+# which the LuaLoader prepends to package.path as "<bundle_dir>/?.lua".
+echo "Provisioning Lua fixture modules..."
+LUA_BUNDLE="${SCRIPT_DIR}/test_plugin_lua"
+rm -rf "${LUA_BUNDLE}/polyplug"
+mkdir -p "${LUA_BUNDLE}/polyplug"
+cp "${SDK_DIR}/lua/guest/polyplug_guest.lua" "${LUA_BUNDLE}/polyplug_guest.lua"
+cp "${SDK_DIR}/lua/abi/polyplug_abi.lua" "${LUA_BUNDLE}/polyplug_abi.lua"
+cp "${SDK_DIR}/lua/abi/abi.lua" "${LUA_BUNDLE}/polyplug/abi.lua"
+echo "  -> tests/fixtures/test_plugin_lua/{polyplug_guest.lua,polyplug_abi.lua,polyplug/abi.lua}"
+
+# js-quickjs fixture: bundle.js is hand-written and self-contained, no build needed.
 echo "js-quickjs bundle.js is hand-written."
 
-# js-deno fixture: index.ts loaded natively by deno_core, no build needed
+# js-deno fixture: index.ts loaded natively by deno_core, no build needed.
 echo "js-deno index.ts is loaded natively by deno_core."
 
 echo "Done."

@@ -8,11 +8,13 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 use polyplug_utils::guest_contract_id;
+use std::sync::Arc;
 
 const LUA_PLUGIN: &str = env!("TEST_LUA_PLUGIN");
 
@@ -26,7 +28,7 @@ fn make_loader() -> LuaLoader {
     LuaLoader::new(LuaConfig::default())
 }
 
-fn create_runtime() -> Runtime {
+fn create_runtime() -> Arc<Runtime> {
     Runtime::builder()
         .loader(make_loader())
         .build()
@@ -40,11 +42,10 @@ fn load_fixture(rt: &Runtime) -> Result<(), RuntimeError> {
 fn get_vtable(rt: &Runtime) -> *const GuestContractInterface {
     let contract_id: u64 = guest_contract_id("test.add", 1);
     let handle: GuestContractHandle = rt
-        .find_by_contract(contract_id, 0)
+        .find_guest_contract(contract_id, 0)
         .expect("test.add must be registered after load_fixture()");
-    rt.resolve_plugin(handle)
+    rt.resolve_guest_contract(handle)
         .expect("handle must be valid")
-        .vtable()
 }
 
 unsafe fn call_vm_function(
@@ -58,7 +59,21 @@ unsafe fn call_vm_function(
         DispatchType::VirtualMachine,
         "expected VM dispatch type"
     );
-    unsafe { (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, fn_id, args, out) }
+    // SAFETY: the dispatch_type assertion above proves the active union variant is `vm`, so
+    // reading `dispatch.vm.{call,loader_data}` is the correct field of the union. The runtime
+    // populates `vm.call` with a non-null loader-provided dispatcher and `vm.loader_data` with
+    // the matching loader context during registration; `vtable` is a live borrow held by the
+    // caller for the duration of this call, so both remain valid. The `fn_id`, `args`, and `out`
+    // pointers are forwarded verbatim under the caller's invariants (see the call sites).
+    unsafe {
+        (vtable.dispatch.vm.call)(
+            vtable.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            fn_id,
+            args,
+            out,
+        )
+    }
 }
 
 #[test]
@@ -69,7 +84,7 @@ fn integration_lua_runtime_name() {
 
 #[test]
 fn integration_lua_bundle_loads() {
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     let result: Result<(), RuntimeError> = load_fixture(&rt);
     assert!(
         result.is_ok(),
@@ -80,16 +95,24 @@ fn integration_lua_bundle_loads() {
 
 #[test]
 fn integration_lua_add() {
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
+    // SAFETY: `vtable_ptr` comes from `resolve_guest_contract`, which returns a pointer into the
+    // registry-owned `GuestContractInterface` for a live handle. The runtime (`rt`) is kept alive
+    // for the whole test, so the registry storage backing this pointer outlives the borrow; the
+    // pointer is non-null and properly aligned as guaranteed by the registration contract.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
-    assert!(
-        vtable.function_count >= 1,
-        "test.add vtable must have at least 1 function"
+    assert_eq!(
+        vtable.dispatch_type,
+        DispatchType::VirtualMachine,
+        "lua loader must use VM dispatch"
     );
     let args: AddArgs = AddArgs { a: 3, b: 5 };
     let mut out: u32 = 0_u32;
+    // SAFETY: `fn_id` 0 is the `add` slot declared by the fixture's `function_count`. `args` points
+    // to a live `AddArgs` (`#[repr(C)]`, matching the guest's `add` parameter layout) and `out`
+    // points to a live `u32` matching the declared return; both outlive the synchronous call.
     let result: AbiError = unsafe {
         call_vm_function(
             vtable,
@@ -108,16 +131,24 @@ fn integration_lua_add() {
 
 #[test]
 fn integration_lua_add_primitive() {
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
+    // SAFETY: `vtable_ptr` comes from `resolve_guest_contract`, which returns a pointer into the
+    // registry-owned `GuestContractInterface` for a live handle. The runtime (`rt`) is kept alive
+    // for the whole test, so the registry storage backing this pointer outlives the borrow; the
+    // pointer is non-null and properly aligned as guaranteed by the registration contract.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
-    assert!(
-        vtable.function_count >= 2,
-        "test.add vtable must have at least 2 functions"
+    assert_eq!(
+        vtable.dispatch_type,
+        DispatchType::VirtualMachine,
+        "lua loader must use VM dispatch"
     );
     let args: AddArgs = AddArgs { a: 10, b: 20 };
     let mut out: u32 = 0_u32;
+    // SAFETY: `fn_id` 1 is the `add_primitive` slot declared by the fixture. `args` points to a
+    // live `AddArgs` (`#[repr(C)]`, matching the guest's parameter layout) and `out` points to a
+    // live `u32` matching the declared return; both outlive the synchronous call.
     let result: AbiError = unsafe {
         call_vm_function(
             vtable,
@@ -136,15 +167,23 @@ fn integration_lua_add_primitive() {
 
 #[test]
 fn integration_lua_version_string() {
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
+    // SAFETY: `vtable_ptr` comes from `resolve_guest_contract`, which returns a pointer into the
+    // registry-owned `GuestContractInterface` for a live handle. The runtime (`rt`) is kept alive
+    // for the whole test, so the registry storage backing this pointer outlives the borrow; the
+    // pointer is non-null and properly aligned as guaranteed by the registration contract.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
-    assert!(
-        vtable.function_count >= 3,
-        "test.add vtable must have at least 3 functions"
+    assert_eq!(
+        vtable.dispatch_type,
+        DispatchType::VirtualMachine,
+        "lua loader must use VM dispatch"
     );
     let mut out_view: StringView = StringView::null();
+    // SAFETY: `fn_id` 2 is the `version` slot declared by the fixture; it takes no arguments, so a
+    // null `args` is the contract-correct value. `out` points to a live `StringView` that the
+    // guest fills with a host-allocated UTF-8 view; the binding outlives the synchronous call.
     let result: AbiError = unsafe {
         call_vm_function(
             vtable,
@@ -158,6 +197,9 @@ fn integration_lua_version_string() {
         AbiErrorCode::Ok,
         "version must return AbiErrorCode::Ok"
     );
+    // SAFETY: the call returned `Ok`, so `out_view` holds a valid (ptr, len) pair into a
+    // host-allocated UTF-8 buffer that the StringView ABI guarantees stays alive while the
+    // owning runtime is alive. `ptr` is non-null and `len` bytes are initialized and contiguous.
     let version_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
     let version_str: &str = core::str::from_utf8(version_bytes).expect("version must be UTF-8");
     assert_eq!(version_str, "1.0.0-lua", "unexpected version string");
@@ -165,14 +207,21 @@ fn integration_lua_version_string() {
 
 #[test]
 fn integration_lua_reset() {
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
+    // SAFETY: `vtable_ptr` comes from `resolve_guest_contract`, which returns a pointer into the
+    // registry-owned `GuestContractInterface` for a live handle. The runtime (`rt`) is kept alive
+    // for the whole test, so the registry storage backing this pointer outlives the borrow; the
+    // pointer is non-null and properly aligned as guaranteed by the registration contract.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
-    assert!(
-        vtable.function_count >= 4,
-        "test.add vtable must have at least 4 functions"
+    assert_eq!(
+        vtable.dispatch_type,
+        DispatchType::VirtualMachine,
+        "lua loader must use VM dispatch"
     );
+    // SAFETY: `fn_id` 3 is the `reset` slot declared by the fixture; it takes no arguments and
+    // returns nothing, so null `args` and null `out` are the contract-correct pointers.
     let result: AbiError = unsafe {
         call_vm_function(
             vtable,
@@ -207,7 +256,7 @@ provides = ["test.noinit@1"]
     std::fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
     std::fs::write(tmp_dir.join("plugin.lua"), b"local x = 1\n").expect("write plugin.lua");
 
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     let result: Result<(), RuntimeError> = rt.load_bundle(&tmp_dir);
     assert!(result.is_err());
     let err: RuntimeError = result.expect_err("expected Err(InitFailed)");
@@ -222,11 +271,18 @@ provides = ["test.noinit@1"]
 
 #[test]
 fn integration_lua_utf8_roundtrip() {
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
+    // SAFETY: `vtable_ptr` comes from `resolve_guest_contract`, which returns a pointer into the
+    // registry-owned `GuestContractInterface` for a live handle. The runtime (`rt`) is kept alive
+    // for the whole test, so the registry storage backing this pointer outlives the borrow; the
+    // pointer is non-null and properly aligned as guaranteed by the registration contract.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     let mut out_view: StringView = StringView::null();
+    // SAFETY: `fn_id` 2 is the `version` slot declared by the fixture; it takes no arguments, so a
+    // null `args` is the contract-correct value. `out` points to a live `StringView` that the
+    // guest fills with a host-allocated UTF-8 view; the binding outlives the synchronous call.
     let result: AbiError = unsafe {
         call_vm_function(
             vtable,
@@ -236,6 +292,9 @@ fn integration_lua_utf8_roundtrip() {
         )
     };
     assert_eq!(result.code, AbiErrorCode::Ok);
+    // SAFETY: the call returned `Ok`, so `out_view` holds a valid (ptr, len) pair into a
+    // host-allocated UTF-8 buffer that the StringView ABI guarantees stays alive while the
+    // owning runtime is alive. `ptr` is non-null and `len` bytes are initialized and contiguous.
     let version_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
     let version_str: &str = core::str::from_utf8(version_bytes).expect("version must be UTF-8");
     assert!(
@@ -248,7 +307,7 @@ fn integration_lua_utf8_roundtrip() {
 
 #[test]
 fn integration_lua_second_load_succeeds() {
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("first load must succeed");
     let result: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(LUA_PLUGIN));
     assert!(

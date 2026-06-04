@@ -23,26 +23,25 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
     static T* s_impl = nullptr;
     s_impl = impl.release();
 
-    static AbiError host_logger_log_thunk(HostContractInstance instance, const void* args, void* out) noexcept {
+    static constexpr auto host_logger_log_thunk = +[](HostContractInstance instance, const void* args, void* out) noexcept -> AbiError {
         (void)instance;  // Instance data passed by caller, we use s_impl directly
         if (s_impl == nullptr) {
-            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};
+            return AbiError{AbiErrorCode::Panic, StringView{nullptr, 0}};
         }
         try {
-            StringView message_sv = *static_cast<const StringView*>(args);
-            std::string_view message(reinterpret_cast<const char*>(message_sv.ptr), message_sv.len);
+            StringView message = *static_cast<const StringView*>(args);
             s_impl->log(message);
             (void)out;
-            return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+            return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};
         } catch (...) {
-            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};
+            return AbiError{AbiErrorCode::Panic, StringView{nullptr, 0}};
         }
-    }
+    };
 
-    static AbiError host_logger_log_with_level_thunk(HostContractInstance instance, const void* args, void* out) noexcept {
+    static constexpr auto host_logger_log_with_level_thunk = +[](HostContractInstance instance, const void* args, void* out) noexcept -> AbiError {
         (void)instance;  // Instance data passed by caller, we use s_impl directly
         if (s_impl == nullptr) {
-            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};
+            return AbiError{AbiErrorCode::Panic, StringView{nullptr, 0}};
         }
         try {
             struct LOG_WITH_LEVELArgs {
@@ -51,32 +50,32 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
             };
             const LOG_WITH_LEVELArgs* packed = static_cast<const LOG_WITH_LEVELArgs*>(args);
             LogLevel level = packed->level;
-            std::string_view message(reinterpret_cast<const char*>(packed->message.ptr), packed->message.len);
+            StringView message = packed->message;
             s_impl->log_with_level(level, message);
             (void)out;
-            return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+            return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};
         } catch (...) {
-            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};
+            return AbiError{AbiErrorCode::Panic, StringView{nullptr, 0}};
         }
-    }
+    };
 
-    static constexpr HostContractFn FUNCTIONS[2] = {
-        host_logger_log_thunk,
-        host_logger_log_with_level_thunk,
+    static void* const FUNCTIONS[2] = {
+        reinterpret_cast<void*>(host_logger_log_thunk),
+        reinterpret_cast<void*>(host_logger_log_with_level_thunk),
     };
 
     // create_instance stub - host owns the singleton instance lifecycle
-    static HostContractInstance create_instance_stub(
-        const HostContractInterface* /*this*/, const void* /*args*/) noexcept {
+    static constexpr HostContractInterface_create_instance_fn create_instance_stub =
+        +[](const HostContractInterface* /*this*/, const void* /*args*/) noexcept -> HostContractInstance {
         // Multi-instance: not supported in host-side factory, use custom factory
         return HostContractInstance{nullptr};
-    }
+    };
 
     // destroy_instance stub - host owns the singleton instance lifecycle
-    static void destroy_instance_stub(
-        const HostContractInterface* /*this*/, HostContractInstance /*instance*/) noexcept {
+    static constexpr HostContractInterface_destroy_instance_fn destroy_instance_stub =
+        +[](const HostContractInterface* /*this*/, HostContractInstance /*instance*/) noexcept -> void {
         // Multi-instance: not supported in host-side factory, use custom factory
-    }
+    };
 
     static HostContractInterface s_interface = {
         0xF53EB5F2845853BBULL,  // contract_id
@@ -86,10 +85,10 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
         nullptr,  // runtime (set by polyplug during registration)
         create_instance_stub,  // create_instance
         destroy_instance_stub,  // destroy_instance
-        NativeDispatch{
+        DispatchMechanisms{ .native = NativeDispatch{
             2U,  // function_count
             FUNCTIONS,  // functions
-        },  // dispatch.native
+        } },  // dispatch.native
     };  // dispatch
 
     (void)s_impl;  // Suppress unused warning - used by thunks
@@ -108,20 +107,20 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
 /// The returned interface pointer is valid for the lifetime of the program.
 const HostContractInterface* create_host_logger_interface_vm(
     void* loader_data,
-    VmDispatchCallFn dispatch_fn
+    VmDispatch_call_fn dispatch_fn
 ) noexcept {
     // create_instance stub - VM loader owns instance lifecycle
-    static HostContractInstance vm_create_instance_stub(
-        const HostContractInterface* /*this*/, const void* /*args*/) noexcept {
+    static constexpr HostContractInterface_create_instance_fn vm_create_instance_stub =
+        +[](const HostContractInterface* /*this*/, const void* /*args*/) noexcept -> HostContractInstance {
         // VM dispatch: instance managed by VM loader, return placeholder
         return HostContractInstance{nullptr};
-    }
+    };
 
     // destroy_instance stub - VM loader owns instance lifecycle
-    static void vm_destroy_instance_stub(
-        const HostContractInterface* /*this*/, HostContractInstance /*instance*/) noexcept {
+    static constexpr HostContractInterface_destroy_instance_fn vm_destroy_instance_stub =
+        +[](const HostContractInterface* /*this*/, HostContractInstance /*instance*/) noexcept -> void {
         // VM dispatch: instance managed by VM loader, no-op here
-    }
+    };
 
     static HostContractInterface s_interface = {
         0xF53EB5F2845853BBULL,  // contract_id
@@ -131,10 +130,10 @@ const HostContractInterface* create_host_logger_interface_vm(
         nullptr,  // runtime (set by polyplug during registration)
         vm_create_instance_stub,  // create_instance
         vm_destroy_instance_stub,  // destroy_instance
-        VmDispatch{
+        DispatchMechanisms{ .vm = VmDispatch{
             dispatch_fn,  // call
-            loader_data,  // loader_data
-        },  // dispatch.vm
+            VmLoaderData{loader_data},  // loader_data
+        } },  // dispatch.vm
     };  // dispatch
     return &s_interface;
 }

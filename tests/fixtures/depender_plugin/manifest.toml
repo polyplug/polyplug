@@ -14,5 +14,5 @@ kind        = "bundle"
 contract    = "reload.test@1"
 min_version = "1.0"
 bundle      = "reload_plugin_v1"
-contract_id = 16526955377754357857
+contract_id = 4871652249423578378
 bundle_id   = 16808897324254478442

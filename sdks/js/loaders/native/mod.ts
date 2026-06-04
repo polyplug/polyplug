@@ -1,3 +1,5 @@
+import type { Runtime } from "../../host/polyplug/mod.js";
+
 let _lib: Deno.DynamicLibrary<typeof NATIVE_SYMBOLS> | null = null;
 
 const NATIVE_SYMBOLS = {
@@ -15,10 +17,12 @@ function getLib(): Deno.DynamicLibrary<typeof NATIVE_SYMBOLS> {
     return _lib;
 }
 
-export function registerNativeLoader(
-    rt: Deno.PointerValue,
-    registerFn: (rt: Deno.PointerValue, loader: Deno.PointerValue) => number
-): void {
+/**
+ * Register the native loader with a Runtime.
+ * Opens the loader cdylib, creates the loader, then registers it through the
+ * Runtime's HostInterface.register_loader path under the "native" runtime name.
+ */
+export function registerNativeLoader(rt: Runtime): void {
     const lib = getLib();
     const cfgBuf = new Uint8Array([0]);
     const cfgPtr = Deno.UnsafePointer.of(cfgBuf);
@@ -26,8 +30,5 @@ export function registerNativeLoader(
     if (loaderPtr === null) {
         throw new Error("polyplug: native loader create failed");
     }
-    const err = registerFn(rt, loaderPtr);
-    if (err !== 0) {
-        throw new Error(`polyplug: native loader register failed: ${err}`);
-    }
+    rt.registerLoader("native", loaderPtr);
 }

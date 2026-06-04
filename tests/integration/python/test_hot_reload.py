@@ -14,8 +14,8 @@ sys.path.insert(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "sdks", "python", "host"),
 )
 
-from polyplug.abi import ReloadPhase, ReloadPhaseType
-from polyplug.runtime_config import RuntimeConfig
+from polyplug import ReloadPhase, ReloadPhaseType
+from polyplug.runtime import RuntimeConfig
 
 
 class TestReloadPhaseTypeConstants(unittest.TestCase):
@@ -110,58 +110,19 @@ class TestReloadPhaseHelperMethods(unittest.TestCase):
 
 
 class TestRuntimeConfigDefaults(unittest.TestCase):
-    """Tests for RuntimeConfig default values."""
+    """Tests for RuntimeConfig default values (canonical 3-field ABI struct)."""
 
-    def test_default_max_retries_is_3(self):
-        """Default hot_reload_max_retries should be 3."""
+    def test_default_hot_reload_disabled(self):
+        """Default hot_reload_enabled should be False."""
         config = RuntimeConfig()
-        self.assertEqual(3, config.hot_reload_max_retries)
+        self.assertFalse(config.hot_reload_enabled)
 
-    def test_default_retry_interval_is_1000(self):
-        """Default hot_reload_retry_interval_ms should be 1000."""
+    def test_enable_hot_reload(self):
+        """hot_reload_enabled can be set to True."""
         config = RuntimeConfig()
-        self.assertEqual(1000, config.hot_reload_retry_interval_ms)
+        config.hot_reload_enabled = True
+        self.assertTrue(config.hot_reload_enabled)
 
-    def test_default_abort_on_max_retries_is_true(self):
-        """Default hot_reload_abort_on_max_retries should be True."""
-        config = RuntimeConfig()
-        self.assertTrue(config.hot_reload_abort_on_max_retries)
-
-
-class TestRuntimeConfigCustomValues(unittest.TestCase):
-    """Tests for RuntimeConfig custom values."""
-
-    def test_custom_max_retries(self):
-        """Should accept custom hot_reload_max_retries."""
-        config = RuntimeConfig(hot_reload_max_retries=10)
-        self.assertEqual(10, config.hot_reload_max_retries)
-
-    def test_custom_retry_interval(self):
-        """Should accept custom hot_reload_retry_interval_ms."""
-        config = RuntimeConfig(hot_reload_retry_interval_ms=5000)
-        self.assertEqual(5000, config.hot_reload_retry_interval_ms)
-
-    def test_custom_abort_on_max_retries(self):
-        """Should accept custom hot_reload_abort_on_max_retries."""
-        config = RuntimeConfig(hot_reload_abort_on_max_retries=False)
-        self.assertFalse(config.hot_reload_abort_on_max_retries)
-
-    def test_partial_override_uses_defaults(self):
-        """Partial override should use defaults for unspecified values."""
-        config = RuntimeConfig(hot_reload_max_retries=5)
-        self.assertEqual(5, config.hot_reload_max_retries)
-        self.assertEqual(1000, config.hot_reload_retry_interval_ms)
-        self.assertTrue(config.hot_reload_abort_on_max_retries)
-
-    def test_zero_retries(self):
-        """Should allow zero retries."""
-        config = RuntimeConfig(hot_reload_max_retries=0)
-        self.assertEqual(0, config.hot_reload_max_retries)
-
-    def test_large_retry_interval(self):
-        """Should allow large retry interval."""
-        config = RuntimeConfig(hot_reload_retry_interval_ms=999999)
-        self.assertEqual(999999, config.hot_reload_retry_interval_ms)
 
 
 if __name__ == "__main__":

@@ -318,9 +318,9 @@ impl RuntimeLanguageBridge for JsHostBridge {
         match call_result {
             Ok(0) => AbiError::ok(),
             Ok(code) => AbiError {
-                // SAFETY: code is a non-zero i32 from a JS host contract call result.
-                // AbiErrorCode is #[repr(u32)], so transmuting from u32 is sound for any value.
-                code: unsafe { core::mem::transmute::<u32, AbiErrorCode>(code as u32) },
+                // Safe: from_u32 does an exhaustive match; unknown codes map to Generic.
+                // Previous transmute::<u32, AbiErrorCode> caused SIGABRT on invalid discriminants.
+                code: AbiErrorCode::from_u32(code as u32),
                 message: StringView::null(),
             },
             Err(e) => {
@@ -486,7 +486,7 @@ mod tests {
         let bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
 
         let result: AbiError =
-            bridge.call_host_contract(9999, 0, std::ptr::null(), std::ptr::null_mut());
+            bridge.call_host_contract(9999, 0, core::ptr::null(), core::ptr::null_mut());
         assert_eq!(result.code, AbiErrorCode::HostContractNotFound);
     }
 
@@ -509,7 +509,7 @@ mod tests {
 
         // Call it
         let result: AbiError =
-            bridge.call_host_contract(1234, 5, std::ptr::null(), std::ptr::null_mut());
+            bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut());
         assert!(result.is_ok());
     }
 
@@ -532,7 +532,7 @@ mod tests {
 
         // Call it - should return error code 42 (user-defined error)
         let result: AbiError =
-            bridge.call_host_contract(1234, 0, std::ptr::null(), std::ptr::null_mut());
+            bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut());
         assert_eq!(result.code, AbiErrorCode::from_u32(42));
     }
 
@@ -557,7 +557,7 @@ mod tests {
 
         // Call it - should return error
         let result: AbiError =
-            bridge.call_host_contract(1234, 0, std::ptr::null(), std::ptr::null_mut());
+            bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut());
         assert_eq!(result.code, AbiErrorCode::HostContractCallFailed);
     }
 
@@ -580,7 +580,7 @@ mod tests {
 
         // Call with fn_id=5, expect error code 10 (user-defined error)
         let result: AbiError =
-            bridge.call_host_contract(1234, 5, std::ptr::null(), std::ptr::null_mut());
+            bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut());
         assert_eq!(result.code, AbiErrorCode::from_u32(10));
     }
 }

@@ -17,10 +17,35 @@ use std::sync::RwLock;
 
 use polyplug_abi::RuntimeLanguage;
 use polyplug_abi::types::Version;
-use polyplug_abi::{GuestContractHandle, GuestContractInterface, PluginDescriptor};
+use polyplug_abi::{
+    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostInterface,
+    PluginDescriptor,
+};
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::RegistryError;
+
+/// Built-in stateless `create_instance` stub.
+///
+/// Some guest runtimes cannot express a function pointer that returns the
+/// 16-byte `GuestContractInstance` by value — notably the Python (ctypes) guest
+/// generator, whose callbacks may not return a struct by value. Such generators
+/// emit a null `create_instance` pointer. The registry substitutes this stub so
+/// every host caller can safely call `create_instance` on any registered
+/// interface. It returns the canonical stateless dispatch token (null data).
+unsafe extern "C" fn stateless_create_instance(
+    _host: *const HostInterface,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Built-in no-op `destroy_instance` stub, paired with `stateless_create_instance`.
+unsafe extern "C" fn stateless_destroy_instance(
+    _host: *const HostInterface,
+    _instance: GuestContractInstance,
+) {
+}
 
 /// Bundle metadata stored in RuntimeStore.
 ///
@@ -97,6 +122,18 @@ struct RuntimeStoreData {
     bundle_name_index: HashMap<String, Vec<BundleId>>,
     /// Maps bundle_id to the set of contract_ids it has declared as dependencies.
     bundle_declared_deps: HashMap<BundleId, HashSet<GuestContractId>>,
+    /// Interface `Arc`s retired by hot-reload swaps, kept alive for the lifetime
+    /// of the runtime.
+    ///
+    /// `resolve_guest_contract` hands out a raw `*const GuestContractInterface`
+    /// borrowed from the slot's `Arc`. A concurrent reload that swaps the slot
+    /// would otherwise drop the old `Arc` and free the interface struct while a
+    /// reader still dereferences that pointer — a use-after-free. Retaining the
+    /// old `Arc` here keeps the interface memory valid for any in-flight reader.
+    /// This mirrors the documented hot-reload guarantee that the old vtable is
+    /// held alive until all in-flight calls complete (TRUST_MODEL.md §Hot-Reload
+    /// Safety Guarantees).
+    retired_interfaces: Vec<Arc<GuestContractInterface>>,
 }
 
 impl RuntimeStoreData {
@@ -108,6 +145,7 @@ impl RuntimeStoreData {
             bundle_data: HashMap::new(),
             bundle_name_index: HashMap::new(),
             bundle_declared_deps: HashMap::new(),
+            retired_interfaces: Vec::new(),
         }
     }
 }
@@ -202,9 +240,65 @@ impl RuntimeStore {
             contract_name,
             bundle_id,
         });
-        // SAFETY: interface_ptr is a valid 'static pointer, we clone the interface
-        // into an Arc for shared ownership.
-        slot.interface = Some(Arc::new(unsafe { *interface_ptr }));
+        // Copy the interface into an Arc for shared ownership, substituting
+        // built-in stateless stubs for any null instance-lifecycle pointer.
+        //
+        // Guest generators that cannot emit a struct-returning callback (e.g.
+        // Python/ctypes, whose callbacks may not return the 16-byte
+        // GuestContractInstance by value) leave create_instance / destroy_instance
+        // as null. The ABI field type is a *non-nullable* `fn` pointer, so a null
+        // must never be materialized as a typed `fn` value (that would be UB).
+        // The lifecycle pointers are therefore read as raw `*const ()` directly
+        // from the source struct, checked for null, and only then transmuted back
+        // to typed fn pointers.
+        let interface: GuestContractInterface = unsafe {
+            // SAFETY: interface_ptr is a valid 'static GuestContractInterface.
+            // We read the two function-pointer fields as raw pointers (never as
+            // typed `fn`) so a null value is observed soundly.
+            let create_raw: *const () = core::ptr::read(core::ptr::addr_of!(
+                (*interface_ptr).create_instance
+            ) as *const *const ());
+            let destroy_raw: *const () = core::ptr::read(core::ptr::addr_of!(
+                (*interface_ptr).destroy_instance
+            ) as *const *const ());
+
+            let create_instance: unsafe extern "C" fn(
+                *const HostInterface,
+                *const (),
+            ) -> GuestContractInstance = if create_raw.is_null() {
+                stateless_create_instance
+            } else {
+                // SAFETY: non-null pointer to a valid create_instance per ABI.
+                core::mem::transmute::<
+                    *const (),
+                    unsafe extern "C" fn(*const HostInterface, *const ()) -> GuestContractInstance,
+                >(create_raw)
+            };
+            let destroy_instance: unsafe extern "C" fn(
+                *const HostInterface,
+                GuestContractInstance,
+            ) = if destroy_raw.is_null() {
+                stateless_destroy_instance
+            } else {
+                // SAFETY: non-null pointer to a valid destroy_instance per ABI.
+                core::mem::transmute::<
+                    *const (),
+                    unsafe extern "C" fn(*const HostInterface, GuestContractInstance),
+                >(destroy_raw)
+            };
+
+            // SAFETY: the remaining POD fields are read from the same valid
+            // struct; the (possibly substituted) lifecycle fns are sound.
+            GuestContractInterface {
+                contract_id: (*interface_ptr).contract_id,
+                contract_version: (*interface_ptr).contract_version,
+                dispatch_type: (*interface_ptr).dispatch_type,
+                create_instance,
+                destroy_instance,
+                dispatch: core::ptr::read(core::ptr::addr_of!((*interface_ptr).dispatch)),
+            }
+        };
+        slot.interface = Some(Arc::new(interface));
 
         // Update contract_index: push slot_idx into the Vec for this contract_id
         data.guest_contract_index
@@ -560,10 +654,109 @@ impl RuntimeStore {
             return Err(RegistryError::InvalidHandle { index: slot_index });
         }
         let slot: &mut PluginSlot = &mut data.slots[slot_idx];
-        if slot.interface.is_none() {
-            return Err(RegistryError::InvalidHandle { index: slot_index });
+        let old_interface: Arc<GuestContractInterface> = match slot.interface.replace(new_interface)
+        {
+            Some(old) => old,
+            None => {
+                // Slot had no interface — restore the empty state and report.
+                data.slots[slot_idx].interface = None;
+                return Err(RegistryError::InvalidHandle { index: slot_index });
+            }
+        };
+        // Retire (do not drop) the old interface so any in-flight reader holding a
+        // raw pointer into it stays valid.
+        data.retired_interfaces.push(old_interface);
+        Ok(())
+    }
+
+    /// Apply a reload swap for `bundle_id`, moving freshly-registered interfaces
+    /// into the bundle's pre-reload slots and retiring the duplicate new slots.
+    ///
+    /// During a reload, the loader calls `polyplug_init`, which registers the new
+    /// version's interfaces into brand-new slots (the existing slots are never
+    /// vacated by registration). This method reconciles that: for each pre-reload
+    /// slot in `old_slots`, it finds the matching newly-registered slot by
+    /// `contract_id`, moves the new interface `Arc` into the old slot, and then
+    /// retires the new slot (clears its entry/interface and removes it from the
+    /// `guest_contract_index` and the bundle's `plugin_slots`).
+    ///
+    /// The whole operation runs under a single write lock so that concurrent
+    /// readers always observe either the complete old state or the complete new
+    /// state — never a half-swapped registry with duplicate or orphaned slots.
+    ///
+    /// # Errors
+    /// Returns `Err(RegistryError::InvalidHandle)` if any old slot has no
+    /// interface, and `Err(RegistryError::PluginNotFound)` if no newly-registered
+    /// slot matches an old slot's `contract_id`.
+    pub(crate) fn apply_reload_swap(
+        &self,
+        bundle_id: BundleId,
+        old_slots: &[u32],
+    ) -> Result<(), RegistryError> {
+        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
+            self.data.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+
+        // Slots registered during this reload = current bundle slots minus old slots.
+        let new_slots: Vec<u32> = match data.bundle_data.get(&bundle_id) {
+            Some(bd) => bd
+                .plugin_slots
+                .iter()
+                .copied()
+                .filter(|idx| !old_slots.contains(idx))
+                .collect(),
+            None => Vec::new(),
+        };
+
+        for &old_idx in old_slots {
+            let old_contract_id: GuestContractId = data
+                .slots
+                .get(old_idx as usize)
+                .and_then(|s| s.interface.as_ref())
+                .map(|i| i.contract_id)
+                .ok_or(RegistryError::InvalidHandle { index: old_idx })?;
+
+            // Find the newly-registered slot for the same contract_id.
+            let new_idx: u32 = new_slots
+                .iter()
+                .copied()
+                .find(|&idx| {
+                    data.slots
+                        .get(idx as usize)
+                        .and_then(|s| s.interface.as_ref())
+                        .is_some_and(|i| i.contract_id == old_contract_id)
+                })
+                .ok_or(RegistryError::PluginNotFound {
+                    contract_id: old_contract_id.id(),
+                    min_version: 0,
+                })?;
+
+            // Move the new interface into the old slot, retiring (not dropping)
+            // the old interface so any in-flight reader holding a raw pointer
+            // into it stays valid.
+            let new_interface: Arc<GuestContractInterface> = data.slots[new_idx as usize]
+                .interface
+                .take()
+                .ok_or(RegistryError::InvalidHandle { index: new_idx })?;
+            if let Some(old_interface) = data.slots[old_idx as usize]
+                .interface
+                .replace(new_interface)
+            {
+                data.retired_interfaces.push(old_interface);
+            }
+
+            // Retire the now-orphaned new slot.
+            data.slots[new_idx as usize].entry = None;
+            if let Some(indices) = data.guest_contract_index.get_mut(&old_contract_id) {
+                indices.retain(|&idx| idx != new_idx);
+            }
+            if let Some(bd) = data.bundle_data.get_mut(&bundle_id) {
+                bd.plugin_slots.retain(|&idx| idx != new_idx);
+            }
         }
-        slot.interface = Some(new_interface);
+
         Ok(())
     }
 
@@ -752,19 +945,6 @@ impl RuntimeStore {
             .get(bundle_name)
             .cloned()
             .unwrap_or_default()
-    }
-
-    /// Get the contract_id for the interface currently stored in `slot_index`.
-    /// Returns None if the slot is empty or has no interface.
-    pub(crate) fn get_slot_guest_contract_id(&self, slot_index: u32) -> Option<GuestContractId> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
-        let slot: &PluginSlot = data.slots.get(slot_index as usize)?;
-        let interface: &Arc<GuestContractInterface> = slot.interface.as_ref()?;
-        Some(interface.contract_id)
     }
 
     /// Get a clone of the Arc<GuestContractInterface> for `slot_index` to check strong_count.

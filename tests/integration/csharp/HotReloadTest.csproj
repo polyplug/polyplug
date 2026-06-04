@@ -6,7 +6,6 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../../sdks/csharp/host/Polyplug/src/ReloadPhase.cs" Link="ReloadPhase.cs" />
-    <Compile Include="../../../sdks/csharp/host/Polyplug/src/RuntimeConfig.cs" Link="RuntimeConfig.cs" />
+    <Compile Include="../../../sdks/csharp/host/ReloadPhase.cs" Link="ReloadPhase.cs" />
   </ItemGroup>
 </Project>

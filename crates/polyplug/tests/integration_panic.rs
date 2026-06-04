@@ -20,6 +20,10 @@ use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 
+mod common;
+
+use common::polyplugc_bin;
+
 // ─── Host functions for integration tests ─────────────────────────────────────
 
 /// Global storage for the interface pointer captured during `polyplug_init`.
@@ -176,7 +180,7 @@ unsafe extern "C" fn noop_register_host_contract(
 unsafe extern "C" fn noop_register_loader(
     _this: *const HostInterface,
     _runtime_name: StringView,
-    _loader_ptr: *mut std::ffi::c_void,
+    _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
     AbiError {
         code: AbiErrorCode::Ok,
@@ -242,8 +246,7 @@ fn test_panic_returns_abi_error_panic() {
     std::fs::write(&bundle_toml_path, bundle_toml_content).expect("write bundle.toml");
 
     // -- Step 3: Run polyplugc generate into tmp_dir/src --
-    let polyplugc_bin: &str = env!("CARGO_BIN_EXE_polyplugc");
-    let gen_status: ExitStatus = Command::new(polyplugc_bin)
+    let gen_status: ExitStatus = Command::new(polyplugc_bin())
         .arg("generate")
         .arg("--bundle")
         .arg(&bundle_toml_path)
@@ -263,7 +266,7 @@ fn test_panic_returns_abi_error_panic() {
     // Only depend on polyplug_guest; polyplug is an indirect dep.
     // We do NOT add polyplug as a direct dep to avoid duplicate
     // `polyplug_abi_version` symbol (it is defined in polyplug/src/lib.rs).
-    let guest_lib_path: PathBuf = workspace_root.join("crates").join("polyplug_guest");
+    let guest_lib_path: PathBuf = workspace_root.join("sdks").join("rust").join("guest");
     let cargo_toml_content: String = format!(
         "[package]\n\
          name = \"panic_plugin\"\n\
@@ -305,11 +308,11 @@ fn test_panic_returns_abi_error_panic() {
         "use polyplug_guest::AbiErrorCode;\n",
         "use guest::interfaces::PANIC_PLUGIN_IMPL;\n",
         "use guest::interfaces::PANIC_PLUGIN_INTERFACE;\n",
-        "use guest::contracts::TestPanicPlugin;\n",
+        "use guest::contracts::TestPanicGuestContract;\n",
         "\n",
         "struct PanicPlugin;\n",
         "\n",
-        "impl TestPanicPlugin for PanicPlugin {\n",
+        "impl TestPanicGuestContract for PanicPlugin {\n",
         "    fn do_panic(&self) -> Result<(), GuestError> {\n",
         "        panic!(\"intentional test panic\");\n",
         "    }\n",

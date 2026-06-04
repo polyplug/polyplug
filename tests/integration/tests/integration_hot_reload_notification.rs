@@ -6,18 +6,17 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use polyplug::ReloadPhase;
+use polyplug::RuntimeConfig;
 use polyplug::error::RuntimeError;
 use polyplug::runtime::Runtime;
-use polyplug::runtime::RuntimeConfig;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::runtime::ReloadPhaseType;
 use polyplug_native::NativeLoader;
-use polyplug_utils;
 
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
-    let handle: polyplug_abi::GuestContractHandle = rt.find_by_contract(contract_id, 0).ok()?;
-    let vtable: *const GuestContractInterface = rt.resolve_plugin(handle).ok()?.vtable();
-    // SAFETY: vtable is from resolve_plugin and points to a valid vtable while the
+    let handle: polyplug_abi::GuestContractHandle = rt.find_guest_contract(contract_id, 0).ok()?;
+    let vtable: *const GuestContractInterface = rt.resolve_guest_contract(handle).ok()?;
+    // SAFETY: vtable is from resolve_guest_contract and points to a valid vtable while the
     // library is loaded; slot 0 is a compatible extern "C" fn in the fixtures.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*vtable).dispatch.native.functions;
@@ -31,7 +30,7 @@ fn test_preparing_fires_before_vtable_swap() {
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .config(RuntimeConfig {
             hot_reload_enabled: true,
@@ -78,10 +77,10 @@ fn test_preparing_fires_before_vtable_swap() {
 
     if let Some(phase) = preparing_phase {
         assert!(
-            !phase.bundle_name.is_empty(),
+            phase.bundle_name.len != 0,
             "bundle_name should not be empty"
         );
-        assert!(phase.bundle_id != 0, "bundle_id should be non-zero");
+        assert!(phase.bundle_id.id() != 0, "bundle_id should be non-zero");
     }
 
     let reloaded_phase: Option<&ReloadPhase> = captured_phases
@@ -98,7 +97,7 @@ fn test_reloaded_fires_after_vtable_swap() {
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .config(RuntimeConfig {
             hot_reload_enabled: true,
@@ -144,10 +143,10 @@ fn test_reloaded_fires_after_vtable_swap() {
 
     if let Some(phase) = reloaded_phase {
         assert!(
-            !phase.bundle_name.is_empty(),
+            phase.bundle_name.len != 0,
             "bundle_name should not be empty"
         );
-        assert!(phase.bundle_id != 0, "bundle_id should be non-zero");
+        assert!(phase.bundle_id.id() != 0, "bundle_id should be non-zero");
     }
 }
 
@@ -156,7 +155,7 @@ fn test_failed_fires_on_reload_error() {
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .config(RuntimeConfig {
             hot_reload_enabled: true,
@@ -205,11 +204,11 @@ fn test_failed_fires_on_reload_error() {
 
     if let Some(phase) = failed_phase {
         assert!(
-            !phase.bundle_name.is_empty(),
+            phase.bundle_name.len != 0,
             "bundle_name should not be empty"
         );
-        assert!(phase.bundle_id != 0, "bundle_id should be non-zero");
-        assert!(!phase.reason.is_empty(), "reason should not be empty");
+        assert!(phase.bundle_id.id() != 0, "bundle_id should be non-zero");
+        assert!(phase.reason.len != 0, "reason should not be empty");
     }
 }
 
@@ -218,7 +217,7 @@ fn test_old_vtable_kept_on_failure() {
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .config(RuntimeConfig {
             hot_reload_enabled: true,
@@ -272,7 +271,7 @@ fn test_notification_order_on_successful_reload() {
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .config(RuntimeConfig {
             hot_reload_enabled: true,
@@ -338,7 +337,7 @@ fn test_callback_receives_correct_bundle_id() {
     let bundle_ids: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     let bundle_ids_clone: Arc<Mutex<Vec<u64>>> = Arc::clone(&bundle_ids);
 
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .config(RuntimeConfig {
             hot_reload_enabled: true,
@@ -348,7 +347,7 @@ fn test_callback_receives_correct_bundle_id() {
             bundle_ids_clone
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .push(phase.bundle_id);
+                .push(phase.bundle_id.id());
         })
         .build()
         .expect("build runtime");

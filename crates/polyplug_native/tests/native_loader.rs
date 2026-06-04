@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Tests for the native loader.
 //!
 //! These tests verify error handling paths for the native loader.
@@ -5,16 +7,16 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
-use polyplug_native::NativeLoader;
 use polyplug_native::NativeConfig;
+use polyplug_native::NativeLoader;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
 
 fn make_manifest(name: &str, file: &str) -> ManifestData {
     ManifestData {
@@ -32,8 +34,10 @@ fn make_manifest(name: &str, file: &str) -> ManifestData {
     }
 }
 
-fn make_runtime() -> Runtime {
-    RuntimeBuilder::new().build().unwrap()
+fn make_runtime() -> Arc<Runtime> {
+    RuntimeBuilder::new()
+        .build()
+        .expect("runtime build must succeed")
 }
 
 // ─── Error Handling Tests ─────────────────────────────────────────────────

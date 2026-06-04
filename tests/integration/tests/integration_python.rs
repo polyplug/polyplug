@@ -6,12 +6,14 @@ use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
-use polyplug_abi::AbiErrorCode::Ok;
+use polyplug_abi::AbiErrorCode;
+use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
+use std::sync::Arc;
 
 const PYTHON_PLUGIN: &str = env!("TEST_PYTHON_PLUGIN");
 const SKIP_PYTHON: bool = {
@@ -50,7 +52,7 @@ fn make_loader() -> PythonLoader {
     PythonLoader::new(PythonConfig::default())
 }
 
-fn create_runtime() -> Runtime {
+fn create_runtime() -> Arc<Runtime> {
     Runtime::builder()
         .loader(make_loader())
         .build()
@@ -64,11 +66,21 @@ fn load_fixture(rt: &Runtime) -> Result<(), RuntimeError> {
 fn get_vtable(rt: &Runtime) -> *const GuestContractInterface {
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
     let handle: GuestContractHandle = rt
-        .find_by_contract(contract_id, 0)
+        .find_guest_contract(contract_id, 0)
         .expect("test.add must be registered after load_fixture()");
-    rt.resolve_plugin(handle)
+    rt.resolve_guest_contract(handle)
         .expect("handle must be valid")
-        .vtable()
+}
+
+/// Read the function count from a Native-dispatch vtable.
+fn native_function_count(vtable: &GuestContractInterface) -> u32 {
+    assert_eq!(
+        vtable.dispatch_type,
+        DispatchType::Native,
+        "python loader must use Native dispatch"
+    );
+    // SAFETY: dispatch_type is Native, so accessing the native union member is valid.
+    unsafe { vtable.dispatch.native.function_count }
 }
 
 #[test]
@@ -80,7 +92,7 @@ fn integration_python_runtime_name() {
 #[test]
 fn integration_python_bundle_loads() {
     skip_if_no_python!();
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     let result: Result<(), RuntimeError> = load_fixture(&rt);
     assert!(
         result.is_ok(),
@@ -92,13 +104,13 @@ fn integration_python_bundle_loads() {
 #[test]
 fn integration_python_add() {
     skip_if_no_python!();
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid; the Python module stays loaded for process lifetime.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
-        vtable.function_count >= 1,
+        native_function_count(vtable) >= 1,
         "test.add vtable must have at least 1 function"
     );
     let args: AddArgs = AddArgs { a: 3, b: 5 };
@@ -126,13 +138,13 @@ fn integration_python_add() {
 #[test]
 fn integration_python_add_primitive() {
     skip_if_no_python!();
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid; the Python module stays loaded.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
-        vtable.function_count >= 2,
+        native_function_count(vtable) >= 2,
         "test.add vtable must have at least 2 functions"
     );
     let args: AddArgs = AddArgs { a: 10, b: 20 };
@@ -160,13 +172,13 @@ fn integration_python_add_primitive() {
 #[test]
 fn integration_python_version_string() {
     skip_if_no_python!();
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
-        vtable.function_count >= 3,
+        native_function_count(vtable) >= 3,
         "test.add vtable must have at least 3 functions"
     );
     let mut out_view: StringView = StringView::null();
@@ -211,21 +223,25 @@ provides = ["test.exception@1"]
     std::fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
 
     // Write Python script that raises an exception in polyplug_init
+    // The loader calls polyplug_init(host_interface, ctx) (self-passing pattern).
     let plugin_content = r#"def polyplug_abi_version():
     return 1
 
-def polyplug_init(registrar_addr):
+def polyplug_init(host_interface, ctx):
     raise ValueError("test exception from polyplug_init")
 "#;
     std::fs::write(tmp_dir.join("plugin.py"), plugin_content).expect("write plugin.py");
 
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     let result: Result<(), RuntimeError> = rt.load_bundle(&tmp_dir);
     match result {
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
-            assert!(
-                bundle.contains("exception_test"),
-                "bundle should mention exception_test: {bundle}"
+            // The loader reports the failure against the module file stem
+            // (the `file` entry, "plugin.py" -> "plugin"), since the exception
+            // is raised inside `polyplug_init` after the module path is resolved.
+            assert_eq!(
+                bundle, "plugin",
+                "init failure should be reported against the module file stem: {bundle}"
             );
             assert!(
                 error.contains("exception")
@@ -244,13 +260,13 @@ def polyplug_init(registrar_addr):
 #[test]
 fn integration_python_utf8_roundtrip() {
     skip_if_no_python!();
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
-        vtable.function_count >= 3,
+        native_function_count(vtable) >= 3,
         "test.add vtable must have at least 3 functions"
     );
     let mut out_view: StringView = StringView::null();
@@ -303,7 +319,7 @@ provides = ["test.version@1"]
     std::fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
     std::fs::write(tmp_dir.join("plugin.py"), b"# empty plugin").expect("write plugin.py");
 
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(PythonLoader::new(PythonConfig {
             min_version: (99, 0),
         }))
@@ -312,9 +328,12 @@ provides = ["test.version@1"]
     let result: Result<(), RuntimeError> = rt.load_bundle(&tmp_dir);
     match result {
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
-            assert!(
-                bundle.contains("version_test"),
-                "bundle should mention version_test: {bundle}"
+            // The version gate runs at interpreter initialization, before any
+            // bundle-specific context exists, so the failure is reported against
+            // the "python" runtime rather than the manifest name.
+            assert_eq!(
+                bundle, "python",
+                "runtime version mismatch should be reported against the python runtime: {bundle}"
             );
             assert!(
                 error.contains("version"),

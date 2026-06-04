@@ -9,6 +9,7 @@ use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
@@ -16,6 +17,7 @@ use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
 use polyplug_utils::guest_contract_id;
+use std::sync::Arc;
 
 /// Path to the compiled C# fixture DLL — set by build.rs.
 /// Value is "DOTNET_NOT_AVAILABLE" if dotnet is not installed.
@@ -63,7 +65,7 @@ fn make_loader() -> DotnetLoader {
     })
 }
 
-fn create_runtime() -> Runtime {
+fn create_runtime() -> Arc<Runtime> {
     Runtime::builder()
         .loader(make_loader())
         .build()
@@ -77,11 +79,21 @@ fn load_fixture(rt: &Runtime) -> Result<(), RuntimeError> {
 fn get_vtable(rt: &Runtime) -> *const GuestContractInterface {
     let contract_id: u64 = guest_contract_id("test.add", 1);
     let handle: GuestContractHandle = rt
-        .find_by_contract(contract_id, 0)
+        .find_guest_contract(contract_id, 0)
         .expect("test.add must be registered after load_fixture()");
-    rt.resolve_plugin(handle)
+    rt.resolve_guest_contract(handle)
         .expect("handle must be valid")
-        .vtable()
+}
+
+/// Read the function count from a Native-dispatch vtable.
+fn native_function_count(vtable: &GuestContractInterface) -> u32 {
+    assert_eq!(
+        vtable.dispatch_type,
+        DispatchType::Native,
+        "dotnet loader must use Native dispatch"
+    );
+    // SAFETY: dispatch_type is Native, so accessing the native union member is valid.
+    unsafe { vtable.dispatch.native.function_count }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -96,7 +108,7 @@ fn integration_dotnet_loader_registration() {
 #[test]
 fn integration_dotnet_bundle_loads() {
     skip_if_no_dotnet!();
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     let result: Result<(), RuntimeError> = load_fixture(&rt);
     assert!(
         result.is_ok(),
@@ -108,13 +120,13 @@ fn integration_dotnet_bundle_loads() {
 #[test]
 fn integration_dotnet_add() {
     skip_if_no_dotnet!();
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid (CLR keeps assembly loaded for process lifetime).
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
-        vtable.function_count >= 1,
+        native_function_count(vtable) >= 1,
         "test.add vtable must have at least 1 function"
     );
     let args: AddArgs = AddArgs { a: 3, b: 5 };
@@ -142,13 +154,13 @@ fn integration_dotnet_add() {
 #[test]
 fn integration_dotnet_add_primitive() {
     skip_if_no_dotnet!();
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr valid, CLR keeps assembly loaded.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
-        vtable.function_count >= 2,
+        native_function_count(vtable) >= 2,
         "test.add vtable must have at least 2 functions"
     );
     // function index 1 = add_primitive(a, b: u32) -> u32 (same arg-pack as add)
@@ -177,13 +189,13 @@ fn integration_dotnet_add_primitive() {
 #[test]
 fn integration_dotnet_version_string() {
     skip_if_no_dotnet!();
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
-        vtable.function_count >= 3,
+        native_function_count(vtable) >= 3,
         "test.add vtable must have at least 3 functions"
     );
     // function index 2 = version() -> StringView (no args, pass null)
@@ -213,13 +225,13 @@ fn integration_dotnet_version_string() {
 #[test]
 fn integration_dotnet_reset() {
     skip_if_no_dotnet!();
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
-        vtable.function_count >= 4,
+        native_function_count(vtable) >= 4,
         "test.add vtable must have at least 4 functions"
     );
     // function index 3 = reset() — no args, no meaningful output
@@ -246,7 +258,7 @@ fn integration_dotnet_reset() {
 #[test]
 fn integration_dotnet_wrong_major_version_rejected() {
     skip_if_no_dotnet!();
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(DotnetLoader::new(DotnetConfig {
             min_framework: String::from("net99.0"),
             hostfxr: HostfxrLocation::Auto,
@@ -255,7 +267,7 @@ fn integration_dotnet_wrong_major_version_rejected() {
         .expect("failed to build runtime");
     let result: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
                 error.contains("version") || error.contains("framework") || error.contains("99.0"),
                 "error: {error}"
@@ -270,7 +282,7 @@ fn integration_dotnet_clr_shared_across_loads() {
     skip_if_no_dotnet!();
     // Load the fixture twice using the same DotnetLoader.
     // CLR is a global once-initialized singleton — second load must succeed.
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     let result1: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result1.is_ok(),
@@ -302,7 +314,7 @@ fn pelite_reads_target_framework() {
 #[test]
 fn version_mismatch_pelite() {
     skip_if_no_dotnet!();
-    let rt: Runtime = Runtime::builder()
+    let rt: Arc<Runtime> = Runtime::builder()
         .loader(DotnetLoader::new(DotnetConfig {
             min_framework: String::from("net99.0"),
             hostfxr: HostfxrLocation::Auto,
@@ -311,7 +323,7 @@ fn version_mismatch_pelite() {
         .expect("failed to build runtime");
     let result: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
                 error.contains("version") || error.contains("framework"),
                 "error: {error}"
@@ -325,7 +337,7 @@ fn version_mismatch_pelite() {
 fn delegate_loader_cached_across_loads() {
     skip_if_no_dotnet!();
     // Load the same DLL twice — both must succeed, proving AssemblyDelegateLoader is cached and reused
-    let rt: Runtime = create_runtime();
+    let rt: Arc<Runtime> = create_runtime();
     let result1: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result1.is_ok(),
@@ -355,7 +367,7 @@ fn non_dotnet_dll_allowed() {
         polyplug_dotnet::version::read_target_framework(std::path::Path::new("nonexistent.dll"));
     // Non-existent file should return InitFailed error
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
                 error.contains("assembly") || error.contains("not found"),
                 "error: {error}"
