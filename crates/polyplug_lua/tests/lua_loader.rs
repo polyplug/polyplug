@@ -18,6 +18,8 @@ use polyplug_abi::AbiErrorCode;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::runtime::Compatibility;
+use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 use polyplug_utils::GuestContractId;
@@ -515,4 +517,62 @@ fn vtable_function_dispatch_returns_abi_ok() {
         "noop function must return Ok, got code={}",
         result.code
     );
+}
+
+// ── 12. Hot-reload ────────────────────────────────────────────────────────────
+
+/// Build a runtime with the given hot-reload setting and a registered LuaLoader.
+fn make_runtime_with_hot_reload(enabled: bool) -> Arc<Runtime> {
+    RuntimeBuilder::new()
+        .config(RuntimeConfig {
+            compatibility: Compatibility::Strict,
+            hot_reload_enabled: enabled,
+            on_reload: None,
+        })
+        .loader(LuaLoader::new(LuaConfig::default()))
+        .build()
+        .expect("runtime build must succeed")
+}
+
+/// When hot-reload is disabled in the runtime config, `LuaLoader::reload` must
+/// return `RuntimeError::HotReloadDisabled` without touching the bundle.
+#[test]
+fn lua_reload_disabled_returns_error() {
+    let (_dir, path) = write_temp_bundle("lua_reload_disabled", valid_plugin_script());
+    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let runtime: Arc<Runtime> = make_runtime_with_hot_reload(false);
+    let manifest: ManifestData = make_manifest(&path, "lua_reload_disabled");
+
+    let result: Result<(), RuntimeError> = loader.reload(&manifest, &runtime);
+    assert!(
+        matches!(result, Err(RuntimeError::HotReloadDisabled)),
+        "reload with hot_reload_enabled=false must return HotReloadDisabled, got: {:?}",
+        result
+    );
+}
+
+/// With hot-reload enabled, reloading a loaded bundle must succeed and the
+/// contract must remain resolvable through the registry afterwards.
+#[test]
+fn lua_reload_reinitializes_contracts() {
+    let (dir, _path) = write_temp_bundle("lua_reload_reinit", valid_plugin_script());
+    let runtime: Arc<Runtime> = make_runtime_with_hot_reload(true);
+
+    let bundle_dir: PathBuf = dir.path().to_path_buf();
+    runtime
+        .load_bundle(&bundle_dir)
+        .expect("initial bundle load must succeed");
+
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
+    runtime
+        .find_guest_contract(contract_id, 0)
+        .expect("contract must resolve after initial load");
+
+    runtime
+        .reload_bundle(&bundle_dir)
+        .expect("reload must succeed when hot-reload is enabled");
+
+    runtime
+        .find_guest_contract(contract_id, 0)
+        .expect("contract must remain resolvable after reload");
 }

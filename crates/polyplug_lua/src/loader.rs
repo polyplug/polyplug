@@ -446,12 +446,315 @@ impl BundleLoader for LuaLoader {
         Ok(())
     }
 
-    fn reload(
-        &self,
-        _manifest: &ManifestData,
-        _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::RuntimeError> {
-        Err(polyplug::error::RuntimeError::HotReloadDisabled)
+    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+        if !runtime.config().hot_reload_enabled {
+            return Err(RuntimeError::HotReloadDisabled);
+        }
+
+        let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
+            manifest.path.join(&manifest.file)
+        } else {
+            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
+                bundle: manifest.name.clone(),
+            }));
+        };
+
+        if !bundle_path.exists() {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "Lua script load failed at {}: file does not exist",
+                    bundle_path.display()
+                ),
+            }));
+        }
+
+        let bundle_id: u64 = manifest.id;
+        let bundle_dir: &Path = &manifest.path;
+        let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
+
+        // Create a new Lua VM for this bundle (per-bundle isolation).
+        // mlua 0.10: Lua::unsafe_new() enables the FFI module required by LuaJIT plugins.
+        // SAFETY: We trust the Lua scripts loaded through this loader. The LuaJIT FFI is
+        // required for the polyplug_guest.lua ABI bridge (struct layout, pointer casts).
+        let lua: Lua = unsafe { Lua::unsafe_new() };
+
+        // Set package.path so that require("polyplug_guest") resolves correctly.
+        let guest_path_code: String = format!(
+            "package.path = package.path .. ';' .. '{}/?.lua'",
+            GUEST_LUA_DIR.replace('\\', "/")
+        );
+        lua.load(&guest_path_code)
+            .exec()
+            .map_err(|e: mlua::Error| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "Lua VM init failed: failed to set guest package.path: {}",
+                        e
+                    ),
+                })
+            })?;
+
+        // Set package.path so that require("polyplug_abi") resolves correctly.
+        let abi_path_code: String = format!(
+            "package.path = package.path .. ';' .. '{}/?.lua'",
+            ABI_LUA_DIR.replace('\\', "/")
+        );
+        lua.load(&abi_path_code).exec().map_err(|e: mlua::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("Lua VM init failed: failed to set abi package.path: {}", e),
+            })
+        })?;
+
+        // Read the plugin script source.
+        let source: String =
+            std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!("Lua script load failed at {}: {}", bundle_path.display(), e),
+                })
+            })?;
+
+        let bundle_dir_fwd: String = bundle_dir_str.replace('\\', "/");
+        let path_code: String = format!(
+            "package.path = \"{}/?.lua;{}/?.init.lua;\" .. package.path",
+            bundle_dir_fwd, bundle_dir_fwd
+        );
+        lua.load(&path_code).exec().map_err(|e: mlua::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("Lua VM init failed: package.path injection failed: {e}"),
+            })
+        })?;
+        let cpath_ext: &str = if cfg!(windows) { "dll" } else { "so" };
+        let cpath_code: String = format!(
+            "package.cpath = \"{}/?.{};\" .. package.cpath",
+            bundle_dir_fwd, cpath_ext
+        );
+        lua.load(&cpath_code).exec().map_err(|e: mlua::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("Lua VM init failed: package.cpath injection failed: {e}"),
+            })
+        })?;
+        // Execute the script. This defines polyplug_init in the global environment.
+        lua.load(&source).exec().map_err(|e: mlua::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("Lua script load failed at {}: {}", bundle_path.display(), e),
+            })
+        })?;
+
+        // Derive bundle name for error messages.
+        let bundle_name: String = bundle_path
+            .file_name()
+            .map(|n: &OsStr| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| bundle_path.display().to_string());
+
+        // Retrieve polyplug_init global function.
+        let init_fn: Function =
+            lua.globals()
+                .get::<Function>("polyplug_init")
+                .map_err(|_: mlua::Error| {
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!(
+                            "Lua plugin missing polyplug_init function: bundle={}",
+                            bundle_name
+                        ),
+                    })
+                })?;
+
+        // Get HostInterface pointer from runtime.
+        // The interface already has the runtime pointer set.
+        let host_interface: *const HostInterface = runtime.as_context_ptr();
+
+        // Set bundle_id in TLS for dependency enforcement during init.
+        polyplug::runtime::set_init_bundle_id(bundle_id);
+
+        // Call polyplug_init — it populates _G._polyplug_handlers.
+        // New signature: polyplug_init(host, ctx) - self-passing pattern.
+        // SAFETY: bundle_path_static outlives this call; leaked intentionally.
+        let bundle_path_static: &'static str = Box::leak(bundle_dir_str.clone().into_boxed_str());
+        let ctx: polyplug_abi::BundleInitContext = polyplug_abi::BundleInitContext {
+            bundle_path: polyplug_abi::StringView {
+                ptr: bundle_path_static.as_ptr(),
+                len: bundle_path_static.len(),
+            },
+            bundle_id,
+        };
+        // Pass HostInterface pointer and BundleInitContext pointer to Lua.
+        // The HostInterface uses self-passing pattern - Lua guest code will pass it back
+        // as the first parameter to each HostInterface function call.
+        let host_interface_i64: i64 = host_interface as usize as i64;
+        let ctx_ptr: i64 = &ctx as *const polyplug_abi::BundleInitContext as i64;
+        init_fn
+            .call::<()>((host_interface_i64, ctx_ptr))
+            .map_err(|e: mlua::Error| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!("Lua polyplug_init raised error: {}", e),
+                })
+            })?;
+
+        // Clear bundle_id TLS after init completes.
+        polyplug::runtime::clear_init_bundle_id();
+
+        // Read the handler table that polyplug_init populated.
+        let handlers: Table =
+            lua.globals()
+                .get::<Table>("_polyplug_handlers")
+                .map_err(|_: mlua::Error| {
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!(
+                            "Lua plugin missing _polyplug_handlers: bundle={}",
+                            bundle_name
+                        ),
+                    })
+                })?;
+
+        // Extract metadata from handlers table.
+        let contract_name_str: String = handlers
+            .get::<String>("contract_name")
+            .unwrap_or_else(|_: mlua::Error| "unknown".to_owned());
+
+        let contract_version: u32 = handlers.get::<u32>("contract_version").unwrap_or(1_u32);
+
+        let plugin_name_str: String = handlers
+            .get::<String>("plugin_name")
+            .unwrap_or_else(|_: mlua::Error| bundle_name.clone());
+
+        let functions_table: Table =
+            handlers
+                .get::<Table>("functions")
+                .map_err(|e: mlua::Error| {
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!("Lua handlers error: missing functions table: {}", e),
+                    })
+                })?;
+
+        // Count functions in the table (0-indexed integers).
+        let function_count: u32 = {
+            let mut count: u32 = 0_u32;
+            let mut idx: i64 = 0_i64;
+            loop {
+                let v: Value = functions_table.get::<Value>(idx).unwrap_or(Value::Nil);
+                if v == Value::Nil {
+                    break;
+                }
+                count += 1;
+                idx += 1;
+            }
+            count
+        };
+
+        // Collect Lua functions into a Vec for VM dispatch.
+        let mut lua_functions: Vec<Function> = Vec::with_capacity(function_count as usize);
+        for slot_idx in 0..function_count {
+            let lua_fn: Function =
+                functions_table
+                    .get::<Function>(slot_idx as i64)
+                    .map_err(|e: mlua::Error| {
+                        RuntimeError::Loader(LoaderError::InitFailed {
+                            bundle: bundle_name.clone(),
+                            error: format!("Lua function slot {} error: {}", slot_idx, e),
+                        })
+                    })?;
+            lua_functions.push(lua_fn);
+        }
+
+        // Build contract_id from contract_name and version.
+        let cid: GuestContractId = GuestContractId::new(&contract_name_str, contract_version);
+
+        // Create LuaLoaderData with the Lua VM and functions.
+        let loader_data: Box<LuaLoaderData> = Box::new(LuaLoaderData {
+            _vm: lua,
+            functions: lua_functions,
+        });
+
+        let loader_data_ptr: *mut LuaLoaderData = Box::into_raw(loader_data);
+
+        // Build GuestContractInterface with VM dispatch.
+        let plugin_interface: GuestContractInterface = GuestContractInterface {
+            contract_id: cid,
+            contract_version: Version {
+                major: contract_version,
+                minor: 0,
+                patch: 0,
+            },
+            dispatch_type: DispatchType::VirtualMachine,
+            create_instance: lua_create_instance,
+            destroy_instance: lua_destroy_instance,
+            dispatch: DispatchMechanisms {
+                vm: VmDispatch {
+                    call: lua_dispatch,
+                    loader_data: VmLoaderData {
+                        data: loader_data_ptr as *mut core::ffi::c_void,
+                    },
+                },
+            },
+        };
+
+        // Leak the interface so it has 'static lifetime.
+        // SAFETY: GuestContractInterface is leaked intentionally — the loader data must be 'static.
+        // The interface is valid for the process lifetime (Lua plugins are never unloaded).
+        let static_interface: *const GuestContractInterface =
+            Box::into_raw(Box::new(plugin_interface));
+
+        // Build static string slices for PluginDescriptor.
+        // We leak String → &'static str so StringView ptrs remain valid indefinitely.
+        //
+        // The descriptor's human-readable `contract_name` must be the canonical
+        // `"<name>@<major>"` form so it matches what every other language registers
+        // (rust/cpp/python/js generated code emit this full form directly). The bare
+        // `contract_name_str` + `contract_version` are the hash inputs already consumed
+        // by `GuestContractId::new` above; reusing the bare name in the descriptor would
+        // diverge from the other loaders and trip the registry's collision check.
+        let contract_display_name: String = format!("{}@{}", contract_name_str, contract_version);
+        let plugin_name_leaked: &'static str = Box::leak(plugin_name_str.into_boxed_str());
+        let contract_name_leaked: &'static str = Box::leak(contract_display_name.into_boxed_str());
+
+        let descriptor: PluginDescriptor = PluginDescriptor {
+            name: StringView {
+                ptr: plugin_name_leaked.as_ptr(),
+                len: plugin_name_leaked.len(),
+            },
+            contract_name: StringView {
+                ptr: contract_name_leaked.as_ptr(),
+                len: contract_name_leaked.len(),
+            },
+            version: Version {
+                major: contract_version,
+                minor: 0,
+                patch: 0,
+            },
+        };
+
+        // Call register_contract via the HostInterface self-passing pattern.
+        // SAFETY: `host_interface` is a valid HostInterface pointer for this call.
+        // `descriptor` is stack-allocated and valid for this call (register_contract must copy
+        // any data it needs to retain — the contract is that descriptor is borrowed for the call only).
+        // `static_interface` is a leaked Box — valid for 'static lifetime.
+        let reg_result: AbiError = unsafe {
+            ((*host_interface).register_contract)(
+                host_interface,
+                &descriptor as *const PluginDescriptor,
+                static_interface,
+            )
+        };
+
+        if !reg_result.is_ok() {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name,
+                error: format!("register_contract error: code={:?}", reg_result.code),
+            }));
+        }
+
+        Ok(())
     }
 }
 

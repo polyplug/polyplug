@@ -9,14 +9,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
+use polyplug_abi::Compatibility;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::RuntimeConfig;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
 use polyplug_utils::GuestContractId;
@@ -96,6 +99,19 @@ fn make_loader() -> JsLoader {
 fn make_runtime() -> Arc<Runtime> {
     RuntimeBuilder::new()
         .loader(make_loader())
+        .build()
+        .expect("runtime build must succeed")
+}
+
+/// Create a Runtime with the JsLoader registered and hot-reload enabled.
+fn make_runtime_hot_reload() -> Arc<Runtime> {
+    RuntimeBuilder::new()
+        .loader(make_loader())
+        .config(RuntimeConfig {
+            compatibility: Compatibility::Strict,
+            hot_reload_enabled: true,
+            on_reload: None,
+        })
         .build()
         .expect("runtime build must succeed")
 }
@@ -956,4 +972,67 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
     let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "Empty string test must succeed: {result:?}");
+}
+
+// ── Hot-reload ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn js_reload_disabled_returns_error() {
+    // With hot-reload disabled, the loader must reject reload() up front.
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.reload.disabled", 1);
+
+    let bundle: String = make_bundle_js(contract_id, 1, "test.reload.disabled");
+    let (_dir, path) = write_temp_bundle(&bundle);
+
+    let runtime: Arc<Runtime> = make_runtime();
+    let loader: JsLoader = make_loader();
+
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    let result: Result<(), RuntimeError> = loader.reload(&manifest, &runtime);
+    assert!(
+        matches!(result, Err(RuntimeError::HotReloadDisabled)),
+        "reload with hot-reload disabled must return HotReloadDisabled: {result:?}"
+    );
+}
+
+#[test]
+fn js_reload_reinitializes_contracts() {
+    // Load a bundle, then reload it through the runtime and verify the contract
+    // remains resolvable after the interface swap.
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.reload.contract", 1);
+
+    let bundle: String = make_bundle_js(contract_id, 1, "test.reload.contract");
+    let (dir, _path) = write_temp_bundle_with_name(&bundle, "test.reload.contract");
+
+    let runtime: Arc<Runtime> = make_runtime_hot_reload();
+
+    runtime
+        .load_bundle(dir.path())
+        .expect("initial load must succeed");
+
+    let handle_before: GuestContractHandle = runtime
+        .registry()
+        .find(GuestContractId::from_u64(contract_id), 0)
+        .expect("plugin must be registered after load");
+    assert!(!handle_before.is_null(), "handle must be valid after load");
+
+    let reload_result: Result<(), RuntimeError> = runtime.reload_bundle(dir.path());
+    assert!(
+        reload_result.is_ok(),
+        "reload_bundle must succeed: {reload_result:?}"
+    );
+
+    let handle_after: GuestContractHandle = runtime
+        .registry()
+        .find(GuestContractId::from_u64(contract_id), 0)
+        .expect("plugin must still be registered after reload");
+    assert!(!handle_after.is_null(), "handle must be valid after reload");
+
+    let vtable_ptr: *const GuestContractInterface = runtime
+        .registry()
+        .resolve_guest_contract(handle_after)
+        .expect("resolve must succeed after reload");
+    // SAFETY: vtable_ptr is a valid pointer returned by resolve.
+    let vtable_ref: &GuestContractInterface = unsafe { &*vtable_ptr };
+    assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
 }

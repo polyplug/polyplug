@@ -776,6 +776,52 @@ impl RuntimeStore {
             .unwrap_or_default()
     }
 
+    /// Collect the distinct contract IDs exported by `bundle_id`.
+    ///
+    /// Cross-references the bundle's plugin slots against `guest_contract_index`:
+    /// a contract is exported by this bundle when at least one of its registered
+    /// slot indices belongs to the bundle. Used by cascade reload to determine
+    /// which contracts a freshly-reloaded bundle provides.
+    pub(crate) fn bundle_exported_contracts(&self, bundle_id: BundleId) -> Vec<GuestContractId> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        let bundle_slots: &Vec<u32> = match data.bundle_data.get(&bundle_id) {
+            Some(bd) => &bd.plugin_slots,
+            None => return Vec::new(),
+        };
+        let mut exported: Vec<GuestContractId> = Vec::new();
+        for (contract_id, slot_indices) in data.guest_contract_index.iter() {
+            if slot_indices.iter().any(|idx| bundle_slots.contains(idx)) {
+                exported.push(*contract_id);
+            }
+        }
+        exported
+    }
+
+    /// Return the bundle IDs that declared a dependency on any contract in `contracts`.
+    ///
+    /// Iterates `bundle_declared_deps`, returning each `bundle_id` whose declared
+    /// dependency set intersects `contracts`. Used by cascade reload to find
+    /// bundles that must be re-initialized when one of their dependencies reloads.
+    pub(crate) fn bundles_depending_on_any(
+        &self,
+        contracts: &HashSet<GuestContractId>,
+    ) -> Vec<BundleId> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        data.bundle_declared_deps
+            .iter()
+            .filter(|(_, declared)| !declared.is_disjoint(contracts))
+            .map(|(bundle_id, _)| *bundle_id)
+            .collect()
+    }
+
     /// Register bundle metadata after load_bundle completes.
     ///
     /// This populates the BundleDescriptor in bundle_data and adds to bundle_name_index.
