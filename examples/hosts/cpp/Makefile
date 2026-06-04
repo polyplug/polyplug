@@ -13,14 +13,19 @@ LDFLAGS = -L$(LIBS_DIR) -Wl,-rpath,$(LIBS_DIR)
 LIBS = -lpolyplug -lpolyplug_native -lpolyplug_python -lpolyplug_lua -lpolyplug_js
 
 TARGET = host
+HOT_RELOAD_TARGET = hot_reload_host
 SRC = host.cpp
+HOT_RELOAD_SRC = main.cpp
 
 all: $(TARGET)
 
 $(TARGET): $(SRC)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $< $(LIBS)
 
+$(HOT_RELOAD_TARGET): $(HOT_RELOAD_SRC)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $< $(LIBS)
+
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) $(HOT_RELOAD_TARGET)
 
 .PHONY: all clean

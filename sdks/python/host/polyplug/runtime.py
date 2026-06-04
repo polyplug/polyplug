@@ -13,7 +13,7 @@ from __future__ import annotations
 import ctypes
 import os
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol, runtime_checkable
+from typing import Callable, Optional, Protocol, runtime_checkable
 
 # Import all FFI struct types from the auto-generated abi module.
 # The polyplug_abi package re-exports from sdks/python/abi/abi.py (per D-28).
@@ -80,7 +80,6 @@ class Backend(Protocol):
     def create_host_interface(self, config_ptr: int = 0) -> int: ...
     def destroy_host_interface(self, host: int) -> None: ...
     def load_host_interface(self, host: int) -> HostInterface: ...
-    def create_uint64_array(self, cap: int) -> Any: ...
 
 
 class CTypesBackend:
@@ -115,9 +114,6 @@ class CTypesBackend:
     def load_host_interface(self, host: int) -> HostInterface:
         """Load HostInterface struct from pointer."""
         return HostInterface.from_address(host)
-
-    def create_uint64_array(self, cap: int) -> Any:
-        return (self.ctypes.c_uint64 * cap)()
 
 
 class CFFIBackend:
@@ -154,9 +150,6 @@ class CFFIBackend:
     def load_host_interface(self, host: int) -> HostInterface:
         """Load HostInterface struct from pointer (via ctypes)."""
         return HostInterface.from_address(host)
-
-    def create_uint64_array(self, cap: int) -> Any:
-        return self.ffi.new("uint64_t[]", cap)
 
 
 def get_backend() -> str:

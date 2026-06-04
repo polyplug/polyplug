@@ -1,4 +1,4 @@
-# AGENTS.md — polyplug
+# CLAUDE.md — polyplug
 
 This file defines the **mandatory, non-negotiable rules** for every agent, contributor, and AI assistant working on this codebase. No exceptions. No shortcuts. No "just this once."
 
@@ -6,22 +6,95 @@ If you are unsure whether something violates a rule — it probably does. Ask fi
 
 ---
 
-## Project Identity
+## Project Overview
 
-- **Project name:** `polyplug`
-- **CLI tool name:** `polyplugc`
-- **Language:** Rust (host runtime, CLI, guest libs)
-- **Goal:** The universal, blazing-fast, cross-language plugin runtime platform
-- **Trust model**: See `TRUST_MODEL.md` for bundle identity, declared dependencies, and ABI freeze details.
+polyplug is a universal, blazing-fast, cross-language plugin runtime platform written in Rust. A host application loads plugin bundles at runtime; each bundle exports one or more guest contracts that the host discovers and calls through a frozen C ABI. Plugins can be written in any language (Rust, C++, C#, Python, Lua, JavaScript) — the `polyplugc` CLI generates the language-specific glue code from a `.toml` contract definition.
+
+**Trust model**: See `TRUST_MODEL.md` for bundle identity, declared dependencies, and ABI freeze details.
+
+**Do NOT timeout tasks.** Wait for them to complete; the system will notify you. Do NOT poll.
+
+---
+
+## Architecture
+
+### Crates
+
+| Crate | Purpose |
+|---|---|
+| `polyplug` | Core runtime: `Runtime`, `RuntimeStore`, loader, reload, FFI entry points |
+| `polyplug_abi` | Frozen ABI types: `HostInterface`, `BundleInitContext`, `GuestContractInterface`, `AbiError`, etc. |
+| `polyplug_utils` | Shared hash utilities (`fnv1a_64`, `bundle_id`, `contract_id`) |
+| `polyplug_native` | Loader for native (`cdylib`) bundles — the only loader that supports hot-reload |
+| `polyplug_python` | Loader for Python bundles |
+| `polyplug_lua` | Loader for Lua bundles |
+| `polyplug_js` | Loader for JavaScript (QuickJS) bundles |
+| `polyplug_dotnet` | Loader for .NET/C# bundles |
+| `polyplug_guest` | Guest-side Rust helper (links into plugin dylibs) |
+| `polyplug_codegen` | Code-generation library used by `polyplugc` |
+| `polyplugc` | CLI tool: parses contract `.toml`, generates host/guest bindings |
+| `sdk_validator` | Validates SDK correctness against the ABI |
+
+### FFI Surface (2 exports only)
+
+The host-side Rust library (`libpolyplug`) exposes exactly **two** `#[no_mangle]` C symbols:
+
+```c
+void* polyplug_runtime_create(const void* config);   // returns HostInterface pointer
+void  polyplug_runtime_destroy(void* host);
+```
+
+All other operations go through **`HostInterface` struct fields** (function pointers). `HostInterface` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields), `align = 8`.
+
+### `polyplug_init` — the plugin entry point
+
+Every plugin bundle must export this 2-argument function:
+
+```c
+// All generators must produce this signature (language-specific syntax):
+AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx)
+```
+
+- `host` — the function table; plugins call `host->register_contract(host, &descriptor, &interface)` to register
+- `ctx` — 24-byte struct: `{ bundle_id: u64, bundle_path: StringView }`
+
+The 3-argument form `fn(rt_ctx, host, ctx)` is **gone** — do not use it.
+
+### Code Generators (`polyplug_codegen`)
+
+Generators live in `crates/polyplug_codegen/src/languages/`:
+`rust.rs`, `cpp.rs`, `csharp.rs`, `python.rs`, `lua.rs`, `js.rs`
+
+`polyplugc` (in `crates/polyplugc/src/`) is the CLI binary that drives codegen. Its `src/generators/` re-uses the same set: `rust.rs`, `cpp.rs`, `csharp.rs`, `python.rs`, `lua.rs`, `js_quickjs.rs`.
+
+There is **no `js_deno.rs`** — JS generation targets QuickJS only.
+
+### SDKs (`sdks/`)
+
+Each language SDK has `abi/`, `host/`, `guest/`, and `loaders/` subdirectories:
+
+```
+sdks/
+├── rust/        abi/, guest/, host/
+├── cpp/         abi/, host/, guest/, loaders/
+├── csharp/      abi/, host/, guest/, loaders/, abi.tests/, host.tests/
+├── python/      abi/, host/, guest/, loaders/, polyplug_abi/
+├── lua/         abi/, host/, guest/, loaders/
+└── js/          abi/, host/, guest/, loaders/
+```
+
+### Hot-Reload
+
+Only native (`cdylib`) bundles support hot-reload. Python, .NET, Lua, and JS loaders return `RuntimeError::HotReloadDisabled` from `reload()`. The retire-not-drop model keeps superseded interfaces and libraries alive for the runtime lifetime so previously resolved pointers stay valid.
+
+### Runtime Isolation Known Limitations
+
+**Python**: CPython initializes once per process — multiple `Runtime` instances share the interpreter.
+**CLR/.NET**: Same constraint; CLR initializes once per process.
 
 ---
 
 ## Non-Negotiable Rules
-
-- Violating any rule below is grounds for immediate rejection of the change. These are not style suggestions. They are hard requirements.
-- DONT ever timeout tasks! wait for them to complete system will notify you when the background tasks complete! DONT POLL
-
----
 
 ### 1. Module Structure
 
@@ -30,9 +103,9 @@ If you are unsure whether something violates a rule — it probably does. Ask fi
 ```
 // CORRECT — single-file module (no children)
 src/
-├── registry.rs
-├── graph.rs
-└── error.rs
+├── error.rs
+├── reload.rs
+└── runtime_store.rs
 
 // CORRECT — multi-file module (has submodules)
 src/
@@ -45,10 +118,6 @@ src/
 src/
 ├── registry/
 │   └── mod.rs   ← FORBIDDEN when registry has no submodules
-├── graph/
-│   └── mod.rs   ← FORBIDDEN when graph has no submodules
-└── error/
-    └── mod.rs   ← FORBIDDEN when error has no submodules
 ```
 
 **Rule:** if a `folder/mod.rs` has zero sibling `.rs` files and zero subdirectories inside the folder, collapse it to `folder.rs` and delete the empty directory.
@@ -69,7 +138,7 @@ pub mod loader {
 ```rust
 // CORRECT — use at file top only
 use std::collections::HashMap;
-use crate::registry::Registry;
+use crate::runtime_store::RuntimeStore;
 
 pub fn do_something() {
     // no use statements here
@@ -82,7 +151,7 @@ pub fn do_something() {
 
 // FORBIDDEN — use inside impl
 impl MyStruct {
-    use crate::registry::Registry; // FORBIDDEN
+    use crate::runtime_store::RuntimeStore; // FORBIDDEN
 }
 ```
 
@@ -236,7 +305,7 @@ If you believe an ABI change is necessary, stop and raise it as a discussion. Do
 
 ### 8. Memory Rules
 
-**All memory crossing plugin boundaries must use the host allocator (`host_alloc` / `host_free`).**
+**All memory crossing plugin boundaries must use the host allocator (`alloc` / `free` fields on `HostInterface`).**
 
 - A plugin must never free memory it did not allocate
 - Generated code must never introduce copies of cross-boundary data that are not in the host allocator
@@ -270,18 +339,18 @@ If you believe an ABI change is necessary, stop and raise it as a discussion. Do
 
 **All code generators MUST produce identical ABI mechanisms. No exceptions.**
 
-Every generator (rust, python, lua, csharp, cpp, js_deno, js_quickjs) must generate code that:
+Every generator (rust, cpp, csharp, python, lua, js) must generate code that:
 
 1. **Uses the same `polyplug_init` signature:**
-   ```rust
+   ```c
    // All generators must produce this signature (language-specific syntax):
-   fn polyplug_init(rt_ctx: *mut c_void, host: *const HostInterface, ctx: *const PluginContext) -> AbiError
+   AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx)
    ```
 
 2. **Uses the same registration mechanism:**
-   ```rust
-   // All generators must call register_plugin via the HostInterface:
-   (host.register_plugin)(rt_ctx, &descriptor, &vtable)
+   ```c
+   // All generators must call register_contract via the HostInterface self-passing pattern:
+   host->register_contract(host, &descriptor, &interface)
    ```
 
 3. **Never uses global state or thread-locals in generated code.**
@@ -350,8 +419,7 @@ thread_local! {
 
 // CORRECT — all state owned by the Runtime instance
 pub struct Runtime {
-    registry: Registry,
-    bundles: HashMap<u64, LoadedBundle>,
+    store: RuntimeStore,
     config: RuntimeConfig,
     // ... all state is instance-owned, no globals
 }
@@ -359,7 +427,7 @@ pub struct Runtime {
 
 **Why this matters:**
 - Multiple runtimes in the same process must be fully isolated
-- Each runtime owns its own Registry, loaded bundles, and configuration
+- Each runtime owns its own `RuntimeStore`, loaded bundles, and configuration
 - No shared state between runtime instances
 - Enables use cases like: testing with parallel isolated runtimes, embedding multiple plugin systems, sandboxing
 
@@ -369,7 +437,7 @@ pub struct Runtime {
 - `OnceLock`, `LazyLock`, `Lazy` for runtime data
 - Any pattern that shares state across Runtime instances
 
-### Known Limitations (External Runtime Constraints)
+**Known Limitations (External Runtime Constraints)**
 
 **Python Loader**: The CPython interpreter can only be initialized **once per process**. The `polyplug_python` loader uses `static PYTHON_INIT: OnceLock<()>` to ensure single initialization. This means:
 - Multiple `Runtime` instances in the same process share the same Python interpreter
@@ -382,105 +450,6 @@ pub struct Runtime {
 - For full isolation with .NET, use separate processes
 
 **Lua, JavaScript (QuickJS), and Native loaders**: Fully compliant with runtime isolation. Each bundle gets its own isolated VM.
-
----
-
-## Project Structure
-
-```
-polyplug/
-├── AGENTS.md                        this file
-├── crates/
-│   ├── polyplug/                    Rust runtime core
-│   │   └── src/
-│   │       ├── lib.rs               crate root
-│   │       ├── abi.rs
-│   │       ├── error.rs
-│   │       ├── ffi.rs
-│   │       ├── graph.rs
-│   │       ├── registry.rs
-│   │       ├── reload.rs
-│   │       ├── runtime.rs
-│   │       ├── version.rs
-│   │       ├── allocator/           has submodule: tracking
-│   │       │   ├── mod.rs
-│   │       │   └── tracking.rs
-│   │       ├── extensions/          has submodule: trace
-│   │       │   ├── mod.rs
-│   │       │   └── trace.rs
-│   │       └── loader/              has submodules: manifest, scanner
-│   │           ├── mod.rs
-│   │           ├── manifest.rs
-│   │           └── scanner.rs
-│   └── polyplugc/                   CLI codegen tool
-│       └── src/
-│           ├── main.rs              binary entry point
-│           ├── error.rs
-│           ├── ir.rs
-│           ├── pack.rs
-│           ├── parser.rs
-│           └── generators/          has submodules: rust, cpp, csharp, python, lua, js_*
-│               ├── mod.rs
-│               ├── rust.rs
-│               ├── cpp.rs
-│               ├── csharp.rs
-│               ├── python.rs
-│               ├── lua.rs
-│               ├── js_deno.rs
-│               └── js_quickjs.rs
-├── sdks/
-│   ├── cpp/
-│   │   ├── host/
-│   │   └── guest/
-│   ├── csharp/
-│   │   ├── host/
-│   │   └── guest/
-│   ├── python/
-│   │   ├── host/
-│   │   └── guest/
-│   ├── lua/
-│   │   ├── host/
-│   │   └── guest/
-│   └── js/
-│       ├── host/
-│       └── guest/
-└── examples/
-
----
-
-## Quick Reference — Forbidden vs Correct
-
-| Forbidden | Correct |
-|---|---|
-| `folder/mod.rs` with no submodules | `folder.rs` (flat file) |
-| `use` inside function/impl | `use` at file top only |
-| `include!()` module pattern | proper `mod` declarations |
-| `let x = foo()` (inferred) | `let x: MyType = foo()` |
-| `.unwrap()` anywhere | `?` operator or explicit match |
-| `.expect()` in production | proper error types + `?` |
-| `return Err("string")` | `return Err(MyError::Variant)` |
-| `unsafe { ... }` no comment | `// SAFETY: ...` before every unsafe block |
-| modifying ABI structs | new functionality via extensions only |
-| editing generated files | fix the generator, re-run polyplugc |
-| different ABI mechanisms per generator | identical `polyplug_init` + `register_plugin` across all generators |
-| global state / thread-locals in generated code | pass `rt_ctx` through all ABI calls |
-| global state / thread-locals for Runtime | all state owned by Runtime instance |
-| dependency version in crate `Cargo.toml` | version in workspace `Cargo.toml`, `{ workspace = true }` in crate |
-| `version = ...` alongside `workspace = true` | omit version in crate entirely — workspace owns it |
-| type aliases for "convenience" (`pub type OldName = NewName`) | use canonical names everywhere |
-
----
-
-## Enforcement
-
-Every pull request must pass:
-
-1. `cargo clippy -- -D warnings` — zero warnings tolerated
-2. `cargo fmt --check` — formatting must be clean
-3. `cargo test` — all tests must pass
-4. Manual review against this AGENTS.md checklist
-
-A reviewer finding any violation of this document must reject the PR immediately, regardless of how minor the violation appears. Consistency is non-negotiable.
 
 ---
 
@@ -717,3 +686,116 @@ fn test_something_else() { }
 - Skipped tests hide bugs that will bite users in production
 - A test failure is a bug report — treat it as such
 - Technical debt compounds: every skipped test makes the codebase less trustworthy
+
+---
+
+## Project Structure
+
+```
+polyplug/
+├── CLAUDE.md                        this file
+├── TRUST_MODEL.md                   bundle identity, ABI freeze, trust boundaries
+├── crates/
+│   ├── polyplug/                    core runtime
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── error.rs
+│   │       ├── ffi.rs               2 #[no_mangle] exports: _create / _destroy
+│   │       ├── host_bridge.rs
+│   │       ├── reload.rs
+│   │       ├── runtime.rs
+│   │       ├── runtime_builder.rs
+│   │       ├── runtime_store.rs
+│   │       ├── compatibility/       has submodules: bundle_node, contract_capability, …
+│   │       │   └── mod.rs + *.rs
+│   │       └── loader/              has submodules: manifest, scanner, bundle_loader
+│   │           └── mod.rs + *.rs
+│   ├── polyplug_abi/                frozen ABI types
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── ffi.rs
+│   │       ├── host/                host_interface.rs, host_contract_interface.rs, …
+│   │       ├── guest/               guest_contract_interface.rs, guest_contract_instance.rs
+│   │       ├── plugin/              guest_contract_handle.rs, plugin_context.rs, plugin_descriptor.rs
+│   │       ├── dispatch/            dispatch_type.rs, native_dispatch.rs, vm_dispatch.rs, …
+│   │       ├── runtime/             compatibility.rs, reload_phase.rs, runtime_config.rs
+│   │       └── types/               abi_error.rs, error_code.rs, array.rs, string_view.rs, version.rs, …
+│   ├── polyplug_utils/              fnv1a_64, bundle_id, contract_id
+│   ├── polyplug_native/             native cdylib loader (supports hot-reload)
+│   │   └── src/  config.rs, ffi.rs, lib.rs, loader.rs
+│   ├── polyplug_python/             Python loader
+│   │   └── src/  config.rs, ffi.rs, lib.rs, loader.rs
+│   ├── polyplug_lua/                Lua loader
+│   │   └── src/  bridge.rs, config.rs, ffi.rs, lib.rs, loader.rs
+│   ├── polyplug_js/                 JavaScript (QuickJS) loader
+│   │   └── src/  config.rs, ffi.rs, lib.rs, loader.rs
+│   ├── polyplug_dotnet/             .NET/C# loader
+│   │   └── src/  config.rs, ffi.rs, lib.rs, loader.rs
+│   ├── polyplug_guest/              guest-side Rust helper
+│   ├── polyplug_codegen/            codegen library
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── context.rs, data.rs, error.rs, generator.rs
+│   │       └── languages/
+│   │           ├── mod.rs
+│   │           ├── rust.rs, cpp.rs, csharp.rs, python.rs, lua.rs, js.rs
+│   ├── polyplugc/                   CLI binary
+│   │   └── src/
+│   │       ├── main.rs
+│   │       ├── ir.rs, pack.rs, parser.rs
+│   │       └── generators/
+│   │           ├── mod.rs
+│   │           ├── rust.rs, cpp.rs, csharp.rs, python.rs, lua.rs, js_quickjs.rs
+│   └── sdk_validator/               validates SDKs against the ABI
+├── sdks/
+│   ├── rust/    abi/, guest/, host/
+│   ├── cpp/     abi/, host/, guest/, loaders/
+│   ├── csharp/  abi/, host/, guest/, loaders/, abi.tests/, host.tests/
+│   ├── python/  abi/, host/, guest/, loaders/, polyplug_abi/
+│   ├── lua/     abi/, host/, guest/, loaders/
+│   └── js/      abi/, host/, guest/, loaders/
+└── examples/
+    ├── api.toml
+    ├── guests/
+    ├── hosts/
+    └── plugins/
+```
+
+---
+
+## Quick Reference — Forbidden vs Correct
+
+| Forbidden | Correct |
+|---|---|
+| `folder/mod.rs` with no submodules | `folder.rs` (flat file) |
+| `use` inside function/impl | `use` at file top only |
+| `include!()` module pattern | proper `mod` declarations |
+| `let x = foo()` (inferred) | `let x: MyType = foo()` |
+| `.unwrap()` anywhere | `?` operator or explicit match |
+| `.expect()` in production | proper error types + `?` |
+| `return Err("string")` | `return Err(MyError::Variant)` |
+| `unsafe { ... }` no comment | `// SAFETY: ...` before every unsafe block |
+| modifying ABI structs | new functionality via extension system only |
+| editing generated files | fix the generator, re-run polyplugc |
+| `fn polyplug_init(rt_ctx, host, ctx)` (3 args) | `fn polyplug_init(host, ctx)` (2 args — canonical) |
+| different ABI mechanisms per generator | identical `polyplug_init` + `register_contract` across all generators |
+| global state / thread-locals in generated code | all context flows through `host` and `ctx` parameters |
+| global state / thread-locals for Runtime | all state owned by Runtime instance |
+| dependency version in crate `Cargo.toml` | version in workspace `Cargo.toml`, `{ workspace = true }` in crate |
+| `version = ...` alongside `workspace = true` | omit version in crate entirely — workspace owns it |
+| type aliases (`pub type OldName = NewName`) | use canonical names everywhere |
+| `ABI_OK` / `ABI_ERROR_*` constants | `AbiErrorCode::Ok` / `AbiErrorCode::*` enum |
+| `pub use other_crate::Type` | consumers import from source crate directly |
+
+---
+
+## Enforcement
+
+Every pull request must pass:
+
+1. `cargo clippy -- -D warnings` — zero warnings tolerated
+2. `cargo fmt --check` — formatting must be clean
+3. `cargo test` — all tests must pass
+4. Manual review against this CLAUDE.md checklist
+
+A reviewer finding any violation of this document must reject the PR immediately, regardless of how minor the violation appears. Consistency is non-negotiable.
