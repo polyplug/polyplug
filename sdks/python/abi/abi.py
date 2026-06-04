@@ -167,7 +167,7 @@ assert ctypes.sizeof(Buffer) == 24, f"Buffer expected 24 bytes, got {ctypes.size
 class DependencyInfo(ctypes.Structure):
     """ Dependency information returned by get_dependencies introspection API.
     
-     Mirrors `manifest.toml` `\[dependency\]` table structure for plugins to query
+     Mirrors `manifest.toml` `\\[dependency\\]` table structure for plugins to query
      their own declared dependencies at runtime.
     
      # Who provides

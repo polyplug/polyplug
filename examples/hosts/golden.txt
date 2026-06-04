@@ -2,10 +2,15 @@
 
 Input: "name,value,42"
 
-[rust_decoder] decode("name,value,42") = "DECODED:name|value|42"
-[rust_transformer] transform("DECODED:name|value|42") = "TRANSFORMED:NAME|value (transformed)|43"
-[rust_encoder] encode("TRANSFORMED:NAME|value (transformed)|43") = "NAME,value (transformed),43"
-[rust_reporter] report("TRANSFORMED:NAME|value (transformed)|43") = "Report: NAME has value 'value (transformed)' with count 43"
-[rust_validator] validate("DECODED:name|value|42") = "VALID:name|value|42"
+[decoder] decode("name,value,42") = "DECODED:name|value|42"
+[transformer] transform("DECODED:name|value|42") = "TRANSFORMED:NAME|value (transformed)|43"
+[encoder] encode("TRANSFORMED:NAME|value (transformed)|43") = "NAME,value (transformed),43"
+[plugin] [plugin] Starting report for: TRANSFORMED:NAME|value (transformed)|43
+[plugin][INFO] [plugin] Step 1: Parsing input
+[plugin][DEBUG] [plugin] Input length: 39
+[plugin][WARN] [plugin] Step 2: Processing data
+[plugin][ERROR] [plugin] Step 3: Finalizing report
+[reporter] report("TRANSFORMED:NAME|value (transformed)|43") = "Report: NAME has value 'value (transformed)' with count 43"
+[validator] validate("DECODED:name|value|42") = "VALID:name|value|42"
 
 done.

@@ -376,22 +376,17 @@ fn render_plugin_interface_quickjs(
         let has_params: bool = !func.params.is_empty();
         let has_return: bool = func.returns.is_some();
 
-        // Generate the ABI wrapper function
-        // Note: QuickJS uses lo/hi u32 pairs for 64-bit pointers
-        // We use Number for arithmetic since QuickJS supports it
-        // Instance parameter is first (as dataLo, dataHi pair), then args, then out
+        // Generate the ABI wrapper function.
+        // The loader dispatches via js_dispatch which passes two f64 values:
+        //   args_ptr — full address of the packed args buffer (as Number/f64)
+        //   out_ptr  — full address of the output StringView buffer (as Number/f64)
+        // User-space addresses are < 2^48 < 2^53 (float64 mantissa), so the
+        // usize→f64→usize round-trip is exact. readU32/writeU32 also accept f64.
         out.push_str("\nfunction ");
         out.push_str(&wrapper_name);
-        out.push_str("(instanceDataLo, instanceDataHi, args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {\n");
-        // SAFETY comments for generated code are required per AGENTS.md for all unsafe operations
-        out.push_str(
-            "    // Instance is ignored for stateless plugins (instanceDataLo/Hi are 0).\n",
-        );
-        out.push_str(
-            "    // For stateful plugins, users override createInstance and use instanceData.\n",
-        );
-        out.push_str("    // SAFETY: args_ptr_lo/hi and out_ptr_lo/hi are valid pointer halves per ABI contract.\n");
-        out.push_str("    // The host guarantees these pointers are properly aligned and sized before calling.\n");
+        out.push_str("(args_ptr, out_ptr) {\n");
+        out.push_str("    // SAFETY: args_ptr and out_ptr are valid addresses passed as f64\n");
+        out.push_str("    // by the loader. readU32/writeU32 accept f64 and convert to usize.\n");
         out.push_str("    var polyplug = globalThis.polyplug;\n");
         out.push_str("    if (!polyplug) return 1;\n");
         out.push_str("    var impl = ");
@@ -400,19 +395,14 @@ fn render_plugin_interface_quickjs(
         out.push_str("    if (!impl) return 1;\n");
 
         if has_params {
-            out.push_str("    if (args_ptr_lo === 0 && args_ptr_hi === 0) return 8;\n");
+            out.push_str("    if (!args_ptr) return 8;\n");
         }
         if has_return {
-            out.push_str("    if (out_ptr_lo === 0 && out_ptr_hi === 0) return 8;\n");
+            out.push_str("    if (!out_ptr) return 8;\n");
         }
 
-        // Read input StringView from args_ptr
-        // StringView is { ptr_lo: u32, ptr_hi: u32, len: u32 } = 12 bytes
-        // Use Number for pointer arithmetic (QuickJS Number can hold 53-bit integers)
-        out.push_str("    // SAFETY: Pointer arithmetic reconstructs the full 64-bit address from lo/hi halves.\n");
-        out.push_str("    // The loader guarantees the pointer is valid for the memory region being accessed.\n");
-        out.push_str("    var args_ptr = args_ptr_lo + args_ptr_hi * 4294967296;\n");
-        out.push_str("    // SAFETY: readU32 reads 4 bytes from a valid memory location per the polyplug ABI.\n");
+        // StringView in the args buffer: { ptr_lo: u32, ptr_hi: u32, len: u32 } = 12 bytes.
+        out.push_str("    // SAFETY: readU32 reads 4 bytes from a valid host-allocated buffer.\n");
         out.push_str("    var input_ptr_lo = polyplug.readU32(args_ptr);\n");
         out.push_str("    var input_ptr_hi = polyplug.readU32(args_ptr + 4);\n");
         out.push_str("    var input_len = polyplug.readU32(args_ptr + 8);\n");
@@ -425,12 +415,8 @@ fn render_plugin_interface_quickjs(
         out.push_str(&idx.to_string());
         out.push_str("(input);\n");
 
-        // Write output StringView to out_ptr
-        out.push_str("    // SAFETY: out_ptr is a valid pointer to a StringView-sized buffer per ABI contract.\n");
-        out.push_str(
-            "    // writeU32 writes 4 bytes to valid memory locations per the polyplug ABI.\n",
-        );
-        out.push_str("    var out_ptr = out_ptr_lo + out_ptr_hi * 4294967296;\n");
+        // Write output StringView back through out_ptr.
+        out.push_str("    // SAFETY: out_ptr is a valid host-allocated StringView buffer.\n");
         out.push_str("    polyplug.writeU32(out_ptr, result.ptr_lo);\n");
         out.push_str("    polyplug.writeU32(out_ptr + 4, result.ptr_hi);\n");
         out.push_str("    polyplug.writeU32(out_ptr + 8, result.len);\n");

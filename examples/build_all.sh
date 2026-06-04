@@ -161,6 +161,7 @@ cargo build --release --manifest-path "hosts/rust/Cargo.toml" || fail "rust host
 
 require_tool g++ "cpp host"
 make -C "hosts/cpp" || fail "cpp host (make)"
+make -C "hosts/cpp" hot_reload_host || fail "cpp hot_reload_host (make)"
 
 require_tool dotnet "csharp host"
 dotnet build -c Release "hosts/csharp/Host.csproj" || fail "csharp host (dotnet build)"

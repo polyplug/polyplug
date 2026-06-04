@@ -28,6 +28,16 @@ try:
 except ImportError:
     register_python_loader = None
 
+try:
+    from polyplug_loaders_lua import register_lua_loader
+except ImportError:
+    register_lua_loader = None
+
+try:
+    from polyplug_loaders_js import register_js_loader
+except ImportError:
+    register_js_loader = None
+
 from generated.host.callers import (
     PipelineDecoderContractCaller,
     DataTransformerContractCaller,
@@ -90,6 +100,8 @@ def main():
     loaders = [
         ("native", register_native_loader),
         ("python", register_python_loader),
+        ("lua", register_lua_loader),
+        ("js-quickjs", register_js_loader),
     ]
     for name, register in loaders:
         if register is None:

@@ -230,13 +230,14 @@ export function readBytes(ptr, len) {
     }
     // QuickJS: use bulk readMemory for performance (single FFI call)
     if (globalThis.polyplug.readMemory) {
-        const buffer = globalThis.polyplug.readMemory(ptr, len);
+        const buffer = globalThis.polyplug.readMemory(Number(ptr), len);
         return new Uint8Array(buffer);
     }
     // Fallback: byte-by-byte read (for runtimes without readMemory)
     const bytes = new Uint8Array(len);
+    const ptrNum = Number(ptr);
     for (let i = 0; i < len; i++) {
-        bytes[i] = globalThis.polyplug.readByte(ptr + BigInt(i));
+        bytes[i] = globalThis.polyplug.readByte(ptrNum + i);
     }
     return bytes;
 }
@@ -252,8 +253,9 @@ export function readBytes(ptr, len) {
  * writeBytes(0x1234n, new TextEncoder().encode("hello"));
  */
 export function writeBytes(ptr, data) {
+    const ptrNum = Number(ptr);
     for (let i = 0; i < data.length; i++) {
-        globalThis.polyplug.writeByte(ptr + BigInt(i), data[i]);
+        globalThis.polyplug.writeByte(ptrNum + i, data[i]);
     }
 }
 
@@ -266,9 +268,54 @@ export function writeBytes(ptr, data) {
  * @example
  * const { ptr, len } = allocString("hello");
  */
+function _encodeUtf8(str) {
+    const out = [];
+    for (let i = 0; i < str.length; i++) {
+        let code = str.charCodeAt(i);
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            const low = str.charCodeAt(++i);
+            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+        }
+        if (code < 0x80) {
+            out.push(code);
+        } else if (code < 0x800) {
+            out.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F));
+        } else if (code < 0x10000) {
+            out.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F));
+        } else {
+            out.push(0xF0 | (code >> 18), 0x80 | ((code >> 12) & 0x3F), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F));
+        }
+    }
+    return new Uint8Array(out);
+}
+
+function _decodeUtf8(bytes) {
+    let str = '';
+    let i = 0;
+    while (i < bytes.length) {
+        const b = bytes[i];
+        if (b < 0x80) {
+            str += String.fromCharCode(b);
+            i++;
+        } else if (b < 0xE0) {
+            str += String.fromCharCode(((b & 0x1F) << 6) | (bytes[i + 1] & 0x3F));
+            i += 2;
+        } else if (b < 0xF0) {
+            str += String.fromCharCode(((b & 0x0F) << 12) | ((bytes[i + 1] & 0x3F) << 6) | (bytes[i + 2] & 0x3F));
+            i += 3;
+        } else {
+            const cp = ((b & 0x07) << 18) | ((bytes[i + 1] & 0x3F) << 12) | ((bytes[i + 2] & 0x3F) << 6) | (bytes[i + 3] & 0x3F);
+            str += String.fromCharCode(0xD800 + ((cp - 0x10000) >> 10), 0xDC00 + ((cp - 0x10000) & 0x3FF));
+            i += 4;
+        }
+    }
+    return str;
+}
+
 export function allocString(str) {
-    const encoder = new TextEncoder();
-    const bytes = encoder.encode(str);
+    const bytes = (typeof TextEncoder !== 'undefined')
+        ? new TextEncoder().encode(str)
+        : _encodeUtf8(str);
     const ptrArr = globalThis.polyplug.alloc(bytes.length);
     const ptr = (BigInt(ptrArr[1]) << 32n) + BigInt(ptrArr[0]);
     writeBytes(ptr, bytes);
@@ -303,10 +350,12 @@ export function toStr(sv) {
         // QuickJS: reconstruct 64-bit pointer from hi/lo split
         ptr = (BigInt(sv.ptr_hi) << 32n) + BigInt(sv.ptr_lo);
     }
-    // Read bytes and decode as UTF-8
+    // Read bytes and decode as UTF-8 (without TextDecoder for QuickJS compatibility)
     const bytes = readBytes(ptr, sv.len);
-    const decoder = new TextDecoder();
-    return decoder.decode(bytes);
+    if (typeof TextDecoder !== 'undefined') {
+        return new TextDecoder().decode(bytes);
+    }
+    return _decodeUtf8(bytes);
 }
 
 

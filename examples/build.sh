@@ -73,7 +73,7 @@ if [ -f "hosts/lua/host.lua" ]; then
 fi
 
 # Build JS/Deno host (script, no build needed)
-if [ -f "hosts/js/host.ts" ]; then
+if [ -f "hosts/js/host.js" ]; then
     echo "  ✓ js host (script)"
 fi
 

@@ -4,7 +4,7 @@ import { toStr, allocString } from '../../../../sdks/js/guest/polyplug_guest.js'
 
 function transform(input) {
     const s = toStr(input);
-    const data = s.startsWith('DECODED:') ? s.slice(9) : s;
+    const data = s.startsWith('DECODED:') ? s.slice('DECODED:'.length) : s;
     const parts = data.split('|');
     
     if (parts.length >= 3) {

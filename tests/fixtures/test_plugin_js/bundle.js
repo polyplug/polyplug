@@ -1,7 +1,7 @@
 function add(argsPtr, outPtr) {
     try {
         var a = polyplug.readI32(argsPtr);
-        var b = polyplug.readI32(argsPtr + 4n);
+        var b = polyplug.readI32(argsPtr + 4);
         var sum = a + b;
         polyplug.writeI32(outPtr, sum);
         return 0;
@@ -13,7 +13,7 @@ function add(argsPtr, outPtr) {
 function subtract(argsPtr, outPtr) {
     try {
         var a = polyplug.readI32(argsPtr);
-        var b = polyplug.readI32(argsPtr + 4n);
+        var b = polyplug.readI32(argsPtr + 4);
         polyplug.writeI32(outPtr, a - b);
         return 0;
     } catch (e) {
@@ -24,7 +24,7 @@ function subtract(argsPtr, outPtr) {
 function multiply(argsPtr, outPtr) {
     try {
         var a = polyplug.readI32(argsPtr);
-        var b = polyplug.readI32(argsPtr + 4n);
+        var b = polyplug.readI32(argsPtr + 4);
         polyplug.writeI32(outPtr, a * b);
         return 0;
     } catch (e) {
@@ -35,7 +35,7 @@ function multiply(argsPtr, outPtr) {
 function divide(argsPtr, outPtr) {
     try {
         var a = polyplug.readI32(argsPtr);
-        var b = polyplug.readI32(argsPtr + 4n);
+        var b = polyplug.readI32(argsPtr + 4);
         polyplug.writeI32(outPtr, b === 0 ? 0 : Math.floor(a / b));
         return 0;
     } catch (e) {

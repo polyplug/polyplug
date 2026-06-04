@@ -1,12 +1,22 @@
-import { setReporterImpl, polyplug_init } from './generated/guest/index';
+import { setReporterImpl } from './generated/guest/contracts';
+import { polyplug_init } from './generated/guest/init';
+import { toStr, allocString } from '../../../../sdks/js/guest/polyplug_guest.js';
 
 function report(input) {
-    const data = input.replace("TRANSFORMED:", "");
+    const s = toStr(input);
+    const data = s.startsWith("TRANSFORMED:") ? s.slice("TRANSFORMED:".length) : s;
     const parts = data.split("|");
+
+    let result;
     if (parts.length >= 3) {
-        return `Report: ${parts[0]} has value '${parts[1]}' with count ${parts[2]}`;
+        result = allocString(`Report: ${parts[0]} has value '${parts[1]}' with count ${parts[2]}`);
+    } else {
+        result = allocString("INVALID:format");
     }
-    return "INVALID:format";
+
+    const ptrLo = Number(result.ptr & 0xFFFFFFFFn);
+    const ptrHi = Number((result.ptr >> 32n) & 0xFFFFFFFFn);
+    return { ptr_lo: ptrLo, ptr_hi: ptrHi, len: result.len };
 }
 
 setReporterImpl(report);

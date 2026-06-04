@@ -9,7 +9,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use rquickjs::Array;
-use rquickjs::ArrayBuffer;
 use rquickjs::Context;
 use rquickjs::Ctx;
 use rquickjs::Function;
@@ -145,16 +144,17 @@ unsafe extern "C" fn js_dispatch(
     let args_usize: usize = args as usize;
     let out_usize: usize = out as usize;
 
+    // Pass pointers as f64. User-space addresses fit within 2^48 < 2^53 (float64 mantissa),
+    // so the conversion from usize → f64 → usize is exact on all supported platforms.
+    // The generated JS wrapper receives plain Number arguments and passes them directly
+    // to readU32/writeU32, which also accept f64 — no BigInt conversion needed.
+    let args_f64: f64 = args_usize as f64;
+    let out_f64: f64 = out_usize as f64;
+
     let call_result: Result<i32, rquickjs::Error> = data.ctx.with(|ctx| {
         let js_fn: Function<'_> = func_persistent.clone().restore(&ctx)?;
 
-        let args_bigint: rquickjs::BigInt<'_> =
-            rquickjs::BigInt::from_u64(ctx.clone(), args_usize as u64)?;
-        let out_bigint: rquickjs::BigInt<'_> =
-            rquickjs::BigInt::from_u64(ctx.clone(), out_usize as u64)?;
-
-        let result: i32 = js_fn
-            .call::<(rquickjs::BigInt<'_>, rquickjs::BigInt<'_>), i32>((args_bigint, out_bigint))?;
+        let result: i32 = js_fn.call::<(f64, f64), i32>((args_f64, out_f64))?;
         Ok(result)
     });
 
@@ -184,11 +184,14 @@ fn pack_handle(h: GuestContractHandle) -> Option<u64> {
 }
 
 /// Helper to get HostInterface pointer from JS globals.
+///
+/// Lo/hi are stored as f64 to avoid rquickjs sign-extending u32 > INT32_MAX to negative
+/// tagged ints, which would cause u32::from_js to fail or return a wrong value.
 fn get_host_interface_from_globals<'js>(ctx: &Ctx<'js>) -> Option<*const HostInterface> {
     let polyplug_obj: Object<'js> = ctx.globals().get::<&str, Object<'js>>("polyplug").ok()?;
 
-    let vtable_lo: u32 = polyplug_obj.get::<&str, u32>("_hostVtableLo").ok()?;
-    let vtable_hi: u32 = polyplug_obj.get::<&str, u32>("_hostVtableHi").ok()?;
+    let vtable_lo: f64 = polyplug_obj.get::<&str, f64>("_hostVtableLo").ok()?;
+    let vtable_hi: f64 = polyplug_obj.get::<&str, f64>("_hostVtableHi").ok()?;
 
     let host_interface_ptr: *const HostInterface =
         ((vtable_hi as u64) << 32 | vtable_lo as u64) as usize as *const HostInterface;
@@ -209,8 +212,10 @@ fn register_host_functions<'js>(
     // Store host interface pointer as JS globals on the polyplug object
     let host_interface_usize: usize = host_interface as usize;
 
+    // Store as f64: u32 > INT32_MAX would be sign-extended by rquickjs to a negative
+    // tagged int, causing f64::from_js or u32::from_js to fail on read-back.
     polyplug_obj
-        .set("_hostVtableLo", host_interface_usize as u32)
+        .set("_hostVtableLo", (host_interface_usize as u32) as f64)
         .map_err(|e: rquickjs::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
@@ -218,7 +223,10 @@ fn register_host_functions<'js>(
             })
         })?;
     polyplug_obj
-        .set("_hostVtableHi", (host_interface_usize >> 32) as u32)
+        .set(
+            "_hostVtableHi",
+            ((host_interface_usize >> 32) as u32) as f64,
+        )
         .map_err(|e: rquickjs::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
@@ -458,8 +466,8 @@ fn register_host_functions<'js>(
                     let arr: Array<'js> = Array::new(ctx.clone()).map_err(|_| {
                         rquickjs::Exception::throw_message(&ctx, "array creation failed")
                     })?;
-                    let _ = arr.set(0, 0_u32);
-                    let _ = arr.set(1, 0_u32);
+                    let _ = arr.set(0, 0.0_f64);
+                    let _ = arr.set(1, 0.0_f64);
                     return Ok(arr);
                 }
             };
@@ -468,8 +476,10 @@ fn register_host_functions<'js>(
             let ptr_usize: usize = ptr as usize;
             let arr: Array<'js> = Array::new(ctx.clone())
                 .map_err(|_| rquickjs::Exception::throw_message(&ctx, "array creation failed"))?;
-            let _ = arr.set(0, ptr_usize as u32);
-            let _ = arr.set(1, (ptr_usize >> 32) as u32);
+            // Store as f64: rquickjs sign-extends u32 > INT32_MAX to negative JS ints,
+            // which breaks BigInt reconstruction. f64 preserves the unsigned value exactly.
+            let _ = arr.set(0, (ptr_usize as u32) as f64);
+            let _ = arr.set(1, ((ptr_usize >> 32) as u32) as f64);
             Ok(arr)
         },
     )
@@ -489,7 +499,9 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let free_fn: Function<'js> = Function::new(ctx.clone(), |ctx: Ctx<'js>, lo: u32, hi: u32| {
+    // lo/hi are f64 for the same reason as alloc's return values: u32 > INT32_MAX would be
+    // sign-extended by rquickjs to a negative JS int, corrupting the pointer reconstruction.
+    let free_fn: Function<'js> = Function::new(ctx.clone(), |ctx: Ctx<'js>, lo: f64, hi: f64| {
         let hvt: *const HostInterface = match get_host_interface_from_globals(&ctx) {
             Some(ptr) => ptr,
             None => return,
@@ -517,27 +529,21 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let read_i32_fn: Function<'js> =
-        Function::new(ctx.clone(), |ptr_bigint: rquickjs::BigInt<'js>| -> i32 {
-            let ptr_u64: u64 = match ptr_bigint.to_i64() {
-                Ok(v) => v as u64,
-                Err(_) => return 0,
-            };
-            let ptr: *const i32 = ptr_u64 as usize as *const i32;
-            if ptr.is_null() {
-                return 0;
-            }
-            // SAFETY: ptr is a valid pointer provided by the host for reading.
-            unsafe { *ptr }
+    let read_i32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64| -> i32 {
+        let ptr_u64: u64 = ptr_num as u64;
+        let ptr: *const i32 = ptr_u64 as usize as *const i32;
+        if ptr.is_null() {
+            return 0;
+        }
+        // SAFETY: ptr is a valid pointer provided by the host for reading.
+        unsafe { *ptr }
+    })
+    .map_err(|e: rquickjs::Error| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: readI32 function creation failed: {e}"),
         })
-        .map_err(|e: rquickjs::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!(
-                    "JS runtime js-quickjs error: readI32 function creation failed: {e}"
-                ),
-            })
-        })?;
+    })?;
 
     polyplug_obj
         .set("readI32", read_i32_fn)
@@ -548,23 +554,17 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let write_i32_fn: Function<'js> = Function::new(
-        ctx.clone(),
-        |ptr_bigint: rquickjs::BigInt<'js>, value: i32| {
-            let ptr_u64: u64 = match ptr_bigint.to_i64() {
-                Ok(v) => v as u64,
-                Err(_) => return,
-            };
-            let ptr: *mut i32 = ptr_u64 as usize as *mut i32;
-            if ptr.is_null() {
-                return;
-            }
-            // SAFETY: ptr is a valid pointer provided by the host for writing.
-            unsafe {
-                *ptr = value;
-            }
-        },
-    )
+    let write_i32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64, value: i32| {
+        let ptr_u64: u64 = ptr_num as u64;
+        let ptr: *mut i32 = ptr_u64 as usize as *mut i32;
+        if ptr.is_null() {
+            return;
+        }
+        // SAFETY: ptr is a valid pointer provided by the host for writing.
+        unsafe {
+            *ptr = value;
+        }
+    })
     .map_err(|e: rquickjs::Error| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
@@ -581,27 +581,21 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let read_byte_fn: Function<'js> =
-        Function::new(ctx.clone(), |ptr_bigint: rquickjs::BigInt<'js>| -> u32 {
-            let ptr_u64: u64 = match ptr_bigint.to_i64() {
-                Ok(v) => v as u64,
-                Err(_) => return 0,
-            };
-            let ptr: *const u8 = ptr_u64 as usize as *const u8;
-            if ptr.is_null() {
-                return 0;
-            }
-            // SAFETY: ptr is a valid pointer provided by the host for reading.
-            unsafe { *ptr as u32 }
+    let read_byte_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64| -> u32 {
+        let ptr_u64: u64 = ptr_num as u64;
+        let ptr: *const u8 = ptr_u64 as usize as *const u8;
+        if ptr.is_null() {
+            return 0;
+        }
+        // SAFETY: ptr is a valid pointer provided by the host for reading.
+        unsafe { *ptr as u32 }
+    })
+    .map_err(|e: rquickjs::Error| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: readByte function creation failed: {e}"),
         })
-        .map_err(|e: rquickjs::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!(
-                    "JS runtime js-quickjs error: readByte function creation failed: {e}"
-                ),
-            })
-        })?;
+    })?;
 
     polyplug_obj
         .set("readByte", read_byte_fn)
@@ -612,23 +606,17 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let write_byte_fn: Function<'js> = Function::new(
-        ctx.clone(),
-        |ptr_bigint: rquickjs::BigInt<'js>, value: u32| {
-            let ptr_u64: u64 = match ptr_bigint.to_i64() {
-                Ok(v) => v as u64,
-                Err(_) => return,
-            };
-            let ptr: *mut u8 = ptr_u64 as usize as *mut u8;
-            if ptr.is_null() {
-                return;
-            }
-            // SAFETY: ptr is a valid pointer provided by the host for writing.
-            unsafe {
-                *ptr = value as u8;
-            }
-        },
-    )
+    let write_byte_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64, value: u32| {
+        let ptr_u64: u64 = ptr_num as u64;
+        let ptr: *mut u8 = ptr_u64 as usize as *mut u8;
+        if ptr.is_null() {
+            return;
+        }
+        // SAFETY: ptr is a valid pointer provided by the host for writing.
+        unsafe {
+            *ptr = value as u8;
+        }
+    })
     .map_err(|e: rquickjs::Error| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
@@ -647,36 +635,30 @@ fn register_host_functions<'js>(
 
     let read_memory_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |ctx: Ctx<'js>,
-         ptr_bigint: rquickjs::BigInt<'js>,
-         len: u32|
-         -> Result<ArrayBuffer<'js>, rquickjs::Error> {
-            let ptr_u64: u64 = match ptr_bigint.to_i64() {
-                Ok(v) => v as u64,
-                Err(_) => {
-                    let empty_bytes: Vec<u8> = Vec::new();
-                    return ArrayBuffer::new(ctx.clone(), empty_bytes).map_err(|_| {
-                        rquickjs::Exception::throw_message(&ctx, "ArrayBuffer creation failed")
-                    });
-                }
-            };
+        // Returns Array<'js> of u8 values instead of ArrayBuffer: a plain Array of integers
+        // is unambiguous and Uint8Array(array_of_ints) works correctly in QuickJS.
+        |ctx: Ctx<'js>, ptr_num: f64, len: u32| -> Result<Array<'js>, rquickjs::Error> {
+            let ptr_u64: u64 = ptr_num as u64;
             let ptr: *const u8 = ptr_u64 as usize as *const u8;
             let len_usize: usize = len as usize;
 
+            let arr: Array<'js> = Array::new(ctx.clone())
+                .map_err(|_| rquickjs::Exception::throw_message(&ctx, "Array creation failed"))?;
+
             if ptr.is_null() || len_usize == 0 {
-                let empty_bytes: Vec<u8> = Vec::new();
-                return ArrayBuffer::new(ctx.clone(), empty_bytes).map_err(|_| {
-                    rquickjs::Exception::throw_message(&ctx, "ArrayBuffer creation failed")
-                });
+                return Ok(arr);
             }
 
             // SAFETY: ptr is a valid pointer provided by the host for reading.
             // The caller guarantees the memory region [ptr, ptr+len) is valid.
-            let bytes: Vec<u8> = unsafe { core::slice::from_raw_parts(ptr, len_usize).to_vec() };
+            let bytes: &[u8] = unsafe { core::slice::from_raw_parts(ptr, len_usize) };
 
-            ArrayBuffer::new(ctx.clone(), bytes).map_err(|_| {
-                rquickjs::Exception::throw_message(&ctx, "ArrayBuffer creation failed")
-            })
+            for (i, &byte) in bytes.iter().enumerate() {
+                // Byte values are 0-255, always fit in 31-bit signed int — no sign-extension issue.
+                let _ = arr.set(i, u32::from(byte) as f64);
+            }
+
+            Ok(arr)
         },
     )
     .map_err(|e: rquickjs::Error| {
@@ -695,14 +677,17 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let read_u32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64| -> u32 {
+    // Return f64 instead of u32: rquickjs sign-extends u32 > INT32_MAX when converting to
+    // JavaScript tagged ints. Returning f64 ensures the full unsigned range [0, 2^32) is
+    // represented exactly as a JS Number (all u32 values are < 2^53 = float64 mantissa cap).
+    let read_u32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64| -> f64 {
         let ptr_u64: u64 = ptr_num as u64;
         let ptr: *const u32 = ptr_u64 as usize as *const u32;
         if ptr.is_null() {
-            return 0;
+            return 0.0;
         }
         // SAFETY: ptr is a valid pointer provided by the host for reading.
-        unsafe { *ptr }
+        unsafe { *ptr as f64 }
     })
     .map_err(|e: rquickjs::Error| {
         RuntimeError::Loader(LoaderError::InitFailed {
@@ -720,7 +705,9 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let write_u32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64, value: u32| {
+    // Both arguments are f64: same reasoning as readU32 — u32 values > INT32_MAX would be
+    // sign-extended by rquickjs if typed as u32, corrupting large pointer halves or values.
+    let write_u32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64, value: f64| {
         let ptr_u64: u64 = ptr_num as u64;
         let ptr: *mut u32 = ptr_u64 as usize as *mut u32;
         if ptr.is_null() {
@@ -728,7 +715,7 @@ fn register_host_functions<'js>(
         }
         // SAFETY: ptr is a valid pointer provided by the host for writing.
         unsafe {
-            *ptr = value;
+            *ptr = value as u64 as u32;
         }
     })
     .map_err(|e: rquickjs::Error| {
@@ -885,33 +872,20 @@ impl BundleLoader for JsLoader {
                 bundle_id,
             };
 
-            // Pass HostInterface pointer and BundleInitContext pointer to JS.
-            // The HostInterface uses self-passing pattern - JS guest code will pass it back
-            // as the first parameter to each HostInterface function call.
-            let host_interface_i64: i64 = host_interface as usize as i64;
-            let ctx_ptr_i64: i64 = &plugin_ctx as *const BundleInitContext as i64;
-
-            let host_interface_bigint: rquickjs::BigInt<'_> =
-                rquickjs::BigInt::from_i64(ctx_ref.clone(), host_interface_i64).map_err(
-                    |e: rquickjs::Error| {
-                        RuntimeError::Loader(LoaderError::InitFailed {
-                            bundle: manifest.name.clone(),
-                            error: format!("JS runtime js-quickjs error: host_interface BigInt creation failed: {e}"),
-                        })
-                    },
-                )?;
-            let ctx_ptr_bigint: rquickjs::BigInt<'_> =
-                rquickjs::BigInt::from_i64(ctx_ref.clone(), ctx_ptr_i64).map_err(
-                    |e: rquickjs::Error| {
-                        RuntimeError::Loader(LoaderError::InitFailed {
-                            bundle: manifest.name.clone(),
-                            error: format!("JS runtime js-quickjs error: ctx_ptr BigInt creation failed: {e}"),
-                        })
-                    },
-                )?;
+            // Pass HostInterface and BundleInitContext pointers as 4 f64 arguments:
+            //   (host_lo, host_hi, ctx_lo, ctx_hi)
+            // The generated polyplug_init expects this 4-arg lo/hi split convention.
+            // f64 is used instead of u32 because rquickjs sign-extends u32 > INT32_MAX to
+            // negative tagged ints. f64 represents the full unsigned 32-bit range exactly.
+            let host_usize: usize = host_interface as usize;
+            let ctx_usize: usize = &plugin_ctx as *const BundleInitContext as usize;
+            let host_lo: f64 = (host_usize as u32) as f64;
+            let host_hi: f64 = ((host_usize >> 32) as u32) as f64;
+            let ctx_lo: f64 = (ctx_usize as u32) as f64;
+            let ctx_hi: f64 = ((ctx_usize >> 32) as u32) as f64;
 
             init_fn
-                .call::<(rquickjs::BigInt<'_>, rquickjs::BigInt<'_>), ()>((host_interface_bigint, ctx_ptr_bigint))
+                .call::<(f64, f64, f64, f64), ()>((host_lo, host_hi, ctx_lo, ctx_hi))
                 .map_err(|e: rquickjs::Error| {
                     RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: manifest.name.clone(),

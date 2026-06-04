@@ -22,9 +22,9 @@ export POLYPLUG_PYTHON_LIB="$DEPS_DIR/libpolyplug_python.so"
 
 # Python host import path: host package + the standalone polyplug_abi package
 # (its parent dir, so `import polyplug_abi` resolves) + sdks/python/ (so
-# polyplug_abi/abi.py can `from abi.abi import *`) + the native and python
-# loader packages (so the example can register both loaders).
-PYTHON_HOST_PATH="$WORKSPACE_DIR/sdks/python/host:$WORKSPACE_DIR/sdks/python/polyplug_abi:$WORKSPACE_DIR/sdks/python:$WORKSPACE_DIR/sdks/python/loaders/native:$WORKSPACE_DIR/sdks/python/loaders/python"
+# polyplug_abi/abi.py can `from abi.abi import *`) + all four loader packages
+# (native, python, lua, js) so the example can register every available loader.
+PYTHON_HOST_PATH="$WORKSPACE_DIR/sdks/python/host:$WORKSPACE_DIR/sdks/python/polyplug_abi:$WORKSPACE_DIR/sdks/python:$WORKSPACE_DIR/sdks/python/loaders/native:$WORKSPACE_DIR/sdks/python/loaders/python:$WORKSPACE_DIR/sdks/python/loaders/lua:$WORKSPACE_DIR/sdks/python/loaders/js"
 
 # Lua host search path: host modules + the abi modules (polyplug_abi.lua and
 # abi.lua live in sdks/lua/abi) + the four loader package dirs (native, lua, js,
@@ -117,6 +117,20 @@ else
 fi
 echo ""
 
+# Run C++ hot-reload host
+echo "=== C++ Hot-Reload Host ==="
+if [ -f "hosts/cpp/hot_reload_host" ]; then
+    if LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps" hosts/cpp/hot_reload_host 2>&1; then
+        echo "✓ cpp hot_reload_host passed"
+    else
+        echo "✗ cpp hot_reload_host failed"
+        FAILED=$((FAILED + 1))
+    fi
+else
+    echo "⊘ cpp hot_reload_host skipped (not built)"
+fi
+echo ""
+
 echo "=== Verification Summary ==="
 
 # Check for pipeline output from each host
@@ -179,6 +193,16 @@ if [ -f "hosts/cpp/host" ]; then
         PIPELINE_OK=$((PIPELINE_OK + 1))
     else
         echo "✗ cpp host: pipeline output missing"
+    fi
+fi
+
+if [ -f "hosts/cpp/hot_reload_host" ]; then
+    OUTPUT=$(LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps" hosts/cpp/hot_reload_host 2>&1)
+    if echo "$OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
+        echo "✓ cpp hot_reload_host: full pipeline executed"
+        PIPELINE_OK=$((PIPELINE_OK + 1))
+    else
+        echo "✗ cpp hot_reload_host: pipeline output missing"
     fi
 fi
 
