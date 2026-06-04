@@ -8,7 +8,7 @@
 4. High-Level Architecture
 5. Runtime Core
 6. ABI Layer
-7. VTable System
+7. Contract Slot System
 8. Host Libraries
 9. Guest Libraries
 10. Language Runtime Adapters
@@ -178,9 +178,10 @@ GuestContractHandle find_by_bundle(uint64_t bundle_id, uint64_t contract_id, uin
 size_t       find_all_by_contract(uint64_t contract_id, uint32_t min_version,
                                    GuestContractHandle* out, size_t out_cap);  // caller-provides-buffer
 
-// One-time resolution at init: GuestContractHandle → arc-swap Guard (opaque)
-// Returned guard keeps vtable alive. Store the guard, use guard->vtable on hot path.
-const PluginGuard* resolve_plugin(GuestContractHandle handle);
+// Resolve a handle to the contract's function table. The returned pointer is
+// borrowed from the runtime's slot; resolve again after a reload to pick up a
+// swapped interface.
+const GuestContractInterface* resolve_guest_contract(GuestContractHandle handle);
 
 // Extension lookup
 const void* get_extension(uint32_t extension_id);
@@ -216,21 +217,17 @@ typedef struct {
 } Buffer;
 
 typedef struct {
-    uint32_t index;       // slot index in registry
-    uint32_t generation;  // detects use-after-unload
-} GuestContractHandle;           // null sentinel: { index: U32_MAX, generation: 0 }
+    uint32_t index;       // stable slot index in the registry
+} GuestContractHandle;           // null sentinel: { index: U32_MAX }
 
-// Passed to init() — gives plugin access to its bundle directory.
-// Valid for the duration of init() only. Do not store the pointer.
-// Copy bundle_path into owned storage if needed after init returns.
+// Passed to polyplug_init() — gives the plugin its bundle id and directory.
+// bundle_path is valid for the runtime lifetime; copy it if you need to store
+// it beyond init(). Do not store the raw pointer.
 typedef struct {
+    uint64_t   bundle_id;    // bundle identity, used for dependency enforcement
     StringView bundle_path;  // absolute path to bundle directory, UTF-8
     // future fields appended here — ABI-stable by addition only
-} PluginContext;
-
-// Opaque — managed by runtime. Holds an arc-swap read guard keeping the
-// vtable pointer alive for exactly one call sequence.
-typedef struct PluginGuard PluginGuard;
+} BundleInitContext;
 ```
 
 **Dependency enforcement — hard error on undeclared access:**
@@ -251,36 +248,36 @@ polyplug assumes plugins are trusted code loaded by the app developer. Malicious
 
 ---
 
-## 7. VTable System
+## 7. Contract Slot System
 
-The vtable system is how plugins and host exchange callable function pointers. It is the mechanism that makes the hot path a single indirect call.
+The contract slot system is how plugins and host exchange callable function tables. It is the mechanism that makes the hot path a single indirect call, and it is the unit the runtime swaps atomically during hot-reload.
 
 **Exchange happens once at load time:**
 
 ```
-Host loads bundle (via correct loader — native, dotnet, python, or lua)
+Host loads bundle (via correct loader — native, dotnet, python, lua, or js)
         │
         ▼
 Host builds HostInterface (its functions for plugins to call)
         │
         ▼
-Host calls init(registrar, ctx) passing HostInterface ptr and PluginContext
+Host calls polyplug_init(host, ctx) passing HostInterface ptr and BundleInitContext
         │
         ▼
-Plugin resolves declared dependencies via find_by_contract / find_by_bundle
-Plugin stores PluginGuard for each dependency (arc-swap read guard)
+Plugin resolves declared dependencies via find_guest_contract / find_guest_contract_by_bundle
+Plugin stores the returned GuestContractHandle (stable slot index) for each dependency
         │
         ▼
 Plugin builds GuestContractInterface (its functions for host to call)
         │
         ▼
-Plugin calls registrar->register() passing GuestContractInterface ptr
+Plugin calls host->register_contract(host, &descriptor, &interface)
         │
         ▼
-Host stores GuestContractInterface ptr in arc-swap slot
+Host copies the GuestContractInterface into an Arc and stores it in a registry slot
         │
         ▼
-Load complete. All future calls = one indirect call.
+Load complete. All future calls = resolve handle → one indirect call.
 ```
 
 This exchange is identical regardless of what language the plugin is written in.
@@ -289,103 +286,83 @@ This exchange is identical regardless of what language the plugin is written in.
 
 ```c
 typedef struct {
-    void*                    (*alloc)(size_t size);
-    void                     (*free)(void* ptr);
-    GuestContractHandle             (*find_by_contract)(uint64_t contract_id, uint32_t min_version);
-    GuestContractHandle             (*find_by_bundle)(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
-    size_t                   (*find_all_by_contract)(uint64_t contract_id, uint32_t min_version,
-                                                      GuestContractHandle* out, size_t out_cap);
-    const PluginGuard*       (*resolve_plugin)(GuestContractHandle handle);
-    const void*              (*get_extension)(uint32_t extension_id);
+    void*                         runtime;                 // opaque runtime pointer (self-passing)
+    AbiError                      (*register_contract)(const HostInterface* self,
+                                                       const PluginDescriptor* descriptor,
+                                                       const GuestContractInterface* interface);
+    void*                         (*alloc)(const HostInterface* self, size_t size, size_t align);
+    void                          (*free)(const HostInterface* self, void* ptr, size_t size, size_t align);
+    GuestContractHandle           (*find_guest_contract)(const HostInterface* self,
+                                                         uint64_t contract_id, uint32_t min_version);
+    size_t                        (*find_all_guest_contracts)(const HostInterface* self,
+                                                              uint64_t contract_id, uint32_t min_version,
+                                                              GuestContractHandle* out, size_t out_cap);
+    const GuestContractInterface* (*resolve_guest_contract)(const HostInterface* self,
+                                                            GuestContractHandle handle);
+    // ... additional capability fields (dispatch, extensions) follow — ABI-stable by addition only
 } HostInterface;
 ```
+
+Every function uses the **self-passing pattern**: the first argument is the `HostInterface` pointer itself, so generated code carries no global or thread-local state. SDKs hide the self argument from developers.
 
 **GuestContractInterface — one per contract implemented:**
 
 ```c
 typedef struct {
-    uint64_t contract_id;
-    uint32_t contract_version;
-    uint32_t function_count;
-    void*    functions[];      // fixed order defined by contract schema
+    uint64_t              contract_id;
+    Version               contract_version;
+    DispatchType          dispatch_type;
+    GuestContractInstance (*create_instance)(const HostInterface* host, const void* args);
+    void                  (*destroy_instance)(const HostInterface* host, GuestContractInstance instance);
+    DispatchMechanisms    dispatch;          // function table, fixed order defined by contract schema
 } GuestContractInterface;
-```
-
-**HostInterface — host capabilities during init:**
-
-```c
-typedef struct {
-    void (*register_contract)(
-        const HostInterface*        self,
-        const PluginDescriptor* descriptor,
-        const GuestContractInterface*     vtable
-    );
-    const HostInterface* host;
-} HostInterface;
 ```
 
 **Bundle entry point — single symbol exposed by every bundle:**
 
 ```c
-// PluginContext valid for duration of init() only — do not store the pointer.
-void init(const HostInterface* host, const PluginContext* ctx);
+// BundleInitContext is valid for the runtime lifetime — do not store the raw pointer.
+AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx);
 ```
 
-**Registry storage — arc-swap slots for hot-reload safety:**
+**Registry storage — RwLock-protected slots:**
 
-Each registered plugin occupies one slot in the registry:
+The runtime owns a single `RuntimeStore`. It holds a `Vec<PluginSlot>` keyed by integer index, with all mutable state guarded by one `RwLock`. Each slot owns the contract's function table behind an `Arc`:
 
 ```rust
 struct PluginSlot {
-    vtable:     ArcSwap<VTableSlot>,  // atomically swappable, arc-swap crate
-    generation: u32,                   // incremented on unload, detects stale handles
+    entry:     Option<PluginEntry>,                  // None when the slot is vacant
+    interface: Option<Arc<GuestContractInterface>>,  // the registered function table
 }
-
-struct VTableSlot(pub *const GuestContractInterface);
-// SAFETY: GuestContractInterface is read-only after registration. Send+Sync by trust model.
-unsafe impl Send for VTableSlot {}
-unsafe impl Sync for VTableSlot {}
 ```
 
-**Cross-plugin call — hot path with arc-swap guard:**
+A `GuestContractHandle` is simply the slot index (a `u32`). It stays stable across hot-reload: the slot keeps its index while the interface inside it is replaced. There is no generation counter — out-of-bounds or vacant slots are rejected by `resolve_guest_contract`.
 
-Plugin resolves dependency once at init, stores the guard. On hot path loads vtable from guard directly — one pointer load, one indirect call.
+**Resolving and calling — read lock on the hot path:**
+
+A plugin resolves each dependency once at init and stores the handle. On the hot path it re-resolves the handle to the current interface (a short read-lock lookup), then performs one indirect call:
 
 ```rust
 // Generated guest code — at init (once per dependency):
-let handle = host.find_by_contract(IMAGE_PROCESSOR_CONTRACT_ID, 1)?;
-let guard = host.resolve_plugin(handle)?;   // arc-swap read guard
-self.image_processor = guard;               // stored for lifetime of plugin
+let handle = host.find_guest_contract(IMAGE_PROCESSOR_CONTRACT_ID, 1)?;
+self.image_processor = handle;              // stable slot index, stored for plugin lifetime
 
 // Generated guest code — on hot path:
-let vtable = self.image_processor.vtable(); // one load from guard
-vtable.functions[PROCESS_FN_ID](args, out); // one indirect call
+let interface = host.resolve_guest_contract(self.image_processor)?; // read-lock lookup
+interface.dispatch(args, out);                                       // one indirect call
 ```
 
-**Why arc-swap for hot-reload:**
+`find_guest_contract` and `resolve_guest_contract` take a read lock; concurrent callers proceed in parallel. Registration and reload take the write lock, which is rare.
 
-`ArcSwap<VTableSlot>` allows the runtime to atomically swap the vtable pointer during hot-reload without any locking on the reader path. Readers (callers) pay one atomic load per call sequence. The `Arc` refcount in the guard keeps the old vtable alive until all in-flight calls complete — automatic quiescence, no notification needed.
+**Why an Arc per slot — hot-reload safety:**
 
-Hot-reload implementation details are in Epic 17 (Hot-Reload).
-
-**Hot path call:**
-
-```c
-// Developer writes:
-Stats stats = image_stats.compute(image);
-
-// Generated code does:
-Stats stats;  // caller allocates on host allocator
-AbiError err = vtable->functions[COMPUTE_FN_ID](&image, &stats);
-```
-
-One guard load. One pointer dereference. One indirect call. Nothing else.
+Storing the function table as `Arc<GuestContractInterface>` lets the runtime swap a new interface into an existing slot under the write lock while old interfaces are **retired, not dropped**: superseded `Arc`s are moved into a retained list that lives for the runtime lifetime. Any in-flight reader holding a borrowed pointer into the old interface therefore stays valid — the memory is never freed out from under a concurrent call. Existing handles re-resolved after a reload automatically observe the new interface. Full hot-reload flow is in §28.
 
 ---
 
 ## 8. Host Libraries
 
-**Host libs are idiomatic wrappers over the polyplug C ABI, one per language.** That is all they are. They wrap the ABI functions — `host_alloc/host_free`, `find_by_contract`, `find_by_bundle`, `find_all_by_contract`, `resolve_plugin`, `get_extension` — in the natural idiom of each language. Written once, stable forever because the C ABI is frozen.
+**Host libs are idiomatic wrappers over the polyplug C ABI, one per language.** That is all they are. They wrap the ABI functions — `alloc`/`free`, `find_guest_contract`, `find_guest_contract_by_bundle`, `find_all_guest_contracts`, `resolve_guest_contract`, `get_extension` — in the natural idiom of each language. Written once, stable forever because the C ABI is frozen.
 
 The generated host callers from `polyplugc` sit on top of the host lib. The host lib is contract-agnostic infrastructure; generated code is contract-specific.
 
@@ -568,11 +545,9 @@ Each adapter implements the `BundleLoader` trait defined in `polyplug`:
 ```rust
 pub trait BundleLoader: Send + Sync {
     fn runtime_name(&self) -> &'static str;
-    fn load(
-        &self,
-        path: &Path,
-        registrar: &mut HostInterface,
-    ) -> Result<(), RuntimeError>;
+    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError>;
+    // reload() is mandatory for all loaders; only the native loader performs a real
+    // hot-reload — the others return RuntimeError::HotReloadDisabled.
 }
 ```
 
@@ -643,7 +618,7 @@ DotnetLoader::new(DotnetConfig {
 
 `hostfxr_initialize_for_runtime_config` requires a `.runtimeconfig.json` file path — there is no in-memory alternative. `polyplug-dotnet` generates a minimal one in a temp dir from `DotnetConfig.min_framework` **before** calling `nethost::load_hostfxr()` context init, passes it to hostfxr, then deletes it immediately after. Plugin developers ship only the `.dll`. No `.runtimeconfig.json` in the bundle.
 
-The generated `runtimeconfig.json` includes `additionalProbingPaths` pointing to the bundle directory. This allows managed assembly dependencies (`.dll` files) shipped inside the bundle directory to be found by the CLR automatically. For native interop DLLs, plugin developers use `NativeLibrary.Load(Path.Combine(bundlePath, "native.dll"))` with the `bundle_path` from `PluginContext`.
+The generated `runtimeconfig.json` includes `additionalProbingPaths` pointing to the bundle directory. This allows managed assembly dependencies (`.dll` files) shipped inside the bundle directory to be found by the CLR automatically. For native interop DLLs, plugin developers use `NativeLibrary.Load(Path.Combine(bundlePath, "native.dll"))` with the `bundle_path` from `BundleInitContext`.
 
 **Assembly target framework version check — `pelite` reads PE metadata:**
 
@@ -680,8 +655,8 @@ First .NET bundle load:
         ↓
 Each .NET bundle:
   pelite reads TargetFrameworkAttribute from PE metadata → version check
-  cached AssemblyDelegateLoader.get_function_pointer("Init")
-  Init(registrar) called — identical vtable exchange from here
+  cached AssemblyDelegateLoader.get_function_pointer("polyplug_init")
+  polyplug_init(host, ctx) called — identical contract exchange from here
 ```
 
 **Generated C# — performance requirements:**
@@ -692,18 +667,18 @@ Each .NET bundle:
 // Generated Init.cs — polyplugc output, plugin developer never edits this.
 // <AllowUnsafeBlocks>true</AllowUnsafeBlocks> is set ONLY in the generated .csproj.
 
-// Init receives IntPtr parameters — blittable, ABI-correct, no unsafe on method.
-[UnmanagedCallersOnly(EntryPoint = "init",
+// polyplug_init receives IntPtr parameters — blittable, ABI-correct, no unsafe on method.
+[UnmanagedCallersOnly(EntryPoint = "polyplug_init",
     CallConvs = new[] { typeof(CallConvCdecl) })]
-public static AbiError Init(IntPtr registrarPtr, IntPtr ctxPtr) {
+public static AbiError PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {
     // Called from a Rust (foreign) thread — CLR thread affinity required
     Thread.BeginThreadAffinity();
     try {
         // Generated code casts IntPtr → delegate* here (unsafe block, generated only)
         unsafe {
-            var registrar = (HostInterface*)registrarPtr;
-            var ctx       = (PluginContext*)ctxPtr;
-            // register vtables via delegate* — calli IL, zero allocation
+            var host = (HostInterface*)hostPtr;
+            var ctx  = (BundleInitContext*)ctxPtr;
+            // register contracts via host->register_contract — calli IL, zero allocation
         }
         return AbiError.Ok;
     } catch (Exception ex) {
@@ -818,13 +793,13 @@ mlua = { version = "0.11", features = ["lua55", "vendored", "send"] }
 
 `LuaVersion` enum: `Jit | Lua55 | Lua54 | Lua53`
 
-**Registrar pointer passing — FFI cdata, NOT lightuserdata:**
+**Host interface pointer passing — FFI cdata, NOT lightuserdata:**
 
-LuaJIT `lightuserdata` has a 47-bit pointer limit on x86_64 Linux. The registrar pointer may live anywhere in the address range. The correct pattern is to pass the pointer as a `uintptr_t` integer and cast it to a typed pointer on the Lua side via FFI:
+LuaJIT `lightuserdata` has a 47-bit pointer limit on x86_64 Linux. The `HostInterface` pointer may live anywhere in the address range. The correct pattern is to pass the pointer as a `uintptr_t` integer and cast it to a typed pointer on the Lua side via FFI:
 
 ```lua
--- Rust sets: lua.globals().set("_registrar_ptr", ptr as i64)
-local reg = ffi.cast("HostInterface*", ffi.cast("uintptr_t", _registrar_ptr))
+-- Rust sets: lua.globals().set("_host_ptr", ptr as i64)
+local host = ffi.cast("HostInterface*", ffi.cast("uintptr_t", _host_ptr))
 ```
 
 This cast happens once at init time. All subsequent vtable function pointer calls are FFI cdata indirect calls — JIT-compiled to near-native speed (~800M ops/sec vs ~45M for lightuserdata C bindings).
@@ -866,12 +841,12 @@ JsLoader::new(JsConfig {})  // no fields — QuickJS is fully embedded, no syste
 Host process
 ├── rquickjs::Runtime::new()          ← embedded in-process, ~300μs startup
 ├── ctx.globals().set("polyplug", {}) ← all HostInterface fns as direct Rust fn ptrs:
-│     findByContract(lo, hi, min_ver) → {index, generation} | null
-│     findByBundle(b_lo, b_hi, c_lo, c_hi, min_ver) → {index, generation} | null
-│     findAllByContract(lo, hi, min_ver) → [{index, generation}]
-│     resolvePlugin(index, generation) → guard_token
+│     findGuestContract(lo, hi, min_ver) → {index} | null
+│     findGuestContractByBundle(b_lo, b_hi, c_lo, c_hi, min_ver) → {index} | null
+│     findAllGuestContracts(lo, hi, min_ver) → [{index}]
+│     resolveGuestContract(index) → interface_token
 │     getExtension(extension_id) → {lo, hi} | null
-│     registerVtable(contract_lo, contract_hi, vtable_obj) → void
+│     registerContract(contract_lo, contract_hi, interface_obj) → void
 │     alloc(size) → {lo, hi}
 │     free(lo, hi) → void
 ├── ctx.eval(bundle_js)               ← plugin runs, calls polyplug.*, registers vtable
@@ -1268,7 +1243,7 @@ runtime.load_bundle_with("./my_plugin/", LoadOptions {
 
 ## 14. Cross-Plugin Communication
 
-Plugins never link to each other directly. All cross-plugin calls go through the runtime's arc-swap slots, which are the safety mechanism for hot-reload.
+Plugins never link to each other directly. All cross-plugin calls go through the runtime's RwLock-protected registry slots, which are the safety mechanism for hot-reload.
 
 **Plugin declares dependency in bundle.toml:**
 
@@ -1282,19 +1257,19 @@ min_version = "1.0"
 
 ```rust
 // Generated — plugin developer never writes this
-let handle = host.find_by_contract(IMAGE_DECODE_CONTRACT_ID, 1)?;
-self.decoder_guard = host.resolve_plugin(handle)?;
+let handle = host.find_guest_contract(IMAGE_DECODE_CONTRACT_ID, 1)?;
+self.decoder_handle = handle;                       // stable slot index, stored at init
 ```
 
-**Hot path — one load, one indirect call:**
+**Hot path — resolve, one indirect call:**
 
 ```rust
 // Developer writes:
 let result = self.decoder.decode(raw);
 
 // Generated code does:
-let vtable = self.decoder_guard.vtable();           // one atomic load from arc-swap
-vtable.functions[DECODE_FN_ID](&raw, &mut result);  // one indirect call
+let interface = host.resolve_guest_contract(self.decoder_handle)?; // read-lock lookup
+interface.dispatch(&raw, &mut result);                             // one indirect call
 ```
 
 **For specific bundle dependency:**
@@ -1307,9 +1282,9 @@ min_version = "1.0"
 ```
 
 ```rust
-// Generated — uses find_by_bundle with baked bundle_id constant
-let handle = host.find_by_bundle(AWESOME_FILTER_BUNDLE_ID, IMAGE_DECODE_CONTRACT_ID, 1)?;
-self.filter_guard = host.resolve_plugin(handle)?;
+// Generated — uses find_guest_contract_by_bundle with baked bundle_id constant
+let handle = host.find_guest_contract_by_bundle(AWESOME_FILTER_BUNDLE_ID, IMAGE_DECODE_CONTRACT_ID, 1)?;
+self.filter_handle = handle;                        // stable slot index, stored at init
 ```
 
 **Undeclared access — hard error:**
@@ -1388,7 +1363,7 @@ JS/TS     StringViewHelper: decode(sv), encode(s)→{view,bytes}, isEmpty(sv)
           (no operator overloading in JS — static helper class is idiomatic)
 ```
 
-**PluginContext helpers:**
+**BundleInitContext helpers:**
 
 ```
 Rust      ctx.bundle_path() → &str
@@ -1665,8 +1640,8 @@ cargo build --release
         csharp_bundle → DotnetLoader (hostfxr → CLR → managed assembly)
         python_plugin → PythonLoader (CPython → import → ctypes bridge)
 
-6.  Each loader calls init(registrar)
-        vtables registered — identical path from here for all languages
+6.  Each loader calls polyplug_init(host, ctx)
+        contracts registered via host->register_contract — identical path from here for all languages
 
 7.  App calls plugin:
         decoder.decode(raw_bytes)
@@ -1939,7 +1914,7 @@ QuickJS cannot be a standalone host — it is an embedded VM that runs inside a 
 **Design rules:**
 - All symbols prefixed `polyplug_`
 - No Rust types cross the boundary — only primitives, pointers, and ABI structs
-- `GuestContractHandle` packed as `u64`: `(generation as u64) << 32 | index as u64`
+- `GuestContractHandle` packed as `u64`: `index as u64` (null handle packs as `u64::MAX`)
 - Errors reported via `polyplug_last_error()` thread-local string — never panics across FFI
 - Runtime pointer opaque (`*mut OpaqueRuntime`) — consumers never dereference it
 
@@ -1975,11 +1950,11 @@ size_t   polyplug_runtime_find_all_by_contract(OpaqueRuntime* rt,
                                                 uint64_t* out,
                                                 size_t out_cap);
 
-// Vtable access
-OpaquePluginGuard* polyplug_runtime_resolve_plugin(OpaqueRuntime* rt,
-                                                    uint64_t packed_handle);
-void               polyplug_runtime_plugin_release(OpaquePluginGuard* guard);
-const void*        polyplug_runtime_plugin_vtable(OpaquePluginGuard* guard);
+// Interface access — resolve a packed handle to the contract's function table.
+// The returned pointer is borrowed from the runtime's slot; resolve again after
+// a reload to pick up a swapped interface. No release call is needed.
+const GuestContractInterface* polyplug_runtime_resolve_guest_contract(OpaqueRuntime* rt,
+                                                                      uint64_t packed_handle);
 
 // Error retrieval — UTF-8, caller-provides-buffer
 size_t polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
@@ -1992,8 +1967,8 @@ size_t polyplug_runtime_error_message_len(void);
 // Version sentinel — called first, must return 1
 uint32_t polyplug_abi_version(void);
 
-// Plugin constructor — registers vtables with the runtime
-AbiError polyplug_init(const HostInterface* host, const PluginContext* ctx);
+// Plugin constructor — registers contracts with the runtime
+AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx);
 ```
 
 **Performance:** The C facade is a zero-overhead shim — each function is a direct call into the existing Rust runtime with no additional allocation or logic. LuaJIT JIT-compiles these calls to direct indirect calls (bypassing PLT). Deno uses V8 Fast API calls for non-BigInt parameters (<10ns) and the standard call path for BigInt u64 parameters (~150ns).
@@ -2009,7 +1984,7 @@ AbiError polyplug_init(const HostInterface* host, const PluginContext* ctx);
 
 **Planned epics (already designed):**
 - Hot-reload — Epic 17 ✅ done
-- PluginContext + ABI type helpers — Epic 20 ✅ done
+- BundleInitContext + ABI type helpers — Epic 20 ✅ done
 - Lua host lib + Deno host lib + C facade — Epic 21 ✅ done
 
 **Long term:**
@@ -2037,72 +2012,64 @@ AbiError polyplug_init(const HostInterface* host, const PluginContext* ctx);
 
 ## 28. Hot-Reload Architecture
 
-Hot-reload allows a running application to replace a plugin bundle with a new version without restarting. All callers transparently use the new vtable after reload with zero downtime and no stale pointer risk.
+Hot-reload allows a running application to replace a native plugin bundle with a new version without restarting. Existing `GuestContractHandle`s stay valid: handles are stable slot indices, and re-resolving a handle after reload returns the new interface. Only native (`cdylib`) bundles support hot-reload; the Python, .NET, Lua, and JS loaders return `RuntimeError::HotReloadDisabled` from `reload()`, because their host runtimes cannot unload code once loaded.
 
-**Foundation — arc-swap slots (in place since Epic 9.7):**
+**Foundation — RwLock slots with retire-not-drop:**
 
-Every plugin slot in the registry holds an `ArcSwap<VTableSlot>`. Readers (callers) hold an arc-swap read guard for the duration of exactly one call sequence. When the guard drops, the Arc refcount decrements. The old vtable is only freed when all in-flight guards drop — automatic quiescence, no coordination, no locking.
+Each registry slot owns its contract function table as `Arc<GuestContractInterface>` behind the `RuntimeStore`'s single `RwLock`. A swap replaces the `Arc` in an existing slot under the write lock; the superseded `Arc` is **retired, not dropped** — moved into a retained list (`retired_interfaces`) that lives for the runtime lifetime. The old native library handle is likewise retained, never `dlclose`d. Any in-flight caller holding a borrowed pointer into the old interface therefore stays valid; no quiescence detection or deferred unload is required.
 
 **Hot-reload invariants:**
 
-1. Contract functions are synchronous and bounded — when a call returns, it is done. No background threads, no stored callbacks into the old vtable. This makes quiescence detection trivial.
+1. Contract functions are synchronous and bounded — when a call returns, it is done. No background threads and no stored callbacks into the old interface.
 2. Plugins must declare all dependencies in `bundle.toml`. The runtime knows the complete dependency graph. When bundle B is reloaded, the runtime knows every bundle that depends on B.
-3. Plugins load their dependency guard once at init. On hot-reload the arc-swap slot is swapped atomically — dependents automatically use the new vtable on their next call with no notification.
+3. Plugins store a `GuestContractHandle` (stable slot index) once at init. After reload the slot's interface `Arc` is swapped in place — dependents pick up the new interface the next time they re-resolve the handle, with no notification.
 
-**Reload path (Epic 17):**
+**Reload path (callback-based model):**
 
 ```
-New version of bundle B detected (inotify / polling / explicit API)
+New version of bundle B requested (explicit reload_bundle API)
         │
         ▼
-Runtime loads new_B.so (via correct loader), runs init, gets new GuestContractInterface*
+Fire ReloadPhase::Preparing — host destroys all live instances here
         │
         ▼
-Runtime atomically swaps arc-swap slot: vtable_slot.store(Arc::new(VTableSlot(new_ptr)))
+Check Arc::strong_count on each slot — warn (informational) if refs remain
         │
         ▼
-Callers immediately see new vtable on next call (atomic load in arc-swap guard)
+loader.reload(): dlopen new B, run polyplug_init → new interfaces registered
+                 into fresh slots (old slots are never vacated by registration)
         │
         ▼
-Old Arc held alive until all in-flight guards drop (quiescence — automatic)
+apply_reload_swap (write lock): for each pre-reload slot, move the matching
+                 new interface Arc into it, retire the old Arc, retire the
+                 now-duplicate new slot — all atomically under one write lock
         │
         ▼
-old_arc strong_count == 1 → safe to dlclose old bundle
+Fire ReloadPhase::Reloaded — host may create new instances
 ```
 
-**Deferred dlclose:**
+If `loader.reload()` fails, the runtime fires `ReloadPhase::Failed` and performs **no** interface swap; the previously active version stays in place.
 
-```rust
-let old_arc = slot.vtable.swap(Arc::new(VTableSlot(new_ptr)));
-// Spin in reloader thread ONLY until all in-flight callers complete
-while Arc::strong_count(&old_arc) > 1 { std::hint::spin_loop(); }
-// NOW safe to dlclose
-drop(old_arc);
-dlclose(old_library_handle);
-```
-
-Callers never spin. Only the reloader thread waits. Caller overhead is zero.
+**Safety contract:** the host MUST destroy all live instances inside the `Preparing` callback. The strong-count check after `Preparing` is informational only — if extra `Arc` references remain the runtime emits a warning and proceeds, because the retire-not-drop guarantee keeps the old interface memory valid regardless.
 
 **Caller overhead in steady state:**
 
 | Operation | Cost on x86_64 |
 |---|---|
-| arc-swap guard load | 1 atomic load (acquire = free on x86, TSO) |
-| vtable pointer read from guard | 1 load |
+| `resolve_guest_contract` read-lock lookup | 1 read-lock acquire + bounds check + Arc deref |
 | indirect function call | 1 indirect call |
-| guard drop (Arc refcount dec) | 1 atomic decrement |
-| **Total vs raw pointer** | **~2-3 cycles** |
 
 **Dependency graph and reload ordering:**
 
-When bundle B is reloaded, bundles that depend on B (declared in their `[[dependency]]` sections and stored in the manifest dependency graph) must also be checked. If a dependent bundle cached a guard at init time, its guard remains valid — it points to the arc-swap slot, not a raw pointer. The slot update is transparent.
+When bundle B is reloaded, bundles that depend on B (declared in their `[[dependency]]` sections and stored in the manifest dependency graph) keep their handles. A dependent's stored `GuestContractHandle` points at the slot index, not a raw pointer, so its next `resolve_guest_contract` transparently observes B's new interface.
 
-If a dependent bundle itself needs re-initialization (e.g. it caches derived state from B's vtable at init time), the runtime triggers a cascading reload in topological order. This is opt-in via a `needs_reinit_on_dep_reload = true` field in `bundle.toml`.
+If a dependent bundle itself needs re-initialization (e.g. it caches derived state from B's interface at init time), the runtime triggers a cascading reload in topological order. This is opt-in via a `needs_reinit_on_dep_reload = true` field in `bundle.toml`.
 
 **Limitations:**
-- Recursive self-calls during reload are not supported — document clearly
-- Hot-reload adds ~2-3 cycles per cross-plugin call in steady state vs a raw pointer (unavoidable cost of safety)
-- Host-side direct vtable pointers (from `resolve_plugin` stored by host app) must be refreshed after reload via `runtime.refresh_handle(handle)` — generated host callers do this automatically
+- Hot-reload is native-only; other loaders return `HotReloadDisabled`.
+- Recursive self-calls during reload are not supported — document clearly.
+- Retired interfaces and superseded native libraries are kept alive for the runtime lifetime (retire-not-drop), so repeated reloads grow memory until the runtime is destroyed.
+- Host-side resolved interface pointers stored by the host app must be re-resolved after reload via `runtime.refresh_handle(handle)` — generated host callers do this automatically.
 
 ---
 

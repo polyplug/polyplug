@@ -4,11 +4,11 @@
 
 ## Terminology Note
 
-This document uses terminology renamed in v1.1:
-- **GuestContractInterface**: Previously called "GuestContractInterface"
-- **RuntimeAbi**: Previously called "HostInterface"
+This document uses the following terminology (current as of v1.1):
+- **GuestContractInterface**: The interface struct a plugin provides for the host to call
+- **HostInterface**: The runtime's ABI table provided to guests
 
-The `VTableSlot` wrapper struct was removed in the instance model refactor. Interfaces are now stored directly in the registry.
+Interfaces are stored in `RuntimeStore` as interface slots guarded by a single `RwLock`. There is no separate slot wrapper struct around individual interfaces.
 
 ---
 
@@ -118,8 +118,8 @@ pub struct PluginGuard {
 │                         HOST SIDE (Runtime)                         │
 │                                                                     │
 │  ┌────────────────────────────────────────────────────────────┐    │
-│  │  RegistrySlot {                                            │    │
-│  │    interface: ArcSwap<InterfaceSlot>  ← ONE per contract   │    │
+│  │  RuntimeStore {                                            │    │
+│  │    interface slot (RwLock-guarded)  ← ONE per contract     │    │
 │  │  }                                                         │    │
 │  └────────────────────────────────────────────────────────────┘    │
 │                              ↑                                      │
@@ -218,7 +218,8 @@ The host must destroy all instances when receiving the `Preparing` notification:
 // Host drops all wrappers
 drop(w1); drop(w2); drop(w3);
 
-// Runtime can now safely swap interface
+// Runtime can now safely swap the interface slot via apply_reload_swap
+// (under the RuntimeStore RwLock write guard)
 ```
 
 ### Why Wrappers Must Be Dropped

@@ -2,9 +2,9 @@
 
 ## Terminology Note
 
-This document uses the following terminology (renamed in v1.1):
-- **GuestContractInterface**: Previously called "GuestContractInterface"
-- **RuntimeAbi**: Previously called "HostInterface"
+This document uses the following terminology (current as of v1.1):
+- **HostInterface**: The runtime's ABI table provided to guests (a `#[repr(C)]` struct of function pointers)
+- **GuestContractInterface**: The interface struct a plugin provides for the host to call
 - **Host Contract**: A contract provided by the host to plugins
 - **Guest Contract**: A contract implemented by plugins
 
@@ -30,8 +30,8 @@ AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx);
 ```
 **Called by:** Host immediately after dlopen
 **Parameters:**
-- `registrar`: Bridge for plugin to register its interfaces
-- `ctx`: Context containing bundle_path and future extensibility
+- `host`: The `HostInterface` function table; the plugin registers by calling `host->register_contract(host, &descriptor, &interface)`
+- `ctx`: Context containing bundle_id and bundle_path
 **Purpose:** Plugin constructor - registers contracts with the runtime
 
 ### BundleInitContext
@@ -148,11 +148,11 @@ polyplug_runtime_load_bundle()
     ├── dlsym(polyplug_init)
     │
     ▼
-Call: polyplug_init(registrar, ctx)
+Call: polyplug_init(host, ctx)
     │
     ├── Plugin builds interfaces
-    ├── Plugin calls registrar->register_plugin()
-    └── Interfaces stored in registry
+    ├── Plugin calls host->register_contract(host, &descriptor, &interface)
+    └── Interfaces stored in RuntimeStore
     │
     ▼
 polyplug_runtime_find_by_contract() ──► Get handle
@@ -178,6 +178,6 @@ The core ABI is frozen per §7 of AGENTS.md:
 ## Future Extensions
 
 New functionality should use:
-1. Extension interfaces via `RuntimeAbi.get_extension()`
+1. Host contract interfaces resolved via `HostInterface.get_host_contract`
 2. New fields in `BundleInitContext` (backward compatible)
 3. New host ABI functions (doesn't break plugins)

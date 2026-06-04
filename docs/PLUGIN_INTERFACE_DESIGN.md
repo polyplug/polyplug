@@ -1,18 +1,18 @@
 # GuestContractInterface Design Rationale
 
-> **Historical Document** — This document describes the design rationale for the `GuestContractInterface` architecture (previously called `GuestContractInterface`). The implementation is complete and this document is preserved for historical reference. For current implementation details, see the code in `crates/polyplug_abi/src/guest/` and `sdks/*/abi/`.
+> **Historical Document** — This document describes the design rationale for the `GuestContractInterface` architecture, which replaced an earlier native-only interface that stored a flat function-pointer array. The implementation is complete and this document is preserved for historical reference. For current implementation details, see the code in `crates/polyplug_abi/src/guest/` and `sdks/*/abi/`.
 
 ## Terminology Note
 
-This document uses terminology renamed in v1.1:
-- **GuestContractInterface**: Previously called "GuestContractInterface"
-- **RuntimeAbi**: Previously called "HostInterface"
+This document uses the following terminology (current as of v1.1):
+- **GuestContractInterface**: The interface struct a plugin provides for the host to call
+- **HostInterface**: The runtime's ABI table provided to guests
 - **Guest Contract**: A contract implemented by plugins
 - **Host Contract**: A contract provided by the host to plugins
 
 ## Overview
 
-This document explains the design decisions behind the `GuestContractInterface` architecture, which replaces the previous `GuestContractInterface` design. The key goals are:
+This document explains the design decisions behind the `GuestContractInterface` architecture, which replaced an earlier native-only interface (a flat function-pointer array, referred to below as the "old native-only interface"). The key goals are:
 
 1. **Zero overhead for native plugins** - Direct function call, no indirection
 2. **Minimal overhead for VM plugins** - One dispatch call, no global state
@@ -21,14 +21,14 @@ This document explains the design decisions behind the `GuestContractInterface` 
 
 ---
 
-## The Problem with the Old GuestContractInterface
+## The Problem with the Old Native-Only Interface
 
 ### Previous Architecture
 
 ```rust
-// OLD: GuestContractInterface forced all loaders into the same pattern
+// OLD: a flat function-pointer array forced all loaders into the same pattern
 #[repr(C)]
-pub struct OldGuestContractInterface {
+pub struct OldNativeOnlyInterface {
     pub contract_id: u64,
     pub contract_version: u32,
     pub function_count: u32,
@@ -76,7 +76,6 @@ VM loaders used **static trampolines** + **global registries**:
 ```rust
 #[repr(C)]
 pub struct GuestContractInterface {
-    pub rt_ctx: *const HostContext,      // Per-plugin runtime context
     pub contract_id: u64,
     pub contract_version: u32,
     pub function_count: u32,
@@ -354,7 +353,7 @@ unsafe extern "C" fn deno_dispatch(
 
 ## Summary
 
-| Aspect | Old (GuestContractInterface) | New (GuestContractInterface) |
+| Aspect | Old (native-only interface) | New (GuestContractInterface) |
 |--------|-------------------|----------------------|
 | Native overhead | ~5 ns | ~5 ns (zero change) |
 | VM overhead | ~100-200 ns | ~60-120 ns (40% faster) |

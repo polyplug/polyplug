@@ -10,11 +10,11 @@ This document describes the hot-reload notification system for polyplug. The des
 
 ## Terminology Note
 
-This document uses terminology renamed in v1.1:
-- **GuestContractInterface**: Previously called "GuestContractInterface"
-- **RuntimeAbi**: Previously called "HostInterface"
+This document uses the following terminology (current as of v1.1):
+- **GuestContractInterface**: The interface struct a plugin provides for the host to call
+- **HostInterface**: The runtime's ABI table provided to guests
 
-The `VTableSlot` wrapper struct was removed in the instance model refactor. Interfaces are now stored directly in the registry.
+Interfaces are stored in `RuntimeStore` as interface slots guarded by a single `RwLock`. On reload, the slot is swapped in place via `apply_reload_swap` under the write guard.
 
 ---
 
@@ -218,7 +218,7 @@ For language-specific API details and examples, see the SDK documentation:
 │  3. All instances destroyed - safe to swap                          │
 │     │                                                                │
 │     ▼                                                                │
-│  4. Runtime: swap_interface(new_interface)  ← ATOMIC               │
+│  4. Runtime: apply_reload_swap(new_interface)  ← RwLock write      │
 │     │                                                                │
 │     ▼                                                                │
 │  5. Runtime: on_reload(Reloaded { bundle_id })                      │

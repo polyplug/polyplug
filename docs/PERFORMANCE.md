@@ -4,9 +4,9 @@ This document covers performance characteristics and optimization strategies for
 
 ## Terminology Note
 
-This document uses terminology renamed in v1.1:
-- **GuestContractInterface**: Previously called "GuestContractInterface"
-- **RuntimeAbi**: Previously called "HostInterface"
+This document uses the following terminology (current as of v1.1):
+- **GuestContractInterface**: The interface struct a plugin provides for the host to call
+- **HostInterface**: The runtime's ABI table provided to guests
 
 ## Overview
 
@@ -22,7 +22,7 @@ polyplug is designed for **zero-overhead hot path calls**. The architecture ensu
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │   1. Runtime.resolve_plugin(handle)                              │
-│      └─> Validates generation counter                           │
+│      └─> Reads the interface slot under the RuntimeStore RwLock │
 │      └─> Returns Guard with interface pointer                   │
 │                                                                  │
 │   2. Guard.interface()                                           │
@@ -173,37 +173,37 @@ All host libraries implement the same hot-reload safety pattern:
 │                                                                  │
 │   On each interface() call:                                      │
 │   1. Guard.interface() -> resolve_plugin(runtime, handle)       │
-│   2. Runtime validates generation counter                        │
-│   3. If stale (hot-reload happened) -> returns null/error       │
-│   4. If valid -> returns current interface pointer               │
+│   2. Runtime reads the interface slot under the RwLock          │
+│   3. Returns the current interface pointer for the slot         │
 │                                                                  │
 │   This ensures:                                                  │
-│   - Hot-reload invalidates old handles                           │
-│   - No dangling interface pointers                               │
+│   - Hot-reload swaps the slot to the new interface              │
+│   - The superseded interface is retired, not freed, so          │
+│     in-flight pointers stay valid                                │
 │   - Safe concurrent access                                       │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Why not cache interface?**
+**Why re-resolve instead of caching a raw interface pointer in the SDK?**
 
-When hot-reload happens, the Rust runtime:
-1. Swaps the interface Arc in the slot
-2. Returns the old Arc
-3. If no Rust guard holds it, the old interface is **freed**
+When hot-reload happens, the Rust runtime, under the `RuntimeStore` RwLock write guard:
+1. Swaps the interface in the slot to the newly registered one (`apply_reload_swap`)
+2. Pushes the superseded interface onto `retired_interfaces`
 
-Any cached raw pointer becomes a **dangling pointer** -> use-after-free crash.
+The retire-not-drop model keeps superseded interfaces alive for the runtime lifetime,
+so a previously resolved pointer never dangles. Re-resolving on each call ensures the
+SDK observes the **new** interface after a swap rather than continuing to dispatch into
+the retired one.
 
 **Overhead:**
 
 | Operation | Cost | Impact |
 |-----------|------|--------|
-| Cached interface | ~0-5 ns | Crash on hot-reload |
-| Re-resolve interface | ~10-50 ns | Safe |
+| Cached interface | ~0-5 ns | Keeps dispatching into the retired interface after reload |
+| Re-resolve interface | ~10-50 ns | Observes the swapped-in interface |
 
 For typical plugin calls (>1us), the 10-50ns overhead is <5%.
-
-**Future consideration:** A "red-green" state mechanism where the runtime pauses all plugin calls during hot-reload, allowing cached interfaces to be safely invalidated. This would eliminate the per-call overhead while maintaining safety.
 
 ---
 

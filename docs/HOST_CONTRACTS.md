@@ -2,9 +2,9 @@
 
 ## Terminology Note
 
-This document uses terminology renamed in v1.1:
-- **RuntimeAbi**: Previously called "HostInterface" - the runtime's ABI provided to guests
-- **HostContractInterface**: Previously called "HostContractVTable" - a contract the host implements for guests
+This document uses the following terminology (current as of v1.1):
+- **HostInterface**: The runtime's ABI function table provided to guests during `polyplug_init`
+- **HostContractInterface**: A contract the host implements for guests to call
 
 ## Overview
 
@@ -30,11 +30,11 @@ Host Application                    Plugin Bundle
 
 ## Terminology Clarification
 
-- **RuntimeAbi**: The runtime's ABI provided to guests (host's functions like `alloc`, `find_by_contract`, etc.). This is passed to plugins during `polyplug_init`.
+- **HostInterface**: The runtime's ABI provided to guests (host's functions like `alloc`, `find_guest_contract`, `register_contract`, etc.). This is passed to plugins during `polyplug_init`.
 - **HostContractInterface**: A contract the host implements for guests to call (e.g., logging, metrics). This is registered via `register_host_contract`.
 - **GuestContractInterface**: A contract plugins implement for the host to call.
 
-The naming separation clarifies the Host/Guest relationship: the host provides the RuntimeAbi, while both host and guest can provide contract interfaces.
+The naming separation clarifies the Host/Guest relationship: the host provides the HostInterface, while both host and guest can provide contract interfaces.
 
 ## How Host Contracts Differ from Plugin Contracts
 
@@ -150,12 +150,9 @@ struct WorkerPlugin;
 
 impl ExampleWorkerPlugin for WorkerPlugin {
     fn do_work(&self, input: StringView) -> Result<StringView, GuestError> {
-        // Get the host contract caller
+        // Get the host contract caller from the HostInterface
         let logger = unsafe {
-            HostLoggerCaller::from_host(
-                polyplug_guest::ffi::get_runtime_abi(),
-                1
-            )
+            HostLoggerCaller::from_host(host, 1)
         };
         
         // Call host contract if available
@@ -298,7 +295,7 @@ HostContractRegistration.RegisterHostLogger(runtime, logger);
 ### Rust
 
 ```rust
-let logger = HostLoggerCaller::from_host(get_runtime_abi(), 1);
+let logger = unsafe { HostLoggerCaller::from_host(host, 1) };
 if let Some(logger) = logger {
     if logger.is_valid() {
         logger.log("Hello from plugin!")?;
@@ -309,7 +306,7 @@ if let Some(logger) = logger {
 ### Python
 
 ```python
-logger = HostLoggerCaller.from_host(runtime_abi)
+logger = HostLoggerCaller.from_host(host)
 if logger:
     logger.log("Hello from plugin!")
 ```
@@ -317,7 +314,7 @@ if logger:
 ### Lua
 
 ```lua
-local logger = M.HostLoggerCaller.from_host(runtime_abi)
+local logger = M.HostLoggerCaller.from_host(host)
 if logger then
   logger:log("Hello from plugin!")
 end
@@ -326,7 +323,7 @@ end
 ### JavaScript
 
 ```typescript
-const logger = HostLoggerCaller.fromHost(runtimeAbi);
+const logger = HostLoggerCaller.fromHost(host);
 if (logger) {
   logger.log("Hello from plugin!");
 }
@@ -335,7 +332,7 @@ if (logger) {
 ### C++
 
 ```cpp
-auto logger = HostLoggerCaller::from_host(runtime_abi);
+auto logger = HostLoggerCaller::from_host(host);
 if (logger) {
     logger->log(StringView("Hello from plugin!"));
 }
@@ -344,7 +341,7 @@ if (logger) {
 ### C#
 
 ```csharp
-var logger = HostLoggerCaller.FromHost(runtimeAbi);
+var logger = HostLoggerCaller.FromHost(host);
 if (logger != null) {
     logger.Log(1, new StringView("Hello from plugin!"));
 }
@@ -374,7 +371,7 @@ Host contracts support version negotiation. When a plugin requests a host contra
 
 ```rust
 // Plugin side - request with minimum minor version
-let logger = HostLoggerCaller::from_host(runtime_abi, min_minor: 2);
+let logger = unsafe { HostLoggerCaller::from_host(host, 2) };
 
 // If host implements 1.3 and plugin needs >= 1.2, success
 // If host implements 1.1 and plugin needs >= 1.2, returns None

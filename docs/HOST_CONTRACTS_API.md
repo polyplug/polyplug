@@ -2,9 +2,9 @@
 
 ## Terminology Note
 
-This document uses terminology renamed in v1.1:
-- **RuntimeAbi**: Previously called "HostInterface" - the runtime's ABI provided to guests
-- **HostContractInterface**: Previously called "HostContractVTable" - a contract the host implements
+This document uses the following terminology (current as of v1.1):
+- **HostInterface**: The runtime's ABI function table provided to guests during `polyplug_init`
+- **HostContractInterface**: A contract the host implements for guests to call
 
 ## Overview
 
@@ -186,28 +186,30 @@ pub struct HostContractInterface {
 
 ---
 
-## RuntimeAbi Changes
+## HostInterface Host Contract Discovery
 
-The `RuntimeAbi` structure includes a callback for host contract discovery:
+The `HostInterface` structure includes a function pointer for host contract discovery.
+It follows the self-passing pattern: the first argument is always the `HostInterface`
+pointer itself.
 
 ```rust
 #[repr(C)]
-pub struct RuntimeAbi {
+pub struct HostInterface {
     // ... existing fields ...
-    
-    /// Get a host contract interface by contract ID.
-    /// 
+
+    /// Resolve a host contract interface by contract ID.
+    ///
     /// # Arguments
-    /// * `rt_ctx` - Runtime context pointer
+    /// * `this` - HostInterface pointer (self-passing)
     /// * `contract_id` - FNV-1a hash of "host_contract:{name}@{major}"
-    /// * `min_minor_version` - Minimum minor version required
-    /// 
+    /// * `min_version` - Minimum minor version required
+    ///
     /// # Returns
     /// Pointer to HostContractInterface, or NULL if not found/incompatible
-    pub get_host_contract: unsafe extern "C" fn(
-        rt_ctx: *mut c_void,
+    pub resolve_host_contract_interface: unsafe extern "C" fn(
+        this: *const HostInterface,
         contract_id: u64,
-        min_minor_version: u32,
+        min_version: u32,
     ) -> *const HostContractInterface,
 }
 ```
@@ -215,10 +217,10 @@ pub struct RuntimeAbi {
 **Usage from Guest**:
 ```rust
 let interface_ptr = unsafe {
-    (runtime_abi.get_host_contract)(
-        runtime_abi.rt_ctx,
+    (host.resolve_host_contract_interface)(
+        host,
         HOSTLOGGER_CONTRACT_ID,
-        0,  // min_minor_version
+        0,  // min_version
     )
 };
 
@@ -344,15 +346,19 @@ impl HostLoggerCaller {
     pub const REQUIRED_MAJOR: u32 = 1;
     pub const MIN_MINOR: u32 = 0;
     
-    /// Factory method - creates instance from RuntimeAbi
+    /// Factory method - creates caller from the HostInterface
     pub unsafe fn from_host(
-        runtime_abi: &RuntimeAbi,
-        min_minor: u32,
+        host: *const HostInterface,
+        min_version: u32,
     ) -> Option<Self> {
-        let interface_ptr = (runtime_abi.get_host_contract)(
-            runtime_abi.rt_ctx,
+        if host.is_null() {
+            return None;
+        }
+        let host = &*host;
+        let interface_ptr = (host.resolve_host_contract_interface)(
+            host,
             Self::CONTRACT_ID,
-            min_minor,
+            min_version,
         );
         
         if interface_ptr.is_null() {
@@ -415,7 +421,7 @@ impl HostLoggerCaller {
 
 ```rust
 // Check for contract availability
-match HostLoggerCaller::from_host(runtime_abi, 0) {
+match unsafe { HostLoggerCaller::from_host(host, 0) } {
     Some(logger) if logger.is_valid() => {
         // Contract available
         match logger.log("message") {
@@ -461,10 +467,9 @@ runtime.register_host_contract(HOSTLOGGER_CONTRACT_ID, interface)?;
 
 ```rust
 use generated::host_contract_callers::HostLoggerCaller;
-use polyplug_guest::ffi::get_runtime_abi;
 
 unsafe {
-    let logger = HostLoggerCaller::from_host(get_runtime_abi(), 0);
+    let logger = HostLoggerCaller::from_host(host, 0);
     if let Some(logger) = logger {
         if logger.is_valid() {
             logger.log("Hello")?;
@@ -496,7 +501,7 @@ HostContractRegistration.register_host_logger(runtime, logger)
 ```python
 from generated.host_callers import HostLoggerCaller
 
-logger = HostLoggerCaller.from_host(runtime_abi)
+logger = HostLoggerCaller.from_host(host)
 if logger:
     logger.log("Hello")
 ```
@@ -526,7 +531,7 @@ registration.register_host_logger(runtime, logger)
 ```lua
 local callers = require("generated.host_callers")
 
-local logger = callers.HostLoggerCaller.from_host(runtime_abi)
+local logger = callers.HostLoggerCaller.from_host(host)
 if logger then
   logger:log("Hello")
 end
@@ -557,7 +562,7 @@ HostContractRegistration.registerHostLogger(runtime, logger);
 ```typescript
 import { HostLoggerCaller } from "./generated/host_callers.ts";
 
-const logger = HostLoggerCaller.fromHost(runtimeAbi);
+const logger = HostLoggerCaller.fromHost(host);
 if (logger) {
   logger.log("Hello");
 }
@@ -592,7 +597,7 @@ polyplug::host::HostContractRegistration::register_host_logger(
 ```cpp
 #include "generated/host_callers.hpp"
 
-auto logger = HostLoggerCaller::from_host(runtime_abi);
+auto logger = HostLoggerCaller::from_host(host);
 if (logger) {
     logger->log(StringView("Hello"));
 }
@@ -625,7 +630,7 @@ HostContractRegistration.RegisterHostLogger(runtime, logger);
 ```csharp
 using Generated.HostCallers;
 
-var logger = HostLoggerCaller.FromHost(runtimeAbi);
+var logger = HostLoggerCaller.FromHost(host);
 if (logger != null) {
     logger.Log(1, new StringView("Hello"));
 }
@@ -719,19 +724,19 @@ fn register() {
 ### Implementation
 
 ```rust
-pub(crate) unsafe extern "C" fn host_get_host_contract(
-    rt_ctx: *mut c_void,
+pub(crate) unsafe extern "C" fn host_resolve_host_contract_interface(
+    this: *const HostInterface,
     contract_id: u64,
-    min_minor_version: u32,
+    min_version: u32,
 ) -> *const HostContractInterface {
-    let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
-    let runtime: &Runtime = unsafe { &*ctx.runtime };
+    let host: &HostInterface = unsafe { &*this };
+    let runtime: &Runtime = unsafe { &*(host.runtime as *const Runtime) };
     
     match runtime.host_contracts.read() {
         Ok(contracts) => {
             match contracts.get(&contract_id) {
                 Some(interface) => {
-                    if interface.header.contract_minor >= min_minor_version {
+                    if interface.header.contract_minor >= min_version {
                         interface as *const HostContractInterface
                     } else {
                         core::ptr::null()
