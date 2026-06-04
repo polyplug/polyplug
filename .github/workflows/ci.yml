@@ -54,8 +54,12 @@ jobs:
 
   test:
     name: Tests
-    runs-on: ubuntu-latest
     needs: [fmt, clippy, sdk_validator]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -116,6 +120,43 @@ jobs:
         run: ${{ matrix.setup }}
       - name: Run ${{ matrix.toolchain }} tests
         run: ${{ matrix.test_cmd }}
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: examples
+          save-if: true
+      - name: Install build-essential
+        run: sudo apt-get install -y build-essential
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+      - name: Install rolldown
+        run: npm install -g rolldown
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Set up LuaJIT
+        uses: leafo/gh-actions-lua@v11
+        with:
+          luaVersion: 'luajit-2.1.0-beta3'
+      - name: Build release artifacts
+        run: cargo build --release
+      - name: Build examples
+        run: bash examples/build_all.sh
+      - name: Verify hosts
+        run: bash examples/verify_hosts.sh
 
   test-download-nethost:
     name: Build with download-nethost
