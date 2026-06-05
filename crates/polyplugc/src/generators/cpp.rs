@@ -1281,7 +1281,7 @@ fn generate_cpp_host_function(
     out.push_str("            }\n");
     out.push_str("            case DispatchType::VirtualMachine: {\n");
     out.push_str(&format!(
-        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, {}U, args_ptr, {});\n",
+        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, {}U, args_ptr, {}, nullptr);\n",
         fn_id, out_ptr_expr
     ));
     out.push_str("                break;\n");
@@ -1673,7 +1673,7 @@ fn generate_cpp_guest_host_contract_method(
     out.push_str("            }\n");
     out.push_str("            case DispatchType::VirtualMachine: {\n");
     out.push_str(&format!(
-        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, {fn_id}U, args_ptr, out_ptr);\n"
+        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, {fn_id}U, args_ptr, out_ptr, nullptr);\n"
     ));
     out.push_str("                break;\n");
     out.push_str("            }\n");

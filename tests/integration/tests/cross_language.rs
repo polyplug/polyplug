@@ -282,6 +282,7 @@ fn dispatch_add_and_verify(interface_ptr: *const GuestContractInterface) {
                 0, // fn_id = 0 for add
                 &args as *const AddArgs as *const (),
                 &mut out as *mut u32 as *mut (),
+                core::ptr::null_mut(),
             )
         }
     };

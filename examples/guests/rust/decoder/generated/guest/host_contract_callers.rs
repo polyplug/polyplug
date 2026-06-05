@@ -124,6 +124,7 @@ impl HostLoggerCaller {
                     0_u32,
                     args_ptr,
                     out_ptr,
+                    core::ptr::null_mut(),
                 ),
             }
         };
@@ -198,6 +199,7 @@ impl HostLoggerCaller {
                     1_u32,
                     args_ptr,
                     out_ptr,
+                    core::ptr::null_mut(),
                 ),
             }
         };

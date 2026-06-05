@@ -58,7 +58,7 @@ public:
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr);
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, nullptr);
                 break;
             }
         }
@@ -91,7 +91,7 @@ public:
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 1U, args_ptr, out_ptr);
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 1U, args_ptr, out_ptr, nullptr);
                 break;
             }
         }

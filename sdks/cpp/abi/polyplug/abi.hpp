@@ -27,6 +27,8 @@ struct RuntimeConfig;
 struct AbiError;
 struct Array;
 struct Buffer;
+struct ArenaOverflowBlock;
+struct CallArena;
 struct DependencyInfo;
 struct StringView;
 struct Version;
@@ -664,6 +666,44 @@ struct Buffer {
 };
 static_assert(sizeof(Buffer) == 24, "Buffer size mismatch");
 
+///  Header prepended to every host-allocated overflow block.
+///
+///  Overflow blocks form a singly linked list rooted at `CallArena.first_overflow`.
+///  Each block stores the total `capacity` it was allocated with (including this
+///  header) so `reset()` can free it with the exact size/align the host expects.
+struct ArenaOverflowBlock {
+    ///  Next overflow block in the chain, or null for the last block.
+    ArenaOverflowBlock* next;
+    ///  Total allocated size of this block in bytes, including this header.
+    size_t capacity;
+};
+static_assert(sizeof(ArenaOverflowBlock) == 16, "ArenaOverflowBlock size mismatch");
+
+///  Per-call bump allocator handed to a VM dispatch call.
+///
+///  # Layout
+///
+///  `#[repr(C)]` with five pointer-sized fields (40 bytes, align 8). The first
+///  three fields define the primary bump region `[base, end)` with `cur` as the
+///  next free byte. When the primary region is exhausted, `alloc` requests a fresh
+///  block from `host->alloc`, chains it onto `first_overflow`, and serves from it.
+///
+///  A null `CallArena*` passed to a dispatch function means "no arena": the bridge
+///  falls back to per-value `host->alloc`.
+struct CallArena {
+    ///  Next free byte in the primary region.
+    uint8_t* cur;
+    ///  One past the last usable byte of the primary region.
+    uint8_t* end;
+    ///  Start of the primary region (the reset target for `cur`).
+    uint8_t* base;
+    ///  Host API used to allocate and free overflow blocks.
+    const HostApi* host;
+    ///  Head of the singly linked list of host-allocated overflow blocks.
+    ArenaOverflowBlock* first_overflow;
+};
+static_assert(sizeof(CallArena) == 40, "CallArena size mismatch");
+
 ///  Dependency information returned by get_dependencies introspection API.
 ///
 ///  Mirrors `manifest.toml` `\[dependency\]` table structure for plugins to query
@@ -810,7 +850,7 @@ enum class ParseVersionError : uint32_t {
 ///
 ///  Used when `dispatch_type == DispatchType::VirtualMachine`.
 ///  The `call` function receives `loader_data` which contains VM-specific state.
-using VmDispatch_call_fn = AbiError(*)(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*);
+using VmDispatch_call_fn = AbiError(*)(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
 struct VmDispatch {
     ///  Dispatch function called for every VM function invocation.
     ///
@@ -820,6 +860,11 @@ struct VmDispatch {
     ///  - `fn_id`: Function index within the contract
     ///  - `args`: Pointer to packed arguments (ABI-specific layout)
     ///  - `out`: Pointer to output buffer for return value
+    ///  - `arena`: Optional per-call [`CallArena`] for variable-size return values.
+    ///    A null pointer means "no arena" — the bridge falls back to per-value
+    ///    `host->alloc`. When non-null, the arena is reset by the caller at the
+    ///    start of each call, so values written into it are valid until the next
+    ///    call on the same caller.
     VmDispatch_call_fn call;
     ///  Loader-specific data handle.
     ///  Opaque to the host; interpreted by the dispatch function.

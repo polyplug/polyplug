@@ -1456,6 +1456,9 @@ fn generate_host_fn_caller(
     out.push_str(&format!("                            {fn_id}_u32,\n"));
     out.push_str("                            args_ptr,\n");
     out.push_str("                            out_ptr,\n");
+    // TODO(call-arena wave B): thread a per-caller CallArena here. The VM bridge
+    // tolerates a null arena and falls back to per-value host allocation.
+    out.push_str("                            core::ptr::null_mut(),\n");
     out.push_str("                        )\n");
     out.push_str("                    }\n");
     out.push_str("                }\n");
@@ -1890,6 +1893,7 @@ fn generate_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("use polyplug_abi::DispatchMechanisms;\n");
     out.push_str("use polyplug_abi::NativeDispatch;\n");
     out.push_str("use polyplug_abi::VmDispatch;\n");
+    out.push_str("use polyplug_abi::CallArena;\n");
     out.push_str("use polyplug_abi::DispatchType;\n");
     out.push_str("use polyplug_abi::StringView;\n");
     out.push_str("use polyplug_abi::AbiError;\n");
@@ -2084,6 +2088,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("        fn_id: u32,\n");
     out.push_str("        args: *const (),\n");
     out.push_str("        out: *mut (),\n");
+    out.push_str("        arena: *mut CallArena,\n");
     out.push_str("    ) -> AbiError,\n");
     out.push_str(") -> &'static HostContractInterface {\n");
 
@@ -2609,7 +2614,7 @@ fn generate_guest_host_contract_method(
     out.push_str("                }\n");
     out.push_str("                DispatchType::VirtualMachine => {\n");
     out.push_str(&format!(
-        "                    (interface.dispatch.vm.call)(interface.dispatch.vm.loader_data, GuestContractInstance::null(), {fn_id}_u32, args_ptr, out_ptr)\n"
+        "                    (interface.dispatch.vm.call)(interface.dispatch.vm.loader_data, GuestContractInstance::null(), {fn_id}_u32, args_ptr, out_ptr, core::ptr::null_mut())\n"
     ));
     out.push_str("                }\n");
     out.push_str("            }\n");

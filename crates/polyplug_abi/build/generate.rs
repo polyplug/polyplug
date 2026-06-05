@@ -670,6 +670,8 @@ inline StringView string_view(std::string_view s) noexcept {
 const KNOWN_SIZES: &[(&str, usize)] = &[
     ("StringView", 16),
     ("Buffer", 24),
+    ("CallArena", 40),
+    ("ArenaOverflowBlock", 16),
     ("Version", 12),
     ("AbiError", 24),
     ("DependencyInfo", 24),

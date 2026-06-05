@@ -58,7 +58,7 @@ function HostLoggerContract:log(self, message)
         local fn = ffi.cast(DispatchFnType, fn_ptr)
         err = fn(impl_ptr, args_ptr, out_ptr)
     elseif dispatch_type == 1 then
-        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, 0, args_ptr, out_ptr)
+        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, 0, args_ptr, out_ptr, nil)
     else
         return
     end
@@ -91,7 +91,7 @@ function HostLoggerContract:log_with_level(self, level, message)
         local fn = ffi.cast(DispatchFnType, fn_ptr)
         err = fn(impl_ptr, args_ptr, out_ptr)
     elseif dispatch_type == 1 then
-        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, 1, args_ptr, out_ptr)
+        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, 1, args_ptr, out_ptr, nil)
     else
         return
     end

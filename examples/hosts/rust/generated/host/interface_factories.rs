@@ -11,6 +11,7 @@ use super::types::*;
 use core::ffi::c_void;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::CallArena;
 use polyplug_abi::DispatchMechanisms;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInstance;
@@ -170,6 +171,7 @@ pub fn create_host_logger_interface_vm(
         fn_id: u32,
         args: *const (),
         out: *mut (),
+        arena: *mut CallArena,
     ) -> AbiError,
 ) -> &'static HostContractInterface {
     /// Create instance stub for `host.logger` host contract (VM dispatch).

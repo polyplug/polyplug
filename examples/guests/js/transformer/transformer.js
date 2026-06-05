@@ -1,6 +1,6 @@
 import { setTransformerImpl } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
-import { toStr, allocString } from '../../../../sdks/js/guest/polyplug_guest.js';
+import { toStr, allocStringArena } from '../../../../sdks/js/guest/polyplug_guest.js';
 
 function transform(input) {
     const s = toStr(input);
@@ -11,7 +11,7 @@ function transform(input) {
         const name = parts[0].toUpperCase();
         const value = `${parts[1]} (transformed)`;
         const count = parseInt(parts[2], 10) || 0;
-        const result = allocString(`TRANSFORMED:${name}|${value}|${count + 1}`);
+        const result = allocStringArena(`TRANSFORMED:${name}|${value}|${count + 1}`);
         
         const ptrLo = Number(result.ptr & 0xFFFFFFFFn);
         const ptrHi = Number((result.ptr >> 32n) & 0xFFFFFFFFn);

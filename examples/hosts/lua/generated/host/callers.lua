@@ -72,7 +72,7 @@ local PipelineDecoderContract_methods = {
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             err = fn(self._instance, args_ptr, out_ptr)
         else
-            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr)
+            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -155,7 +155,7 @@ local DataTransformerContract_methods = {
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             err = fn(self._instance, args_ptr, out_ptr)
         else
-            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr)
+            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -238,7 +238,7 @@ local PipelineEncoderContract_methods = {
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             err = fn(self._instance, args_ptr, out_ptr)
         else
-            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr)
+            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -321,7 +321,7 @@ local DataReporterContract_methods = {
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             err = fn(self._instance, args_ptr, out_ptr)
         else
-            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr)
+            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -404,7 +404,7 @@ local PipelineValidatorContract_methods = {
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             err = fn(self._instance, args_ptr, out_ptr)
         else
-            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr)
+            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)

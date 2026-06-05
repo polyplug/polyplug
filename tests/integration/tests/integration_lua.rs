@@ -72,6 +72,7 @@ unsafe fn call_vm_function(
             fn_id,
             args,
             out,
+            core::ptr::null_mut(),
         )
     }
 }

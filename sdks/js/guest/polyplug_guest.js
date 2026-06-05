@@ -211,6 +211,7 @@ export default {
     readBytes,
     writeBytes,
     allocString,
+    allocStringArena,
     freeBytes,
     toStr
 };
@@ -318,6 +319,29 @@ export function allocString(str) {
         ? new TextEncoder().encode(str)
         : _encodeUtf8(str);
     const ptrArr = globalThis.polyplug.alloc(bytes.length);
+    const ptr = (BigInt(ptrArr[1]) << 32n) + BigInt(ptrArr[0]);
+    writeBytes(ptr, bytes);
+    return { ptr, len: bytes.length };
+}
+
+/**
+ * Allocate a return-value string from the current call arena.
+ *
+ * Use this for strings RETURNED from a contract function: the bytes are served
+ * from the host's per-call {@link CallArena} and stay valid until the next call
+ * on the same caller, so the guest never frees them. When no arena is active
+ * (`polyplug.arenaAlloc` falls back to `polyplug.alloc`), this behaves like
+ * {@link allocString}. For data that must outlive the call, use
+ * {@link allocString} and free it explicitly with {@link freeBytes}.
+ *
+ * @param {string} str - JavaScript string to allocate.
+ * @returns {{ ptr: bigint, len: number }} Pointer and length of the bytes.
+ */
+export function allocStringArena(str) {
+    const bytes = (typeof TextEncoder !== 'undefined')
+        ? new TextEncoder().encode(str)
+        : _encodeUtf8(str);
+    const ptrArr = globalThis.polyplug.arenaAlloc(bytes.length);
     const ptr = (BigInt(ptrArr[1]) << 32n) + BigInt(ptrArr[0]);
     writeBytes(ptr, bytes);
     return { ptr, len: bytes.length };

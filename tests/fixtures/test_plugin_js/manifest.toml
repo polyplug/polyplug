@@ -10,4 +10,4 @@ provides = ["test.add@1"]
 needs_reinit_on_dep_reload = false
 
 [function_count]
-"test.add@1" = 4
+"test.add@1" = 5

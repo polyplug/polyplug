@@ -1,6 +1,6 @@
 import { setReporterImpl } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
-import { toStr, allocString } from '../../../../sdks/js/guest/polyplug_guest.js';
+import { toStr, allocStringArena } from '../../../../sdks/js/guest/polyplug_guest.js';
 
 function report(input) {
     const s = toStr(input);
@@ -9,9 +9,9 @@ function report(input) {
 
     let result;
     if (parts.length >= 3) {
-        result = allocString(`Report: ${parts[0]} has value '${parts[1]}' with count ${parts[2]}`);
+        result = allocStringArena(`Report: ${parts[0]} has value '${parts[1]}' with count ${parts[2]}`);
     } else {
-        result = allocString("INVALID:format");
+        result = allocStringArena("INVALID:format");
     }
 
     const ptrLo = Number(result.ptr & 0xFFFFFFFFn);

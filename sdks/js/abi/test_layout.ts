@@ -18,6 +18,8 @@ import {
     RUNTIME_CONFIG_SIZE,
     ABI_ERROR_SIZE,
     BUFFER_SIZE,
+    ARENA_OVERFLOW_BLOCK_SIZE,
+    CALL_ARENA_SIZE,
     DEPENDENCY_INFO_SIZE,
     STRING_VIEW_SIZE,
     VERSION_SIZE,
@@ -86,6 +88,14 @@ Deno.test("AbiError is 24 bytes", () => {
 
 Deno.test("Buffer is 24 bytes", () => {
     assert(BUFFER_SIZE === 24);
+});
+
+Deno.test("ArenaOverflowBlock is 16 bytes", () => {
+    assert(ARENA_OVERFLOW_BLOCK_SIZE === 16);
+});
+
+Deno.test("CallArena is 40 bytes", () => {
+    assert(CALL_ARENA_SIZE === 40);
 });
 
 Deno.test("DependencyInfo is 24 bytes", () => {

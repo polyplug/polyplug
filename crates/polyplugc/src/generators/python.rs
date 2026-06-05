@@ -1688,7 +1688,7 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
     out.push_str("            err = dispatch_fn(impl_ptr, args_ptr, out_ptr)\n");
     out.push_str("        elif dispatch_type == DispatchType.VirtualMachine:\n");
     out.push_str(&format!(
-        "            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr)\n"
+        "            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr, None)\n"
     ));
     out.push_str("        else:\n");
     if has_return {

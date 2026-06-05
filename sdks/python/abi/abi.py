@@ -160,6 +160,47 @@ class Buffer(ctypes.Structure):
 assert ctypes.sizeof(Buffer) == 24, f"Buffer expected 24 bytes, got {ctypes.sizeof(Buffer)}"
 
 
+class ArenaOverflowBlock(ctypes.Structure):
+    """ Header prepended to every host-allocated overflow block.
+    
+     Overflow blocks form a singly linked list rooted at `CallArena.first_overflow`.
+     Each block stores the total `capacity` it was allocated with (including this
+     header) so `reset()` can free it with the exact size/align the host expects.
+    """
+    _fields_ = [
+        ("next", ctypes.c_void_p),
+        ("capacity", ctypes.c_size_t),
+    ]
+
+# Expected size: 16 bytes
+assert ctypes.sizeof(ArenaOverflowBlock) == 16, f"ArenaOverflowBlock expected 16 bytes, got {ctypes.sizeof(ArenaOverflowBlock)}"
+
+
+class CallArena(ctypes.Structure):
+    """ Per-call bump allocator handed to a VM dispatch call.
+    
+     # Layout
+    
+     `#[repr(C)]` with five pointer-sized fields (40 bytes, align 8). The first
+     three fields define the primary bump region `[base, end)` with `cur` as the
+     next free byte. When the primary region is exhausted, `alloc` requests a fresh
+     block from `host->alloc`, chains it onto `first_overflow`, and serves from it.
+    
+     A null `CallArena*` passed to a dispatch function means "no arena": the bridge
+     falls back to per-value `host->alloc`.
+    """
+    _fields_ = [
+        ("cur", ctypes.c_void_p),
+        ("end", ctypes.c_void_p),
+        ("base", ctypes.c_void_p),
+        ("host", ctypes.c_void_p),
+        ("first_overflow", ctypes.c_void_p),
+    ]
+
+# Expected size: 40 bytes
+assert ctypes.sizeof(CallArena) == 40, f"CallArena expected 40 bytes, got {ctypes.sizeof(CallArena)}"
+
+
 class DependencyInfo(ctypes.Structure):
     """ Dependency information returned by get_dependencies introspection API.
     
@@ -381,7 +422,7 @@ class AbiError(ctypes.Structure):
 assert ctypes.sizeof(AbiError) == 24, f"AbiError expected 24 bytes, got {ctypes.sizeof(AbiError)}"
 
 
-_vm_dispatch_call_t = ctypes.CFUNCTYPE(AbiError, VmLoaderData, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
+_vm_dispatch_call_t = ctypes.CFUNCTYPE(AbiError, VmLoaderData, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 class VmDispatch(ctypes.Structure):
     """ VM dispatch data — call through a dispatch function.
     

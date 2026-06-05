@@ -1,6 +1,7 @@
 mod abi_error;
 mod array;
 mod buffer;
+mod call_arena;
 mod dependency_info;
 mod error_code;
 mod string_view;
@@ -9,6 +10,7 @@ mod version;
 pub use abi_error::AbiError;
 pub use array::Array;
 pub use buffer::Buffer;
+pub use call_arena::{ArenaOverflowBlock, CallArena};
 pub use dependency_info::DependencyInfo;
 pub use error_code::AbiErrorCode;
 pub use string_view::StringView;

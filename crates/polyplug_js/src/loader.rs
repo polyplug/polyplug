@@ -25,6 +25,7 @@ use polyplug::loader::ManifestData;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::BundleInitContext;
+use polyplug_abi::CallArena;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
@@ -109,12 +110,16 @@ unsafe extern "C" fn js_destroy_instance(_host: *const HostApi, _instance: Guest
 /// # Safety
 /// - `loader_data` must be a valid VmLoaderData wrapping JsLoaderData
 /// - `args` and `out` must be valid pointers for the ABI call
+/// - `arena`, when non-null, must point to a valid [`CallArena`] reset by the
+///   caller for this call. Values written by the guest into the arena (via
+///   `polyplug.arenaAlloc`) are valid until the caller's next reset.
 unsafe extern "C" fn js_dispatch(
     loader_data: VmLoaderData,
     _instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
+    arena: *mut CallArena,
 ) -> AbiError {
     // SAFETY: loader_data wraps a valid pointer to JsLoaderData created by the loader.
     let data: &JsLoaderData = unsafe { &*(loader_data.data as *const JsLoaderData) };
@@ -139,11 +144,22 @@ unsafe extern "C" fn js_dispatch(
     let args_f64: f64 = args_usize as f64;
     let out_f64: f64 = out_usize as f64;
 
+    let arena_usize: usize = arena as usize;
+
     let call_result: Result<i32, rquickjs::Error> = data.ctx.with(|ctx| {
+        // Publish the per-call arena pointer on the polyplug object so the
+        // arenaAlloc bridge can serve allocations from it. The VM lock is held
+        // for the whole closure, so single-threaded access is guaranteed. The
+        // pointer is cleared after the call so a stale arena is never reachable.
+        set_arena_ptr(&ctx, arena_usize);
+
         let js_fn: Function<'_> = func_persistent.clone().restore(&ctx)?;
 
-        let result: i32 = js_fn.call::<(f64, f64), i32>((args_f64, out_f64))?;
-        Ok(result)
+        let result: Result<i32, rquickjs::Error> =
+            js_fn.call::<(f64, f64), i32>((args_f64, out_f64));
+
+        set_arena_ptr(&ctx, 0);
+        result
     });
 
     match call_result {
@@ -169,6 +185,29 @@ fn pack_handle(h: GuestContractHandle) -> Option<u64> {
     } else {
         Some(h.index as u64)
     }
+}
+
+/// Publish the per-call arena pointer on the `polyplug` global as lo/hi f64 halves.
+///
+/// Stored as f64 for the same reason as the host vtable pointer: rquickjs would
+/// sign-extend a u32 above INT32_MAX to a negative tagged int and corrupt the
+/// pointer. A value of 0 means "no arena" (arenaAlloc falls back to host->alloc).
+fn set_arena_ptr<'js>(ctx: &Ctx<'js>, ptr: usize) {
+    let Ok(polyplug_obj) = ctx.globals().get::<&str, Object<'js>>("polyplug") else {
+        return;
+    };
+    let _ = polyplug_obj.set("_arenaLo", (ptr as u32) as f64);
+    let _ = polyplug_obj.set("_arenaHi", ((ptr >> 32) as u32) as f64);
+}
+
+/// Read the per-call arena pointer from the `polyplug` global, or null if unset.
+fn get_arena_ptr<'js>(ctx: &Ctx<'js>) -> *mut CallArena {
+    let Ok(polyplug_obj) = ctx.globals().get::<&str, Object<'js>>("polyplug") else {
+        return core::ptr::null_mut();
+    };
+    let lo: f64 = polyplug_obj.get::<&str, f64>("_arenaLo").unwrap_or(0.0);
+    let hi: f64 = polyplug_obj.get::<&str, f64>("_arenaHi").unwrap_or(0.0);
+    (((hi as u64) << 32) | lo as u64) as usize as *mut CallArena
 }
 
 /// Helper to get HostApi pointer from JS globals.
@@ -486,6 +525,49 @@ fn register_host_functions<'js>(
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("JS runtime js-quickjs error: alloc set failed: {e}"),
+            })
+        })?;
+
+    // arenaAlloc serves the guest's per-call return buffers from the current
+    // CallArena (published by js_dispatch), falling back to host->alloc when no
+    // arena is active. Returns [lo, hi] f64 halves, matching alloc.
+    let arena_alloc_fn: Function<'js> = Function::new(
+        ctx.clone(),
+        |ctx: Ctx<'js>, size: u32| -> Result<Array<'js>, rquickjs::Error> {
+            let arena: *mut CallArena = get_arena_ptr(&ctx);
+            let ptr: *mut u8 = if arena.is_null() {
+                match get_host_interface_from_globals(&ctx) {
+                    // SAFETY: hvt points to 'static HostApi data.
+                    Some(hvt) => unsafe { ((*hvt).alloc)(hvt, size as usize, 1) },
+                    None => core::ptr::null_mut(),
+                }
+            } else {
+                // SAFETY: `arena` is the valid per-call CallArena published by
+                // js_dispatch under the VM lock; alloc bumps within it or chains
+                // a host-allocated overflow block.
+                unsafe { (*arena).alloc(size as usize, 1) }
+            };
+            let ptr_usize: usize = ptr as usize;
+            let arr: Array<'js> = Array::new(ctx.clone())
+                .map_err(|_| rquickjs::Exception::throw_message(&ctx, "array creation failed"))?;
+            let _ = arr.set(0, (ptr_usize as u32) as f64);
+            let _ = arr.set(1, ((ptr_usize >> 32) as u32) as f64);
+            Ok(arr)
+        },
+    )
+    .map_err(|e: rquickjs::Error| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: arenaAlloc function creation failed: {e}"),
+        })
+    })?;
+
+    polyplug_obj
+        .set("arenaAlloc", arena_alloc_fn)
+        .map_err(|e: rquickjs::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: arenaAlloc set failed: {e}"),
             })
         })?;
 

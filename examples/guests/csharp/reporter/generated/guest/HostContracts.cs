@@ -72,8 +72,8 @@ public sealed class HostLoggerContract {
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
-                    err = vmFn(contract->Dispatch.Vm.LoaderData, 0u, argsPtr, outPtr);
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
+                    err = vmFn(contract->Dispatch.Vm.LoaderData, 0u, argsPtr, outPtr, IntPtr.Zero);
                     break;
                 }
                 default:
@@ -116,8 +116,8 @@ public sealed class HostLoggerContract {
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
-                    err = vmFn(contract->Dispatch.Vm.LoaderData, 1u, argsPtr, outPtr);
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
+                    err = vmFn(contract->Dispatch.Vm.LoaderData, 1u, argsPtr, outPtr, IntPtr.Zero);
                     break;
                 }
                 default:

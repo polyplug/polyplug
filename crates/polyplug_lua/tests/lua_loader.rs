@@ -325,6 +325,7 @@ fn assert_function_count(vtable: &GuestContractInterface, expected: u32) {
                 fn_id,
                 core::ptr::null::<()>(),
                 core::ptr::null_mut::<()>(),
+                core::ptr::null_mut(),
             )
         };
         assert_eq!(
@@ -341,6 +342,7 @@ fn assert_function_count(vtable: &GuestContractInterface, expected: u32) {
             expected,
             core::ptr::null::<()>(),
             core::ptr::null_mut::<()>(),
+            core::ptr::null_mut(),
         )
     };
     assert_eq!(
@@ -585,6 +587,7 @@ fn vtable_function_dispatch_returns_abi_ok() {
             0, // fn_id = 0 (first function)
             core::ptr::null::<()>(),
             core::ptr::null_mut::<()>(),
+            core::ptr::null_mut(),
         )
     };
     assert_eq!(

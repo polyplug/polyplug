@@ -45,7 +45,7 @@ class HostLoggerContract:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             err = dispatch_fn(impl_ptr, args_ptr, out_ptr)
         elif dispatch_type == DispatchType.VirtualMachine:
-            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, 0, args_ptr, out_ptr)
+            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, 0, args_ptr, out_ptr, None)
         else:
             return
         if err.code != AbiErrorCode.Ok:
@@ -74,7 +74,7 @@ class HostLoggerContract:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             err = dispatch_fn(impl_ptr, args_ptr, out_ptr)
         elif dispatch_type == DispatchType.VirtualMachine:
-            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, 1, args_ptr, out_ptr)
+            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, 1, args_ptr, out_ptr, None)
         else:
             return
         if err.code != AbiErrorCode.Ok:

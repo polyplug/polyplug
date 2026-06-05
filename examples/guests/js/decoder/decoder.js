@@ -3,7 +3,7 @@
 
 import { setDecoderImpl } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
-import { toStr, allocString } from '../../../../sdks/js/guest/polyplug_guest.js';
+import { toStr, allocStringArena } from '../../../../sdks/js/guest/polyplug_guest.js';
 
 /**
  * Decode function implementation.
@@ -15,7 +15,7 @@ import { toStr, allocString } from '../../../../sdks/js/guest/polyplug_guest.js'
 function decode(input) {
     const s = toStr(input);
     const decoded = s.replace(/,/g, '|');
-    const result = allocString(`DECODED:${decoded}`);
+    const result = allocStringArena(`DECODED:${decoded}`);
     
     const ptrLo = Number(result.ptr & 0xFFFFFFFFn);
     const ptrHi = Number((result.ptr >> 32n) & 0xFFFFFFFFn);

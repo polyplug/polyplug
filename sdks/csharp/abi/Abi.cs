@@ -36,6 +36,11 @@ public struct VmDispatch
     ///  - `fn_id`: Function index within the contract
     ///  - `args`: Pointer to packed arguments (ABI-specific layout)
     ///  - `out`: Pointer to output buffer for return value
+    ///  - `arena`: Optional per-call [`CallArena`] for variable-size return values.
+    ///    A null pointer means "no arena" — the bridge falls back to per-value
+    ///    `host->alloc`. When non-null, the arena is reset by the caller at the
+    ///    start of each call, so values written into it are valid until the next
+    ///    call on the same caller.
     public IntPtr Call;
     ///  Loader-specific data handle.
     ///  Opaque to the host; interpreted by the dispatch function.
@@ -910,6 +915,50 @@ public struct Buffer
 }
 
 /// Expected size: 24 bytes
+
+///  Header prepended to every host-allocated overflow block.
+///
+///  Overflow blocks form a singly linked list rooted at `CallArena.first_overflow`.
+///  Each block stores the total `capacity` it was allocated with (including this
+///  header) so `reset()` can free it with the exact size/align the host expects.
+[StructLayout(LayoutKind.Sequential, Size = 16)]
+public struct ArenaOverflowBlock
+{
+    ///  Next overflow block in the chain, or null for the last block.
+    public IntPtr Next;
+    ///  Total allocated size of this block in bytes, including this header.
+    public nuint Capacity;
+}
+
+/// Expected size: 16 bytes
+
+///  Per-call bump allocator handed to a VM dispatch call.
+///
+///  # Layout
+///
+///  `#[repr(C)]` with five pointer-sized fields (40 bytes, align 8). The first
+///  three fields define the primary bump region `[base, end)` with `cur` as the
+///  next free byte. When the primary region is exhausted, `alloc` requests a fresh
+///  block from `host->alloc`, chains it onto `first_overflow`, and serves from it.
+///
+///  A null `CallArena*` passed to a dispatch function means "no arena": the bridge
+///  falls back to per-value `host->alloc`.
+[StructLayout(LayoutKind.Sequential, Size = 40)]
+public struct CallArena
+{
+    ///  Next free byte in the primary region.
+    public IntPtr Cur;
+    ///  One past the last usable byte of the primary region.
+    public IntPtr End;
+    ///  Start of the primary region (the reset target for `cur`).
+    public IntPtr Base;
+    ///  Host API used to allocate and free overflow blocks.
+    public IntPtr Host;
+    ///  Head of the singly linked list of host-allocated overflow blocks.
+    public IntPtr FirstOverflow;
+}
+
+/// Expected size: 40 bytes
 
 ///  Dependency information returned by get_dependencies introspection API.
 ///

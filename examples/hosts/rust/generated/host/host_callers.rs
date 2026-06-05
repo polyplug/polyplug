@@ -141,6 +141,7 @@ impl PipelineDecoderContract {
                             0_u32,
                             args_ptr,
                             out_ptr,
+                            core::ptr::null_mut(),
                         )
                     }
                 }
@@ -288,6 +289,7 @@ impl DataTransformerContract {
                             0_u32,
                             args_ptr,
                             out_ptr,
+                            core::ptr::null_mut(),
                         )
                     }
                 }
@@ -435,6 +437,7 @@ impl PipelineEncoderContract {
                             0_u32,
                             args_ptr,
                             out_ptr,
+                            core::ptr::null_mut(),
                         )
                     }
                 }
@@ -582,6 +585,7 @@ impl DataReporterContract {
                             0_u32,
                             args_ptr,
                             out_ptr,
+                            core::ptr::null_mut(),
                         )
                     }
                 }
@@ -729,6 +733,7 @@ impl PipelineValidatorContract {
                             0_u32,
                             args_ptr,
                             out_ptr,
+                            core::ptr::null_mut(),
                         )
                     }
                 }

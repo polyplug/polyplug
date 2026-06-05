@@ -19,6 +19,8 @@ static_assert(sizeof(ReloadPhase) == 48, "ReloadPhase size mismatch");
 static_assert(sizeof(RuntimeConfig) == 24, "RuntimeConfig size mismatch");
 static_assert(sizeof(AbiError) == 24, "AbiError size mismatch");
 static_assert(sizeof(Buffer) == 24, "Buffer size mismatch");
+static_assert(sizeof(ArenaOverflowBlock) == 16, "ArenaOverflowBlock size mismatch");
+static_assert(sizeof(CallArena) == 40, "CallArena size mismatch");
 static_assert(sizeof(DependencyInfo) == 24, "DependencyInfo size mismatch");
 static_assert(sizeof(StringView) == 16, "StringView size mismatch");
 static_assert(sizeof(Version) == 12, "Version size mismatch");

@@ -57,6 +57,12 @@ namespace Polyplug.Abi.Tests
         public void BufferIs24Bytes() => Assert.Equal(24, Marshal.SizeOf<Buffer>());
 
         [Fact]
+        public void ArenaOverflowBlockIs16Bytes() => Assert.Equal(16, Marshal.SizeOf<ArenaOverflowBlock>());
+
+        [Fact]
+        public void CallArenaIs40Bytes() => Assert.Equal(40, Marshal.SizeOf<CallArena>());
+
+        [Fact]
         public void DependencyInfoIs24Bytes() => Assert.Equal(24, Marshal.SizeOf<DependencyInfo>());
 
         [Fact]

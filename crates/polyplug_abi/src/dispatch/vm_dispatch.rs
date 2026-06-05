@@ -2,7 +2,7 @@
 
 use crate::dispatch::VmLoaderData;
 use crate::guest::GuestContractInstance;
-use crate::types::AbiError;
+use crate::types::{AbiError, CallArena};
 
 /// VM dispatch data — call through a dispatch function.
 ///
@@ -19,12 +19,18 @@ pub struct VmDispatch {
     /// - `fn_id`: Function index within the contract
     /// - `args`: Pointer to packed arguments (ABI-specific layout)
     /// - `out`: Pointer to output buffer for return value
+    /// - `arena`: Optional per-call [`CallArena`] for variable-size return values.
+    ///   A null pointer means "no arena" — the bridge falls back to per-value
+    ///   `host->alloc`. When non-null, the arena is reset by the caller at the
+    ///   start of each call, so values written into it are valid until the next
+    ///   call on the same caller.
     pub call: unsafe extern "C" fn(
         loader_data: VmLoaderData,
         instance: GuestContractInstance,
         fn_id: u32,
         args: *const (),
         out: *mut (),
+        arena: *mut CallArena,
     ) -> AbiError,
     /// Loader-specific data handle.
     /// Opaque to the host; interpreted by the dispatch function.

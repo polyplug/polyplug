@@ -517,7 +517,7 @@ fn generate_host_caller_method(
     out.push_str("            err = fn(self._instance, args_ptr, out_ptr)\n");
     out.push_str("        else\n");
     out.push_str(&format!(
-        "            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr)\n"
+        "            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, nil)\n"
     ));
     out.push_str("        end\n");
     out.push_str("        if err.code ~= AbiErrorCode.Ok then\n");
@@ -1305,7 +1305,7 @@ fn generate_lua_guest_host_contract_method(
     out.push_str("        err = fn(impl_ptr, args_ptr, out_ptr)\n");
     out.push_str("    elseif dispatch_type == 1 then\n");
     out.push_str(&format!(
-        "        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr)\n"
+        "        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr, nil)\n"
     ));
     out.push_str("    else\n");
     if has_return {

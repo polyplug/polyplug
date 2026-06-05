@@ -1331,10 +1331,12 @@ fn generate_cs_guest_host_contract_method(
     out.push_str("                }\n");
     out.push_str("                case DispatchType.VirtualMachine: {\n");
     out.push_str(
-        "                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;\n",
+        "                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;\n",
     );
+    // A null arena (IntPtr.Zero) makes the VM bridge fall back to per-value host
+    // allocation; threading a real CallArena is deferred to a later wave.
     out.push_str(&format!(
-        "                    err = vmFn(contract->Dispatch.Vm.LoaderData, {fn_id}u, argsPtr, outPtr);\n"
+        "                    err = vmFn(contract->Dispatch.Vm.LoaderData, {fn_id}u, argsPtr, outPtr, IntPtr.Zero);\n"
     ));
     out.push_str("                    break;\n");
     out.push_str("                }\n");

@@ -20,6 +20,7 @@ use polyplug::loader::BundleLoader;
 use polyplug::loader::ManifestData;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::CallArena;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
@@ -76,12 +77,16 @@ unsafe extern "C" fn lua_destroy_instance(_host: *const HostApi, _instance: Gues
 /// # Safety
 /// - `loader_data` must be a valid VmLoaderData wrapping LuaLoaderData
 /// - `args` and `out` must be valid pointers for the ABI call
+///
+/// The `_arena` parameter is accepted but ignored: Lua arena adoption is pending
+/// a later wave. The Lua bridge falls back to per-value host allocation today.
 unsafe extern "C" fn lua_dispatch(
     loader_data: VmLoaderData,
     _instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
+    _arena: *mut CallArena,
 ) -> AbiError {
     // SAFETY: loader_data wraps a valid pointer to LuaLoaderData created by the loader.
     let data: &LuaLoaderData = unsafe { &*(loader_data.data as *const LuaLoaderData) };
