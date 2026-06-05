@@ -27,7 +27,7 @@ use polyplug::error::RuntimeError;
 use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
-    GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor, StringView, Version,
+    GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -54,27 +54,27 @@ impl BundleLoader for ProbeLoader {
     }
 
     fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
-        let host_abi: &'static HostInterface = runtime.host_abi();
+        let host_abi: &'static HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 
         // Enter the enforcement window, exactly as the native loader does.
         runtime.push_init_bundle_id(bundle_id.id());
 
         // Probe the declared dependency: must resolve (non-null handle).
-        // SAFETY: host_abi is a valid HostInterface from the runtime.
+        // SAFETY: host_abi is a valid HostApi from the runtime.
         let declared_handle: GuestContractHandle = unsafe {
             (host_abi.find_guest_contract)(
-                host_abi as *const HostInterface,
+                host_abi as *const HostApi,
                 self.declared_contract_id,
                 0_u32,
             )
         };
 
         // Probe the undeclared contract: must be denied (null handle).
-        // SAFETY: host_abi is a valid HostInterface from the runtime.
+        // SAFETY: host_abi is a valid HostApi from the runtime.
         let undeclared_handle: GuestContractHandle = unsafe {
             (host_abi.find_guest_contract)(
-                host_abi as *const HostInterface,
+                host_abi as *const HostApi,
                 self.undeclared_contract_id,
                 0_u32,
             )
@@ -82,18 +82,18 @@ impl BundleLoader for ProbeLoader {
 
         // Probe the enumeration API for both contracts. The declared one must be
         // enumerable; the undeclared one must come back empty during init.
-        // SAFETY: host_abi is a valid HostInterface from the runtime.
+        // SAFETY: host_abi is a valid HostApi from the runtime.
         let declared_all: polyplug_abi::Array<GuestContractHandle> = unsafe {
             (host_abi.find_all_guest_contracts)(
-                host_abi as *const HostInterface,
+                host_abi as *const HostApi,
                 self.declared_contract_id,
                 0_u32,
             )
         };
-        // SAFETY: host_abi is a valid HostInterface from the runtime.
+        // SAFETY: host_abi is a valid HostApi from the runtime.
         let undeclared_all: polyplug_abi::Array<GuestContractHandle> = unsafe {
             (host_abi.find_all_guest_contracts)(
-                host_abi as *const HostInterface,
+                host_abi as *const HostApi,
                 self.undeclared_contract_id,
                 0_u32,
             )
@@ -119,7 +119,7 @@ impl BundleLoader for ProbeLoader {
 
 /// No-op create_instance callback for the registered provider interface.
 unsafe extern "C" fn noop_create_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -127,7 +127,7 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback for the registered provider interface.
 unsafe extern "C" fn noop_destroy_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }

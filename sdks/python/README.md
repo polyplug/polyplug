@@ -121,7 +121,7 @@ plugin authors rely on:
 - `alloc_string(s)` — allocate an outgoing `StringView` via the host allocator
 - `store_host_interface(ptr)` / `get_host_interface()` — stash the host interface
   pointer for the allocator
-- Re-exported ABI types — `HostInterface`, `BundleInitContext`, `StringView`,
+- Re-exported ABI types — `HostApi`, `BundleInitContext`, `StringView`,
   `AbiError`, `AbiErrorCode`, and the other types generated code imports
 
 ### Loaders (`loaders/`)

@@ -655,7 +655,7 @@ inline StringView string_view(std::string_view s) noexcept {
 
 // NOTE: cross-boundary allocation (alloc_string) lives in the guest SDK
 // (polyplug::alloc_string in guest.hpp), which routes through the stored
-// HostInterface. abi.hpp stays pure ABI with no link-time host dependency.
+// HostApi. abi.hpp stays pure ABI with no link-time host dependency.
 
 } // namespace abi
 } // namespace polyplug
@@ -676,10 +676,10 @@ const KNOWN_SIZES: &[(&str, usize)] = &[
     ("DispatchMechanisms", 16),
     ("GuestContractInterface", 56),
     ("GuestContractInstance", 16),
-    ("HostInterface", 144),
+    ("HostApi", 144),
     ("HostContractInterface", 80),
     ("HostContractInstance", 8),
-    ("RuntimeInterface", 96),
+    ("RuntimeApi", 96),
     ("GuestContractHandle", 4),
     ("PluginDescriptor", 48),
     ("BundleInitContext", 24),

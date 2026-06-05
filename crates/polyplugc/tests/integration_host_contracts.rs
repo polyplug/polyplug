@@ -331,8 +331,8 @@ fn test_csharp_host_callers_use_real_runtime_api() {
         "the caller class must be `unsafe` to hold pointer fields: {callers}"
     );
     assert!(
-        callers.contains("(HostInterface*)rt.HostHandle"),
-        "Create must derive the HostInterface pointer from Runtime.HostHandle: {callers}"
+        callers.contains("(HostApi*)rt.HostHandle"),
+        "Create must derive the HostApi pointer from Runtime.HostHandle: {callers}"
     );
     assert!(
         !callers.contains("if (inst.Data == nint.Zero) { return null; }"),
@@ -341,7 +341,7 @@ fn test_csharp_host_callers_use_real_runtime_api() {
     // create_instance / destroy_instance are IntPtr fields and must be cast to
     // function pointers before invocation, not called directly.
     assert!(
-        callers.contains("(delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance"),
+        callers.contains("(delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance"),
         "Create must cast the IntPtr CreateInstance field to a function pointer: {callers}"
     );
 
@@ -408,7 +408,7 @@ fn generate_csharp_guest_host_contracts(tmp_dir: &Path) -> String {
 }
 
 /// The guest-caller path (guest/HostContracts.cs) must resolve host contracts
-/// through the real HostInterface ABI: `GetHostContract` for the instance and
+/// through the real HostApi ABI: `GetHostContract` for the instance and
 /// `ResolveHostContractInterface` for the interface, then dispatch via the flat
 /// `HostContractInterface` (DispatchType + Dispatch.Native / Dispatch.Vm). It
 /// must never reference the phantom VTable / header types that the old emitter

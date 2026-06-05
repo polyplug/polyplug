@@ -20,7 +20,7 @@ use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
@@ -31,7 +31,7 @@ use polyplug_utils::GuestContractId;
 
 /// Stub create_instance for benchmarks - returns null instance.
 unsafe extern "C" fn bench_create_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -39,7 +39,7 @@ unsafe extern "C" fn bench_create_instance(
 
 /// Stub destroy_instance for benchmarks - no cleanup needed.
 unsafe extern "C" fn bench_destroy_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }

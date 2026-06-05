@@ -46,7 +46,7 @@ function M.get_host_interface()
 end
 
 function M.cast_host_interface(ptr_int)
-    return ffi.cast("HostInterface*", ffi.cast("uintptr_t", ptr_int))
+    return ffi.cast("HostApi*", ffi.cast("uintptr_t", ptr_int))
 end
 
 function M.cast_context(ptr)
@@ -77,7 +77,7 @@ function M.alloc_string(s)
     if host_ptr == nil then
         error("alloc_string: host interface not stored (call store_host_interface first)")
     end
-    local host = ffi.cast("HostInterface*", ffi.cast("uintptr_t", host_ptr))
+    local host = ffi.cast("HostApi*", ffi.cast("uintptr_t", host_ptr))
     local len = #s
     local view = ffi.new("StringView")
     if len == 0 then

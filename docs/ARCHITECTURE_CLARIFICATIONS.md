@@ -6,7 +6,7 @@
 
 This document uses the following terminology (current as of v1.1):
 - **GuestContractInterface**: The interface struct a plugin provides for the host to call
-- **HostInterface**: The runtime's ABI table provided to guests
+- **HostApi**: The runtime's ABI table provided to guests
 
 Interfaces are stored in `RuntimeStore` as interface slots guarded by a single `RwLock`. There is no separate slot wrapper struct around individual interfaces.
 

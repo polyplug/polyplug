@@ -6,7 +6,7 @@ from __future__ import annotations
 import ctypes
 from typing import Callable, Optional
 
-from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostInterface, StringView
+from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostApi, StringView
 
 class ContractError(Exception): ...
 

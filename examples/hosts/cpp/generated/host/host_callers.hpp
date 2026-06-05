@@ -21,17 +21,17 @@ public:
     /// Calls `create_instance` on the resolved interface.
     ///
     /// # Arguments
-    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `handle`: Contract handle from `find_guest_contract`
     /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `std::optional<Self>` if interface found and instance created
     /// - `std::nullopt` if interface not found or `create_instance` failed
-    static std::optional<PipelineDecoderContract> create(GuestContractHandle handle, const HostInterface* host) noexcept {
+    static std::optional<PipelineDecoderContract> create(GuestContractHandle handle, const HostApi* host) noexcept {
         if (host == nullptr) {
             return std::nullopt;
         }
-        // Resolve the interface from the handle via HostInterface method.
+        // Resolve the interface from the handle via HostApi method.
         const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);
         if (iface == nullptr) {
             return std::nullopt;
@@ -129,9 +129,9 @@ private:
     /// Instance handle created by `create_instance`.
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
-    const HostInterface* host_;
+    const HostApi* host_;
 
-    explicit PipelineDecoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept
+    explicit PipelineDecoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept
         : interface_(iface), instance_(inst), host_(host) {}
 };
 
@@ -147,17 +147,17 @@ public:
     /// Calls `create_instance` on the resolved interface.
     ///
     /// # Arguments
-    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `handle`: Contract handle from `find_guest_contract`
     /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `std::optional<Self>` if interface found and instance created
     /// - `std::nullopt` if interface not found or `create_instance` failed
-    static std::optional<DataTransformerContract> create(GuestContractHandle handle, const HostInterface* host) noexcept {
+    static std::optional<DataTransformerContract> create(GuestContractHandle handle, const HostApi* host) noexcept {
         if (host == nullptr) {
             return std::nullopt;
         }
-        // Resolve the interface from the handle via HostInterface method.
+        // Resolve the interface from the handle via HostApi method.
         const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);
         if (iface == nullptr) {
             return std::nullopt;
@@ -255,9 +255,9 @@ private:
     /// Instance handle created by `create_instance`.
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
-    const HostInterface* host_;
+    const HostApi* host_;
 
-    explicit DataTransformerContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept
+    explicit DataTransformerContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept
         : interface_(iface), instance_(inst), host_(host) {}
 };
 
@@ -273,17 +273,17 @@ public:
     /// Calls `create_instance` on the resolved interface.
     ///
     /// # Arguments
-    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `handle`: Contract handle from `find_guest_contract`
     /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `std::optional<Self>` if interface found and instance created
     /// - `std::nullopt` if interface not found or `create_instance` failed
-    static std::optional<PipelineEncoderContract> create(GuestContractHandle handle, const HostInterface* host) noexcept {
+    static std::optional<PipelineEncoderContract> create(GuestContractHandle handle, const HostApi* host) noexcept {
         if (host == nullptr) {
             return std::nullopt;
         }
-        // Resolve the interface from the handle via HostInterface method.
+        // Resolve the interface from the handle via HostApi method.
         const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);
         if (iface == nullptr) {
             return std::nullopt;
@@ -381,9 +381,9 @@ private:
     /// Instance handle created by `create_instance`.
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
-    const HostInterface* host_;
+    const HostApi* host_;
 
-    explicit PipelineEncoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept
+    explicit PipelineEncoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept
         : interface_(iface), instance_(inst), host_(host) {}
 };
 
@@ -399,17 +399,17 @@ public:
     /// Calls `create_instance` on the resolved interface.
     ///
     /// # Arguments
-    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `handle`: Contract handle from `find_guest_contract`
     /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `std::optional<Self>` if interface found and instance created
     /// - `std::nullopt` if interface not found or `create_instance` failed
-    static std::optional<DataReporterContract> create(GuestContractHandle handle, const HostInterface* host) noexcept {
+    static std::optional<DataReporterContract> create(GuestContractHandle handle, const HostApi* host) noexcept {
         if (host == nullptr) {
             return std::nullopt;
         }
-        // Resolve the interface from the handle via HostInterface method.
+        // Resolve the interface from the handle via HostApi method.
         const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);
         if (iface == nullptr) {
             return std::nullopt;
@@ -507,9 +507,9 @@ private:
     /// Instance handle created by `create_instance`.
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
-    const HostInterface* host_;
+    const HostApi* host_;
 
-    explicit DataReporterContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept
+    explicit DataReporterContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept
         : interface_(iface), instance_(inst), host_(host) {}
 };
 
@@ -525,17 +525,17 @@ public:
     /// Calls `create_instance` on the resolved interface.
     ///
     /// # Arguments
-    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `handle`: Contract handle from `find_guest_contract`
     /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `std::optional<Self>` if interface found and instance created
     /// - `std::nullopt` if interface not found or `create_instance` failed
-    static std::optional<PipelineValidatorContract> create(GuestContractHandle handle, const HostInterface* host) noexcept {
+    static std::optional<PipelineValidatorContract> create(GuestContractHandle handle, const HostApi* host) noexcept {
         if (host == nullptr) {
             return std::nullopt;
         }
-        // Resolve the interface from the handle via HostInterface method.
+        // Resolve the interface from the handle via HostApi method.
         const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);
         if (iface == nullptr) {
             return std::nullopt;
@@ -633,9 +633,9 @@ private:
     /// Instance handle created by `create_instance`.
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
-    const HostInterface* host_;
+    const HostApi* host_;
 
-    explicit PipelineValidatorContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept
+    explicit PipelineValidatorContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept
         : interface_(iface), instance_(inst), host_(host) {}
 };
 

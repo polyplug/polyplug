@@ -126,7 +126,7 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("use polyplug_abi::AbiErrorCode;\n");
         callers_out.push_str("use polyplug_abi::AbiError;\n");
         callers_out.push_str("use polyplug_abi::GuestContractInterface;\n");
-        callers_out.push_str("use polyplug_abi::HostInterface;\n");
+        callers_out.push_str("use polyplug_abi::HostApi;\n");
         callers_out.push_str("use polyplug_abi::DispatchType;\n");
         callers_out.push_str("use polyplug_abi::StringView;\n");
         callers_out.push_str("use polyplug_abi::GuestContractHandle;\n");
@@ -527,7 +527,7 @@ fn generate_guest_interfaces_file(
     out.push_str("use polyplug_guest::GuestContractId;\n");
     out.push_str("use polyplug_guest::GuestContractInterface;\n");
     out.push_str("use polyplug_guest::GuestContractInstance;\n");
-    out.push_str("use polyplug_guest::HostInterface;\n");
+    out.push_str("use polyplug_guest::HostApi;\n");
     out.push_str("use polyplug_guest::DispatchType;\n");
     out.push_str("use polyplug_guest::NativeDispatch;\n");
     out.push_str("use polyplug_guest::DispatchMechanisms;\n");
@@ -670,7 +670,7 @@ fn generate_guest_contract_interface(
     out.push_str(&format!(
         "unsafe extern \"C\" fn {upper}_create_instance_stub(\n"
     ));
-    out.push_str("    _host: *const HostInterface,\n");
+    out.push_str("    _host: *const HostApi,\n");
     out.push_str("    _args: *const (),\n");
     out.push_str(") -> GuestContractInstance {\n");
     out.push_str("    GuestContractInstance::null()\n");
@@ -686,7 +686,7 @@ fn generate_guest_contract_interface(
     out.push_str(&format!(
         "unsafe extern \"C\" fn {upper}_destroy_instance_stub(\n"
     ));
-    out.push_str("    _host: *const HostInterface,\n");
+    out.push_str("    _host: *const HostApi,\n");
     out.push_str("    _instance: GuestContractInstance,\n");
     out.push_str(") {\n");
     out.push_str("    // No-op - stateless plugins don't need cleanup\n");
@@ -800,7 +800,7 @@ fn generate_guest_plugin_interface(
     out.push_str(&format!(
         "unsafe extern \"C\" fn {plugin_upper}_create_instance_stub(\n"
     ));
-    out.push_str("    _host: *const HostInterface,\n");
+    out.push_str("    _host: *const HostApi,\n");
     out.push_str("    _args: *const (),\n");
     out.push_str(") -> GuestContractInstance {\n");
     out.push_str("    GuestContractInstance::null()\n");
@@ -816,7 +816,7 @@ fn generate_guest_plugin_interface(
     out.push_str(&format!(
         "unsafe extern \"C\" fn {plugin_upper}_destroy_instance_stub(\n"
     ));
-    out.push_str("    _host: *const HostInterface,\n");
+    out.push_str("    _host: *const HostApi,\n");
     out.push_str("    _instance: GuestContractInstance,\n");
     out.push_str(") {\n");
     out.push_str("    // No-op - stateless plugins don't need cleanup\n");
@@ -1010,7 +1010,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("use polyplug_guest::string_view_from_static;\n");
     out.push_str("use polyplug_guest::abi_error_ok;\n");
     out.push_str("use polyplug_guest::PluginDescriptor;\n");
-    out.push_str("use polyplug_guest::HostInterface;\n");
+    out.push_str("use polyplug_guest::HostApi;\n");
     out.push_str("use polyplug_guest::GuestContractInterface;\n");
     out.push_str("use polyplug_guest::StringView;\n");
     out.push_str("use polyplug_guest::Version;\n");
@@ -1060,12 +1060,12 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("/// # Safety\n");
     out.push_str("/// The returned pointer is valid only as long as the host runtime is alive.\n");
     out.push_str("pub unsafe fn polyplug_get_extension(name: &[u8]) -> Option<*const ()> {\n");
-    out.push_str("    let host_ptr: *const HostInterface = polyplug_guest::get_host_vtable();\n");
+    out.push_str("    let host_ptr: *const HostApi = polyplug_guest::get_host_vtable();\n");
     out.push_str("    if host_ptr.is_null() {\n");
     out.push_str("        return None;\n");
     out.push_str("    }\n");
     out.push_str("    // SAFETY: host_ptr was stored during polyplug_init and is valid for the plugin lifetime.\n");
-    out.push_str("    let host: &HostInterface = unsafe { &*host_ptr };\n");
+    out.push_str("    let host: &HostApi = unsafe { &*host_ptr };\n");
     out.push_str("    let extension_id: u32 = fnv1a_32(name);\n");
     out.push_str("    // SAFETY: get_extension is a valid function pointer from the host ABI.\n");
     out.push_str(
@@ -1080,7 +1080,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("/// `host` and `ctx` must be valid non-null pointers provided by the host.\n");
     out.push_str("#[unsafe(no_mangle)]\n");
     out.push_str("pub unsafe extern \"C\" fn polyplug_init(\n");
-    out.push_str("    host: *const HostInterface,\n");
+    out.push_str("    host: *const HostApi,\n");
     out.push_str("    ctx: *const BundleInitContext,\n");
     out.push_str(") -> AbiError {\n");
     out.push_str("    if host.is_null() {\n");
@@ -1099,11 +1099,11 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
         "    let _ = ctx; // suppress unused warning if plugin_init user stub not yet updated\n",
     );
     out.push_str("    // SAFETY: host is non-null and valid per ABI contract.\n");
-    out.push_str("    let host: &HostInterface = unsafe { &*host };\n");
+    out.push_str("    let host: &HostApi = unsafe { &*host };\n");
     out.push_str(
         "    // SAFETY: Called once during plugin init, before any host contract access.\n",
     );
-    out.push_str("    unsafe { store_host_vtable(host as *const HostInterface); }\n\n");
+    out.push_str("    unsafe { store_host_vtable(host as *const HostApi); }\n\n");
     // Call user initialization hook if it exists
     out.push_str("    // Call user initialization to register plugin implementations\n");
     out.push_str("    unsafe extern \"C\" {\n");
@@ -1148,7 +1148,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "    let err_{plugin_upper}: AbiError = unsafe {{\n"
             ));
             out.push_str(&format!(
-                "        (host.register_contract)(host, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_INTERFACE as *const GuestContractInterface)\n"
+                "        (host.register_guest_contract)(host, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_INTERFACE as *const GuestContractInterface)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!(
@@ -1184,7 +1184,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
             out.push_str("    // SAFETY: desc and interface are 'static.\n");
             out.push_str(&format!("    let err_{upper}: AbiError = unsafe {{\n"));
             out.push_str(&format!(
-                "        (host.register_contract)(host, &desc_{upper} as *const PluginDescriptor, &{upper}_INTERFACE as *const GuestContractInterface)\n"
+                "        (host.register_guest_contract)(host, &desc_{upper} as *const PluginDescriptor, &{upper}_INTERFACE as *const GuestContractInterface)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!(
@@ -1291,7 +1291,7 @@ fn generate_host_contract_caller(
     out.push_str("    /// Instance handle created by `create_instance`.\n");
     out.push_str("    instance: GuestContractInstance,\n");
     out.push_str("    /// Host interface pointer (needed for create/destroy_instance).\n");
-    out.push_str("    host: *const HostInterface,\n");
+    out.push_str("    host: *const HostApi,\n");
     out.push_str("}\n\n");
 
     out.push_str(&format!("impl {struct_name} {{\n"));
@@ -1299,16 +1299,18 @@ fn generate_host_contract_caller(
     out.push_str("    /// Calls `create_instance` on the resolved interface.\n");
     out.push_str("    ///\n");
     out.push_str("    /// # Arguments\n");
-    out.push_str("    /// - `handle`: Contract handle from `find_by_contract`\n");
+    out.push_str("    /// - `handle`: Contract handle from `find_guest_contract`\n");
     out.push_str("    /// - `host`: Host interface pointer\n");
     out.push_str("    ///\n");
     out.push_str("    /// # Returns\n");
     out.push_str("    /// - `Some(Self)` if interface found and instance created\n");
     out.push_str("    /// - `None` if interface not found or `create_instance` failed\n");
-    out.push_str("    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {\n");
-    out.push_str("        // Resolve the interface from the handle via HostInterface method\n");
+    out.push_str(
+        "    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {\n",
+    );
+    out.push_str("        // Resolve the interface from the handle via HostApi method\n");
     out.push_str("        let interface: *const GuestContractInterface = unsafe {\n");
-    out.push_str("            let iface: &HostInterface = host.as_ref()?;\n");
+    out.push_str("            let iface: &HostApi = host.as_ref()?;\n");
     out.push_str("            (iface.resolve_guest_contract)(host, handle)\n");
     out.push_str("        };\n");
     out.push_str("        if interface.is_null() {\n");
@@ -1882,7 +1884,7 @@ fn generate_host_interface_factories_file(ir: &ValidatedIr) -> String {
 
     out.push_str("use polyplug_abi::HostContractInterface;\n");
     out.push_str("use polyplug_abi::HostContractInstance;\n");
-    out.push_str("use polyplug_abi::HostInterface;\n");
+    out.push_str("use polyplug_abi::HostApi;\n");
     out.push_str("use polyplug_abi::GuestContractInstance;\n");
     out.push_str("use polyplug_abi::VmLoaderData;\n");
     out.push_str("use polyplug_abi::DispatchMechanisms;\n");
@@ -2401,7 +2403,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(header);
 
-    out.push_str("use polyplug_guest::HostInterface;\n");
+    out.push_str("use polyplug_guest::HostApi;\n");
     out.push_str("use polyplug_guest::HostContractInterface;\n");
     out.push_str("use polyplug_guest::HostContractInstance;\n");
     out.push_str("use polyplug_guest::GuestContractInstance;\n");
@@ -2461,30 +2463,28 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
     out.push_str(
         "    /// Vtable for the host contract: provides dispatch metadata and function pointers.\n",
     );
-    out.push_str("    /// Resolved via `HostInterface::resolve_host_contract_interface`.\n");
+    out.push_str("    /// Resolved via `HostApi::resolve_host_contract_interface`.\n");
     out.push_str("    interface: *const HostContractInterface,\n");
     out.push_str("    /// Per-instance state for the host contract, produced by\n");
-    out.push_str(
-        "    /// `HostInterface::get_host_contract`. Passed as the first argument to native\n",
-    );
+    out.push_str("    /// `HostApi::get_host_contract`. Passed as the first argument to native\n");
     out.push_str("    /// dispatch functions (the host thunk dereferences it as the implementation pointer).\n");
     out.push_str("    instance: HostContractInstance,\n");
     out.push_str("}\n\n");
 
     out.push_str(&format!("impl {caller_name} {{\n"));
 
-    out.push_str(
-        "    /// Factory method - creates caller from HostInterface or None if not found.\n",
-    );
+    out.push_str("    /// Factory method - creates caller from HostApi or None if not found.\n");
     out.push_str("    ///\n");
     out.push_str("    /// # Safety\n");
     out.push_str("    /// The `host` pointer must be valid and non-null.\n");
-    out.push_str("    pub unsafe fn from_host(host: *const HostInterface, min_version: u32) -> Option<Self> {\n");
+    out.push_str(
+        "    pub unsafe fn from_host(host: *const HostApi, min_version: u32) -> Option<Self> {\n",
+    );
     out.push_str("        if host.is_null() {\n");
     out.push_str("            return None;\n");
     out.push_str("        }\n");
     out.push_str("        // SAFETY: host is non-null and valid per ABI contract.\n");
-    out.push_str("        let host: &HostInterface = unsafe { &*host };\n");
+    out.push_str("        let host: &HostApi = unsafe { &*host };\n");
     out.push_str(
         "        // Resolve the contract vtable. This is the source of dispatch metadata\n",
     );

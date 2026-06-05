@@ -9,10 +9,10 @@ from abi import (
     VmLoaderData,
     GuestContractInstance,
     GuestContractInterface,
+    HostApi,
     HostContractInstance,
     HostContractInterface,
-    HostInterface,
-    RuntimeInterface,
+    RuntimeApi,
     GuestContractHandle,
     BundleInitContext,
     PluginDescriptor,
@@ -46,6 +46,10 @@ def test_guest_contract_interface_size():
     assert ctypes.sizeof(GuestContractInterface) == 56, f"GuestContractInterface expected 56 bytes, got {ctypes.sizeof(GuestContractInterface)}"
 
 
+def test_host_api_size():
+    assert ctypes.sizeof(HostApi) == 144, f"HostApi expected 144 bytes, got {ctypes.sizeof(HostApi)}"
+
+
 def test_host_contract_instance_size():
     assert ctypes.sizeof(HostContractInstance) == 8, f"HostContractInstance expected 8 bytes, got {ctypes.sizeof(HostContractInstance)}"
 
@@ -54,12 +58,8 @@ def test_host_contract_interface_size():
     assert ctypes.sizeof(HostContractInterface) == 80, f"HostContractInterface expected 80 bytes, got {ctypes.sizeof(HostContractInterface)}"
 
 
-def test_host_interface_size():
-    assert ctypes.sizeof(HostInterface) == 144, f"HostInterface expected 144 bytes, got {ctypes.sizeof(HostInterface)}"
-
-
-def test_runtime_interface_size():
-    assert ctypes.sizeof(RuntimeInterface) == 96, f"RuntimeInterface expected 96 bytes, got {ctypes.sizeof(RuntimeInterface)}"
+def test_runtime_api_size():
+    assert ctypes.sizeof(RuntimeApi) == 96, f"RuntimeApi expected 96 bytes, got {ctypes.sizeof(RuntimeApi)}"
 
 
 def test_guest_contract_handle_size():

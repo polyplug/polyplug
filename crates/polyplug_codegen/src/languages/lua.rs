@@ -494,7 +494,7 @@ mod tests {
         let (typedef, _type_name) = LuaGenerator::generate_fn_ptr_typedef(
             "Test",
             "destroy",
-            "unsafeextern\"C\"fn(this:*constHostInterface,instance:GuestContractInstance)->()",
+            "unsafeextern\"C\"fn(this:*constHostApi,instance:GuestContractInstance)->()",
         );
         assert!(
             typedef.contains("void (*Test_destroy_fn)("),

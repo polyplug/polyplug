@@ -19,8 +19,7 @@ use polyplug_abi::RuntimeLanguage;
 use polyplug_abi::dispatch::dispatch_type::DispatchType;
 use polyplug_abi::types::Version;
 use polyplug_abi::{
-    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostInterface,
-    PluginDescriptor,
+    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostApi, PluginDescriptor,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -35,7 +34,7 @@ use crate::error::RegistryError;
 /// every host caller can safely call `create_instance` on any registered
 /// interface. It returns the canonical stateless dispatch token (null data).
 unsafe extern "C" fn stateless_create_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -43,7 +42,7 @@ unsafe extern "C" fn stateless_create_instance(
 
 /// Built-in no-op `destroy_instance` stub, paired with `stateless_create_instance`.
 unsafe extern "C" fn stateless_destroy_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }
@@ -118,7 +117,7 @@ unsafe fn string_view_to_owned_string(
 ///
 /// The ABI [`PluginDescriptor`] carries borrowed `StringView`s (`name`,
 /// `contract_name`) that point into the plugin's transient init-time buffers —
-/// some generators (e.g. C#) free those buffers as soon as `register_contract`
+/// some generators (e.g. C#) free those buffers as soon as `register_guest_contract`
 /// returns. Retaining the raw descriptor would therefore dangle. This struct
 /// owns the string data so introspection stays valid for the registry's lifetime.
 #[derive(Debug, Clone)]
@@ -350,7 +349,7 @@ impl RuntimeStore {
             ) as *const *const ());
 
             let create_instance: unsafe extern "C" fn(
-                *const HostInterface,
+                *const HostApi,
                 *const (),
             ) -> GuestContractInstance = if create_raw.is_null() {
                 stateless_create_instance
@@ -358,21 +357,19 @@ impl RuntimeStore {
                 // SAFETY: non-null pointer to a valid create_instance per ABI.
                 core::mem::transmute::<
                     *const (),
-                    unsafe extern "C" fn(*const HostInterface, *const ()) -> GuestContractInstance,
+                    unsafe extern "C" fn(*const HostApi, *const ()) -> GuestContractInstance,
                 >(create_raw)
             };
-            let destroy_instance: unsafe extern "C" fn(
-                *const HostInterface,
-                GuestContractInstance,
-            ) = if destroy_raw.is_null() {
-                stateless_destroy_instance
-            } else {
-                // SAFETY: non-null pointer to a valid destroy_instance per ABI.
-                core::mem::transmute::<
-                    *const (),
-                    unsafe extern "C" fn(*const HostInterface, GuestContractInstance),
-                >(destroy_raw)
-            };
+            let destroy_instance: unsafe extern "C" fn(*const HostApi, GuestContractInstance) =
+                if destroy_raw.is_null() {
+                    stateless_destroy_instance
+                } else {
+                    // SAFETY: non-null pointer to a valid destroy_instance per ABI.
+                    core::mem::transmute::<
+                        *const (),
+                        unsafe extern "C" fn(*const HostApi, GuestContractInstance),
+                    >(destroy_raw)
+                };
 
             // SAFETY: the remaining POD fields are read from the same valid
             // struct; the (possibly substituted) lifecycle fns are sound.
@@ -1332,13 +1329,13 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
     use polyplug_abi::{
-        DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
-        HostInterface, NativeDispatch, PluginDescriptor, StringView, Version,
+        DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface, HostApi,
+        NativeDispatch, PluginDescriptor, StringView, Version,
     };
 
     /// No-op create_instance callback.
     unsafe extern "C" fn noop_create_instance(
-        _host: *const HostInterface,
+        _host: *const HostApi,
         _args: *const (),
     ) -> GuestContractInstance {
         GuestContractInstance::null()
@@ -1346,7 +1343,7 @@ mod tests {
 
     /// No-op destroy_instance callback.
     unsafe extern "C" fn noop_destroy_instance(
-        _host: *const HostInterface,
+        _host: *const HostApi,
         _instance: GuestContractInstance,
     ) {
     }

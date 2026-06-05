@@ -1,5 +1,5 @@
 -- sdks/lua/host/polyplug/runtime.lua
--- Runtime class with HostInterface-based API (18-04 refactor).
+-- Runtime class with HostApi-based API (18-04 refactor).
 -- All ABI struct types are imported from the auto-generated abi.lua (per D-26).
 
 local ffi = require('ffi')
@@ -8,13 +8,13 @@ local reload_phase = require('polyplug.reload_phase')
 
 -- ─── Host-specific FFI definitions ──────────────────────────────────────────────
 -- Only FFI function declarations live here. All struct types (RuntimeConfig,
--- ReloadPhase, HostInterface, etc.) come from the auto-generated abi.lua.
+-- ReloadPhase, HostApi, etc.) come from the auto-generated abi.lua.
 ffi.cdef([[
     // The only two FFI exports: create and destroy.
     // polyplug_runtime_create takes a `const RuntimeConfig*` (or NULL); the
     // on_reload callback pointer lives INSIDE RuntimeConfig (offset 8).
-    const HostInterface* polyplug_runtime_create(const void* config);
-    void polyplug_runtime_destroy(const HostInterface* host);
+    const HostApi* polyplug_runtime_create(const void* config);
+    void polyplug_runtime_destroy(const HostApi* host);
 ]])
 
 local M = {}
@@ -61,21 +61,21 @@ function M.load_lib(so_path)
     return M._lib
 end
 
---- Get last error message from HostInterface.
--- @param host HostInterface*  The host interface pointer.
+--- Get last error message from HostApi.
+-- @param host HostApi*  The host interface pointer.
 -- @param lib                  The library handle.
 -- @return string              The error message, or empty string.
 function M.last_error(host, lib)
     lib = lib or get_lib()
-    -- Cast and call through HostInterface.get_error_len field
-    local get_error_len_fn = ffi.cast("size_t(*)(const HostInterface*)", host.get_error_len)
+    -- Cast and call through HostApi.get_error_len field
+    local get_error_len_fn = ffi.cast("size_t(*)(const HostApi*)", host.get_error_len)
     local len = get_error_len_fn(host)
     if len == 0 then
         return ""
     end
     local buf = ffi.new("uint8_t[?]", len)
-    -- Cast and call through HostInterface.get_last_error field
-    local get_last_error_fn = ffi.cast("size_t(*)(const HostInterface*, uint8_t*, size_t)", host.get_last_error)
+    -- Cast and call through HostApi.get_last_error field
+    local get_last_error_fn = ffi.cast("size_t(*)(const HostApi*, uint8_t*, size_t)", host.get_last_error)
     get_last_error_fn(host, buf, len)
     return ffi.string(buf, len)
 end
@@ -95,7 +95,7 @@ function M.set_config(config)
 end
 
 --- Create a new Runtime instance.
--- Uses HostInterface-based API: polyplug_runtime_create returns HostInterface*.
+-- Uses HostApi-based API: polyplug_runtime_create returns HostApi*.
 -- @return Runtime             The runtime instance.
 function M.Runtime.new()
     local lib = get_lib()
@@ -141,20 +141,20 @@ function M.Runtime.new()
     end
 
     if host_ptr == nil then
-        error("polyplug_runtime_create failed: returned null HostInterface")
+        error("polyplug_runtime_create failed: returned null HostApi")
     end
 
-    -- Dereference HostInterface struct from pointer
+    -- Dereference HostApi struct from pointer
     local host = host_ptr[0]
     local self = {
-        _host = host_ptr,      -- HostInterface* pointer (for FFI calls)
+        _host = host_ptr,      -- HostApi* pointer (for FFI calls)
         _host_struct = host,   -- Dereferenced struct (for field access)
         _lib = lib,
         _destroyed = false
     }
     local obj = setmetatable(self, M.Runtime)
 
-    -- Finalizer: destroy HostInterface when GC collects
+    -- Finalizer: destroy HostApi when GC collects
     ffi.gc(host_ptr, function(ptr)
         if not self._destroyed and ptr ~= nil then
             lib.polyplug_runtime_destroy(ptr)
@@ -164,14 +164,14 @@ function M.Runtime.new()
 end
 
 --- Load a plugin bundle from path.
--- Calls through HostInterface.load_bundle field.
+-- Calls through HostApi.load_bundle field.
 -- @param path string  Path to bundle directory.
 function M.Runtime:load_bundle(path)
     local path_str = tostring(path)
     local path_bytes = ffi.new("uint8_t[?]", #path_str, path_str)
     -- Cast function pointer and call with self-passing pattern.
-    -- HostInterface.load_bundle returns AbiError (24-byte struct), not uint32_t.
-    local fn = ffi.cast("AbiError(*)(const HostInterface*, const uint8_t*, size_t)", self._host_struct.load_bundle)
+    -- HostApi.load_bundle returns AbiError (24-byte struct), not uint32_t.
+    local fn = ffi.cast("AbiError(*)(const HostApi*, const uint8_t*, size_t)", self._host_struct.load_bundle)
     local err = fn(self._host, path_bytes, #path_str)
     if err.code ~= ffi.C.AbiErrorCode_Ok then
         error("load_bundle failed: " .. M.last_error(self._host, self._lib))
@@ -179,14 +179,14 @@ function M.Runtime:load_bundle(path)
 end
 
 --- Reload a plugin bundle (hot-reload).
--- Calls through HostInterface.reload_bundle field.
+-- Calls through HostApi.reload_bundle field.
 -- @param path string  Path to bundle directory.
 function M.Runtime:reload_bundle(path)
     local path_str = tostring(path)
     local path_bytes = ffi.new("uint8_t[?]", #path_str, path_str)
     -- Cast function pointer and call with self-passing pattern.
-    -- HostInterface.reload_bundle returns AbiError (24-byte struct), not uint32_t.
-    local fn = ffi.cast("AbiError(*)(const HostInterface*, const uint8_t*, size_t)", self._host_struct.reload_bundle)
+    -- HostApi.reload_bundle returns AbiError (24-byte struct), not uint32_t.
+    local fn = ffi.cast("AbiError(*)(const HostApi*, const uint8_t*, size_t)", self._host_struct.reload_bundle)
     local err = fn(self._host, path_bytes, #path_str)
     if err.code ~= ffi.C.AbiErrorCode_Ok then
         error("reload_bundle failed: " .. M.last_error(self._host, self._lib))
@@ -194,19 +194,19 @@ function M.Runtime:reload_bundle(path)
 end
 
 --- Find guest contract by contract_id and minimum version.
--- Calls through HostInterface.find_guest_contract field.
+-- Calls through HostApi.find_guest_contract field.
 -- @param contract_id number  Contract identifier hash.
 -- @param min_version number  Minimum version required.
 -- @return number             Packed handle, or NULL_HANDLE if not found.
 function M.Runtime:find_guest_contract(contract_id, min_version)
     -- Cast function pointer and call with self-passing pattern.
     -- GuestContractHandle is `#[repr(C)] { index: u32 }` and crosses the C ABI as a uint32_t.
-    local fn = ffi.cast("uint32_t(*)(const HostInterface*, uint64_t, uint32_t)", self._host_struct.find_guest_contract)
+    local fn = ffi.cast("uint32_t(*)(const HostApi*, uint64_t, uint32_t)", self._host_struct.find_guest_contract)
     return fn(self._host, contract_id, min_version)
 end
 
 --- Find all guest contracts matching contract_id and minimum version.
--- Calls through HostInterface.find_all_guest_contracts field.
+-- Calls through HostApi.find_all_guest_contracts field.
 -- @param contract_id number  Contract identifier hash.
 -- @param min_version number  Minimum version required.
 -- @param cap number          Maximum results to return (default 64).
@@ -216,22 +216,22 @@ function M.Runtime:find_all_guest_contracts(contract_id, min_version, cap)
     -- Cast function pointer and call with self-passing pattern.
     -- Returns Array<GuestContractHandle> struct with ptr and len. GuestContractHandle
     -- is `#[repr(C)] { index: u32 }` = 4 bytes, so the element type is uint32_t.
-    local fn = ffi.cast("struct { uint32_t* ptr; size_t len; }(*)(const HostInterface*, uint64_t, uint32_t)", self._host_struct.find_all_guest_contracts)
+    local fn = ffi.cast("struct { uint32_t* ptr; size_t len; }(*)(const HostApi*, uint64_t, uint32_t)", self._host_struct.find_all_guest_contracts)
     local arr = fn(self._host, contract_id, min_version)
     local result = {}
     for i = 0, math.min(arr.len, cap) - 1 do
         table.insert(result, arr.ptr[i])
     end
-    -- Free the array via HostInterface.free (size = len * 4, align = 4).
+    -- Free the array via HostApi.free (size = len * 4, align = 4).
     if arr.ptr ~= nil and arr.len > 0 then
-        local free_fn = ffi.cast("void(*)(const HostInterface*, void*, size_t, size_t)", self._host_struct.free)
+        local free_fn = ffi.cast("void(*)(const HostApi*, void*, size_t, size_t)", self._host_struct.free)
         free_fn(self._host, arr.ptr, arr.len * 4, 4)
     end
     return result
 end
 
 --- Resolve a guest contract handle to a GuestContractInterface pointer.
--- Calls through HostInterface.resolve_guest_contract field. The returned cdata
+-- Calls through HostApi.resolve_guest_contract field. The returned cdata
 -- exposes the full struct (dispatch_type, create_instance, destroy_instance,
 -- dispatch) so callers can create instances and dispatch functions.
 -- @param handle number  GuestContractHandle index (u32) from find_guest_contract.
@@ -243,7 +243,7 @@ function M.Runtime:resolve_guest_contract(handle)
     end
     -- Cast function pointer and call with self-passing pattern.
     -- GuestContractHandle is `#[repr(C)] { index: u32 }` and crosses the C ABI as a uint32_t.
-    local fn = ffi.cast("const GuestContractInterface*(*)(const HostInterface*, uint32_t)", self._host_struct.resolve_guest_contract)
+    local fn = ffi.cast("const GuestContractInterface*(*)(const HostApi*, uint32_t)", self._host_struct.resolve_guest_contract)
     local interface = fn(self._host, handle)
     if interface == nil then
         return nil, M.last_error(self._host, self._lib)
@@ -252,15 +252,15 @@ function M.Runtime:resolve_guest_contract(handle)
 end
 
 --- Register a host contract interface with the runtime.
--- Calls through HostInterface.register_host_contract field.
+-- Calls through HostApi.register_host_contract field.
 -- @param interface HostContractInterface*  Pointer to host contract interface.
 function M.Runtime:register_host_contract(interface)
     if interface == nil then
         error("register_host_contract: null interface pointer")
     end
     -- Cast function pointer and call with self-passing pattern.
-    -- HostInterface.register_host_contract returns AbiError (24-byte struct), not uint32_t.
-    local fn = ffi.cast("AbiError(*)(const HostInterface*, const HostContractInterface*)", self._host_struct.register_host_contract)
+    -- HostApi.register_host_contract returns AbiError (24-byte struct), not uint32_t.
+    local fn = ffi.cast("AbiError(*)(const HostApi*, const HostContractInterface*)", self._host_struct.register_host_contract)
     local err = fn(self._host, interface)
     if err.code ~= ffi.C.AbiErrorCode_Ok then
         error("register_host_contract failed: " .. M.last_error(self._host, self._lib))
@@ -268,7 +268,7 @@ function M.Runtime:register_host_contract(interface)
 end
 
 --- Register a language loader with the runtime.
--- Calls through HostInterface.register_loader field. The loader pointer is the
+-- Calls through HostApi.register_loader field. The loader pointer is the
 -- opaque handle returned by a loader cdylib's `polyplug_<lang>_loader_create`.
 -- @param runtime_name string  Runtime name the loader handles (e.g. "native", "lua").
 -- @param loader_ptr cdata     Opaque loader pointer from the loader create function.
@@ -279,21 +279,21 @@ function M.Runtime:register_loader(runtime_name, loader_ptr)
     name_view.ptr = name_bytes
     name_view.len = #name_str
     -- Cast function pointer; StringView is passed by value (ptr + len).
-    local fn = ffi.cast("AbiError(*)(const HostInterface*, StringView, void*)", self._host_struct.register_loader)
+    local fn = ffi.cast("AbiError(*)(const HostApi*, StringView, void*)", self._host_struct.register_loader)
     local err = fn(self._host, name_view, loader_ptr)
     if err.code ~= ffi.C.AbiErrorCode_Ok then
         error("register_loader failed: " .. M.last_error(self._host, self._lib))
     end
 end
 
---- Get the HostInterface pointer.
--- @return HostInterface*  The host interface pointer.
+--- Get the HostApi pointer.
+-- @return HostApi*  The host interface pointer.
 function M.Runtime:host()
     return self._host
 end
 
 --- Destroy the runtime explicitly.
--- Call polyplug_runtime_destroy on the HostInterface.
+-- Call polyplug_runtime_destroy on the HostApi.
 function M.Runtime:destroy()
     if self._host ~= nil and not self._destroyed then
         self._lib.polyplug_runtime_destroy(self._host)

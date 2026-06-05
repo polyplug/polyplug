@@ -8,7 +8,7 @@
 //!
 //! # Who calls
 //! Guest (plugin) code calls the dispatch functions after obtaining an instance
-//! via `HostInterface::get_host_contract()`.
+//! via `HostApi::get_host_contract()`.
 //!
 //! # Ownership
 //! Must be `'static`. The runtime holds a reference for the plugin lifetime.
@@ -37,7 +37,7 @@ use crate::{
 ///
 /// # Who calls
 /// Guest (plugin) code calls the dispatch functions after obtaining an instance
-/// via `HostInterface::get_host_contract()`.
+/// via `HostApi::get_host_contract()`.
 ///
 /// # Ownership
 /// Must be `'static`. The runtime holds a reference for the plugin lifetime.

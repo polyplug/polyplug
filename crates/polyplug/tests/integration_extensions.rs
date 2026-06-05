@@ -30,7 +30,7 @@ use polyplug::error::RuntimeError;
 use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug::runtime::Runtime;
 use polyplug_abi::{
-    DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface, HostInterface,
+    DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface, HostApi,
     NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::{BundleId, GuestContractId, fnv1a_32};
@@ -38,14 +38,14 @@ use polyplug_utils::{BundleId, GuestContractId, fnv1a_32};
 const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
 unsafe extern "C" fn noop_create_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
 }
 
 unsafe extern "C" fn noop_destroy_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }
@@ -88,21 +88,19 @@ impl BundleLoader for ExtensionPluginLoader {
     }
 
     fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
-        let host: &'static HostInterface = runtime.host_abi();
+        let host: &'static HostApi = runtime.host_abi();
 
         // Recover the extension by id (fnv1a_32 of its name), exactly as a real
         // plugin would inside polyplug_init.
         let ext_id: u32 = fnv1a_32(EXTENSION_NAME.as_bytes());
-        // SAFETY: host is a valid HostInterface from the runtime.
-        let ext_ptr: *const () =
-            unsafe { (host.get_extension)(host as *const HostInterface, ext_id) };
+        // SAFETY: host is a valid HostApi from the runtime.
+        let ext_ptr: *const () = unsafe { (host.get_extension)(host as *const HostApi, ext_id) };
         assert!(!ext_ptr.is_null(), "registered extension must resolve");
 
         // An unknown id must resolve to null.
-        // SAFETY: host is a valid HostInterface from the runtime.
-        let unknown_ptr: *const () = unsafe {
-            (host.get_extension)(host as *const HostInterface, fnv1a_32(b"no.such.extension"))
-        };
+        // SAFETY: host is a valid HostApi from the runtime.
+        let unknown_ptr: *const () =
+            unsafe { (host.get_extension)(host as *const HostApi, fnv1a_32(b"no.such.extension")) };
         self.unknown_returned_null
             .store(u64::from(unknown_ptr.is_null()), Ordering::SeqCst);
 

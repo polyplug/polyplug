@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use polyplug::Runtime;
 use polyplug::error::{LoaderError, RuntimeError};
 use polyplug::loader::{BundleLoader, ManifestData};
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::plugin::BundleInitContext;
 use polyplug_abi::types::AbiError;
@@ -110,14 +110,14 @@ impl BundleLoader for NativeLoader {
 
         // ─── Step 3: Resolve init symbol ──────────────────────────────────────────────
         // SAFETY: polyplug_init is guaranteed by the plugin build process.
-        // New signature: fn(host_abi: *const HostInterface, ctx: *const BundleInitContext) -> AbiError
+        // New signature: fn(host_abi: *const HostApi, ctx: *const BundleInitContext) -> AbiError
         let init_fn_ptr: unsafe extern "C" fn(
-            *const HostInterface,
+            *const HostApi,
             *const BundleInitContext,
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
-                unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
+                unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
                 // SAFETY: polyplug_init is an exported C symbol from the plugin library,
                 // validated to exist by library.get(). The signature matches the ABI contract.
             > = unsafe {
@@ -144,17 +144,17 @@ impl BundleLoader for NativeLoader {
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(expected_bundle_id.id());
 
-        // ─── Step 6: Get HostInterface and call init (panic-isolated) ──────────────────
+        // ─── Step 6: Get HostApi and call init (panic-isolated) ──────────────────
         // A panicking plugin init must not unwind across the C ABI (UB / process abort).
         // catch_unwind contains it and maps it to a proper LoaderError. The init stack
         // is popped on BOTH the success and panic paths so it never leaks an entry.
-        let host_abi: &'static HostInterface = runtime.host_abi();
+        let host_abi: &'static HostApi = runtime.host_abi();
         let init_outcome: Result<AbiError, Box<dyn core::any::Any + Send>> =
             std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
-                // SAFETY: host_abi is a valid HostInterface reference obtained from the runtime.
+                // SAFETY: host_abi is a valid HostApi reference obtained from the runtime.
                 // init_fn_ptr is a valid function pointer resolved from the plugin library.
                 // ctx is a stack-allocated BundleInitContext that outlives the call.
-                unsafe { init_fn_ptr(host_abi as *const HostInterface, &ctx) }
+                unsafe { init_fn_ptr(host_abi as *const HostApi, &ctx) }
             }));
 
         // ─── Step 7: Pop bundle_id (always, including panic path) ──────────────────────
@@ -256,12 +256,12 @@ impl BundleLoader for NativeLoader {
         // ─── Step 3: Resolve init symbol ────────────────────────────────────────────────
         // SAFETY: polyplug_init is guaranteed by the plugin build process.
         let init_fn_ptr: unsafe extern "C" fn(
-            *const HostInterface,
+            *const HostApi,
             *const BundleInitContext,
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
-                unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
+                unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
                 // SAFETY: polyplug_init is an exported C symbol from the new plugin library,
                 // validated to exist by new_library.get(). The signature matches the ABI contract.
             > = unsafe {
@@ -288,16 +288,16 @@ impl BundleLoader for NativeLoader {
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(expected_bundle_id.id());
 
-        // ─── Step 6: Get HostInterface and call init (panic-isolated) ────────────────────
+        // ─── Step 6: Get HostApi and call init (panic-isolated) ────────────────────
         // A panicking plugin init must not unwind across the C ABI. catch_unwind contains
         // it; the init stack is popped on both the success and panic paths.
-        let host_abi: &'static HostInterface = runtime.host_abi();
+        let host_abi: &'static HostApi = runtime.host_abi();
         let init_outcome: Result<AbiError, Box<dyn core::any::Any + Send>> =
             std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
-                // SAFETY: host_abi is a valid HostInterface reference obtained from the runtime.
+                // SAFETY: host_abi is a valid HostApi reference obtained from the runtime.
                 // init_fn_ptr is a valid function pointer resolved from the new plugin library.
                 // ctx is a stack-allocated BundleInitContext that outlives the call.
-                unsafe { init_fn_ptr(host_abi as *const HostInterface, &ctx) }
+                unsafe { init_fn_ptr(host_abi as *const HostApi, &ctx) }
             }));
 
         // ─── Step 7: Pop bundle_id (always, including panic path) ────────────────────────

@@ -26,7 +26,7 @@ _RUNTIME_NAME: str = "python"
 
 
 def register_python_loader(runtime: Runtime, min_version: str = "3.11") -> None:
-    """Register the Python loader with the runtime via HostInterface.register_loader."""
+    """Register the Python loader with the runtime via HostApi.register_loader."""
     lib: ctypes.CDLL = _get_lib()
     version_bytes: bytes = min_version.encode("utf-8")
     cfg = _PythonConfig(version_bytes, len(version_bytes))

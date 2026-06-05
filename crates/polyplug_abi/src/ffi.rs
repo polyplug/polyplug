@@ -1,5 +1,5 @@
 //! Allocator — host_alloc/host_free cross-boundary memory management.
-//! These functions back the `HostInterface::alloc`/`HostInterface::free` fields
+//! These functions back the `HostApi::alloc`/`HostApi::free` fields
 //! and are used to allocate memory that crosses the plugin/host boundary.
 //! They are NOT exported as standalone C symbols — the only exported symbols are
 //! `polyplug_runtime_create` and `polyplug_runtime_destroy`.

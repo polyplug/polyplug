@@ -43,7 +43,7 @@ extern "C" fn plugin_add(args: *const (), out: *mut ()) -> AbiError {
 /// # Safety
 /// Test plugins don't need real instances; dispatch uses global state.
 unsafe extern "C" fn create_instance_stub(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -54,7 +54,7 @@ unsafe extern "C" fn create_instance_stub(
 /// # Safety
 /// Test plugins don't own instance data.
 unsafe extern "C" fn destroy_instance_stub(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }
@@ -126,11 +126,11 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 /// Plugin init — called by the loader to register interfaces.
 ///
 /// # Safety
-/// `host_abi` must be a valid non-null pointer to a HostInterface from the host.
+/// `host_abi` must be a valid non-null pointer to a HostApi from the host.
 /// `ctx` must be a valid non-null pointer to a BundleInitContext from the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
-    host_abi: *const HostInterface,
+    host_abi: *const HostApi,
     ctx: *const BundleInitContext,
 ) -> AbiError {
     if host_abi.is_null() {
@@ -152,16 +152,16 @@ pub unsafe extern "C" fn polyplug_init(
     LAST_BUNDLE_PATH_LEN.store(sv.len, Ordering::SeqCst);
 
     // SAFETY: host_abi is non-null and provided by the host runtime per ABI contract.
-    let host: &HostInterface = unsafe { &*host_abi };
+    let host: &HostApi = unsafe { &*host_abi };
 
     // The host copies the interface during this synchronous call, so a local
     // value (carrying the runtime-computed contract ID) is sufficient.
     let interface: GuestContractInterface = test_add_interface();
 
-    // SAFETY: register_contract is a valid function pointer set by the host.
+    // SAFETY: register_guest_contract is a valid function pointer set by the host.
     // TEST_ADD_DESCRIPTOR is 'static; `interface` outlives the synchronous call.
     unsafe {
-        (host.register_contract)(
+        (host.register_guest_contract)(
             host_abi,
             &TEST_ADD_DESCRIPTOR as *const PluginDescriptor,
             &interface as *const GuestContractInterface,

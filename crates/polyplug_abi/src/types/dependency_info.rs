@@ -4,7 +4,7 @@
 //! for plugins to query their own declared dependencies at runtime.
 //!
 //! # Who provides
-//! Runtime returns this from `HostInterface::get_dependencies`.
+//! Runtime returns this from `HostApi::get_dependencies`.
 //!
 //! # Who calls
 //! Guest (plugin) code calls `get_dependencies` during initialization.
@@ -23,7 +23,7 @@ use polyplug_utils::{BundleId, GuestContractId};
 /// their own declared dependencies at runtime.
 ///
 /// # Who provides
-/// Runtime returns this from `HostInterface::get_dependencies`.
+/// Runtime returns this from `HostApi::get_dependencies`.
 ///
 /// # Who calls
 /// Guest (plugin) code calls `get_dependencies` during initialization
@@ -42,7 +42,7 @@ pub struct DependencyInfo {
     /// Contract ID of the dependency.
     ///
     /// FNV-1a hash of the contract name and major version.
-    /// Use this to find matching contracts via `find_by_contract`.
+    /// Use this to find matching contracts via `find_guest_contract`.
     pub contract_id: GuestContractId,
     /// Minimum version required.
     ///

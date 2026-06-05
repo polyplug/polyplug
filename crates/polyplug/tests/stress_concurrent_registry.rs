@@ -10,7 +10,7 @@ use polyplug::error::RegistryError;
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractId, GuestContractInterface,
-    HostInterface, NativeDispatch, PluginDescriptor, StringView, Version,
+    HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::BundleId;
 
@@ -66,7 +66,7 @@ const MOCK_FUNCTIONS: [*const (); 0] = [];
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> polyplug_abi::GuestContractInstance {
     polyplug_abi::GuestContractInstance::null()
@@ -74,7 +74,7 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: polyplug_abi::GuestContractInstance,
 ) {
 }
@@ -155,7 +155,7 @@ fn stress_concurrent_register_find_resolve() {
             for _round in 0_usize..RESOLVE_ROUNDS {
                 let found: GuestContractHandle = reg_clone
                     .find_guest_contract(GuestContractId::from_u64(CONTRACT_IDS[idx]), 0_u32)
-                    .expect("find_by_contract must succeed");
+                    .expect("find_guest_contract must succeed");
                 let interface_ptr: *const GuestContractInterface = reg_clone
                     .resolve_guest_contract(found)
                     .expect("resolve must succeed");

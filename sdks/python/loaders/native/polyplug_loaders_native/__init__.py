@@ -25,7 +25,7 @@ def register_native_loader(runtime: Runtime) -> None:
     """Register the native (Rust/C++) loader with the runtime.
 
     Creates the loader via the loader cdylib's ``polyplug_native_loader_create``
-    export and registers it through the canonical ``HostInterface.register_loader``
+    export and registers it through the canonical ``HostApi.register_loader``
     function-pointer path.
     """
     lib: ctypes.CDLL = _get_lib()

@@ -17,7 +17,7 @@ use polyplug_abi::DependencyInfo;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::string_view_null;
@@ -116,7 +116,7 @@ use polyplug_guest::AbiError;
 use polyplug_guest::AbiErrorCode;
 use polyplug_guest::PluginDescriptor;
 use polyplug_guest::GuestError;
-use polyplug_guest::HostInterface;
+use polyplug_guest::HostApi;
 use polyplug_guest::BundleInitContext;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
@@ -150,7 +150,7 @@ impl TestAddGuestContract for MyPlugin {
 /// `host` must be a valid non-null pointer provided by the host.
 #[no_mangle]
 pub unsafe extern "C" fn polyplug_init(
-    host: *const HostInterface,
+    host: *const HostApi,
     _ctx: *const BundleInitContext,
 ) -> AbiError {
     if host.is_null() {
@@ -161,7 +161,7 @@ pub unsafe extern "C" fn polyplug_init(
     let _ = set_test_adder_impl(Box::new(MyPlugin));
 
     // SAFETY: host is non-null and valid per ABI contract.
-    let host: &HostInterface = unsafe { &*host };
+    let host: &HostApi = unsafe { &*host };
 
     let desc: PluginDescriptor = PluginDescriptor {
         name: StringView { ptr: b"codegen_test_plugin".as_ptr(), len: 19_usize },
@@ -171,7 +171,7 @@ pub unsafe extern "C" fn polyplug_init(
 
     // SAFETY: desc and TEST_ADDER_INTERFACE are 'static; host is valid.
     unsafe {
-        (host.register_contract)(
+        (host.register_guest_contract)(
             host as *const _,
             &desc as *const PluginDescriptor,
             &TEST_ADDER_INTERFACE as *const _,
@@ -183,20 +183,20 @@ pub unsafe extern "C" fn polyplug_init(
     std::fs::write(&lib_rs_path, content).expect("failed to write plugin src/lib.rs");
 }
 
-// ─── HostInterface callback capturing the interface pointer ───────────────────────
+// ─── HostApi callback capturing the interface pointer ───────────────────────
 
-// Captured interface pointer from the register_contract callback, stored in a thread-local.
+// Captured interface pointer from the register_guest_contract callback, stored in a thread-local.
 std::thread_local! {
     static CAPTURED_INTERFACE: core::cell::Cell<*const GuestContractInterface> =
         const { core::cell::Cell::new(core::ptr::null()) };
 }
 
-/// register_contract callback that captures the interface pointer into `CAPTURED_INTERFACE`.
+/// register_guest_contract callback that captures the interface pointer into `CAPTURED_INTERFACE`.
 ///
 /// # Safety
 /// `descriptor` and `interface` must be valid for the duration of the call.
 unsafe extern "C" fn capture_interface_callback(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -216,18 +216,13 @@ struct AddArgs {
     b: u32,
 }
 
-// ─── HostInterface stub functions ─────────────────────────────────────────────────
+// ─── HostApi stub functions ─────────────────────────────────────────────────
 
-unsafe extern "C" fn stub_alloc(_host: *const HostInterface, size: usize, align: usize) -> *mut u8 {
+unsafe extern "C" fn stub_alloc(_host: *const HostApi, size: usize, align: usize) -> *mut u8 {
     polyplug_abi::ffi::polyplug_host_alloc(size, align)
 }
 
-unsafe extern "C" fn stub_free(
-    _host: *const HostInterface,
-    ptr: *mut u8,
-    size: usize,
-    align: usize,
-) {
+unsafe extern "C" fn stub_free(_host: *const HostApi, ptr: *mut u8, size: usize, align: usize) {
     // SAFETY: This is an unsafe extern "C" function. The caller ensures ptr is valid.
     unsafe {
         polyplug_abi::ffi::polyplug_host_free(ptr, size, align);
@@ -235,7 +230,7 @@ unsafe extern "C" fn stub_free(
 }
 
 unsafe extern "C" fn stub_find_guest_contract(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> GuestContractHandle {
@@ -243,7 +238,7 @@ unsafe extern "C" fn stub_find_guest_contract(
 }
 
 unsafe extern "C" fn stub_find_all_guest_contracts(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> Array<GuestContractHandle> {
@@ -251,14 +246,14 @@ unsafe extern "C" fn stub_find_all_guest_contracts(
 }
 
 unsafe extern "C" fn stub_resolve_guest_contract(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
 
 unsafe extern "C" fn stub_get_host_contract(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -268,23 +263,23 @@ unsafe extern "C" fn stub_get_host_contract(
 }
 
 unsafe extern "C" fn stub_resolve_host_contract_interface(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> *const polyplug_abi::HostContractInterface {
     core::ptr::null()
 }
 
-unsafe extern "C" fn stub_list_bundles(_host: *const HostInterface) -> Array<BundleId> {
+unsafe extern "C" fn stub_list_bundles(_host: *const HostApi) -> Array<BundleId> {
     Array::empty()
 }
 
-unsafe extern "C" fn stub_get_dependencies(_host: *const HostInterface) -> Array<DependencyInfo> {
+unsafe extern "C" fn stub_get_dependencies(_host: *const HostApi) -> Array<DependencyInfo> {
     Array::empty()
 }
 
 unsafe extern "C" fn stub_load_bundle(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
@@ -295,7 +290,7 @@ unsafe extern "C" fn stub_load_bundle(
 }
 
 unsafe extern "C" fn stub_reload_bundle(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
@@ -306,7 +301,7 @@ unsafe extern "C" fn stub_reload_bundle(
 }
 
 unsafe extern "C" fn stub_register_host_contract(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
     AbiError {
@@ -316,7 +311,7 @@ unsafe extern "C" fn stub_register_host_contract(
 }
 
 unsafe extern "C" fn stub_register_loader(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _runtime_name: StringView,
     _loader_ptr: *mut c_void,
 ) -> AbiError {
@@ -327,21 +322,18 @@ unsafe extern "C" fn stub_register_loader(
 }
 
 unsafe extern "C" fn stub_get_last_error(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _buf: *mut u8,
     _buf_len: usize,
 ) -> usize {
     0
 }
 
-unsafe extern "C" fn stub_get_error_len(_this: *const HostInterface) -> usize {
+unsafe extern "C" fn stub_get_error_len(_this: *const HostApi) -> usize {
     0
 }
 
-unsafe extern "C" fn stub_get_extension(
-    _this: *const HostInterface,
-    _extension_id: u32,
-) -> *const () {
+unsafe extern "C" fn stub_get_extension(_this: *const HostApi, _extension_id: u32) -> *const () {
     core::ptr::null()
 }
 
@@ -404,19 +396,19 @@ fn test_rust_codegen_compile_and_run() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
+        unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
     };
 
-    // ── 8. Build HostInterface + call polyplug_init ───────────────────────────────
+    // ── 8. Build HostApi + call polyplug_init ───────────────────────────────
     CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
 
-    let host_abi: HostInterface = HostInterface {
+    let host_abi: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
-        register_contract: capture_interface_callback,
+        register_guest_contract: capture_interface_callback,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -443,7 +435,7 @@ fn test_rust_codegen_compile_and_run() {
     // SAFETY: init_fn is valid; host_abi and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &host_abi as *const HostInterface,
+            &host_abi as *const HostApi,
             &ctx as *const BundleInitContext,
         )
     };

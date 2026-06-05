@@ -12,7 +12,7 @@ This document describes the hot-reload notification system for polyplug. The des
 
 This document uses the following terminology (current as of v1.1):
 - **GuestContractInterface**: The interface struct a plugin provides for the host to call
-- **HostInterface**: The runtime's ABI table provided to guests
+- **HostApi**: The runtime's ABI table provided to guests
 
 Interfaces are stored in `RuntimeStore` as interface slots guarded by a single `RwLock`. On reload, the slot is swapped in place via `apply_reload_swap` under the write guard.
 

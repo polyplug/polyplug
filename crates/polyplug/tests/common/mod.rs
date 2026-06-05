@@ -21,7 +21,7 @@
 //! Two entry points are provided:
 //! - [`TestNativeLoader`] for builder-oriented tests via `RuntimeBuilder::loader`.
 //! - [`register_native_loader`] for FFI-oriented tests via the
-//!   `HostInterface::register_loader` callback.
+//!   `HostApi::register_loader` callback.
 
 use core::ffi::c_void;
 use std::collections::HashMap;
@@ -34,7 +34,7 @@ use libloading::Library;
 use polyplug::Runtime;
 use polyplug::error::{LoaderError, RuntimeError};
 use polyplug::loader::{BundleLoader, ManifestData};
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::StringView;
 use polyplug_abi::plugin::BundleInitContext;
@@ -107,12 +107,12 @@ impl TestNativeLoader {
         // SAFETY: polyplug_init is an exported C symbol from the plugin library, validated
         // to exist by library.get(); the signature matches the ABI contract.
         let init_fn_ptr: unsafe extern "C" fn(
-            *const HostInterface,
+            *const HostApi,
             *const BundleInitContext,
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
-                unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
+                unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
             > = unsafe {
                 library.get(b"polyplug_init\0").map_err(|_| {
                     RuntimeError::Loader(LoaderError::InitSymbolMissing {
@@ -136,10 +136,10 @@ impl TestNativeLoader {
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(expected_bundle_id.id());
 
-        let host_abi: &'static HostInterface = runtime.host_abi();
-        // SAFETY: host_abi is a valid HostInterface reference from the runtime; init_fn_ptr is a
+        let host_abi: &'static HostApi = runtime.host_abi();
+        // SAFETY: host_abi is a valid HostApi reference from the runtime; init_fn_ptr is a
         // valid function pointer; ctx is stack-allocated and outlives the call.
-        let init_result: AbiError = unsafe { init_fn_ptr(host_abi as *const HostInterface, &ctx) };
+        let init_result: AbiError = unsafe { init_fn_ptr(host_abi as *const HostApi, &ctx) };
 
         runtime.pop_init_bundle_id();
 
@@ -200,8 +200,8 @@ impl BundleLoader for TestNativeLoader {
 /// Register a [`TestNativeLoader`] with the runtime behind `host`.
 ///
 /// # Safety
-/// `host` must be a valid `HostInterface` pointer returned by `polyplug_runtime_create`.
-pub unsafe fn register_native_loader(host: *const HostInterface) {
+/// `host` must be a valid `HostApi` pointer returned by `polyplug_runtime_create`.
+pub unsafe fn register_native_loader(host: *const HostApi) {
     let name: &[u8] = b"native";
     let loader: *mut c_void = Box::into_raw(Box::new(
         Box::new(TestNativeLoader::new()) as Box<dyn BundleLoader>

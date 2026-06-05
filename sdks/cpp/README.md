@@ -57,7 +57,7 @@ if (decoder) {
 #include <polyplug/guest.hpp>
 
 POLYPLUG_PLUGIN_INIT {
-    host->register_contract(host, &descriptor, &contractInterface);
+    host->register_guest_contract(host, &descriptor, &contractInterface);
 }
 
 class DecoderImpl : public IPipelineDecoder {
@@ -103,7 +103,7 @@ C++ wrappers over the polyplug C ABI:
 
 Bootstrap layer for C++ plugins:
 - `POLYPLUG_PLUGIN_INIT` macro — Entry point
-- `HostInterface` — Contract registration
+- `HostApi` — Contract registration
 - `BundleInitContext` — Bundle metadata
 - Exception boundary — Plugin crashes don't take down host
 

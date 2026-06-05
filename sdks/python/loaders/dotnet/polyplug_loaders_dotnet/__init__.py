@@ -26,7 +26,7 @@ _RUNTIME_NAME: str = "dotnet"
 
 
 def register_dotnet_loader(runtime: Runtime, min_framework: str = "10.0") -> None:
-    """Register the .NET loader with the runtime via HostInterface.register_loader."""
+    """Register the .NET loader with the runtime via HostApi.register_loader."""
     lib: ctypes.CDLL = _get_lib()
     framework_bytes: bytes = min_framework.encode("utf-8")
     cfg = _DotnetConfig(framework_bytes, len(framework_bytes))

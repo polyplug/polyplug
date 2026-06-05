@@ -48,8 +48,8 @@ interface AbiError {
 
 /**
  * Initialize plugin with host runtime.
- * @param host_lo - HostInterface pointer (low 32 bits)
- * @param host_hi - HostInterface pointer (high 32 bits)
+ * @param host_lo - HostApi pointer (low 32 bits)
+ * @param host_hi - HostApi pointer (high 32 bits)
  * @param ctx_lo - BundleInitContext pointer (low 32 bits)
  * @param ctx_hi - BundleInitContext pointer (high 32 bits)
  */

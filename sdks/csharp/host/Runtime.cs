@@ -13,9 +13,9 @@ public sealed class Runtime
     private static GCHandle s_reloadCallbackHandle;
     private static readonly object s_lock = new();
 
-    // HostInterface pointer and loaded struct (18-03)
+    // HostApi pointer and loaded struct (18-03)
     private nint _host;
-    private HostInterface _hostStruct;
+    private HostApi _hostStruct;
 
     // Cached function pointer delegates (18-03)
     private LoadBundleDelegate? _loadBundleFn;
@@ -66,7 +66,7 @@ public sealed class Runtime
 
     /// <summary>
     /// Create a new Runtime instance with default configuration.
-    /// Gets HostInterface pointer from FFI and caches struct fields.
+    /// Gets HostApi pointer from FFI and caches struct fields.
     /// </summary>
     public Runtime()
     {
@@ -75,23 +75,23 @@ public sealed class Runtime
         {
             ThrowLastError("Failed to create runtime.");
         }
-        _hostStruct = Marshal.PtrToStructure<HostInterface>(_host);
+        _hostStruct = Marshal.PtrToStructure<HostApi>(_host);
         CacheFunctionPointers();
     }
 
     /// <summary>
-    /// Create a Runtime from an existing HostInterface pointer.
-    /// Used by RuntimeBuilder after creating the HostInterface.
+    /// Create a Runtime from an existing HostApi pointer.
+    /// Used by RuntimeBuilder after creating the HostApi.
     /// </summary>
-    /// <param name="hostInterfacePtr">HostInterface pointer from polyplug_runtime_create.</param>
+    /// <param name="hostInterfacePtr">HostApi pointer from polyplug_runtime_create.</param>
     internal Runtime(nint hostInterfacePtr)
     {
         if (hostInterfacePtr == nint.Zero)
         {
-            throw new InvalidOperationException("HostInterface pointer is null.");
+            throw new InvalidOperationException("HostApi pointer is null.");
         }
         _host = hostInterfacePtr;
-        _hostStruct = Marshal.PtrToStructure<HostInterface>(_host);
+        _hostStruct = Marshal.PtrToStructure<HostApi>(_host);
         CacheFunctionPointers();
     }
 
@@ -281,7 +281,7 @@ public sealed class Runtime
     /// <summary>
     /// Throw an <see cref="InvalidOperationException"/> with the given message.
     /// Used on runtime create / loader register failure paths where no live
-    /// <c>HostInterface</c> is available to read <c>get_last_error</c> from, so
+    /// <c>HostApi</c> is available to read <c>get_last_error</c> from, so
     /// the supplied fallback message is thrown directly.
     /// </summary>
     public static void ThrowLastError(string fallbackMessage)
@@ -331,7 +331,7 @@ public sealed class Runtime
     }
 
     /// <summary>
-    /// The runtime's <c>HostInterface*</c> pointer, passed to guest contract
+    /// The runtime's <c>HostApi*</c> pointer, passed to guest contract
     /// factory functions (create_instance / destroy_instance) for host allocation.
     /// </summary>
     public nint HostHandle

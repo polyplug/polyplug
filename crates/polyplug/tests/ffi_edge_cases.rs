@@ -5,14 +5,14 @@
 //! Edge case tests for the FFI layer.
 //!
 //! Tests null pointers, stale handles, and buffer boundary conditions
-//! for HostInterface operations (find_guest_contract, find_all_guest_contracts, resolve_guest_contract).
+//! for HostApi operations (find_guest_contract, find_all_guest_contracts, resolve_guest_contract).
 
 use std::path::PathBuf;
 
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug_abi::GuestContractHandle;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
 
@@ -28,7 +28,7 @@ const TEST_PLUGIN_CPP_SO: &str = env!("TEST_PLUGIN_CPP_SO");
 // resolve_guest_contract edge cases
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Test `resolve_guest_contract` with null HostInterface pointer.
+/// Test `resolve_guest_contract` with null HostApi pointer.
 /// Expected: Returns null.
 #[test]
 fn test_resolve_plugin_null_host() {
@@ -47,8 +47,8 @@ fn test_resolve_plugin_null_host() {
 /// Expected: Returns null without setting last_error.
 #[test]
 fn test_resolve_plugin_null_handle() {
-    // SAFETY: polyplug_runtime_create returns a valid HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    // SAFETY: polyplug_runtime_create returns a valid HostApi or null on OOM.
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // SAFETY: host is valid; null handle is the sentinel.
@@ -67,11 +67,11 @@ fn test_resolve_plugin_null_handle() {
 /// Expected: Returns null.
 #[test]
 fn test_resolve_plugin_stale_handle() {
-    // SAFETY: polyplug_runtime_create returns a valid HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    // SAFETY: polyplug_runtime_create returns a valid HostApi or null on OOM.
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
-    // SAFETY: host is a valid HostInterface from polyplug_runtime_create.
+    // SAFETY: host is a valid HostApi from polyplug_runtime_create.
     unsafe { register_native_loader(host) };
 
     // Load a plugin to get a valid slot
@@ -117,8 +117,8 @@ fn test_resolve_plugin_stale_handle() {
 /// Expected: Returns empty array.
 #[test]
 fn test_find_all_guest_contracts_empty_registry() {
-    // SAFETY: polyplug_runtime_create returns a valid HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    // SAFETY: polyplug_runtime_create returns a valid HostApi or null on OOM.
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // SAFETY: host is valid.
@@ -137,11 +137,11 @@ fn test_find_all_guest_contracts_empty_registry() {
 /// Expected: Returns array with one handle.
 #[test]
 fn test_find_all_guest_contracts_single_plugin() {
-    // SAFETY: polyplug_runtime_create returns a valid HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    // SAFETY: polyplug_runtime_create returns a valid HostApi or null on OOM.
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
-    // SAFETY: host is a valid HostInterface from polyplug_runtime_create.
+    // SAFETY: host is a valid HostApi from polyplug_runtime_create.
     unsafe { register_native_loader(host) };
 
     // Load reload_plugin_v1 which provides "reload.test@1"
@@ -193,11 +193,11 @@ fn test_find_all_guest_contracts_multiple_plugins() {
         return;
     }
 
-    // SAFETY: polyplug_runtime_create returns a valid HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    // SAFETY: polyplug_runtime_create returns a valid HostApi or null on OOM.
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
-    // SAFETY: host is a valid HostInterface from polyplug_runtime_create.
+    // SAFETY: host is a valid HostApi from polyplug_runtime_create.
     unsafe { register_native_loader(host) };
 
     // Load test_plugin (Rust) which provides "test.add@1"

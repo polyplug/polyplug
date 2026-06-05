@@ -26,21 +26,21 @@ use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug::runtime::Runtime;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
-    GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor, StringView, Version,
+    GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
 const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
 unsafe extern "C" fn noop_create_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
 }
 
 unsafe extern "C" fn noop_destroy_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }
@@ -116,19 +116,15 @@ impl BundleLoader for LuaDependerLoader {
     }
 
     fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
-        let host: &'static HostInterface = runtime.host_abi();
+        let host: &'static HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 
         // Enter the enforcement window, exactly as a real loader does.
         runtime.push_init_bundle_id(bundle_id.id());
 
-        // SAFETY: host is a valid HostInterface from the runtime.
+        // SAFETY: host is a valid HostApi from the runtime.
         let handle: GuestContractHandle = unsafe {
-            (host.find_guest_contract)(
-                host as *const HostInterface,
-                self.provider_contract_id,
-                0_u32,
-            )
+            (host.find_guest_contract)(host as *const HostApi, self.provider_contract_id, 0_u32)
         };
 
         runtime.pop_init_bundle_id();

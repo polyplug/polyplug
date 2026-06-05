@@ -13,7 +13,7 @@ use polyplug_guest::AbiError;
 use polyplug_guest::AbiErrorCode;
 use polyplug_guest::BundleInitContext;
 use polyplug_guest::GuestContractInterface;
-use polyplug_guest::HostInterface;
+use polyplug_guest::HostApi;
 use polyplug_guest::PluginDescriptor;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
@@ -43,12 +43,12 @@ fn fnv1a_32(data: &[u8]) -> u32 {
 /// # Safety
 /// The returned pointer is valid only as long as the host runtime is alive.
 pub unsafe fn polyplug_get_extension(name: &[u8]) -> Option<*const ()> {
-    let host_ptr: *const HostInterface = polyplug_guest::get_host_vtable();
+    let host_ptr: *const HostApi = polyplug_guest::get_host_vtable();
     if host_ptr.is_null() {
         return None;
     }
     // SAFETY: host_ptr was stored during polyplug_init and is valid for the plugin lifetime.
-    let host: &HostInterface = unsafe { &*host_ptr };
+    let host: &HostApi = unsafe { &*host_ptr };
     let extension_id: u32 = fnv1a_32(name);
     // SAFETY: get_extension is a valid function pointer from the host ABI.
     let ptr: *const () = unsafe { (host.get_extension)(host_ptr, extension_id) };
@@ -61,7 +61,7 @@ pub unsafe fn polyplug_get_extension(name: &[u8]) -> Option<*const ()> {
 /// `host` and `ctx` must be valid non-null pointers provided by the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
-    host: *const HostInterface,
+    host: *const HostApi,
     ctx: *const BundleInitContext,
 ) -> AbiError {
     if host.is_null() {
@@ -80,10 +80,10 @@ pub unsafe extern "C" fn polyplug_init(
     let ctx: &BundleInitContext = unsafe { &*ctx };
     let _ = ctx; // suppress unused warning if plugin_init user stub not yet updated
     // SAFETY: host is non-null and valid per ABI contract.
-    let host: &HostInterface = unsafe { &*host };
+    let host: &HostApi = unsafe { &*host };
     // SAFETY: Called once during plugin init, before any host contract access.
     unsafe {
-        store_host_vtable(host as *const HostInterface);
+        store_host_vtable(host as *const HostApi);
     }
 
     // Call user initialization to register plugin implementations
@@ -112,7 +112,7 @@ pub unsafe extern "C" fn polyplug_init(
     };
     // SAFETY: desc and interface are 'static.
     let err_VALIDATOR: AbiError = unsafe {
-        (host.register_contract)(
+        (host.register_guest_contract)(
             host,
             &desc_VALIDATOR as *const PluginDescriptor,
             &VALIDATOR_INTERFACE as *const GuestContractInterface,

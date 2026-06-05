@@ -19,7 +19,7 @@ internal static partial class NativeMethods
     /// hot-reload, and the reload callback, or <c>nint.Zero</c> to use defaults.
     /// The native side reads the config during the call; the caller may free it
     /// once the call returns.
-    /// Returns a HostInterface pointer that provides all runtime operations.
+    /// Returns a HostApi pointer that provides all runtime operations.
     /// </summary>
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_create")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -27,7 +27,7 @@ internal static partial class NativeMethods
 
     /// <summary>
     /// Destroys a runtime instance.
-    /// Takes HostInterface pointer returned by polyplug_runtime_create.
+    /// Takes HostApi pointer returned by polyplug_runtime_create.
     /// </summary>
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_destroy")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

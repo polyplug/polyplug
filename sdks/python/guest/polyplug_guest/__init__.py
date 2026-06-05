@@ -12,7 +12,7 @@ from polyplug_abi import (
     PluginDescriptor,
     GuestContractHandle,
     BundleInitContext,
-    HostInterface,
+    HostApi,
     StringView,
     GuestContractInterface,
     DispatchType,
@@ -26,7 +26,7 @@ __all__ = [
     "PluginDescriptor",
     "GuestContractHandle",
     "BundleInitContext",
-    "HostInterface",
+    "HostApi",
     "StringView",
     "GuestContractInterface",
     "DispatchType",
@@ -56,7 +56,7 @@ def _init_allocator(host_interface_ptr: int, rt_ctx: int) -> None:
     global _host_alloc, _host_free
     import ctypes
 
-    host = ctypes.cast(host_interface_ptr, ctypes.POINTER(HostInterface))
+    host = ctypes.cast(host_interface_ptr, ctypes.POINTER(HostApi))
     _host_alloc = host.contents.alloc
     _host_free = host.contents.free
 
@@ -76,7 +76,7 @@ def alloc_string(s: str) -> StringView:
 
     encoded = s.encode("utf-8")
     # The host allocator uses the self-passing convention: alloc(this, size, align).
-    # `_host_alloc` is already the correctly typed HostInterface.alloc CFUNCTYPE
+    # `_host_alloc` is already the correctly typed HostApi.alloc CFUNCTYPE
     # field, so it must be called with the host interface pointer as the first
     # argument. Dropping it (calling as (size, align)) shifts every argument by a
     # register and corrupts the allocation request.

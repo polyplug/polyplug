@@ -6,7 +6,7 @@
 
 This document uses the following terminology (current as of v1.1):
 - **GuestContractInterface**: The interface struct a plugin provides for the host to call
-- **HostInterface**: The runtime's ABI table provided to guests
+- **HostApi**: The runtime's ABI table provided to guests
 - **Guest Contract**: A contract implemented by plugins
 - **Host Contract**: A contract provided by the host to plugins
 

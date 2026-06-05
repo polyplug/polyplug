@@ -18,7 +18,7 @@ from polyplug_guest import (
 from polyplug_abi import (
     NativeDispatch,
     DispatchMechanisms,
-    HostInterface,
+    HostApi,
     Version,
     DispatchType,
     guest_contract_id,
@@ -124,8 +124,8 @@ _FUNCTIONS_ARRAY = (ctypes.c_void_p * 4)(
     ctypes.cast(_FN_RESET, ctypes.c_void_p),
 )
 
-# ── HostInterface definition ───────────────────────────────────────────────────
-# Use the auto-generated HostInterface from polyplug_abi (imported above).
+# ── HostApi definition ───────────────────────────────────────────────────
+# Use the auto-generated HostApi from polyplug_abi (imported above).
 
 # ── Plugin interface ──────────────────────────────────────────────────
 
@@ -170,18 +170,18 @@ def polyplug_abi_version() -> int:
 
 
 def polyplug_init(host_addr: int, ctx_ptr: int) -> None:
-    """Called by PythonLoader with the HostInterface address and BundleInitContext pointer."""
+    """Called by PythonLoader with the HostApi address and BundleInitContext pointer."""
     if host_addr == 0:
         raise RuntimeError("host interface pointer is null")
 
-    # Cast the host pointer to the auto-generated HostInterface structure
-    host = HostInterface.from_address(host_addr)
+    # Cast the host pointer to the auto-generated HostApi structure
+    host = HostApi.from_address(host_addr)
 
-    # Call register_contract via the auto-generated delegate (self-passing pattern)
-    err = host.register_contract(
-        host_addr,  # self: HostInterface pointer
+    # Call register_guest_contract via the auto-generated delegate (self-passing pattern)
+    err = host.register_guest_contract(
+        host_addr,  # self: HostApi pointer
         ctypes.byref(_DESCRIPTOR),
         ctypes.byref(_VTABLE),
     )
     if err.code != AbiErrorCode.Ok:
-        raise RuntimeError(f"register_contract failed with code {err.code}")
+        raise RuntimeError(f"register_guest_contract failed with code {err.code}")

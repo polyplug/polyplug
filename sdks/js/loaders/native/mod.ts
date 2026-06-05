@@ -20,7 +20,7 @@ function getLib(): Deno.DynamicLibrary<typeof NATIVE_SYMBOLS> {
 /**
  * Register the native loader with a Runtime.
  * Opens the loader cdylib, creates the loader, then registers it through the
- * Runtime's HostInterface.register_loader path under the "native" runtime name.
+ * Runtime's HostApi.register_loader path under the "native" runtime name.
  */
 export function registerNativeLoader(rt: Runtime): void {
     const lib = getLib();

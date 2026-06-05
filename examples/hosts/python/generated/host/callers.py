@@ -6,7 +6,7 @@ from __future__ import annotations
 import ctypes
 from typing import Callable, Optional, TypeAlias
 
-from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostInterface, StringView
+from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostApi, StringView
 
 class ContractError(Exception):
     def __init__(self, message: str, code: int = AbiErrorCode.Generic) -> None:
@@ -51,9 +51,9 @@ class PipelineDecoderContractCaller:
         Raises:
             ValueError: If interface not found or create_instance failed
         """
-        # Resolve the interface from the handle via HostInterface method
-        # Cast host to HostInterface pointer and call resolve_guest_contract
-        host_iface: ctypes.POINTER(HostInterface) = ctypes.cast(host, ctypes.POINTER(HostInterface))
+        # Resolve the interface from the handle via HostApi method
+        # Cast host to HostApi pointer and call resolve_guest_contract
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(host, ctypes.POINTER(HostApi))
         self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)
         if not self._interface:
             raise ValueError("Contract not found")
@@ -143,9 +143,9 @@ class DataTransformerContractCaller:
         Raises:
             ValueError: If interface not found or create_instance failed
         """
-        # Resolve the interface from the handle via HostInterface method
-        # Cast host to HostInterface pointer and call resolve_guest_contract
-        host_iface: ctypes.POINTER(HostInterface) = ctypes.cast(host, ctypes.POINTER(HostInterface))
+        # Resolve the interface from the handle via HostApi method
+        # Cast host to HostApi pointer and call resolve_guest_contract
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(host, ctypes.POINTER(HostApi))
         self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)
         if not self._interface:
             raise ValueError("Contract not found")
@@ -235,9 +235,9 @@ class PipelineEncoderContractCaller:
         Raises:
             ValueError: If interface not found or create_instance failed
         """
-        # Resolve the interface from the handle via HostInterface method
-        # Cast host to HostInterface pointer and call resolve_guest_contract
-        host_iface: ctypes.POINTER(HostInterface) = ctypes.cast(host, ctypes.POINTER(HostInterface))
+        # Resolve the interface from the handle via HostApi method
+        # Cast host to HostApi pointer and call resolve_guest_contract
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(host, ctypes.POINTER(HostApi))
         self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)
         if not self._interface:
             raise ValueError("Contract not found")
@@ -327,9 +327,9 @@ class DataReporterContractCaller:
         Raises:
             ValueError: If interface not found or create_instance failed
         """
-        # Resolve the interface from the handle via HostInterface method
-        # Cast host to HostInterface pointer and call resolve_guest_contract
-        host_iface: ctypes.POINTER(HostInterface) = ctypes.cast(host, ctypes.POINTER(HostInterface))
+        # Resolve the interface from the handle via HostApi method
+        # Cast host to HostApi pointer and call resolve_guest_contract
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(host, ctypes.POINTER(HostApi))
         self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)
         if not self._interface:
             raise ValueError("Contract not found")
@@ -419,9 +419,9 @@ class PipelineValidatorContractCaller:
         Raises:
             ValueError: If interface not found or create_instance failed
         """
-        # Resolve the interface from the handle via HostInterface method
-        # Cast host to HostInterface pointer and call resolve_guest_contract
-        host_iface: ctypes.POINTER(HostInterface) = ctypes.cast(host, ctypes.POINTER(HostInterface))
+        # Resolve the interface from the handle via HostApi method
+        # Cast host to HostApi pointer and call resolve_guest_contract
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(host, ctypes.POINTER(HostApi))
         self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)
         if not self._interface:
             raise ValueError("Contract not found")

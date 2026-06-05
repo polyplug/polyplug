@@ -1,10 +1,10 @@
 """
 polyplug Python Host Library
 
-After 18-02/18-03: All operations go through HostInterface struct fields.
+After 18-02/18-03: All operations go through HostApi struct fields.
 Only two FFI exports remain: polyplug_runtime_create, polyplug_runtime_destroy.
 
-The Runtime class holds a HostInterface pointer and calls methods through struct fields.
+The Runtime class holds a HostApi pointer and calls methods through struct fields.
 All FFI struct types are imported from the auto-generated polyplug_abi module.
 """
 
@@ -28,7 +28,7 @@ from polyplug_abi import (
     GuestContractInterface,
     HostContractInterface,
     HostContractInstance,
-    HostInterface,
+    HostApi,
     ReloadPhase,
     ReloadPhaseType,
     RuntimeConfig,
@@ -68,23 +68,23 @@ except ImportError:
     pass
 
 
-# ─── Backend Protocol (18-03: HostInterface-based) ─────────────────────────────────
+# ─── Backend Protocol (18-03: HostApi-based) ─────────────────────────────────
 
 @runtime_checkable
 class Backend(Protocol):
-    """Protocol for HostInterface-based FFI backend.
+    """Protocol for HostApi-based FFI backend.
 
     Only two FFI bindings needed: create and destroy.
-    All operations go through HostInterface struct fields.
+    All operations go through HostApi struct fields.
     """
 
     def create_host_interface(self, config_ptr: int = 0) -> int: ...
     def destroy_host_interface(self, host: int) -> None: ...
-    def load_host_interface(self, host: int) -> HostInterface: ...
+    def load_host_interface(self, host: int) -> HostApi: ...
 
 
 class CTypesBackend:
-    """ctypes-based FFI backend for HostInterface operations."""
+    """ctypes-based FFI backend for HostApi operations."""
 
     def __init__(self, lib_path: str) -> None:
         self.ctypes = ctypes
@@ -101,7 +101,7 @@ class CTypesBackend:
         self.lib.polyplug_runtime_destroy.restype = None
 
     def create_host_interface(self, config_ptr: int = 0) -> int:
-        """Create runtime and return HostInterface pointer.
+        """Create runtime and return HostApi pointer.
 
         Args:
             config_ptr: Address of a RuntimeConfig struct, or 0 for defaults.
@@ -109,16 +109,16 @@ class CTypesBackend:
         return self.lib.polyplug_runtime_create(config_ptr or None) or 0
 
     def destroy_host_interface(self, host: int) -> None:
-        """Destroy HostInterface and runtime."""
+        """Destroy HostApi and runtime."""
         self.lib.polyplug_runtime_destroy(host)
 
-    def load_host_interface(self, host: int) -> HostInterface:
-        """Load HostInterface struct from pointer."""
-        return HostInterface.from_address(host)
+    def load_host_interface(self, host: int) -> HostApi:
+        """Load HostApi struct from pointer."""
+        return HostApi.from_address(host)
 
 
 class CFFIBackend:
-    """cffi ABI mode backend for HostInterface operations."""
+    """cffi ABI mode backend for HostApi operations."""
 
     CDEF = """
         void* polyplug_runtime_create(const void* config);
@@ -132,7 +132,7 @@ class CFFIBackend:
         self.lib = self.ffi.dlopen(lib_path)
 
     def create_host_interface(self, config_ptr: int = 0) -> int:
-        """Create runtime and return HostInterface pointer.
+        """Create runtime and return HostApi pointer.
 
         Args:
             config_ptr: Address of a RuntimeConfig struct, or 0 for defaults.
@@ -145,12 +145,12 @@ class CFFIBackend:
         )
 
     def destroy_host_interface(self, host: int) -> None:
-        """Destroy HostInterface and runtime."""
+        """Destroy HostApi and runtime."""
         self.lib.polyplug_runtime_destroy(self.ffi.cast("void*", host))
 
-    def load_host_interface(self, host: int) -> HostInterface:
-        """Load HostInterface struct from pointer (via ctypes)."""
-        return HostInterface.from_address(host)
+    def load_host_interface(self, host: int) -> HostApi:
+        """Load HostApi struct from pointer (via ctypes)."""
+        return HostApi.from_address(host)
 
 
 def get_backend() -> str:
@@ -187,7 +187,7 @@ def _read_c_string(ptr: int, length: int) -> str:
 class Runtime:
     """polyplug runtime for loading and managing plugins.
 
-    Holds HostInterface pointer and calls methods through struct fields.
+    Holds HostApi pointer and calls methods through struct fields.
     """
 
     _on_reload_cb: Optional[Callable[[ReloadPhase], None]] = None
@@ -198,7 +198,7 @@ class Runtime:
         self._backend: Backend = _create_backend(lib_path)
         self.ctypes = ctypes
 
-        # Create HostInterface (options or default)
+        # Create HostApi (options or default)
         if self._on_reload_cb is not None or self._config is not None:
             host_ptr: int = self._create_runtime_with_options()
         else:
@@ -207,11 +207,11 @@ class Runtime:
         if host_ptr == 0:
             raise RuntimeError("polyplug_runtime_create returned null")
 
-        # Store HostInterface pointer and load struct
+        # Store HostApi pointer and load struct
         self._host: int = host_ptr
-        self._host_struct: HostInterface = self._backend.load_host_interface(host_ptr)
+        self._host_struct: HostApi = self._backend.load_host_interface(host_ptr)
 
-        # The HostInterface struct fields are already fully-typed C function
+        # The HostApi struct fields are already fully-typed C function
         # pointers (CFUNCTYPE with the canonical ABI signatures from abi.py:
         # functions returning AbiError do so BY VALUE as a 24-byte struct).
         # Cache them directly — re-wrapping in a hand-rolled CFUNCTYPE would
@@ -309,7 +309,7 @@ class Runtime:
         return self._host
 
     def _get_error(self) -> str:
-        """Get last error message from HostInterface."""
+        """Get last error message from HostApi."""
         host: int = self._ensure_host()
         error_len: int = self._get_error_len_fn(host)
         if error_len == 0:
@@ -390,8 +390,8 @@ class Runtime:
         return self._resolve_fn(host, handle)
 
     def release_plugin(self, resolve_handle: int) -> None:
-        """Release a resolve handle (no-op in HostInterface model, managed by registry)."""
-        # In HostInterface model, resolve handles are borrowed references
+        """Release a resolve handle (no-op in HostApi model, managed by registry)."""
+        # In HostApi model, resolve handles are borrowed references
         # No explicit release needed - the registry manages lifetimes
         pass
 
@@ -456,7 +456,7 @@ class Runtime:
             Runtime._host_contract_interfaces: dict[int, HostContractInterface] = {}
         Runtime._host_contract_interfaces[contract_id] = interface
 
-        # Register via HostInterface
+        # Register via HostApi
         interface_ptr = ctypes.addressof(interface)
         err: AbiError = self._register_host_contract_fn(host, interface_ptr)
         if err.code == AbiErrorCode.DuplicateProvider:
@@ -464,7 +464,7 @@ class Runtime:
         self._check_error(err.code, "register_host_contract")
 
     def register_loader(self, runtime_name: str, loader_ptr: int) -> None:
-        """Register a language loader with the runtime via HostInterface.
+        """Register a language loader with the runtime via HostApi.
 
         Args:
             runtime_name: Runtime name the loader handles (e.g. "native", "python").

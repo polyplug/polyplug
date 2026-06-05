@@ -2,7 +2,7 @@
 
 Three goals, in order of dependency. Each is an independently executable
 orchestrated session. The ABI freezes at v1.0 and the project is still pre-1.0,
-so these goals may touch `HostInterface` — but only with explicit owner approval,
+so these goals may touch `HostApi` — but only with explicit owner approval,
 never unilaterally (see CLAUDE.md Rule 7).
 
 ---
@@ -32,18 +32,18 @@ generation and manifest emission.
 ## Goal 2 — Extension System ✅ Done
 
 The extension system has shipped. `get_extension(extension_id: u32) → *const ()` is the
-17th function pointer on `HostInterface` (offset 136; struct is 144 bytes). The host
+17th function pointer on `HostApi` (offset 136; struct is 144 bytes). The host
 registers extension pointers by ID (no versioning, no contract machinery); plugins call
 `host->get_extension(id)` and cast the result to the expected struct if non-null. It is
 designed for optional host capabilities: tracing, debug hooks, custom metrics, etc.
 
 Delivered:
 
-- `polyplug_abi`: `get_extension` fn pointer on `HostInterface`.
+- `polyplug_abi`: `get_extension` fn pointer on `HostApi`.
 - `polyplug_utils`: `fnv1a_32(name: &[u8]) → u32` alongside `fnv1a_64`.
 - `polyplug` crate: `Runtime.extensions` map, `Runtime::register_extension`, and
   `host_get_extension` wired to the `get_extension` field.
-- All 6 SDK `HostInterface` ABI definitions and the 6 generators carry the field.
+- All 6 SDK `HostApi` ABI definitions and the 6 generators carry the field.
 - `sdk_validator` checks for the field.
 
 Generic mechanism only — no built-in extensions. Lifetime contract: extension pointers are

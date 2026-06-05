@@ -2,8 +2,8 @@
  * @file polyplug.js
  * @description Host library for polyplug JavaScript/TypeScript hosts.
  *
- * Updated for HostInterface-based API (18-04 refactor).
- * All operations are accessed through HostInterface struct fields,
+ * Updated for HostApi-based API (18-04 refactor).
+ * All operations are accessed through HostApi struct fields,
  * not via separate FFI functions.
  * Offset constants imported from auto-generated abi.ts (per D-26).
  *
@@ -22,23 +22,23 @@ import { ReloadPhase } from "./reload_phase.js";
 
 // Import offset constants from the auto-generated abi.ts
 import {
-  HOST_INTERFACE_RUNTIME_OFFSET,
-  HOST_INTERFACE_REGISTER_CONTRACT_OFFSET,
-  HOST_INTERFACE_ALLOC_OFFSET,
-  HOST_INTERFACE_FREE_OFFSET,
-  HOST_INTERFACE_FIND_GUEST_CONTRACT_OFFSET,
-  HOST_INTERFACE_FIND_ALL_GUEST_CONTRACTS_OFFSET,
-  HOST_INTERFACE_RESOLVE_GUEST_CONTRACT_OFFSET,
-  HOST_INTERFACE_GET_HOST_CONTRACT_OFFSET,
-  HOST_INTERFACE_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET,
-  HOST_INTERFACE_LIST_BUNDLES_OFFSET,
-  HOST_INTERFACE_GET_DEPENDENCIES_OFFSET,
-  HOST_INTERFACE_LOAD_BUNDLE_OFFSET,
-  HOST_INTERFACE_RELOAD_BUNDLE_OFFSET,
-  HOST_INTERFACE_REGISTER_HOST_CONTRACT_OFFSET,
-  HOST_INTERFACE_REGISTER_LOADER_OFFSET,
-  HOST_INTERFACE_GET_LAST_ERROR_OFFSET,
-  HOST_INTERFACE_GET_ERROR_LEN_OFFSET,
+  HOST_API_RUNTIME_OFFSET,
+  HOST_API_REGISTER_GUEST_CONTRACT_OFFSET,
+  HOST_API_ALLOC_OFFSET,
+  HOST_API_FREE_OFFSET,
+  HOST_API_FIND_GUEST_CONTRACT_OFFSET,
+  HOST_API_FIND_ALL_GUEST_CONTRACTS_OFFSET,
+  HOST_API_RESOLVE_GUEST_CONTRACT_OFFSET,
+  HOST_API_GET_HOST_CONTRACT_OFFSET,
+  HOST_API_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET,
+  HOST_API_LIST_BUNDLES_OFFSET,
+  HOST_API_GET_DEPENDENCIES_OFFSET,
+  HOST_API_LOAD_BUNDLE_OFFSET,
+  HOST_API_RELOAD_BUNDLE_OFFSET,
+  HOST_API_REGISTER_HOST_CONTRACT_OFFSET,
+  HOST_API_REGISTER_LOADER_OFFSET,
+  HOST_API_GET_LAST_ERROR_OFFSET,
+  HOST_API_GET_ERROR_LEN_OFFSET,
   RUNTIME_CONFIG_COMPATIBILITY_OFFSET,
   RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET,
   RUNTIME_CONFIG_ON_RELOAD_OFFSET,
@@ -94,31 +94,31 @@ const FNV_PRIME = 0x00000100000001B3n;
 const MASK_64 = 0xFFFFFFFFFFFFFFFFn;
 
 // ─── FFI Symbols: Only create and destroy ───────────────────────────────────────
-// All operations are accessed through HostInterface struct fields.
+// All operations are accessed through HostApi struct fields.
 const SYMBOLS = {
   polyplug_runtime_create: { parameters: ["pointer"], result: "pointer" },
   polyplug_runtime_destroy: { parameters: ["pointer"], result: "void" },
 };
 
-// HostInterface struct offsets imported from auto-generated abi.ts (144 bytes, 18 pointer fields)
-const HOST_INTERFACE_OFFSETS = {
-  runtime: HOST_INTERFACE_RUNTIME_OFFSET,
-  register_contract: HOST_INTERFACE_REGISTER_CONTRACT_OFFSET,
-  alloc: HOST_INTERFACE_ALLOC_OFFSET,
-  free: HOST_INTERFACE_FREE_OFFSET,
-  find_guest_contract: HOST_INTERFACE_FIND_GUEST_CONTRACT_OFFSET,
-  find_all_guest_contracts: HOST_INTERFACE_FIND_ALL_GUEST_CONTRACTS_OFFSET,
-  resolve_guest_contract: HOST_INTERFACE_RESOLVE_GUEST_CONTRACT_OFFSET,
-  get_host_contract: HOST_INTERFACE_GET_HOST_CONTRACT_OFFSET,
-  resolve_host_contract_interface: HOST_INTERFACE_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET,
-  list_bundles: HOST_INTERFACE_LIST_BUNDLES_OFFSET,
-  get_dependencies: HOST_INTERFACE_GET_DEPENDENCIES_OFFSET,
-  load_bundle: HOST_INTERFACE_LOAD_BUNDLE_OFFSET,
-  reload_bundle: HOST_INTERFACE_RELOAD_BUNDLE_OFFSET,
-  register_host_contract: HOST_INTERFACE_REGISTER_HOST_CONTRACT_OFFSET,
-  register_loader: HOST_INTERFACE_REGISTER_LOADER_OFFSET,
-  get_last_error: HOST_INTERFACE_GET_LAST_ERROR_OFFSET,
-  get_error_len: HOST_INTERFACE_GET_ERROR_LEN_OFFSET,
+// HostApi struct offsets imported from auto-generated abi.ts (144 bytes, 18 pointer fields)
+const HOST_API_OFFSETS = {
+  runtime: HOST_API_RUNTIME_OFFSET,
+  register_guest_contract: HOST_API_REGISTER_GUEST_CONTRACT_OFFSET,
+  alloc: HOST_API_ALLOC_OFFSET,
+  free: HOST_API_FREE_OFFSET,
+  find_guest_contract: HOST_API_FIND_GUEST_CONTRACT_OFFSET,
+  find_all_guest_contracts: HOST_API_FIND_ALL_GUEST_CONTRACTS_OFFSET,
+  resolve_guest_contract: HOST_API_RESOLVE_GUEST_CONTRACT_OFFSET,
+  get_host_contract: HOST_API_GET_HOST_CONTRACT_OFFSET,
+  resolve_host_contract_interface: HOST_API_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET,
+  list_bundles: HOST_API_LIST_BUNDLES_OFFSET,
+  get_dependencies: HOST_API_GET_DEPENDENCIES_OFFSET,
+  load_bundle: HOST_API_LOAD_BUNDLE_OFFSET,
+  reload_bundle: HOST_API_RELOAD_BUNDLE_OFFSET,
+  register_host_contract: HOST_API_REGISTER_HOST_CONTRACT_OFFSET,
+  register_loader: HOST_API_REGISTER_LOADER_OFFSET,
+  get_last_error: HOST_API_GET_LAST_ERROR_OFFSET,
+  get_error_len: HOST_API_GET_ERROR_LEN_OFFSET,
 };
 
 // Module-level caches for hot path performance
@@ -221,10 +221,10 @@ export function setConfig(config) {
 }
 
 /**
- * Read a function pointer from HostInterface at given offset.
+ * Read a function pointer from HostApi at given offset.
  * The raw 64-bit value is wrapped into a Deno pointer object so it can be
  * passed to Deno.UnsafeFnPointer (which rejects bare BigInts).
- * @param {Deno.PointerValue} hostPtr - HostInterface pointer
+ * @param {Deno.PointerValue} hostPtr - HostApi pointer
  * @param {number} offset - Byte offset in struct
  * @returns {Deno.PointerValue} Function pointer
  */
@@ -234,8 +234,8 @@ function readHostField(hostPtr, offset) {
 }
 
 /**
- * Call a HostInterface method with self-passing pattern.
- * @param {Deno.PointerValue} hostPtr - HostInterface pointer
+ * Call a HostApi method with self-passing pattern.
+ * @param {Deno.PointerValue} hostPtr - HostApi pointer
  * @param {number} fieldOffset - Offset of the function pointer field
  * @param {Array} paramTypes - FFI parameter types
  * @param {string} resultType - FFI result type
@@ -245,7 +245,7 @@ function readHostField(hostPtr, offset) {
 function callHostMethod(hostPtr, fieldOffset, paramTypes, resultType, args) {
   const funcPtr = readHostField(hostPtr, fieldOffset);
   if (funcPtr === null) {
-    throw new Error(`HostInterface field at offset ${fieldOffset} is null`);
+    throw new Error(`HostApi field at offset ${fieldOffset} is null`);
   }
 
   // Create function definition for this call
@@ -284,7 +284,7 @@ function callHostMethod(hostPtr, fieldOffset, paramTypes, resultType, args) {
  * null instance handle.
  */
 export class GuestContractInterfaceView {
-  #host;          // HostInterface pointer
+  #host;          // HostApi pointer
   #interfacePtr;  // raw GuestContractInterface* (Deno.PointerValue)
   #dispatchType;
   #functionCount;
@@ -296,7 +296,7 @@ export class GuestContractInterfaceView {
   #fnPtrCache;          // Map<slot, Deno.UnsafeFnPointer> for native dispatch
 
   /**
-   * @param {Deno.PointerValue} host - HostInterface pointer
+   * @param {Deno.PointerValue} host - HostApi pointer
    * @param {Deno.PointerValue} interfacePtr - Raw GuestContractInterface pointer
    */
   constructor(host, interfacePtr) {
@@ -367,7 +367,7 @@ export class GuestContractInterfaceView {
       // raw null pointer survived, fall back to a zeroed (null-data) instance.
       return new Uint8Array(GUEST_CONTRACT_INSTANCE_SIZE);
     }
-    // create_instance(host: *const HostInterface, args: *const ()) -> GuestContractInstance
+    // create_instance(host: *const HostApi, args: *const ()) -> GuestContractInstance
     const fn = new Deno.UnsafeFnPointer(this.#createInstancePtr, {
       parameters: ["pointer", "pointer"],
       result: { struct: ["pointer", "u64"] },
@@ -387,7 +387,7 @@ export class GuestContractInterfaceView {
     if (this.#destroyInstancePtr === null) {
       return;
     }
-    // destroy_instance(host: *const HostInterface, instance: GuestContractInstance)
+    // destroy_instance(host: *const HostApi, instance: GuestContractInstance)
     const fn = new Deno.UnsafeFnPointer(this.#destroyInstancePtr, {
       parameters: ["pointer", { struct: ["pointer", "u64"] }],
       result: "void",
@@ -465,16 +465,16 @@ export class GuestContractInterfaceView {
 }
 
 /**
- * Runtime class using HostInterface-based API.
- * All operations call through HostInterface struct fields.
+ * Runtime class using HostApi-based API.
+ * All operations call through HostApi struct fields.
  */
 export class Runtime {
   #lib;
-  #host;  // HostInterface pointer
+  #host;  // HostApi pointer
 
   /**
    * @param {Deno.DynamicLibrary} lib - Dynamic library instance
-   * @param {Deno.PointerValue} host - HostInterface pointer
+   * @param {Deno.PointerValue} host - HostApi pointer
    */
   constructor(lib, host) {
     this.#lib = lib;
@@ -486,7 +486,7 @@ export class Runtime {
   }
 
   /**
-   * Get HostInterface pointer.
+   * Get HostApi pointer.
    * @returns {Deno.PointerValue}
    */
   host() {
@@ -503,14 +503,14 @@ export class Runtime {
 
   /**
    * Get last error message.
-   * Calls through HostInterface.get_last_error and get_error_len fields.
+   * Calls through HostApi.get_last_error and get_error_len fields.
    * @returns {string}
    */
   lastError() {
     // Get error length via get_error_len
     const len = Number(callHostMethod(
       this.#host,
-      HOST_INTERFACE_OFFSETS.get_error_len,
+      HOST_API_OFFSETS.get_error_len,
       ["pointer"],
       "usize",
       [this.#host]
@@ -523,7 +523,7 @@ export class Runtime {
     const bufPtr = Deno.UnsafePointer.of(buf);
     callHostMethod(
       this.#host,
-      HOST_INTERFACE_OFFSETS.get_last_error,
+      HOST_API_OFFSETS.get_last_error,
       ["pointer", "pointer", "usize"],
       "usize",
       [this.#host, bufPtr, BigInt(len)]
@@ -534,16 +534,16 @@ export class Runtime {
 
   /**
    * Load a plugin bundle.
-   * Calls through HostInterface.load_bundle field.
+   * Calls through HostApi.load_bundle field.
    * @param {string} path - Path to bundle directory
    */
   loadBundle(path) {
     const encoded = _encoder.encode(path);
     const ptr = Deno.UnsafePointer.of(encoded);
-    // HostInterface.load_bundle returns AbiError (24-byte struct), not u32.
+    // HostApi.load_bundle returns AbiError (24-byte struct), not u32.
     const result = callHostMethod(
       this.#host,
-      HOST_INTERFACE_OFFSETS.load_bundle,
+      HOST_API_OFFSETS.load_bundle,
       ["pointer", "pointer", "usize"],
       { struct: ["u32", "u32", "pointer", "usize"] },
       [this.#host, ptr, BigInt(encoded.length)]
@@ -556,16 +556,16 @@ export class Runtime {
 
   /**
    * Reload a plugin bundle (hot-reload).
-   * Calls through HostInterface.reload_bundle field.
+   * Calls through HostApi.reload_bundle field.
    * @param {string} path - Path to bundle directory
    */
   reloadBundle(path) {
     const encoded = _encoder.encode(path);
     const ptr = Deno.UnsafePointer.of(encoded);
-    // HostInterface.reload_bundle returns AbiError (24-byte struct), not u32.
+    // HostApi.reload_bundle returns AbiError (24-byte struct), not u32.
     const result = callHostMethod(
       this.#host,
-      HOST_INTERFACE_OFFSETS.reload_bundle,
+      HOST_API_OFFSETS.reload_bundle,
       ["pointer", "pointer", "usize"],
       { struct: ["u32", "u32", "pointer", "usize"] },
       [this.#host, ptr, BigInt(encoded.length)]
@@ -578,7 +578,7 @@ export class Runtime {
 
   /**
    * Find guest contract by contract ID.
-   * Calls through HostInterface.find_guest_contract field.
+   * Calls through HostApi.find_guest_contract field.
    *
    * Returns a GuestContractHandle, which is `#[repr(C)] { index: u32 }` and
    * crosses the C ABI as a `u32`. The result is therefore a JS number;
@@ -590,7 +590,7 @@ export class Runtime {
   findGuestContract(contractId, minVersion = 0) {
     return callHostMethod(
       this.#host,
-      HOST_INTERFACE_OFFSETS.find_guest_contract,
+      HOST_API_OFFSETS.find_guest_contract,
       ["pointer", "u64", "u32"],
       "u32",
       [this.#host, contractId, minVersion]
@@ -599,7 +599,7 @@ export class Runtime {
 
   /**
    * Find all guest contracts by contract ID.
-   * Calls through HostInterface.find_all_guest_contracts field.
+   * Calls through HostApi.find_all_guest_contracts field.
    * @param {bigint} contractId - Contract identifier
    * @param {number} [minVersion=0] - Minimum version
    * @param {number} [cap=64] - Buffer capacity
@@ -612,7 +612,7 @@ export class Runtime {
     // AbiError-by-value pattern in loadBundle above).
     const result = callHostMethod(
       this.#host,
-      HOST_INTERFACE_OFFSETS.find_all_guest_contracts,
+      HOST_API_OFFSETS.find_all_guest_contracts,
       ["pointer", "u64", "u32"],
       { struct: ["pointer", "usize"] },
       [this.#host, contractId, minVersion]
@@ -636,14 +636,14 @@ export class Runtime {
       handles.push(arrView.getUint32(i * 4));
     }
 
-    // Free the array via HostInterface.free.
+    // Free the array via HostApi.free.
     // GuestContractHandle is `#[repr(C)] { index: u32 }` (4 bytes, align 4),
     // so the allocation size is `arrLen * 4` and alignment is 4 — matching the
     // 4-byte stride used above when reading the handles.
     if (arrLen > 0) {
       callHostMethod(
         this.#host,
-        HOST_INTERFACE_OFFSETS.free,
+        HOST_API_OFFSETS.free,
         ["pointer", "pointer", "usize", "usize"],
         "void",
         [this.#host, arrPtr, BigInt(arrLen * 4), BigInt(4)]
@@ -655,7 +655,7 @@ export class Runtime {
 
   /**
    * Resolve a guest contract handle to a raw interface pointer.
-   * Calls through HostInterface.resolve_guest_contract field.
+   * Calls through HostApi.resolve_guest_contract field.
    *
    * The handle is a GuestContractHandle (`#[repr(C)] { index: u32 }`) passed by
    * value, which crosses the C ABI as a `u32`.
@@ -668,7 +668,7 @@ export class Runtime {
     }
     return callHostMethod(
       this.#host,
-      HOST_INTERFACE_OFFSETS.resolve_guest_contract,
+      HOST_API_OFFSETS.resolve_guest_contract,
       ["pointer", "u32"],
       "pointer",
       [this.#host, handle]
@@ -694,7 +694,7 @@ export class Runtime {
   }
 
   /**
-   * Allocate `size` bytes via the host allocator (HostInterface.alloc).
+   * Allocate `size` bytes via the host allocator (HostApi.alloc).
    *
    * All memory crossing the plugin boundary must use the host allocator. The
    * returned pointer must be released via {@link Runtime#free} with the same
@@ -706,7 +706,7 @@ export class Runtime {
   alloc(size, align = 1) {
     return callHostMethod(
       this.#host,
-      HOST_INTERFACE_OFFSETS.alloc,
+      HOST_API_OFFSETS.alloc,
       ["pointer", "usize", "usize"],
       "pointer",
       [this.#host, BigInt(size), BigInt(align)]
@@ -725,7 +725,7 @@ export class Runtime {
     }
     callHostMethod(
       this.#host,
-      HOST_INTERFACE_OFFSETS.free,
+      HOST_API_OFFSETS.free,
       ["pointer", "pointer", "usize", "usize"],
       "void",
       [this.#host, ptr, BigInt(size), BigInt(align)]
@@ -734,14 +734,14 @@ export class Runtime {
 
   /**
    * Register a host contract interface with the runtime.
-   * Calls through HostInterface.register_host_contract field.
+   * Calls through HostApi.register_host_contract field.
    * @param {Deno.PointerValue} hostInterface - Pointer to HostContractInterface struct
    */
   registerHostContract(hostInterface) {
-    // HostInterface.register_host_contract returns AbiError (24-byte struct), not u32.
+    // HostApi.register_host_contract returns AbiError (24-byte struct), not u32.
     const result = callHostMethod(
       this.#host,
-      HOST_INTERFACE_OFFSETS.register_host_contract,
+      HOST_API_OFFSETS.register_host_contract,
       ["pointer", "pointer"],
       { struct: ["u32", "u32", "pointer", "usize"] },
       [this.#host, hostInterface]
@@ -754,7 +754,7 @@ export class Runtime {
 
   /**
    * Register a language loader with the runtime.
-   * Calls through HostInterface.register_loader field. The StringView runtime
+   * Calls through HostApi.register_loader field. The StringView runtime
    * name is passed by value (ptr + len); the AbiError return is read as a
    * struct by value (code is the first u32).
    * @param {string} runtimeName - Runtime name the loader handles (e.g. "native", "lua").
@@ -772,7 +772,7 @@ export class Runtime {
 
     const result = callHostMethod(
       this.#host,
-      HOST_INTERFACE_OFFSETS.register_loader,
+      HOST_API_OFFSETS.register_loader,
       ["pointer", { struct: ["pointer", "usize"] }, "pointer"],
       { struct: ["u32", "u32", "pointer", "usize"] },
       [this.#host, nameView, loaderPtr]
@@ -797,7 +797,7 @@ export function openPolyplug(soPath) {
 
 /**
  * Create new runtime instance.
- * Uses HostInterface-based API: polyplug_runtime_create returns HostInterface*.
+ * Uses HostApi-based API: polyplug_runtime_create returns HostApi*.
  * RuntimeConfig is 24 bytes (compatibility, hot_reload_enabled, on_reload, on_reload_user_data).
  * @param {Deno.DynamicLibrary} lib - Dynamic library
  * @returns {Runtime}
@@ -859,7 +859,7 @@ export function runtimeNew(lib) {
   }
 
   if (host === null) {
-    throw new Error("polyplug_runtime_create failed: unable to create runtime (returned null HostInterface)");
+    throw new Error("polyplug_runtime_create failed: unable to create runtime (returned null HostApi)");
   }
   return new Runtime(lib, host);
 }

@@ -90,7 +90,7 @@ pub struct ImageDecodeContract {
 impl ImageDecodeContract {
     /// Factory method - creates caller wrapper or None if plugin not found
     pub fn create(runtime: &'static Runtime, min_version: u32) -> Option<Self> {
-        let handle: GuestContractHandle = runtime.find_by_contract(IMAGE_DECODE_CONTRACT_ID, min_version).ok()?;
+        let handle: GuestContractHandle = runtime.find_guest_contract(IMAGE_DECODE_CONTRACT_ID, min_version).ok()?;
         let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
         Some(Self { guard })  // New wrapper, but points to SAME singleton vtable
     }
@@ -223,7 +223,7 @@ class ImageDecodeContractCaller:
     
     @classmethod
     def create(cls, rt: Runtime, min_version: int = 0) -> Optional[Self]:
-        handle: int = rt.find_by_contract(IMAGE_DECODE_CONTRACT_ID, min_version)
+        handle: int = rt.find_guest_contract(IMAGE_DECODE_CONTRACT_ID, min_version)
         if handle == NULL_HANDLE:
             return None
         guard: PluginGuard = rt.resolve_plugin(handle)
@@ -284,7 +284,7 @@ local ImageDecodeContract_mt = {
 -- Factory function for ImageDecodeContract wrapper
 function M.ImageDecodeContract_create(runtime, min_version)
     if min_version == nil then min_version = 0 end
-    local handle = runtime:find_by_contract(IMAGE_DECODE_CONTRACT_ID, min_version)
+    local handle = runtime:find_guest_contract(IMAGE_DECODE_CONTRACT_ID, min_version)
     if handle == nil then
         return nil
     end

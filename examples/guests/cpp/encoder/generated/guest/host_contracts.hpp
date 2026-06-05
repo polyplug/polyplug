@@ -15,8 +15,8 @@ using namespace polyplug_generated;
 /// Plugins use this class to call host-provided functionality.
 class HostLoggerContract {
 public:
-    /// Factory method - creates caller from HostInterface or nullopt if not found.
-    static std::optional<HostLoggerContract> from_host(const HostInterface* host, uint32_t min_version = 0) noexcept {
+    /// Factory method - creates caller from HostApi or nullopt if not found.
+    static std::optional<HostLoggerContract> from_host(const HostApi* host, uint32_t min_version = 0) noexcept {
         if (host == nullptr) {
             return std::nullopt;
         }

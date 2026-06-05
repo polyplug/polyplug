@@ -24,7 +24,7 @@ inline void register_python(Runtime& rt, std::string_view min_version = "3.11") 
     if (loader == nullptr) {
         throw std::runtime_error("polyplug: python loader create failed");
     }
-    const HostInterface* host = rt.host();
+    const HostApi* host = rt.host();
     static const char runtime_name[] = "python";
     StringView name{reinterpret_cast<const uint8_t*>(runtime_name), sizeof(runtime_name) - 1};
     AbiError err = host->register_loader(host, name, loader);

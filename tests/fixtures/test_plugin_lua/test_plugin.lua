@@ -35,7 +35,7 @@ local function impl_reset(_args_ptr, _out_ptr)
     -- no-op
 end
 
--- polyplug_init is called by LuaLoader with the HostInterface pointer as i64.
+-- polyplug_init is called by LuaLoader with the HostApi pointer as i64.
 -- It does NOT call register_plugin directly — the LuaLoader (Rust) does that
 -- after reading _G._polyplug_handlers and creating Rust-side trampolines.
 function polyplug_init(registrar_ptr, ctx_ptr)

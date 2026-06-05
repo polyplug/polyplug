@@ -20,7 +20,7 @@ use polyplug_abi::Buffer;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
@@ -61,7 +61,7 @@ thread_local! {
 /// # Safety
 /// `descriptor` and `interface` must be valid pointers for the call duration.
 unsafe extern "C" fn bench_register_callback(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -92,7 +92,7 @@ unsafe extern "C" fn bench_register_callback(
             let registry = borrowed.as_ref().expect("registry not initialized");
             // SAFETY: `interface` is a 'static pointer captured from a loaded plugin library
             // that outlives the registry, and `desc` is valid for the duration of this call
-            // per the register_contract ABI contract, so register_guest_contract's
+            // per the register_guest_contract ABI contract, so register_guest_contract's
             // preconditions are met.
             unsafe {
                 registry.register_guest_contract(
@@ -118,14 +118,14 @@ unsafe extern "C" fn bench_register_callback(
     }
 }
 
-// ─── Stub HostInterface functions for cross-plugin dispatch ──────────────────────
+// ─── Stub HostApi functions for cross-plugin dispatch ──────────────────────
 
 /// Finds a plugin by contract_id in the thread-local BENCH_REGISTRY.
 ///
 /// # Safety
 /// Must only be called from a bench thread where BENCH_REGISTRY is initialised.
 unsafe extern "C" fn bench_find_guest_contract(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     contract_id: u64,
     min_version: u32,
 ) -> GuestContractHandle {
@@ -145,7 +145,7 @@ unsafe extern "C" fn bench_find_guest_contract(
 /// # Safety
 /// Always safe to call; returns empty array.
 unsafe extern "C" fn bench_find_all_guest_contracts(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> Array<GuestContractHandle> {
@@ -157,7 +157,7 @@ unsafe extern "C" fn bench_find_all_guest_contracts(
 /// # Safety
 /// The returned pointer is valid and 'static — the library is kept alive via mem::forget.
 unsafe extern "C" fn bench_resolve_guest_contract(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
@@ -171,7 +171,7 @@ unsafe extern "C" fn bench_resolve_guest_contract(
 
 /// Returns a null host contract instance.
 unsafe extern "C" fn bench_get_host_contract(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -180,7 +180,7 @@ unsafe extern "C" fn bench_get_host_contract(
 
 /// Returns null pointer for host contract interface.
 unsafe extern "C" fn bench_resolve_host_contract_interface(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> *const polyplug_abi::HostContractInterface {
@@ -188,20 +188,20 @@ unsafe extern "C" fn bench_resolve_host_contract_interface(
 }
 
 /// Returns empty array of bundle IDs.
-unsafe extern "C" fn bench_list_bundles(_this: *const HostInterface) -> Array<BundleId> {
+unsafe extern "C" fn bench_list_bundles(_this: *const HostApi) -> Array<BundleId> {
     Array::empty()
 }
 
 /// Returns empty array of dependencies.
 unsafe extern "C" fn bench_get_dependencies(
-    _this: *const HostInterface,
+    _this: *const HostApi,
 ) -> Array<polyplug_abi::DependencyInfo> {
     Array::empty()
 }
 
 /// load_bundle stub — returns error (not used in benches).
 unsafe extern "C" fn bench_load_bundle(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
@@ -213,7 +213,7 @@ unsafe extern "C" fn bench_load_bundle(
 
 /// reload_bundle stub — returns error (not used in benches).
 unsafe extern "C" fn bench_reload_bundle(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
@@ -225,7 +225,7 @@ unsafe extern "C" fn bench_reload_bundle(
 
 /// register_host_contract stub — returns error (not used in benches).
 unsafe extern "C" fn bench_register_host_contract(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
     AbiError {
@@ -236,7 +236,7 @@ unsafe extern "C" fn bench_register_host_contract(
 
 /// register_loader stub — returns error (not used in benches).
 unsafe extern "C" fn bench_register_loader(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _runtime_name: StringView,
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
@@ -248,7 +248,7 @@ unsafe extern "C" fn bench_register_loader(
 
 /// get_last_error stub — returns 0 (not used in benches).
 unsafe extern "C" fn bench_get_last_error(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _buf: *mut u8,
     _buf_len: usize,
 ) -> usize {
@@ -256,15 +256,12 @@ unsafe extern "C" fn bench_get_last_error(
 }
 
 /// get_error_len stub — returns 0 (not used in benches).
-unsafe extern "C" fn bench_get_error_len(_this: *const HostInterface) -> usize {
+unsafe extern "C" fn bench_get_error_len(_this: *const HostApi) -> usize {
     0
 }
 
 /// get_extension stub — returns null (not used in benches).
-unsafe extern "C" fn bench_get_extension(
-    _this: *const HostInterface,
-    _extension_id: u32,
-) -> *const () {
+unsafe extern "C" fn bench_get_extension(_this: *const HostApi, _extension_id: u32) -> *const () {
     core::ptr::null()
 }
 
@@ -272,11 +269,7 @@ unsafe extern "C" fn bench_get_extension(
 ///
 /// # Safety
 /// Delegates to polyplug_host_alloc which is safe for any size/align.
-unsafe extern "C" fn bench_alloc(
-    _this: *const HostInterface,
-    size: usize,
-    align: usize,
-) -> *mut u8 {
+unsafe extern "C" fn bench_alloc(_this: *const HostApi, size: usize, align: usize) -> *mut u8 {
     polyplug_host_alloc(size, align)
 }
 
@@ -284,12 +277,7 @@ unsafe extern "C" fn bench_alloc(
 ///
 /// # Safety
 /// Delegates to polyplug_host_free which requires ptr was allocated by polyplug_host_alloc.
-unsafe extern "C" fn bench_free(
-    _this: *const HostInterface,
-    ptr: *mut u8,
-    size: usize,
-    align: usize,
-) {
+unsafe extern "C" fn bench_free(_this: *const HostApi, ptr: *mut u8, size: usize, align: usize) {
     // SAFETY: ptr was allocated by polyplug_host_alloc (caller's responsibility).
     unsafe { polyplug_host_free(ptr, size, align) };
 }
@@ -304,22 +292,19 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
         unsafe { libloading::Library::new(path).expect("failed to load plugin") };
 
     // SAFETY: polyplug_init matches the expected 2-arg ABI:
-    // unsafe extern "C" fn(host: *const HostInterface, ctx: *const BundleInitContext) -> AbiError
+    // unsafe extern "C" fn(host: *const HostApi, ctx: *const BundleInitContext) -> AbiError
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(
-            *const HostInterface,
-            *const polyplug_abi::BundleInitContext,
-        ) -> AbiError,
+        unsafe extern "C" fn(*const HostApi, *const polyplug_abi::BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init not found")
     };
 
-    let host_interface: HostInterface = HostInterface {
+    let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
-        register_contract: bench_register_callback,
+        register_guest_contract: bench_register_callback,
         alloc: bench_alloc,
         free: bench_free,
         find_guest_contract: bench_find_guest_contract,
@@ -346,7 +331,7 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
     // SAFETY: init_fn is a valid function; host_interface and plugin_ctx live for the call duration.
     let result: AbiError = unsafe {
         init_fn(
-            &host_interface as *const HostInterface,
+            &host_interface as *const HostApi,
             &plugin_ctx as *const polyplug_abi::BundleInitContext,
         )
     };
@@ -522,7 +507,7 @@ fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
 // ─── Benchmark 4 — cross-plugin dispatch ─────────────────────────────────────
 
 /// Measures the full cross-plugin dispatch path:
-///   find_by_contract (Registry lookup) + resolve_contract (interface pointer) + direct dispatch.
+///   find_guest_contract (Registry lookup) + resolve_guest_contract (interface pointer) + direct dispatch.
 /// Uses memory_plugin fn 2 (echo_string_view) as the target — no allocation.
 fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     // Reset registry for a clean slate.
@@ -530,7 +515,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
         *cell.borrow_mut() = Some(RuntimeStore::new());
     });
 
-    // Load memory_plugin into BENCH_REGISTRY so find_by_contract can locate it.
+    // Load memory_plugin into BENCH_REGISTRY so find_guest_contract can locate it.
     let _memory_lib: libloading::Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
 
     // Capture the memory.test contract_id (set by bench_register_callback above).
@@ -540,10 +525,10 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
         "memory_plugin contract_id was not captured"
     );
 
-    // Build a HostInterface backed by the thread-local BENCH_REGISTRY.
-    let host_interface: HostInterface = HostInterface {
+    // Build a HostApi backed by the thread-local BENCH_REGISTRY.
+    let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
-        register_contract: bench_register_callback,
+        register_guest_contract: bench_register_callback,
         alloc: bench_alloc,
         free: bench_free,
         find_guest_contract: bench_find_guest_contract,
@@ -578,7 +563,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
             // SAFETY: bench_find_guest_contract is a valid extern C fn backed by BENCH_REGISTRY.
             let handle: GuestContractHandle = unsafe {
                 black_box((host_interface.find_guest_contract)(
-                    &host_interface as *const HostInterface,
+                    &host_interface as *const HostApi,
                     memory_contract_id,
                     0,
                 ))
@@ -587,7 +572,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
             // SAFETY: bench_resolve_guest_contract returns a 'static GuestContractInterface pointer.
             let interface_ptr: *const GuestContractInterface = unsafe {
                 black_box((host_interface.resolve_guest_contract)(
-                    &host_interface as *const HostInterface,
+                    &host_interface as *const HostApi,
                     handle,
                 ))
             };

@@ -27,10 +27,10 @@ use crate::config::HostfxrLocation;
 /// which requires `<F as FnPtr>::Abi == System`. On Linux/macOS `"system"` is identical to `"C"`.
 ///
 /// New ABI signature: (host, ctx) -> u32
-/// - host: HostInterface pointer (self-passing pattern)
+/// - host: HostApi pointer (self-passing pattern)
 /// - ctx: BundleInitContext with bundle_path, bundle_id
 pub(crate) type InitFn = unsafe extern "system" fn(
-    *const polyplug_abi::HostInterface,
+    *const polyplug_abi::HostApi,
     *const polyplug_abi::BundleInitContext,
 ) -> u32;
 

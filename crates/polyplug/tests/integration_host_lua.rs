@@ -1,18 +1,18 @@
 #![allow(clippy::expect_used)]
 
-//! Integration tests for the polyplug C facade (HostInterface-based API).
+//! Integration tests for the polyplug C facade (HostApi-based API).
 //!
-//! These tests call the HostInterface methods directly from Rust (same process),
+//! These tests call the HostApi methods directly from Rust (same process),
 //! exercising the same API surface that Lua and Deno use via FFI.
 //!
 //! Tests requiring native plugin loading are in tests/integration/ffi_native.rs.
 
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 
-fn read_last_error(host: *const HostInterface) -> String {
-    // SAFETY: host is a valid HostInterface pointer.
+fn read_last_error(host: *const HostApi) -> String {
+    // SAFETY: host is a valid HostApi pointer.
     let len: usize = unsafe { ((*host).get_error_len)(host) };
     if len == 0 {
         return String::new();
@@ -26,7 +26,7 @@ fn read_last_error(host: *const HostInterface) -> String {
 #[test]
 fn test_runtime_new_succeeds() {
     // SAFETY: polyplug_runtime_create has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "polyplug_runtime_create returned null");
     // SAFETY: host is non-null, returned by polyplug_runtime_create.
     unsafe { polyplug_runtime_destroy(host) };
@@ -35,7 +35,7 @@ fn test_runtime_new_succeeds() {
 #[test]
 fn test_last_error_after_failed_load() {
     // SAFETY: polyplug_runtime_create has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let bad_path: &[u8] = b"/does/not/exist";
     // SAFETY: host is non-null; bad_path ptr/len are valid for the slice.

@@ -23,7 +23,7 @@ _RUNTIME_NAME: str = "lua"
 
 
 def register_lua_loader(runtime: Runtime) -> None:
-    """Register the Lua loader with the runtime via HostInterface.register_loader."""
+    """Register the Lua loader with the runtime via HostApi.register_loader."""
     lib: ctypes.CDLL = _get_lib()
     cfg = _LuaConfig(0)
     loader_ptr: int = lib.polyplug_lua_loader_create(ctypes.byref(cfg))

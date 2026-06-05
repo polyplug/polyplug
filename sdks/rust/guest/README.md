@@ -87,14 +87,14 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_init(host: *const HostInterface) -> AbiError {
+pub unsafe extern "C" fn polyplug_init(host: *const HostApi) -> AbiError {
     if host.is_null() {
         return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
     }
     // SAFETY: host is non-null and provided by the host per ABI contract.
-    let iface: &HostInterface = unsafe { &*host };
-    // SAFETY: register_contract is a valid function pointer set by the host.
-    unsafe { (iface.register_contract)(host, &MY_DESCRIPTOR, &MY_VTABLE) }
+    let iface: &HostApi = unsafe { &*host };
+    // SAFETY: register_guest_contract is a valid function pointer set by the host.
+    unsafe { (iface.register_guest_contract)(host, &MY_DESCRIPTOR, &MY_VTABLE) }
 }
 ```
 
@@ -164,7 +164,7 @@ pub struct Buffer {
 
 **Ownership:** The holder must free with `host.free(host, ptr, cap, 1)` when done.
 Never place `Buffer` data on the Rust allocator — always allocate through the stored
-`HostInterface` (`host.alloc`, e.g. via `alloc_string`).
+`HostApi` (`host.alloc`, e.g. via `alloc_string`).
 
 ---
 
@@ -205,11 +205,11 @@ pub struct GuestContractInterface {
     pub contract_version: Version,     // { major: u32, minor: u32, patch: u32 }
     pub dispatch_type:    DispatchType, // Native (0) or VirtualMachine (1)
     pub create_instance:  unsafe extern "C" fn(
-        host: *const HostInterface,
+        host: *const HostApi,
         args: *const (),
     ) -> GuestContractInstance,
     pub destroy_instance: unsafe extern "C" fn(
-        host: *const HostInterface,
+        host: *const HostApi,
         instance: GuestContractInstance,
     ),
     pub dispatch:         DispatchMechanisms, // union of NativeDispatch or VmDispatch
@@ -239,72 +239,72 @@ pub struct PluginDescriptor {
 
 ---
 
-### `HostInterface`
+### `HostApi`
 
 Passed by the host to your `polyplug_init`. Use it **only during init** — do not store it.
 
 ```rust
 #[repr(C)]
-pub struct HostInterface {
+pub struct HostApi {
     pub runtime: *mut c_void,
-    pub register_contract: unsafe extern "C" fn(
-        this:        *const HostInterface,
+    pub register_guest_contract: unsafe extern "C" fn(
+        this:        *const HostApi,
         descriptor:  *const PluginDescriptor,
         interface:   *const GuestContractInterface,
     ) -> AbiError,
-    pub alloc: unsafe extern "C" fn(this: *const HostInterface, size: usize, align: usize) -> *mut u8,
-    pub free: unsafe extern "C" fn(this: *const HostInterface, ptr: *mut u8, size: usize, align: usize),
+    pub alloc: unsafe extern "C" fn(this: *const HostApi, size: usize, align: usize) -> *mut u8,
+    pub free: unsafe extern "C" fn(this: *const HostApi, ptr: *mut u8, size: usize, align: usize),
     pub find_guest_contract: unsafe extern "C" fn(
-        this: *const HostInterface,
+        this: *const HostApi,
         contract_id: u64,
         min_version: u32,
     ) -> GuestContractHandle,
     pub find_all_guest_contracts: unsafe extern "C" fn(
-        this: *const HostInterface,
+        this: *const HostApi,
         contract_id: u64,
         min_version: u32,
     ) -> Array<GuestContractHandle>,
     pub resolve_guest_contract: unsafe extern "C" fn(
-        this: *const HostInterface,
+        this: *const HostApi,
         handle: GuestContractHandle,
     ) -> *const GuestContractInterface,
     pub get_host_contract: unsafe extern "C" fn(
-        this: *const HostInterface,
+        this: *const HostApi,
         contract_id: u64,
         min_version: u32,
     ) -> HostContractInstance,
     pub resolve_host_contract_interface: unsafe extern "C" fn(
-        this: *const HostInterface,
+        this: *const HostApi,
         contract_id: u64,
         min_version: u32,
     ) -> *const HostContractInterface,
-    pub list_bundles: unsafe extern "C" fn(this: *const HostInterface) -> Array<BundleId>,
-    pub get_dependencies: unsafe extern "C" fn(this: *const HostInterface) -> Array<DependencyInfo>,
+    pub list_bundles: unsafe extern "C" fn(this: *const HostApi) -> Array<BundleId>,
+    pub get_dependencies: unsafe extern "C" fn(this: *const HostApi) -> Array<DependencyInfo>,
     pub load_bundle: unsafe extern "C" fn(
-        this: *const HostInterface, path: *const u8, path_len: usize,
+        this: *const HostApi, path: *const u8, path_len: usize,
     ) -> AbiError,
     pub reload_bundle: unsafe extern "C" fn(
-        this: *const HostInterface, path: *const u8, path_len: usize,
+        this: *const HostApi, path: *const u8, path_len: usize,
     ) -> AbiError,
     pub register_host_contract: unsafe extern "C" fn(
-        this: *const HostInterface,
+        this: *const HostApi,
         interface: *const HostContractInterface,
     ) -> AbiError,
     pub register_loader: unsafe extern "C" fn(
-        this: *const HostInterface, runtime_name: StringView, loader_ptr: *mut c_void,
+        this: *const HostApi, runtime_name: StringView, loader_ptr: *mut c_void,
     ) -> AbiError,
     pub get_last_error: unsafe extern "C" fn(
-        this: *const HostInterface, buf: *mut u8, buf_len: usize,
+        this: *const HostApi, buf: *mut u8, buf_len: usize,
     ) -> usize,
-    pub get_error_len: unsafe extern "C" fn(this: *const HostInterface) -> usize,
+    pub get_error_len: unsafe extern "C" fn(this: *const HostApi) -> usize,
     pub get_extension: unsafe extern "C" fn(
-        this: *const HostInterface, extension_id: u32,
+        this: *const HostApi, extension_id: u32,
     ) -> *const (),
 }
 ```
 
 All functions use the self-passing pattern — the first parameter is always the
-`HostInterface` pointer itself. Call `(iface.register_contract)(host, &MY_DESCRIPTOR, &MY_VTABLE)` for each contract
+`HostApi` pointer itself. Call `(iface.register_guest_contract)(host, &MY_DESCRIPTOR, &MY_VTABLE)` for each contract
 your plugin implements.
 
 ---
@@ -414,7 +414,7 @@ assert_eq!(contract_id("my.contract", 1), MY_CONTRACT_ID);
 ## Allocator API
 
 All memory that **crosses the plugin/host boundary** must use the host allocator,
-reached through the `alloc` / `free` function-pointer fields of the `HostInterface`
+reached through the `alloc` / `free` function-pointer fields of the `HostApi`
 the host stored during `polyplug_init`. There are no `polyplug_host_alloc` /
 `polyplug_host_free` C exports — allocation always flows through the stored interface.
 Never return heap-allocated data from your Rust allocator — the host cannot free it.
@@ -526,16 +526,16 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_init(host: *const HostInterface) -> AbiError {
+pub unsafe extern "C" fn polyplug_init(host: *const HostApi) -> AbiError {
     if host.is_null() {
         return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
     }
     // SAFETY: host is non-null and provided by the host per ABI contract.
-    let iface: &HostInterface = unsafe { &*host };
-    // SAFETY: register_contract is a valid function pointer. TRANSFORM_DESCRIPTOR and
+    let iface: &HostApi = unsafe { &*host };
+    // SAFETY: register_guest_contract is a valid function pointer. TRANSFORM_DESCRIPTOR and
     // TRANSFORM_VTABLE are 'static.
     unsafe {
-        (iface.register_contract)(host, &TRANSFORM_DESCRIPTOR, &TRANSFORM_VTABLE)
+        (iface.register_guest_contract)(host, &TRANSFORM_DESCRIPTOR, &TRANSFORM_VTABLE)
     }
 }
 ```
@@ -661,7 +661,7 @@ untrusted and may return any 32-bit value. Construct it with
 
 | Rule | Detail |
 |---|---|
-| Cross-boundary allocations | Must use the stored `HostInterface` `alloc` / `free` fields |
+| Cross-boundary allocations | Must use the stored `HostApi` `alloc` / `free` fields |
 | Plugin-side allocations | May use Rust allocator, but must NOT cross the boundary |
 | Returned strings / buffers | Must be allocated via `alloc_string` / `host.alloc` |
 | `StringView` (input) | Borrowed — do NOT free; valid only for the duration of the call |

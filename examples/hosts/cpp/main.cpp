@@ -201,7 +201,7 @@ int main() {
     const std::string input = "name,value,42";
     std::cout << "\nInput: \"" << input << "\"\n\n";
 
-    const HostInterface* host = rt.host();
+    const HostApi* host = rt.host();
 
     GuestContractHandle decoder_h = rt.find_guest_contract(PIPELINE_DECODER_CONTRACT_ID, 0);
     if (polyplug::is_valid(decoder_h)) {

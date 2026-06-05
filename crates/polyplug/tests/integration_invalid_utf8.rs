@@ -1,14 +1,14 @@
 #![allow(clippy::expect_used)]
 
-//! Integration tests: non-UTF-8 bytes passed to HostInterface.load_bundle / reload_bundle
+//! Integration tests: non-UTF-8 bytes passed to HostApi.load_bundle / reload_bundle
 //! must produce an error code and a last_error message, not a panic or UB.
 
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 
 /// Helper: read last_error into a String.
-fn read_last_error(host: *const HostInterface) -> String {
+fn read_last_error(host: *const HostApi) -> String {
     let mut buf: Vec<u8> = vec![0_u8; 512];
     // SAFETY: buf is valid for 512 bytes.
     let n: usize = unsafe { ((*host).get_last_error)(host, buf.as_mut_ptr(), buf.len()) };
@@ -18,7 +18,7 @@ fn read_last_error(host: *const HostInterface) -> String {
 #[test]
 fn test_load_bundle_invalid_utf8_path() {
     // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime_new must succeed");
     // Construct a path with invalid UTF-8: \xff\xfe are invalid UTF-8 lead bytes
     let bad_path: &[u8] = &[0xff_u8, 0xfe_u8, b'/', b'p', b'a', b't', b'h'];
@@ -42,7 +42,7 @@ fn test_load_bundle_invalid_utf8_path() {
 #[test]
 fn test_reload_bundle_invalid_utf8_path() {
     // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime_new must succeed");
     let bad_path: &[u8] = &[0xff_u8, 0xfe_u8, b'/', b'p', b'l', b'u', b'g'];
     // SAFETY: host is non-null, bad_path.as_ptr() valid for bad_path.len() bytes.
@@ -68,7 +68,7 @@ fn test_runtime_healthy_after_invalid_utf8() {
     // We test this by attempting a second load with a valid (but non-existent) ASCII path.
     // The second call should fail with a 'file not found' error, NOT a panic.
     // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let bad_path: &[u8] = &[0xff_u8, 0xfe_u8];
     // SAFETY: host non-null, bad_path valid for 2 bytes.

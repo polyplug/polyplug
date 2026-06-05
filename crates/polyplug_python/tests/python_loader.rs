@@ -165,7 +165,7 @@ _INTERFACE.destroy_instance       = None
 _INTERFACE.dispatch.native.function_count = 0
 _INTERFACE.dispatch.native.functions      = ctypes.cast(_FUNCTIONS_ARR, ctypes.c_void_p).value
 
-# HostInterface register_contract signature: (this, descriptor, interface) -> AbiError.
+# HostApi register_guest_contract signature: (this, descriptor, interface) -> AbiError.
 _RegisterFn = ctypes.CFUNCTYPE(
     _AbiError,
     ctypes.c_void_p,
@@ -173,20 +173,20 @@ _RegisterFn = ctypes.CFUNCTYPE(
     ctypes.c_void_p,
 )
 
-class _HostInterface(ctypes.Structure):
-    # Only the first two fields are needed to reach register_contract; the
+class _HostApi(ctypes.Structure):
+    # Only the first two fields are needed to reach register_guest_contract; the
     # function-pointer offset matches the canonical layout (runtime @ 0,
-    # register_contract @ 8).
+    # register_guest_contract @ 8).
     _fields_ = [
         ("runtime", ctypes.c_void_p),
-        ("register_contract", _RegisterFn),
+        ("register_guest_contract", _RegisterFn),
     ]
 
 def polyplug_init(host_interface: int, _ctx: int) -> None:
-    host = _HostInterface.from_address(host_interface)
-    # Self-passing pattern: register_contract receives the HostInterface pointer
+    host = _HostApi.from_address(host_interface)
+    # Self-passing pattern: register_guest_contract receives the HostApi pointer
     # itself as its `this` argument.
-    host.register_contract(
+    host.register_guest_contract(
         ctypes.c_void_p(host_interface),
         ctypes.addressof(_DESC),
         ctypes.addressof(_INTERFACE),

@@ -1,14 +1,14 @@
 use core::ffi::c_void;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use polyplug_abi::{HostInterface, RuntimeLanguage};
+use polyplug_abi::{HostApi, RuntimeLanguage};
 
 use crate::{
     RuntimeConfig,
     compatibility::{CapabilityGraph, Compatibility},
     error::{GraphError, LoaderError, RuntimeError},
     loader::{BundleLoader, ManifestData},
-    runtime::{ReloadCb, Runtime, WarningCb},
+    runtime::{ReloadCallback, Runtime, WarningCallback},
     runtime_store::RuntimeStore,
 };
 
@@ -17,8 +17,8 @@ pub struct RuntimeBuilder {
     plugin_dirs: Vec<PathBuf>,
     loaders: Vec<Box<dyn BundleLoader>>,
     compatibility: Compatibility,
-    warning_cb: Option<WarningCb>,
-    on_reload_cb: Option<ReloadCb>,
+    warning_cb: Option<WarningCallback>,
+    on_reload_cb: Option<ReloadCallback>,
     config: RuntimeConfig,
     host_runtime: RuntimeLanguage,
 }
@@ -65,7 +65,7 @@ impl RuntimeBuilder {
     /// Only the first registered callback takes effect (OnceLock semantics).
     /// The callback receives human-readable warning strings.
     pub fn on_warning(mut self, cb: impl Fn(&str) + Send + Sync + 'static) -> RuntimeBuilder {
-        self.warning_cb = Some(Box::new(cb));
+        self.warning_cb = Some(WarningCallback(Box::new(cb)));
         self
     }
 
@@ -78,7 +78,7 @@ impl RuntimeBuilder {
         mut self,
         cb: impl Fn(*mut core::ffi::c_void, polyplug_abi::runtime::ReloadPhase) + Send + Sync + 'static,
     ) -> RuntimeBuilder {
-        self.on_reload_cb = Some(std::sync::Arc::new(cb));
+        self.on_reload_cb = Some(ReloadCallback(std::sync::Arc::new(cb)));
         self
     }
 
@@ -102,13 +102,13 @@ impl RuntimeBuilder {
     pub fn build(self) -> Result<Arc<Runtime>, RuntimeError> {
         let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::new());
 
-        // Build the static HostInterface. This must be 'static.
+        // Build the static HostApi. This must be 'static.
         // The `runtime` field is null here and patched once below, after the
         // Runtime is placed inside its Arc, so callbacks can recover the Runtime
         // via `(*this).runtime`.
-        let host_abi: &'static HostInterface = Box::leak(Box::new(HostInterface {
+        let host_abi: &'static HostApi = Box::leak(Box::new(HostApi {
             runtime: core::ptr::null_mut(),
-            register_contract: crate::runtime::host_register_contract,
+            register_guest_contract: crate::runtime::host_register_guest_contract,
             alloc: crate::runtime::host_alloc,
             free: crate::runtime::host_free,
             find_guest_contract: crate::runtime::host_find_guest_contract,
@@ -173,14 +173,14 @@ impl RuntimeBuilder {
 
         let runtime: Arc<Runtime> = Arc::new(runtime);
 
-        // Patch the HostInterface.runtime field to point at the Arc's target.
-        // SAFETY: `host_abi` is the unique leaked HostInterface for this Runtime and
+        // Patch the HostApi.runtime field to point at the Arc's target.
+        // SAFETY: `host_abi` is the unique leaked HostApi for this Runtime and
         // no plugin has received it yet (bundle loading happens after this write), so
         // this is a single writer with no concurrent reader. `Arc::as_ptr` stays valid
-        // for the lifetime of the Arc, and the HostInterface lives at least as long
+        // for the lifetime of the Arc, and the HostApi lives at least as long
         // (callbacks only run while the Runtime — and thus the Arc — is alive).
         unsafe {
-            (*(host_abi as *const HostInterface as *mut HostInterface)).runtime =
+            (*(host_abi as *const HostApi as *mut HostApi)).runtime =
                 Arc::as_ptr(&runtime) as *mut c_void;
         }
 

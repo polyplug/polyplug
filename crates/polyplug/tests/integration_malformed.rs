@@ -8,10 +8,10 @@ use std::path::PathBuf;
 
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_utils::bundle_id;
 
-fn load_bundle_path(host: *const HostInterface, dir: &str) -> polyplug_abi::AbiError {
+fn load_bundle_path(host: *const HostApi, dir: &str) -> polyplug_abi::AbiError {
     let bytes: &[u8] = dir.as_bytes();
     // SAFETY: host non-null (checked by caller), bytes valid for bytes.len().
     unsafe { ((*host).load_bundle)(host, bytes.as_ptr(), bytes.len()) }
@@ -41,7 +41,7 @@ fn write_manifest(dir: &Path, name: &str, runtime: &str, file: &str) {
 #[test]
 fn test_truncated_so() {
     // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let dir: PathBuf = make_tmpdir("truncated");
     let mut so: Vec<u8> = vec![0x7f_u8, b'E', b'L', b'F'];
@@ -62,7 +62,7 @@ fn test_truncated_so() {
 #[test]
 fn test_wrong_magic_bytes() {
     // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let dir: PathBuf = make_tmpdir("wrong_magic");
     let garbage: Vec<u8> = b"NOTANELF\x00".iter().cycle().take(512).cloned().collect();
@@ -83,7 +83,7 @@ fn test_wrong_magic_bytes() {
 fn test_missing_init_symbol() {
     let dir: &str = env!("NO_INIT_PLUGIN_DIR");
     // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir);
     assert_ne!(
@@ -107,7 +107,7 @@ fn test_missing_init_symbol() {
 #[test]
 fn test_so_file_missing_from_bundle() {
     // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let dir: PathBuf = make_tmpdir("missing_so");
     write_manifest(&dir, "missing_so", "native", "nonexistent.so");
@@ -125,7 +125,7 @@ fn test_so_file_missing_from_bundle() {
 #[test]
 fn test_unknown_runtime() {
     // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let dir: PathBuf = make_tmpdir("unknown_runtime");
     fs::write(dir.join("dummy.so"), b"notareal").expect("write dummy");

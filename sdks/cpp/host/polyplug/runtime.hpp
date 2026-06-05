@@ -1,6 +1,6 @@
 // THIS FILE IS PART OF polyplug — header-only C++ binding.
 // RAII Runtime wrapper and fluent Builder for the polyplug plugin runtime.
-// Updated for HostInterface-based API (18-04 refactor).
+// Updated for HostApi-based API (18-04 refactor).
 // All FFI struct types are imported from auto-generated abi.hpp (per D-26).
 
 #pragma once
@@ -28,12 +28,12 @@ extern "C" {
 
     /// Create a new runtime instance.
     /// Pass null for default config, or pointer to RuntimeConfig for custom settings.
-    /// Returns HostInterface* for all operations.
-    const HostInterface* polyplug_runtime_create(const RuntimeConfig* config);
+    /// Returns HostApi* for all operations.
+    const HostApi* polyplug_runtime_create(const RuntimeConfig* config);
 
     /// Destroy a runtime instance.
-    /// Takes HostInterface* returned by polyplug_runtime_create.
-    void polyplug_runtime_destroy(const HostInterface* host);
+    /// Takes HostApi* returned by polyplug_runtime_create.
+    void polyplug_runtime_destroy(const HostApi* host);
 }
 
 namespace polyplug {
@@ -102,14 +102,14 @@ public:
                     cfg.on_reload = detail::on_reload_trampoline;
                     cfg.on_reload_user_data = cb.get();
                 }
-                const HostInterface* h = polyplug_runtime_create(&cfg);
+                const HostApi* h = polyplug_runtime_create(&cfg);
                 if (h == nullptr) {
                     throw std::runtime_error("polyplug_runtime_create returned null");
                 }
                 return Runtime(h, std::move(cb));
             } else {
                 // No config or callback — pass null for defaults.
-                const HostInterface* h = polyplug_runtime_create(nullptr);
+                const HostApi* h = polyplug_runtime_create(nullptr);
                 if (h == nullptr) {
                     throw std::runtime_error("polyplug_runtime_create returned null");
                 }
@@ -155,15 +155,15 @@ public:
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
 
-    // ─── Operations via HostInterface fields ─────────────────────────────────────
+    // ─── Operations via HostApi fields ─────────────────────────────────────
 
     /// Load a plugin bundle from path.
-    /// Calls through HostInterface.load_bundle field.
+    /// Calls through HostApi.load_bundle field.
     void load_bundle(std::string_view path) {
         ensure_host();
         // Cast function pointer and call with self-passing pattern.
         // Returns AbiError, not uint32_t.
-        auto func = reinterpret_cast<AbiError(*)(const HostInterface*, const uint8_t*, size_t)>(host_->load_bundle);
+        auto func = reinterpret_cast<AbiError(*)(const HostApi*, const uint8_t*, size_t)>(host_->load_bundle);
         AbiError result = func(host_, reinterpret_cast<const uint8_t*>(path.data()), path.size());
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("load_bundle failed: " + get_last_error());
@@ -171,10 +171,10 @@ public:
     }
 
     /// Reload a plugin bundle (hot-reload).
-    /// Calls through HostInterface.reload_bundle field.
+    /// Calls through HostApi.reload_bundle field.
     void reload_bundle(std::string_view path) {
         ensure_host();
-        auto func = reinterpret_cast<AbiError(*)(const HostInterface*, const uint8_t*, size_t)>(host_->reload_bundle);
+        auto func = reinterpret_cast<AbiError(*)(const HostApi*, const uint8_t*, size_t)>(host_->reload_bundle);
         AbiError result = func(host_, reinterpret_cast<const uint8_t*>(path.data()), path.size());
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("reload_bundle failed: " + get_last_error());
@@ -182,16 +182,16 @@ public:
     }
 
     /// Find a guest contract by contract_id and minimum version.
-    /// Calls through HostInterface.find_guest_contract field.
+    /// Calls through HostApi.find_guest_contract field.
     /// Returns GuestContractHandle (4 bytes: single u32 index), or invalid_handle() if not found.
     GuestContractHandle find_guest_contract(uint64_t contract_id, uint32_t min_version) const {
         ensure_host();
-        auto func = reinterpret_cast<GuestContractHandle(*)(const HostInterface*, uint64_t, uint32_t)>(host_->find_guest_contract);
+        auto func = reinterpret_cast<GuestContractHandle(*)(const HostApi*, uint64_t, uint32_t)>(host_->find_guest_contract);
         return func(host_, contract_id, min_version);
     }
 
     /// Find all guest contracts matching contract_id.
-    /// Calls through HostInterface.find_all_guest_contracts field.
+    /// Calls through HostApi.find_all_guest_contracts field.
     /// Returns vector of GuestContractHandle (ABI Array with 3 fields: items, len, align).
     std::vector<GuestContractHandle> find_all_guest_contracts(uint64_t contract_id, uint32_t min_version, size_t cap = 64) const {
         ensure_host();
@@ -203,7 +203,7 @@ public:
         for (size_t i = 0; i < arr.len && i < cap; ++i) {
             handles.push_back(ptr[i]);
         }
-        // Free the array via HostInterface.free (size = len * sizeof(GuestContractHandle)).
+        // Free the array via HostApi.free (size = len * sizeof(GuestContractHandle)).
         if (arr.items != nullptr && arr.len > 0) {
             host_->free(host_, static_cast<uint8_t*>(arr.items),
                         arr.len * sizeof(GuestContractHandle), arr.align);
@@ -212,50 +212,50 @@ public:
     }
 
     /// Resolve a GuestContractHandle to a GuestContractInterface pointer.
-    /// Calls through HostInterface.resolve_guest_contract field.
+    /// Calls through HostApi.resolve_guest_contract field.
     /// Returns null if the handle is invalid or contract was unloaded.
     const GuestContractInterface* resolve_guest_contract(GuestContractHandle handle) const {
         if (!is_valid(handle)) {
             return nullptr;
         }
         ensure_host();
-        auto func = reinterpret_cast<const GuestContractInterface*(*)(const HostInterface*, GuestContractHandle)>(host_->resolve_guest_contract);
+        auto func = reinterpret_cast<const GuestContractInterface*(*)(const HostApi*, GuestContractHandle)>(host_->resolve_guest_contract);
         return func(host_, handle);
     }
 
     /// Register a host contract interface with the runtime.
-    /// Calls through HostInterface.register_host_contract field.
+    /// Calls through HostApi.register_host_contract field.
     void register_host_contract(const HostContractInterface* interface) {
         if (interface == nullptr) {
             throw std::runtime_error("register_host_contract: null interface pointer");
         }
         ensure_host();
-        auto func = reinterpret_cast<AbiError(*)(const HostInterface*, const HostContractInterface*)>(host_->register_host_contract);
+        auto func = reinterpret_cast<AbiError(*)(const HostApi*, const HostContractInterface*)>(host_->register_host_contract);
         AbiError result = func(host_, interface);
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("register_host_contract failed: " + get_last_error());
         }
     }
 
-    /// Get the HostInterface pointer.
-    const HostInterface* host() const noexcept {
+    /// Get the HostApi pointer.
+    const HostApi* host() const noexcept {
         return host_;
     }
 
     /// Get last error message.
     std::string get_last_error() const {
         ensure_host();
-        auto len_func = reinterpret_cast<size_t(*)(const HostInterface*)>(host_->get_error_len);
+        auto len_func = reinterpret_cast<size_t(*)(const HostApi*)>(host_->get_error_len);
         size_t len = len_func(host_);
         if (len == 0) return "";
         std::vector<char> buf(len);
-        auto err_func = reinterpret_cast<size_t(*)(const HostInterface*, uint8_t*, size_t)>(host_->get_last_error);
+        auto err_func = reinterpret_cast<size_t(*)(const HostApi*, uint8_t*, size_t)>(host_->get_last_error);
         err_func(host_, reinterpret_cast<uint8_t*>(buf.data()), len);
         return std::string(buf.data(), len);
     }
 
 private:
-    Runtime(const HostInterface* h, std::unique_ptr<detail::OnReloadFn> cb) noexcept
+    Runtime(const HostApi* h, std::unique_ptr<detail::OnReloadFn> cb) noexcept
         : host_(h), on_reload_cb_(std::move(cb)) {}
 
     void ensure_host() const {
@@ -264,7 +264,7 @@ private:
         }
     }
 
-    const HostInterface* host_ = nullptr;  // HostInterface pointer
+    const HostApi* host_ = nullptr;  // HostApi pointer
     // Owns the on_reload functor referenced by RuntimeConfig.on_reload_user_data.
     // Must outlive the runtime so the trampoline's user_data stays valid.
     std::unique_ptr<detail::OnReloadFn> on_reload_cb_{};

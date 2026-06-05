@@ -23,7 +23,7 @@ polyplug is a universal, blazing-fast, cross-language plugin runtime platform wr
 | Crate | Purpose |
 |---|---|
 | `polyplug` | Core runtime: `Runtime`, `RuntimeStore`, loader, reload, FFI entry points |
-| `polyplug_abi` | Frozen ABI types: `HostInterface`, `BundleInitContext`, `GuestContractInterface`, `AbiError`, etc. |
+| `polyplug_abi` | Frozen ABI types: `HostApi`, `BundleInitContext`, `GuestContractInterface`, `AbiError`, etc. |
 | `polyplug_utils` | Shared hash utilities (`fnv1a_64`, `bundle_id`, `contract_id`) |
 | `polyplug_native` | Loader for native (`cdylib`) bundles — the only loader that supports hot-reload |
 | `polyplug_python` | Loader for Python bundles |
@@ -40,11 +40,11 @@ polyplug is a universal, blazing-fast, cross-language plugin runtime platform wr
 The host-side Rust library (`libpolyplug`) exposes exactly **two** `#[no_mangle]` C symbols:
 
 ```c
-void* polyplug_runtime_create(const void* config);   // returns HostInterface pointer
+void* polyplug_runtime_create(const void* config);   // returns HostApi pointer
 void  polyplug_runtime_destroy(void* host);
 ```
 
-All other operations go through **`HostInterface` struct fields** (function pointers). `HostInterface` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields, the 17th being `get_extension` at offset 136), `align = 8`. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostInterface` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.
+All other operations go through **`HostApi` struct fields** (function pointers). `HostApi` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields, the 17th being `get_extension` at offset 136), `align = 8`. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostApi` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.
 
 ### `polyplug_init` — the plugin entry point
 
@@ -52,10 +52,10 @@ Every plugin bundle must export this 2-argument function:
 
 ```c
 // All generators must produce this signature (language-specific syntax):
-AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx)
+AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx)
 ```
 
-- `host` — the function table; plugins call `host->register_contract(host, &descriptor, &interface)` to register
+- `host` — the function table; plugins call `host->register_guest_contract(host, &descriptor, &interface)` to register
 - `ctx` — 24-byte struct: `{ bundle_id: u64, bundle_path: StringView }`
 
 The 3-argument form `fn(rt_ctx, host, ctx)` is **gone** — do not use it.
@@ -318,7 +318,7 @@ If you believe an ABI change is necessary, stop and raise it as a discussion wit
 
 ### 8. Memory Rules
 
-**All memory crossing plugin boundaries must use the host allocator (`alloc` / `free` fields on `HostInterface`).**
+**All memory crossing plugin boundaries must use the host allocator (`alloc` / `free` fields on `HostApi`).**
 
 - A plugin must never free memory it did not allocate
 - Generated code must never introduce copies of cross-boundary data that are not in the host allocator
@@ -357,18 +357,18 @@ Every generator (rust, cpp, csharp, python, lua, js) must generate code that:
 1. **Uses the same `polyplug_init` signature:**
    ```c
    // All generators must produce this signature (language-specific syntax):
-   AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx)
+   AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx)
    ```
 
 2. **Uses the same registration mechanism:**
    ```c
-   // All generators must call register_contract via the HostInterface self-passing pattern:
-   host->register_contract(host, &descriptor, &interface)
+   // All generators must call register_guest_contract via the HostApi self-passing pattern:
+   host->register_guest_contract(host, &descriptor, &interface)
    ```
 
 3. **Never uses global state or thread-locals in generated code.**
 
-**Why this matters:** Different registration mechanisms (e.g., divergent `HostInterface` field layouts or calling conventions) break the ABI contract and cause runtime failures. All plugins, regardless of language, must interact with the host through the exact same ABI path.
+**Why this matters:** Different registration mechanisms (e.g., divergent `HostApi` field layouts or calling conventions) break the ABI contract and cause runtime failures. All plugins, regardless of language, must interact with the host through the exact same ABI path.
 
 **Verification:** When adding or modifying a generator, compare its output with `rust.rs` to ensure ABI parity.
 
@@ -791,7 +791,7 @@ polyplug/
 | unilateral ABI struct changes | pre-1.0: only with owner approval; at/after 1.0: new functionality via extension system only |
 | editing generated files | fix the generator, re-run polyplugc |
 | `fn polyplug_init(rt_ctx, host, ctx)` (3 args) | `fn polyplug_init(host, ctx)` (2 args — canonical) |
-| different ABI mechanisms per generator | identical `polyplug_init` + `register_contract` across all generators |
+| different ABI mechanisms per generator | identical `polyplug_init` + `register_guest_contract` across all generators |
 | global state / thread-locals in generated code | all context flows through `host` and `ctx` parameters |
 | global state / thread-locals for Runtime | all state owned by Runtime instance |
 | dependency version in crate `Cargo.toml` | version in workspace `Cargo.toml`, `{ workspace = true }` in crate |

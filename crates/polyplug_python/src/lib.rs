@@ -33,7 +33,7 @@ use polyplug::loader::BundleLoader;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug_abi::BundleInitContext;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
 
 use crate::context::ensure_python_initialized;
@@ -105,9 +105,9 @@ impl BundleLoader for PythonLoader {
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
         let bundle_id: u64 = manifest.id;
 
-        // Get HostInterface pointer from runtime (self-passing pattern).
+        // Get HostApi pointer from runtime (self-passing pattern).
         // The interface already has the runtime pointer set internally.
-        let host_interface: *const HostInterface = runtime.as_context_ptr();
+        let host_interface: *const HostApi = runtime.as_context_ptr();
 
         // Push bundle_id onto the runtime's per-thread init stack for dependency
         // enforcement during init (instance-owned; Rule 12 — no thread-locals).
@@ -248,9 +248,9 @@ impl BundleLoader for PythonLoader {
                 },
             };
 
-            // Pass HostInterface pointer and BundleInitContext pointer to Python.
-            // The HostInterface uses self-passing pattern - Python guest code will pass it back
-            // as the first parameter to each HostInterface function call.
+            // Pass HostApi pointer and BundleInitContext pointer to Python.
+            // The HostApi uses self-passing pattern - Python guest code will pass it back
+            // as the first parameter to each HostApi function call.
             let host_interface_i64: i64 = host_interface as usize as i64;
             let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
             init_fn

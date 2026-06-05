@@ -17,7 +17,7 @@ use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, Buffer, BundleInitContext, GuestContractHandle,
-    GuestContractInterface, HostInterface, PluginDescriptor, StringView,
+    GuestContractInterface, HostApi, PluginDescriptor, StringView,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -48,7 +48,7 @@ struct FillArgs {
 /// Arguments to `memory_alloc_buffer_via_host` (fn 1).
 #[repr(C)]
 struct AllocArgs {
-    host: *const HostInterface,
+    host: *const HostApi,
     size: u64,
     fill_byte: u8,
 }
@@ -67,14 +67,14 @@ struct ZeroResult {
     sv_len: u64,
 }
 
-// --- HostInterface stub functions ---------------------------------------------
+// --- HostApi stub functions ---------------------------------------------
 
-/// Stub find_by_contract -- returns a null handle (not needed for memory stress tests).
+/// Stub find_guest_contract -- returns a null handle (not needed for memory stress tests).
 ///
 /// # Safety
 /// Always safe to call; returns a sentinel null handle.
 unsafe extern "C" fn stub_find_guest_contract(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> GuestContractHandle {
@@ -86,19 +86,19 @@ unsafe extern "C" fn stub_find_guest_contract(
 /// # Safety
 /// Always safe to call; returns empty array.
 unsafe extern "C" fn stub_find_all_guest_contracts(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> Array<GuestContractHandle> {
     Array::empty()
 }
 
-/// Stub resolve_contract -- returns null (not needed for memory stress tests).
+/// Stub resolve_guest_contract -- returns null (not needed for memory stress tests).
 ///
 /// # Safety
 /// Always safe to call; returns null pointer.
 unsafe extern "C" fn stub_resolve_guest_contract(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
@@ -106,7 +106,7 @@ unsafe extern "C" fn stub_resolve_guest_contract(
 
 /// Stub get_host_contract -- returns null instance.
 unsafe extern "C" fn stub_get_host_contract(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -114,20 +114,20 @@ unsafe extern "C" fn stub_get_host_contract(
 }
 
 /// Stub list_bundles -- returns empty array.
-unsafe extern "C" fn stub_list_bundles(_this: *const HostInterface) -> Array<BundleId> {
+unsafe extern "C" fn stub_list_bundles(_this: *const HostApi) -> Array<BundleId> {
     Array::empty()
 }
 
 /// Stub get_dependencies -- returns empty array.
 unsafe extern "C" fn stub_get_dependencies(
-    _this: *const HostInterface,
+    _this: *const HostApi,
 ) -> Array<polyplug_abi::DependencyInfo> {
     Array::empty()
 }
 
 /// Stub resolve_host_contract_interface -- returns null.
 unsafe extern "C" fn stub_resolve_host_contract_interface(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> *const polyplug_abi::HostContractInterface {
@@ -136,7 +136,7 @@ unsafe extern "C" fn stub_resolve_host_contract_interface(
 
 /// Stub load_bundle callback.
 unsafe extern "C" fn stub_load_bundle(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
@@ -148,7 +148,7 @@ unsafe extern "C" fn stub_load_bundle(
 
 /// Stub reload_bundle callback.
 unsafe extern "C" fn stub_reload_bundle(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
@@ -160,7 +160,7 @@ unsafe extern "C" fn stub_reload_bundle(
 
 /// Stub register_host_contract callback.
 unsafe extern "C" fn stub_register_host_contract(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
     AbiError {
@@ -171,7 +171,7 @@ unsafe extern "C" fn stub_register_host_contract(
 
 /// Stub register_loader callback.
 unsafe extern "C" fn stub_register_loader(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _runtime_name: StringView,
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
@@ -183,7 +183,7 @@ unsafe extern "C" fn stub_register_loader(
 
 /// Stub get_last_error callback.
 unsafe extern "C" fn stub_get_last_error(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _buf: *mut u8,
     _buf_len: usize,
 ) -> usize {
@@ -191,42 +191,34 @@ unsafe extern "C" fn stub_get_last_error(
 }
 
 /// Stub get_error_len callback.
-unsafe extern "C" fn stub_get_error_len(_this: *const HostInterface) -> usize {
+unsafe extern "C" fn stub_get_error_len(_this: *const HostApi) -> usize {
     0
 }
 
 /// Stub get_extension callback.
-unsafe extern "C" fn stub_get_extension(
-    _this: *const HostInterface,
-    _extension_id: u32,
-) -> *const () {
+unsafe extern "C" fn stub_get_extension(_this: *const HostApi, _extension_id: u32) -> *const () {
     core::ptr::null()
 }
 
 /// Stub alloc callback.
-unsafe extern "C" fn stub_alloc(_this: *const HostInterface, size: usize, align: usize) -> *mut u8 {
+unsafe extern "C" fn stub_alloc(_this: *const HostApi, size: usize, align: usize) -> *mut u8 {
     polyplug_host_alloc(size, align)
 }
 
 /// Stub free callback.
-unsafe extern "C" fn stub_free(
-    _this: *const HostInterface,
-    ptr: *mut u8,
-    size: usize,
-    align: usize,
-) {
+unsafe extern "C" fn stub_free(_this: *const HostApi, ptr: *mut u8, size: usize, align: usize) {
     // SAFETY: polyplug_host_free is a safe wrapper around the system allocator.
     unsafe { polyplug_host_free(ptr, size, align) }
 }
 
 // --- Registry callback -------------------------------------------------------
 
-/// A register_contract callback that stores interface entries into the thread-local Registry.
+/// A register_guest_contract callback that stores interface entries into the thread-local Registry.
 ///
 /// # Safety
 /// `this`, `descriptor`, and `interface` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -306,16 +298,16 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
     // SAFETY: polyplug_init matches the expected 2-arg ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
+        unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
     };
 
-    let host_interface: HostInterface = HostInterface {
+    let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
-        register_contract: registry_register_callback,
+        register_guest_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -341,7 +333,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &host_interface as *const HostInterface,
+            &host_interface as *const HostApi,
             &ctx as *const BundleInitContext,
         )
     };
@@ -671,14 +663,14 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // Set up a tracking allocator and build a HostInterface that uses wrapper functions.
+    // Set up a tracking allocator and build a HostApi that uses wrapper functions.
     let tracker: TrackingAllocator = TrackingAllocator::new();
     let alloc_fn: unsafe extern "C" fn(usize, usize) -> *mut u8 = tracker.alloc_fn();
     let free_fn: unsafe extern "C" fn(*mut u8, usize, usize) = tracker.free_fn();
 
-    // Wrapper functions that take HostInterface and delegate to tracking functions
+    // Wrapper functions that take HostApi and delegate to tracking functions
     unsafe extern "C" fn tracking_alloc_wrapper(
-        _this: *const HostInterface,
+        _this: *const HostApi,
         size: usize,
         align: usize,
     ) -> *mut u8 {
@@ -690,7 +682,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     }
 
     unsafe extern "C" fn tracking_free_wrapper(
-        _this: *const HostInterface,
+        _this: *const HostApi,
         ptr: *mut u8,
         size: usize,
         align: usize,
@@ -706,9 +698,9 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     TLS_TRACKING_ALLOC.with(|cell| *cell.borrow_mut() = alloc_fn);
     TLS_TRACKING_FREE.with(|cell| *cell.borrow_mut() = free_fn);
 
-    let host_interface: HostInterface = HostInterface {
+    let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
-        register_contract: registry_register_callback,
+        register_guest_contract: registry_register_callback,
         alloc: tracking_alloc_wrapper,
         free: tracking_free_wrapper,
         find_guest_contract: stub_find_guest_contract,
@@ -728,7 +720,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     };
 
     let args: AllocArgs = AllocArgs {
-        host: &host_interface as *const HostInterface,
+        host: &host_interface as *const HostApi,
         size: 4096_u64,
         fill_byte: 0xCC_u8,
     };

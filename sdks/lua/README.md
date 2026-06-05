@@ -47,7 +47,7 @@ end
 local polyplug_guest = require("polyplug_guest")
 
 polyplug_guest.plugin(function(host, ctx)
-    host.register_contract(host, descriptor, contractInterface)
+    host.register_guest_contract(host, descriptor, contractInterface)
 end)
 
 DecoderImpl = {}
@@ -92,7 +92,7 @@ LuaJIT FFI wrappers over the polyplug C ABI:
 
 Bootstrap layer for Lua plugins:
 - `polyplug_guest.plugin()` — Marks plugin entry point
-- `HostInterface` — Contract registration
+- `HostApi` — Contract registration
 - `BundleInitContext` — Bundle metadata
 - Error boundary — Plugin errors don't take down host
 

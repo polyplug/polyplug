@@ -15,13 +15,13 @@ use polyplug_abi::*;
 /// Arguments for error_return_with_message (fn 0).
 #[repr(C)]
 pub struct MessageArgs {
-    pub host: *const HostInterface,
+    pub host: *const HostApi,
 }
 
 /// Arguments for error_chain_propagate (fn 2).
 #[repr(C)]
 pub struct ChainArgs {
-    pub host: *const HostInterface,
+    pub host: *const HostApi,
     pub target_contract_id: u64,
     pub target_fn_id: u32,
 }
@@ -30,20 +30,20 @@ pub struct ChainArgs {
 
 /// fn 0 — error_return_with_message
 ///
-/// Allocates a message via the host allocator (`HostInterface::alloc`) and writes
+/// Allocates a message via the host allocator (`HostApi::alloc`) and writes
 /// an AbiError with code=Generic and the message bytes to `out`.
 ///
-/// OWNERSHIP: The caller (host) must free message.ptr via `HostInterface::free`
+/// OWNERSHIP: The caller (host) must free message.ptr via `HostApi::free`
 /// with size=22, align=1.
 ///
 /// # Safety
-/// `args` must point to a valid `MessageArgs` carrying a live HostInterface.
+/// `args` must point to a valid `MessageArgs` carrying a live HostApi.
 /// `out` must point to a valid `AbiError`.
 extern "C" fn error_return_with_message(args: *const (), out: *mut ()) -> AbiError {
     // SAFETY: args points to MessageArgs per the ABI contract.
     let message_args: &MessageArgs = unsafe { &*(args as *const MessageArgs) };
-    // SAFETY: message_args.host is a valid HostInterface pointer provided by the caller.
-    let host: &HostInterface = unsafe { &*message_args.host };
+    // SAFETY: message_args.host is a valid HostApi pointer provided by the caller.
+    let host: &HostApi = unsafe { &*message_args.host };
     let msg: &[u8] = b"test error from plugin";
     let len: usize = msg.len(); // 22 bytes
     // SAFETY: host.alloc is a valid function pointer set by the host runtime;
@@ -101,8 +101,8 @@ extern "C" fn error_panic(_args: *const (), _out: *mut ()) -> AbiError {
 extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     // SAFETY: args points to ChainArgs per the ABI contract.
     let chain_args: &ChainArgs = unsafe { &*(args as *const ChainArgs) };
-    // SAFETY: chain_args.host is a valid HostInterface pointer provided by the host runtime.
-    let host: &HostInterface = unsafe { &*chain_args.host };
+    // SAFETY: chain_args.host is a valid HostApi pointer provided by the host runtime.
+    let host: &HostApi = unsafe { &*chain_args.host };
     // SAFETY: host.find_guest_contract is a valid function pointer set by the host runtime.
     let plugin: GuestContractHandle = unsafe {
         (host.find_guest_contract)(chain_args.host, chain_args.target_contract_id, 0_u32)
@@ -154,7 +154,7 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
 /// # Safety
 /// Test plugins don't need real instances; dispatch uses global state.
 unsafe extern "C" fn create_instance_stub(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -165,7 +165,7 @@ unsafe extern "C" fn create_instance_stub(
 /// # Safety
 /// Test plugins don't own instance data.
 unsafe extern "C" fn destroy_instance_stub(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }
@@ -243,11 +243,11 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 /// Plugin init — called by the loader to register interfaces.
 ///
 /// # Safety
-/// `host_abi` must be a valid non-null pointer to a HostInterface from the host.
+/// `host_abi` must be a valid non-null pointer to a HostApi from the host.
 /// `ctx` must be a valid non-null pointer to a BundleInitContext from the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
-    host_abi: *const HostInterface,
+    host_abi: *const HostApi,
     ctx: *const BundleInitContext,
 ) -> AbiError {
     if host_abi.is_null() {
@@ -264,16 +264,16 @@ pub unsafe extern "C" fn polyplug_init(
     }
 
     // SAFETY: host_abi is non-null and provided by the host runtime per ABI contract.
-    let host: &HostInterface = unsafe { &*host_abi };
+    let host: &HostApi = unsafe { &*host_abi };
 
     // The host copies the interface during this synchronous call, so a local
     // value (carrying the runtime-computed contract ID) is sufficient.
     let interface: GuestContractInterface = error_test_interface();
 
-    // SAFETY: register_contract is a valid function pointer set by the host.
+    // SAFETY: register_guest_contract is a valid function pointer set by the host.
     // ERROR_TEST_DESCRIPTOR is 'static; `interface` outlives the synchronous call.
     unsafe {
-        (host.register_contract)(
+        (host.register_guest_contract)(
             host_abi,
             &ERROR_TEST_DESCRIPTOR as *const PluginDescriptor,
             &interface as *const GuestContractInterface,

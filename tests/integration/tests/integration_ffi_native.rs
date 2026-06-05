@@ -3,7 +3,7 @@
 //! These tests exercise the polyplug C FFI surface (the same API that Lua and Deno
 //! hosts use) for native plugin loading. The FFI exposes only two free functions —
 //! `polyplug_runtime_create` and `polyplug_runtime_destroy` — and routes every other
-//! operation through the `HostInterface` function-pointer table.
+//! operation through the `HostApi` function-pointer table.
 
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
@@ -12,7 +12,7 @@ use core::ffi::c_void;
 
 use polyplug::ffi::{polyplug_runtime_create, polyplug_runtime_destroy};
 use polyplug::loader::BundleLoader;
-use polyplug_abi::{Array, GuestContractHandle, GuestContractInterface, HostInterface, StringView};
+use polyplug_abi::{Array, GuestContractHandle, GuestContractInterface, HostApi, StringView};
 use polyplug_native::NativeLoader;
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
@@ -21,8 +21,8 @@ fn test_add_contract_id() -> u64 {
     polyplug_utils::guest_contract_id("test.add", 1)
 }
 
-fn read_last_error(host: *const HostInterface) -> String {
-    // SAFETY: host is a valid HostInterface pointer for the lifetime of this call.
+fn read_last_error(host: *const HostApi) -> String {
+    // SAFETY: host is a valid HostApi pointer for the lifetime of this call.
     let len: usize = unsafe { ((*host).get_error_len)(host) };
     if len == 0 {
         return String::new();
@@ -34,8 +34,8 @@ fn read_last_error(host: *const HostInterface) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-/// Register the native loader through the HostInterface `register_loader` pointer.
-fn register_native_loader(host: *const HostInterface) {
+/// Register the native loader through the HostApi `register_loader` pointer.
+fn register_native_loader(host: *const HostApi) {
     // Double-box so the fat trait-object pointer survives the thin `*mut c_void`.
     let trait_obj: Box<dyn BundleLoader> = Box::new(NativeLoader::new(Default::default()));
     let loader_ptr: *mut c_void = Box::into_raw(Box::new(trait_obj)) as *mut c_void;
@@ -51,7 +51,7 @@ fn register_native_loader(host: *const HostInterface) {
     );
 }
 
-fn load_bundle(host: *const HostInterface, dir: &str) -> polyplug_abi::AbiError {
+fn load_bundle(host: *const HostApi, dir: &str) -> polyplug_abi::AbiError {
     let bytes: &[u8] = dir.as_bytes();
     // SAFETY: host is valid; bytes points to `len` valid UTF-8 bytes.
     unsafe { ((*host).load_bundle)(host, bytes.as_ptr(), bytes.len()) }
@@ -60,12 +60,12 @@ fn load_bundle(host: *const HostInterface, dir: &str) -> polyplug_abi::AbiError 
 #[test]
 fn test_runtime_create_and_destroy() {
     // SAFETY: null config selects defaults.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "polyplug_runtime_create returned null");
 
-    // SAFETY: host is non-null and points to a valid HostInterface.
+    // SAFETY: host is non-null and points to a valid HostApi.
     let runtime: *mut c_void = unsafe { (*host).runtime };
-    assert!(!runtime.is_null(), "HostInterface.runtime must be set");
+    assert!(!runtime.is_null(), "HostApi.runtime must be set");
 
     // SAFETY: host was produced by polyplug_runtime_create and not yet destroyed.
     unsafe { polyplug_runtime_destroy(host) };
@@ -74,7 +74,7 @@ fn test_runtime_create_and_destroy() {
 #[test]
 fn test_load_bundle_fails_without_registered_loader() {
     // SAFETY: null config selects defaults.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "polyplug_runtime_create returned null");
 
     let err: polyplug_abi::AbiError = load_bundle(host, TEST_PLUGIN_DIR);
@@ -95,7 +95,7 @@ fn test_load_bundle_fails_without_registered_loader() {
 #[test]
 fn test_native_loader_ffi_workflow() {
     // SAFETY: null config selects defaults.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "polyplug_runtime_create returned null");
 
     register_native_loader(host);
@@ -146,7 +146,7 @@ fn test_native_loader_ffi_workflow() {
 #[test]
 fn test_unknown_contract_returns_null_handle() {
     // SAFETY: null config selects defaults.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "polyplug_runtime_create returned null");
 
     register_native_loader(host);
@@ -174,7 +174,7 @@ fn test_unknown_contract_returns_null_handle() {
 #[test]
 fn test_resolve_null_handle_returns_null() {
     // SAFETY: null config selects defaults.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "polyplug_runtime_create returned null");
 
     // SAFETY: host is valid; resolving the null handle must not dispatch.

@@ -35,9 +35,9 @@ fn make_fn_ptr_struct(name: &str, field_name: &str, fn_ptr_type: &str) -> Struct
 }
 
 /// Build a StructInfo with multiple fields including fn ptr and regular fields.
-fn make_host_interface_struct() -> StructInfo {
+fn make_host_api_struct() -> StructInfo {
     StructInfo {
-        name: "HostInterface".to_string(),
+        name: "HostApi".to_string(),
         fields: vec![
             FieldInfo {
                 name: "runtime".to_string(),
@@ -45,18 +45,18 @@ fn make_host_interface_struct() -> StructInfo {
                 doc: None,
             },
             FieldInfo {
-                name: "register_contract".to_string(),
-                rust_type: r#"unsafeextern"C"fn(*constHostInterface,*constPluginDescriptor,*constGuestContractInterface)->AbiError"#.to_string(),
+                name: "register_guest_contract".to_string(),
+                rust_type: r#"unsafeextern"C"fn(*constHostApi,*constPluginDescriptor,*constGuestContractInterface)->AbiError"#.to_string(),
                 doc: None,
             },
             FieldInfo {
                 name: "alloc".to_string(),
-                rust_type: r#"unsafeextern"C"fn(*constHostInterface,usize,usize)->*mutu8"#.to_string(),
+                rust_type: r#"unsafeextern"C"fn(*constHostApi,usize,usize)->*mutu8"#.to_string(),
                 doc: None,
             },
             FieldInfo {
                 name: "free".to_string(),
-                rust_type: r#"unsafeextern"C"fn(*constHostInterface,*mutu8,usize,usize)"#.to_string(),
+                rust_type: r#"unsafeextern"C"fn(*constHostApi,*mutu8,usize,usize)"#.to_string(),
                 doc: None,
             },
         ],
@@ -133,15 +133,15 @@ fn python_fn_ptr_field_produces_cfunctype() {
 fn python_fn_ptr_typedef_before_struct() {
     let generator = PythonGenerator::new();
     let ctx = GenerationContext::new();
-    let item = make_host_interface_struct();
+    let item = make_host_api_struct();
 
     let output = generator.generate_struct(&item, &ctx);
 
     // The CFUNCTYPE typedef should appear before the class definition.
     let cfunctype_pos = output.find("CFUNCTYPE").expect("Should contain CFUNCTYPE");
     let class_pos = output
-        .find("class HostInterface")
-        .expect("Should contain class HostInterface");
+        .find("class HostApi")
+        .expect("Should contain class HostApi");
     assert!(
         cfunctype_pos < class_pos,
         "CFUNCTYPE typedef must appear before the class definition"
@@ -152,11 +152,11 @@ fn python_fn_ptr_typedef_before_struct() {
 fn python_multiple_fn_ptrs_all_get_cfunctype() {
     let generator = PythonGenerator::new();
     let ctx = GenerationContext::new();
-    let item = make_host_interface_struct();
+    let item = make_host_api_struct();
 
     let output = generator.generate_struct(&item, &ctx);
 
-    // HostInterface has 3 fn ptr fields; all should have CFUNCTYPE.
+    // HostApi has 3 fn ptr fields; all should have CFUNCTYPE.
     let cfunctype_count = output.matches("CFUNCTYPE").count();
     assert!(
         cfunctype_count >= 3,
@@ -223,12 +223,12 @@ fn csharp_fn_ptr_field_emits_no_managed_delegate() {
 fn csharp_all_fn_ptr_fields_become_intptr() {
     let generator = CSharpGenerator::new();
     let ctx = GenerationContext::new();
-    let item = make_host_interface_struct();
+    let item = make_host_api_struct();
 
     let output = generator.generate_struct(&item, &ctx);
 
     assert!(
-        output.contains("public IntPtr RegisterContract;")
+        output.contains("public IntPtr RegisterGuestContract;")
             && output.contains("public IntPtr Alloc;")
             && output.contains("public IntPtr Free;"),
         "every fn ptr field must be IntPtr. Got:\n{output}"
@@ -315,7 +315,7 @@ fn js_fn_ptr_field_produces_number_type() {
 fn js_struct_produces_interface() {
     let generator = JsGenerator::new();
     let ctx = GenerationContext::new();
-    let item = make_host_interface_struct();
+    let item = make_host_api_struct();
 
     let output = generator.generate_struct(&item, &ctx);
 
@@ -424,28 +424,28 @@ fn csharp_optional_fn_ptr_becomes_intptr() {
 fn python_no_void_p_for_fn_ptr_fields() {
     let generator = PythonGenerator::new();
     let ctx = GenerationContext::new();
-    let item = make_host_interface_struct();
+    let item = make_host_api_struct();
 
     let output = generator.generate_struct(&item, &ctx);
 
     // After the fix, fn ptr fields should reference CFUNCTYPE typedef names in _fields_.
     // The `runtime` field is a raw pointer (*mut c_void) and correctly uses c_void_p.
-    // Only fn ptr fields (register_contract, alloc, free) must use CFUNCTYPE names.
+    // Only fn ptr fields (register_guest_contract, alloc, free) must use CFUNCTYPE names.
     let fields_section = output
         .split("_fields_")
         .nth(1)
         .expect("Should have _fields_ section");
 
     assert!(
-        fields_section.contains("_host_interface_register_contract_t"),
-        "register_contract field must use CFUNCTYPE typedef. Got:\n{output}"
+        fields_section.contains("_host_api_register_guest_contract_t"),
+        "register_guest_contract field must use CFUNCTYPE typedef. Got:\n{output}"
     );
     assert!(
-        fields_section.contains("_host_interface_alloc_t"),
+        fields_section.contains("_host_api_alloc_t"),
         "alloc field must use CFUNCTYPE typedef. Got:\n{output}"
     );
     assert!(
-        fields_section.contains("_host_interface_free_t"),
+        fields_section.contains("_host_api_free_t"),
         "free field must use CFUNCTYPE typedef. Got:\n{output}"
     );
 }

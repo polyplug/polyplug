@@ -20,7 +20,7 @@ namespace polyplug {
 /// Note: GuestContractHandle currently has only an index field (no generation).
 /// This is intentional — the generational index pattern uses generation at the
 /// registry level, not in the handle itself. The handle is validated by
-/// `resolve_contract`, which checks the slot's current generation.
+/// `resolve_guest_contract`, which checks the slot's current generation.
 inline bool operator==(GuestContractHandle a, GuestContractHandle b) noexcept {
     return a.index == b.index;
 }

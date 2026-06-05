@@ -6,7 +6,7 @@ This document covers performance characteristics and optimization strategies for
 
 This document uses the following terminology (current as of v1.1):
 - **GuestContractInterface**: The interface struct a plugin provides for the host to call
-- **HostInterface**: The runtime's ABI table provided to guests
+- **HostApi**: The runtime's ABI table provided to guests
 
 ## Overview
 
@@ -234,7 +234,7 @@ cffi ABI: ~380 ns/call (1.7x faster)
 ```
 ffi/resolve_plugin:          ~10 ns
 ffi/find_all_by_contract:    ~25 ns
-registry/find_by_contract:   ~21 ns
+registry/find_guest_contract:   ~21 ns
 ```
 
 ---
@@ -247,7 +247,7 @@ Instead of multiple FFI calls:
 ```python
 # Bad: Multiple FFI calls
 for contract_id in contract_ids:
-    handle = rt.find_by_contract(contract_id, 1)
+    handle = rt.find_guest_contract(contract_id, 1)
 
 # Good: Single FFI call
 handles = rt.find_all_by_contract(contract_id, 1)
@@ -363,7 +363,7 @@ Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
 | `noop` | **2.2 ns** | Trivial function call (add(0,0)) |
 | `struct_arg_and_return` | **2.2 ns** | Struct args with return value |
 | `buffer_arg` | **30 ns** | 4096-byte buffer operation |
-| `cross_plugin` | **43 ns** | find_by_contract + resolve + dispatch |
+| `cross_plugin` | **43 ns** | find_guest_contract + resolve + dispatch |
 
 **Native dispatch is essentially zero overhead** - direct function pointer calls with no VM layer.
 

@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_abi import AbiErrorCode, AbiError, DispatchType, DispatchMechanisms, NativeDispatch, HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version
+from polyplug_abi import AbiErrorCode, AbiError, DispatchType, DispatchMechanisms, NativeDispatch, HostApi, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version
 from polyplug_guest import store_host_interface, get_host_interface, _init_allocator
 
 if TYPE_CHECKING:
@@ -97,7 +97,7 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
     """Initialize plugin with host interface.
 
     Args:
-        host_ptr: Pointer to HostInterface
+        host_ptr: Pointer to HostApi
         ctx_ptr: Pointer to BundleInitContext
     """
     if host_ptr == 0:
@@ -107,8 +107,8 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
     store_host_interface(host_ptr)
     _init_allocator(host_ptr, ctx_ptr)
     ctx: BundleInitContext = BundleInitContext.from_address(ctx_ptr)
-    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
-    err_ENCODER: AbiError = host.contents.register_contract(
+    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))
+    err_ENCODER: AbiError = host.contents.register_guest_contract(
         host_ptr, ctypes.byref(ENCODER_DESCRIPTOR), ctypes.byref(ENCODER_INTERFACE)
     )
     if err_ENCODER.code != AbiErrorCode.Ok:
@@ -129,6 +129,6 @@ def polyplug_get_extension(name: bytes) -> int:
     for byte in name:
         hash_val ^= byte
         hash_val = (hash_val * 16777619) & 0xFFFFFFFF
-    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
+    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))
     return host.contents.get_extension(host_ptr, ctypes.c_uint32(hash_val))
 

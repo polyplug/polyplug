@@ -22,7 +22,7 @@ use polyplug::error::RuntimeError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
-    DispatchMechanisms, DispatchType, GuestContractId, GuestContractInterface, HostInterface,
+    DispatchMechanisms, DispatchType, GuestContractId, GuestContractInterface, HostApi,
     NativeDispatch, PluginDescriptor, ReloadPhaseType, StringView, Version,
 };
 use polyplug_utils::BundleId;
@@ -42,7 +42,7 @@ const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> polyplug_abi::GuestContractInstance {
     polyplug_abi::GuestContractInstance::null()
@@ -50,7 +50,7 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: polyplug_abi::GuestContractInstance,
 ) {
 }

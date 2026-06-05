@@ -3,7 +3,7 @@
 // THIS IS A BENCHMARK FILE — do not add #[test] functions here
 // Run with: cargo bench -p polyplug --bench registry_find
 //
-// Benchmark: Registry::find_by_contract hot path
+// Benchmark: Registry::find_guest_contract hot path
 // Measures: Time for contract lookup with various slot counts
 
 use core::hint::black_box;
@@ -20,7 +20,7 @@ use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
@@ -31,7 +31,7 @@ use polyplug_utils::GuestContractId;
 
 /// Stub create_instance for benchmarks - returns null instance.
 unsafe extern "C" fn bench_create_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -39,7 +39,7 @@ unsafe extern "C" fn bench_create_instance(
 
 /// Stub destroy_instance for benchmarks - no cleanup needed.
 unsafe extern "C" fn bench_destroy_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }
@@ -97,7 +97,7 @@ fn make_interface(id: u64) -> GuestContractInterface {
     }
 }
 
-// ─── Benchmark: find_by_contract with single slot ────────────────────────────
+// ─── Benchmark: find_guest_contract with single slot ────────────────────────────
 
 fn bench_registry_find_by_contract_single(c: &mut Criterion) {
     let registry: RuntimeStore = RuntimeStore::new();
@@ -121,20 +121,23 @@ fn bench_registry_find_by_contract_single(c: &mut Criterion) {
         c.benchmark_group("registry");
     group.throughput(Throughput::Elements(1));
 
-    group.bench_function(BenchmarkId::new("find_by_contract", "single_slot"), |b| {
-        b.iter(|| {
-            let result: Result<GuestContractHandle, _> = registry.find(
-                black_box(GuestContractId::from_u64(contract_id)),
-                black_box(0u32),
-            );
-            let _ = black_box(result);
-        });
-    });
+    group.bench_function(
+        BenchmarkId::new("find_guest_contract", "single_slot"),
+        |b| {
+            b.iter(|| {
+                let result: Result<GuestContractHandle, _> = registry.find(
+                    black_box(GuestContractId::from_u64(contract_id)),
+                    black_box(0u32),
+                );
+                let _ = black_box(result);
+            });
+        },
+    );
 
     group.finish();
 }
 
-// ─── Benchmark: find_by_contract with multiple slots (same contract) ─────────
+// ─── Benchmark: find_guest_contract with multiple slots (same contract) ─────────
 
 fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
     let registry: RuntimeStore = RuntimeStore::new();
@@ -178,7 +181,7 @@ fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
 
     group.bench_function(
-        BenchmarkId::new("find_by_contract", "10_impls_same_contract"),
+        BenchmarkId::new("find_guest_contract", "10_impls_same_contract"),
         |b| {
             b.iter(|| {
                 let result: Result<GuestContractHandle, _> = registry.find(
@@ -193,7 +196,7 @@ fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
     group.finish();
 }
 
-// ─── Benchmark: find_by_contract with many different contracts ──────────────
+// ─── Benchmark: find_guest_contract with many different contracts ──────────────
 
 fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
     let registry: RuntimeStore = RuntimeStore::new();
@@ -239,7 +242,7 @@ fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
 
     group.bench_function(
-        BenchmarkId::new("find_by_contract", "100_different_contracts"),
+        BenchmarkId::new("find_guest_contract", "100_different_contracts"),
         |b| {
             b.iter(|| {
                 let result: Result<GuestContractHandle, _> = registry.find(
@@ -254,7 +257,7 @@ fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
     group.finish();
 }
 
-// ─── Benchmark: find_by_contract not found ───────────────────────────────────
+// ─── Benchmark: find_guest_contract not found ───────────────────────────────────
 
 fn bench_registry_find_by_contract_not_found(c: &mut Criterion) {
     let registry: RuntimeStore = RuntimeStore::new();
@@ -278,7 +281,7 @@ fn bench_registry_find_by_contract_not_found(c: &mut Criterion) {
         c.benchmark_group("registry");
     group.throughput(Throughput::Elements(1));
 
-    group.bench_function(BenchmarkId::new("find_by_contract", "not_found"), |b| {
+    group.bench_function(BenchmarkId::new("find_guest_contract", "not_found"), |b| {
         b.iter(|| {
             let result: Result<GuestContractHandle, _> = registry.find(
                 black_box(GuestContractId::from_u64(nonexistent_contract_id)),

@@ -58,7 +58,7 @@ using Polyplug.Guest;
 [PolyplugPlugin]
 public static class MyPlugin
 {
-    public static void Init(HostInterface host, BundleInitContext ctx)
+    public static void Init(HostApi host, BundleInitContext ctx)
     {
         // Register your contract implementations via the host interface
         host.RegisterContract(host, ref descriptor, ref contractInterface);
@@ -109,7 +109,7 @@ C# wrappers over the polyplug C ABI:
 
 Bootstrap layer for C# plugins:
 - `[PolyplugPlugin]` attribute — Marks plugin entry point
-- `HostInterface` — Contract registration
+- `HostApi` — Contract registration
 - `BundleInitContext` — Bundle metadata
 - Exception boundary — Plugin crashes don't take down host
 

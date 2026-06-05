@@ -48,15 +48,15 @@
 //! // 5. Export init function — registers vtables with the host
 //! #[unsafe(no_mangle)]
 //! pub unsafe extern "C" fn polyplug_init(
-//!     host_abi: *const HostInterface,
+//!     host_abi: *const HostApi,
 //!     _ctx: *const BundleInitContext,
 //! ) -> AbiError {
 //!     if host_abi.is_null() {
 //!         return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
 //!     }
-//!     let host: &HostInterface = unsafe { &*host_abi };
+//!     let host: &HostApi = unsafe { &*host_abi };
 //!     unsafe {
-//!         (host.register_contract)(host_abi, &MY_DESCRIPTOR, &MY_VTABLE)
+//!         (host.register_guest_contract)(host_abi, &MY_DESCRIPTOR, &MY_VTABLE)
 //!     }
 //! }
 //! ```
@@ -69,7 +69,7 @@ use std::sync::OnceLock;
 /// Wrapper for host interface pointer that implements Send + Sync.
 /// The host interface is 'static and immutable, safe to share across threads.
 #[repr(transparent)]
-pub struct HostVtablePtr(pub *const polyplug_abi::HostInterface);
+pub struct HostVtablePtr(pub *const polyplug_abi::HostApi);
 
 // SAFETY: HostVtablePtr wraps a 'static host interface pointer provided by the host runtime.
 // The interface is immutable and valid for the plugin's lifetime. Multiple threads may read
@@ -165,7 +165,7 @@ pub use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
 /// Host contract interface for calling host-provided contracts (`HostContractInterface`).
 ///
 /// Use this type when declaring host contract interfaces in guest code.
-/// The code generator produces `register_contract` functions that populate this.
+/// The code generator produces `register_guest_contract` functions that populate this.
 pub use polyplug_abi::HostContractInterface;
 
 /// Host contract instance - opaque handle to a host contract.
@@ -173,9 +173,9 @@ pub use polyplug_abi::HostContractInstance;
 
 /// Host capabilities passed to every plugin at init time.
 ///
-/// Accessed via `HostInterface`. Provides allocation, plugin lookup,
+/// Accessed via `HostApi`. Provides allocation, plugin lookup,
 /// and extension vtable retrieval.
-pub use polyplug_abi::HostInterface;
+pub use polyplug_abi::HostApi;
 
 /// Metadata about a plugin within a bundle.
 ///
@@ -282,7 +282,7 @@ pub unsafe fn to_str(sv: &StringView) -> &str {
 
 /// Allocate a `StringView` from a `&str` using the host allocator.
 ///
-/// Allocates through the stored `HostInterface` (`host.alloc`, align 1), so the
+/// Allocates through the stored `HostApi` (`host.alloc`, align 1), so the
 /// bytes are owned by the host and never link a separate allocator copy into the
 /// plugin dylib. The caller (host) is responsible for freeing the memory via
 /// `host.free(host, ptr, len, 1)`.
@@ -300,7 +300,7 @@ pub unsafe fn to_str(sv: &StringView) -> &str {
 /// // Host must call host.free(host, sv.ptr, sv.len, 1) when done
 /// ```
 pub fn alloc_string(s: &str) -> Result<StringView, GuestError> {
-    let host_ptr: *const HostInterface = get_host_vtable();
+    let host_ptr: *const HostApi = get_host_vtable();
     if host_ptr.is_null() {
         return Err(GuestError {
             code: AbiErrorCode::Generic,
@@ -432,7 +432,7 @@ pub unsafe fn split<'a>(sv: &'a StringView, delimiter: &str) -> Vec<&'a str> {
 /// # Safety
 /// Must be called exactly once during polyplug_init, before any host contract access.
 /// The interface pointer must remain valid for the lifetime of the plugin.
-pub unsafe fn store_host_vtable(vtable: *const polyplug_abi::HostInterface) {
+pub unsafe fn store_host_vtable(vtable: *const polyplug_abi::HostApi) {
     let _: Result<(), HostVtablePtr> = HOST_VTABLE.set(HostVtablePtr(vtable));
 }
 
@@ -441,7 +441,7 @@ pub unsafe fn store_host_vtable(vtable: *const polyplug_abi::HostInterface) {
 /// Returns a pointer to the host interface stored during initialization.
 /// The pointer is valid for the lifetime of the plugin.
 /// Returns null if called before polyplug_init completes.
-pub fn get_host_vtable() -> *const polyplug_abi::HostInterface {
+pub fn get_host_vtable() -> *const polyplug_abi::HostApi {
     HOST_VTABLE.get().map(|p| p.0).unwrap_or(core::ptr::null())
 }
 
@@ -451,7 +451,7 @@ pub fn get_host_vtable() -> *const polyplug_abi::HostInterface {
 /// `host->get_extension(host, extension_id)`. Returns `None` if the host
 /// interface is unavailable or no extension is registered for that name.
 pub fn get_extension(extension_name: &str) -> Option<*const ()> {
-    let host_ptr: *const polyplug_abi::HostInterface = get_host_vtable();
+    let host_ptr: *const polyplug_abi::HostApi = get_host_vtable();
     if host_ptr.is_null() {
         return None;
     }
@@ -468,7 +468,7 @@ pub fn get_extension(extension_name: &str) -> Option<*const ()> {
 /// FFI utilities for guest plugins.
 ///
 /// Provides host interface access for generated code. Cross-boundary allocation
-/// goes through `crate::alloc_string` / the stored `HostInterface`, never a
+/// goes through `crate::alloc_string` / the stored `HostApi`, never a
 /// separately linked allocator symbol.
 pub mod ffi {
     /// Get the host interface that was passed during polyplug_init.
@@ -476,7 +476,7 @@ pub mod ffi {
     /// Returns a pointer to the host interface stored during initialization.
     /// The pointer is valid for the lifetime of the plugin.
     /// Returns null if called before polyplug_init completes.
-    pub fn get_host_vtable() -> *const polyplug_abi::HostInterface {
+    pub fn get_host_vtable() -> *const polyplug_abi::HostApi {
         crate::get_host_vtable()
     }
 }

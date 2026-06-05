@@ -15,7 +15,7 @@ DataTransformerGuestContract* g_transformer_impl = nullptr;
 
 extern "C" uint32_t polyplug_abi_version() { return 1U; }
 
-extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx) {
+extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {
     if (!host || !ctx) {
         static constexpr const char* err_msg = "null parameter in polyplug_init";
         return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};
@@ -31,7 +31,7 @@ extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitCon
         { (const uint8_t*)"data.Transformer@1", 18U },  // contract_name (StringView)
         { 1U, 0U, 0U }  // version (Version)
     };
-    AbiError err_TRANSFORMER = host->register_contract(host, &desc_TRANSFORMER, &polyplug_plugin::TRANSFORMER_INTERFACE);
+    AbiError err_TRANSFORMER = host->register_guest_contract(host, &desc_TRANSFORMER, &polyplug_plugin::TRANSFORMER_INTERFACE);
     if (err_TRANSFORMER.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return err_TRANSFORMER;
 
     return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
@@ -43,7 +43,7 @@ extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitCon
 /// Returns nullptr if the host interface is not yet initialized or the
 /// extension is not registered.
 inline const void* polyplug_get_extension(const char* name, size_t name_len) noexcept {
-    const HostInterface* host = polyplug::get_host_interface();
+    const HostApi* host = polyplug::get_host_interface();
     if (!host) return nullptr;
     uint32_t hash = 2166136261u;
     for (size_t i = 0; i < name_len; ++i) {

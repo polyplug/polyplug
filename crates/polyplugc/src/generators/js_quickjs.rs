@@ -623,8 +623,8 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
 
     out.push_str("/**\n");
     out.push_str(" * Initialize plugin with host runtime.\n");
-    out.push_str(" * @param host_lo - HostInterface pointer (low 32 bits)\n");
-    out.push_str(" * @param host_hi - HostInterface pointer (high 32 bits)\n");
+    out.push_str(" * @param host_lo - HostApi pointer (low 32 bits)\n");
+    out.push_str(" * @param host_hi - HostApi pointer (high 32 bits)\n");
     out.push_str(" * @param ctx_lo - BundleInitContext pointer (low 32 bits)\n");
     out.push_str(" * @param ctx_hi - BundleInitContext pointer (high 32 bits)\n");
     out.push_str(" */\n");

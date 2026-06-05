@@ -120,13 +120,13 @@ public static class Plugin
             if (hostPtr == nint.Zero)
                 return 1;
 
-            var host = (HostInterface*)hostPtr;
+            var host = (HostApi*)hostPtr;
 
             fixed (PluginDescriptor* descPtr = &s_descriptor)
             fixed (GuestContractInterface* ifacePtr = &s_interface)
             {
                 var registerContract =
-                    (delegate* unmanaged[Cdecl]<nint, nint, nint, AbiError>)host->RegisterContract;
+                    (delegate* unmanaged[Cdecl]<nint, nint, nint, AbiError>)host->RegisterGuestContract;
                 AbiError result = registerContract((nint)host, (nint)descPtr, (nint)ifacePtr);
                 return (uint)result.Code;
             }

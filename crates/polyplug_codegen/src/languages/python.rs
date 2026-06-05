@@ -39,7 +39,7 @@ impl PythonGenerator {
     /// Convert a compact fn ptr parameter string to a ctypes type.
     ///
     /// The compact format from `quote!()` is `name:type` with no spaces,
-    /// e.g., `host:*constHostInterface` or `size:usize`.
+    /// e.g., `host:*constHostApi` or `size:usize`.
     /// This splits on `:` and converts only the type part.
     fn convert_fn_param(param: &str) -> String {
         // Split on the `name: type` separator, which is the first single `:`.
@@ -70,7 +70,7 @@ impl PythonGenerator {
     /// Parse a function pointer type string and return (return_type, param_types).
     ///
     /// The compact `quote!()` output looks like:
-    /// `unsafeextern"C"fn(*constHostInterface,*constPluginDescriptor)->AbiError`
+    /// `unsafeextern"C"fn(*constHostApi,*constPluginDescriptor)->AbiError`
     fn parse_function_pointer(type_name: &str) -> Option<(String, Vec<String>)> {
         let type_str = Self::strip_option(type_name);
 
@@ -517,7 +517,7 @@ mod tests {
     /// Test that CFUNCTYPE typedefs use proper ctypes types (not raw Rust syntax).
     #[test]
     fn python_cfunctype_uses_ctypes_params() {
-        let rust_type = "unsafeextern\"C\"fn(host:*constHostInterface,contract_id:u64)->AbiError";
+        let rust_type = "unsafeextern\"C\"fn(host:*constHostApi,contract_id:u64)->AbiError";
         let Some((return_type, params)) = PythonGenerator::parse_function_pointer(rust_type) else {
             panic!("parse_function_pointer returned None for: {rust_type}");
         };

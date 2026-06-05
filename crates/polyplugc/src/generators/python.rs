@@ -289,7 +289,7 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional, TypeAlias\n\n");
-    out.push_str("from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostInterface, StringView\n\n");
+    out.push_str("from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostApi, StringView\n\n");
 
     // ContractError class for host-side error handling
     out.push_str("class ContractError(Exception):\n");
@@ -352,7 +352,7 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional\n\n");
-    out.push_str("from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostInterface, StringView\n\n");
+    out.push_str("from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostApi, StringView\n\n");
     out.push_str("class ContractError(Exception): ...\n\n");
 
     // Contract ID constants in stub
@@ -405,7 +405,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_abi import AbiErrorCode, AbiError, DispatchType, DispatchMechanisms, NativeDispatch, HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version\n");
+    out.push_str("from polyplug_abi import AbiErrorCode, AbiError, DispatchType, DispatchMechanisms, NativeDispatch, HostApi, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version\n");
     out.push_str(
         "from polyplug_guest import store_host_interface, get_host_interface, _init_allocator\n\n",
     );
@@ -480,7 +480,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("    \"\"\"Initialize plugin with host interface.\n");
     out.push('\n');
     out.push_str("    Args:\n");
-    out.push_str("        host_ptr: Pointer to HostInterface\n");
+    out.push_str("        host_ptr: Pointer to HostApi\n");
     out.push_str("        ctx_ptr: Pointer to BundleInitContext\n");
     out.push_str("    \"\"\"\n");
     out.push_str("    if host_ptr == 0:\n");
@@ -490,13 +490,13 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("    store_host_interface(host_ptr)\n");
     out.push_str("    _init_allocator(host_ptr, ctx_ptr)\n");
     out.push_str("    ctx: BundleInitContext = BundleInitContext.from_address(ctx_ptr)\n");
-    out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))\n");
+    out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))\n");
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
             let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
             out.push_str(&format!(
-                "    err_{plugin_upper}: AbiError = host.contents.register_contract(\n"
+                "    err_{plugin_upper}: AbiError = host.contents.register_guest_contract(\n"
             ));
             out.push_str(&format!("        host_ptr, ctypes.byref({plugin_upper}_DESCRIPTOR), ctypes.byref({plugin_upper}_INTERFACE)\n"));
             out.push_str("    )\n");
@@ -509,7 +509,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
         for contract in &ir.contracts {
             let upper: String = contract_name_to_upper_snake(&contract.name);
             out.push_str(&format!(
-                "    err_{upper}: AbiError = host.contents.register_contract(\n"
+                "    err_{upper}: AbiError = host.contents.register_guest_contract(\n"
             ));
             out.push_str(&format!(
                 "        host_ptr, ctypes.byref({upper}_DESCRIPTOR), ctypes.byref({upper}_INTERFACE)\n"
@@ -534,7 +534,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("    for byte in name:\n");
     out.push_str("        hash_val ^= byte\n");
     out.push_str("        hash_val = (hash_val * 16777619) & 0xFFFFFFFF\n");
-    out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))\n");
+    out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))\n");
     out.push_str("    return host.contents.get_extension(host_ptr, ctypes.c_uint32(hash_val))\n\n");
 
     out
@@ -546,7 +546,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any\n");
-    out.push_str("from polyplug_abi import HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView\n\n");
+    out.push_str("from polyplug_abi import HostApi, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -576,7 +576,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
 
     out.push_str("def polyplug_abi_version() -> int: ...\n");
     out.push_str("def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n");
-    out.push_str("    \"\"\"Initialize plugin with HostInterface pointer.\"\"\"\n");
+    out.push_str("    \"\"\"Initialize plugin with HostApi pointer.\"\"\"\n");
     out.push_str("    ...\n");
 
     out
@@ -668,9 +668,9 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     out.push_str("        Raises:\n");
     out.push_str("            ValueError: If interface not found or create_instance failed\n");
     out.push_str("        \"\"\"\n");
-    out.push_str("        # Resolve the interface from the handle via HostInterface method\n");
-    out.push_str("        # Cast host to HostInterface pointer and call resolve_guest_contract\n");
-    out.push_str("        host_iface: ctypes.POINTER(HostInterface) = ctypes.cast(host, ctypes.POINTER(HostInterface))\n");
+    out.push_str("        # Resolve the interface from the handle via HostApi method\n");
+    out.push_str("        # Cast host to HostApi pointer and call resolve_guest_contract\n");
+    out.push_str("        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(host, ctypes.POINTER(HostApi))\n");
     out.push_str("        self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)\n");
     out.push_str("        if not self._interface:\n");
     out.push_str("            raise ValueError(\"Contract not found\")\n");
@@ -1616,7 +1616,7 @@ fn generate_python_guest_host_contract_caller(out: &mut String, contract: &Resol
     out.push_str("    def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None:\n");
     out.push_str("        if host_ptr == 0:\n");
     out.push_str("            return None\n");
-    out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))\n");
+    out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))\n");
     out.push_str(&format!(
         "        interface: int = host.contents.get_host_contract(host_ptr, 0x{:016X}, min_version)\n",
         contract.contract_id
@@ -1837,7 +1837,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Self\n");
-    out.push_str("from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractInterface, HostInterface, StringView\n\n");
+    out.push_str("from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractInterface, HostApi, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_guest_host_contract_type_imports(ir);
     if !type_imports.is_empty() {

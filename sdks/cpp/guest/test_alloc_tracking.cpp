@@ -10,8 +10,8 @@
 //       sdks/cpp/guest/test_alloc_tracking.cpp -o /tmp/test_alloc_tracking
 //   /tmp/test_alloc_tracking
 //
-// The guest operators route through the HostInterface stored by
-// store_host_interface(); this test supplies a HostInterface whose alloc/free
+// The guest operators route through the HostApi stored by
+// store_host_interface(); this test supplies a HostApi whose alloc/free
 // function pointers do the bookkeeping below, then stores it before allocating.
 //
 // NOTE: this TU replaces the GLOBAL operator new/delete (via guest.hpp), so the
@@ -79,8 +79,8 @@ void record_free(void* ptr, std::size_t size, std::size_t align) {
 
 namespace {
 
-// Tracking allocator behind the HostInterface::alloc function pointer.
-std::uint8_t* tracking_alloc(const HostInterface* /*self*/, std::size_t size,
+// Tracking allocator behind the HostApi::alloc function pointer.
+std::uint8_t* tracking_alloc(const HostApi* /*self*/, std::size_t size,
                              std::size_t align) noexcept {
     std::size_t rounded = ((size + align - 1U) / align) * align;
     if (rounded == 0) {
@@ -94,8 +94,8 @@ std::uint8_t* tracking_alloc(const HostInterface* /*self*/, std::size_t size,
     return static_cast<std::uint8_t*>(p);
 }
 
-// Tracking deallocator behind the HostInterface::free function pointer.
-void tracking_free(const HostInterface* /*self*/, std::uint8_t* ptr, std::size_t size,
+// Tracking deallocator behind the HostApi::free function pointer.
+void tracking_free(const HostApi* /*self*/, std::uint8_t* ptr, std::size_t size,
                    std::size_t align) noexcept {
     if (ptr == nullptr) {
         return;
@@ -116,9 +116,9 @@ struct alignas(64) OverAligned {
 };
 
 int main() {
-    // Supply a HostInterface whose alloc/free do the bookkeeping, then store it
+    // Supply a HostApi whose alloc/free do the bookkeeping, then store it
     // so the guest operators (and any cross-boundary helper) can reach it.
-    HostInterface host{};
+    HostApi host{};
     host.alloc = tracking_alloc;
     host.free = tracking_free;
     polyplug::store_host_interface(&host);

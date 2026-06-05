@@ -24,7 +24,7 @@ function HostLoggerContract.from_host(host_ptr, min_version)
     if host_ptr == nil then
         return nil
     end
-    local host = ffi.cast("HostInterface*", host_ptr)
+    local host = ffi.cast("HostApi*", host_ptr)
     local interface_ptr = host.get_host_contract(host_ptr, 0xF53EB5F2845853BBULL, min_version)
     if interface_ptr == nil then
         return nil

@@ -3,7 +3,7 @@
 ## Terminology Note
 
 This document uses the following terminology (current as of v1.1):
-- **HostInterface**: The runtime's ABI table provided to guests during `polyplug_init`
+- **HostApi**: The runtime's ABI table provided to guests during `polyplug_init`
 - **GuestContractInterface**: The interface struct a plugin provides for the host to call
 
 ## Overview
@@ -227,12 +227,12 @@ Reserved error codes (0–255 runtime, 256+ plugin-defined):
 
 ---
 
-## HostInterface Note
+## HostApi Note
 
-`HostInterface` is **not** part of `DataRecord`. It is passed once at plugin init via
-`polyplug_init(host: *const HostInterface, ctx: *const BundleInitContext)` and must be
+`HostApi` is **not** part of `DataRecord`. It is passed once at plugin init via
+`polyplug_init(host: *const HostApi, ctx: *const BundleInitContext)` and must be
 stored in a static. It provides `alloc`, `free`, `find_guest_contract`,
-`register_contract`, and other host services.
+`register_guest_contract`, and other host services.
 
 Plugins must use `host.alloc` / `host.free` for all cross-boundary memory. Never use
 the system allocator for data that crosses the ABI boundary.

@@ -10,7 +10,7 @@ public static class Plugin {
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "polyplug_init")]
     public static AbiErrorCode PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {
         if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;
-        HostInterfaceStorage.StoreHostInterface(hostPtr);
+        RuntimeAbiStorage.StoreRuntimeAbi(hostPtr);
         System.Threading.Thread.BeginThreadAffinity();
         try {
         unsafe {
@@ -26,8 +26,8 @@ public static class Plugin {
                     ContractName = new StringView { Ptr = contractHandle_transformer.AddrOfPinnedObject(), Len = (nuint)contract_name_transformer.Length },
                     Version = new Version { Major = 1u, Minor = 0u, Patch = 0u },
                 };
-                var host = (HostInterface*)hostPtr;
-                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterContract;
+                var host = (HostApi*)hostPtr;
+                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;
                 var err_transformer = registerFn(hostPtr, &desc_transformer, interfacePtr_transformer);
                 if (err_transformer.Code != AbiErrorCode.Ok) return err_transformer.Code;
             }

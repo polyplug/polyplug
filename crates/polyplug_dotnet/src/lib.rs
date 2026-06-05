@@ -19,7 +19,7 @@ use polyplug::Runtime;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 
 use crate::context::CLR_CONTEXT;
 use crate::context::DotnetContext;
@@ -190,9 +190,9 @@ impl BundleLoader for DotnetLoader {
             },
         };
 
-        // Get HostInterface pointer from runtime (self-passing pattern).
+        // Get HostApi pointer from runtime (self-passing pattern).
         // This pointer is passed to the managed PolyplugInit as the first parameter.
-        let host_interface: *const HostInterface = runtime.as_context_ptr();
+        let host_interface: *const HostApi = runtime.as_context_ptr();
 
         // Push bundle_id onto the runtime's per-thread init stack for dependency
         // enforcement during init. The matching pop MUST run on every exit path
@@ -201,7 +201,7 @@ impl BundleLoader for DotnetLoader {
 
         // SAFETY: managed_init is a valid fn ptr from CLR. host_interface and ctx are non-null and valid.
         // InitFn signature: (host, ctx) -> u32
-        // The HostInterface pointer is passed directly (self-passing pattern).
+        // The HostApi pointer is passed directly (self-passing pattern).
         let result: u32 = unsafe { (*managed_init)(host_interface, &ctx) };
 
         // Pop bundle_id from the init stack after init completes (always, including

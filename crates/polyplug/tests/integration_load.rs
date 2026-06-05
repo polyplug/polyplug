@@ -10,7 +10,7 @@ use polyplug_abi::BundleInitContext;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractId;
 use polyplug_abi::GuestContractInterface;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 
@@ -19,13 +19,13 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 
 // ─── Host functions for integration tests ─────────────────────────────────────
 
-/// register_contract callback that captures the registered interface pointer for inspection.
+/// register_guest_contract callback that captures the registered interface pointer for inspection.
 ///
 /// # Safety
 /// `this`, `descriptor`, and `interface` must be valid non-null pointers for
 /// the duration of this call (guaranteed by the ABI contract).
 unsafe extern "C" fn capture_register(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -56,26 +56,21 @@ unsafe extern "C" fn capture_register(
 }
 
 /// No-op alloc callback.
-unsafe extern "C" fn noop_alloc(this: *const HostInterface, size: usize, align: usize) -> *mut u8 {
+unsafe extern "C" fn noop_alloc(this: *const HostApi, size: usize, align: usize) -> *mut u8 {
     let _ = this;
     polyplug_abi::ffi::polyplug_host_alloc(size, align)
 }
 
 /// No-op free callback.
-unsafe extern "C" fn noop_free(
-    this: *const HostInterface,
-    ptr: *mut u8,
-    size: usize,
-    align: usize,
-) {
+unsafe extern "C" fn noop_free(this: *const HostApi, ptr: *mut u8, size: usize, align: usize) {
     let _ = this;
     // SAFETY: polyplug_host_free is a safe wrapper around the system allocator.
     unsafe { polyplug_abi::ffi::polyplug_host_free(ptr, size, align) }
 }
 
-/// No-op find_by_contract callback.
+/// No-op find_guest_contract callback.
 unsafe extern "C" fn noop_find_guest_contract(
-    this: *const HostInterface,
+    this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> GuestContractHandle {
@@ -85,7 +80,7 @@ unsafe extern "C" fn noop_find_guest_contract(
 
 /// No-op find_all_by_contract callback (not used in this test).
 unsafe extern "C" fn noop_find_all_guest_contracts(
-    this: *const HostInterface,
+    this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::Array<GuestContractHandle> {
@@ -93,9 +88,9 @@ unsafe extern "C" fn noop_find_all_guest_contracts(
     polyplug_abi::Array::empty()
 }
 
-/// No-op resolve_contract callback.
+/// No-op resolve_guest_contract callback.
 unsafe extern "C" fn noop_resolve_guest_contract(
-    this: *const HostInterface,
+    this: *const HostApi,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     let _ = this;
@@ -104,7 +99,7 @@ unsafe extern "C" fn noop_resolve_guest_contract(
 
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
-    this: *const HostInterface,
+    this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -114,7 +109,7 @@ unsafe extern "C" fn noop_get_host_contract(
 
 /// No-op list_bundles callback.
 unsafe extern "C" fn noop_list_bundles(
-    this: *const HostInterface,
+    this: *const HostApi,
 ) -> polyplug_abi::Array<polyplug_utils::BundleId> {
     let _ = this;
     polyplug_abi::Array::empty()
@@ -122,7 +117,7 @@ unsafe extern "C" fn noop_list_bundles(
 
 /// No-op get_dependencies callback.
 unsafe extern "C" fn noop_get_dependencies(
-    this: *const HostInterface,
+    this: *const HostApi,
 ) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
     let _ = this;
     polyplug_abi::Array::empty()
@@ -130,7 +125,7 @@ unsafe extern "C" fn noop_get_dependencies(
 
 /// No-op resolve_host_contract_interface callback.
 unsafe extern "C" fn noop_resolve_host_contract_interface(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
 ) -> *const polyplug_abi::HostContractInterface {
@@ -139,7 +134,7 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
 
 /// No-op load_bundle callback.
 unsafe extern "C" fn noop_load_bundle(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
@@ -151,7 +146,7 @@ unsafe extern "C" fn noop_load_bundle(
 
 /// No-op reload_bundle callback.
 unsafe extern "C" fn noop_reload_bundle(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
 ) -> AbiError {
@@ -163,7 +158,7 @@ unsafe extern "C" fn noop_reload_bundle(
 
 /// No-op register_host_contract callback.
 unsafe extern "C" fn noop_register_host_contract(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
     AbiError {
@@ -174,7 +169,7 @@ unsafe extern "C" fn noop_register_host_contract(
 
 /// No-op register_loader callback.
 unsafe extern "C" fn noop_register_loader(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _runtime_name: StringView,
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
@@ -186,7 +181,7 @@ unsafe extern "C" fn noop_register_loader(
 
 /// No-op get_last_error callback.
 unsafe extern "C" fn noop_get_last_error(
-    _this: *const HostInterface,
+    _this: *const HostApi,
     _buf: *mut u8,
     _buf_len: usize,
 ) -> usize {
@@ -194,15 +189,12 @@ unsafe extern "C" fn noop_get_last_error(
 }
 
 /// No-op get_error_len callback.
-unsafe extern "C" fn noop_get_error_len(_this: *const HostInterface) -> usize {
+unsafe extern "C" fn noop_get_error_len(_this: *const HostApi) -> usize {
     0
 }
 
 /// No-op get_extension callback.
-unsafe extern "C" fn noop_get_extension(
-    _this: *const HostInterface,
-    _extension_id: u32,
-) -> *const () {
+unsafe extern "C" fn noop_get_extension(_this: *const HostApi, _extension_id: u32) -> *const () {
     core::ptr::null()
 }
 
@@ -247,20 +239,20 @@ fn test_init_registers_interface() {
     };
 
     // Resolve polyplug_init symbol.
-    // SAFETY: polyplug_init is a C function with the HostInterface ABI (2-arg signature).
+    // SAFETY: polyplug_init is a C function with the HostApi ABI (2-arg signature).
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError,
+        unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
     };
 
-    // Build a HostInterface that captures registration data.
-    let host_interface: HostInterface = HostInterface {
+    // Build a HostApi that captures registration data.
+    let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
-        register_contract: capture_register,
+        register_guest_contract: capture_register,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,
@@ -290,7 +282,7 @@ fn test_init_registers_interface() {
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let result: AbiError = unsafe {
         init_fn(
-            &host_interface as *const HostInterface,
+            &host_interface as *const HostApi,
             &ctx as *const BundleInitContext,
         )
     };

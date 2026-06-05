@@ -23,7 +23,7 @@ _RUNTIME_NAME: str = "js-quickjs"
 
 
 def register_js_loader(runtime: Runtime) -> None:
-    """Register the JS (QuickJS) loader with the runtime via HostInterface.register_loader."""
+    """Register the JS (QuickJS) loader with the runtime via HostApi.register_loader."""
     lib: ctypes.CDLL = _get_lib()
     cfg = _JsConfig(0)
     loader_ptr: int = lib.polyplug_js_loader_create(ctypes.byref(cfg))

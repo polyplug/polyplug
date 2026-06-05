@@ -3,14 +3,14 @@
 //! Integration tests: cross-plugin lookup, multi-impl registry, stale handle detection,
 //! and dependency enforcement via the new Epic 9.7 ABI.
 //!
-//! Tests a-d: pure Registry API (find_by_contract, find_by_bundle, find_all, resolve).
+//! Tests a-d: pure Registry API (find_guest_contract, find_by_bundle, find_all, resolve).
 //! Tests e-g: dependency enforcement -- see `crates/polyplug/src/runtime/mod.rs`
 //!            unit tests (`cross_plugin_dep_tests` submodule) because `INIT_BUNDLE_ID`
 //!            is `pub(crate)` and cannot be accessed from an external crate.
 //!
 
 use polyplug_abi::{
-    DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface, HostInterface,
+    DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface, HostApi,
     NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::GuestContractId;
@@ -19,7 +19,7 @@ use polyplug_utils::GuestContractId;
 
 /// Create a null instance (stub for tests).
 unsafe extern "C" fn null_create_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -27,7 +27,7 @@ unsafe extern "C" fn null_create_instance(
 
 /// Destroy instance (stub for tests).
 unsafe extern "C" fn null_destroy_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }
@@ -99,7 +99,7 @@ mod tests {
 
     // -- Test a ----------------------------------------------------------------
 
-    /// Single plugin registered for a contract -- find_by_contract returns a valid handle.
+    /// Single plugin registered for a contract -- find_guest_contract returns a valid handle.
     #[test]
     fn find_by_contract_single_plugin() {
         let registry: RuntimeStore = RuntimeStore::new();
@@ -115,7 +115,7 @@ mod tests {
 
         let handle: GuestContractHandle = registry
             .find_guest_contract(cid, 0)
-            .expect("find_by_contract should return Ok");
+            .expect("find_guest_contract should return Ok");
 
         assert!(!handle.is_null(), "returned handle must not be null");
     }

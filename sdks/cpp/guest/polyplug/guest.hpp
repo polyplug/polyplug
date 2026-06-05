@@ -4,7 +4,7 @@
 // Including this header in exactly one translation unit per plugin bundle:
 //   1. Overrides global operator new / operator delete to route all
 //      heap allocations through the host allocator function pointers on the
-//      HostInterface (host->alloc / host->free), stored per-DSO by
+//      HostApi (host->alloc / host->free), stored per-DSO by
 //      store_host_interface() inside polyplug_init.
 //   2. Provides the POLYPLUG_GUEST_MAIN macro that expands to the required
 //      extern "C" polyplug_init signature.
@@ -15,7 +15,7 @@
 //   #include <polyplug/guest.hpp>
 //
 //   POLYPLUG_GUEST_MAIN {
-//       // host->register_contract(host, &kDescriptor, &kInterface);
+//       // host->register_guest_contract(host, &kDescriptor, &kInterface);
 //       AbiError err{};
 //       err.code        = static_cast<uint32_t>(AbiErrorCode::Ok);
 //       err.message.ptr = nullptr;
@@ -72,26 +72,26 @@ static_assert(POLYPLUG_ABI_VERSION == 1,
 // `polyplug::alloc_string` / Buffer with an explicit size), so prefixing a
 // header is sound.
 
-// ─── HostInterface Storage ───────────────────────────────────────────────────────
+// ─── HostApi Storage ───────────────────────────────────────────────────────
 //
-// The host allocator lives behind function pointers on the HostInterface, which
+// The host allocator lives behind function pointers on the HostApi, which
 // polyplug_init receives and stores here for the rest of the DSO's lifetime.
 
 namespace polyplug {
 namespace detail {
 
-inline const HostInterface*& host_interface_storage() noexcept {
-    static const HostInterface* stored = nullptr;
+inline const HostApi*& host_interface_storage() noexcept {
+    static const HostApi* stored = nullptr;
     return stored;
 }
 
 }
 
-inline void store_host_interface(const HostInterface* iface) noexcept {
+inline void store_host_interface(const HostApi* iface) noexcept {
     detail::host_interface_storage() = iface;
 }
 
-inline const HostInterface* get_host_interface() noexcept {
+inline const HostApi* get_host_interface() noexcept {
     return detail::host_interface_storage();
 }
 
@@ -105,7 +105,7 @@ inline const HostInterface* get_host_interface() noexcept {
 /// Returns an empty StringView when the host interface is unavailable (called
 /// before polyplug_init stored it) or on allocation failure.
 inline StringView alloc_string(const std::string& s) {
-    const HostInterface* host = get_host_interface();
+    const HostApi* host = get_host_interface();
     if (host == nullptr) {
         return StringView{nullptr, 0};
     }
@@ -143,7 +143,7 @@ constexpr std::size_t header_slot(std::size_t align) noexcept {
 /// Returns the user pointer (just past the header), or nullptr on failure or
 /// when the host interface has not been stored yet (e.g. before polyplug_init).
 inline void* tracked_alloc(std::size_t payload, std::size_t align) noexcept {
-    const HostInterface* host = polyplug::get_host_interface();
+    const HostApi* host = polyplug::get_host_interface();
     if (host == nullptr) {
         return nullptr;
     }
@@ -166,7 +166,7 @@ inline void tracked_free(void* user) noexcept {
     if (user == nullptr) {
         return;
     }
-    const HostInterface* host = polyplug::get_host_interface();
+    const HostApi* host = polyplug::get_host_interface();
     if (host == nullptr) {
         return;
     }
@@ -257,7 +257,7 @@ void operator delete[](void* ptr, std::size_t /*sz*/, std::align_val_t /*al*/) n
 ///
 /// Usage:
 ///   POLYPLUG_GUEST_MAIN {
-///       // register contracts via host->register_contract(host, &desc, &iface)
+///       // register contracts via host->register_guest_contract(host, &desc, &iface)
 ///       AbiError ok{};
 ///       ok.code        = static_cast<uint32_t>(AbiErrorCode::Ok);
 ///       ok.message.ptr = nullptr;
@@ -266,6 +266,6 @@ void operator delete[](void* ptr, std::size_t /*sz*/, std::align_val_t /*al*/) n
 ///   }
 ///
 /// The macro expands to:
-///   extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx)
+///   extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx)
 #define POLYPLUG_GUEST_MAIN \
-    extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx)
+    extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx)

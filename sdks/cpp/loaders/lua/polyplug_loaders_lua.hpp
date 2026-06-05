@@ -19,7 +19,7 @@ inline void register_lua(Runtime& rt) {
     if (loader == nullptr) {
         throw std::runtime_error("polyplug: lua loader create failed");
     }
-    const HostInterface* host = rt.host();
+    const HostApi* host = rt.host();
     static const char runtime_name[] = "lua";
     StringView name{reinterpret_cast<const uint8_t*>(runtime_name), sizeof(runtime_name) - 1};
     AbiError err = host->register_loader(host, name, loader);

@@ -668,7 +668,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = \"polyplug_init\")]\n");
     out.push_str("    public static AbiErrorCode PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {\n");
     out.push_str("        if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;\n");
-    out.push_str("        HostInterfaceStorage.StoreHostInterface(hostPtr);\n");
+    out.push_str("        RuntimeAbiStorage.StoreRuntimeAbi(hostPtr);\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
     out.push_str("        unsafe {\n");
@@ -741,8 +741,8 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                     ));
                     out.push_str(&format!("                    Version = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
                     out.push_str("                };\n");
-                    out.push_str("                var host = (HostInterface*)hostPtr;\n");
-                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterContract;\n");
+                    out.push_str("                var host = (HostApi*)hostPtr;\n");
+                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;\n");
                     out.push_str(&format!(
                         "                var err_{plugin_lower} = registerFn(hostPtr, &desc_{plugin_lower}, interfacePtr_{plugin_lower});\n"
                     ));
@@ -798,8 +798,8 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
             ));
             out.push_str(&format!("                    Version = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
             out.push_str("                };\n");
-            out.push_str("                var host = (HostInterface*)hostPtr;\n");
-            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterContract;\n");
+            out.push_str("                var host = (HostApi*)hostPtr;\n");
+            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;\n");
             out.push_str(&format!(
                 "                var err_{lower} = registerFn(hostPtr, &desc_{lower}, interfacePtr_{lower});\n"
             ));
@@ -876,12 +876,12 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         ));
         out.push_str("    private readonly GuestContractInterface* _interface;\n");
         out.push_str("    private GuestContractInstance _instance;\n");
-        out.push_str("    private readonly HostInterface* _host;\n");
+        out.push_str("    private readonly HostApi* _host;\n");
         out.push_str("    private bool _disposed;\n\n");
 
         // Private constructor
         out.push_str(&format!(
-            "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {{\n"
+            "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {{\n"
         ));
         out.push_str("        _interface = iface;\n");
         out.push_str("        _instance = inst;\n");
@@ -891,8 +891,8 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
 
         // create_instance / destroy_instance are IntPtr fn pointers in the ABI struct.
         // Cast them to the canonical native dispatch signature before calling.
-        let create_cast: &str = "((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)";
-        let destroy_cast: &str = "((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)";
+        let create_cast: &str = "((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)";
+        let destroy_cast: &str = "((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)";
 
         // Factory method
         out.push_str(
@@ -907,14 +907,14 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         // GuestContractHandle is `#[repr(C)] { index: u32 }`; FindGuestContract returns a
         // uint and the null handle sentinel is index == u32::MAX (0xFFFFFFFF).
         out.push_str("        if (handle == uint.MaxValue) { return null; }\n");
-        out.push_str("        var host = (HostInterface*)rt.HostHandle;\n");
+        out.push_str("        var host = (HostApi*)rt.HostHandle;\n");
         out.push_str(
             "        var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);\n",
         );
         out.push_str("        if (iface == null) { return null; }\n");
         // A null instance handle is valid: stateless contracts return a null handle
         // from create_instance and use it as an opaque dispatch token.
-        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;\n");
+        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;\n");
         out.push_str("        var inst = createFn(host, null);\n");
         out.push_str(&format!(
             "        return new {caller_name}(iface, inst, host);\n"
@@ -1180,7 +1180,7 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     ));
 
     // Factory method - FromHost
-    out.push_str("    /// <summary>Factory method - creates caller from HostInterface or null if not found.</summary>\n");
+    out.push_str("    /// <summary>Factory method - creates caller from HostApi or null if not found.</summary>\n");
     out.push_str(&format!(
         "    public static {}? FromHost(IntPtr host, uint minVersion = 0) {{\n",
         class_name
@@ -1189,7 +1189,7 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     out.push_str("            return null;\n");
     out.push_str("        }\n");
     out.push_str("        unsafe {\n");
-    out.push_str("            var hostInterface = (HostInterface*)host;\n");
+    out.push_str("            var hostInterface = (HostApi*)host;\n");
     out.push_str(&format!(
         "            var instance = hostInterface->GetHostContract(host, 0x{:016X}UL, minVersion);\n",
         contract.contract_id

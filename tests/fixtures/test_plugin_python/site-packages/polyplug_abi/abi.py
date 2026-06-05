@@ -1,4 +1,7 @@
 # Re-export all types from the auto-generated abi module.
-# The auto-generated file is at sdks/python/abi/abi.py (per D-28).
+# The canonical file is at sdks/python/abi/abi.py.
 # This shared package makes the types available via `from polyplug_abi import ...`.
-from polyplug.abi.abi import *  # noqa: F401,F403
+try:
+    from abi.abi import *  # noqa: F401,F403
+except ImportError:
+    from polyplug.abi.abi import *  # noqa: F401,F403

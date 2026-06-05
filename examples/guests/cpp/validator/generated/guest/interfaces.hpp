@@ -59,13 +59,13 @@ static void* const VALIDATOR_FNS[] = {
 };
 
 // Default create_instance stub for validator - returns null instance.
-static GuestContractInstance VALIDATOR_create_instance_stub(const HostInterface* host, const void* args) noexcept {
+static GuestContractInstance VALIDATOR_create_instance_stub(const HostApi* host, const void* args) noexcept {
     (void)host; (void)args;  // Unused in default stub.
     return GuestContractInstance{nullptr, 0U};  // Null instance for stateless plugins.
 }
 
 // Default destroy_instance stub for validator - no-op.
-static void VALIDATOR_destroy_instance_stub(const HostInterface* host, GuestContractInstance instance) noexcept {
+static void VALIDATOR_destroy_instance_stub(const HostApi* host, GuestContractInstance instance) noexcept {
     (void)host; (void)instance;  // Unused in default stub.
     // No-op - stateless plugins don't need cleanup.
 }

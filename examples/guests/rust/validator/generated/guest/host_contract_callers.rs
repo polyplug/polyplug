@@ -12,9 +12,9 @@ use polyplug_guest::AbiError;
 use polyplug_guest::AbiErrorCode;
 use polyplug_guest::DispatchType;
 use polyplug_guest::GuestContractInstance;
+use polyplug_guest::HostApi;
 use polyplug_guest::HostContractInstance;
 use polyplug_guest::HostContractInterface;
-use polyplug_guest::HostInterface;
 use polyplug_guest::StringView;
 use polyplug_guest::alloc_string;
 use polyplug_guest::string_view_null;
@@ -41,25 +41,25 @@ impl HostContractError {
 /// Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 pub struct HostLoggerCaller {
     /// Vtable for the host contract: provides dispatch metadata and function pointers.
-    /// Resolved via `HostInterface::resolve_host_contract_interface`.
+    /// Resolved via `HostApi::resolve_host_contract_interface`.
     interface: *const HostContractInterface,
     /// Per-instance state for the host contract, produced by
-    /// `HostInterface::get_host_contract`. Passed as the first argument to native
+    /// `HostApi::get_host_contract`. Passed as the first argument to native
     /// dispatch functions (the host thunk dereferences it as the implementation pointer).
     instance: HostContractInstance,
 }
 
 impl HostLoggerCaller {
-    /// Factory method - creates caller from HostInterface or None if not found.
+    /// Factory method - creates caller from HostApi or None if not found.
     ///
     /// # Safety
     /// The `host` pointer must be valid and non-null.
-    pub unsafe fn from_host(host: *const HostInterface, min_version: u32) -> Option<Self> {
+    pub unsafe fn from_host(host: *const HostApi, min_version: u32) -> Option<Self> {
         if host.is_null() {
             return None;
         }
         // SAFETY: host is non-null and valid per ABI contract.
-        let host: &HostInterface = unsafe { &*host };
+        let host: &HostApi = unsafe { &*host };
         // Resolve the contract vtable. This is the source of dispatch metadata
         // (dispatch_type, function_count, functions) — NOT the instance.
         let interface: *const HostContractInterface = unsafe {

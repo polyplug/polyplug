@@ -3,7 +3,7 @@
 ## Terminology Note
 
 This document uses the following terminology (current as of v1.1):
-- **HostInterface**: The runtime's ABI table provided to guests (a `#[repr(C)]` struct of function pointers)
+- **HostApi**: The runtime's ABI table provided to guests (a `#[repr(C)]` struct of function pointers)
 - **GuestContractInterface**: The interface struct a plugin provides for the host to call
 - **Host Contract**: A contract provided by the host to plugins
 - **Guest Contract**: A contract implemented by plugins
@@ -26,11 +26,11 @@ uint32_t polyplug_abi_version(void);
 
 ### `polyplug_init`
 ```c
-AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx);
+AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx);
 ```
 **Called by:** Host immediately after dlopen
 **Parameters:**
-- `host`: The `HostInterface` function table; the plugin registers by calling `host->register_contract(host, &descriptor, &interface)`
+- `host`: The `HostApi` function table; the plugin registers by calling `host->register_guest_contract(host, &descriptor, &interface)`
 - `ctx`: Context containing bundle_id and bundle_path
 **Purpose:** Plugin constructor - registers contracts with the runtime
 
@@ -49,39 +49,39 @@ The runtime exports exactly **two** `#[no_mangle]` C symbols, both runtime
 lifecycle entry points. Every other operation — including cross-boundary
 allocation (load/reload, discovery, resolution, registration, error handling,
 and `alloc` / `free`) — is reached through the function-pointer fields of the
-`HostInterface` returned by `polyplug_runtime_create`, not through additional
+`HostApi` returned by `polyplug_runtime_create`, not through additional
 C exports.
 
 ### Runtime Lifecycle
 ```c
 // Create a new runtime instance. Pass NULL for config to use defaults.
-// Returns a HostInterface* that exposes all runtime operations.
-const HostInterface* polyplug_runtime_create(const void* config);
+// Returns a HostApi* that exposes all runtime operations.
+const HostApi* polyplug_runtime_create(const void* config);
 
 // Destroy a runtime instance (double-destroy is a safe no-op).
-void polyplug_runtime_destroy(const HostInterface* host);
+void polyplug_runtime_destroy(const HostApi* host);
 ```
 
-### Cross-Boundary Allocator (via HostInterface fields)
+### Cross-Boundary Allocator (via HostApi fields)
 ```c
 // Allocate memory that crosses the plugin/host boundary.
 // Returns NULL for size == 0 or invalid alignment.
-uint8_t* host->alloc(const HostInterface* host, size_t size, size_t align);
+uint8_t* host->alloc(const HostApi* host, size_t size, size_t align);
 
 // Free memory previously allocated by host->alloc.
 // Must pass the SAME size and align used for the allocation.
-void host->free(const HostInterface* host, uint8_t* ptr, size_t size, size_t align);
+void host->free(const HostApi* host, uint8_t* ptr, size_t size, size_t align);
 ```
 
-### All Other Operations (via HostInterface fields)
+### All Other Operations (via HostApi fields)
 
-`polyplug_runtime_create` returns a pointer to `HostInterface`, a `144`-byte
+`polyplug_runtime_create` returns a pointer to `HostApi`, a `144`-byte
 `#[repr(C)]` struct: one opaque runtime pointer plus 17 function-pointer fields
 (the 17th being `get_extension` at offset 136). Host applications and plugins call
 these fields using the self-passing pattern, e.g. `host->load_bundle(host, path, path_len)`.
 The fields cover bundle lifecycle (`load_bundle`, `reload_bundle`), contract
 discovery (`find_guest_contract`, `find_all_guest_contracts`,
-`resolve_guest_contract`), registration (`register_contract`,
+`resolve_guest_contract`), registration (`register_guest_contract`,
 `register_host_contract`, `register_loader`), and error handling
 (`get_last_error`, `get_error_len`), among others.
 
@@ -91,7 +91,7 @@ discovery (`find_guest_contract`, `find_all_guest_contracts`,
 Host Application
     │
     ▼
-polyplug_runtime_create() ──► HostInterface* (Runtime Instance)
+polyplug_runtime_create() ──► HostApi* (Runtime Instance)
     │
     ▼
 host->load_bundle(host, path, len)
@@ -104,7 +104,7 @@ host->load_bundle(host, path, len)
 Call: polyplug_init(host, ctx)
     │
     ├── Plugin builds interfaces
-    ├── Plugin calls host->register_contract(host, &descriptor, &interface)
+    ├── Plugin calls host->register_guest_contract(host, &descriptor, &interface)
     └── Interfaces stored in RuntimeStore
     │
     ▼
@@ -125,7 +125,7 @@ polyplug_runtime_destroy(host)
 The core ABI freezes at v1.0 per §7 of CLAUDE.md. The project is currently pre-1.0
 (no public release yet), so ABI-visible changes are still permitted with explicit
 owner approval. At and after v1.0:
-- `HostInterface` layout cannot change
+- `HostApi` layout cannot change
 - `BundleInitContext` layout cannot change (no field additions or removals)
 - `polyplug_init` signature is fixed (2 params)
 - All additions go through the host contract / extension system
@@ -133,5 +133,5 @@ owner approval. At and after v1.0:
 ## Future Extensions
 
 New functionality should use:
-1. Host contract interfaces resolved via `HostInterface.get_host_contract`
-2. The extension system via `HostInterface.get_extension`
+1. Host contract interfaces resolved via `HostApi.get_host_contract`
+2. The extension system via `HostApi.get_extension`

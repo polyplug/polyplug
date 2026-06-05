@@ -23,7 +23,7 @@ use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::VmLoaderData;
@@ -56,7 +56,7 @@ pub struct LuaLoaderData {
 /// # Safety
 /// Lua plugins use VM dispatch with global state; instances are not used.
 unsafe extern "C" fn lua_create_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -66,10 +66,7 @@ unsafe extern "C" fn lua_create_instance(
 ///
 /// # Safety
 /// Lua plugins don't own instance data.
-unsafe extern "C" fn lua_destroy_instance(
-    _host: *const HostInterface,
-    _instance: GuestContractInstance,
-) {
+unsafe extern "C" fn lua_destroy_instance(_host: *const HostApi, _instance: GuestContractInstance) {
 }
 
 // ─── Lua Dispatch Function ─────────────────────────────────────────────────────
@@ -264,9 +261,9 @@ impl LuaLoader {
                     })
                 })?;
 
-        // Get HostInterface pointer from runtime.
+        // Get HostApi pointer from runtime.
         // The interface already has the runtime pointer set.
-        let host_interface: *const HostInterface = runtime.as_context_ptr();
+        let host_interface: *const HostApi = runtime.as_context_ptr();
 
         // Push bundle_id onto the runtime's per-thread init stack for dependency
         // enforcement during init. The matching pop MUST run on every exit path
@@ -284,9 +281,9 @@ impl LuaLoader {
             },
             bundle_id,
         };
-        // Pass HostInterface pointer and BundleInitContext pointer to Lua.
-        // The HostInterface uses self-passing pattern - Lua guest code will pass it back
-        // as the first parameter to each HostInterface function call.
+        // Pass HostApi pointer and BundleInitContext pointer to Lua.
+        // The HostApi uses self-passing pattern - Lua guest code will pass it back
+        // as the first parameter to each HostApi function call.
         let host_interface_i64: i64 = host_interface as usize as i64;
         let ctx_ptr: i64 = &ctx as *const polyplug_abi::BundleInitContext as i64;
         let init_result: Result<(), mlua::Error> =
@@ -452,13 +449,13 @@ impl LuaLoader {
                 },
             };
 
-            // Call register_contract via the HostInterface self-passing pattern.
-            // SAFETY: `host_interface` is a valid HostInterface pointer for this call.
-            // `descriptor` is stack-allocated and valid for this call (register_contract must copy
+            // Call register_guest_contract via the HostApi self-passing pattern.
+            // SAFETY: `host_interface` is a valid HostApi pointer for this call.
+            // `descriptor` is stack-allocated and valid for this call (register_guest_contract must copy
             // any data it needs to retain — the contract is that descriptor is borrowed for the call only).
             // `static_interface` is a leaked Box — valid for 'static lifetime.
             let reg_result: AbiError = unsafe {
-                ((*host_interface).register_contract)(
+                ((*host_interface).register_guest_contract)(
                     host_interface,
                     &descriptor as *const PluginDescriptor,
                     static_interface,
@@ -469,7 +466,7 @@ impl LuaLoader {
                 return Err(RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: bundle_name,
                     error: format!(
-                        "register_contract error for contract '{}': code={:?}",
+                        "register_guest_contract error for contract '{}': code={:?}",
                         contract_name_str, reg_result.code
                     ),
                 }));

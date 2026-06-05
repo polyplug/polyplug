@@ -334,7 +334,7 @@ fn generate_cpp_guest_plugin_interface(
         plugin_name
     ));
     out.push_str(&format!(
-        "static GuestContractInstance {0}_create_instance_stub(const HostInterface* host, const void* args) noexcept {{\n",
+        "static GuestContractInstance {0}_create_instance_stub(const HostApi* host, const void* args) noexcept {{\n",
         plugin_upper
     ));
     out.push_str("    (void)host; (void)args;  // Unused in default stub.\n");
@@ -347,7 +347,7 @@ fn generate_cpp_guest_plugin_interface(
         plugin_name
     ));
     out.push_str(&format!(
-        "static void {0}_destroy_instance_stub(const HostInterface* host, GuestContractInstance instance) noexcept {{\n",
+        "static void {0}_destroy_instance_stub(const HostApi* host, GuestContractInstance instance) noexcept {{\n",
         plugin_upper
     ));
     out.push_str("    (void)host; (void)instance;  // Unused in default stub.\n");
@@ -421,7 +421,7 @@ fn generate_cpp_guest_contract_interface(
         contract.name
     ));
     out.push_str(&format!(
-        "static GuestContractInstance {0}_create_instance_stub(const HostInterface* host, const void* args) noexcept {{\n",
+        "static GuestContractInstance {0}_create_instance_stub(const HostApi* host, const void* args) noexcept {{\n",
         upper
     ));
     out.push_str("    (void)host; (void)args;  // Unused in default stub.\n");
@@ -434,7 +434,7 @@ fn generate_cpp_guest_contract_interface(
         contract.name
     ));
     out.push_str(&format!(
-        "static void {0}_destroy_instance_stub(const HostInterface* host, GuestContractInstance instance) noexcept {{\n",
+        "static void {0}_destroy_instance_stub(const HostApi* host, GuestContractInstance instance) noexcept {{\n",
         upper
     ));
     out.push_str("    (void)host; (void)instance;  // Unused in default stub.\n");
@@ -691,7 +691,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("extern \"C\" uint32_t polyplug_abi_version() { return 1U; }\n\n");
 
     // polyplug_init
-    out.push_str("extern \"C\" AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx) {\n");
+    out.push_str("extern \"C\" AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {\n");
     out.push_str("    if (!host || !ctx) {\n");
     out.push_str(
         "        static constexpr const char* err_msg = \"null parameter in polyplug_init\";\n",
@@ -745,7 +745,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
             out.push_str("    };\n");
 
             out.push_str(&format!(
-                "    AbiError err_{upper} = host->register_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_INTERFACE);\n",
+                "    AbiError err_{upper} = host->register_guest_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_INTERFACE);\n",
                 upper = plugin_upper
             ));
             out.push_str(&format!(
@@ -755,7 +755,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         }
     } else {
         for contract in &ir.contracts {
-            generate_init_hpp_register_contract(&mut out, contract)?;
+            generate_init_hpp_register_guest_contract(&mut out, contract)?;
         }
     }
 
@@ -772,7 +772,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str(
         "inline const void* polyplug_get_extension(const char* name, size_t name_len) noexcept {\n",
     );
-    out.push_str("    const HostInterface* host = polyplug::get_host_interface();\n");
+    out.push_str("    const HostApi* host = polyplug::get_host_interface();\n");
     out.push_str("    if (!host) return nullptr;\n");
     out.push_str("    uint32_t hash = 2166136261u;\n");
     out.push_str("    for (size_t i = 0; i < name_len; ++i) {\n");
@@ -790,7 +790,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     Ok(out)
 }
 
-fn generate_init_hpp_register_contract(
+fn generate_init_hpp_register_guest_contract(
     out: &mut String,
     contract: &ResolvedContract,
 ) -> Result<(), PolyplugcError> {
@@ -829,7 +829,7 @@ fn generate_init_hpp_register_contract(
     out.push_str("    };\n");
 
     out.push_str(&format!(
-        "    AbiError err_{upper} = host->register_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_INTERFACE);\n",
+        "    AbiError err_{upper} = host->register_guest_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_INTERFACE);\n",
         upper = upper
     ));
     out.push_str(&format!(
@@ -1075,20 +1075,20 @@ fn generate_cpp_host_contract(
     out.push_str("    /// Calls `create_instance` on the resolved interface.\n");
     out.push_str("    ///\n");
     out.push_str("    /// # Arguments\n");
-    out.push_str("    /// - `handle`: Contract handle from `find_by_contract`\n");
+    out.push_str("    /// - `handle`: Contract handle from `find_guest_contract`\n");
     out.push_str("    /// - `host`: Host interface pointer\n");
     out.push_str("    ///\n");
     out.push_str("    /// # Returns\n");
     out.push_str("    /// - `std::optional<Self>` if interface found and instance created\n");
     out.push_str("    /// - `std::nullopt` if interface not found or `create_instance` failed\n");
     out.push_str(&format!(
-        "    static std::optional<{}> create(GuestContractHandle handle, const HostInterface* host) noexcept {{\n",
+        "    static std::optional<{}> create(GuestContractHandle handle, const HostApi* host) noexcept {{\n",
         class_name
     ));
     out.push_str("        if (host == nullptr) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
-    out.push_str("        // Resolve the interface from the handle via HostInterface method.\n");
+    out.push_str("        // Resolve the interface from the handle via HostApi method.\n");
     out.push_str("        const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);\n");
     out.push_str("        if (iface == nullptr) {\n");
     out.push_str("            return std::nullopt;\n");
@@ -1184,9 +1184,9 @@ fn generate_cpp_host_contract(
     out.push_str("    /// Instance handle created by `create_instance`.\n");
     out.push_str("    GuestContractInstance instance_;\n");
     out.push_str("    /// Host interface pointer (needed for create/destroy_instance).\n");
-    out.push_str("    const HostInterface* host_;\n\n");
+    out.push_str("    const HostApi* host_;\n\n");
     out.push_str(&format!(
-        "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept\n",
+        "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept\n",
         class_name
     ));
     out.push_str("        : interface_(iface), instance_(inst), host_(host) {}\n");
@@ -1549,11 +1549,9 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
 
     // Factory method - from_host
-    out.push_str(
-        "    /// Factory method - creates caller from HostInterface or nullopt if not found.\n",
-    );
+    out.push_str("    /// Factory method - creates caller from HostApi or nullopt if not found.\n");
     out.push_str(&format!(
-        "    static std::optional<{}> from_host(const HostInterface* host, uint32_t min_version = 0) noexcept {{\n",
+        "    static std::optional<{}> from_host(const HostApi* host, uint32_t min_version = 0) noexcept {{\n",
         class_name
     ));
     out.push_str("        if (host == nullptr) {\n");
@@ -2494,7 +2492,7 @@ mod tests {
         // Check for instance-based factory method. The handle is the typed
         // GuestContractHandle (a u32 index struct), never a raw u64.
         assert!(
-            out.contains("static std::optional<TestAddContract> create(GuestContractHandle handle, const HostInterface* host) noexcept"),
+            out.contains("static std::optional<TestAddContract> create(GuestContractHandle handle, const HostApi* host) noexcept"),
             "missing factory method: {out}"
         );
 
@@ -2530,7 +2528,7 @@ mod tests {
             "missing interface member: {out}"
         );
         assert!(
-            out.contains("const HostInterface* host_"),
+            out.contains("const HostApi* host_"),
             "missing host member: {out}"
         );
 
@@ -2580,7 +2578,7 @@ mod tests {
 
         // Check private constructor
         assert!(
-            out.contains("explicit TestAddContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept"),
+            out.contains("explicit TestAddContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept"),
             "missing private constructor: {out}"
         );
 

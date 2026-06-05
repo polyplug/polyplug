@@ -115,7 +115,7 @@ impl Runtime {
                 error: format!("bundle library not found at {}", path.display()),
             });
             if let Some(cb) = self.on_reload_cb() {
-                cb(
+                (cb.0)(
                     self.config().on_reload_user_data,
                     ReloadPhase::failed(
                         bundle_id,
@@ -132,7 +132,7 @@ impl Runtime {
 
         // Fire Preparing callback
         if let Some(cb) = self.on_reload_cb() {
-            cb(
+            (cb.0)(
                 self.config().on_reload_user_data,
                 ReloadPhase::preparing(bundle_id, string_view(&manifest.name)),
             );
@@ -186,7 +186,7 @@ impl Runtime {
 
                 // Fire Reloaded callback
                 if let Some(cb) = self.on_reload_cb() {
-                    cb(
+                    (cb.0)(
                         self.config().on_reload_user_data,
                         ReloadPhase::reloaded(bundle_id, string_view(&manifest.name)),
                     );
@@ -200,7 +200,7 @@ impl Runtime {
                 self.registry.abort_reload(bundle_id, &slot_indices);
                 // Fire Failed callback - NO interface swap on failure
                 if let Some(cb) = self.on_reload_cb() {
-                    cb(
+                    (cb.0)(
                         self.config().on_reload_user_data,
                         ReloadPhase::failed(
                             bundle_id,

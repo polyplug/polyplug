@@ -86,15 +86,15 @@ struct GuestContractInterface {
     DispatchMechanisms dispatch;
 };
 
-// HostInterface is opaque to this fixture except for `register_contract`, which
+// HostApi is opaque to this fixture except for `register_guest_contract`, which
 // is the first function pointer following the leading `runtime` pointer.
 using register_contract_fn = AbiError (*)(const void* host,
                                           const PluginDescriptor* descriptor,
                                           const GuestContractInterface* interface);
 
-struct HostInterface {
+struct HostApi {
     void* runtime;
-    register_contract_fn register_contract;
+    register_contract_fn register_guest_contract;
     // Remaining function pointers are unused by this fixture.
 };
 
@@ -159,9 +159,9 @@ extern "C" uint32_t polyplug_abi_version() {
     return 1U;
 }
 
-extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx) {
+extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {
     if (host == nullptr || ctx == nullptr) {
         return AbiError{AbiErrorCode::Generic, StringView{nullptr, 0}};
     }
-    return host->register_contract(host, &kTestAddDescriptor, &kTestAddInterface);
+    return host->register_guest_contract(host, &kTestAddDescriptor, &kTestAddInterface);
 }

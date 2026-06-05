@@ -166,7 +166,7 @@ Once a plugin has successfully obtained a `GuestContractHandle` during Phase 1, 
 Polyplug allows multiple bundles to implement the same contract, enabling a rich ecosystem of providers. The runtime provides three distinct query APIs to resolve these implementations.
 
 ### Query APIs
-1. **`find_by_contract(contract_id, min_version)`**:
+1. **`find_guest_contract(contract_id, min_version)`**:
    The standard lookup. It returns the `GuestContractHandle` for the **first registered** provider that satisfies the version requirement. This is deterministic based on the load order.
 2. **`find_by_bundle(bundle_id, contract_id, min_version)`**:
    A scoped lookup. This allows a caller to request an implementation from a specific provider bundle, bypassing the default resolution order.
@@ -181,7 +181,7 @@ Polyplug allows multiple bundles to implement the same contract, enabling a rich
 ### Multi-impl Scenario
 Consider an application that supports multiple audio decoders. Both `flac-bundle` and `mp3-bundle` might register the same `audio.Decoder` contract.
 
-1. **`find_by_contract`**: The first one to register (e.g., `flac-bundle`) will be returned as the system default.
+1. **`find_guest_contract`**: The first one to register (e.g., `flac-bundle`) will be returned as the system default.
 2. **`find_by_bundle`**: The host can explicitly ask for the `mp3-bundle` implementation.
 3. **`find_all_by_contract`**: The UI can enumerate all available decoders to show a selection list.
 
@@ -190,21 +190,21 @@ The following table summarizes the sizes and alignments of the core ABI types on
 
 | Type | Size (bytes) | Alignment (bytes) | Key Fields |
 |------|--------------|-------------------|------------|
-| `HostInterface` | 144 | 8 | `runtime` opaque ptr + 17 function pointers |
+| `HostApi` | 144 | 8 | `runtime` opaque ptr + 17 function pointers |
 | `GuestContractInterface` | 24 | 8 | `contract_id`, `functions` ptr |
 | `GuestContractHandle` | 4 | 4 | `index` (u32, no generation) |
 | `StringView` | 16 | 8 | `ptr`, `len` |
 | `AbiError` | 24 | 8 | `code`, `message` (StringView) |
 
-`HostInterface`'s 17 function pointers (offsets verified in
-`crates/polyplug_abi/src/host/host_interface.rs`): `register_contract` (8), `alloc` (16),
+`HostApi`'s 17 function pointers (offsets verified in
+`crates/polyplug_abi/src/host/host_interface.rs`): `register_guest_contract` (8), `alloc` (16),
 `free` (24), `find_guest_contract` (32), `find_all_guest_contracts` (40),
 `resolve_guest_contract` (48), `get_host_contract` (56),
 `resolve_host_contract_interface` (64), `list_bundles` (72), `get_dependencies` (80),
 `load_bundle` (88), `reload_bundle` (96), `register_host_contract` (104),
 `register_loader` (112), `get_last_error` (120), `get_error_len` (128),
 `get_extension` (136). There is no `call_guest_method`, `find_by_bundle`, or
-`resolve_plugin` pointer in `HostInterface`.
+`resolve_plugin` pointer in `HostApi`.
 
 ### Pointer Validity After Resolution
 The C ABI deals in raw handles and pointers: `find_guest_contract` returns a
@@ -227,7 +227,7 @@ The polyplug trust model is a **Software Architecture Enforcement Tool**, not a 
 | Protection Type | Status | Description |
 |-----------------|--------|-------------|
 | Undeclared Dependencies | **YES** | Caught during initialization lookup. |
-| Version Mismatches | **YES** | Rejected by `find_by_contract` if version < `min_version`. |
+| Version Mismatches | **YES** | Rejected by `find_guest_contract` if version < `min_version`. |
 | Use-after-Unload | **YES** | Caught by generational index checks in `GuestContractHandle`. |
 | Malformed / corrupted binaries | **YES** | Invalid UTF-8, truncated, wrong magic, missing `init` — all return clean errors. |
 | Null pointer inputs to C facade | **YES** | All `polyplug_rt_*` functions null-check every pointer at entry. |
@@ -278,17 +278,17 @@ The core polyplug ABI **freezes at v1.0**. There is no public release yet, so th
 
 ### Frozen Surface Areas
 The following structures have the layouts and sizes that will be frozen at v1.0. At/after v1.0, any modification to these (e.g., adding a field or changing field order) is a breaking change. Sizes are verified by the layout tests in `crates/polyplug_abi`.
-- **`HostInterface` (144 bytes)**: An opaque `runtime` pointer followed by 17 function pointers (full list in §5).
+- **`HostApi` (144 bytes)**: An opaque `runtime` pointer followed by 17 function pointers (full list in §5).
 - **`GuestContractInterface` (24 bytes)**: Fixed header before the function pointer array.
 - **`GuestContractHandle` (4 bytes)**: a single 4-byte `index` (no generation field).
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
 
 ### Extensibility via host contracts and extensions
 To support future capabilities without breaking the ABI, the host exposes contracts through
-`HostInterface::get_host_contract(contract_id, min_version)` (and
+`HostApi::get_host_contract(contract_id, min_version)` (and
 `resolve_host_contract_interface`). New host-side capabilities are added as new host contracts
-that plugins resolve by ID, rather than by extending the frozen `HostInterface` struct.
-In addition, `HostInterface::get_extension(extension_id)` returns host-provided opaque
+that plugins resolve by ID, rather than by extending the frozen `HostApi` struct.
+In addition, `HostApi::get_extension(extension_id)` returns host-provided opaque
 pointers keyed by a 32-bit FNV-1a hash of the extension name, giving the host a second,
 ID-based extension channel that also avoids changing the struct layout.
 
@@ -349,7 +349,7 @@ return `HotReloadDisabled`. See the Hot-Reload Safety Guarantees section above.
 Python, Lua, and JavaScript (QuickJS) plugins are implemented. All respect the same trust model rules — scripted plugins have their own bundle ID and declare dependencies in `bundle.toml`. The runtime enforces these through the same `INIT_BUNDLE_ID` mechanism used by native code.
 
 ### Priority Resolution
-A weighting system for multi-impl providers is planned for a future version. This will allow the host or a "Coordinator Bundle" to assign priorities to implementations, ensuring that `find_by_contract` returns the "best" provider rather than just the first one registered.
+A weighting system for multi-impl providers is planned for a future version. This will allow the host or a "Coordinator Bundle" to assign priorities to implementations, ensuring that `find_guest_contract` returns the "best" provider rather than just the first one registered.
 
 ### WASM sandbox support
 Future versions will support WASM plugins in a sandboxed execution environment, providing crash isolation without IPC overhead. This is the planned path for untrusted plugin execution.
@@ -377,7 +377,7 @@ and communicate via IPC. polyplug does not provide this facility.
 //
 // The following types and function signatures constitute the polyplug ABI that
 // freezes at v1.0. While pre-1.0, changes to #[repr(C)] structs, function pointer
-// signatures, or the field order of HostInterface ARE permitted, but ONLY after
+// signatures, or the field order of HostApi ARE permitted, but ONLY after
 // explicit owner approval — never unilaterally. At and after v1.0, NO such changes
 // are permitted.
 //

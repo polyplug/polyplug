@@ -11,10 +11,10 @@ ffi.cdef[[
     typedef struct VmLoaderData VmLoaderData;
     typedef struct GuestContractInstance GuestContractInstance;
     typedef struct GuestContractInterface GuestContractInterface;
+    typedef struct HostApi HostApi;
     typedef struct HostContractInstance HostContractInstance;
     typedef struct HostContractInterface HostContractInterface;
-    typedef struct HostInterface HostInterface;
-    typedef struct RuntimeInterface RuntimeInterface;
+    typedef struct RuntimeApi RuntimeApi;
     typedef struct GuestContractHandle GuestContractHandle;
     typedef struct BundleInitContext BundleInitContext;
     typedef struct PluginDescriptor PluginDescriptor;
@@ -99,39 +99,28 @@ ffi.cdef[[
     } GuestContractInstance;
     // Expected size: 16 bytes
 
-    //  Opaque handle to a host contract instance.
-    // 
-    //  Created by `HostContractInterface::create_instance`, destroyed by `destroy_instance`.
-    //  For singleton host contracts, the same instance is returned for all callers.
-    typedef struct HostContractInstance {
-        //  Opaque instance data pointer.
-        //  The actual data is owned by the host.
-        void* data;
-    } HostContractInstance;
-    // Expected size: 8 bytes
-
-    typedef AbiError (*HostInterface_register_contract_fn)(const HostInterface*, const PluginDescriptor*, const GuestContractInterface*);
-    typedef uint8_t* (*HostInterface_alloc_fn)(const HostInterface*, size_t, size_t);
-    typedef void (*HostInterface_free_fn)(const HostInterface*, uint8_t*, size_t, size_t);
-    typedef GuestContractHandle (*HostInterface_find_guest_contract_fn)(const HostInterface*, uint64_t, uint32_t);
-    typedef void* (*HostInterface_find_all_guest_contracts_fn)(const HostInterface*, uint64_t, uint32_t);
-    typedef const GuestContractInterface* (*HostInterface_resolve_guest_contract_fn)(const HostInterface*, GuestContractHandle);
-    typedef HostContractInstance (*HostInterface_get_host_contract_fn)(const HostInterface*, uint64_t, uint32_t);
-    typedef const HostContractInterface* (*HostInterface_resolve_host_contract_interface_fn)(const HostInterface*, uint64_t, uint32_t);
-    typedef void* (*HostInterface_list_bundles_fn)(const HostInterface*);
-    typedef void* (*HostInterface_get_dependencies_fn)(const HostInterface*);
-    typedef AbiError (*HostInterface_load_bundle_fn)(const HostInterface*, const uint8_t*, size_t);
-    typedef AbiError (*HostInterface_reload_bundle_fn)(const HostInterface*, const uint8_t*, size_t);
-    typedef AbiError (*HostInterface_register_host_contract_fn)(const HostInterface*, const HostContractInterface*);
-    typedef AbiError (*HostInterface_register_loader_fn)(const HostInterface*, StringView, void*);
-    typedef size_t (*HostInterface_get_last_error_fn)(const HostInterface*, uint8_t*, size_t);
-    typedef size_t (*HostInterface_get_error_len_fn)(const HostInterface*);
-    typedef const void* (*HostInterface_get_extension_fn)(const HostInterface*, uint32_t);
+    typedef AbiError (*HostApi_register_guest_contract_fn)(const HostApi*, const PluginDescriptor*, const GuestContractInterface*);
+    typedef uint8_t* (*HostApi_alloc_fn)(const HostApi*, size_t, size_t);
+    typedef void (*HostApi_free_fn)(const HostApi*, uint8_t*, size_t, size_t);
+    typedef GuestContractHandle (*HostApi_find_guest_contract_fn)(const HostApi*, uint64_t, uint32_t);
+    typedef void* (*HostApi_find_all_guest_contracts_fn)(const HostApi*, uint64_t, uint32_t);
+    typedef const GuestContractInterface* (*HostApi_resolve_guest_contract_fn)(const HostApi*, GuestContractHandle);
+    typedef HostContractInstance (*HostApi_get_host_contract_fn)(const HostApi*, uint64_t, uint32_t);
+    typedef const HostContractInterface* (*HostApi_resolve_host_contract_interface_fn)(const HostApi*, uint64_t, uint32_t);
+    typedef void* (*HostApi_list_bundles_fn)(const HostApi*);
+    typedef void* (*HostApi_get_dependencies_fn)(const HostApi*);
+    typedef AbiError (*HostApi_load_bundle_fn)(const HostApi*, const uint8_t*, size_t);
+    typedef AbiError (*HostApi_reload_bundle_fn)(const HostApi*, const uint8_t*, size_t);
+    typedef AbiError (*HostApi_register_host_contract_fn)(const HostApi*, const HostContractInterface*);
+    typedef AbiError (*HostApi_register_loader_fn)(const HostApi*, StringView, void*);
+    typedef size_t (*HostApi_get_last_error_fn)(const HostApi*, uint8_t*, size_t);
+    typedef size_t (*HostApi_get_error_len_fn)(const HostApi*);
+    typedef const void* (*HostApi_get_extension_fn)(const HostApi*, uint32_t);
     //  Host Interface — function table passed to guests during initialization.
     // 
     //  Contains an opaque runtime pointer and function pointers for guest calls.
-    //  All functions use self-passing pattern (receive HostInterface pointer as first parameter).
-    //  `HostInterface` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
+    //  All functions use self-passing pattern (receive HostApi pointer as first parameter).
+    //  `HostApi` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
     // 
     //  # Who provides
     //  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -154,9 +143,9 @@ ffi.cdef[[
     // 
     //  # Self-passing pattern
     //  Each function receives the interface pointer as its first parameter,
-    //  allowing guests to call: `host->find_by_contract(host, id, ver)`
-    //  SDKs hide this pattern: `host.find_by_contract(id, ver)`
-    typedef struct HostInterface {
+    //  allowing guests to call: `host->find_guest_contract(host, id, ver)`
+    //  SDKs hide this pattern: `host.find_guest_contract(id, ver)`
+    typedef struct HostApi {
         //  Opaque pointer to Runtime.
         // 
         //  Set during interface creation. Provides access to runtime state
@@ -171,86 +160,86 @@ ffi.cdef[[
         //  Returns error if contract_id collision detected or ABI version mismatch.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `descriptor`: Plugin descriptor with contract metadata
         //  - `interface`: GuestContractInterface to register
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        HostInterface_register_contract_fn register_contract;
+        HostApi_register_guest_contract_fn register_guest_contract;
         //  Allocate memory using the host allocator.
         // 
         //  Memory allocated here must be freed via `free`.
         //  Returns null on allocation failure.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `size`: Number of bytes to allocate
         //  - `align`: Alignment requirement (must be power of 2)
         // 
         //  # Returns
         //  Pointer to allocated memory, or null on failure.
-        HostInterface_alloc_fn alloc;
+        HostApi_alloc_fn alloc;
         //  Free memory allocated via `alloc`.
         // 
         //  Must pass the same size and align used for allocation.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `ptr`: Pointer to memory to free
         //  - `size`: Size used for allocation
         //  - `align`: Alignment used for allocation
-        HostInterface_free_fn free;
+        HostApi_free_fn free;
         //  Find a guest contract by contract_id and minimum version.
         // 
         //  Returns a GuestContractHandle that can be resolved to an interface.
         //  Returns null handle if no matching contract found.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `contract_id`: Contract identifier hash
         //  - `min_version`: Minimum version required
         // 
         //  # Returns
         //  GuestContractHandle for the first matching contract, or null handle.
-        HostInterface_find_guest_contract_fn find_guest_contract;
+        HostApi_find_guest_contract_fn find_guest_contract;
         //  Find all guest contracts matching contract_id and minimum version.
         // 
         //  Returns an Array of GuestContractHandle. Caller must free via `host->free`.
         //  Use when multiple implementations of the same contract may exist.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `contract_id`: Contract identifier hash
         //  - `min_version`: Minimum version required
         // 
         //  # Returns
         //  Array of GuestContractHandle. Caller owns and must free.
-        HostInterface_find_all_guest_contracts_fn find_all_guest_contracts;
+        HostApi_find_all_guest_contracts_fn find_all_guest_contracts;
         //  Resolve a GuestContractHandle to a GuestContractInterface pointer.
         // 
         //  Returns null if the handle is invalid or contract was unloaded.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `handle`: GuestContractHandle from find_guest_contract
         // 
         //  # Returns
         //  Pointer to GuestContractInterface, or null if invalid/stale.
-        HostInterface_resolve_guest_contract_fn resolve_guest_contract;
+        HostApi_resolve_guest_contract_fn resolve_guest_contract;
         //  Get a host contract instance by contract_id and minimum version.
         // 
         //  For singleton host contracts, returns the same instance every time.
         //  For multi-instance host contracts, returns a new instance each time.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `contract_id`: Host contract identifier hash
         //  - `min_version`: Minimum version required
         // 
         //  # Returns
         //  HostContractInstance for the contract.
-        HostInterface_get_host_contract_fn get_host_contract;
+        HostApi_get_host_contract_fn get_host_contract;
         //  Resolve a host contract interface by contract_id and minimum version.
         // 
         //  Returns the HostContractInterface pointer for the contract.
@@ -258,109 +247,109 @@ ffi.cdef[[
         //  Returns null if no matching contract found.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `contract_id`: Host contract identifier hash
         //  - `min_version`: Minimum version required
         // 
         //  # Returns
         //  Pointer to HostContractInterface, or null if invalid/not found.
-        HostInterface_resolve_host_contract_interface_fn resolve_host_contract_interface;
+        HostApi_resolve_host_contract_interface_fn resolve_host_contract_interface;
         //  List all loaded bundles.
         // 
         //  Returns an Array of BundleId. Caller must free via `host->free`.
         //  Bundle IDs are stable for the lifetime of the runtime.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         // 
         //  # Returns
         //  Array of BundleId. Caller owns and must free.
-        HostInterface_list_bundles_fn list_bundles;
+        HostApi_list_bundles_fn list_bundles;
         //  Get dependencies for the calling bundle.
         // 
         //  Uses bundle_id from current BundleInitContext (TLS) to look up declared deps.
         //  Returns an Array of DependencyInfo. Caller must free via `host->free`.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         // 
         //  # Returns
         //  Array of DependencyInfo. Caller owns and must free.
         //  Returns empty array if called outside bundle init context.
-        HostInterface_get_dependencies_fn get_dependencies;
+        HostApi_get_dependencies_fn get_dependencies;
         //  Load a plugin bundle from a path.
         // 
         //  Host applications call this to load a bundle at runtime.
         //  The loader matching the bundle's runtime type is used.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `path`: UTF-8 path to bundle directory (not null-terminated)
         //  - `path_len`: Length of path in bytes
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        HostInterface_load_bundle_fn load_bundle;
+        HostApi_load_bundle_fn load_bundle;
         //  Reload a plugin bundle (hot-reload).
         // 
         //  Replaces the bundle's contracts with new versions from the updated binary.
         //  All instances must be destroyed before calling this.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `path`: UTF-8 path to bundle directory (not null-terminated)
         //  - `path_len`: Length of path in bytes
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        HostInterface_reload_bundle_fn reload_bundle;
+        HostApi_reload_bundle_fn reload_bundle;
         //  Register a host contract interface.
         // 
         //  Host applications register their contracts for plugins to consume.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `interface`: HostContractInterface to register
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        HostInterface_register_host_contract_fn register_host_contract;
+        HostApi_register_host_contract_fn register_host_contract;
         //  Register a language loader.
         // 
         //  Host applications register loaders for each runtime language they support.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `runtime_name`: Name of the runtime (e.g., "rust", "python")
         //  - `loader_ptr`: Opaque pointer to the loader implementation
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        HostInterface_register_loader_fn register_loader;
+        HostApi_register_loader_fn register_loader;
         //  Get last error message.
         // 
         //  Returns the most recent error message from this runtime.
         //  Copies up to buf_len bytes into buf.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `buf`: Buffer to write error message into
         //  - `buf_len`: Maximum bytes to write
         // 
         //  # Returns
         //  Number of bytes written (0 if no error or buffer too small).
-        HostInterface_get_last_error_fn get_last_error;
+        HostApi_get_last_error_fn get_last_error;
         //  Get last error message length.
         // 
         //  Returns the byte length of the most recent error message.
         //  Use to allocate buffer before calling get_last_error.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         // 
         //  # Returns
         //  Length of last error message (0 if no error).
-        HostInterface_get_error_len_fn get_error_len;
+        HostApi_get_error_len_fn get_error_len;
         //  Get a registered extension by extension ID.
         // 
         //  Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
@@ -370,30 +359,41 @@ ffi.cdef[[
         //  Returns null if no extension is registered for the given ID.
         // 
         //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
+        //  - `this`: HostApi pointer (self-passing)
         //  - `extension_id`: 32-bit FNV-1a hash of the extension name
         // 
         //  # Returns
         //  Opaque pointer to the extension, or null if not registered.
-        HostInterface_get_extension_fn get_extension;
-    } HostInterface;
+        HostApi_get_extension_fn get_extension;
+    } HostApi;
     // Expected size: 144 bytes
 
-    typedef AbiError (*RuntimeInterface_load_bundle_fn)(const RuntimeInterface*, StringView);
-    typedef AbiError (*RuntimeInterface_reload_bundle_fn)(const RuntimeInterface*, uint64_t);
-    typedef AbiError (*RuntimeInterface_unload_bundle_fn)(const RuntimeInterface*, uint64_t);
-    typedef GuestContractHandle (*RuntimeInterface_find_by_contract_fn)(const RuntimeInterface*, uint64_t, uint32_t);
-    typedef void* (*RuntimeInterface_find_all_by_contract_fn)(const RuntimeInterface*, uint64_t, uint32_t);
-    typedef const GuestContractInterface* (*RuntimeInterface_resolve_contract_fn)(const RuntimeInterface*, GuestContractHandle);
-    typedef HostContractInstance (*RuntimeInterface_get_host_contract_fn)(const RuntimeInterface*, uint64_t, uint32_t);
-    typedef StringView (*RuntimeInterface_get_last_error_fn)(const RuntimeInterface*);
-    typedef void* (*RuntimeInterface_list_bundles_fn)(const RuntimeInterface*);
-    typedef void* (*RuntimeInterface_get_dependencies_fn)(const RuntimeInterface*);
-    typedef void (*RuntimeInterface_destroy_fn)(const RuntimeInterface*);
+    //  Opaque handle to a host contract instance.
+    // 
+    //  Created by `HostContractInterface::create_instance`, destroyed by `destroy_instance`.
+    //  For singleton host contracts, the same instance is returned for all callers.
+    typedef struct HostContractInstance {
+        //  Opaque instance data pointer.
+        //  The actual data is owned by the host.
+        void* data;
+    } HostContractInstance;
+    // Expected size: 8 bytes
+
+    typedef AbiError (*RuntimeApi_load_bundle_fn)(const RuntimeApi*, StringView);
+    typedef AbiError (*RuntimeApi_reload_bundle_fn)(const RuntimeApi*, uint64_t);
+    typedef AbiError (*RuntimeApi_unload_bundle_fn)(const RuntimeApi*, uint64_t);
+    typedef GuestContractHandle (*RuntimeApi_find_guest_contract_fn)(const RuntimeApi*, uint64_t, uint32_t);
+    typedef void* (*RuntimeApi_find_all_by_contract_fn)(const RuntimeApi*, uint64_t, uint32_t);
+    typedef const GuestContractInterface* (*RuntimeApi_resolve_guest_contract_fn)(const RuntimeApi*, GuestContractHandle);
+    typedef HostContractInstance (*RuntimeApi_get_host_contract_fn)(const RuntimeApi*, uint64_t, uint32_t);
+    typedef StringView (*RuntimeApi_get_last_error_fn)(const RuntimeApi*);
+    typedef void* (*RuntimeApi_list_bundles_fn)(const RuntimeApi*);
+    typedef void* (*RuntimeApi_get_dependencies_fn)(const RuntimeApi*);
+    typedef void (*RuntimeApi_destroy_fn)(const RuntimeApi*);
     //  Runtime Interface — function table returned to host from polyplug_runtime_create().
     // 
     //  Contains an opaque runtime pointer and function pointers for host calls.
-    //  All functions take `*const RuntimeInterface` as first parameter.
+    //  All functions take `*const RuntimeApi` as first parameter.
     // 
     //  # Who provides
     //  The runtime creates this struct and returns it from `polyplug_runtime_create()`.
@@ -418,7 +418,7 @@ ffi.cdef[[
     //  Each function receives the interface pointer as its first parameter,
     //  allowing hosts to call: `rt->load_bundle(rt, path)`
     //  SDKs hide this pattern: `rt.load_bundle(path)`
-    typedef struct RuntimeInterface {
+    typedef struct RuntimeApi {
         //  Opaque pointer to Runtime.
         // 
         //  Set during interface creation. Provides access to runtime state.
@@ -432,13 +432,13 @@ ffi.cdef[[
         //  Dependencies are resolved in topological order.
         // 
         //  # Arguments
-        //  - `this`: RuntimeInterface pointer (self-passing)
+        //  - `this`: RuntimeApi pointer (self-passing)
         //  - `path`: UTF-8 path to the bundle directory or manifest file (not null-terminated)
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
         //  Use `get_last_error()` for detailed error message.
-        RuntimeInterface_load_bundle_fn load_bundle;
+        RuntimeApi_load_bundle_fn load_bundle;
         //  Reload a bundle (hot-reload).
         // 
         //  Triggers hot-reload of the specified bundle. The runtime will:
@@ -449,117 +449,117 @@ ffi.cdef[[
         //  5. Call post-reload callbacks
         // 
         //  # Arguments
-        //  - `this`: RuntimeInterface pointer (self-passing)
+        //  - `this`: RuntimeApi pointer (self-passing)
         //  - `bundle_id`: ID of the bundle to reload
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        RuntimeInterface_reload_bundle_fn reload_bundle;
+        RuntimeApi_reload_bundle_fn reload_bundle;
         //  Unload a bundle.
         // 
         //  Removes the bundle and all its guest contracts from the registry.
         //  Host must destroy all instances before unloading.
         // 
         //  # Arguments
-        //  - `this`: RuntimeInterface pointer (self-passing)
+        //  - `this`: RuntimeApi pointer (self-passing)
         //  - `bundle_id`: ID of the bundle to unload
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        RuntimeInterface_unload_bundle_fn unload_bundle;
+        RuntimeApi_unload_bundle_fn unload_bundle;
         //  Find a guest contract by contract_id and minimum version.
         // 
         //  Returns a GuestContractHandle that can be resolved to an interface.
         //  Returns null handle if no matching contract found.
         // 
         //  # Arguments
-        //  - `this`: RuntimeInterface pointer (self-passing)
+        //  - `this`: RuntimeApi pointer (self-passing)
         //  - `contract_id`: Contract identifier hash
         //  - `min_version`: Minimum version required
         // 
         //  # Returns
         //  GuestContractHandle for the first matching contract, or null handle.
-        RuntimeInterface_find_by_contract_fn find_by_contract;
+        RuntimeApi_find_guest_contract_fn find_guest_contract;
         //  Find all guest contracts matching contract_id and minimum version.
         // 
         //  Returns an Array of GuestContractHandle. Caller must free via host->free.
         //  Use when multiple implementations of the same contract may exist.
         // 
         //  # Arguments
-        //  - `this`: RuntimeInterface pointer (self-passing)
+        //  - `this`: RuntimeApi pointer (self-passing)
         //  - `contract_id`: Contract identifier hash
         //  - `min_version`: Minimum version required
         // 
         //  # Returns
         //  Array of GuestContractHandle. Caller owns and must free.
-        RuntimeInterface_find_all_by_contract_fn find_all_by_contract;
+        RuntimeApi_find_all_by_contract_fn find_all_by_contract;
         //  Resolve a GuestContractHandle to a GuestContractInterface pointer.
         // 
         //  Returns null if the handle is invalid or contract was unloaded.
         // 
         //  # Arguments
-        //  - `this`: RuntimeInterface pointer (self-passing)
-        //  - `handle`: GuestContractHandle from find_by_contract
+        //  - `this`: RuntimeApi pointer (self-passing)
+        //  - `handle`: GuestContractHandle from find_guest_contract
         // 
         //  # Returns
         //  Pointer to GuestContractInterface, or null if invalid/stale.
-        RuntimeInterface_resolve_contract_fn resolve_contract;
+        RuntimeApi_resolve_guest_contract_fn resolve_guest_contract;
         //  Get a host contract instance by contract_id and minimum version.
         // 
         //  For singleton host contracts, returns the same instance every time.
         //  For multi-instance host contracts, returns a new instance each time.
         // 
         //  # Arguments
-        //  - `this`: RuntimeInterface pointer (self-passing)
+        //  - `this`: RuntimeApi pointer (self-passing)
         //  - `contract_id`: Host contract identifier hash
         //  - `min_version`: Minimum version required
         // 
         //  # Returns
         //  HostContractInstance for the contract.
-        RuntimeInterface_get_host_contract_fn get_host_contract;
+        RuntimeApi_get_host_contract_fn get_host_contract;
         //  Get the last error message.
         // 
         //  Returns detailed error message for the most recent failed operation.
         //  Message is valid until the next operation is performed.
         // 
         //  # Arguments
-        //  - `this`: RuntimeInterface pointer (self-passing)
+        //  - `this`: RuntimeApi pointer (self-passing)
         // 
         //  # Returns
         //  StringView containing the error message, or empty string if no error.
-        RuntimeInterface_get_last_error_fn get_last_error;
+        RuntimeApi_get_last_error_fn get_last_error;
         //  List all loaded bundles.
         // 
         //  Returns an Array of BundleId. Caller must free via host->free.
         //  Bundle IDs are stable for the lifetime of the runtime.
         // 
         //  # Arguments
-        //  - `this`: RuntimeInterface pointer (self-passing)
+        //  - `this`: RuntimeApi pointer (self-passing)
         // 
         //  # Returns
         //  Array of BundleId. Caller owns and must free.
-        RuntimeInterface_list_bundles_fn list_bundles;
+        RuntimeApi_list_bundles_fn list_bundles;
         //  Get dependencies (returns empty array for host context).
         // 
         //  Hosts have no bundle dependencies, so this returns an empty array.
-        //  Guests use HostInterface::get_dependencies for their actual deps.
+        //  Guests use HostApi::get_dependencies for their actual deps.
         // 
         //  # Arguments
-        //  - `this`: RuntimeInterface pointer (self-passing)
+        //  - `this`: RuntimeApi pointer (self-passing)
         // 
         //  # Returns
         //  Empty Array of DependencyInfo. Caller owns and must free.
-        RuntimeInterface_get_dependencies_fn get_dependencies;
+        RuntimeApi_get_dependencies_fn get_dependencies;
         //  Destroy the runtime and free this interface.
         // 
         //  # Arguments
-        //  - `this`: RuntimeInterface pointer (self-passing)
+        //  - `this`: RuntimeApi pointer (self-passing)
         // 
         //  # Safety
         //  After calling destroy, the pointer is invalid and must not be used.
         //  All instances must be destroyed before calling this.
-        RuntimeInterface_destroy_fn destroy;
-    } RuntimeInterface;
+        RuntimeApi_destroy_fn destroy;
+    } RuntimeApi;
     // Expected size: 96 bytes
 
     //  Opaque handle to a registered guest contract.
@@ -575,7 +575,7 @@ ffi.cdef[[
     //  - `index`: Slot index in the registry (u32)
     // 
     //  # Safety
-    //  Handles become stale after unload. Call `resolve_contract` to validate.
+    //  Handles become stale after unload. Call `resolve_guest_contract` to validate.
     //  Returns null pointer if the handle is invalid.
     typedef struct GuestContractHandle {
         //  Slot in the registry array.
@@ -640,7 +640,7 @@ ffi.cdef[[
     //  their own declared dependencies at runtime.
     // 
     //  # Who provides
-    //  Runtime returns this from `HostInterface::get_dependencies`.
+    //  Runtime returns this from `HostApi::get_dependencies`.
     // 
     //  # Who calls
     //  Guest (plugin) code calls `get_dependencies` during initialization
@@ -657,7 +657,7 @@ ffi.cdef[[
         //  Contract ID of the dependency.
         // 
         //  FNV-1a hash of the contract name and major version.
-        //  Use this to find matching contracts via `find_by_contract`.
+        //  Use this to find matching contracts via `find_guest_contract`.
         uint64_t contract_id;
         //  Minimum version required.
         // 
@@ -904,12 +904,12 @@ ffi.cdef[[
         VmDispatch vm;
     } DispatchMechanisms;
 
-    typedef GuestContractInstance (*GuestContractInterface_create_instance_fn)(const HostInterface*, const void*);
-    typedef void (*GuestContractInterface_destroy_instance_fn)(const HostInterface*, GuestContractInstance);
+    typedef GuestContractInstance (*GuestContractInterface_create_instance_fn)(const HostApi*, const void*);
+    typedef void (*GuestContractInterface_destroy_instance_fn)(const HostApi*, GuestContractInstance);
     //  Guest Contract Interface — one per contract implemented by a guest (plugin).
     // 
     //  # Who provides
-    //  Guest (plugin) code creates this struct and registers it via `register_contract`.
+    //  Guest (plugin) code creates this struct and registers it via `register_guest_contract`.
     //  Must be `'static` or intentionally leaked.
     // 
     //  # Who calls
@@ -933,7 +933,7 @@ ffi.cdef[[
         //  FNV-1a hash of "guest_contract:name@major_version".
         // 
         //  Generated by polyplugc from contract name and major version.
-        //  Used for contract lookup via `find_by_contract`.
+        //  Used for contract lookup via `find_guest_contract`.
         uint64_t contract_id;
         //  Contract version (major, minor, patch).
         // 
@@ -951,7 +951,7 @@ ffi.cdef[[
         //  Returns null handle on failure.
         // 
         //  # Arguments
-        //  - `host`: HostInterface pointer (for memory allocation via host->alloc)
+        //  - `host`: HostApi pointer (for memory allocation via host->alloc)
         //  - `args`: Optional initialization arguments (contract-specific)
         // 
         //  # Returns
@@ -966,7 +966,7 @@ ffi.cdef[[
         //  Failure to destroy instances causes memory leaks.
         // 
         //  # Arguments
-        //  - `host`: HostInterface pointer
+        //  - `host`: HostApi pointer
         //  - `instance`: Instance handle to destroy
         // 
         //  # Safety
@@ -992,7 +992,7 @@ ffi.cdef[[
     // 
     //  # Who calls
     //  Guest (plugin) code calls the dispatch functions after obtaining an instance
-    //  via `HostInterface::get_host_contract()`.
+    //  via `HostApi::get_host_contract()`.
     // 
     //  # Ownership
     //  Must be `'static`. The runtime holds a reference for the plugin lifetime.

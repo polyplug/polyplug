@@ -1,13 +1,13 @@
 //! Guest Contract Handle — index-based handle to a registered guest contract.
 //!
-//! This module defines `GuestContractHandle`, the handle returned by `find_by_contract`
-//! and passed to `resolve_contract` to obtain a `GuestContractInterface`.
+//! This module defines `GuestContractHandle`, the handle returned by `find_guest_contract`
+//! and passed to `resolve_guest_contract` to obtain a `GuestContractInterface`.
 //!
 //! # Who provides
 //! The registry creates handles during guest contract registration.
 //!
 //! # Who calls
-//! Host code calls `find_by_contract` to obtain handles, then `resolve_contract`
+//! Host code calls `find_guest_contract` to obtain handles, then `resolve_guest_contract`
 //! to get the interface.
 //!
 //! # Ownership
@@ -15,7 +15,7 @@
 //!
 //! # Lifetime
 //! Valid until the contract is unregistered or the bundle is unloaded.
-//! Use `resolve_contract` to check validity — returns null if stale.
+//! Use `resolve_guest_contract` to check validity — returns null if stale.
 
 /// Opaque handle to a registered guest contract.
 ///
@@ -30,7 +30,7 @@
 /// - `index`: Slot index in the registry (u32)
 ///
 /// # Safety
-/// Handles become stale after unload. Call `resolve_contract` to validate.
+/// Handles become stale after unload. Call `resolve_guest_contract` to validate.
 /// Returns null pointer if the handle is invalid.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +53,7 @@ impl GuestContractHandle {
     /// Pack the handle into a u64 for FFI calls.
     ///
     /// Used when passing the handle to FFI functions like
-    /// `polyplug_runtime_resolve_contract`.
+    /// `polyplug_runtime_resolve_guest_contract`.
     pub const fn pack(&self) -> u64 {
         if self.is_null() {
             u64::MAX

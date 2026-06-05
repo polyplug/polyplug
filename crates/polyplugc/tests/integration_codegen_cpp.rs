@@ -386,13 +386,13 @@ fn test_cpp_codegen_no_legacy_vtable_naming() {
                 full_path.display()
             );
 
-            // Assert no HostInterface (legacy naming) - except in comments/docs
-            // Note: HostInterface might appear in abi.hpp which is included, but not in generated code
-            if content.contains("HostInterface") && !content.contains("abi.hpp") {
-                // Only check if HostInterface appears in actual generated code
+            // Assert no HostApi (legacy naming) - except in comments/docs
+            // Note: HostApi might appear in abi.hpp which is included, but not in generated code
+            if content.contains("HostApi") && !content.contains("abi.hpp") {
+                // Only check if HostApi appears in actual generated code
                 assert!(
-                    !content.contains("static HostInterface"),
-                    "{} must NOT contain static HostInterface declaration: {}",
+                    !content.contains("static HostApi"),
+                    "{} must NOT contain static HostApi declaration: {}",
                     rel_path,
                     full_path.display()
                 );

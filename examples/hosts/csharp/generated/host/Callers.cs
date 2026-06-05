@@ -21,10 +21,10 @@ public static class PipelineDecoderContractConstants {
 public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
     private readonly GuestContractInterface* _interface;
     private GuestContractInstance _instance;
-    private readonly HostInterface* _host;
+    private readonly HostApi* _host;
     private bool _disposed;
 
-    private PipelineDecoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {
+    private PipelineDecoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
         _interface = iface;
         _instance = inst;
         _host = host;
@@ -35,10 +35,10 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
     public static PipelineDecoderContractCaller? Create(Runtime rt) {
         var handle = rt.FindGuestContract(PipelineDecoderContractConstants.PIPELINE_DECODER_CONTRACT_ID, 0);
         if (handle == uint.MaxValue) { return null; }
-        var host = (HostInterface*)rt.HostHandle;
+        var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;
         var inst = createFn(host, null);
         return new PipelineDecoderContractCaller(iface, inst, host);
     }
@@ -49,15 +49,15 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
+        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
             _disposed = true;
         }
@@ -101,10 +101,10 @@ public static class DataTransformerContractConstants {
 public sealed unsafe class DataTransformerContractCaller : IDisposable {
     private readonly GuestContractInterface* _interface;
     private GuestContractInstance _instance;
-    private readonly HostInterface* _host;
+    private readonly HostApi* _host;
     private bool _disposed;
 
-    private DataTransformerContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {
+    private DataTransformerContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
         _interface = iface;
         _instance = inst;
         _host = host;
@@ -115,10 +115,10 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
     public static DataTransformerContractCaller? Create(Runtime rt) {
         var handle = rt.FindGuestContract(DataTransformerContractConstants.DATA_TRANSFORMER_CONTRACT_ID, 0);
         if (handle == uint.MaxValue) { return null; }
-        var host = (HostInterface*)rt.HostHandle;
+        var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;
         var inst = createFn(host, null);
         return new DataTransformerContractCaller(iface, inst, host);
     }
@@ -129,15 +129,15 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
+        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
             _disposed = true;
         }
@@ -181,10 +181,10 @@ public static class PipelineEncoderContractConstants {
 public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
     private readonly GuestContractInterface* _interface;
     private GuestContractInstance _instance;
-    private readonly HostInterface* _host;
+    private readonly HostApi* _host;
     private bool _disposed;
 
-    private PipelineEncoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {
+    private PipelineEncoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
         _interface = iface;
         _instance = inst;
         _host = host;
@@ -195,10 +195,10 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
     public static PipelineEncoderContractCaller? Create(Runtime rt) {
         var handle = rt.FindGuestContract(PipelineEncoderContractConstants.PIPELINE_ENCODER_CONTRACT_ID, 0);
         if (handle == uint.MaxValue) { return null; }
-        var host = (HostInterface*)rt.HostHandle;
+        var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;
         var inst = createFn(host, null);
         return new PipelineEncoderContractCaller(iface, inst, host);
     }
@@ -209,15 +209,15 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
+        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
             _disposed = true;
         }
@@ -261,10 +261,10 @@ public static class DataReporterContractConstants {
 public sealed unsafe class DataReporterContractCaller : IDisposable {
     private readonly GuestContractInterface* _interface;
     private GuestContractInstance _instance;
-    private readonly HostInterface* _host;
+    private readonly HostApi* _host;
     private bool _disposed;
 
-    private DataReporterContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {
+    private DataReporterContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
         _interface = iface;
         _instance = inst;
         _host = host;
@@ -275,10 +275,10 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
     public static DataReporterContractCaller? Create(Runtime rt) {
         var handle = rt.FindGuestContract(DataReporterContractConstants.DATA_REPORTER_CONTRACT_ID, 0);
         if (handle == uint.MaxValue) { return null; }
-        var host = (HostInterface*)rt.HostHandle;
+        var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;
         var inst = createFn(host, null);
         return new DataReporterContractCaller(iface, inst, host);
     }
@@ -289,15 +289,15 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
+        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
             _disposed = true;
         }
@@ -341,10 +341,10 @@ public static class PipelineValidatorContractConstants {
 public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
     private readonly GuestContractInterface* _interface;
     private GuestContractInstance _instance;
-    private readonly HostInterface* _host;
+    private readonly HostApi* _host;
     private bool _disposed;
 
-    private PipelineValidatorContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {
+    private PipelineValidatorContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
         _interface = iface;
         _instance = inst;
         _host = host;
@@ -355,10 +355,10 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
     public static PipelineValidatorContractCaller? Create(Runtime rt) {
         var handle = rt.FindGuestContract(PipelineValidatorContractConstants.PIPELINE_VALIDATOR_CONTRACT_ID, 0);
         if (handle == uint.MaxValue) { return null; }
-        var host = (HostInterface*)rt.HostHandle;
+        var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)iface->CreateInstance;
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;
         var inst = createFn(host, null);
         return new PipelineValidatorContractCaller(iface, inst, host);
     }
@@ -369,15 +369,15 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostInterface*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
+        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostInterface*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
             _disposed = true;
         }

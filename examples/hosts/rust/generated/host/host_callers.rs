@@ -13,7 +13,7 @@ use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
-use polyplug_abi::HostInterface;
+use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
 
 /// Host-side error type for contract calls.
@@ -47,7 +47,7 @@ pub struct PipelineDecoderContract {
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
-    host: *const HostInterface,
+    host: *const HostApi,
 }
 
 impl PipelineDecoderContract {
@@ -55,16 +55,16 @@ impl PipelineDecoderContract {
     /// Calls `create_instance` on the resolved interface.
     ///
     /// # Arguments
-    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `handle`: Contract handle from `find_guest_contract`
     /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
-        // Resolve the interface from the handle via HostInterface method
+    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
+        // Resolve the interface from the handle via HostApi method
         let interface: *const GuestContractInterface = unsafe {
-            let iface: &HostInterface = host.as_ref()?;
+            let iface: &HostApi = host.as_ref()?;
             (iface.resolve_guest_contract)(host, handle)
         };
         if interface.is_null() {
@@ -194,7 +194,7 @@ pub struct DataTransformerContract {
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
-    host: *const HostInterface,
+    host: *const HostApi,
 }
 
 impl DataTransformerContract {
@@ -202,16 +202,16 @@ impl DataTransformerContract {
     /// Calls `create_instance` on the resolved interface.
     ///
     /// # Arguments
-    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `handle`: Contract handle from `find_guest_contract`
     /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
-        // Resolve the interface from the handle via HostInterface method
+    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
+        // Resolve the interface from the handle via HostApi method
         let interface: *const GuestContractInterface = unsafe {
-            let iface: &HostInterface = host.as_ref()?;
+            let iface: &HostApi = host.as_ref()?;
             (iface.resolve_guest_contract)(host, handle)
         };
         if interface.is_null() {
@@ -341,7 +341,7 @@ pub struct PipelineEncoderContract {
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
-    host: *const HostInterface,
+    host: *const HostApi,
 }
 
 impl PipelineEncoderContract {
@@ -349,16 +349,16 @@ impl PipelineEncoderContract {
     /// Calls `create_instance` on the resolved interface.
     ///
     /// # Arguments
-    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `handle`: Contract handle from `find_guest_contract`
     /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
-        // Resolve the interface from the handle via HostInterface method
+    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
+        // Resolve the interface from the handle via HostApi method
         let interface: *const GuestContractInterface = unsafe {
-            let iface: &HostInterface = host.as_ref()?;
+            let iface: &HostApi = host.as_ref()?;
             (iface.resolve_guest_contract)(host, handle)
         };
         if interface.is_null() {
@@ -488,7 +488,7 @@ pub struct DataReporterContract {
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
-    host: *const HostInterface,
+    host: *const HostApi,
 }
 
 impl DataReporterContract {
@@ -496,16 +496,16 @@ impl DataReporterContract {
     /// Calls `create_instance` on the resolved interface.
     ///
     /// # Arguments
-    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `handle`: Contract handle from `find_guest_contract`
     /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
-        // Resolve the interface from the handle via HostInterface method
+    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
+        // Resolve the interface from the handle via HostApi method
         let interface: *const GuestContractInterface = unsafe {
-            let iface: &HostInterface = host.as_ref()?;
+            let iface: &HostApi = host.as_ref()?;
             (iface.resolve_guest_contract)(host, handle)
         };
         if interface.is_null() {
@@ -635,7 +635,7 @@ pub struct PipelineValidatorContract {
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
-    host: *const HostInterface,
+    host: *const HostApi,
 }
 
 impl PipelineValidatorContract {
@@ -643,16 +643,16 @@ impl PipelineValidatorContract {
     /// Calls `create_instance` on the resolved interface.
     ///
     /// # Arguments
-    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `handle`: Contract handle from `find_guest_contract`
     /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
-        // Resolve the interface from the handle via HostInterface method
+    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
+        // Resolve the interface from the handle via HostApi method
         let interface: *const GuestContractInterface = unsafe {
-            let iface: &HostInterface = host.as_ref()?;
+            let iface: &HostApi = host.as_ref()?;
             (iface.resolve_guest_contract)(host, handle)
         };
         if interface.is_null() {

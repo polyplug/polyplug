@@ -342,7 +342,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     out.push_str("        hash = bit.bxor(hash, name:byte(i))\n");
     out.push_str("        hash = bit.band(hash * 16777619, 0xFFFFFFFF)\n");
     out.push_str("    end\n");
-    out.push_str("    local host = ffi.cast('HostInterface*', ffi.cast('uintptr_t', host_ptr))\n");
+    out.push_str("    local host = ffi.cast('HostApi*', ffi.cast('uintptr_t', host_ptr))\n");
     out.push_str("    local ptr = host.get_extension(host_ptr, hash)\n");
     out.push_str("    if ptr == nil then return nil end\n");
     out.push_str("    return ptr\n");
@@ -1226,7 +1226,7 @@ fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("    if host_ptr == nil then\n");
     out.push_str("        return nil\n");
     out.push_str("    end\n");
-    out.push_str("    local host = ffi.cast(\"HostInterface*\", host_ptr)\n");
+    out.push_str("    local host = ffi.cast(\"HostApi*\", host_ptr)\n");
     out.push_str(&format!(
         "    local interface_ptr = host.get_host_contract(host_ptr, 0x{:016X}ULL, min_version)\n",
         contract.contract_id

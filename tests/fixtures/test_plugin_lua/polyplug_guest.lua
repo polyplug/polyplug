@@ -9,7 +9,29 @@ local abi = require("polyplug_abi")
 
 local M = {}
 
-M.AbiErrorCode = abi.AbiErrorCode
+-- Lua-accessible constant tables mirroring the ABI enums. The generated
+-- abi.lua only declares these as C enums (ffi.C.AbiErrorCode_Ok,
+-- ffi.C.DispatchType_Native, ...), so the guest SDK surfaces them as plain
+-- Lua tables for generated guest code and plugin authors.
+M.AbiErrorCode = {
+    Ok = 0,
+    Generic = 1,
+    BufferTooSmall = 2,
+    Panic = 3,
+    NotFound = 4,
+    StaleHandle = 5,
+    FunctionNotAvailable = 6,
+    DuplicateProvider = 7,
+    InvalidPointer = 8,
+    HostContractNotFound = 100,
+    HostContractVersionMismatch = 101,
+    HostContractCallFailed = 102,
+}
+
+M.DispatchType = {
+    Native = 0,
+    VirtualMachine = 1,
+}
 
 M.bundle_id = abi.bundle_id
 
@@ -24,7 +46,7 @@ function M.get_host_interface()
 end
 
 function M.cast_host_interface(ptr_int)
-    return ffi.cast("HostInterface*", ffi.cast("uintptr_t", ptr_int))
+    return ffi.cast("HostApi*", ffi.cast("uintptr_t", ptr_int))
 end
 
 function M.cast_context(ptr)
@@ -33,6 +55,45 @@ end
 
 function M.string_view(s)
     return ffi.new("StringView", { ptr = ffi.cast("const uint8_t*", s), len = #s })
+end
+
+-- Decode a StringView (passed by value or as a pointer) into a Lua string.
+-- Accepts either a StringView cdata or its address as an integer/pointer.
+function M.to_str(sv)
+    if sv == nil then
+        return ""
+    end
+    if sv.len == 0 then
+        return ""
+    end
+    return ffi.string(sv.ptr, sv.len)
+end
+
+-- Allocate a string in HOST memory and return a StringView pointing at it.
+-- Cross-boundary data MUST use the host allocator (see AGENTS.md memory rules),
+-- so the returned bytes outlive this call and may be handed back to the host.
+function M.alloc_string(s)
+    local host_ptr = _host_interface_ptr
+    if host_ptr == nil then
+        error("alloc_string: host interface not stored (call store_host_interface first)")
+    end
+    local host = ffi.cast("HostApi*", ffi.cast("uintptr_t", host_ptr))
+    local len = #s
+    local view = ffi.new("StringView")
+    if len == 0 then
+        view.ptr = nil
+        view.len = 0
+        return view
+    end
+    -- align 1 is valid for raw byte buffers.
+    local buf = host.alloc(host, len, 1)
+    if buf == nil then
+        error("alloc_string: host allocation failed")
+    end
+    ffi.copy(buf, s, len)
+    view.ptr = buf
+    view.len = len
+    return view
 end
 
 function M.ok()

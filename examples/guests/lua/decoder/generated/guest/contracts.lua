@@ -55,7 +55,7 @@ function M.polyplug_get_extension(name)
         hash = bit.bxor(hash, name:byte(i))
         hash = bit.band(hash * 16777619, 0xFFFFFFFF)
     end
-    local host = ffi.cast('HostInterface*', ffi.cast('uintptr_t', host_ptr))
+    local host = ffi.cast('HostApi*', ffi.cast('uintptr_t', host_ptr))
     local ptr = host.get_extension(host_ptr, hash)
     if ptr == nil then return nil end
     return ptr

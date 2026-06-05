@@ -475,7 +475,7 @@ impl CodeGenerator for CppGenerator {
         // abi.hpp is pure ABI: structs, enums, and borrowing helpers only — no
         // link-time dependency on the host. Cross-boundary allocation lives in the
         // guest SDK (polyplug::alloc_string), which routes through the stored
-        // HostInterface function pointers.
+        // HostApi function pointers.
         header
     }
 }
@@ -605,7 +605,7 @@ mod tests {
             Some(String::from("DispatchMechanisms"))
         );
         assert_eq!(CppGenerator::value_dependency("u32"), None);
-        assert_eq!(CppGenerator::value_dependency("*const HostInterface"), None);
+        assert_eq!(CppGenerator::value_dependency("*const HostApi"), None);
         assert_eq!(CppGenerator::value_dependency("Array<u8>"), None);
         assert_eq!(
             CppGenerator::value_dependency("unsafeextern\"C\"fn(ptr:*constu8)->u32"),

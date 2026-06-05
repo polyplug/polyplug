@@ -98,7 +98,7 @@ TypeScript wrappers over the polyplug C ABI:
 
 Bootstrap layer for JavaScript plugins:
 - `plugin()` function — Marks plugin entry point
-- `HostInterface` — Contract registration
+- `HostApi` — Contract registration
 - `BundleInitContext` — Bundle metadata
 - Error boundary — Plugin errors don't take down host
 

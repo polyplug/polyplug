@@ -16,13 +16,13 @@ public sealed class HostLoggerContract {
 
     private HostLoggerContract(IntPtr instance, IntPtr iface) { _instance = instance; _interface = iface; }
 
-    /// <summary>Factory method - creates caller from HostInterface or null if not found.</summary>
+    /// <summary>Factory method - creates caller from HostApi or null if not found.</summary>
     public static HostLoggerContract? FromHost(IntPtr host, uint minVersion = 0) {
         if (host == IntPtr.Zero) {
             return null;
         }
         unsafe {
-            var hostInterface = (HostInterface*)host;
+            var hostInterface = (HostApi*)host;
             var instance = hostInterface->GetHostContract(host, 0xF53EB5F2845853BBUL, minVersion);
             if (instance == IntPtr.Zero) {
                 return null;

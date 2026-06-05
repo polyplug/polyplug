@@ -5,7 +5,7 @@
 //! Tests for:
 //! - resolve with valid/invalid handles
 //! - concurrent access thread safety
-//! - find_by_contract with multiple implementations
+//! - find_guest_contract with multiple implementations
 //! - swap_interface during active resolve
 
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use polyplug::error::RegistryError;
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractId, GuestContractInterface,
-    HostInterface, NativeDispatch, PluginDescriptor, StringView, Version,
+    HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::BundleId;
 
@@ -23,7 +23,7 @@ const MOCK_FUNCTIONS: [*const (); 0] = [];
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _args: *const (),
 ) -> polyplug_abi::GuestContractInstance {
     polyplug_abi::GuestContractInstance::null()
@@ -31,7 +31,7 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
-    _host: *const HostInterface,
+    _host: *const HostApi,
     _instance: polyplug_abi::GuestContractInstance,
 ) {
 }
@@ -379,7 +379,7 @@ fn resolve_concurrent_access_thread_safety() {
 }
 
 // =============================================================================
-// Test 4: find_by_contract with multiple implementations
+// Test 4: find_guest_contract with multiple implementations
 // =============================================================================
 
 #[test]
@@ -468,11 +468,11 @@ fn find_by_contract_multiple_implementations_returns_first() {
 
     let found: GuestContractHandle = registry
         .find_guest_contract(GuestContractId::from_u64(MULTI_CONTRACT_ID), 0_u32)
-        .expect("find_by_contract should find an implementation");
+        .expect("find_guest_contract should find an implementation");
 
     assert_eq!(
         found.index, handle_a.index,
-        "find_by_contract should return first registered implementation"
+        "find_guest_contract should return first registered implementation"
     );
 
     let interface_ptr: *const GuestContractInterface = registry
