@@ -13,4 +13,12 @@
     <ProjectReference Include="..\..\host\Polyplug.Host.csproj" />
     <ProjectReference Include="..\..\abi\Polyplug.Abi.csproj" />
   </ItemGroup>
+
+  <!--
+    Embed the per-platform loader native libraries into the NuGet package. The
+    release workflow populates runtimes/<rid>/native/ before `dotnet pack`.
+  -->
+  <ItemGroup>
+    <Content Include="runtimes\**\*" Pack="true" PackagePath="runtimes" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -22,6 +22,7 @@ import {
     STRING_VIEW_SIZE,
     VERSION_SIZE,
 } from "./abi.ts";
+import { assert } from "jsr:@std/assert";
 
 Deno.test("NativeDispatch is 16 bytes", () => {
     assert(NATIVE_DISPATCH_SIZE === 16);
@@ -47,8 +48,8 @@ Deno.test("HostContractInstance is 8 bytes", () => {
     assert(HOST_CONTRACT_INSTANCE_SIZE === 8);
 });
 
-Deno.test("HostContractInterface is 72 bytes", () => {
-    assert(HOST_CONTRACT_INTERFACE_SIZE === 72);
+Deno.test("HostContractInterface is 80 bytes", () => {
+    assert(HOST_CONTRACT_INTERFACE_SIZE === 80);
 });
 
 Deno.test("HostInterface is 144 bytes", () => {
@@ -75,8 +76,8 @@ Deno.test("ReloadPhase is 48 bytes", () => {
     assert(RELOAD_PHASE_SIZE === 48);
 });
 
-Deno.test("RuntimeConfig is 16 bytes", () => {
-    assert(RUNTIME_CONFIG_SIZE === 16);
+Deno.test("RuntimeConfig is 24 bytes", () => {
+    assert(RUNTIME_CONFIG_SIZE === 24);
 });
 
 Deno.test("AbiError is 24 bytes", () => {

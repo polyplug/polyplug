@@ -58,7 +58,8 @@ private:
 /// Intended for host-side code that wants C++ exceptions rather than manual
 /// AbiError checks after every ABI call.
 inline void throw_if_error(AbiError err) {
-    if (err.code != AbiErrorCode::Ok) {
+    // err.code is a raw u32; compare against the enum's integer value.
+    if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
         throw HostException(err);
     }
 }
@@ -79,11 +80,13 @@ private:
 /// Throw a DispatchException if the AbiError indicates failure.
 /// Used by generated host caller code after every interface dispatch.
 inline void check_abi_error(AbiError err) {
-    if (err.code != AbiErrorCode::Ok) {
+    // err.code is a raw u32; compare against the enum's integer value.
+    if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
         const char* msg = (err.message.ptr != nullptr)
             ? reinterpret_cast<const char*>(err.message.ptr)
             : "unknown error";
-        throw DispatchException(err.code, std::string(msg, err.message.len));
+        throw DispatchException(static_cast<AbiErrorCode>(err.code),
+                                std::string(msg, err.message.len));
     }
 }
 

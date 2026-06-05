@@ -29,7 +29,6 @@ import {
   HOST_INTERFACE_FIND_GUEST_CONTRACT_OFFSET,
   HOST_INTERFACE_FIND_ALL_GUEST_CONTRACTS_OFFSET,
   HOST_INTERFACE_RESOLVE_GUEST_CONTRACT_OFFSET,
-  HOST_INTERFACE_CALL_GUEST_METHOD_OFFSET,
   HOST_INTERFACE_GET_HOST_CONTRACT_OFFSET,
   HOST_INTERFACE_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET,
   HOST_INTERFACE_LIST_BUNDLES_OFFSET,
@@ -110,7 +109,6 @@ const HOST_INTERFACE_OFFSETS = {
   find_guest_contract: HOST_INTERFACE_FIND_GUEST_CONTRACT_OFFSET,
   find_all_guest_contracts: HOST_INTERFACE_FIND_ALL_GUEST_CONTRACTS_OFFSET,
   resolve_guest_contract: HOST_INTERFACE_RESOLVE_GUEST_CONTRACT_OFFSET,
-  call_guest_method: HOST_INTERFACE_CALL_GUEST_METHOD_OFFSET,
   get_host_contract: HOST_INTERFACE_GET_HOST_CONTRACT_OFFSET,
   resolve_host_contract_interface: HOST_INTERFACE_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET,
   list_bundles: HOST_INTERFACE_LIST_BUNDLES_OFFSET,
@@ -136,9 +134,19 @@ let _pendingConfig = null;
 /** @type {Deno.UnsafeCallback | null} */
 let _ffiReloadCallback = null;
 
-// Callback type for reload notifications
+// Callback type for reload notifications.
+//
+// The ABI signature is `void(*)(void* user_data, ReloadPhase)`: an opaque
+// user-data pointer followed by ONE `ReloadPhase` struct (48 bytes) BY VALUE —
+// not a list of scalar arguments. ReloadPhase layout (matches
+// polyplug_abi::runtime::reload_phase):
+//   phase_type: u32 @ 0, padding @ 4, bundle_id: u64 @ 8,
+//   bundle_name: StringView{ ptr @ 16, len @ 24 },
+//   reason: StringView{ ptr @ 32, len @ 40 }.
+// There is NO retry_count field. The padding u32 is declared explicitly so the
+// struct layout lines up at the by-value ABI boundary.
 const _RELOAD_CALLBACK_TYPE = {
-    parameters: ["u32", "u64", "pointer", "usize", "u32", "pointer", "usize"],
+    parameters: ["pointer", { struct: ["u32", "u32", "u64", "pointer", "usize", "pointer", "usize"] }],
     result: "void"
 };
 
@@ -200,7 +208,7 @@ export function onReload(callback) {
 /**
  * Set runtime configuration for subsequently created runtimes.
  * Must be called BEFORE creating a Runtime instance.
- * Per D-22: RuntimeConfig is 16 bytes (compatibility, hot_reload_enabled, on_reload).
+ * RuntimeConfig is 24 bytes (compatibility, hot_reload_enabled, on_reload, on_reload_user_data).
  * @param {Object} config - Configuration options
  * @param {boolean} [config.hotReloadEnabled=false] - Whether hot-reload is enabled
  * @param {number} [config.compatibility=0] - Compatibility mode (COMPATIBILITY_STRICT=0, RELAXED=1, YOLO=2)
@@ -266,9 +274,9 @@ function callHostMethod(hostPtr, fieldOffset, paramTypes, resultType, args) {
  *   destroy_instance (fn ptr)@ 32
  *   dispatch (union, 16)     @ 40  (Native: function_count u32 @ +0, functions ptr @ +8)
  *
- * Dispatch is routed through `HostInterface.call_guest_method`, which is
- * dispatch-type agnostic (the runtime selects native vs VM internally), so this
- * view works identically for native guests and VM (QuickJS/Lua/Python) guests.
+ * Dispatch is routed directly through the resolved interface's dispatch union
+ * (native function table or VM call), so this view works identically for native
+ * guests and VM (QuickJS/Lua/Python) guests.
  *
  * Validity keys off the interface pointer, never off instance data: a null
  * `instance.data` is a VALID dispatch token because the runtime substitutes
@@ -394,11 +402,9 @@ export class GuestContractInterfaceView {
    * - Native: call `dispatch.native.functions[slot](instance, args, out) -> AbiError`.
    * - VM: call `dispatch.vm.call(loader_data, instance, fn_id, args, out) -> AbiError`.
    *
-   * `HostInterface.call_guest_method` is intentionally NOT used: it is a stub that
-   * only supports cross-instance routing (not yet implemented) and rejects a null
-   * `instance.data`. Direct interface dispatch is the supported mechanism and works
-   * for both native and VM (QuickJS/Lua/Python) guests, including stateless ones
-   * whose instance carries a null `data`.
+   * Direct interface dispatch is the supported mechanism and works for both native
+   * and VM (QuickJS/Lua/Python) guests, including stateless ones whose instance
+   * carries a null `data`.
    * @param {number} slot - function_id / method index.
    * @param {Uint8Array} instance - GuestContractInstance struct (16 bytes, by value).
    * @param {Deno.PointerValue} argsPtr - Pointer to packed args (or null).
@@ -592,19 +598,6 @@ export class Runtime {
   }
 
   /**
-   * Find plugin by bundle ID (deprecated, not in HostInterface).
-   * Returns NULL_HANDLE since this was removed from FFI surface.
-   * @param {bigint} bundleId - Bundle identifier
-   * @param {bigint} contractId - Contract identifier
-   * @param {number} [minVersion=0] - Minimum version
-   * @returns {number} NULL_HANDLE (not implemented)
-   */
-  findByBundle(bundleId, contractId, minVersion = 0) {
-    // Note: find_by_bundle is not in HostInterface (18-02 removed from FFI surface)
-    return NULL_HANDLE;
-  }
-
-  /**
    * Find all guest contracts by contract ID.
    * Calls through HostInterface.find_all_guest_contracts field.
    * @param {bigint} contractId - Contract identifier
@@ -613,20 +606,23 @@ export class Runtime {
    * @returns {number[]} Array of guest contract handle indices (u32 each)
    */
   findAllGuestContracts(contractId, minVersion = 0, cap = 64) {
-    // The function returns Array<GuestContractHandle> struct { ptr, len }
-    // We need to call and then read the result struct
-    const resultPtr = callHostMethod(
+    // find_all_guest_contracts returns `Array<GuestContractHandle>` by value as a
+    // 16-byte struct { ptr: pointer, len: usize } — NOT a pointer to an Array.
+    // Deno FFI returns by-value structs as a Uint8Array buffer (mirrors the
+    // AbiError-by-value pattern in loadBundle above).
+    const result = callHostMethod(
       this.#host,
       HOST_INTERFACE_OFFSETS.find_all_guest_contracts,
       ["pointer", "u64", "u32"],
-      "pointer",
+      { struct: ["pointer", "usize"] },
       [this.#host, contractId, minVersion]
     );
 
-    // Read Array struct: { ptr: pointer, len: usize }
-    const view = new Deno.UnsafePointerView(resultPtr);
-    const arrPtr = view.getPointer(0);
-    const arrLen = Number(view.getBigUint64(8));
+    // Read the returned Array struct: { ptr: pointer @ 0, len: usize @ 8 }.
+    const resultDv = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const arrPtrRaw = resultDv.getBigUint64(0, true);
+    const arrLen = Number(resultDv.getBigUint64(8, true));
+    const arrPtr = Deno.UnsafePointer.create(arrPtrRaw);
 
     if (arrPtr === null || arrLen === 0) {
       return [];
@@ -788,40 +784,6 @@ export class Runtime {
       throw new Error(`registerLoader(${runtimeName}) failed: ${this.lastError()}`);
     }
   }
-
-  // ─── Backward Compatibility Aliases ───────────────────────────────────────────
-
-  /**
-   * Alias for findGuestContract (deprecated).
-   * @deprecated Use findGuestContract instead.
-   */
-  findByContract(contractId, minVersion = 0) {
-    return this.findGuestContract(contractId, minVersion);
-  }
-
-  /**
-   * Alias for findAllGuestContracts (deprecated).
-   * @deprecated Use findAllGuestContracts instead.
-   */
-  findAllByContract(contractId, minVersion = 0, cap = 64) {
-    return this.findAllGuestContracts(contractId, minVersion, cap);
-  }
-
-  /**
-   * Alias for resolveGuestContract (deprecated).
-   * @deprecated Use resolveGuestContract instead.
-   */
-  resolvePlugin(packedHandle) {
-    return this.resolveGuestContract(packedHandle);
-  }
-
-  /**
-   * Get runtime pointer (deprecated).
-   * @deprecated Use host() instead.
-   */
-  ptr() {
-    return this.#host;
-  }
 }
 
 /**
@@ -836,7 +798,7 @@ export function openPolyplug(soPath) {
 /**
  * Create new runtime instance.
  * Uses HostInterface-based API: polyplug_runtime_create returns HostInterface*.
- * Per D-22: RuntimeConfig is 16 bytes (compatibility, hot_reload_enabled, on_reload).
+ * RuntimeConfig is 24 bytes (compatibility, hot_reload_enabled, on_reload, on_reload_user_data).
  * @param {Deno.DynamicLibrary} lib - Dynamic library
  * @returns {Runtime}
  */
@@ -844,34 +806,49 @@ export function runtimeNew(lib) {
   let host;
 
   if (_pendingConfig || _pendingReloadCallback) {
-    // RuntimeConfig is 16 bytes per D-22: compatibility(u32) + padding(4) + hot_reload_enabled(bool/u8) + padding(7) + on_reload(fn ptr)
+    // RuntimeConfig is 24 bytes: compatibility(u32) @ 0 + hot_reload_enabled(bool/u8) @ 4
+    // + padding + on_reload(fn ptr) @ 8 + on_reload_user_data(ptr) @ 16.
     const configBuf = new Uint8Array(RUNTIME_CONFIG_SIZE);
     const configView = new DataView(configBuf.buffer);
 
     if (_pendingConfig) {
-      // offset 0: compatibility (4 bytes u32)
+      // compatibility (u32) at its abi.ts offset.
       configView.setUint32(RUNTIME_CONFIG_COMPATIBILITY_OFFSET, _pendingConfig.compatibility, true);
-      // offset 8: hot_reload_enabled (1 byte bool)
+      // hot_reload_enabled (1 byte bool) at its abi.ts offset.
       configView.setUint8(RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET, _pendingConfig.hotReloadEnabled ? 1 : 0);
     }
 
     if (_pendingReloadCallback) {
       const callback = _pendingReloadCallback;
       _ffiReloadCallback = new Deno.UnsafeCallback(_RELOAD_CALLBACK_TYPE,
-        (phaseType, bundleId, bundleNamePtr, bundleNameLen, retryCount, reasonPtr, reasonLen) => {
+        (_userData, phaseStruct) => {
+          // _userData is the opaque on_reload_user_data pointer (unused here — the
+          // JS closure already captures `callback`). phaseStruct is the 48-byte
+          // ReloadPhase passed by value as a buffer.
+          const dv = new DataView(phaseStruct.buffer, phaseStruct.byteOffset, phaseStruct.byteLength);
+          const phaseType = dv.getUint32(0, true);
+          const bundleId = dv.getBigUint64(8, true);
+          const bundleNamePtrRaw = dv.getBigUint64(16, true);
+          const bundleNameLen = Number(dv.getBigUint64(24, true));
+          const reasonPtrRaw = dv.getBigUint64(32, true);
+          const reasonLen = Number(dv.getBigUint64(40, true));
+
           let bundleName = "";
-          if (bundleNamePtr !== 0n && bundleNameLen > 0) {
-            bundleName = new Deno.UnsafePointerView(bundleNamePtr).getUtf8String(Number(bundleNameLen));
+          const bundleNamePtr = Deno.UnsafePointer.create(bundleNamePtrRaw);
+          if (bundleNamePtr !== null && bundleNameLen > 0) {
+            bundleName = new Deno.UnsafePointerView(bundleNamePtr).getUtf8String(bundleNameLen);
           }
           let reason = "";
-          if (reasonPtr !== 0n && reasonLen > 0) {
-            reason = new Deno.UnsafePointerView(reasonPtr).getUtf8String(Number(reasonLen));
+          const reasonPtr = Deno.UnsafePointer.create(reasonPtrRaw);
+          if (reasonPtr !== null && reasonLen > 0) {
+            reason = new Deno.UnsafePointerView(reasonPtr).getUtf8String(reasonLen);
           }
-          const phase = new ReloadPhase(phaseType, bundleId, bundleName, retryCount, reason);
+          const phase = new ReloadPhase(phaseType, bundleId, bundleName, reason);
           callback(phase);
         }
       );
-      // offset 16: on_reload (fn pointer, 8 bytes)
+      // on_reload lives at offset 8 inside the RuntimeConfig (fn pointer, 8 bytes).
+      // on_reload_user_data is left null: the JS closure already captures the callback.
       configView.setBigUint64(RUNTIME_CONFIG_ON_RELOAD_OFFSET, Deno.UnsafePointer.value(_ffiReloadCallback.pointer), true);
     }
 

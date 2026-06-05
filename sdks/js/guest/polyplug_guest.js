@@ -211,6 +211,7 @@ export default {
     readBytes,
     writeBytes,
     allocString,
+    freeBytes,
     toStr
 };
 
@@ -320,6 +321,30 @@ export function allocString(str) {
     const ptr = (BigInt(ptrArr[1]) << 32n) + BigInt(ptrArr[0]);
     writeBytes(ptr, bytes);
     return { ptr, len: bytes.length };
+}
+
+/**
+ * Free a host-allocated region previously obtained via {@link allocString} or
+ * `polyplug.alloc`.
+ *
+ * The host allocator requires the original allocation size and alignment to
+ * free the exact region — passing the wrong size leaks memory (the host free is
+ * a no-op on size 0). `alloc`/`allocString` use alignment 1, which is the
+ * default here.
+ *
+ * @param {bigint} ptr - Pointer returned by allocString/alloc (as BigInt).
+ * @param {number} size - Original allocation size in bytes.
+ * @param {number} [align=1] - Original allocation alignment.
+ * @returns {void}
+ */
+export function freeBytes(ptr, size, align = 1) {
+    if (!ptr || size === 0) {
+        return;
+    }
+    const ptrBig = BigInt(ptr);
+    const lo = Number(ptrBig & 0xFFFFFFFFn);
+    const hi = Number((ptrBig >> 32n) & 0xFFFFFFFFn);
+    globalThis.polyplug.free(lo, hi, size, align);
 }
 
 /**

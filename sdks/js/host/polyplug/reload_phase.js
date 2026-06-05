@@ -24,21 +24,21 @@ export class ReloadPhase {
 
     /**
      * Create a new ReloadPhase instance.
+     *
+     * Mirrors the ABI `ReloadPhase` struct exactly — there is no retry_count
+     * field in the ABI.
      * @param {number} type - Phase type (TYPE_PREPARING, TYPE_RELOADED, or TYPE_FAILED)
      * @param {bigint} bundleId - FNV-1a 64-bit hash of the bundle name
      * @param {string} bundleName - Human-readable bundle name
-     * @param {number} [retryCount=0] - Current retry attempt (0-indexed, only for Preparing)
      * @param {string} [reason=""] - Error reason (only for Failed phase)
      */
-    constructor(type, bundleId, bundleName, retryCount = 0, reason = "") {
+    constructor(type, bundleId, bundleName, reason = "") {
         /** @type {number} Phase type */
         this.type = type;
         /** @type {bigint} Bundle ID */
         this.bundleId = bundleId;
         /** @type {string} Bundle name */
         this.bundleName = bundleName;
-        /** @type {number} Retry count */
-        this.retryCount = retryCount;
         /** @type {string} Error reason */
         this.reason = reason;
     }
@@ -78,6 +78,6 @@ export class ReloadPhase {
             [ReloadPhase.TYPE_FAILED]: "Failed",
         };
         const typeName = typeNames[this.type] || `Unknown(${this.type})`;
-        return `ReloadPhase(type=${typeName}, bundleId=${this.bundleId}, bundleName=${JSON.stringify(this.bundleName)}, retryCount=${this.retryCount}, reason=${JSON.stringify(this.reason)})`;
+        return `ReloadPhase(type=${typeName}, bundleId=${this.bundleId}, bundleName=${JSON.stringify(this.bundleName)}, reason=${JSON.stringify(this.reason)})`;
     }
 }

@@ -82,11 +82,7 @@ public struct VmLoaderData
 ///
 ///  # Layout
 ///  - `data`: Opaque instance pointer (owned by guest)
-///  - `contract_id`: Contract ID for zero-overhead dispatch
-///
-///  # Dispatch
-///  The `contract_id` field enables `call_guest_method` to dispatch without
-///  looking up the contract in a map. This is zero-overhead dispatch.
+///  - `contract_id`: Contract ID stamped at instance creation
 [StructLayout(LayoutKind.Sequential, Size = 16)]
 public struct GuestContractInstance
 {
@@ -97,12 +93,10 @@ public struct GuestContractInstance
     ///  Guest owns the memory. Host must not free or modify.
     ///  Must be freed via GuestContractInterface::destroy_instance.
     public IntPtr Data;
-    ///  Contract ID for zero-overhead dispatch.
-    ///  Enables call_guest_method to dispatch without lookup.
+    ///  Contract ID stamped at instance creation.
     ///
     ///  # Purpose
-    ///  Eliminates the need to look up which contract an instance belongs to.
-    ///  The contract_id is set by create_instance and used for direct dispatch.
+    ///  Identifies which contract an instance belongs to. Set by `create_instance`.
     public ulong ContractId;
 }
 
@@ -225,7 +219,7 @@ public struct HostContractInstance
 ///  # Self-Passing Pattern
 ///  `create_instance` and `destroy_instance` take `self: *const HostContractInterface`.
 ///  The runtime field provides access to runtime services.
-[StructLayout(LayoutKind.Sequential, Size = 72)]
+[StructLayout(LayoutKind.Sequential, Size = 80)]
 public struct HostContractInterface
 {
     ///  FNV-1a hash of "host_contract:name@major_version".
@@ -254,6 +248,15 @@ public struct HostContractInterface
     ///  # Ownership
     ///  Owned by the runtime. Host contract implementations must not free.
     public IntPtr Runtime;
+    ///  Opaque per-interface user-data pointer.
+    ///
+    ///  `create_instance` and `destroy_instance` can read it via their `this`
+    ///  parameter (`(*this).user_data`) to recover registrant-owned context.
+    ///
+    ///  # Ownership
+    ///  Owned by the registrant (the host application). The runtime never reads,
+    ///  writes, or frees the pointee — it only stores the pointer.
+    public IntPtr UserData;
     ///  Create a new instance of this host contract.
     ///
     ///  For singleton contracts, this is typically called once and the instance
@@ -285,12 +288,13 @@ public struct HostContractInterface
     public DispatchMechanisms Dispatch;
 }
 
-/// Expected size: 72 bytes
+/// Expected size: 80 bytes
 
 ///  Host Interface — function table passed to guests during initialization.
 ///
 ///  Contains an opaque runtime pointer and function pointers for guest calls.
 ///  All functions use self-passing pattern (receive HostInterface pointer as first parameter).
+///  `HostInterface` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
 ///
 ///  # Who provides
 ///  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -399,21 +403,6 @@ public struct HostInterface
     ///  # Returns
     ///  Pointer to GuestContractInterface, or null if invalid/stale.
     public IntPtr ResolveGuestContract;
-    ///  Call a method on a guest contract instance.
-    ///
-    ///  This is the cross-dispatch mechanism for calling methods across
-    ///  different dispatch types (Native vs VM).
-    ///
-    ///  # Arguments
-    ///  - `this`: HostInterface pointer (self-passing)
-    ///  - `instance`: GuestContractInstance with contract_id for dispatch
-    ///  - `method_id`: Method index within the contract
-    ///  - `args`: Pointer to packed arguments (contract-specific layout)
-    ///  - `out`: Pointer to output buffer for return value
-    ///
-    ///  # Returns
-    ///  AbiError::OK on success, error code on failure.
-    public IntPtr CallGuestMethod;
     ///  Get a host contract instance by contract_id and minimum version.
     ///
     ///  For singleton host contracts, returns the same instance every time.
@@ -537,6 +526,21 @@ public struct HostInterface
     ///  # Returns
     ///  Length of last error message (0 if no error).
     public IntPtr GetErrorLen;
+    ///  Get a registered extension by extension ID.
+    ///
+    ///  Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
+    ///  of the extension name. Use `polyplug_utils::fnv1a_32(name.as_bytes())` to
+    ///  compute the ID.
+    ///
+    ///  Returns null if no extension is registered for the given ID.
+    ///
+    ///  # Arguments
+    ///  - `this`: HostInterface pointer (self-passing)
+    ///  - `extension_id`: 32-bit FNV-1a hash of the extension name
+    ///
+    ///  # Returns
+    ///  Opaque pointer to the extension, or null if not registered.
+    public IntPtr GetExtension;
 }
 
 /// Expected size: 144 bytes
@@ -586,7 +590,7 @@ public struct RuntimeInterface
     ///
     ///  # Arguments
     ///  - `this`: RuntimeInterface pointer (self-passing)
-    ///  - `path`: Path to the bundle directory or manifest file
+    ///  - `path`: UTF-8 path to the bundle directory or manifest file (not null-terminated)
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
@@ -803,7 +807,7 @@ public struct ReloadPhase
 ///  # OWNERSHIP
 ///  Borrowed for the duration of the runtime build only.
 ///  The runtime copies any data it needs to retain.
-[StructLayout(LayoutKind.Sequential, Size = 16)]
+[StructLayout(LayoutKind.Sequential, Size = 24)]
 public struct RuntimeConfig
 {
     ///  Compatibility mode for version resolution.
@@ -811,21 +815,40 @@ public struct RuntimeConfig
     ///  Whether hot-reload is enabled.
     public bool HotReloadEnabled;
     ///  Optional hot-reload callback, or null for no callback.
+    ///
+    ///  The first argument is the opaque `on_reload_user_data` pointer, forwarded
+    ///  unchanged on every invocation.
     public IntPtr OnReload;
+    ///  Opaque user-data pointer forwarded to `on_reload` as its first argument.
+    ///
+    ///  # Ownership
+    ///  Owned by the host that supplies the callback. The runtime never reads,
+    ///  writes, or frees the pointee — it only forwards the pointer.
+    public IntPtr OnReloadUserData;
 }
 
-/// Expected size: 16 bytes
+/// Expected size: 24 bytes
 
 ///  ABI error — returned by value from all ABI calls.
 ///
-///  OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
-///  via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
-///  after reading. If `code == AbiErrorCode::Ok`, `message.ptr` is NULL — no free needed.
+///  CODE: a raw `u32`, NOT the [`AbiErrorCode`] enum. Plugins are untrusted and
+///  return `AbiError` by value across the C ABI, so any 32-bit pattern can land
+///  here — including values that are not declared discriminants of the frozen
+///  [`AbiErrorCode`] enum. Materializing such a value as the enum would be
+///  instant undefined behaviour, so the field stays a raw `u32`. Construct it
+///  with `AbiErrorCode::X as u32` and interpret it with
+///  [`AbiErrorCode::from_u32`], which is total and safe. The layout is identical
+///  to the `#[repr(u32)]` enum (4 bytes at offset 0), so the C ABI is unchanged.
+///
+///  OWNERSHIP: `message` is always a static or runtime-owned string. The receiver
+///  must NEVER free it. Rich, allocated error detail is retrieved separately via
+///  `get_last_error`.
 [StructLayout(LayoutKind.Sequential, Size = 24)]
 public struct AbiError
 {
-    ///  0 = success, non-zero = error.
-    public AbiErrorCode Code;
+    ///  0 = success, non-zero = error. Raw `u32`; convert with
+    ///  [`AbiErrorCode::from_u32`].
+    public uint Code;
     ///  Empty/NULL if success. UTF-8 message if non-zero code.
     public StringView Message;
 }
@@ -1228,21 +1251,95 @@ public static unsafe class StringHelpers
     }
 
     /// <summary>
-    /// Allocates a StringView from a .NET string using the host allocator.
-    /// The returned StringView owns its memory and must be freed by the host.
+    /// Returns a process-lifetime <see cref="StringView"/> for a string that
+    /// crosses the ABI boundary as an <see cref="AbiError.Message"/>.
     /// </summary>
-    public static StringView AllocString(string value)
+    /// <remarks>
+    /// Per the ABI ownership contract, an AbiError.Message is a static or
+    /// runtime-owned string that the receiver MUST NEVER free. This helper pins
+    /// the UTF-8 bytes for the lifetime of the process (equivalent to .rodata),
+    /// caching one buffer per distinct string so repeated errors never leak a new
+    /// GCHandle. It is the only sound way to hand the host a borrowed message that
+    /// nobody frees. Use it for fixed error literals — NOT for per-call argument
+    /// strings (use <see cref="PinnedUtf8"/> for those).
+    /// </remarks>
+    public static StringView StaticMessage(string value)
     {
         if (string.IsNullOrEmpty(value))
             return new StringView { Ptr = IntPtr.Zero, Len = 0 };
 
-        byte[] bytes = Encoding.UTF8.GetBytes(value);
-        GCHandle handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
-        return new StringView
+        lock (s_staticMessages)
         {
-            Ptr = handle.AddrOfPinnedObject(),
+            if (s_staticMessages.TryGetValue(value, out StringView cached))
+                return cached;
+
+            byte[] bytes = Encoding.UTF8.GetBytes(value);
+            // Never freed: pinned for the process lifetime, mirroring .rodata.
+            GCHandle handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+            StringView view = new StringView
+            {
+                Ptr = handle.AddrOfPinnedObject(),
+                Len = (nuint)bytes.Length,
+            };
+            s_staticMessages[value] = view;
+            return view;
+        }
+    }
+
+    private static readonly System.Collections.Generic.Dictionary<string, StringView> s_staticMessages =
+        new System.Collections.Generic.Dictionary<string, StringView>();
+}
+
+/// <summary>
+/// Call-scoped pin of a .NET string's UTF-8 bytes, exposing a borrowed
+/// <see cref="StringView"/> for passing a string ARGUMENT across the ABI
+/// boundary. The argument is borrowed for the duration of the call only:
+/// construct a <see cref="PinnedUtf8"/>, pass <see cref="View"/> into the call,
+/// then dispose to release the pin.
+/// </summary>
+/// <remarks>
+/// This is the correct mechanism for argument strings. It pins managed bytes
+/// only for the call and frees the <see cref="GCHandle"/> on <see cref="Dispose"/>,
+/// so there is no per-call leak. The host never frees this memory — it only reads
+/// it for the duration of the call. For AbiError.Message values, use
+/// <see cref="StringHelpers.StaticMessage"/> instead.
+/// </remarks>
+public sealed class PinnedUtf8 : IDisposable
+{
+    private GCHandle _handle;
+    private bool _pinned;
+
+    /// <summary>
+    /// The borrowed <see cref="StringView"/> over the pinned UTF-8 bytes. Valid
+    /// only until <see cref="Dispose"/> is called.
+    /// </summary>
+    public StringView View { get; }
+
+    public PinnedUtf8(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            View = new StringView { Ptr = IntPtr.Zero, Len = 0 };
+            return;
+        }
+
+        byte[] bytes = Encoding.UTF8.GetBytes(value);
+        _handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+        _pinned = true;
+        View = new StringView
+        {
+            Ptr = _handle.AddrOfPinnedObject(),
             Len = (nuint)bytes.Length,
         };
+    }
+
+    public void Dispose()
+    {
+        if (_pinned)
+        {
+            _handle.Free();
+            _pinned = false;
+        }
     }
 }
 }

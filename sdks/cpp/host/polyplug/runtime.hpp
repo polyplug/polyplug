@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -37,23 +38,25 @@ extern "C" {
 
 namespace polyplug {
 
-// ─── Static callback storage for on_reload trampoline ─────────────────────────
+// ─── on_reload trampoline ─────────────────────────────────────────────────────
 namespace detail {
 
-/// Storage for the user-provided on_reload callback.
-/// The C ABI requires a plain function pointer (RuntimeConfig_on_reload_fn),
-/// so we store the std::function here and invoke it from a static trampoline.
-inline std::function<void(const ReloadPhase&)>& on_reload_storage() noexcept {
-    static std::function<void(const ReloadPhase&)> cb;
-    return cb;
-}
+/// Owned storage for the user-provided on_reload callback.
+///
+/// The functor is owned by the Runtime instance (no globals — Rule 12). A stable
+/// pointer to this storage is passed to the runtime as `on_reload_user_data` and
+/// forwarded back to `on_reload_trampoline` on every invocation.
+using OnReloadFn = std::function<void(const ReloadPhase&)>;
 
-/// C ABI trampoline that dispatches to the stored std::function.
-/// Signature matches RuntimeConfig_on_reload_fn: void(*)(ReloadPhase).
-inline void on_reload_trampoline(ReloadPhase phase) {
-    auto& cb = on_reload_storage();
-    if (cb) {
-        cb(phase);
+/// C ABI trampoline matching RuntimeConfig_on_reload_fn:
+/// void(*)(void* user_data, ReloadPhase). Recovers the owning functor from
+/// `user_data` and invokes it.
+inline void on_reload_trampoline(void* user_data, ReloadPhase phase) {
+    if (user_data != nullptr) {
+        auto* cb = static_cast<OnReloadFn*>(user_data);
+        if (*cb) {
+            (*cb)(phase);
+        }
     }
 }
 
@@ -90,25 +93,27 @@ public:
                 if (config_.has_value()) {
                     cfg = config_.value();
                 }
+                // The owned functor (if any) is heap-allocated so its address is
+                // stable; the pointer is handed to the runtime as on_reload_user_data
+                // and forwarded back to the trampoline. The Runtime keeps it alive.
+                std::unique_ptr<detail::OnReloadFn> cb{};
                 if (on_reload_cb_.has_value()) {
-                    // Store the callback in static storage so the C trampoline
-                    // can invoke it. The trampoline function pointer is passed
-                    // to the runtime via RuntimeConfig.on_reload.
-                    detail::on_reload_storage() = std::move(on_reload_cb_.value());
+                    cb = std::make_unique<detail::OnReloadFn>(std::move(on_reload_cb_.value()));
                     cfg.on_reload = detail::on_reload_trampoline;
+                    cfg.on_reload_user_data = cb.get();
                 }
                 const HostInterface* h = polyplug_runtime_create(&cfg);
                 if (h == nullptr) {
                     throw std::runtime_error("polyplug_runtime_create returned null");
                 }
-                return Runtime(h);
+                return Runtime(h, std::move(cb));
             } else {
                 // No config or callback — pass null for defaults.
                 const HostInterface* h = polyplug_runtime_create(nullptr);
                 if (h == nullptr) {
                     throw std::runtime_error("polyplug_runtime_create returned null");
                 }
-                return Runtime(h);
+                return Runtime(h, nullptr);
             }
         }
 
@@ -130,7 +135,8 @@ public:
         }
     }
 
-    Runtime(Runtime&& other) noexcept : host_(other.host_) {
+    Runtime(Runtime&& other) noexcept
+        : host_(other.host_), on_reload_cb_(std::move(other.on_reload_cb_)) {
         other.host_ = nullptr;
     }
 
@@ -140,6 +146,7 @@ public:
                 polyplug_runtime_destroy(host_);
             }
             host_ = other.host_;
+            on_reload_cb_ = std::move(other.on_reload_cb_);
             other.host_ = nullptr;
         }
         return *this;
@@ -158,7 +165,7 @@ public:
         // Returns AbiError, not uint32_t.
         auto func = reinterpret_cast<AbiError(*)(const HostInterface*, const uint8_t*, size_t)>(host_->load_bundle);
         AbiError result = func(host_, reinterpret_cast<const uint8_t*>(path.data()), path.size());
-        if (result.code != AbiErrorCode::Ok) {
+        if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("load_bundle failed: " + get_last_error());
         }
     }
@@ -169,7 +176,7 @@ public:
         ensure_host();
         auto func = reinterpret_cast<AbiError(*)(const HostInterface*, const uint8_t*, size_t)>(host_->reload_bundle);
         AbiError result = func(host_, reinterpret_cast<const uint8_t*>(path.data()), path.size());
-        if (result.code != AbiErrorCode::Ok) {
+        if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("reload_bundle failed: " + get_last_error());
         }
     }
@@ -188,9 +195,7 @@ public:
     /// Returns vector of GuestContractHandle (ABI Array with 3 fields: items, len, align).
     std::vector<GuestContractHandle> find_all_guest_contracts(uint64_t contract_id, uint32_t min_version, size_t cap = 64) const {
         ensure_host();
-        // The function returns Array (3 fields: void* items, size_t len, size_t align).
-        auto func = reinterpret_cast<Array(*)(const HostInterface*, uint64_t, uint32_t)>(host_->find_all_guest_contracts);
-        Array arr = func(host_, contract_id, min_version);
+        Array arr = host_->find_all_guest_contracts(host_, contract_id, min_version);
 
         std::vector<GuestContractHandle> handles;
         handles.reserve(arr.len);
@@ -200,8 +205,8 @@ public:
         }
         // Free the array via HostInterface.free (size = len * sizeof(GuestContractHandle)).
         if (arr.items != nullptr && arr.len > 0) {
-            auto free_func = reinterpret_cast<void(*)(const HostInterface*, void*, size_t, size_t)>(host_->free);
-            free_func(host_, arr.items, arr.len * sizeof(GuestContractHandle), arr.align);
+            host_->free(host_, static_cast<uint8_t*>(arr.items),
+                        arr.len * sizeof(GuestContractHandle), arr.align);
         }
         return handles;
     }
@@ -227,7 +232,7 @@ public:
         ensure_host();
         auto func = reinterpret_cast<AbiError(*)(const HostInterface*, const HostContractInterface*)>(host_->register_host_contract);
         AbiError result = func(host_, interface);
-        if (result.code != AbiErrorCode::Ok) {
+        if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("register_host_contract failed: " + get_last_error());
         }
     }
@@ -249,20 +254,9 @@ public:
         return std::string(buf.data(), len);
     }
 
-    // ─── Backward Compatibility Aliases ─────────────────────────────────────────
-
-    /// Alias for find_guest_contract (deprecated).
-    GuestContractHandle find(uint64_t contract_id, uint32_t min_version) const {
-        return find_guest_contract(contract_id, min_version);
-    }
-
-    /// Alias for find_all_guest_contracts (deprecated).
-    std::vector<GuestContractHandle> find_all_by_contract(uint64_t contract_id, uint32_t min_version, size_t cap = 64) const {
-        return find_all_guest_contracts(contract_id, min_version, cap);
-    }
-
 private:
-    explicit Runtime(const HostInterface* h) noexcept : host_(h) {}
+    Runtime(const HostInterface* h, std::unique_ptr<detail::OnReloadFn> cb) noexcept
+        : host_(h), on_reload_cb_(std::move(cb)) {}
 
     void ensure_host() const {
         if (host_ == nullptr) {
@@ -271,6 +265,9 @@ private:
     }
 
     const HostInterface* host_ = nullptr;  // HostInterface pointer
+    // Owns the on_reload functor referenced by RuntimeConfig.on_reload_user_data.
+    // Must outlive the runtime so the trampoline's user_data stays valid.
+    std::unique_ptr<detail::OnReloadFn> on_reload_cb_{};
 };
 
 } // namespace polyplug

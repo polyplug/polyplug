@@ -9,11 +9,6 @@
 #include <string_view>
 #include <vector>
 
-extern "C" {
-uint8_t* polyplug_host_alloc(size_t size, size_t align);
-void polyplug_host_free(uint8_t* ptr, size_t size, size_t align);
-}
-
 // ─── Forward declarations ───
 struct NativeDispatch;
 struct VmDispatch;
@@ -91,11 +86,7 @@ static_assert(sizeof(VmLoaderData) == 8, "VmLoaderData size mismatch");
 ///
 ///  # Layout
 ///  - `data`: Opaque instance pointer (owned by guest)
-///  - `contract_id`: Contract ID for zero-overhead dispatch
-///
-///  # Dispatch
-///  The `contract_id` field enables `call_guest_method` to dispatch without
-///  looking up the contract in a map. This is zero-overhead dispatch.
+///  - `contract_id`: Contract ID stamped at instance creation
 struct GuestContractInstance {
     ///  Opaque instance data pointer.
     ///  The actual data is owned by the guest plugin.
@@ -104,12 +95,10 @@ struct GuestContractInstance {
     ///  Guest owns the memory. Host must not free or modify.
     ///  Must be freed via GuestContractInterface::destroy_instance.
     void* data;
-    ///  Contract ID for zero-overhead dispatch.
-    ///  Enables call_guest_method to dispatch without lookup.
+    ///  Contract ID stamped at instance creation.
     ///
     ///  # Purpose
-    ///  Eliminates the need to look up which contract an instance belongs to.
-    ///  The contract_id is set by create_instance and used for direct dispatch.
+    ///  Identifies which contract an instance belongs to. Set by `create_instance`.
     uint64_t contract_id;
 };
 static_assert(sizeof(GuestContractInstance) == 16, "GuestContractInstance size mismatch");
@@ -129,6 +118,7 @@ static_assert(sizeof(HostContractInstance) == 8, "HostContractInstance size mism
 ///
 ///  Contains an opaque runtime pointer and function pointers for guest calls.
 ///  All functions use self-passing pattern (receive HostInterface pointer as first parameter).
+///  `HostInterface` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
 ///
 ///  # Who provides
 ///  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -157,19 +147,19 @@ using HostInterface_register_contract_fn = AbiError(*)(const HostInterface*, con
 using HostInterface_alloc_fn = uint8_t*(*)(const HostInterface*, size_t, size_t);
 using HostInterface_free_fn = void(*)(const HostInterface*, uint8_t*, size_t, size_t);
 using HostInterface_find_guest_contract_fn = GuestContractHandle(*)(const HostInterface*, uint64_t, uint32_t);
-using HostInterface_find_all_guest_contracts_fn = void*(*)(const HostInterface*, uint64_t, uint32_t);
+using HostInterface_find_all_guest_contracts_fn = Array(*)(const HostInterface*, uint64_t, uint32_t);
 using HostInterface_resolve_guest_contract_fn = const GuestContractInterface*(*)(const HostInterface*, GuestContractHandle);
-using HostInterface_call_guest_method_fn = AbiError(*)(const HostInterface*, GuestContractInstance, uint32_t, const void*, void*);
 using HostInterface_get_host_contract_fn = HostContractInstance(*)(const HostInterface*, uint64_t, uint32_t);
 using HostInterface_resolve_host_contract_interface_fn = const HostContractInterface*(*)(const HostInterface*, uint64_t, uint32_t);
-using HostInterface_list_bundles_fn = void*(*)(const HostInterface*);
-using HostInterface_get_dependencies_fn = void*(*)(const HostInterface*);
+using HostInterface_list_bundles_fn = Array(*)(const HostInterface*);
+using HostInterface_get_dependencies_fn = Array(*)(const HostInterface*);
 using HostInterface_load_bundle_fn = AbiError(*)(const HostInterface*, const uint8_t*, size_t);
 using HostInterface_reload_bundle_fn = AbiError(*)(const HostInterface*, const uint8_t*, size_t);
 using HostInterface_register_host_contract_fn = AbiError(*)(const HostInterface*, const HostContractInterface*);
 using HostInterface_register_loader_fn = AbiError(*)(const HostInterface*, StringView, void*);
 using HostInterface_get_last_error_fn = size_t(*)(const HostInterface*, uint8_t*, size_t);
 using HostInterface_get_error_len_fn = size_t(*)(const HostInterface*);
+using HostInterface_get_extension_fn = const void*(*)(const HostInterface*, uint32_t);
 struct HostInterface {
     ///  Opaque pointer to Runtime.
     ///
@@ -252,21 +242,6 @@ struct HostInterface {
     ///  # Returns
     ///  Pointer to GuestContractInterface, or null if invalid/stale.
     HostInterface_resolve_guest_contract_fn resolve_guest_contract;
-    ///  Call a method on a guest contract instance.
-    ///
-    ///  This is the cross-dispatch mechanism for calling methods across
-    ///  different dispatch types (Native vs VM).
-    ///
-    ///  # Arguments
-    ///  - `this`: HostInterface pointer (self-passing)
-    ///  - `instance`: GuestContractInstance with contract_id for dispatch
-    ///  - `method_id`: Method index within the contract
-    ///  - `args`: Pointer to packed arguments (contract-specific layout)
-    ///  - `out`: Pointer to output buffer for return value
-    ///
-    ///  # Returns
-    ///  AbiError::OK on success, error code on failure.
-    HostInterface_call_guest_method_fn call_guest_method;
     ///  Get a host contract instance by contract_id and minimum version.
     ///
     ///  For singleton host contracts, returns the same instance every time.
@@ -390,6 +365,21 @@ struct HostInterface {
     ///  # Returns
     ///  Length of last error message (0 if no error).
     HostInterface_get_error_len_fn get_error_len;
+    ///  Get a registered extension by extension ID.
+    ///
+    ///  Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
+    ///  of the extension name. Use `polyplug_utils::fnv1a_32(name.as_bytes())` to
+    ///  compute the ID.
+    ///
+    ///  Returns null if no extension is registered for the given ID.
+    ///
+    ///  # Arguments
+    ///  - `this`: HostInterface pointer (self-passing)
+    ///  - `extension_id`: 32-bit FNV-1a hash of the extension name
+    ///
+    ///  # Returns
+    ///  Opaque pointer to the extension, or null if not registered.
+    HostInterface_get_extension_fn get_extension;
 };
 static_assert(sizeof(HostInterface) == 144, "HostInterface size mismatch");
 
@@ -421,16 +411,16 @@ static_assert(sizeof(HostInterface) == 144, "HostInterface size mismatch");
 ///  Each function receives the interface pointer as its first parameter,
 ///  allowing hosts to call: `rt->load_bundle(rt, path)`
 ///  SDKs hide this pattern: `rt.load_bundle(path)`
-using RuntimeInterface_load_bundle_fn = AbiError(*)(const RuntimeInterface*, const char*);
+using RuntimeInterface_load_bundle_fn = AbiError(*)(const RuntimeInterface*, StringView);
 using RuntimeInterface_reload_bundle_fn = AbiError(*)(const RuntimeInterface*, uint64_t);
 using RuntimeInterface_unload_bundle_fn = AbiError(*)(const RuntimeInterface*, uint64_t);
 using RuntimeInterface_find_by_contract_fn = GuestContractHandle(*)(const RuntimeInterface*, uint64_t, uint32_t);
-using RuntimeInterface_find_all_by_contract_fn = void*(*)(const RuntimeInterface*, uint64_t, uint32_t);
+using RuntimeInterface_find_all_by_contract_fn = Array(*)(const RuntimeInterface*, uint64_t, uint32_t);
 using RuntimeInterface_resolve_contract_fn = const GuestContractInterface*(*)(const RuntimeInterface*, GuestContractHandle);
 using RuntimeInterface_get_host_contract_fn = HostContractInstance(*)(const RuntimeInterface*, uint64_t, uint32_t);
 using RuntimeInterface_get_last_error_fn = StringView(*)(const RuntimeInterface*);
-using RuntimeInterface_list_bundles_fn = void*(*)(const RuntimeInterface*);
-using RuntimeInterface_get_dependencies_fn = void*(*)(const RuntimeInterface*);
+using RuntimeInterface_list_bundles_fn = Array(*)(const RuntimeInterface*);
+using RuntimeInterface_get_dependencies_fn = Array(*)(const RuntimeInterface*);
 using RuntimeInterface_destroy_fn = void(*)(const RuntimeInterface*);
 struct RuntimeInterface {
     ///  Opaque pointer to Runtime.
@@ -447,7 +437,7 @@ struct RuntimeInterface {
     ///
     ///  # Arguments
     ///  - `this`: RuntimeInterface pointer (self-passing)
-    ///  - `path`: Path to the bundle directory or manifest file
+    ///  - `path`: UTF-8 path to the bundle directory or manifest file (not null-terminated)
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
@@ -602,7 +592,7 @@ static_assert(sizeof(GuestContractHandle) == 4, "GuestContractHandle size mismat
 ///  # OWNERSHIP
 ///  Borrowed for the duration of the runtime build only.
 ///  The runtime copies any data it needs to retain.
-using RuntimeConfig_on_reload_fn = void(*)(ReloadPhase);
+using RuntimeConfig_on_reload_fn = void(*)(void*, ReloadPhase);
 // Nullable function pointer.
 struct RuntimeConfig {
     ///  Compatibility mode for version resolution.
@@ -610,9 +600,18 @@ struct RuntimeConfig {
     ///  Whether hot-reload is enabled.
     bool hot_reload_enabled;
     ///  Optional hot-reload callback, or null for no callback.
+    ///
+    ///  The first argument is the opaque `on_reload_user_data` pointer, forwarded
+    ///  unchanged on every invocation.
     RuntimeConfig_on_reload_fn on_reload;
+    ///  Opaque user-data pointer forwarded to `on_reload` as its first argument.
+    ///
+    ///  # Ownership
+    ///  Owned by the host that supplies the callback. The runtime never reads,
+    ///  writes, or frees the pointee — it only forwards the pointer.
+    void* on_reload_user_data;
 };
-static_assert(sizeof(RuntimeConfig) == 16, "RuntimeConfig size mismatch");
+static_assert(sizeof(RuntimeConfig) == 24, "RuntimeConfig size mismatch");
 
 ///  FFI-safe array with caller-frees ownership model.
 ///
@@ -879,12 +878,22 @@ static_assert(sizeof(ReloadPhase) == 48, "ReloadPhase size mismatch");
 
 ///  ABI error — returned by value from all ABI calls.
 ///
-///  OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
-///  via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
-///  after reading. If `code == AbiErrorCode::Ok`, `message.ptr` is NULL — no free needed.
+///  CODE: a raw `u32`, NOT the [`AbiErrorCode`] enum. Plugins are untrusted and
+///  return `AbiError` by value across the C ABI, so any 32-bit pattern can land
+///  here — including values that are not declared discriminants of the frozen
+///  [`AbiErrorCode`] enum. Materializing such a value as the enum would be
+///  instant undefined behaviour, so the field stays a raw `u32`. Construct it
+///  with `AbiErrorCode::X as u32` and interpret it with
+///  [`AbiErrorCode::from_u32`], which is total and safe. The layout is identical
+///  to the `#[repr(u32)]` enum (4 bytes at offset 0), so the C ABI is unchanged.
+///
+///  OWNERSHIP: `message` is always a static or runtime-owned string. The receiver
+///  must NEVER free it. Rich, allocated error detail is retrieved separately via
+///  `get_last_error`.
 struct AbiError {
-    ///  0 = success, non-zero = error.
-    AbiErrorCode code;
+    ///  0 = success, non-zero = error. Raw `u32`; convert with
+    ///  [`AbiErrorCode::from_u32`].
+    uint32_t code;
     ///  Empty/NULL if success. UTF-8 message if non-zero code.
     StringView message;
 };
@@ -1032,6 +1041,15 @@ struct HostContractInterface {
     ///  # Ownership
     ///  Owned by the runtime. Host contract implementations must not free.
     void* runtime;
+    ///  Opaque per-interface user-data pointer.
+    ///
+    ///  `create_instance` and `destroy_instance` can read it via their `this`
+    ///  parameter (`(*this).user_data`) to recover registrant-owned context.
+    ///
+    ///  # Ownership
+    ///  Owned by the registrant (the host application). The runtime never reads,
+    ///  writes, or frees the pointee — it only stores the pointer.
+    void* user_data;
     ///  Create a new instance of this host contract.
     ///
     ///  For singleton contracts, this is typically called once and the instance
@@ -1062,7 +1080,7 @@ struct HostContractInterface {
     ///  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
     DispatchMechanisms dispatch;
 };
-static_assert(sizeof(HostContractInterface) == 72, "HostContractInterface size mismatch");
+static_assert(sizeof(HostContractInterface) == 80, "HostContractInterface size mismatch");
 
 
 // ─── Helper Methods (preserved from helper files) ───
@@ -1153,15 +1171,9 @@ inline StringView string_view(std::string_view s) noexcept {
     return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
 }
 
-/// Allocate StringView from std::string using host allocator
-inline StringView alloc_string(const std::string& s) {
-    auto* ptr = static_cast<uint8_t*>(polyplug_host_alloc(s.size(), 1));
-    if (!ptr) {
-        return StringView{nullptr, 0};
-    }
-    std::memcpy(ptr, s.data(), s.size());
-    return StringView{ptr, s.size()};
-}
+// NOTE: cross-boundary allocation (alloc_string) lives in the guest SDK
+// (polyplug::alloc_string in guest.hpp), which routes through the stored
+// HostInterface. abi.hpp stays pure ABI with no link-time host dependency.
 
 } // namespace abi
 } // namespace polyplug

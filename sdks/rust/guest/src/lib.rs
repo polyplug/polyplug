@@ -120,15 +120,17 @@ pub use polyplug_abi::types::StringView;
 
 /// Owning byte buffer allocated via the host allocator.
 ///
-/// OWNERSHIP: `ptr` is always allocated via `polyplug_host_alloc`.
-/// Owner calls `polyplug_host_free(ptr, cap, align)` when done.
+/// OWNERSHIP: `ptr` is always allocated via the host allocator (`host.alloc`).
+/// Owner calls `host.free(host, ptr, cap, align)` when done.
 pub use polyplug_abi::types::Buffer;
 
 /// ABI error returned by value from all ABI calls.
 ///
-/// OWNERSHIP: `code` is a value type. `message.ptr` (if non-null) is
-/// allocated by the callee via `host_alloc`. Caller frees with
-/// `polyplug_host_free(message.ptr, message.len, 1)` after reading.
+/// OWNERSHIP: `message` is always a static or runtime-owned string. The
+/// receiver must NEVER free it. Rich, allocated error detail is retrieved
+/// separately via `get_last_error`. `code` is a raw `u32`; interpret it with
+/// `AbiErrorCode::from_u32` because plugins are untrusted and may return any
+/// value.
 pub use polyplug_abi::types::AbiError;
 
 /// Semantic version (major.minor.patch).
@@ -198,12 +200,6 @@ pub use polyplug_utils::GuestContractId;
 /// Host contract ID type for computing host contract identifiers.
 pub use polyplug_utils::HostContractId;
 
-// ─── Allocator ────────────────────────────────────────────────────────────────
-
-pub use polyplug_abi::ffi::polyplug_host_alloc;
-
-pub use polyplug_abi::ffi::polyplug_host_free;
-
 // ─── Helper Types ─────────────────────────────────────────────────────────────
 
 /// Wrapper for a function pointer stored in a static vtable array.
@@ -254,55 +250,74 @@ impl core::error::Error for GuestError {}
 
 // ─── String Helpers ───────────────────────────────────────────────────────────
 
-/// Convert a `StringView` to a `&str`.
+/// Convert a `StringView` to a `&str` borrowing for the view's lifetime.
 ///
 /// # Safety
-/// The `StringView` must point to valid UTF-8 data.
-/// The returned slice is valid only as long as the `StringView` data remains valid.
+/// - `sv.ptr` must either be null or point to `sv.len` initialized bytes that
+///   stay valid and immutable for the entire lifetime `'a` of the borrow.
+/// - The pointed-to bytes are expected to be UTF-8; invalid UTF-8 yields `""`.
+///
+/// The returned `&'a str` is tied to the borrow of `sv`, so it cannot outlive
+/// the `StringView` it was derived from. This is `unsafe` because the validity
+/// and lifetime of `sv.ptr` cannot be checked here.
 ///
 /// # Example
 /// ```rust
 /// use polyplug_guest::{StringView, to_str};
 ///
 /// let sv = StringView { ptr: b"hello".as_ptr(), len: 5 };
-/// let s: &str = to_str(sv);
+/// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
+/// let s: &str = unsafe { to_str(&sv) };
 /// assert_eq!(s, "hello");
 /// ```
-pub fn to_str(sv: StringView) -> &'static str {
+pub unsafe fn to_str(sv: &StringView) -> &str {
     if sv.ptr.is_null() || sv.len == 0 {
         return "";
     }
     // SAFETY: sv.ptr is non-null (checked above) and sv.len is the valid length.
-    // The caller guarantees the pointer is valid for sv.len bytes and points to UTF-8 data.
+    // The caller guarantees, via this function's `# Safety` contract, that the
+    // pointer is valid for sv.len bytes for the lifetime 'a and points to UTF-8.
     unsafe { core::str::from_utf8(core::slice::from_raw_parts(sv.ptr, sv.len)).unwrap_or("") }
 }
 
 /// Allocate a `StringView` from a `&str` using the host allocator.
 ///
-/// The returned `StringView` points to memory allocated via `polyplug_host_alloc`.
-/// The caller (host) is responsible for freeing the memory via `polyplug_host_free`.
+/// Allocates through the stored `HostInterface` (`host.alloc`, align 1), so the
+/// bytes are owned by the host and never link a separate allocator copy into the
+/// plugin dylib. The caller (host) is responsible for freeing the memory via
+/// `host.free(host, ptr, len, 1)`.
 ///
 /// # Errors
-/// Returns `Err(GuestError)` if allocation fails.
+/// Returns `Err(GuestError)` if the host interface is unavailable (called before
+/// `polyplug_init` stored it) or if allocation fails.
 ///
 /// # Example
-/// ```rust
+/// ```rust,ignore
 /// use polyplug_guest::{alloc_string, StringView};
 ///
 /// let sv: StringView = alloc_string("hello").unwrap();
 /// // sv.ptr points to host-allocated memory
-/// // Host must call polyplug_host_free(sv.ptr, sv.len, 1) when done
+/// // Host must call host.free(host, sv.ptr, sv.len, 1) when done
 /// ```
 pub fn alloc_string(s: &str) -> Result<StringView, GuestError> {
+    let host_ptr: *const HostInterface = get_host_vtable();
+    if host_ptr.is_null() {
+        return Err(GuestError {
+            code: AbiErrorCode::Generic,
+            message: "host interface unavailable".to_string(),
+        });
+    }
     let bytes: &[u8] = s.as_bytes();
-    let ptr: *mut u8 = polyplug_host_alloc(bytes.len(), 1);
+    // SAFETY: host_ptr is non-null (checked above) and was validated during
+    // store_host_vtable. `alloc` is a valid function pointer set by the host.
+    let ptr: *mut u8 = unsafe { ((*host_ptr).alloc)(host_ptr, bytes.len(), 1) };
     if ptr.is_null() {
         return Err(GuestError {
             code: AbiErrorCode::Generic,
             message: "allocation failed".to_string(),
         });
     }
-    // SAFETY: ptr is non-null (checked above) and was allocated by polyplug_host_alloc
+    // SAFETY: ptr is non-null (checked above) and was allocated by host.alloc
     // with size bytes.len() and align 1. The source bytes.as_ptr() is valid for
     // bytes.len() bytes. The destination is valid for bytes.len() bytes.
     unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
@@ -314,49 +329,68 @@ pub fn alloc_string(s: &str) -> Result<StringView, GuestError> {
 
 /// Check if a `StringView` starts with the given prefix.
 ///
+/// # Safety
+/// Same contract as [`to_str`]: `sv` must point to valid, live UTF-8 bytes for
+/// the duration of the call.
+///
 /// # Example
 /// ```rust
 /// use polyplug_guest::{StringView, starts_with};
 ///
 /// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
-/// assert!(starts_with(sv, "hello"));
-/// assert!(!starts_with(sv, "world"));
+/// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
+/// assert!(unsafe { starts_with(&sv, "hello") });
+/// assert!(!unsafe { starts_with(&sv, "world") });
 /// ```
-pub fn starts_with(sv: StringView, prefix: &str) -> bool {
-    let s: &str = to_str(sv);
+pub unsafe fn starts_with(sv: &StringView, prefix: &str) -> bool {
+    // SAFETY: forwarded to the caller via this function's `# Safety` contract.
+    let s: &str = unsafe { to_str(sv) };
     s.starts_with(prefix)
 }
 
 /// Check if a `StringView` ends with the given suffix.
+///
+/// # Safety
+/// Same contract as [`to_str`]: `sv` must point to valid, live UTF-8 bytes for
+/// the duration of the call.
 ///
 /// # Example
 /// ```rust
 /// use polyplug_guest::{StringView, ends_with};
 ///
 /// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
-/// assert!(ends_with(sv, "world"));
-/// assert!(!ends_with(sv, "hello"));
+/// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
+/// assert!(unsafe { ends_with(&sv, "world") });
+/// assert!(!unsafe { ends_with(&sv, "hello") });
 /// ```
-pub fn ends_with(sv: StringView, suffix: &str) -> bool {
-    let s: &str = to_str(sv);
+pub unsafe fn ends_with(sv: &StringView, suffix: &str) -> bool {
+    // SAFETY: forwarded to the caller via this function's `# Safety` contract.
+    let s: &str = unsafe { to_str(sv) };
     s.ends_with(suffix)
 }
 
 /// Strip a prefix from a `StringView` if present.
 ///
 /// Returns the remaining string slice if the prefix was present,
-/// otherwise returns the original string.
+/// otherwise returns the original string. The returned slice borrows for the
+/// lifetime of `sv`.
+///
+/// # Safety
+/// Same contract as [`to_str`]: `sv` must point to valid, live UTF-8 bytes for
+/// the lifetime `'a` of the borrow.
 ///
 /// # Example
 /// ```rust
 /// use polyplug_guest::{StringView, strip_prefix};
 ///
 /// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
-/// assert_eq!(strip_prefix(sv, "hello "), "world");
-/// assert_eq!(strip_prefix(sv, "goodbye"), "hello world");
+/// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
+/// assert_eq!(unsafe { strip_prefix(&sv, "hello ") }, "world");
+/// assert_eq!(unsafe { strip_prefix(&sv, "goodbye") }, "hello world");
 /// ```
-pub fn strip_prefix(sv: StringView, prefix: &str) -> &'static str {
-    let s: &str = to_str(sv);
+pub unsafe fn strip_prefix<'a>(sv: &'a StringView, prefix: &str) -> &'a str {
+    // SAFETY: forwarded to the caller via this function's `# Safety` contract.
+    let s: &'a str = unsafe { to_str(sv) };
     match s.strip_prefix(prefix) {
         Some(remaining) => remaining,
         None => s,
@@ -365,19 +399,26 @@ pub fn strip_prefix(sv: StringView, prefix: &str) -> &'static str {
 
 /// Split a `StringView` by a delimiter.
 ///
-/// Returns a vector of string slices. Empty input returns an empty vector.
-/// Consecutive delimiters produce empty strings in the output.
+/// Returns a vector of string slices borrowing for the lifetime of `sv`. Empty
+/// input returns an empty vector. Consecutive delimiters produce empty strings
+/// in the output.
+///
+/// # Safety
+/// Same contract as [`to_str`]: `sv` must point to valid, live UTF-8 bytes for
+/// the lifetime `'a` of the borrow.
 ///
 /// # Example
 /// ```rust
 /// use polyplug_guest::{StringView, split};
 ///
 /// let sv = StringView { ptr: b"a,b,c".as_ptr(), len: 5 };
-/// let parts: Vec<&str> = split(sv, ",");
+/// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
+/// let parts: Vec<&str> = unsafe { split(&sv, ",") };
 /// assert_eq!(parts, vec!["a", "b", "c"]);
 /// ```
-pub fn split(sv: StringView, delimiter: &str) -> Vec<&'static str> {
-    let s: &str = to_str(sv);
+pub unsafe fn split<'a>(sv: &'a StringView, delimiter: &str) -> Vec<&'a str> {
+    // SAFETY: forwarded to the caller via this function's `# Safety` contract.
+    let s: &'a str = unsafe { to_str(sv) };
     if s.is_empty() {
         return Vec::new();
     }
@@ -404,23 +445,32 @@ pub fn get_host_vtable() -> *const polyplug_abi::HostInterface {
     HOST_VTABLE.get().map(|p| p.0).unwrap_or(core::ptr::null())
 }
 
+/// Look up a registered extension by name.
+///
+/// Computes the 32-bit FNV-1a hash of `extension_name` and calls
+/// `host->get_extension(host, extension_id)`. Returns `None` if the host
+/// interface is unavailable or no extension is registered for that name.
+pub fn get_extension(extension_name: &str) -> Option<*const ()> {
+    let host_ptr: *const polyplug_abi::HostInterface = get_host_vtable();
+    if host_ptr.is_null() {
+        return None;
+    }
+    let extension_id: u32 = polyplug_utils::fnv1a_32(extension_name.as_bytes());
+    // SAFETY: host_ptr is non-null (checked above) and was validated during
+    // store_host_vtable. The pointer is 'static for the plugin lifetime.
+    // get_extension is a valid function pointer set by the host runtime.
+    let result: *const () = unsafe { ((*host_ptr).get_extension)(host_ptr, extension_id) };
+    if result.is_null() { None } else { Some(result) }
+}
+
 // ─── FFI Module ────────────────────────────────────────────────────────────────
 
 /// FFI utilities for guest plugins.
 ///
-/// Provides allocator functions and host interface access for generated code.
+/// Provides host interface access for generated code. Cross-boundary allocation
+/// goes through `crate::alloc_string` / the stored `HostInterface`, never a
+/// separately linked allocator symbol.
 pub mod ffi {
-    /// Allocate memory via the host system allocator.
-    ///
-    /// All memory that crosses the plugin/host boundary must use this allocator.
-    /// Returns null for size=0 or invalid alignment.
-    pub use polyplug_abi::ffi::polyplug_host_alloc;
-
-    /// Free memory previously allocated by `polyplug_host_alloc`.
-    ///
-    /// Passing null or size=0 is a safe no-op.
-    pub use polyplug_abi::ffi::polyplug_host_free;
-
     /// Get the host interface that was passed during polyplug_init.
     ///
     /// Returns a pointer to the host interface stored during initialization.

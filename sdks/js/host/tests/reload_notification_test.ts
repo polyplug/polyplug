@@ -31,32 +31,29 @@ Deno.test("constructor sets all properties", () => {
         ReloadPhase.TYPE_PREPARING,
         12345n,
         "TestBundle",
-        2,
         "Test reason",
     );
     assertEquals(ReloadPhase.TYPE_PREPARING, phase.type);
     assertEquals(12345n, phase.bundleId);
     assertEquals("TestBundle", phase.bundleName);
-    assertEquals(2, phase.retryCount);
     assertEquals("Test reason", phase.reason);
 });
 
-Deno.test("constructor uses default retryCount and reason", () => {
+Deno.test("constructor uses default reason", () => {
     const phase = new ReloadPhase(ReloadPhase.TYPE_RELOADED, 999n, "MyBundle");
     assertEquals(ReloadPhase.TYPE_RELOADED, phase.type);
     assertEquals(999n, phase.bundleId);
     assertEquals("MyBundle", phase.bundleName);
-    assertEquals(0, phase.retryCount);
     assertEquals("", phase.reason);
 });
 
 Deno.test("constructor handles empty bundleName", () => {
-    const phase = new ReloadPhase(ReloadPhase.TYPE_FAILED, 1n, "", 0, "Error");
+    const phase = new ReloadPhase(ReloadPhase.TYPE_FAILED, 1n, "", "Error");
     assertEquals("", phase.bundleName);
 });
 
 Deno.test("constructor handles empty reason", () => {
-    const phase = new ReloadPhase(ReloadPhase.TYPE_FAILED, 1n, "Bundle", 0, "");
+    const phase = new ReloadPhase(ReloadPhase.TYPE_FAILED, 1n, "Bundle", "");
     assertEquals("", phase.reason);
 });
 

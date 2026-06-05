@@ -129,8 +129,9 @@ public sealed class Runtime
     /// </summary>
     private static OnReloadTrampoline? s_reloadTrampoline;
 
-    private static void OnReloadNative(Polyplug.Abi.ReloadPhase phase)
+    private static void OnReloadNative(nint userData, Polyplug.Abi.ReloadPhase phase)
     {
+        _ = userData;
         Action<ReloadPhase>? cb = s_reloadCallback;
         if (cb is null)
         {
@@ -159,7 +160,7 @@ public sealed class Runtime
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate void OnReloadTrampoline(Polyplug.Abi.ReloadPhase phase);
+    private delegate void OnReloadTrampoline(nint userData, Polyplug.Abi.ReloadPhase phase);
 
     /// <summary>
     /// Build a RuntimeConfig struct that includes the stored reload callback.
@@ -277,55 +278,15 @@ public sealed class Runtime
         }
     }
 
+    /// <summary>
+    /// Throw an <see cref="InvalidOperationException"/> with the given message.
+    /// Used on runtime create / loader register failure paths where no live
+    /// <c>HostInterface</c> is available to read <c>get_last_error</c> from, so
+    /// the supplied fallback message is thrown directly.
+    /// </summary>
     public static void ThrowLastError(string fallbackMessage)
     {
-        // Create a temporary HostInterface with default config to read the error.
-        nint tempHost = NativeMethods.PolyplugRuntimeCreate(nint.Zero);
-        if (tempHost == nint.Zero)
-        {
-            throw new InvalidOperationException(fallbackMessage);
-        }
-
-        try
-        {
-            HostInterface tempStruct = Marshal.PtrToStructure<HostInterface>(tempHost);
-            GetErrorLenDelegate getLen = Marshal.GetDelegateForFunctionPointer<GetErrorLenDelegate>(tempStruct.GetErrorLen);
-            GetLastErrorDelegate getErr = Marshal.GetDelegateForFunctionPointer<GetLastErrorDelegate>(tempStruct.GetLastError);
-
-            nuint len = getLen(tempHost);
-            ulong length = len.ToUInt64();
-            if (length == 0ul)
-            {
-                throw new InvalidOperationException(fallbackMessage);
-            }
-
-            if (length > int.MaxValue)
-            {
-                throw new InvalidOperationException("polyplug error message too large");
-            }
-
-            byte[] buffer = new byte[(int)length];
-            GCHandle pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
-            try
-            {
-                nuint written = getErr(tempHost, pinned.AddrOfPinnedObject(), (nuint)buffer.Length);
-                int count = (int)written.ToUInt64();
-                if (count == 0)
-                {
-                    throw new InvalidOperationException(fallbackMessage);
-                }
-                string message = Encoding.UTF8.GetString(buffer, 0, count);
-                throw new InvalidOperationException(string.IsNullOrEmpty(message) ? fallbackMessage : message);
-            }
-            finally
-            {
-                pinned.Free();
-            }
-        }
-        finally
-        {
-            NativeMethods.PolyplugRuntimeDestroy(tempHost);
-        }
+        throw new InvalidOperationException(fallbackMessage);
     }
 
     public void LoadBundle(string path)
@@ -350,22 +311,22 @@ public sealed class Runtime
 
     /// <summary>
     /// Inspect an <see cref="AbiError"/> returned by value from a host call.
-    /// On a non-Ok code, frees the error message (allocated by the callee via
-    /// the host allocator) after copying it, then throws.
+    /// On a non-Ok code, copy the message into a managed string and throw.
     /// </summary>
+    /// <remarks>
+    /// Per the ABI ownership contract, <see cref="AbiError.Message"/> is always a
+    /// static or runtime-owned string; the receiver MUST NEVER free it. Freeing a
+    /// static <c>.rodata</c> pointer through the host allocator corrupts the heap.
+    /// Rich detail is available via <c>get_last_error</c>.
+    /// </remarks>
     private void CheckAbiError(AbiError error, string fallbackMessage)
     {
-        if (error.Code == AbiErrorCode.Ok)
+        if (error.Code == (uint)AbiErrorCode.Ok)
         {
             return;
         }
 
         string message = StringViewToString(error.Message);
-        if (error.Message.Ptr != nint.Zero && error.Message.Len != nuint.Zero)
-        {
-            _freeFn!(_host, error.Message.Ptr, error.Message.Len, 1);
-        }
-
         throw new InvalidOperationException(string.IsNullOrEmpty(message) ? fallbackMessage : message);
     }
 
@@ -452,11 +413,8 @@ public sealed class Runtime
         {
             StringView name = new StringView { Ptr = ptr, Len = len };
             AbiError error = _registerLoaderFn!(_host, name, loaderPtr);
-            result = (uint)error.Code;
-            if (error.Code != AbiErrorCode.Ok && error.Message.Ptr != nint.Zero && error.Message.Len != nuint.Zero)
-            {
-                _freeFn!(_host, error.Message.Ptr, error.Message.Len, 1);
-            }
+            // AbiError.Message is static or runtime-owned; the receiver never frees it.
+            result = error.Code;
         });
         return result;
     }

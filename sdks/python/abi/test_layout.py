@@ -51,7 +51,7 @@ def test_host_contract_instance_size():
 
 
 def test_host_contract_interface_size():
-    assert ctypes.sizeof(HostContractInterface) == 72, f"HostContractInterface expected 72 bytes, got {ctypes.sizeof(HostContractInterface)}"
+    assert ctypes.sizeof(HostContractInterface) == 80, f"HostContractInterface expected 80 bytes, got {ctypes.sizeof(HostContractInterface)}"
 
 
 def test_host_interface_size():
@@ -79,7 +79,7 @@ def test_reload_phase_size():
 
 
 def test_runtime_config_size():
-    assert ctypes.sizeof(RuntimeConfig) == 16, f"RuntimeConfig expected 16 bytes, got {ctypes.sizeof(RuntimeConfig)}"
+    assert ctypes.sizeof(RuntimeConfig) == 24, f"RuntimeConfig expected 24 bytes, got {ctypes.sizeof(RuntimeConfig)}"
 
 
 def test_abi_error_size():

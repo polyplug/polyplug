@@ -82,11 +82,7 @@ ffi.cdef[[
     // 
     //  # Layout
     //  - `data`: Opaque instance pointer (owned by guest)
-    //  - `contract_id`: Contract ID for zero-overhead dispatch
-    // 
-    //  # Dispatch
-    //  The `contract_id` field enables `call_guest_method` to dispatch without
-    //  looking up the contract in a map. This is zero-overhead dispatch.
+    //  - `contract_id`: Contract ID stamped at instance creation
     typedef struct GuestContractInstance {
         //  Opaque instance data pointer.
         //  The actual data is owned by the guest plugin.
@@ -95,12 +91,10 @@ ffi.cdef[[
         //  Guest owns the memory. Host must not free or modify.
         //  Must be freed via GuestContractInterface::destroy_instance.
         void* data;
-        //  Contract ID for zero-overhead dispatch.
-        //  Enables call_guest_method to dispatch without lookup.
+        //  Contract ID stamped at instance creation.
         // 
         //  # Purpose
-        //  Eliminates the need to look up which contract an instance belongs to.
-        //  The contract_id is set by create_instance and used for direct dispatch.
+        //  Identifies which contract an instance belongs to. Set by `create_instance`.
         uint64_t contract_id;
     } GuestContractInstance;
     // Expected size: 16 bytes
@@ -122,7 +116,6 @@ ffi.cdef[[
     typedef GuestContractHandle (*HostInterface_find_guest_contract_fn)(const HostInterface*, uint64_t, uint32_t);
     typedef void* (*HostInterface_find_all_guest_contracts_fn)(const HostInterface*, uint64_t, uint32_t);
     typedef const GuestContractInterface* (*HostInterface_resolve_guest_contract_fn)(const HostInterface*, GuestContractHandle);
-    typedef AbiError (*HostInterface_call_guest_method_fn)(const HostInterface*, GuestContractInstance, uint32_t, const void*, void*);
     typedef HostContractInstance (*HostInterface_get_host_contract_fn)(const HostInterface*, uint64_t, uint32_t);
     typedef const HostContractInterface* (*HostInterface_resolve_host_contract_interface_fn)(const HostInterface*, uint64_t, uint32_t);
     typedef void* (*HostInterface_list_bundles_fn)(const HostInterface*);
@@ -133,10 +126,12 @@ ffi.cdef[[
     typedef AbiError (*HostInterface_register_loader_fn)(const HostInterface*, StringView, void*);
     typedef size_t (*HostInterface_get_last_error_fn)(const HostInterface*, uint8_t*, size_t);
     typedef size_t (*HostInterface_get_error_len_fn)(const HostInterface*);
+    typedef const void* (*HostInterface_get_extension_fn)(const HostInterface*, uint32_t);
     //  Host Interface — function table passed to guests during initialization.
     // 
     //  Contains an opaque runtime pointer and function pointers for guest calls.
     //  All functions use self-passing pattern (receive HostInterface pointer as first parameter).
+    //  `HostInterface` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
     // 
     //  # Who provides
     //  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -243,21 +238,6 @@ ffi.cdef[[
         //  # Returns
         //  Pointer to GuestContractInterface, or null if invalid/stale.
         HostInterface_resolve_guest_contract_fn resolve_guest_contract;
-        //  Call a method on a guest contract instance.
-        // 
-        //  This is the cross-dispatch mechanism for calling methods across
-        //  different dispatch types (Native vs VM).
-        // 
-        //  # Arguments
-        //  - `this`: HostInterface pointer (self-passing)
-        //  - `instance`: GuestContractInstance with contract_id for dispatch
-        //  - `method_id`: Method index within the contract
-        //  - `args`: Pointer to packed arguments (contract-specific layout)
-        //  - `out`: Pointer to output buffer for return value
-        // 
-        //  # Returns
-        //  AbiError::OK on success, error code on failure.
-        HostInterface_call_guest_method_fn call_guest_method;
         //  Get a host contract instance by contract_id and minimum version.
         // 
         //  For singleton host contracts, returns the same instance every time.
@@ -381,10 +361,25 @@ ffi.cdef[[
         //  # Returns
         //  Length of last error message (0 if no error).
         HostInterface_get_error_len_fn get_error_len;
+        //  Get a registered extension by extension ID.
+        // 
+        //  Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
+        //  of the extension name. Use `polyplug_utils::fnv1a_32(name.as_bytes())` to
+        //  compute the ID.
+        // 
+        //  Returns null if no extension is registered for the given ID.
+        // 
+        //  # Arguments
+        //  - `this`: HostInterface pointer (self-passing)
+        //  - `extension_id`: 32-bit FNV-1a hash of the extension name
+        // 
+        //  # Returns
+        //  Opaque pointer to the extension, or null if not registered.
+        HostInterface_get_extension_fn get_extension;
     } HostInterface;
     // Expected size: 144 bytes
 
-    typedef AbiError (*RuntimeInterface_load_bundle_fn)(const RuntimeInterface*, const int8_t*);
+    typedef AbiError (*RuntimeInterface_load_bundle_fn)(const RuntimeInterface*, StringView);
     typedef AbiError (*RuntimeInterface_reload_bundle_fn)(const RuntimeInterface*, uint64_t);
     typedef AbiError (*RuntimeInterface_unload_bundle_fn)(const RuntimeInterface*, uint64_t);
     typedef GuestContractHandle (*RuntimeInterface_find_by_contract_fn)(const RuntimeInterface*, uint64_t, uint32_t);
@@ -438,7 +433,7 @@ ffi.cdef[[
         // 
         //  # Arguments
         //  - `this`: RuntimeInterface pointer (self-passing)
-        //  - `path`: Path to the bundle directory or manifest file
+        //  - `path`: UTF-8 path to the bundle directory or manifest file (not null-terminated)
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
@@ -850,7 +845,7 @@ ffi.cdef[[
     } ReloadPhase;
     // Expected size: 48 bytes
 
-    typedef void (*RuntimeConfig_on_reload_fn)(ReloadPhase);
+    typedef void (*RuntimeConfig_on_reload_fn)(void*, ReloadPhase);
     //  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
     // 
     //  # OWNERSHIP
@@ -862,18 +857,37 @@ ffi.cdef[[
         //  Whether hot-reload is enabled.
         uint8_t hot_reload_enabled;
         //  Optional hot-reload callback, or null for no callback.
+        // 
+        //  The first argument is the opaque `on_reload_user_data` pointer, forwarded
+        //  unchanged on every invocation.
         RuntimeConfig_on_reload_fn on_reload;
+        //  Opaque user-data pointer forwarded to `on_reload` as its first argument.
+        // 
+        //  # Ownership
+        //  Owned by the host that supplies the callback. The runtime never reads,
+        //  writes, or frees the pointee — it only forwards the pointer.
+        void* on_reload_user_data;
     } RuntimeConfig;
-    // Expected size: 16 bytes
+    // Expected size: 24 bytes
 
     //  ABI error — returned by value from all ABI calls.
     // 
-    //  OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
-    //  via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
-    //  after reading. If `code == AbiErrorCode::Ok`, `message.ptr` is NULL — no free needed.
+    //  CODE: a raw `u32`, NOT the [`AbiErrorCode`] enum. Plugins are untrusted and
+    //  return `AbiError` by value across the C ABI, so any 32-bit pattern can land
+    //  here — including values that are not declared discriminants of the frozen
+    //  [`AbiErrorCode`] enum. Materializing such a value as the enum would be
+    //  instant undefined behaviour, so the field stays a raw `u32`. Construct it
+    //  with `AbiErrorCode::X as u32` and interpret it with
+    //  [`AbiErrorCode::from_u32`], which is total and safe. The layout is identical
+    //  to the `#[repr(u32)]` enum (4 bytes at offset 0), so the C ABI is unchanged.
+    // 
+    //  OWNERSHIP: `message` is always a static or runtime-owned string. The receiver
+    //  must NEVER free it. Rich, allocated error detail is retrieved separately via
+    //  `get_last_error`.
     typedef struct AbiError {
-        //  0 = success, non-zero = error.
-        AbiErrorCode code;
+        //  0 = success, non-zero = error. Raw `u32`; convert with
+        //  [`AbiErrorCode::from_u32`].
+        uint32_t code;
         //  Empty/NULL if success. UTF-8 message if non-zero code.
         StringView message;
     } AbiError;
@@ -1021,6 +1035,15 @@ ffi.cdef[[
         //  # Ownership
         //  Owned by the runtime. Host contract implementations must not free.
         void* runtime;
+        //  Opaque per-interface user-data pointer.
+        // 
+        //  `create_instance` and `destroy_instance` can read it via their `this`
+        //  parameter (`(*this).user_data`) to recover registrant-owned context.
+        // 
+        //  # Ownership
+        //  Owned by the registrant (the host application). The runtime never reads,
+        //  writes, or frees the pointee — it only stores the pointer.
+        void* user_data;
         //  Create a new instance of this host contract.
         // 
         //  For singleton contracts, this is typically called once and the instance
@@ -1051,7 +1074,7 @@ ffi.cdef[[
         //  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
         DispatchMechanisms dispatch;
     } HostContractInterface;
-    // Expected size: 72 bytes
+    // Expected size: 80 bytes
 
 ]]
 

@@ -10,17 +10,11 @@ local reload_phase = require('polyplug.reload_phase')
 -- Only FFI function declarations live here. All struct types (RuntimeConfig,
 -- ReloadPhase, HostInterface, etc.) come from the auto-generated abi.lua.
 ffi.cdef([[
-    // Only three FFI exports: create, create_with_options, destroy
-    const HostInterface* polyplug_runtime_create(void);
-    const HostInterface* polyplug_runtime_create_with_options(const void* options);
+    // The only two FFI exports: create and destroy.
+    // polyplug_runtime_create takes a `const RuntimeConfig*` (or NULL); the
+    // on_reload callback pointer lives INSIDE RuntimeConfig (offset 8).
+    const HostInterface* polyplug_runtime_create(const void* config);
     void polyplug_runtime_destroy(const HostInterface* host);
-
-    // Host-side options wrapper: references the ABI RuntimeConfig (16 bytes)
-    // and the ABI RuntimeConfig_on_reload_fn callback type (both from abi.lua).
-    typedef struct {
-        const RuntimeConfig* config;
-        RuntimeConfig_on_reload_fn on_reload;
-    } RuntimeCreateOptions;
 ]])
 
 local M = {}
@@ -108,49 +102,42 @@ function M.Runtime.new()
     local host_ptr
 
     if M._pending_config or M._pending_reload_callback then
-        local options = ffi.new("RuntimeCreateOptions")
-        local config_c
-
-        if M._pending_config then
-            config_c = ffi.new("RuntimeConfig", {
-                compatibility = M._pending_config.compatibility or M.COMPATIBILITY_STRICT,
-                hot_reload_enabled = M._pending_config.hot_reload_enabled and 1 or 0,
-                on_reload = nil,  -- set separately below if callback provided
-            })
-            options.config = config_c
-        end
+        -- Build a single RuntimeConfig; the on_reload callback pointer lives
+        -- inside it (offset 8) — there is no separate options wrapper.
+        local config_c = ffi.new("RuntimeConfig", {
+            compatibility = (M._pending_config and M._pending_config.compatibility)
+                or M.COMPATIBILITY_STRICT,
+            hot_reload_enabled = (M._pending_config and M._pending_config.hot_reload_enabled)
+                and 1 or 0,
+            on_reload = nil,
+        })
 
         if M._pending_reload_callback then
             local callback = M._pending_reload_callback
+            -- The ABI signature is void(*)(void* user_data, ReloadPhase): an opaque
+            -- user-data pointer followed by ONE ReloadPhase struct by value (no
+            -- retry_count field). user_data is unused here — the Lua closure already
+            -- captures `callback`.
             M._ffi_reload_callback = ffi.cast("RuntimeConfig_on_reload_fn", function(
+                _user_data,
                 phase_struct
             )
-                -- Extract fields from the ABI ReloadPhase struct
                 local phase = reload_phase.new(
                     phase_struct.phase_type,
                     phase_struct.bundle_id,
                     abi.to_str(phase_struct.bundle_name),
-                    nil,       -- retry_count removed from ABI
                     abi.to_str(phase_struct.reason)
                 )
                 callback(phase)
             end)
-            options.on_reload = M._ffi_reload_callback
-            -- If no config was provided but we have a callback, create a
-            -- default config so the on_reload pointer is paired with a config.
-            if not config_c then
-                config_c = ffi.new("RuntimeConfig", {
-                    compatibility = M.COMPATIBILITY_STRICT,
-                    hot_reload_enabled = 0,
-                    on_reload = nil,
-                })
-                options.config = config_c
-            end
+            config_c.on_reload = M._ffi_reload_callback
         end
 
-        host_ptr = lib.polyplug_runtime_create_with_options(options)
+        -- Keep the config cdata anchored for the duration of the create call.
+        M._pending_config_cdata = config_c
+        host_ptr = lib.polyplug_runtime_create(config_c)
     else
-        host_ptr = lib.polyplug_runtime_create()
+        host_ptr = lib.polyplug_runtime_create(nil)
     end
 
     if host_ptr == nil then
@@ -216,21 +203,6 @@ function M.Runtime:find_guest_contract(contract_id, min_version)
     -- GuestContractHandle is `#[repr(C)] { index: u32 }` and crosses the C ABI as a uint32_t.
     local fn = ffi.cast("uint32_t(*)(const HostInterface*, uint64_t, uint32_t)", self._host_struct.find_guest_contract)
     return fn(self._host, contract_id, min_version)
-end
-
---- Find guest contract by bundle_id and contract_id.
--- Note: This method is NOT in HostInterface (removed from FFI surface).
--- It's a convenience wrapper that would require different backend support.
--- For now, returns NULL_HANDLE to indicate unimplemented.
--- @param bundle_id number    Bundle identifier.
--- @param contract_id number  Contract identifier hash.
--- @param min_version number  Minimum version required.
--- @return number             Packed handle, or NULL_HANDLE.
-function M.Runtime:find_by_bundle(bundle_id, contract_id, min_version)
-    -- Note: find_by_bundle is not in HostInterface (18-02 removed it from FFI surface)
-    -- This method is deprecated and returns NULL_HANDLE
-    -- TODO: Implement via list_bundles + find_guest_contract if needed
-    return M.NULL_HANDLE
 end
 
 --- Find all guest contracts matching contract_id and minimum version.
@@ -328,25 +300,6 @@ function M.Runtime:destroy()
         self._destroyed = true
         self._host = nil
     end
-end
-
--- ─── Backward Compatibility Aliases ─────────────────────────────────────────────
--- These aliases allow old code to work with the new HostInterface-based API.
--- Deprecated: Use find_guest_contract, find_all_guest_contracts, resolve_guest_contract instead.
-
---- Alias for find_guest_contract (deprecated).
-function M.Runtime:find(contract_id, min_version)
-    return self:find_guest_contract(contract_id, min_version)
-end
-
---- Alias for find_all_guest_contracts (deprecated).
-function M.Runtime:find_all_by_contract(contract_id, min_version, cap)
-    return self:find_all_guest_contracts(contract_id, min_version, cap)
-end
-
---- Alias for resolve_guest_contract (deprecated).
-function M.Runtime:resolve_plugin(handle)
-    return self:resolve_guest_contract(handle)
 end
 
 return M

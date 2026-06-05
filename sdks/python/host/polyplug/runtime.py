@@ -20,6 +20,7 @@ from typing import Callable, Optional, Protocol, runtime_checkable
 from polyplug_abi import (
     AbiError,
     AbiErrorCode,
+    Array,
     Compatibility,
     DispatchMechanisms,
     DispatchType,
@@ -284,8 +285,8 @@ class Runtime:
     def _make_c_callback(cls) -> ctypes.CFUNCTYPE:
         """Internal: Create a C-compatible callback wrapper."""
 
-        @ctypes.CFUNCTYPE(None, AbiReloadPhase)
-        def c_callback(abi_phase: AbiReloadPhase) -> None:
+        @ctypes.CFUNCTYPE(None, ctypes.c_void_p, AbiReloadPhase)
+        def c_callback(_user_data: int, abi_phase: AbiReloadPhase) -> None:
             if cls._on_reload_cb is not None:
                 reason: str = _read_c_string(
                     abi_phase.reason.ptr, abi_phase.reason.len
@@ -353,28 +354,30 @@ class Runtime:
     def find_all_by_contract(self, contract_id: int, min_version: int) -> list[int]:
         """Find all guest contracts matching contract_id."""
         host: int = self._ensure_host()
-        # Array struct: { data: *mut T, len: usize }
-        array_ptr = self._find_all_fn(host, contract_id, min_version)
-        if array_ptr == 0:
-            return []
+        # `find_all_guest_contracts` returns an `Array` struct BY VALUE
+        # (#[repr(C)] { items: *mut T, len: usize, align: usize } = 24 bytes).
+        # The CFUNCTYPE restype is the `Array` Structure, so ctypes performs the
+        # sret struct-return ABI and `array` is a populated `Array` instance —
+        # NOT a pointer. Reading its fields directly is correct; treating the
+        # result as a pointer (the old behavior) misread the sret register.
+        array: Array = self._find_all_fn(host, contract_id, min_version)
 
-        # Read Array<GuestContractHandle> from pointer
-        # Array layout: data (8 bytes), len (8 bytes)
-        array_data = ctypes.c_void_p.from_address(array_ptr).value
-        array_len = ctypes.c_size_t.from_address(array_ptr + 8).value
-
+        array_data: int = array.items or 0
+        array_len: int = array.len
         if array_len == 0 or array_data == 0:
             return []
 
-        # GuestContractHandle is `#[repr(C)] { index: u32 }` = 4 bytes, so the array
-        # has a 4-byte element stride and each element is read as a u32 index.
-        handles = []
+        # GuestContractHandle is `#[repr(C)] { index: u32 }` = 4 bytes, so the
+        # array has a 4-byte element stride and each element is read as a u32 index.
+        element_size: int = ctypes.sizeof(ctypes.c_uint32)
+        handles: list[int] = []
         for i in range(array_len):
-            handle = ctypes.c_uint32.from_address(array_data + i * 4).value
+            handle: int = ctypes.c_uint32.from_address(array_data + i * element_size).value
             handles.append(handle)
 
-        # Free the array via host->free (size = len * 4, align = 4).
-        self._free_fn(host, array_data, array_len * 4, 4)
+        # Free the array via host->free using the same size/align the runtime
+        # allocated with: size = len * sizeof(element), align = array.align.
+        self._free_fn(host, array_data, array_len * element_size, array.align)
 
         return handles
 

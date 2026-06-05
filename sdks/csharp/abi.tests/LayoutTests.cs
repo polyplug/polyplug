@@ -27,7 +27,7 @@ namespace Polyplug.Abi.Tests
         public void HostContractInstanceIs8Bytes() => Assert.Equal(8, Marshal.SizeOf<HostContractInstance>());
 
         [Fact]
-        public void HostContractInterfaceIs72Bytes() => Assert.Equal(72, Marshal.SizeOf<HostContractInterface>());
+        public void HostContractInterfaceIs80Bytes() => Assert.Equal(80, Marshal.SizeOf<HostContractInterface>());
 
         [Fact]
         public void HostInterfaceIs144Bytes() => Assert.Equal(144, Marshal.SizeOf<HostInterface>());
@@ -48,7 +48,7 @@ namespace Polyplug.Abi.Tests
         public void ReloadPhaseIs48Bytes() => Assert.Equal(48, Marshal.SizeOf<ReloadPhase>());
 
         [Fact]
-        public void RuntimeConfigIs16Bytes() => Assert.Equal(16, Marshal.SizeOf<RuntimeConfig>());
+        public void RuntimeConfigIs24Bytes() => Assert.Equal(24, Marshal.SizeOf<RuntimeConfig>());
 
         [Fact]
         public void AbiErrorIs24Bytes() => Assert.Equal(24, Marshal.SizeOf<AbiError>());

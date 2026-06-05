@@ -15,12 +15,10 @@
       "import": "./abi/polyplug_abi.ts"
     },
     "./host": {
-      "types": "./host/mod.ts",
-      "import": "./host/mod.ts"
+      "import": "./host/mod.js"
     },
     "./guest": {
-      "types": "./guest/polyplug_guest.ts",
-      "import": "./guest/polyplug_guest.ts"
+      "import": "./guest/polyplug_guest.js"
     }
   },
   "files": [

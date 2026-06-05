@@ -15,4 +15,14 @@
   <ItemGroup>
     <ProjectReference Include="..\abi\Polyplug.Abi.csproj" />
   </ItemGroup>
+
+  <!--
+    Embed the native runtime libraries into the NuGet package. The release
+    workflow populates runtimes/<rid>/native/ with the per-platform binaries
+    before `dotnet pack`. PackagePath places them at the RID-conventional
+    location so the .NET runtime resolves the correct binary per platform.
+  -->
+  <ItemGroup>
+    <Content Include="runtimes\**\*" Pack="true" PackagePath="runtimes" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -44,17 +44,41 @@ if decoder:
 
 ### Plugin Author
 
+First generate the guest bindings for your contract with `polyplugc` (see
+[Code Generation](#code-generation) below). This produces a
+`generated/guest/contracts.py` module containing, for each contract:
+
+- a base class (e.g. `DECODERPipelineDecoderPlugin`) with one method per
+  contract function,
+- a `set_<contract>_impl()` registration function,
+- the `polyplug_init` entry point and `polyplug_abi_version` the loader calls.
+
+Write your plugin by subclassing the generated base class and registering an
+instance at module load time:
+
 ```python
-from polyplug_guest import plugin, HostInterface
+from generated.guest.contracts import (
+    DECODERPipelineDecoderPlugin,
+    set_decoder_impl,
+    polyplug_abi_version,
+    polyplug_init,
+)
+from polyplug_guest import to_str, alloc_string
 
-@plugin
-def init(host: HostInterface, ctx):
-    host.register(PipelineDecoder, DecoderImpl())
 
-class DecoderImpl:
-    def decode(self, input: str) -> str:
-        return f"DECODED:{input}"
+class DecoderImpl(DECODERPipelineDecoderPlugin):
+    def decode(self, input):
+        s = to_str(input).replace(",", "|")
+        return alloc_string(f"DECODED:{s}")
+
+
+set_decoder_impl(DecoderImpl())
 ```
+
+`to_str(view)` decodes an incoming `StringView` to a Python `str`, and
+`alloc_string(s)` allocates an outgoing `StringView` through the host allocator.
+The loader resolves the generated `polyplug_init` / `polyplug_abi_version`
+symbols directly — there is no decorator to apply.
 
 ## Code Generation
 
@@ -89,11 +113,16 @@ Python wrappers over the polyplug C ABI using ctypes:
 
 ### Guest Library (`guest/`)
 
-Bootstrap layer for Python plugins:
-- `@plugin` decorator — Marks plugin entry point
-- `HostInterface` — Contract registration
-- `BundleInitContext` — Bundle metadata
-- Exception boundary — Plugin crashes don't take down host
+`polyplug_guest` — bootstrap helpers for Python plugins. The contract registration
+and `polyplug_init` entry point are produced by `polyplugc` in the generated
+`contracts.py`; this library provides the runtime helpers that generated code and
+plugin authors rely on:
+- `to_str(view)` — decode an incoming `StringView` to a Python `str`
+- `alloc_string(s)` — allocate an outgoing `StringView` via the host allocator
+- `store_host_interface(ptr)` / `get_host_interface()` — stash the host interface
+  pointer for the allocator
+- Re-exported ABI types — `HostInterface`, `BundleInitContext`, `StringView`,
+  `AbiError`, `AbiErrorCode`, and the other types generated code imports
 
 ### Loaders (`loaders/`)
 

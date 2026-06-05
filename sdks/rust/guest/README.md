@@ -162,8 +162,9 @@ pub struct Buffer {
 }
 ```
 
-**Ownership:** The holder must free with `polyplug_host_free(ptr, cap, 1)` when done.
-Never place `Buffer` data on the Rust allocator — always use `polyplug_host_alloc`.
+**Ownership:** The holder must free with `host.free(host, ptr, cap, 1)` when done.
+Never place `Buffer` data on the Rust allocator — always allocate through the stored
+`HostInterface` (`host.alloc`, e.g. via `alloc_string`).
 
 ---
 
@@ -181,8 +182,9 @@ pub struct AbiError {
 
 - `code == 0` → success (`AbiErrorCode::Ok`).
 - `code != 0` → failure; `message` provides a human-readable description.
-- **Ownership of `message.ptr`:** allocated by the callee via `polyplug_host_alloc`.
-  Caller frees with `polyplug_host_free(message.ptr as *mut u8, message.len, 1)`.
+- **Ownership of `message.ptr`:** always a static or runtime-owned string. The
+  receiver **never** frees it (a bare `StringView` carries no allocation provenance).
+  For rich, allocated error detail, use `get_last_error` instead.
 
 Convenience constructors:
 
@@ -266,13 +268,6 @@ pub struct HostInterface {
         this: *const HostInterface,
         handle: GuestContractHandle,
     ) -> *const GuestContractInterface,
-    pub call_guest_method: unsafe extern "C" fn(
-        this:     *const HostInterface,
-        instance: GuestContractInstance,
-        method_id: u32,
-        args:     *const (),
-        out:      *mut (),
-    ) -> AbiError,
     pub get_host_contract: unsafe extern "C" fn(
         this: *const HostInterface,
         contract_id: u64,
@@ -302,6 +297,9 @@ pub struct HostInterface {
         this: *const HostInterface, buf: *mut u8, buf_len: usize,
     ) -> usize,
     pub get_error_len: unsafe extern "C" fn(this: *const HostInterface) -> usize,
+    pub get_extension: unsafe extern "C" fn(
+        this: *const HostInterface, extension_id: u32,
+    ) -> *const (),
 }
 ```
 
@@ -415,27 +413,43 @@ assert_eq!(contract_id("my.contract", 1), MY_CONTRACT_ID);
 
 ## Allocator API
 
-All memory that **crosses the plugin/host boundary** must use the host system allocator.
+All memory that **crosses the plugin/host boundary** must use the host allocator,
+reached through the `alloc` / `free` function-pointer fields of the `HostInterface`
+the host stored during `polyplug_init`. There are no `polyplug_host_alloc` /
+`polyplug_host_free` C exports — allocation always flows through the stored interface.
 Never return heap-allocated data from your Rust allocator — the host cannot free it.
 
-```rust
-use polyplug_guest::{polyplug_host_alloc, polyplug_host_free};
+For strings, prefer the `alloc_string` helper, which allocates through `host.alloc`:
 
-// Allocate 64 bytes, align 8:
-let ptr: *mut u8 = unsafe { polyplug_host_alloc(64, 8) };
+```rust
+use polyplug_guest::{alloc_string, StringView};
+
+// Allocate a host-owned StringView from a &str:
+let sv: StringView = alloc_string("hello")?;
+// sv.ptr points to host-allocated memory; the host frees it via
+// host.free(host, sv.ptr, sv.len, 1) when done.
+```
+
+For raw buffers, call the stored interface directly:
+
+```rust
+use polyplug_guest::get_host_vtable;
+
+let host = get_host_vtable();
+// SAFETY: host was stored during polyplug_init and is non-null in plugin code.
+let ptr: *mut u8 = unsafe { ((*host).alloc)(host, 64, 8) };
 if ptr.is_null() {
     // allocation failed
 }
-
-// Free it:
-unsafe { polyplug_host_free(ptr, 64, 8) };
+// Free it through the same interface:
+unsafe { ((*host).free)(host, ptr, 64, 8) };
 ```
 
 **Rules:**
 - A plugin must **never free** memory it did not allocate.
 - Never place cross-boundary data on the Rust managed heap (`Box`, `Vec`, `String`).
-- For string outputs, allocate via `polyplug_host_alloc`, copy bytes in, return a
-  `StringView` pointing to that allocation.
+- For string outputs, allocate via `alloc_string` (or `host.alloc`), copy bytes in,
+  return a `StringView` pointing to that allocation.
 
 ---
 
@@ -630,10 +644,16 @@ let s: &str = match std::str::from_utf8(bytes) {
 };
 ```
 
-For error messages pointing to static byte strings (as above), the host will **not**
-attempt to free `message.ptr` — it recognises static lifetime from the fact that no
-`polyplug_host_alloc` was called. If you allocate a dynamic error message, use
-`polyplug_host_alloc` so the host can free it.
+`AbiError.message` is **always** a static or runtime-owned string. The receiver
+**never** frees it — a bare `StringView` carries no allocation provenance, so the
+host cannot and does not free `message.ptr`. Point it at
+a `'static` byte string, as above. If you need rich, allocated error detail,
+expose it through `get_last_error` rather than through `AbiError.message`.
+
+`AbiError.code` is a raw `u32`, not the `AbiErrorCode` enum: plugins are
+untrusted and may return any 32-bit value. Construct it with
+`AbiErrorCode::Variant as u32` and interpret a received code with
+`AbiErrorCode::from_u32`.
 
 ---
 
@@ -641,12 +661,12 @@ attempt to free `message.ptr` — it recognises static lifetime from the fact th
 
 | Rule | Detail |
 |---|---|
-| Cross-boundary allocations | Must use `polyplug_host_alloc` / `polyplug_host_free` |
+| Cross-boundary allocations | Must use the stored `HostInterface` `alloc` / `free` fields |
 | Plugin-side allocations | May use Rust allocator, but must NOT cross the boundary |
-| Returned strings / buffers | Must be allocated with `polyplug_host_alloc` |
+| Returned strings / buffers | Must be allocated via `alloc_string` / `host.alloc` |
 | `StringView` (input) | Borrowed — do NOT free; valid only for the duration of the call |
-| `Buffer` (output) | Owned — caller frees with `polyplug_host_free` |
-| `AbiError.message` (output) | Allocated by callee via `polyplug_host_alloc`; caller frees |
+| `Buffer` (output) | Owned — caller frees with `host.free(host, ptr, cap, align)` |
+| `AbiError.message` (output) | Static or runtime-owned; receiver NEVER frees it |
 
 ---
 

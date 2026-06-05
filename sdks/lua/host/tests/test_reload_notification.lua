@@ -70,27 +70,25 @@ assert_equals(2, reload_phase.TYPE_FAILED,    "TYPE_FAILED should be 2")
 -- ─── ReloadPhase Constructor ──────────────────────────────────────────────────
 print("\n=== ReloadPhase Constructor ===")
 
-local phase_all = reload_phase.new(reload_phase.TYPE_PREPARING, 12345, "TestBundle", 2, "Test reason")
+local phase_all = reload_phase.new(reload_phase.TYPE_PREPARING, 12345, "TestBundle", "Test reason")
 assert_equals(reload_phase.TYPE_PREPARING, phase_all.type,        "phase.type should be TYPE_PREPARING")
 assert_equals(12345,                       phase_all.bundle_id,   "phase.bundle_id should be 12345")
 assert_equals("TestBundle",               phase_all.bundle_name, "phase.bundle_name should be TestBundle")
-assert_equals(2,                           phase_all.retry_count, "phase.retry_count should be 2")
 assert_equals("Test reason",              phase_all.reason,      "phase.reason should be Test reason")
 
--- Optional fields default to empty string / 0 when nil is passed
+-- Optional fields default to empty string when nil is passed
 local phase_defaults = reload_phase.new(reload_phase.TYPE_RELOADED, 999, "MyBundle")
 assert_equals(reload_phase.TYPE_RELOADED, phase_defaults.type,        "defaults: type should be TYPE_RELOADED")
 assert_equals(999,                         phase_defaults.bundle_id,   "defaults: bundle_id should be 999")
 assert_equals("MyBundle",                 phase_defaults.bundle_name, "defaults: bundle_name should be MyBundle")
-assert_equals(0,                           phase_defaults.retry_count, "defaults: retry_count should default to 0")
 assert_equals("",                          phase_defaults.reason,      "defaults: reason should default to empty string")
 
 -- nil bundle_name defaults to empty string
-local phase_nil_name = reload_phase.new(reload_phase.TYPE_FAILED, 1, nil, 0, "Error")
+local phase_nil_name = reload_phase.new(reload_phase.TYPE_FAILED, 1, nil, "Error")
 assert_equals("", phase_nil_name.bundle_name, "nil bundle_name should default to empty string")
 
 -- nil reason defaults to empty string
-local phase_nil_reason = reload_phase.new(reload_phase.TYPE_FAILED, 1, "Bundle", 0, nil)
+local phase_nil_reason = reload_phase.new(reload_phase.TYPE_FAILED, 1, "Bundle", nil)
 assert_equals("", phase_nil_reason.reason, "nil reason should default to empty string")
 
 -- ─── ReloadPhase Helper Methods ───────────────────────────────────────────────

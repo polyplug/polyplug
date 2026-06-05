@@ -65,11 +65,7 @@ class GuestContractInstance(ctypes.Structure):
     
      # Layout
      - `data`: Opaque instance pointer (owned by guest)
-     - `contract_id`: Contract ID for zero-overhead dispatch
-    
-     # Dispatch
-     The `contract_id` field enables `call_guest_method` to dispatch without
-     looking up the contract in a map. This is zero-overhead dispatch.
+     - `contract_id`: Contract ID stamped at instance creation
     """
     _fields_ = [
         ("data", ctypes.c_void_p),
@@ -167,7 +163,7 @@ assert ctypes.sizeof(Buffer) == 24, f"Buffer expected 24 bytes, got {ctypes.size
 class DependencyInfo(ctypes.Structure):
     """ Dependency information returned by get_dependencies introspection API.
     
-     Mirrors `manifest.toml` `\\[dependency\\]` table structure for plugins to query
+     Mirrors `manifest.toml` `\[dependency\]` table structure for plugins to query
      their own declared dependencies at runtime.
     
      # Who provides
@@ -340,7 +336,7 @@ class ReloadPhase(ctypes.Structure):
 assert ctypes.sizeof(ReloadPhase) == 48, f"ReloadPhase expected 48 bytes, got {ctypes.sizeof(ReloadPhase)}"
 
 
-_runtime_config_on_reload_t = ctypes.CFUNCTYPE(None, ReloadPhase)
+_runtime_config_on_reload_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ReloadPhase)
 # Nullable function pointer (Option<fn>). Can be set to None.
 class RuntimeConfig(ctypes.Structure):
     """ Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
@@ -353,18 +349,28 @@ class RuntimeConfig(ctypes.Structure):
         ("compatibility", ctypes.c_uint32),
         ("hot_reload_enabled", ctypes.c_bool),
         ("on_reload", _runtime_config_on_reload_t),
+        ("on_reload_user_data", ctypes.c_void_p),
     ]
 
-# Expected size: 16 bytes
-assert ctypes.sizeof(RuntimeConfig) == 16, f"RuntimeConfig expected 16 bytes, got {ctypes.sizeof(RuntimeConfig)}"
+# Expected size: 24 bytes
+assert ctypes.sizeof(RuntimeConfig) == 24, f"RuntimeConfig expected 24 bytes, got {ctypes.sizeof(RuntimeConfig)}"
 
 
 class AbiError(ctypes.Structure):
     """ ABI error — returned by value from all ABI calls.
     
-     OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
-     via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
-     after reading. If `code == AbiErrorCode::Ok`, `message.ptr` is NULL — no free needed.
+     CODE: a raw `u32`, NOT the [`AbiErrorCode`] enum. Plugins are untrusted and
+     return `AbiError` by value across the C ABI, so any 32-bit pattern can land
+     here — including values that are not declared discriminants of the frozen
+     [`AbiErrorCode`] enum. Materializing such a value as the enum would be
+     instant undefined behaviour, so the field stays a raw `u32`. Construct it
+     with `AbiErrorCode::X as u32` and interpret it with
+     [`AbiErrorCode::from_u32`], which is total and safe. The layout is identical
+     to the `#[repr(u32)]` enum (4 bytes at offset 0), so the C ABI is unchanged.
+    
+     OWNERSHIP: `message` is always a static or runtime-owned string. The receiver
+     must NEVER free it. Rich, allocated error detail is retrieved separately via
+     `get_last_error`.
     """
     _fields_ = [
         ("code", ctypes.c_uint32),
@@ -395,24 +401,25 @@ _host_interface_register_contract_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p
 _host_interface_alloc_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
 _host_interface_free_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
 _host_interface_find_guest_contract_t = ctypes.CFUNCTYPE(GuestContractHandle, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-_host_interface_find_all_guest_contracts_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_host_interface_find_all_guest_contracts_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
 _host_interface_resolve_guest_contract_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, GuestContractHandle)
-_host_interface_call_guest_method_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
 _host_interface_get_host_contract_t = ctypes.CFUNCTYPE(HostContractInstance, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
 _host_interface_resolve_host_contract_interface_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-_host_interface_list_bundles_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
-_host_interface_get_dependencies_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
+_host_interface_list_bundles_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p)
+_host_interface_get_dependencies_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p)
 _host_interface_load_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
 _host_interface_reload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
 _host_interface_register_host_contract_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)
 _host_interface_register_loader_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, StringView, ctypes.c_void_p)
 _host_interface_get_last_error_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
 _host_interface_get_error_len_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p)
+_host_interface_get_extension_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32)
 class HostInterface(ctypes.Structure):
     """ Host Interface — function table passed to guests during initialization.
     
      Contains an opaque runtime pointer and function pointers for guest calls.
      All functions use self-passing pattern (receive HostInterface pointer as first parameter).
+     `HostInterface` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
     
      # Who provides
      The runtime creates this struct and passes it to `polyplug_init()`.
@@ -446,7 +453,6 @@ class HostInterface(ctypes.Structure):
         ("find_guest_contract", _host_interface_find_guest_contract_t),
         ("find_all_guest_contracts", _host_interface_find_all_guest_contracts_t),
         ("resolve_guest_contract", _host_interface_resolve_guest_contract_t),
-        ("call_guest_method", _host_interface_call_guest_method_t),
         ("get_host_contract", _host_interface_get_host_contract_t),
         ("resolve_host_contract_interface", _host_interface_resolve_host_contract_interface_t),
         ("list_bundles", _host_interface_list_bundles_t),
@@ -457,22 +463,23 @@ class HostInterface(ctypes.Structure):
         ("register_loader", _host_interface_register_loader_t),
         ("get_last_error", _host_interface_get_last_error_t),
         ("get_error_len", _host_interface_get_error_len_t),
+        ("get_extension", _host_interface_get_extension_t),
     ]
 
 # Expected size: 144 bytes
 assert ctypes.sizeof(HostInterface) == 144, f"HostInterface expected 144 bytes, got {ctypes.sizeof(HostInterface)}"
 
 
-_runtime_interface_load_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)
+_runtime_interface_load_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, StringView)
 _runtime_interface_reload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_uint64)
 _runtime_interface_unload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_uint64)
 _runtime_interface_find_by_contract_t = ctypes.CFUNCTYPE(GuestContractHandle, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-_runtime_interface_find_all_by_contract_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_runtime_interface_find_all_by_contract_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
 _runtime_interface_resolve_contract_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, GuestContractHandle)
 _runtime_interface_get_host_contract_t = ctypes.CFUNCTYPE(HostContractInstance, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
 _runtime_interface_get_last_error_t = ctypes.CFUNCTYPE(StringView, ctypes.c_void_p)
-_runtime_interface_list_bundles_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
-_runtime_interface_get_dependencies_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
+_runtime_interface_list_bundles_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p)
+_runtime_interface_get_dependencies_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p)
 _runtime_interface_destroy_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p)
 class RuntimeInterface(ctypes.Structure):
     """ Runtime Interface — function table returned to host from polyplug_runtime_create().
@@ -613,13 +620,14 @@ class HostContractInterface(ctypes.Structure):
         ("singleton", ctypes.c_bool),
         ("dispatch_type", ctypes.c_uint32),
         ("runtime", ctypes.c_void_p),
+        ("user_data", ctypes.c_void_p),
         ("create_instance", _host_contract_interface_create_instance_t),
         ("destroy_instance", _host_contract_interface_destroy_instance_t),
         ("dispatch", DispatchMechanisms),
     ]
 
-# Expected size: 72 bytes
-assert ctypes.sizeof(HostContractInterface) == 72, f"HostContractInterface expected 72 bytes, got {ctypes.sizeof(HostContractInterface)}"
+# Expected size: 80 bytes
+assert ctypes.sizeof(HostContractInterface) == 80, f"HostContractInterface expected 80 bytes, got {ctypes.sizeof(HostContractInterface)}"
 
 
 # ─── Helper Methods (preserved from helper files) ───

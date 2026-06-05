@@ -87,11 +87,7 @@ export const VM_LOADER_DATA_SIZE: number = 8;
  * 
  *  # Layout
  *  - `data`: Opaque instance pointer (owned by guest)
- *  - `contract_id`: Contract ID for zero-overhead dispatch
- * 
- *  # Dispatch
- *  The `contract_id` field enables `call_guest_method` to dispatch without
- *  looking up the contract in a map. This is zero-overhead dispatch.
+ *  - `contract_id`: Contract ID stamped at instance creation
  */
 export interface GuestContractInstance {
     /**
@@ -104,12 +100,10 @@ export interface GuestContractInstance {
      */
     data: bigint;
     /**
-     *  Contract ID for zero-overhead dispatch.
-     *  Enables call_guest_method to dispatch without lookup.
+     *  Contract ID stamped at instance creation.
      * 
      *  # Purpose
-     *  Eliminates the need to look up which contract an instance belongs to.
-     *  The contract_id is set by create_instance and used for direct dispatch.
+     *  Identifies which contract an instance belongs to. Set by `create_instance`.
      */
     contract_id: bigint;
 }
@@ -296,6 +290,17 @@ export interface HostContractInterface {
      */
     runtime: bigint;
     /**
+     *  Opaque per-interface user-data pointer.
+     * 
+     *  `create_instance` and `destroy_instance` can read it via their `this`
+     *  parameter (`(*this).user_data`) to recover registrant-owned context.
+     * 
+     *  # Ownership
+     *  Owned by the registrant (the host application). The runtime never reads,
+     *  writes, or frees the pointee — it only stores the pointer.
+     */
+    user_data: bigint;
+    /**
      *  Create a new instance of this host contract.
      * 
      *  For singleton contracts, this is typically called once and the instance
@@ -337,16 +342,18 @@ export const HOST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET: number = 8;
 export const HOST_CONTRACT_INTERFACE_SINGLETON_OFFSET: number = 20;
 export const HOST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET: number = 24;
 export const HOST_CONTRACT_INTERFACE_RUNTIME_OFFSET: number = 32;
-export const HOST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET: number = 40;
-export const HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET: number = 48;
-export const HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET: number = 56;
-export const HOST_CONTRACT_INTERFACE_SIZE: number = 72;
+export const HOST_CONTRACT_INTERFACE_USER_DATA_OFFSET: number = 40;
+export const HOST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET: number = 48;
+export const HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET: number = 56;
+export const HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET: number = 64;
+export const HOST_CONTRACT_INTERFACE_SIZE: number = 80;
 
 /**
  *  Host Interface — function table passed to guests during initialization.
  * 
  *  Contains an opaque runtime pointer and function pointers for guest calls.
  *  All functions use self-passing pattern (receive HostInterface pointer as first parameter).
+ *  `HostInterface` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
  * 
  *  # Who provides
  *  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -468,23 +475,6 @@ export interface HostInterface {
      *  Pointer to GuestContractInterface, or null if invalid/stale.
      */
     resolve_guest_contract: number;
-    /**
-     *  Call a method on a guest contract instance.
-     * 
-     *  This is the cross-dispatch mechanism for calling methods across
-     *  different dispatch types (Native vs VM).
-     * 
-     *  # Arguments
-     *  - `this`: HostInterface pointer (self-passing)
-     *  - `instance`: GuestContractInstance with contract_id for dispatch
-     *  - `method_id`: Method index within the contract
-     *  - `args`: Pointer to packed arguments (contract-specific layout)
-     *  - `out`: Pointer to output buffer for return value
-     * 
-     *  # Returns
-     *  AbiError::OK on success, error code on failure.
-     */
-    call_guest_method: number;
     /**
      *  Get a host contract instance by contract_id and minimum version.
      * 
@@ -628,6 +618,23 @@ export interface HostInterface {
      *  Length of last error message (0 if no error).
      */
     get_error_len: number;
+    /**
+     *  Get a registered extension by extension ID.
+     * 
+     *  Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
+     *  of the extension name. Use `polyplug_utils::fnv1a_32(name.as_bytes())` to
+     *  compute the ID.
+     * 
+     *  Returns null if no extension is registered for the given ID.
+     * 
+     *  # Arguments
+     *  - `this`: HostInterface pointer (self-passing)
+     *  - `extension_id`: 32-bit FNV-1a hash of the extension name
+     * 
+     *  # Returns
+     *  Opaque pointer to the extension, or null if not registered.
+     */
+    get_extension: number;
 }
 
 export const HOST_INTERFACE_RUNTIME_OFFSET: number = 0;
@@ -637,17 +644,17 @@ export const HOST_INTERFACE_FREE_OFFSET: number = 24;
 export const HOST_INTERFACE_FIND_GUEST_CONTRACT_OFFSET: number = 32;
 export const HOST_INTERFACE_FIND_ALL_GUEST_CONTRACTS_OFFSET: number = 40;
 export const HOST_INTERFACE_RESOLVE_GUEST_CONTRACT_OFFSET: number = 48;
-export const HOST_INTERFACE_CALL_GUEST_METHOD_OFFSET: number = 56;
-export const HOST_INTERFACE_GET_HOST_CONTRACT_OFFSET: number = 64;
-export const HOST_INTERFACE_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET: number = 72;
-export const HOST_INTERFACE_LIST_BUNDLES_OFFSET: number = 80;
-export const HOST_INTERFACE_GET_DEPENDENCIES_OFFSET: number = 88;
-export const HOST_INTERFACE_LOAD_BUNDLE_OFFSET: number = 96;
-export const HOST_INTERFACE_RELOAD_BUNDLE_OFFSET: number = 104;
-export const HOST_INTERFACE_REGISTER_HOST_CONTRACT_OFFSET: number = 112;
-export const HOST_INTERFACE_REGISTER_LOADER_OFFSET: number = 120;
-export const HOST_INTERFACE_GET_LAST_ERROR_OFFSET: number = 128;
-export const HOST_INTERFACE_GET_ERROR_LEN_OFFSET: number = 136;
+export const HOST_INTERFACE_GET_HOST_CONTRACT_OFFSET: number = 56;
+export const HOST_INTERFACE_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET: number = 64;
+export const HOST_INTERFACE_LIST_BUNDLES_OFFSET: number = 72;
+export const HOST_INTERFACE_GET_DEPENDENCIES_OFFSET: number = 80;
+export const HOST_INTERFACE_LOAD_BUNDLE_OFFSET: number = 88;
+export const HOST_INTERFACE_RELOAD_BUNDLE_OFFSET: number = 96;
+export const HOST_INTERFACE_REGISTER_HOST_CONTRACT_OFFSET: number = 104;
+export const HOST_INTERFACE_REGISTER_LOADER_OFFSET: number = 112;
+export const HOST_INTERFACE_GET_LAST_ERROR_OFFSET: number = 120;
+export const HOST_INTERFACE_GET_ERROR_LEN_OFFSET: number = 128;
+export const HOST_INTERFACE_GET_EXTENSION_OFFSET: number = 136;
 export const HOST_INTERFACE_SIZE: number = 144;
 
 /**
@@ -698,7 +705,7 @@ export interface RuntimeInterface {
      * 
      *  # Arguments
      *  - `this`: RuntimeInterface pointer (self-passing)
-     *  - `path`: Path to the bundle directory or manifest file
+     *  - `path`: UTF-8 path to the bundle directory or manifest file (not null-terminated)
      * 
      *  # Returns
      *  AbiError::OK on success, error code on failure.
@@ -965,25 +972,51 @@ export interface RuntimeConfig {
     compatibility: Compatibility;
     /**  Whether hot-reload is enabled. */
     hot_reload_enabled: boolean;
-    /**  Optional hot-reload callback, or null for no callback. */
+    /**
+     *  Optional hot-reload callback, or null for no callback.
+     * 
+     *  The first argument is the opaque `on_reload_user_data` pointer, forwarded
+     *  unchanged on every invocation.
+     */
     on_reload: number;
+    /**
+     *  Opaque user-data pointer forwarded to `on_reload` as its first argument.
+     * 
+     *  # Ownership
+     *  Owned by the host that supplies the callback. The runtime never reads,
+     *  writes, or frees the pointee — it only forwards the pointer.
+     */
+    on_reload_user_data: bigint;
 }
 
 export const RUNTIME_CONFIG_COMPATIBILITY_OFFSET: number = 0;
 export const RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET: number = 4;
 export const RUNTIME_CONFIG_ON_RELOAD_OFFSET: number = 8;
-export const RUNTIME_CONFIG_SIZE: number = 16;
+export const RUNTIME_CONFIG_ON_RELOAD_USER_DATA_OFFSET: number = 16;
+export const RUNTIME_CONFIG_SIZE: number = 24;
 
 /**
  *  ABI error — returned by value from all ABI calls.
  * 
- *  OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
- *  via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
- *  after reading. If `code == AbiErrorCode::Ok`, `message.ptr` is NULL — no free needed.
+ *  CODE: a raw `u32`, NOT the [`AbiErrorCode`] enum. Plugins are untrusted and
+ *  return `AbiError` by value across the C ABI, so any 32-bit pattern can land
+ *  here — including values that are not declared discriminants of the frozen
+ *  [`AbiErrorCode`] enum. Materializing such a value as the enum would be
+ *  instant undefined behaviour, so the field stays a raw `u32`. Construct it
+ *  with `AbiErrorCode::X as u32` and interpret it with
+ *  [`AbiErrorCode::from_u32`], which is total and safe. The layout is identical
+ *  to the `#[repr(u32)]` enum (4 bytes at offset 0), so the C ABI is unchanged.
+ * 
+ *  OWNERSHIP: `message` is always a static or runtime-owned string. The receiver
+ *  must NEVER free it. Rich, allocated error detail is retrieved separately via
+ *  `get_last_error`.
  */
 export interface AbiError {
-    /**  0 = success, non-zero = error. */
-    code: AbiErrorCode;
+    /**
+     *  0 = success, non-zero = error. Raw `u32`; convert with
+     *  [`AbiErrorCode::from_u32`].
+     */
+    code: number;
     /**  Empty/NULL if success. UTF-8 message if non-zero code. */
     message: StringView;
 }
