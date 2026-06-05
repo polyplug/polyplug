@@ -42,15 +42,16 @@ function polyplug_init(registrar_ptr, ctx_ptr)
     -- The loader derives the contract_id canonically from contract_name +
     -- contract_version via guest_contract_id("test.add", 1); no id is baked here.
     _G._polyplug_handlers = {
-        contract_name = "test.add",
-        contract_version = 1,
-        plugin_name = "test-plugin-lua",
-        -- Functions in declaration order (must match contract function_id order):
-        functions = {
-            [0] = impl_add,           -- function_id 0: add
-            [1] = impl_add_primitive, -- function_id 1: add_primitive
-            [2] = impl_version,       -- function_id 2: version
-            [3] = impl_reset,         -- function_id 3: reset
+        ["test.add"] = {
+            contract_version = 1,
+            plugin_name = "test-plugin-lua",
+            -- Functions in declaration order (must match contract function_id order):
+            functions = {
+                [0] = impl_add,           -- function_id 0: add
+                [1] = impl_add_primitive, -- function_id 1: add_primitive
+                [2] = impl_version,       -- function_id 2: version
+                [3] = impl_reset,         -- function_id 3: reset
+            },
         },
     }
 end

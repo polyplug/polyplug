@@ -122,7 +122,7 @@ fn test_warning_timing_after_preparing_before_reloaded() {
         })
         .on_reload({
             let events = Arc::clone(&events);
-            move |phase: ReloadPhase| {
+            move |_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
                 let label: &str = match phase.phase_type {
                     ReloadPhaseType::Preparing => "Preparing",
                     ReloadPhaseType::Reloaded => "Reloaded",

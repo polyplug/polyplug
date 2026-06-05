@@ -54,43 +54,27 @@ skipUnlessNative("load_bundle_succeeds", () => {
     } finally { lib.close(); }
 });
 
-skipUnlessNative("find_by_contract_returns_valid_handle", () => {
+skipUnlessNative("find_guest_contract_returns_valid_handle", () => {
     const lib = openPolyplug(POLYPLUG_SO);
     try {
         const rt = runtimeNew(lib);
         try {
             rt.loadBundle(TEST_PLUGIN_DIR);
-            const handle = rt.findByContract(TEST_ADD_CONTRACT_ID);
+            const handle = rt.findGuestContract(TEST_ADD_CONTRACT_ID);
             if (handle === NULL_HANDLE) throw new Error("Got NULL_HANDLE");
         } finally { rt[Symbol.dispose](); }
     } finally { lib.close(); }
 });
 
-skipUnlessNative("resolve_plugin_returns_guard", () => {
+skipUnlessNative("resolve_guest_contract_returns_interface", () => {
     const lib = openPolyplug(POLYPLUG_SO);
     try {
         const rt = runtimeNew(lib);
         try {
             rt.loadBundle(TEST_PLUGIN_DIR);
-            const handle = rt.findByContract(TEST_ADD_CONTRACT_ID);
-            const guard = rt.resolvePlugin(handle);
-            guard[Symbol.dispose]();
-        } finally { rt[Symbol.dispose](); }
-    } finally { lib.close(); }
-});
-
-skipUnlessNative("guard_interface_nonnull", () => {
-    const lib = openPolyplug(POLYPLUG_SO);
-    try {
-        const rt = runtimeNew(lib);
-        try {
-            rt.loadBundle(TEST_PLUGIN_DIR);
-            const handle = rt.findByContract(TEST_ADD_CONTRACT_ID);
-            const guard = rt.resolvePlugin(handle);
-            try {
-                const iface = guard.vtable();
-                if (iface === null) throw new Error("interface is null");
-            } finally { guard[Symbol.dispose](); }
+            const handle = rt.findGuestContract(TEST_ADD_CONTRACT_ID);
+            const iface = rt.resolveGuestContract(handle);
+            if (iface === null) throw new Error("interface is null");
         } finally { rt[Symbol.dispose](); }
     } finally { lib.close(); }
 });
@@ -100,7 +84,7 @@ runTest("null_handle_for_missing_contract", () => {
     try {
         const rt = runtimeNew(lib);
         try {
-            const handle = rt.findByContract(0n);
+            const handle = rt.findGuestContract(0n);
             if (handle !== NULL_HANDLE) throw new Error(`Expected NULL_HANDLE, got ${handle}`);
         } finally { rt[Symbol.dispose](); }
     } finally { lib.close(); }

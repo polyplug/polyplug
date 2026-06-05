@@ -1,4 +1,4 @@
-id = 9569986636177360922
+id = 11175554700064995833
 name = "test_plugin"
 version = "1.0"
 runtime = "native"
@@ -6,4 +6,4 @@ file = "libtest_plugin.so"
 provides = ["test.add"]
 
 [function_count]
-"test.add@1" = 4
+"test.add@1" = 1

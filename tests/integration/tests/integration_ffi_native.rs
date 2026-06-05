@@ -45,7 +45,7 @@ fn register_native_loader(host: *const HostInterface) {
     let err = unsafe { ((*host).register_loader)(host, runtime_name, loader_ptr) };
     assert_eq!(
         err.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "register_loader failed: {}",
         read_last_error(host)
     );
@@ -80,7 +80,7 @@ fn test_load_bundle_fails_without_registered_loader() {
     let err: polyplug_abi::AbiError = load_bundle(host, TEST_PLUGIN_DIR);
     assert_ne!(
         err.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "load_bundle must fail when no loader is registered"
     );
     assert!(
@@ -104,7 +104,7 @@ fn test_native_loader_ffi_workflow() {
     let err: polyplug_abi::AbiError = load_bundle(host, TEST_PLUGIN_DIR);
     assert_eq!(
         err.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "load_bundle failed: {}",
         read_last_error(host)
     );
@@ -154,7 +154,7 @@ fn test_unknown_contract_returns_null_handle() {
     let err: polyplug_abi::AbiError = load_bundle(host, TEST_PLUGIN_DIR);
     assert_eq!(
         err.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "load_bundle failed: {}",
         read_last_error(host)
     );

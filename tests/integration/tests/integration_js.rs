@@ -101,7 +101,7 @@ fn js_quickjs_load_bundle_and_call() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "add must return AbiErrorCode::Ok"
     );
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");

@@ -129,7 +129,7 @@ fn integration_python_add() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "add must return AbiErrorCode::Ok"
     );
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
@@ -163,7 +163,7 @@ fn integration_python_add_primitive() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "add_primitive must return AbiErrorCode::Ok"
     );
     assert_eq!(out, 30_u32, "add_primitive(10, 20) must equal 30");
@@ -196,7 +196,7 @@ fn integration_python_version_string() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "version must return AbiErrorCode::Ok"
     );
 }
@@ -209,9 +209,10 @@ fn integration_python_exception_returns_abi_error() {
     std::fs::create_dir_all(&tmp_dir).expect("create temp dir");
 
     // Write manifest.toml
-    let manifest_content = r#"
+    let manifest_content: String = format!(
+        r#"
 name = "exception_test"
-id = 8888888888888
+id = {}
 version = "1.0.0"
 runtime = "python"
 file = "plugin.py"
@@ -219,7 +220,9 @@ provides = ["test.exception@1"]
 
 [function_count]
 "test.exception@1" = 1
-"#;
+"#,
+        polyplug_utils::bundle_id("exception_test")
+    );
     std::fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
 
     // Write Python script that raises an exception in polyplug_init
@@ -284,7 +287,7 @@ fn integration_python_utf8_roundtrip() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "version must return AbiErrorCode::Ok"
     );
     // SAFETY: out_view.ptr points to valid UTF-8 bytes for out_view.len bytes.
@@ -305,9 +308,10 @@ fn integration_python_version_too_old() {
     std::fs::create_dir_all(&tmp_dir).expect("create temp dir");
 
     // Write manifest.toml
-    let manifest_content = r#"
+    let manifest_content: String = format!(
+        r#"
 name = "version_test"
-id = 7777777777777
+id = {}
 version = "1.0.0"
 runtime = "python"
 file = "plugin.py"
@@ -315,7 +319,9 @@ provides = ["test.version@1"]
 
 [function_count]
 "test.version@1" = 1
-"#;
+"#,
+        polyplug_utils::bundle_id("version_test")
+    );
     std::fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
     std::fs::write(tmp_dir.join("plugin.py"), b"# empty plugin").expect("write plugin.py");
 

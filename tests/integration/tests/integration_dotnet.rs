@@ -145,7 +145,7 @@ fn integration_dotnet_add() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "add must return AbiErrorCode::Ok"
     );
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
@@ -180,7 +180,7 @@ fn integration_dotnet_add_primitive() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "add_primitive must return AbiErrorCode::Ok"
     );
     assert_eq!(out, 30_u32, "add_primitive(10, 20) must equal 30");
@@ -214,7 +214,7 @@ fn integration_dotnet_version_string() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "version must return AbiErrorCode::Ok"
     );
     // SAFETY: out_view.ptr points to valid UTF-8 bytes for out_view.len bytes (C# static array).
@@ -250,7 +250,7 @@ fn integration_dotnet_reset() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "reset must return AbiErrorCode::Ok"
     );
 }

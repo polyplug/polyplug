@@ -51,6 +51,8 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {
         contractHi: 0x40244DF5 >>> 0,
         fnCount: 4,
         contractName: "test.add",
+        // Packed contract version: major << 16 (test.add@1 -> 0x10000).
+        version: 0x10000,
         functions: [add, subtract, multiply, divide]
     };
     polyplug.registerVtable(
@@ -58,7 +60,8 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {
         vtable.contractHi,
         vtable,
         vtable.fnCount,
-        vtable.contractName
+        vtable.contractName,
+        vtable.version
     );
     return { code: 0, message: null };
 }

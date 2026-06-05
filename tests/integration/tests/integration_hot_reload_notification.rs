@@ -36,12 +36,14 @@ fn test_preparing_fires_before_vtable_swap() {
             hot_reload_enabled: true,
             ..RuntimeConfig::default()
         })
-        .on_reload(move |phase: ReloadPhase| {
-            phases_clone
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(phase);
-        })
+        .on_reload(
+            move |_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
+                phases_clone
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(phase);
+            },
+        )
         .build()
         .expect("build runtime");
 
@@ -103,12 +105,14 @@ fn test_reloaded_fires_after_vtable_swap() {
             hot_reload_enabled: true,
             ..RuntimeConfig::default()
         })
-        .on_reload(move |phase: ReloadPhase| {
-            phases_clone
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(phase);
-        })
+        .on_reload(
+            move |_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
+                phases_clone
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(phase);
+            },
+        )
         .build()
         .expect("build runtime");
 
@@ -161,12 +165,14 @@ fn test_failed_fires_on_reload_error() {
             hot_reload_enabled: true,
             ..RuntimeConfig::default()
         })
-        .on_reload(move |phase: ReloadPhase| {
-            phases_clone
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(phase);
-        })
+        .on_reload(
+            move |_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
+                phases_clone
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(phase);
+            },
+        )
         .build()
         .expect("build runtime");
 
@@ -223,12 +229,14 @@ fn test_old_vtable_kept_on_failure() {
             hot_reload_enabled: true,
             ..RuntimeConfig::default()
         })
-        .on_reload(move |phase: ReloadPhase| {
-            phases_clone
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(phase);
-        })
+        .on_reload(
+            move |_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
+                phases_clone
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(phase);
+            },
+        )
         .build()
         .expect("build runtime");
 
@@ -277,12 +285,14 @@ fn test_notification_order_on_successful_reload() {
             hot_reload_enabled: true,
             ..RuntimeConfig::default()
         })
-        .on_reload(move |phase: ReloadPhase| {
-            phases_clone
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(phase);
-        })
+        .on_reload(
+            move |_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
+                phases_clone
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(phase);
+            },
+        )
         .build()
         .expect("build runtime");
 
@@ -343,12 +353,14 @@ fn test_callback_receives_correct_bundle_id() {
             hot_reload_enabled: true,
             ..RuntimeConfig::default()
         })
-        .on_reload(move |phase: ReloadPhase| {
-            bundle_ids_clone
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(phase.bundle_id.id());
-        })
+        .on_reload(
+            move |_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
+                bundle_ids_clone
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(phase.bundle_id.id());
+            },
+        )
         .build()
         .expect("build runtime");
 

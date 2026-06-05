@@ -61,19 +61,19 @@ extern "C" fn memory_fill_preallocated_buffer(args: *const (), out: *mut ()) -> 
     let required_align: usize = align_of::<u64>();
     if cap < len {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: string_view_null(),
         };
     }
     if cap > 0 && ptr.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: string_view_null(),
         };
     }
     if cap > 0 && (ptr as usize) % required_align != 0 {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: string_view_null(),
         };
     }
@@ -110,7 +110,7 @@ extern "C" fn memory_alloc_buffer_via_host(args: *const (), out: *mut ()) -> Abi
     let ptr: *mut u8 = unsafe { (host.alloc)(alloc_args.host, size, 1) };
     if ptr.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: string_view_null(),
         };
     }
@@ -148,7 +148,7 @@ extern "C" fn memory_echo_string_view(args: *const (), out: *mut ()) -> AbiError
     let bytes: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
     if core::str::from_utf8(bytes).is_err() {
         return AbiError {
-            code: AbiErrorCode::Generic, // invalid UTF-8
+            code: AbiErrorCode::Generic as u32, // invalid UTF-8
             message: string_view_null(),
         };
     }
@@ -284,13 +284,13 @@ pub unsafe extern "C" fn polyplug_init(
 ) -> AbiError {
     if host_abi.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: string_view_null(),
         };
     }
     if ctx.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: string_view_null(),
         };
     }

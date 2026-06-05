@@ -10,13 +10,13 @@
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
 
-// ─── Extern host allocator ───────────────────────────────────────────────────
-
-unsafe extern "C" {
-    fn polyplug_host_alloc(size: usize, align: usize) -> *mut u8;
-}
-
 // ─── Contract args types ──────────────────────────────────────────────────────
+
+/// Arguments for error_return_with_message (fn 0).
+#[repr(C)]
+pub struct MessageArgs {
+    pub host: *const HostInterface,
+}
 
 /// Arguments for error_chain_propagate (fn 2).
 #[repr(C)]
@@ -30,32 +30,39 @@ pub struct ChainArgs {
 
 /// fn 0 — error_return_with_message
 ///
-/// Allocates a message via the host allocator and writes an AbiError with
-/// code=Generic and the message bytes to `out`.
+/// Allocates a message via the host allocator (`HostInterface::alloc`) and writes
+/// an AbiError with code=Generic and the message bytes to `out`.
 ///
-/// OWNERSHIP: The caller (host) must free message.ptr via polyplug_host_free(ptr, 22, 1).
+/// OWNERSHIP: The caller (host) must free message.ptr via `HostInterface::free`
+/// with size=22, align=1.
 ///
 /// # Safety
-/// `out` must point to a valid `AbiError`. `_args` is ignored.
-extern "C" fn error_return_with_message(_args: *const (), out: *mut ()) -> AbiError {
+/// `args` must point to a valid `MessageArgs` carrying a live HostInterface.
+/// `out` must point to a valid `AbiError`.
+extern "C" fn error_return_with_message(args: *const (), out: *mut ()) -> AbiError {
+    // SAFETY: args points to MessageArgs per the ABI contract.
+    let message_args: &MessageArgs = unsafe { &*(args as *const MessageArgs) };
+    // SAFETY: message_args.host is a valid HostInterface pointer provided by the caller.
+    let host: &HostInterface = unsafe { &*message_args.host };
     let msg: &[u8] = b"test error from plugin";
     let len: usize = msg.len(); // 22 bytes
-    // SAFETY: polyplug_host_alloc allocates len bytes with align 1; returns null on failure.
-    let ptr: *mut u8 = unsafe { polyplug_host_alloc(len, 1) };
+    // SAFETY: host.alloc is a valid function pointer set by the host runtime;
+    // it allocates len bytes with align 1 and returns null on failure.
+    let ptr: *mut u8 = unsafe { (host.alloc)(message_args.host, len, 1) };
     if ptr.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: string_view_null(),
         };
     }
     let abi_error: AbiError = AbiError {
-        code: AbiErrorCode::Generic,
+        code: AbiErrorCode::Generic as u32,
         message: StringView {
             ptr: ptr as *const u8,
             len,
         },
     };
-    // SAFETY: ptr is valid for len bytes as guaranteed by polyplug_host_alloc.
+    // SAFETY: ptr is valid for len bytes as guaranteed by the host allocator.
     unsafe {
         core::ptr::copy_nonoverlapping(msg.as_ptr(), ptr, len);
         // SAFETY: out points to a valid AbiError per the ABI contract.
@@ -78,7 +85,7 @@ extern "C" fn error_panic(_args: *const (), _out: *mut ()) -> AbiError {
     match result {
         Ok(()) => abi_error_ok(), // unreachable — the closure always panics
         Err(_) => AbiError {
-            code: AbiErrorCode::Panic,
+            code: AbiErrorCode::Panic as u32,
             message: string_view_from_static(b"plugin panicked"),
         },
     }
@@ -106,7 +113,7 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     // Dispatch through the interface if non-null and fn_id is in range.
     let inner_result: AbiError = if iface_ptr.is_null() {
         AbiError {
-            code: AbiErrorCode::NotFound,
+            code: AbiErrorCode::NotFound as u32,
             message: string_view_null(),
         }
     } else {
@@ -116,7 +123,7 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
         let function_count = unsafe { iface.dispatch.native.function_count };
         if chain_args.target_fn_id >= function_count {
             AbiError {
-                code: AbiErrorCode::FunctionNotAvailable,
+                code: AbiErrorCode::FunctionNotAvailable as u32,
                 message: string_view_null(),
             }
         } else {
@@ -245,13 +252,13 @@ pub unsafe extern "C" fn polyplug_init(
 ) -> AbiError {
     if host_abi.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: string_view_null(),
         };
     }
     if ctx.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: string_view_null(),
         };
     }

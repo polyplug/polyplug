@@ -40,16 +40,16 @@ end
 -- after reading _G._polyplug_handlers and creating Rust-side trampolines.
 function polyplug_init(registrar_ptr, ctx_ptr)
     _G._polyplug_handlers = {
-        contract_name = "test.add",
-        contract_id_hex = "0xCC4232FAB0410D2B",
-        contract_version = 1,
-        plugin_name = "test-plugin-lua",
-        -- Functions in declaration order (must match contract function_id order):
-        functions = {
-            [0] = impl_add,           -- function_id 0: add
-            [1] = impl_add_primitive, -- function_id 1: add_primitive
-            [2] = impl_version,       -- function_id 2: version
-            [3] = impl_reset,         -- function_id 3: reset
+        ["test.add"] = {
+            contract_version = 1,
+            plugin_name = "test-plugin-lua",
+            -- Functions in declaration order (must match contract function_id order):
+            functions = {
+                [0] = impl_add,           -- function_id 0: add
+                [1] = impl_add_primitive, -- function_id 1: add_primitive
+                [2] = impl_version,       -- function_id 2: version
+                [3] = impl_reset,         -- function_id 3: reset
+            },
         },
     }
 end

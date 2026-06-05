@@ -67,12 +67,12 @@ impl TestAddContract {
             let vtable: &GuestContractInterface = &*vtable_ptr;
             if 0_u32 >= vtable.dispatch.native.function_count {
                 AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::StringView::null(),
                 }
             } else if vtable.dispatch_type != polyplug_abi::DispatchType::Native {
                 AbiError {
-                    code: polyplug_abi::AbiErrorCode::Generic,
+                    code: polyplug_abi::AbiErrorCode::Generic as u32,
                     message: polyplug_abi::StringView::null(),
                 }
             } else {
@@ -82,9 +82,9 @@ impl TestAddContract {
                 dispatch_fn(args_ptr, out_ptr)
             }
         };
-        if err.code != AbiErrorCode::Ok {
+        if err.code != AbiErrorCode::Ok as u32 {
             return Err(ContractError {
-                code: err.code,
+                code: AbiErrorCode::from_u32(err.code),
                 message: String::new(),
             });
         }

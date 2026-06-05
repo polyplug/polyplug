@@ -77,7 +77,7 @@ public static class Plugin
             var outPtr = (uint*)result;
             *outPtr = addArgs->A + addArgs->B;
         }
-        return new AbiError { Code = AbiErrorCode.Ok };
+        return new AbiError { Code = (uint)AbiErrorCode.Ok };
     }
 
     [UnmanagedCallersOnly]
@@ -89,7 +89,7 @@ public static class Plugin
             var outPtr = (uint*)result;
             *outPtr = addArgs->A + addArgs->B;
         }
-        return new AbiError { Code = AbiErrorCode.Ok };
+        return new AbiError { Code = (uint)AbiErrorCode.Ok };
     }
 
     [UnmanagedCallersOnly]
@@ -103,13 +103,13 @@ public static class Plugin
                 *outPtr = new StringView { Ptr = (nint)ptr, Len = (nuint)s_versionBytes.Length };
             }
         }
-        return new AbiError { Code = AbiErrorCode.Ok };
+        return new AbiError { Code = (uint)AbiErrorCode.Ok };
     }
 
     [UnmanagedCallersOnly]
     public static AbiError Reset(nint args, nint result)
     {
-        return new AbiError { Code = AbiErrorCode.Ok };
+        return new AbiError { Code = (uint)AbiErrorCode.Ok };
     }
 
     [UnmanagedCallersOnly(EntryPoint = "PolyplugInit")]

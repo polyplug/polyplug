@@ -123,7 +123,7 @@ fn integration_lua_add() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "add must return AbiErrorCode::Ok"
     );
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
@@ -159,7 +159,7 @@ fn integration_lua_add_primitive() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "add_primitive must return AbiErrorCode::Ok"
     );
     assert_eq!(out, 30_u32, "add_primitive(10, 20) must equal 30");
@@ -194,7 +194,7 @@ fn integration_lua_version_string() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "version must return AbiErrorCode::Ok"
     );
     // SAFETY: the call returned `Ok`, so `out_view` holds a valid (ptr, len) pair into a
@@ -232,7 +232,7 @@ fn integration_lua_reset() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "reset must return AbiErrorCode::Ok"
     );
 }
@@ -242,9 +242,10 @@ fn integration_lua_init_function_missing_returns_typed_error() {
     let tmp_dir: std::path::PathBuf = std::env::temp_dir().join("noinit_test_bundle");
     std::fs::create_dir_all(&tmp_dir).expect("create temp dir");
 
-    let manifest_content = r#"
+    let manifest_content: String = format!(
+        r#"
 name = "noinit_test"
-id = 9999999999999
+id = {}
 version = "1.0.0"
 runtime = "lua"
 file = "plugin.lua"
@@ -252,7 +253,9 @@ provides = ["test.noinit@1"]
 
 [function_count]
 "test.noinit@1" = 1
-"#;
+"#,
+        polyplug_utils::bundle_id("noinit_test")
+    );
     std::fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
     std::fs::write(tmp_dir.join("plugin.lua"), b"local x = 1\n").expect("write plugin.lua");
 
@@ -291,7 +294,7 @@ fn integration_lua_utf8_roundtrip() {
             &mut out_view as *mut StringView as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok);
+    assert_eq!(result.code, AbiErrorCode::Ok as u32);
     // SAFETY: the call returned `Ok`, so `out_view` holds a valid (ptr, len) pair into a
     // host-allocated UTF-8 buffer that the StringView ABI guarantees stays alive while the
     // owning runtime is alive. `ptr` is non-null and `len` bytes are initialized and contiguous.

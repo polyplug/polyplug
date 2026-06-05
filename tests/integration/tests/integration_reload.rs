@@ -172,7 +172,7 @@ fn test_f_callback_fires() {
     let rt: Arc<Runtime> = Runtime::builder()
         .config(hot_reload_config())
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
-        .on_reload(move |ev: ReloadPhase| {
+        .on_reload(move |_user_data: *mut core::ffi::c_void, ev: ReloadPhase| {
             *fired_clone.lock().unwrap_or_else(|e| e.into_inner()) = Some(ev);
         })
         .build()
