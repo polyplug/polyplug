@@ -38,20 +38,59 @@ function Get-LatestVersion {
 
 function Download-Binary {
     param($version, $platform)
-    
-    $url = "https://github.com/$Repo/releases/download/v$version/${BinaryName}-${platform}.exe"
-    $tmpFile = Join-Path $env:TEMP "${BinaryName}-${platform}.exe"
-    
+
+    $asset = "${BinaryName}-${platform}.exe"
+    $baseUrl = "https://github.com/$Repo/releases/download/v$version"
+    $url = "$baseUrl/$asset"
+    $tmpFile = Join-Path $env:TEMP $asset
+
     Write-Info "Downloading polyplugc v$version for $platform..."
     Write-Info "URL: $url"
-    
+
     try {
         Invoke-WebRequest -Uri $url -OutFile $tmpFile -UseBasicParsing
     } catch {
         Write-Error-Exit "Failed to download binary from $url"
     }
-    
+
+    Verify-Checksum -file $tmpFile -asset $asset -baseUrl $baseUrl
+
     return $tmpFile
+}
+
+# Verify the downloaded binary against the release SHA256SUMS manifest.
+# Aborts the install on mismatch or missing entry so a tampered or truncated
+# download is never executed.
+function Verify-Checksum {
+    param($file, $asset, $baseUrl)
+
+    $sumsFile = Join-Path $env:TEMP "${BinaryName}-SHA256SUMS"
+    try {
+        Invoke-WebRequest -Uri "$baseUrl/SHA256SUMS" -OutFile $sumsFile -UseBasicParsing
+    } catch {
+        Write-Error-Exit "Failed to download SHA256SUMS from $baseUrl/SHA256SUMS - cannot verify integrity"
+    }
+
+    $expected = $null
+    foreach ($line in Get-Content $sumsFile) {
+        # SHA256SUMS lines are "<hash>  <filename>".
+        $parts = $line -split '\s+', 2
+        if ($parts.Count -eq 2 -and $parts[1].Trim() -eq $asset) {
+            $expected = $parts[0].Trim().ToLower()
+            break
+        }
+    }
+    if ([string]::IsNullOrEmpty($expected)) {
+        Write-Error-Exit "No checksum entry for '$asset' in SHA256SUMS - refusing to install"
+    }
+
+    $actual = (Get-FileHash -Path $file -Algorithm SHA256).Hash.ToLower()
+    if ($expected -ne $actual) {
+        Remove-Item -Path $file -Force -ErrorAction SilentlyContinue
+        Write-Error-Exit "Checksum mismatch for $asset (expected $expected, got $actual) - download may be corrupted or tampered"
+    }
+
+    Write-Info "Checksum verified for $asset"
 }
 
 function Install-Binary {

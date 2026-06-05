@@ -626,7 +626,13 @@ jobs:
           cp sdks/js/host/*.tgz release-assets/ 2>/dev/null || true
           cp dist/npm/*.tgz release-assets/ 2>/dev/null || true
 
+          # Produce a SHA256SUMS manifest over every asset, keyed by bare filename
+          # so the installer can verify a downloaded binary by its asset name.
+          ( cd release-assets && sha256sum * > SHA256SUMS )
+
           ls -la release-assets/
+          echo "=== SHA256SUMS ==="
+          cat release-assets/SHA256SUMS
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')

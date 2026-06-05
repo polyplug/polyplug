@@ -221,9 +221,7 @@ impl Runtime {
                 e.into_inner()
             });
         guard.get(&contract_id).and_then(|interface| {
-            let version: u32 =
-                (interface.contract_version.major << 16) | interface.contract_version.minor;
-            if version >= min_version {
+            if host_contract_version_satisfies(interface, min_version) {
                 Some(*interface)
             } else {
                 None
@@ -795,6 +793,25 @@ fn plugin_handle_null() -> GuestContractHandle {
     GuestContractHandle::null()
 }
 
+/// Host-contract version negotiation (see `docs/HOST_CONTRACTS.md`).
+///
+/// `min_version` is the requested version packed as `(major << 16) | minor`,
+/// matching the constant every generator emits. A host contract satisfies the
+/// request iff its major matches EXACTLY and its minor is `>=` the requested
+/// minor. A higher major is NOT compatible (breaking change); a lower minor is
+/// NOT compatible (missing functions).
+///
+/// `min_version == 0` is the documented wildcard ("accept any version"): real
+/// contracts are `>= 1.0`, so a packed request never legitimately equals 0.
+fn host_contract_version_satisfies(interface: &HostContractInterface, min_version: u32) -> bool {
+    if min_version == 0 {
+        return true;
+    }
+    let req_major: u32 = min_version >> 16;
+    let req_minor: u32 = min_version & 0xFFFF;
+    interface.contract_version.major == req_major && interface.contract_version.minor >= req_minor
+}
+
 /// Convert a runtime string from manifest.toml to RuntimeLanguage enum.
 fn runtime_language_from_str(s: &str) -> RuntimeLanguage {
     match s {
@@ -808,14 +825,29 @@ fn runtime_language_from_str(s: &str) -> RuntimeLanguage {
     }
 }
 
-/// Helper to convert a StringView to an owned String.
-fn string_view_to_string_owned(sv: &polyplug_abi::types::StringView) -> String {
+/// Convert a `StringView` to an owned, strictly-validated UTF-8 `String`.
+///
+/// The contract name keys the registry, so a lossy conversion could silently
+/// replace invalid bytes with U+FFFD and alias two distinct names. Invalid UTF-8
+/// is therefore rejected with [`RuntimeError::InvalidUtf8`] rather than coerced.
+///
+/// # Safety
+/// `sv.ptr` must be valid for `sv.len` bytes for the duration of this call, or be null.
+unsafe fn string_view_to_string_owned(
+    sv: &polyplug_abi::types::StringView,
+    context: &str,
+) -> Result<String, RuntimeError> {
     if sv.ptr.is_null() || sv.len == 0 {
-        return String::new();
+        return Ok(String::new());
     }
-    // SAFETY: ptr and len are valid for this StringView
-    let slice = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
-    String::from_utf8_lossy(slice).into_owned()
+    // SAFETY: caller guarantees ptr/len describe a valid byte range for this call.
+    let slice: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
+    match core::str::from_utf8(slice) {
+        Ok(s) => Ok(s.to_owned()),
+        Err(_) => Err(RuntimeError::InvalidUtf8 {
+            context: context.to_owned(),
+        }),
+    }
 }
 
 // ─── HostInterface C ABI callbacks ───────────────────────────────────────────────
@@ -859,8 +891,20 @@ pub(crate) unsafe extern "C" fn host_register_contract(
         };
     }
 
-    // SAFETY: desc.contract_name.ptr is non-null, valid UTF-8 for len bytes
-    let contract_name: String = string_view_to_string_owned(&desc.contract_name);
+    // SAFETY: desc.contract_name.ptr is non-null and valid for len bytes during init.
+    let contract_name: String = match unsafe {
+        string_view_to_string_owned(&desc.contract_name, "PluginDescriptor.contract_name")
+    } {
+        Ok(name) => name,
+        Err(e) => {
+            runtime.set_last_error(e.to_string());
+            eprintln!("[polyplug] registration rejected for bundle {bundle_id}: {e}");
+            return polyplug_abi::types::AbiError {
+                code: polyplug_abi::types::AbiErrorCode::Generic as u32,
+                message: polyplug_abi::types::StringView::null(),
+            };
+        }
+    };
 
     // SAFETY: interface is a valid 'static GuestContractInterface from the plugin binary
     match unsafe {
@@ -1058,7 +1102,7 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
         .values()
         .find(|iface| {
             iface.contract_id.id() == contract_id
-                && iface.contract_version.major >= (min_version >> 16)
+                && host_contract_version_satisfies(iface, min_version)
         })
         .copied();
 
@@ -1144,7 +1188,7 @@ pub(crate) unsafe extern "C" fn host_resolve_host_contract_interface(
         .values()
         .find(|iface| {
             iface.contract_id.id() == contract_id
-                && iface.contract_version.major >= (min_version >> 16)
+                && host_contract_version_satisfies(iface, min_version)
         })
         .map(|v| *v as *const HostContractInterface)
         .unwrap_or_else(|| {
@@ -1541,6 +1585,97 @@ pub(crate) unsafe extern "C" fn host_get_extension(
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
+
+    /// No-op create_instance for a test host contract interface.
+    unsafe extern "C" fn test_create_instance(
+        _this: *const HostContractInterface,
+        _args: *const (),
+    ) -> HostContractInstance {
+        HostContractInstance::null()
+    }
+
+    /// No-op destroy_instance for a test host contract interface.
+    unsafe extern "C" fn test_destroy_instance(
+        _this: *const HostContractInterface,
+        _instance: HostContractInstance,
+    ) {
+    }
+
+    /// Build a `HostContractInterface` with the given major/minor version for
+    /// negotiation tests (other fields are inert).
+    fn host_contract_interface_with_version(major: u32, minor: u32) -> HostContractInterface {
+        HostContractInterface {
+            contract_id: polyplug_utils::HostContractId::from(0xABCD_u64),
+            contract_version: Version {
+                major,
+                minor,
+                patch: 0,
+            },
+            singleton: true,
+            dispatch_type: polyplug_abi::dispatch::dispatch_type::DispatchType::Native,
+            runtime: core::ptr::null_mut(),
+            user_data: core::ptr::null_mut(),
+            create_instance: test_create_instance,
+            destroy_instance: test_destroy_instance,
+            dispatch: polyplug_abi::DispatchMechanisms {
+                native: polyplug_abi::NativeDispatch {
+                    function_count: 0,
+                    functions: core::ptr::null(),
+                },
+            },
+        }
+    }
+
+    /// Pack a (major, minor) request the way generated callers do.
+    fn pack_min_version(major: u32, minor: u32) -> u32 {
+        (major << 16) | minor
+    }
+
+    #[test]
+    fn host_contract_version_exact_major_equal_minor_passes() {
+        let iface: HostContractInterface = host_contract_interface_with_version(1, 5);
+        assert!(host_contract_version_satisfies(
+            &iface,
+            pack_min_version(1, 5)
+        ));
+    }
+
+    #[test]
+    fn host_contract_version_higher_minor_passes() {
+        let iface: HostContractInterface = host_contract_interface_with_version(1, 7);
+        assert!(host_contract_version_satisfies(
+            &iface,
+            pack_min_version(1, 5)
+        ));
+    }
+
+    #[test]
+    fn host_contract_version_lower_minor_fails() {
+        let iface: HostContractInterface = host_contract_interface_with_version(1, 4);
+        assert!(!host_contract_version_satisfies(
+            &iface,
+            pack_min_version(1, 5)
+        ));
+    }
+
+    #[test]
+    fn host_contract_version_higher_major_fails() {
+        // 2.0 must NOT satisfy a request for 1.5 — a higher major is a breaking change.
+        let iface: HostContractInterface = host_contract_interface_with_version(2, 0);
+        assert!(!host_contract_version_satisfies(
+            &iface,
+            pack_min_version(1, 5)
+        ));
+    }
+
+    #[test]
+    fn host_contract_version_lower_major_fails() {
+        let iface: HostContractInterface = host_contract_interface_with_version(1, 9);
+        assert!(!host_contract_version_satisfies(
+            &iface,
+            pack_min_version(2, 0)
+        ));
+    }
 
     #[test]
     fn builder_creates_runtime() {

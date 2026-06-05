@@ -89,17 +89,29 @@ pub struct BundleData {
     pub descriptor: BundleDescriptor,
 }
 
-/// Copy a `StringView`'s bytes into an owned, lossy-UTF-8 `String`.
+/// Copy a `StringView`'s bytes into an owned, strictly-validated UTF-8 `String`.
+///
+/// Plugin-provided names key the registry, so a lossy conversion could silently
+/// replace invalid bytes with U+FFFD and alias two distinct names. Invalid UTF-8
+/// is therefore rejected with [`RegistryError::InvalidUtf8`] rather than coerced.
 ///
 /// # Safety
 /// `sv.ptr` must be valid for `sv.len` bytes for the duration of this call, or be null.
-unsafe fn string_view_to_owned_string(sv: &polyplug_abi::types::StringView) -> String {
+unsafe fn string_view_to_owned_string(
+    sv: &polyplug_abi::types::StringView,
+    context: &str,
+) -> Result<String, RegistryError> {
     if sv.ptr.is_null() || sv.len == 0 {
-        return String::new();
+        return Ok(String::new());
     }
     // SAFETY: caller guarantees ptr/len describe a valid byte range for this call.
     let bytes: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
-    String::from_utf8_lossy(bytes).into_owned()
+    match core::str::from_utf8(bytes) {
+        Ok(s) => Ok(s.to_owned()),
+        Err(_) => Err(RegistryError::InvalidUtf8 {
+            context: context.to_owned(),
+        }),
+    }
 }
 
 /// Owned copy of a plugin's [`PluginDescriptor`] for the registry to retain.
@@ -255,6 +267,14 @@ impl RuntimeStore {
             }
         };
 
+        // Validate and copy the descriptor's borrowed `name` into an owned String
+        // BEFORE touching any registry state, so a rejected (invalid UTF-8) name
+        // leaves no slot behind. The StringView is valid for the whole call (the
+        // plugin owns the backing buffer during polyplug_init); we only read it.
+        // SAFETY: `descriptor.name` describes a valid byte range for this call.
+        let owned_name: String =
+            unsafe { string_view_to_owned_string(&descriptor.name, "PluginDescriptor.name")? };
+
         let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -295,13 +315,6 @@ impl RuntimeStore {
                 new_idx
             });
 
-        // Copy the descriptor's borrowed `name` into an owned String NOW, while the
-        // plugin's init-time buffer is still valid. Storing the raw StringView would
-        // dangle once the plugin frees that buffer after register_contract returns.
-        // SAFETY: `descriptor.name` is a valid StringView for the duration of this
-        // call (the plugin owns the backing buffer during polyplug_init). We only
-        // read it; no aliasing or lifetime extension beyond this copy.
-        let owned_name: String = unsafe { string_view_to_owned_string(&descriptor.name) };
         let owned_descriptor: OwnedPluginDescriptor = OwnedPluginDescriptor {
             name: owned_name,
             contract_name: contract_name.clone(),
@@ -781,7 +794,7 @@ impl RuntimeStore {
     /// Contracts registered by this bundle while the window is open are kept out of
     /// `guest_contract_index` (pending) so concurrent `find`/`find_all` readers do
     /// not observe a second live slot per contract. Pair with `apply_reload_swap`
-    /// (which closes the window) or `end_reload` on the failure path.
+    /// (which closes the window) or `abort_reload` on the failure path.
     pub(crate) fn begin_reload(&self, bundle_id: BundleId) {
         let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
             self.data.write().unwrap_or_else(|e| {
@@ -791,18 +804,66 @@ impl RuntimeStore {
         data.reloading_bundles.insert(bundle_id);
     }
 
-    /// Close the reload window for `bundle_id` without reconciling.
+    /// Abort the reload window for `bundle_id`, purging any pending slots.
     ///
-    /// Used on the reload failure path (init failed) so the flag does not leak. Any
-    /// pending slots registered before the failure remain in `bundle_data` but out
-    /// of the find index; the caller is responsible for cleaning them up if needed.
-    pub(crate) fn end_reload(&self, bundle_id: BundleId) {
+    /// Used on the reload failure path (init failed). Closes the window and removes
+    /// the slots that `loader.reload()` registered before failing — i.e. the current
+    /// bundle plugin slots that are NOT in `old_slots` (the pre-reload set). These
+    /// pending slots were never published into `guest_contract_index`, so they are
+    /// never-visible; purging them prevents unbounded accumulation across retries.
+    ///
+    /// Retire-not-drop is respected: only pending (never-visible) slots are purged.
+    /// Pre-reload (live) and previously-retired slots are left untouched, so any
+    /// raw pointer a caller already resolved stays valid.
+    pub(crate) fn abort_reload(&self, bundle_id: BundleId, old_slots: &[u32]) {
         let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
         data.reloading_bundles.remove(&bundle_id);
+
+        // Pending slots = current bundle slots minus the pre-reload set.
+        let pending_slots: Vec<u32> = match data.bundle_data.get(&bundle_id) {
+            Some(bd) => bd
+                .plugin_slots
+                .iter()
+                .copied()
+                .filter(|idx| !old_slots.contains(idx))
+                .collect(),
+            None => Vec::new(),
+        };
+
+        for pending_idx in pending_slots {
+            let contract_id: Option<GuestContractId> = data
+                .slots
+                .get(pending_idx as usize)
+                .and_then(|s| s.interface.as_ref())
+                .map(|i| i.contract_id);
+
+            // Clear the pending slot. Its interface Arc was never handed out (the
+            // slot was never published), so dropping it here is sound.
+            if let Some(slot) = data.slots.get_mut(pending_idx as usize) {
+                slot.entry = None;
+                slot.interface = None;
+            }
+
+            // Defensively drop the slot from the find index. Pending slots are kept
+            // out of the index during the window, but a brand-new contract path must
+            // never leave a dangling index entry.
+            if let Some(cid) = contract_id
+                && let Some(indices) = data.guest_contract_index.get_mut(&cid)
+            {
+                indices.retain(|&idx| idx != pending_idx);
+                if indices.is_empty() {
+                    data.guest_contract_index.remove(&cid);
+                }
+            }
+
+            if let Some(bd) = data.bundle_data.get_mut(&bundle_id) {
+                bd.plugin_slots.retain(|&idx| idx != pending_idx);
+            }
+        }
     }
 
     pub(crate) fn apply_reload_swap(
@@ -1420,6 +1481,58 @@ mod tests {
             matches!(result, Err(RegistryError::ContractIdCollision { .. })),
             "expected ContractIdCollision error"
         );
+    }
+
+    #[test]
+    fn register_invalid_utf8_name_rejected_runtime_unaffected() {
+        let registry: RuntimeStore = RuntimeStore::new();
+        // 0xFF/0xFE are invalid UTF-8 lead bytes.
+        let bad_name: &[u8] = &[0xFF_u8, 0xFE_u8, b'x'];
+        let descriptor: PluginDescriptor = PluginDescriptor {
+            name: StringView {
+                ptr: bad_name.as_ptr(),
+                len: bad_name.len(),
+            },
+            contract_name: StringView::from_static(b"image.decode"),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+        };
+        let interface = mock_interface(0x1234_5678_9ABC_DEF0);
+
+        // SAFETY: interface and bad_name are local values valid for this call.
+        let result: Result<GuestContractHandle, RegistryError> = unsafe {
+            registry.register_guest_contract(
+                descriptor,
+                &interface,
+                "image.decode".to_owned(),
+                BundleId::from_u64(0),
+            )
+        };
+        assert!(
+            matches!(result, Err(RegistryError::InvalidUtf8 { .. })),
+            "invalid UTF-8 name must be rejected with InvalidUtf8, got: {result:?}"
+        );
+
+        // The runtime is unaffected: the rejected registration left no slot behind,
+        // and a subsequent valid registration still succeeds and is findable.
+        let good: PluginDescriptor = make_descriptor("ok_plugin", "image.decode");
+        // SAFETY: interface is a local value valid for this call.
+        let handle: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                good,
+                &interface,
+                "image.decode".to_owned(),
+                BundleId::from_u64(0),
+            )
+        }
+        .expect("valid registration after rejection should succeed");
+        let found: GuestContractHandle = registry
+            .find(GuestContractId::from_u64(0x1234_5678_9ABC_DEF0), 0)
+            .expect("find should succeed after recovery");
+        assert_eq!(found.index, handle.index);
     }
 
     #[test]

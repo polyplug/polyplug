@@ -140,6 +140,9 @@ pub enum RegistryError {
 
     #[error("invalid dispatch_type {value} in guest contract interface (untrusted plugin)")]
     InvalidDispatchType { value: u32 },
+
+    #[error("invalid UTF-8 in plugin-provided data: context={context}")]
+    InvalidUtf8 { context: String },
 }
 
 /// Errors from the capability graph.

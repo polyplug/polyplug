@@ -194,9 +194,10 @@ impl Runtime {
                 Ok(())
             }
             Err(e) => {
-                // Close the reload window: init failed, so no swap happens. Any slots
-                // registered before the failure stay pending (out of the find index).
-                self.registry.end_reload(bundle_id);
+                // Abort the reload window: init failed, so no swap happens. Purge any
+                // pending slots the failed init registered (kept out of the find index)
+                // so they do not accumulate across retries.
+                self.registry.abort_reload(bundle_id, &slot_indices);
                 // Fire Failed callback - NO interface swap on failure
                 if let Some(cb) = self.on_reload_cb() {
                     cb(
