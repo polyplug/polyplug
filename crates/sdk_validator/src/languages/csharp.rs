@@ -115,13 +115,13 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_temp_csharp_file(content: &str) -> NamedTempFile {
-        let mut file: NamedTempFile =
-            NamedTempFile::with_suffix(".cs").expect("Failed to create temp file");
-        file.write_all(content.as_bytes())
-            .expect("Failed to write temp file");
-        file.flush().expect("Failed to flush temp file");
-        file
+    fn create_temp_csharp_file(
+        content: &str,
+    ) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+        let mut file: NamedTempFile = NamedTempFile::with_suffix(".cs")?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        Ok(file)
     }
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn test_csharp_validator_default() {
-        let validator: CSharpValidator = CSharpValidator::default();
+        let validator: CSharpValidator = CSharpValidator;
         assert_eq!(validator.language_name(), "csharp");
     }
 
@@ -188,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn test_csharp_validator_detects_to_string() {
+    fn test_csharp_validator_detects_to_string() -> Result<(), Box<dyn core::error::Error>> {
         let csharp_code: &str = r#"
 using System;
 
@@ -201,7 +201,7 @@ namespace Polyplug.Abi {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_csharp_file(csharp_code);
+        let file: NamedTempFile = create_temp_csharp_file(csharp_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -219,10 +219,12 @@ namespace Polyplug.Abi {
 
         assert!(result.found_methods.contains(&"to_string".to_string()));
         assert!(result.missing_methods.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_csharp_validator_detects_expression_bodied() {
+    fn test_csharp_validator_detects_expression_bodied() -> Result<(), Box<dyn core::error::Error>>
+    {
         let csharp_code: &str = r#"
 using System;
 
@@ -234,7 +236,7 @@ namespace Polyplug.Abi {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_csharp_file(csharp_code);
+        let file: NamedTempFile = create_temp_csharp_file(csharp_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -251,10 +253,11 @@ namespace Polyplug.Abi {
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
         assert!(result.found_methods.contains(&"from_ptr".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_csharp_validator_detects_static_method() {
+    fn test_csharp_validator_detects_static_method() -> Result<(), Box<dyn core::error::Error>> {
         let csharp_code: &str = r#"
 using System;
 
@@ -267,7 +270,7 @@ namespace Polyplug.Abi {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_csharp_file(csharp_code);
+        let file: NamedTempFile = create_temp_csharp_file(csharp_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -284,10 +287,11 @@ namespace Polyplug.Abi {
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
         assert!(result.found_methods.contains(&"from_ptr".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_csharp_validator_reports_missing() {
+    fn test_csharp_validator_reports_missing() -> Result<(), Box<dyn core::error::Error>> {
         let csharp_code: &str = r#"
 using System;
 
@@ -300,7 +304,7 @@ namespace Polyplug.Abi {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_csharp_file(csharp_code);
+        let file: NamedTempFile = create_temp_csharp_file(csharp_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -324,6 +328,7 @@ namespace Polyplug.Abi {
         assert!(result.missing_methods.contains(&"starts_with".to_string()));
         assert!(result.missing_methods.contains(&"ends_with".to_string()));
         assert!(!result.is_complete());
+        Ok(())
     }
 
     #[test]

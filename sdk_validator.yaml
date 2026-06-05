@@ -1,0 +1,43 @@
+# sdk_validator.yaml
+# Configuration for the cross-language SDK validator.
+# Defines the golden method set and the target SDK file each language must implement.
+#
+# Run with: cargo run -p sdk-validator -- --config sdk_validator.yaml --fail-on-missing
+
+version: 1
+
+# Golden method set (authoritative, NOT extracted from code).
+# Every language SDK must implement these StringView helper methods.
+methods:
+  StringView:
+    - to_str
+    - starts_with
+    - ends_with
+    - strip_prefix
+    - split
+
+# Naming conventions per language.
+# The validator transforms the snake_case canonical names above to each
+# language's convention before searching the target file.
+naming:
+  rust: snake_case
+  python: snake_case
+  csharp: PascalCase
+  js: camelCase
+  cpp: snake_case
+  lua: snake_case
+
+# Target SDK file for each language. Paths are relative to the repo root.
+targets:
+  rust:
+    - sdks/rust/guest/src/lib.rs
+  python:
+    - sdks/python/polyplug_abi/polyplug_abi/string_view_helper.py
+  csharp:
+    - sdks/csharp/abi/Abi.cs
+  js:
+    - sdks/js/abi/abi.ts
+  cpp:
+    - sdks/cpp/abi/polyplug/abi.hpp
+  lua:
+    - sdks/lua/abi/abi.lua

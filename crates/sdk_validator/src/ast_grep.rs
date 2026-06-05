@@ -705,31 +705,32 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_naming_convention_from_str() {
+    fn test_naming_convention_from_str() -> Result<(), AstGrepError> {
         assert_eq!(
-            NamingConvention::from_str("snake_case").unwrap(),
+            NamingConvention::from_str("snake_case")?,
             NamingConvention::Snake
         );
         assert_eq!(
-            NamingConvention::from_str("snake").unwrap(),
+            NamingConvention::from_str("snake")?,
             NamingConvention::Snake
         );
         assert_eq!(
-            NamingConvention::from_str("PascalCase").unwrap(),
+            NamingConvention::from_str("PascalCase")?,
             NamingConvention::Pascal
         );
         assert_eq!(
-            NamingConvention::from_str("pascal").unwrap(),
+            NamingConvention::from_str("pascal")?,
             NamingConvention::Pascal
         );
         assert_eq!(
-            NamingConvention::from_str("camelCase").unwrap(),
+            NamingConvention::from_str("camelCase")?,
             NamingConvention::Camel
         );
         assert_eq!(
-            NamingConvention::from_str("camel").unwrap(),
+            NamingConvention::from_str("camel")?,
             NamingConvention::Camel
         );
+        Ok(())
     }
 
     #[test]
@@ -752,26 +753,21 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_language_from_str() {
-        assert_eq!(Language::from_str("rust").unwrap(), Language::Rust);
-        assert_eq!(Language::from_str("rs").unwrap(), Language::Rust);
-        assert_eq!(Language::from_str("python").unwrap(), Language::Python);
-        assert_eq!(Language::from_str("py").unwrap(), Language::Python);
-        assert_eq!(Language::from_str("csharp").unwrap(), Language::CSharp);
-        assert_eq!(Language::from_str("cs").unwrap(), Language::CSharp);
-        assert_eq!(Language::from_str("c#").unwrap(), Language::CSharp);
-        assert_eq!(Language::from_str("cpp").unwrap(), Language::Cpp);
-        assert_eq!(Language::from_str("c++").unwrap(), Language::Cpp);
-        assert_eq!(
-            Language::from_str("typescript").unwrap(),
-            Language::TypeScript
-        );
-        assert_eq!(Language::from_str("ts").unwrap(), Language::TypeScript);
-        assert_eq!(
-            Language::from_str("javascript").unwrap(),
-            Language::JavaScript
-        );
-        assert_eq!(Language::from_str("js").unwrap(), Language::JavaScript);
+    fn test_language_from_str() -> Result<(), AstGrepError> {
+        assert_eq!(Language::from_str("rust")?, Language::Rust);
+        assert_eq!(Language::from_str("rs")?, Language::Rust);
+        assert_eq!(Language::from_str("python")?, Language::Python);
+        assert_eq!(Language::from_str("py")?, Language::Python);
+        assert_eq!(Language::from_str("csharp")?, Language::CSharp);
+        assert_eq!(Language::from_str("cs")?, Language::CSharp);
+        assert_eq!(Language::from_str("c#")?, Language::CSharp);
+        assert_eq!(Language::from_str("cpp")?, Language::Cpp);
+        assert_eq!(Language::from_str("c++")?, Language::Cpp);
+        assert_eq!(Language::from_str("typescript")?, Language::TypeScript);
+        assert_eq!(Language::from_str("ts")?, Language::TypeScript);
+        assert_eq!(Language::from_str("javascript")?, Language::JavaScript);
+        assert_eq!(Language::from_str("js")?, Language::JavaScript);
+        Ok(())
     }
 
     #[test]

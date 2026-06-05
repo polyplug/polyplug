@@ -27,6 +27,7 @@ impl RustValidator {
     /// 3. `pub fn name() { }` - public, no return type
     /// 4. `pub fn name() -> Ret { }` - public, with return type
     /// 5. `pub(crate) fn name() { }` - restricted visibility
+    /// 6. `pub unsafe fn name() -> Ret { }` - unsafe (raw-pointer SDK helpers)
     ///
     /// We use an `any` rule to match all these variants.
     fn generate_function_rule(method_name: &str) -> String {
@@ -41,6 +42,12 @@ rule:
     - pattern: pub fn {method_name}($$$) -> $RET {{ $$$ }}
     - pattern: pub($$$) fn {method_name}($$$) {{ $$$ }}
     - pattern: pub($$$) fn {method_name}($$$) -> $RET {{ $$$ }}
+    - pattern: unsafe fn {method_name}($$$) {{ $$$ }}
+    - pattern: unsafe fn {method_name}($$$) -> $RET {{ $$$ }}
+    - pattern: pub unsafe fn {method_name}($$$) {{ $$$ }}
+    - pattern: pub unsafe fn {method_name}($$$) -> $RET {{ $$$ }}
+    - pattern: pub fn {method_name}<$$$>($$$) -> $RET {{ $$$ }}
+    - pattern: pub unsafe fn {method_name}<$$$>($$$) -> $RET {{ $$$ }}
 "#
         )
     }
@@ -118,13 +125,11 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_temp_rust_file(content: &str) -> NamedTempFile {
-        let mut file: NamedTempFile =
-            NamedTempFile::with_suffix(".rs").expect("Failed to create temp file");
-        file.write_all(content.as_bytes())
-            .expect("Failed to write temp file");
-        file.flush().expect("Failed to flush temp file");
-        file
+    fn create_temp_rust_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+        let mut file: NamedTempFile = NamedTempFile::with_suffix(".rs")?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        Ok(file)
     }
 
     #[test]
@@ -137,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_rust_validator_default() {
-        let validator: RustValidator = RustValidator::default();
+        let validator: RustValidator = RustValidator;
         assert_eq!(validator.language_name(), "rust");
     }
 
@@ -176,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rust_validator_detects_to_str() {
+    fn test_rust_validator_detects_to_str() -> Result<(), Box<dyn core::error::Error>> {
         let rust_code: &str = r#"
 //! polyplug guest library
 
@@ -188,7 +193,7 @@ pub fn to_str(sv: StringView) -> &'static str {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_rust_file(rust_code);
+        let file: NamedTempFile = create_temp_rust_file(rust_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -206,10 +211,11 @@ pub fn to_str(sv: StringView) -> &'static str {
 
         assert!(result.found_methods.contains(&"to_str".to_string()));
         assert!(result.missing_methods.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_rust_validator_detects_alloc_string() {
+    fn test_rust_validator_detects_alloc_string() -> Result<(), Box<dyn core::error::Error>> {
         let rust_code: &str = r#"
 //! polyplug guest library
 
@@ -230,7 +236,7 @@ pub fn alloc_string(s: &str) -> Result<StringView, GuestError> {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_rust_file(rust_code);
+        let file: NamedTempFile = create_temp_rust_file(rust_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -247,17 +253,18 @@ pub fn alloc_string(s: &str) -> Result<StringView, GuestError> {
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
         assert!(result.found_methods.contains(&"alloc_string".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_rust_validator_detects_private_function() {
+    fn test_rust_validator_detects_private_function() -> Result<(), Box<dyn core::error::Error>> {
         let rust_code: &str = r#"
 fn internal_helper(x: i32) -> i32 {
     x * 2
 }
 "#;
 
-        let file: NamedTempFile = create_temp_rust_file(rust_code);
+        let file: NamedTempFile = create_temp_rust_file(rust_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -278,10 +285,11 @@ fn internal_helper(x: i32) -> i32 {
                 .found_methods
                 .contains(&"internal_helper".to_string())
         );
+        Ok(())
     }
 
     #[test]
-    fn test_rust_validator_reports_missing() {
+    fn test_rust_validator_reports_missing() -> Result<(), Box<dyn core::error::Error>> {
         let rust_code: &str = r#"
 //! polyplug guest library
 
@@ -290,7 +298,7 @@ pub fn to_str(sv: StringView) -> &'static str {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_rust_file(rust_code);
+        let file: NamedTempFile = create_temp_rust_file(rust_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -314,6 +322,7 @@ pub fn to_str(sv: StringView) -> &'static str {
         assert!(result.missing_methods.contains(&"starts_with".to_string()));
         assert!(result.missing_methods.contains(&"ends_with".to_string()));
         assert!(!result.is_complete());
+        Ok(())
     }
 
     #[test]
@@ -338,7 +347,7 @@ pub fn to_str(sv: StringView) -> &'static str {
     }
 
     #[test]
-    fn test_rust_validator_multiple_files() {
+    fn test_rust_validator_multiple_files() -> Result<(), Box<dyn core::error::Error>> {
         let rust_code1: &str = r#"
 pub fn to_str(sv: StringView) -> &'static str {
     ""
@@ -351,8 +360,8 @@ pub fn starts_with(sv: StringView, prefix: &str) -> bool {
 }
 "#;
 
-        let file1: NamedTempFile = create_temp_rust_file(rust_code1);
-        let file2: NamedTempFile = create_temp_rust_file(rust_code2);
+        let file1: NamedTempFile = create_temp_rust_file(rust_code1)?;
+        let file2: NamedTempFile = create_temp_rust_file(rust_code2)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -378,5 +387,6 @@ pub fn starts_with(sv: StringView, prefix: &str) -> bool {
         assert!(result.found_methods.contains(&"to_str".to_string()));
         assert!(result.found_methods.contains(&"starts_with".to_string()));
         assert!(result.missing_methods.contains(&"ends_with".to_string()));
+        Ok(())
     }
 }

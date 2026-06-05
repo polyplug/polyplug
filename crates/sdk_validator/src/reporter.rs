@@ -374,14 +374,13 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_json_structure() {
+    fn test_generate_json_structure() -> Result<(), Box<dyn core::error::Error>> {
         let reporter: Reporter = Reporter::new();
         let report: ValidationReport = create_test_report();
         let output: String = reporter.generate_json(&report);
 
         // Parse the JSON to verify structure
-        let parsed: serde_json::Value =
-            serde_json::from_str(&output).expect("JSON should be valid");
+        let parsed: serde_json::Value = serde_json::from_str(&output)?;
 
         assert_eq!(parsed["is_complete"], false);
         assert_eq!(parsed["total_methods"], 3);
@@ -389,16 +388,16 @@ mod tests {
         assert!(parsed["completion_percentage"].is_number());
         assert!(parsed["per_struct"].is_object());
         assert!(parsed["per_struct"]["StringView"].is_object());
+        Ok(())
     }
 
     #[test]
-    fn test_generate_json_method_status() {
+    fn test_generate_json_method_status() -> Result<(), Box<dyn core::error::Error>> {
         let reporter: Reporter = Reporter::new();
         let report: ValidationReport = create_test_report();
         let output: String = reporter.generate_json(&report);
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&output).expect("JSON should be valid");
+        let parsed: serde_json::Value = serde_json::from_str(&output)?;
 
         // Check to_str method status
         let to_str: &serde_json::Value = &parsed["per_struct"]["StringView"]["methods"]["to_str"];
@@ -407,27 +406,28 @@ mod tests {
 
         let found_in: Vec<String> = to_str["found_in"]
             .as_array()
-            .unwrap()
+            .ok_or("found_in must be an array")?
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
         assert!(found_in.contains(&"rust".to_string()));
         assert!(found_in.contains(&"python".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_generate_json_empty_report() {
+    fn test_generate_json_empty_report() -> Result<(), Box<dyn core::error::Error>> {
         let reporter: Reporter = Reporter::new();
         let report: ValidationReport = ValidationReport::new();
         let output: String = reporter.generate_json(&report);
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&output).expect("JSON should be valid");
+        let parsed: serde_json::Value = serde_json::from_str(&output)?;
 
         assert_eq!(parsed["is_complete"], true);
         assert_eq!(parsed["total_methods"], 0);
         assert_eq!(parsed["found_methods"], 0);
         assert_eq!(parsed["completion_percentage"], 100.0);
+        Ok(())
     }
 
     #[test]

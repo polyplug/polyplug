@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_cpp_validator_default() {
-        let validator: CppValidator = CppValidator::default();
+        let validator: CppValidator = CppValidator;
         assert_eq!(validator.language_name(), "cpp");
     }
 

@@ -103,16 +103,15 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_temp_config(content: &str) -> NamedTempFile {
-        let mut file: NamedTempFile = NamedTempFile::new().expect("Failed to create temp file");
-        file.write_all(content.as_bytes())
-            .expect("Failed to write temp file");
-        file.flush().expect("Failed to flush temp file");
-        file
+    fn create_temp_config(content: &str) -> Result<NamedTempFile> {
+        let mut file: NamedTempFile = NamedTempFile::new()?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        Ok(file)
     }
 
     #[test]
-    fn test_parse_config() {
+    fn test_parse_config() -> Result<()> {
         let yaml = r#"
 version: 1
 
@@ -139,27 +138,49 @@ targets:
     - sdks/python/polyplug_abi/polyplug_abi/helpers.py
 "#;
 
-        let file: NamedTempFile = create_temp_config(yaml);
-        let config: Config = parse_config(file.path()).expect("Failed to parse config");
+        let file: NamedTempFile = create_temp_config(yaml)?;
+        let config: Config = parse_config(file.path())?;
 
         assert_eq!(config.version, 1);
 
         assert!(config.methods.contains_key("StringView"));
-        let string_view_methods: &Vec<String> = config.methods.get("StringView").unwrap();
+        let string_view_methods: &Vec<String> = config
+            .methods
+            .get("StringView")
+            .ok_or_else(|| anyhow::anyhow!("missing StringView methods"))?;
         assert_eq!(string_view_methods.len(), 5);
         assert!(string_view_methods.contains(&"to_str".to_string()));
         assert!(string_view_methods.contains(&"starts_with".to_string()));
 
-        assert_eq!(config.naming.get("rust").unwrap(), "snake_case");
-        assert_eq!(config.naming.get("csharp").unwrap(), "PascalCase");
-        assert_eq!(config.naming.get("js").unwrap(), "camelCase");
+        assert_eq!(
+            config
+                .naming
+                .get("rust")
+                .ok_or_else(|| anyhow::anyhow!("missing rust naming"))?,
+            "snake_case"
+        );
+        assert_eq!(
+            config
+                .naming
+                .get("csharp")
+                .ok_or_else(|| anyhow::anyhow!("missing csharp naming"))?,
+            "PascalCase"
+        );
+        assert_eq!(
+            config
+                .naming
+                .get("js")
+                .ok_or_else(|| anyhow::anyhow!("missing js naming"))?,
+            "camelCase"
+        );
 
         assert!(config.targets.contains_key("rust"));
         assert!(config.targets.contains_key("python"));
+        Ok(())
     }
 
     #[test]
-    fn test_parse_config_multiple_structs() {
+    fn test_parse_config_multiple_structs() -> Result<()> {
         let yaml = r#"
 version: 1
 
@@ -179,16 +200,17 @@ targets:
     - src/lib.rs
 "#;
 
-        let file: NamedTempFile = create_temp_config(yaml);
-        let config: Config = parse_config(file.path()).expect("Failed to parse config");
+        let file: NamedTempFile = create_temp_config(yaml)?;
+        let config: Config = parse_config(file.path())?;
 
         assert_eq!(config.methods.len(), 2);
         assert!(config.methods.contains_key("StringView"));
         assert!(config.methods.contains_key("BufferView"));
+        Ok(())
     }
 
     #[test]
-    fn test_parse_config_invalid_version() {
+    fn test_parse_config_invalid_version() -> Result<()> {
         let yaml = r#"
 version: 2
 
@@ -204,15 +226,19 @@ targets:
     - src/lib.rs
 "#;
 
-        let file: NamedTempFile = create_temp_config(yaml);
+        let file: NamedTempFile = create_temp_config(yaml)?;
         let result: Result<Config> = parse_config(file.path());
         assert!(result.is_err());
-        let err_msg: String = result.unwrap_err().to_string();
+        let err_msg: String = result
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected error"))?
+            .to_string();
         assert!(err_msg.contains("Unsupported config version"));
+        Ok(())
     }
 
     #[test]
-    fn test_parse_config_duplicate_method() {
+    fn test_parse_config_duplicate_method() -> Result<()> {
         let yaml = r#"
 version: 1
 
@@ -229,25 +255,33 @@ targets:
     - src/lib.rs
 "#;
 
-        let file: NamedTempFile = create_temp_config(yaml);
+        let file: NamedTempFile = create_temp_config(yaml)?;
         let result: Result<Config> = parse_config(file.path());
         assert!(result.is_err());
-        let err_msg: String = result.unwrap_err().to_string();
+        let err_msg: String = result
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected error"))?
+            .to_string();
         assert!(err_msg.contains("Duplicate method"));
         assert!(err_msg.contains("to_str"));
         assert!(err_msg.contains("StringView"));
+        Ok(())
     }
 
     #[test]
-    fn test_parse_config_missing_file() {
+    fn test_parse_config_missing_file() -> Result<()> {
         let result: Result<Config> = parse_config(Path::new("/nonexistent/config.yaml"));
         assert!(result.is_err());
-        let err_msg: String = result.unwrap_err().to_string();
+        let err_msg: String = result
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected error"))?
+            .to_string();
         assert!(err_msg.contains("Failed to read config file"));
+        Ok(())
     }
 
     #[test]
-    fn test_parse_config_malformed_yaml() {
+    fn test_parse_config_malformed_yaml() -> Result<()> {
         let yaml = r#"
 version: 1
 methods:
@@ -255,10 +289,14 @@ methods:
     - not a map
 "#;
 
-        let file: NamedTempFile = create_temp_config(yaml);
+        let file: NamedTempFile = create_temp_config(yaml)?;
         let result: Result<Config> = parse_config(file.path());
         assert!(result.is_err());
-        let err_msg: String = result.unwrap_err().to_string();
+        let err_msg: String = result
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected error"))?
+            .to_string();
         assert!(err_msg.contains("Failed to parse YAML"));
+        Ok(())
     }
 }

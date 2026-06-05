@@ -548,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_results_single_struct() {
+    fn test_aggregate_results_single_struct() -> Result<(), Box<dyn core::error::Error>> {
         let mut methods: HashMap<String, Vec<String>> = HashMap::new();
         methods.insert(
             "StringView".to_string(),
@@ -580,7 +580,10 @@ mod tests {
 
         // Check per-struct report
         assert!(report.per_struct.contains_key("StringView"));
-        let struct_report: &StructReport = report.per_struct.get("StringView").unwrap();
+        let struct_report: &StructReport = report
+            .per_struct
+            .get("StringView")
+            .ok_or("missing StringView struct report")?;
         assert_eq!(struct_report.methods.len(), 2);
 
         // Check per-language reports
@@ -588,10 +591,11 @@ mod tests {
         for lang_report in report.per_language.values() {
             assert!(lang_report.structs.contains_key("StringView"));
         }
+        Ok(())
     }
 
     #[test]
-    fn test_update_struct_report() {
+    fn test_update_struct_report() -> Result<(), Box<dyn core::error::Error>> {
         let mut struct_report: StructReport = StructReport::new();
         struct_report
             .methods
@@ -607,17 +611,24 @@ mod tests {
 
         update_struct_report(&mut struct_report, &result, "rust");
 
-        let to_str_status: &MethodStatus = struct_report.methods.get("to_str").unwrap();
+        let to_str_status: &MethodStatus = struct_report
+            .methods
+            .get("to_str")
+            .ok_or("missing to_str method status")?;
         assert!(to_str_status.found_in.contains(&"rust".to_string()));
         assert!(to_str_status.missing_in.is_empty());
 
-        let starts_with_status: &MethodStatus = struct_report.methods.get("starts_with").unwrap();
+        let starts_with_status: &MethodStatus = struct_report
+            .methods
+            .get("starts_with")
+            .ok_or("missing starts_with method status")?;
         assert!(starts_with_status.found_in.is_empty());
         assert!(starts_with_status.missing_in.contains(&"rust".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_update_language_report() {
+    fn test_update_language_report() -> Result<(), Box<dyn core::error::Error>> {
         let mut per_language: HashMap<String, LanguageReport> = HashMap::new();
         per_language.insert("rust".to_string(), LanguageReport::new());
 
@@ -626,8 +637,11 @@ mod tests {
 
         update_language_report(&mut per_language, "StringView", result, "rust");
 
-        let rust_report: &LanguageReport = per_language.get("rust").unwrap();
+        let rust_report: &LanguageReport = per_language
+            .get("rust")
+            .ok_or("missing rust language report")?;
         assert!(rust_report.structs.contains_key("StringView"));
+        Ok(())
     }
 
     #[test]

@@ -94,13 +94,13 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_temp_python_file(content: &str) -> NamedTempFile {
-        let mut file: NamedTempFile =
-            NamedTempFile::with_suffix(".py").expect("Failed to create temp file");
-        file.write_all(content.as_bytes())
-            .expect("Failed to write temp file");
-        file.flush().expect("Failed to flush temp file");
-        file
+    fn create_temp_python_file(
+        content: &str,
+    ) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+        let mut file: NamedTempFile = NamedTempFile::with_suffix(".py")?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        Ok(file)
     }
 
     #[test]
@@ -113,12 +113,12 @@ mod tests {
 
     #[test]
     fn test_python_validator_default() {
-        let validator: PythonValidator = PythonValidator::default();
+        let validator: PythonValidator = PythonValidator;
         assert_eq!(validator.language_name(), "python");
     }
 
     #[test]
-    fn test_python_validator_detects_to_str() {
+    fn test_python_validator_detects_to_str() -> Result<(), Box<dyn core::error::Error>> {
         let runner: AstGrepRunner = AstGrepRunner::new();
         if !runner.is_available() {
             panic!(
@@ -131,7 +131,7 @@ def to_str(sv: StringView) -> str:
     """Convert StringView to Python str."""
     return ""
 "#;
-        let file: NamedTempFile = create_temp_python_file(python_code);
+        let file: NamedTempFile = create_temp_python_file(python_code)?;
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(
@@ -143,10 +143,11 @@ def to_str(sv: StringView) -> str:
 
         assert!(result.found_methods.contains(&"to_str".to_string()));
         assert!(!result.missing_methods.contains(&"to_str".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_python_validator_detects_multiple_methods() {
+    fn test_python_validator_detects_multiple_methods() -> Result<(), Box<dyn core::error::Error>> {
         let runner: AstGrepRunner = AstGrepRunner::new();
         if !runner.is_available() {
             panic!(
@@ -167,7 +168,7 @@ def strip_prefix(sv: StringView, prefix: str) -> str:
 def split(sv: StringView, delimiter: str) -> list[str]:
     return []
 "#;
-        let file: NamedTempFile = create_temp_python_file(python_code);
+        let file: NamedTempFile = create_temp_python_file(python_code)?;
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(
@@ -192,10 +193,12 @@ def split(sv: StringView, delimiter: str) -> list[str]:
         // Should report ends_with as missing
         assert!(result.missing_methods.contains(&"ends_with".to_string()));
         assert!(!result.is_complete());
+        Ok(())
     }
 
     #[test]
-    fn test_python_validator_handles_type_annotated_functions() {
+    fn test_python_validator_handles_type_annotated_functions()
+    -> Result<(), Box<dyn core::error::Error>> {
         let runner: AstGrepRunner = AstGrepRunner::new();
         if !runner.is_available() {
             panic!(
@@ -208,7 +211,7 @@ def to_str(sv: StringView) -> str:
     """Function with type annotations."""
     return ""
 "#;
-        let file: NamedTempFile = create_temp_python_file(python_code);
+        let file: NamedTempFile = create_temp_python_file(python_code)?;
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(
@@ -219,10 +222,12 @@ def to_str(sv: StringView) -> str:
         );
 
         assert!(result.found_methods.contains(&"to_str".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_python_validator_handles_functions_without_annotations() {
+    fn test_python_validator_handles_functions_without_annotations()
+    -> Result<(), Box<dyn core::error::Error>> {
         let runner: AstGrepRunner = AstGrepRunner::new();
         if !runner.is_available() {
             panic!(
@@ -234,7 +239,7 @@ def to_str(sv: StringView) -> str:
 def to_str(sv):
     return ""
 "#;
-        let file: NamedTempFile = create_temp_python_file(python_code);
+        let file: NamedTempFile = create_temp_python_file(python_code)?;
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(
@@ -245,15 +250,16 @@ def to_str(sv):
         );
 
         assert!(result.found_methods.contains(&"to_str".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_python_validator_missing_method() {
+    fn test_python_validator_missing_method() -> Result<(), Box<dyn core::error::Error>> {
         let python_code: &str = r#"
 def to_str(sv):
     return ""
 "#;
-        let file: NamedTempFile = create_temp_python_file(python_code);
+        let file: NamedTempFile = create_temp_python_file(python_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
         let validator: PythonValidator = PythonValidator::new();
 
@@ -266,6 +272,7 @@ def to_str(sv):
 
         assert!(result.missing_methods.contains(&"ends_with".to_string()));
         assert!(!result.is_complete());
+        Ok(())
     }
 
     #[test]
@@ -285,7 +292,7 @@ def to_str(sv):
     }
 
     #[test]
-    fn test_python_validator_completion_percentage() {
+    fn test_python_validator_completion_percentage() -> Result<(), Box<dyn core::error::Error>> {
         let runner: AstGrepRunner = AstGrepRunner::new();
         if !runner.is_available() {
             panic!(
@@ -300,7 +307,7 @@ def to_str(sv):
 def starts_with(sv, prefix):
     return True
 "#;
-        let file: NamedTempFile = create_temp_python_file(python_code);
+        let file: NamedTempFile = create_temp_python_file(python_code)?;
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(
@@ -316,10 +323,11 @@ def starts_with(sv, prefix):
 
         // 2 out of 3 methods found = 66%
         assert_eq!(result.completion_percentage(), 66);
+        Ok(())
     }
 
     #[test]
-    fn test_python_validator_all_methods_found() {
+    fn test_python_validator_all_methods_found() -> Result<(), Box<dyn core::error::Error>> {
         let runner: AstGrepRunner = AstGrepRunner::new();
         if !runner.is_available() {
             panic!(
@@ -334,7 +342,7 @@ def to_str(sv):
 def starts_with(sv, prefix):
     return True
 "#;
-        let file: NamedTempFile = create_temp_python_file(python_code);
+        let file: NamedTempFile = create_temp_python_file(python_code)?;
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(
@@ -346,5 +354,6 @@ def starts_with(sv, prefix):
 
         assert!(result.is_complete());
         assert_eq!(result.completion_percentage(), 100);
+        Ok(())
     }
 }

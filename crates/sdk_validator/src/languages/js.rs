@@ -106,13 +106,13 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_temp_typescript_file(content: &str) -> NamedTempFile {
-        let mut file: NamedTempFile =
-            NamedTempFile::with_suffix(".ts").expect("Failed to create temp file");
-        file.write_all(content.as_bytes())
-            .expect("Failed to write temp file");
-        file.flush().expect("Failed to flush temp file");
-        file
+    fn create_temp_typescript_file(
+        content: &str,
+    ) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+        let mut file: NamedTempFile = NamedTempFile::with_suffix(".ts")?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        Ok(file)
     }
 
     #[test]
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_js_validator_default() {
-        let validator: JsValidator = JsValidator::default();
+        let validator: JsValidator = JsValidator;
         assert_eq!(validator.language_name(), "js");
     }
 
@@ -143,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn test_js_validator_detects_function() {
+    fn test_js_validator_detects_function() -> Result<(), Box<dyn core::error::Error>> {
         let typescript_code: &str = r#"
 /**
  * Convert a StringView to a JavaScript string.
@@ -154,7 +154,7 @@ export function toStr(sv: StringView | null | undefined): string {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_typescript_file(typescript_code);
+        let file: NamedTempFile = create_temp_typescript_file(typescript_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -172,10 +172,11 @@ export function toStr(sv: StringView | null | undefined): string {
 
         assert!(result.found_methods.contains(&"to_str".to_string()));
         assert!(result.missing_methods.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_js_validator_detects_starts_with() {
+    fn test_js_validator_detects_starts_with() -> Result<(), Box<dyn core::error::Error>> {
         let typescript_code: &str = r#"
 /**
  * Check if a string starts with a prefix.
@@ -186,7 +187,7 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_typescript_file(typescript_code);
+        let file: NamedTempFile = create_temp_typescript_file(typescript_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -203,10 +204,11 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
         assert!(result.found_methods.contains(&"starts_with".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_js_validator_detects_strip_prefix() {
+    fn test_js_validator_detects_strip_prefix() -> Result<(), Box<dyn core::error::Error>> {
         let typescript_code: &str = r#"
 /**
  * Strip a prefix from a string.
@@ -220,7 +222,7 @@ export function stripPrefix(sv: StringView | string, prefix: string): string {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_typescript_file(typescript_code);
+        let file: NamedTempFile = create_temp_typescript_file(typescript_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -237,10 +239,11 @@ export function stripPrefix(sv: StringView | string, prefix: string): string {
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
         assert!(result.found_methods.contains(&"strip_prefix".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_js_validator_detects_split() {
+    fn test_js_validator_detects_split() -> Result<(), Box<dyn core::error::Error>> {
         let typescript_code: &str = r#"
 /**
  * Split a string by a delimiter.
@@ -251,7 +254,7 @@ export function split(sv: StringView | string, delimiter: string): string[] {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_typescript_file(typescript_code);
+        let file: NamedTempFile = create_temp_typescript_file(typescript_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -268,10 +271,11 @@ export function split(sv: StringView | string, delimiter: string): string[] {
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
         assert!(result.found_methods.contains(&"split".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_js_validator_reports_missing() {
+    fn test_js_validator_reports_missing() -> Result<(), Box<dyn core::error::Error>> {
         let typescript_code: &str = r#"
 export function toStr(sv: StringView | null | undefined): string {
     return '';
@@ -282,7 +286,7 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
 }
 "#;
 
-        let file: NamedTempFile = create_temp_typescript_file(typescript_code);
+        let file: NamedTempFile = create_temp_typescript_file(typescript_code)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -310,6 +314,7 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
         assert!(result.missing_methods.contains(&"strip_prefix".to_string()));
         assert!(result.missing_methods.contains(&"split".to_string()));
         assert!(!result.is_complete());
+        Ok(())
     }
 
     #[test]
@@ -334,7 +339,7 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
     }
 
     #[test]
-    fn test_js_validator_multiple_files() {
+    fn test_js_validator_multiple_files() -> Result<(), Box<dyn core::error::Error>> {
         let file1_content: &str = r#"
 export function toStr(sv: StringView | null | undefined): string {
     return '';
@@ -347,8 +352,8 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
 }
 "#;
 
-        let file1: NamedTempFile = create_temp_typescript_file(file1_content);
-        let file2: NamedTempFile = create_temp_typescript_file(file2_content);
+        let file1: NamedTempFile = create_temp_typescript_file(file1_content)?;
+        let file2: NamedTempFile = create_temp_typescript_file(file2_content)?;
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
@@ -370,5 +375,6 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
         assert!(result.found_methods.contains(&"to_str".to_string()));
         assert!(result.found_methods.contains(&"starts_with".to_string()));
         assert!(result.is_complete());
+        Ok(())
     }
 }

@@ -166,29 +166,29 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_temp_lua_file(content: &str) -> NamedTempFile {
-        let mut file = NamedTempFile::with_suffix(".lua").expect("Failed to create temp file");
-        file.write_all(content.as_bytes())
-            .expect("Failed to write temp file");
-        file.flush().expect("Failed to flush temp file");
-        file
+    fn create_temp_lua_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+        let mut file: NamedTempFile = NamedTempFile::with_suffix(".lua")?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        Ok(file)
     }
 
     #[test]
-    fn test_lua_validator_new() {
-        let validator: LuaValidator = LuaValidator::new().expect("Failed to create validator");
+    fn test_lua_validator_new() -> Result<(), Box<dyn core::error::Error>> {
+        let validator: LuaValidator = LuaValidator::new()?;
         assert_eq!(validator.language_name(), "lua");
+        Ok(())
     }
 
     #[test]
-    fn test_lua_validator_detects_global_function() {
-        let lua_code = r#"
+    fn test_lua_validator_detects_global_function() -> Result<(), Box<dyn core::error::Error>> {
+        let lua_code: &str = r#"
 function to_str(sv)
     return ""
 end
 "#;
-        let file = create_temp_lua_file(lua_code);
-        let mut validator = LuaValidator::new().expect("Failed to create validator");
+        let file: NamedTempFile = create_temp_lua_file(lua_code)?;
+        let mut validator: LuaValidator = LuaValidator::new()?;
 
         let result = validator.validate(
             "StringView",
@@ -198,11 +198,12 @@ end
 
         assert!(result.found_methods.contains(&"to_str".to_string()));
         assert!(!result.missing_methods.contains(&"to_str".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_lua_validator_detects_table_method_dot() {
-        let lua_code = r#"
+    fn test_lua_validator_detects_table_method_dot() -> Result<(), Box<dyn core::error::Error>> {
+        let lua_code: &str = r#"
 local M = {}
 
 function M.to_str(sv)
@@ -211,8 +212,8 @@ end
 
 return M
 "#;
-        let file = create_temp_lua_file(lua_code);
-        let mut validator = LuaValidator::new().expect("Failed to create validator");
+        let file: NamedTempFile = create_temp_lua_file(lua_code)?;
+        let mut validator: LuaValidator = LuaValidator::new()?;
 
         let result = validator.validate(
             "StringView",
@@ -221,11 +222,12 @@ return M
         );
 
         assert!(result.found_methods.contains(&"to_str".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_lua_validator_detects_table_method_colon() {
-        let lua_code = r#"
+    fn test_lua_validator_detects_table_method_colon() -> Result<(), Box<dyn core::error::Error>> {
+        let lua_code: &str = r#"
 local M = {}
 
 function M:to_str()
@@ -234,8 +236,8 @@ end
 
 return M
 "#;
-        let file = create_temp_lua_file(lua_code);
-        let mut validator = LuaValidator::new().expect("Failed to create validator");
+        let file: NamedTempFile = create_temp_lua_file(lua_code)?;
+        let mut validator: LuaValidator = LuaValidator::new()?;
 
         let result = validator.validate(
             "StringView",
@@ -244,11 +246,12 @@ return M
         );
 
         assert!(result.found_methods.contains(&"to_str".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_lua_validator_detects_multiple_methods() {
-        let lua_code = r#"
+    fn test_lua_validator_detects_multiple_methods() -> Result<(), Box<dyn core::error::Error>> {
+        let lua_code: &str = r#"
 local M = {}
 
 function M.to_str(sv)
@@ -269,8 +272,8 @@ end
 
 return M
 "#;
-        let file = create_temp_lua_file(lua_code);
-        let mut validator = LuaValidator::new().expect("Failed to create validator");
+        let file: NamedTempFile = create_temp_lua_file(lua_code)?;
+        let mut validator: LuaValidator = LuaValidator::new()?;
 
         let result = validator.validate(
             "StringView",
@@ -290,17 +293,18 @@ return M
         assert!(result.found_methods.contains(&"split".to_string()));
         assert!(result.missing_methods.contains(&"ends_with".to_string()));
         assert!(!result.is_complete());
+        Ok(())
     }
 
     #[test]
-    fn test_lua_validator_missing_method() {
-        let lua_code = r#"
+    fn test_lua_validator_missing_method() -> Result<(), Box<dyn core::error::Error>> {
+        let lua_code: &str = r#"
 function to_str(sv)
     return ""
 end
 "#;
-        let file = create_temp_lua_file(lua_code);
-        let mut validator = LuaValidator::new().expect("Failed to create validator");
+        let file: NamedTempFile = create_temp_lua_file(lua_code)?;
+        let mut validator: LuaValidator = LuaValidator::new()?;
 
         let result = validator.validate(
             "StringView",
@@ -310,11 +314,12 @@ end
 
         assert!(result.missing_methods.contains(&"ends_with".to_string()));
         assert!(!result.is_complete());
+        Ok(())
     }
 
     #[test]
-    fn test_lua_validator_nonexistent_file() {
-        let mut validator = LuaValidator::new().expect("Failed to create validator");
+    fn test_lua_validator_nonexistent_file() -> Result<(), Box<dyn core::error::Error>> {
+        let mut validator: LuaValidator = LuaValidator::new()?;
 
         let result = validator.validate(
             "StringView",
@@ -323,11 +328,12 @@ end
         );
 
         assert!(result.missing_methods.contains(&"to_str".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_lua_validator_completion_percentage() {
-        let lua_code = r#"
+    fn test_lua_validator_completion_percentage() -> Result<(), Box<dyn core::error::Error>> {
+        let lua_code: &str = r#"
 function to_str(sv)
     return ""
 end
@@ -336,8 +342,8 @@ function starts_with(sv, prefix)
     return true
 end
 "#;
-        let file = create_temp_lua_file(lua_code);
-        let mut validator = LuaValidator::new().expect("Failed to create validator");
+        let file: NamedTempFile = create_temp_lua_file(lua_code)?;
+        let mut validator: LuaValidator = LuaValidator::new()?;
 
         let result = validator.validate(
             "StringView",
@@ -350,11 +356,12 @@ end
         );
 
         assert_eq!(result.completion_percentage(), 66);
+        Ok(())
     }
 
     #[test]
-    fn test_lua_validator_all_methods_found() {
-        let lua_code = r#"
+    fn test_lua_validator_all_methods_found() -> Result<(), Box<dyn core::error::Error>> {
+        let lua_code: &str = r#"
 function to_str(sv)
     return ""
 end
@@ -363,8 +370,8 @@ function starts_with(sv, prefix)
     return true
 end
 "#;
-        let file = create_temp_lua_file(lua_code);
-        let mut validator = LuaValidator::new().expect("Failed to create validator");
+        let file: NamedTempFile = create_temp_lua_file(lua_code)?;
+        let mut validator: LuaValidator = LuaValidator::new()?;
 
         let result = validator.validate(
             "StringView",
@@ -374,17 +381,18 @@ end
 
         assert!(result.is_complete());
         assert_eq!(result.completion_percentage(), 100);
+        Ok(())
     }
 
     #[test]
-    fn test_lua_validator_local_function() {
-        let lua_code = r#"
+    fn test_lua_validator_local_function() -> Result<(), Box<dyn core::error::Error>> {
+        let lua_code: &str = r#"
 local function to_str(sv)
     return ""
 end
 "#;
-        let file = create_temp_lua_file(lua_code);
-        let mut validator = LuaValidator::new().expect("Failed to create validator");
+        let file: NamedTempFile = create_temp_lua_file(lua_code)?;
+        let mut validator: LuaValidator = LuaValidator::new()?;
 
         let result = validator.validate(
             "StringView",
@@ -393,19 +401,20 @@ end
         );
 
         assert!(result.found_methods.contains(&"to_str".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_lua_validator_nested_table_method() {
-        let lua_code = r#"
+    fn test_lua_validator_nested_table_method() -> Result<(), Box<dyn core::error::Error>> {
+        let lua_code: &str = r#"
 local helpers = {}
 
 function helpers.string.to_str(sv)
     return ""
 end
 "#;
-        let file = create_temp_lua_file(lua_code);
-        let mut validator = LuaValidator::new().expect("Failed to create validator");
+        let file: NamedTempFile = create_temp_lua_file(lua_code)?;
+        let mut validator: LuaValidator = LuaValidator::new()?;
 
         let result = validator.validate(
             "StringView",
@@ -414,5 +423,6 @@ end
         );
 
         assert!(result.found_methods.contains(&"to_str".to_string()));
+        Ok(())
     }
 }
