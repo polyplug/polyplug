@@ -1507,6 +1507,7 @@ dependencies = [
  "polyplug",
  "polyplug_abi",
  "polyplug_utils",
+ "serde_json",
  "tempfile",
 ]
 
@@ -1560,7 +1561,6 @@ dependencies = [
  "polyplug",
  "polyplug_abi",
  "polyplug_utils",
- "thiserror",
 ]
 
 [[package]]

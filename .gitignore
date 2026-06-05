@@ -481,3 +481,8 @@ host-libs/python/loaders/polyplug-loaders-python/build/
 # MemPalace per-project files (issue #185)
 mempalace.yaml
 entities.json
+
+# Compiled C++ example host binaries (built by examples/hosts/cpp/Makefile)
+examples/hosts/cpp/host
+examples/hosts/cpp/hot_reload_host
+tests/integration/cpp/hot_reload_test

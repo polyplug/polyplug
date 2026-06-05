@@ -769,11 +769,11 @@ _dist-copy-host-libs:
 # Copy guest libraries to dist (library files ONLY - NO build artifacts)
 _dist-copy-guest-libs:
     @echo "Copying guest libraries..."
-    @# Rust (source for crates.io) - now in crates/polyplug_guest
+    @# Rust (source for crates.io) - lives in sdks/rust/guest
     @mkdir -p {{dist_dir}}/guest-libs/rust/src
-    @cp -r crates/polyplug_guest/src/* {{dist_dir}}/guest-libs/rust/src/
-    @cp crates/polyplug_guest/Cargo.toml {{dist_dir}}/guest-libs/rust/
-    @cp crates/polyplug_guest/README.md {{dist_dir}}/guest-libs/rust/ 2>/dev/null || true
+    @cp -r {{sdks_dir}}/rust/guest/src/* {{dist_dir}}/guest-libs/rust/src/
+    @cp {{sdks_dir}}/rust/guest/Cargo.toml {{dist_dir}}/guest-libs/rust/
+    @cp {{sdks_dir}}/rust/guest/README.md {{dist_dir}}/guest-libs/rust/ 2>/dev/null || true
     @# C++ (header-only) - ONLY .hpp files
     @mkdir -p {{dist_dir}}/guest-libs/cpp/polyplug
     @cp {{sdks_dir}}/cpp/guest/polyplug/*.hpp {{dist_dir}}/guest-libs/cpp/polyplug/

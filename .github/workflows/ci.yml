@@ -50,7 +50,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install ast-grep
         run: cargo install ast-grep --locked
-      - run: cargo run -p sdk_validator -- --config sdk_validator.yaml --fail-on-missing
+      - run: cargo run -p sdk-validator -- --config sdk_validator.yaml --fail-on-missing
 
   test:
     name: Tests

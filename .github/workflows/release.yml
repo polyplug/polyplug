@@ -214,23 +214,23 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "9.0.x"
+          dotnet-version: "10.0.x"
 
       - name: Test C# native loading
         shell: bash
         run: |
-          mkdir -p sdks/csharp/host/Polyplug/runtimes/${{ matrix.platform }}/native
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp native/polyplug.dll sdks/csharp/host/Polyplug/runtimes/win-x64/native/
+            rid="win-x64"; lib="native/polyplug.dll"
           elif [ "${{ matrix.platform }}" = "macos-x64" ]; then
-            cp native/libpolyplug.dylib sdks/csharp/host/Polyplug/runtimes/osx-x64/native/
+            rid="osx-x64"; lib="native/libpolyplug.dylib"
           elif [ "${{ matrix.platform }}" = "macos-arm64" ]; then
-            cp native/libpolyplug.dylib sdks/csharp/host/Polyplug/runtimes/osx-arm64/native/
+            rid="osx-arm64"; lib="native/libpolyplug.dylib"
           else
-            cp native/libpolyplug.so sdks/csharp/host/Polyplug/runtimes/linux-x64/native/
+            rid="linux-x64"; lib="native/libpolyplug.so"
           fi
-          cd sdks/csharp/host/Polyplug
-          dotnet build -c Release
+          mkdir -p "sdks/csharp/host/runtimes/$rid/native"
+          cp "$lib" "sdks/csharp/host/runtimes/$rid/native/"
+          dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Release
           echo "C#: OK"
 
   publish:
@@ -389,51 +389,48 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "9.0.x"
+          dotnet-version: "10.0.x"
 
       - name: Build NuGet host package with embedded natives
         run: |
-          cd sdks/csharp/host/Polyplug
+          host_dir="sdks/csharp/host"
 
-          mkdir -p runtimes/linux-x64/native
-          mkdir -p runtimes/osx-x64/native
-          mkdir -p runtimes/osx-arm64/native
-          mkdir -p runtimes/win-x64/native
+          mkdir -p "$host_dir/runtimes/linux-x64/native"
+          mkdir -p "$host_dir/runtimes/osx-x64/native"
+          mkdir -p "$host_dir/runtimes/osx-arm64/native"
+          mkdir -p "$host_dir/runtimes/win-x64/native"
 
-          cp ../../../dist/native/linux-x64/libpolyplug.so runtimes/linux-x64/native/
-          cp ../../../dist/native/macos-x64/libpolyplug.dylib runtimes/osx-x64/native/
-          cp ../../../dist/native/macos-arm64/libpolyplug.dylib runtimes/osx-arm64/native/
-          cp ../../../dist/native/windows-x64/polyplug.dll runtimes/win-x64/native/
+          cp dist/native/linux-x64/libpolyplug.so "$host_dir/runtimes/linux-x64/native/"
+          cp dist/native/macos-x64/libpolyplug.dylib "$host_dir/runtimes/osx-x64/native/"
+          cp dist/native/macos-arm64/libpolyplug.dylib "$host_dir/runtimes/osx-arm64/native/"
+          cp dist/native/windows-x64/polyplug.dll "$host_dir/runtimes/win-x64/native/"
 
-          dotnet pack -c Release -o ../../../dist/nuget
+          dotnet pack "$host_dir/Polyplug.Host.csproj" -c Release -o dist/nuget
 
       - name: Build NuGet guest package
         run: |
-          cd sdks/csharp/guest
-          dotnet pack -c Release -o ../../dist/nuget
+          dotnet pack sdks/csharp/guest -c Release -o dist/nuget
 
       - name: Build NuGet loader packages with embedded natives
         run: |
           for loader in Native Python Lua Js Dotnet; do
-            loader_dir="sdks/csharp/host/Loaders/$loader"
-            if [ -d "$loader_dir" ]; then
-              echo "Building Polyplug.Loaders.$loader..."
+            loader_dir="sdks/csharp/loaders/$loader"
+            echo "Building Polyplug.Loaders.$loader..."
 
-              loader_lower=$(echo "$loader" | tr '[:upper:]' '[:lower:]')
-              lib_name="libpolyplug_$loader_lower"
+            loader_lower=$(echo "$loader" | tr '[:upper:]' '[:lower:]')
+            lib_name="libpolyplug_$loader_lower"
 
-              mkdir -p "$loader_dir/runtimes/linux-x64/native"
-              mkdir -p "$loader_dir/runtimes/osx-x64/native"
-              mkdir -p "$loader_dir/runtimes/osx-arm64/native"
-              mkdir -p "$loader_dir/runtimes/win-x64/native"
+            mkdir -p "$loader_dir/runtimes/linux-x64/native"
+            mkdir -p "$loader_dir/runtimes/osx-x64/native"
+            mkdir -p "$loader_dir/runtimes/osx-arm64/native"
+            mkdir -p "$loader_dir/runtimes/win-x64/native"
 
-              cp dist/native/linux-x64/${lib_name}.so "$loader_dir/runtimes/linux-x64/native/" 2>/dev/null || true
-              cp dist/native/macos-x64/${lib_name}.dylib "$loader_dir/runtimes/osx-x64/native/" 2>/dev/null || true
-              cp dist/native/macos-arm64/${lib_name}.dylib "$loader_dir/runtimes/osx-arm64/native/" 2>/dev/null || true
-              cp dist/native/windows-x64/${lib_name}.dll "$loader_dir/runtimes/win-x64/native/" 2>/dev/null || true
+            cp dist/native/linux-x64/${lib_name}.so "$loader_dir/runtimes/linux-x64/native/"
+            cp dist/native/macos-x64/${lib_name}.dylib "$loader_dir/runtimes/osx-x64/native/"
+            cp dist/native/macos-arm64/${lib_name}.dylib "$loader_dir/runtimes/osx-arm64/native/"
+            cp dist/native/windows-x64/${lib_name}.dll "$loader_dir/runtimes/win-x64/native/"
 
-              dotnet pack "$loader_dir" -c Release -o ../../../dist/nuget
-            fi
+            dotnet pack "$loader_dir" -c Release -o dist/nuget
           done
 
       - name: Validate NuGet packages
