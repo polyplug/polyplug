@@ -11,7 +11,6 @@ use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -352,13 +351,13 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                 out.push_str("            // call impl\n");
                 out.push_str("            return new AbiError { Code = AbiErrorCode.Ok };\n");
                 out.push_str("        } catch (Polyplug.Guest.GuestException ex) {\n");
-                out.push_str("            var msg = StringHelpers.AllocString(ex.Message);\n");
+                out.push_str("            var msg = StringHelpers.StaticMessage(ex.Message);\n");
                 out.push_str(
                     "            return new AbiError { Code = ex.Code, Message = msg };\n",
                 );
                 out.push_str("        } catch {\n");
                 out.push_str(
-                    "            var msg = StringHelpers.AllocString(\"plugin panicked\");\n",
+                    "            var msg = StringHelpers.StaticMessage(\"plugin panicked\");\n",
                 );
                 out.push_str("            return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n");
                 out.push_str("        }\n");
@@ -535,10 +534,10 @@ fn generate_cs_guest_plugin_interface(
         out.push_str("            // call impl\n");
         out.push_str("            return new AbiError { Code = AbiErrorCode.Ok };\n");
         out.push_str("        } catch (Polyplug.Guest.GuestException ex) {\n");
-        out.push_str("            var msg = StringHelpers.AllocString(ex.Message);\n");
+        out.push_str("            var msg = StringHelpers.StaticMessage(ex.Message);\n");
         out.push_str("            return new AbiError { Code = ex.Code, Message = msg };\n");
         out.push_str("        } catch {\n");
-        out.push_str("            var msg = StringHelpers.AllocString(\"plugin panicked\");\n");
+        out.push_str("            var msg = StringHelpers.StaticMessage(\"plugin panicked\");\n");
         out.push_str(
             "            return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n",
         );
@@ -820,6 +819,22 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("        } finally {\n");
     out.push_str("            System.Threading.Thread.EndThreadAffinity();\n");
     out.push_str("        }\n");
+    out.push_str("    }\n\n");
+
+    out.push_str("    /// <summary>Gets a host extension by name.</summary>\n");
+    out.push_str("    /// <param name=\"name\">Extension name as UTF-8 bytes.</param>\n");
+    out.push_str("    /// <returns>\n");
+    out.push_str(
+        "    /// Opaque extension pointer, or <see cref=\"IntPtr.Zero\"/> if not registered.\n",
+    );
+    out.push_str("    /// </returns>\n");
+    out.push_str("    public static IntPtr GetExtension(System.ReadOnlySpan<byte> name) {\n");
+    out.push_str("        uint hash = 2166136261u;\n");
+    out.push_str("        foreach (byte b in name) {\n");
+    out.push_str("            hash ^= b;\n");
+    out.push_str("            hash *= 16777619u;\n");
+    out.push_str("        }\n");
+    out.push_str("        return PolyplugHost.GetExtension(hash);\n");
     out.push_str("    }\n");
     out.push_str("}\n");
     out
@@ -1343,10 +1358,17 @@ fn emit_cs_guest_host_contract_args_setup(
         let param: &ResolvedParam = &func.params[0];
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-                // string -> StringView conversion
+                // string -> StringView: pin the UTF-8 bytes for the duration of the call.
+                // `using var` disposes the pin at the end of the enclosing unsafe block,
+                // i.e. after the dispatch returns, so the host reads valid memory and no
+                // GCHandle is leaked. The host never frees this memory.
                 out.push_str(&format!(
-                    "            var {}_view = StringHelpers.AllocString({});\n",
-                    param.name, param.name
+                    "            using var {0}_pin = new PinnedUtf8({0});\n",
+                    param.name
+                ));
+                out.push_str(&format!(
+                    "            var {0}_view = {0}_pin.View;\n",
+                    param.name
                 ));
                 out.push_str(&format!(
                     "            var argsPtr = (IntPtr)(&{}_view);\n",
@@ -1378,12 +1400,24 @@ fn emit_cs_guest_host_contract_args_setup(
     let func_name_cap: String = pascal_case(&func.name);
     let struct_name: String = format!("{}{}Args", class_name, func_name_cap);
 
+    // Pin every StringView argument for the duration of the call. Each `using var`
+    // pin is disposed at the end of the enclosing unsafe block (after dispatch),
+    // so the borrowed views stay valid through the call and no GCHandle leaks.
+    for param in &func.params {
+        if matches!(&param.ty, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
+            out.push_str(&format!(
+                "            using var {0}_pin = new PinnedUtf8({0});\n",
+                param.name
+            ));
+        }
+    }
+
     out.push_str(&format!("            var args = new {} {{\n", struct_name));
     for param in &func.params {
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                 out.push_str(&format!(
-                    "                {} = StringHelpers.AllocString({}),\n",
+                    "                {} = {}_pin.View,\n",
                     pascal_case(&param.name),
                     param.name
                 ));
@@ -1529,33 +1563,7 @@ fn generate_bundle_manifest_csharp(ir: &ValidatedIr) -> String {
     let reinit: bool = bundle.needs_reinit_on_dep_reload;
 
     // Build [[dependency]] tables
-    let mut dep_tables: String = String::new();
-    for dep in &bundle.dependencies {
-        match dep {
-            ResolvedDependency::ByContract {
-                contract,
-                contract_id,
-                min_version,
-            } => {
-                dep_tables.push_str(&format!(
-                    "[[dependency]]\ncontract = \"{}\"\ncontract_id = 0x{:016X}\nmin_version = {}\n\n",
-                    contract, contract_id, min_version
-                ));
-            }
-            ResolvedDependency::ByBundle {
-                bundle: dep_bundle,
-                bundle_id,
-                contract,
-                contract_id,
-                min_version,
-            } => {
-                dep_tables.push_str(&format!(
-                    "[[dependency]]\nbundle = \"{}\"\nbundle_id = 0x{:016X}\ncontract = \"{}\"\ncontract_id = 0x{:016X}\nmin_version = {}\n\n",
-                    dep_bundle, bundle_id, contract, contract_id, min_version
-                ));
-            }
-        }
-    }
+    let dep_tables: String = super::emit_manifest_dependencies(&bundle.dependencies);
 
     let file_field: String = super::format_manifest_file_field(&bundle.file);
     let runtime: &str = &bundle.runtime;
@@ -1865,6 +1873,13 @@ fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostC
     out.push_str(&format!("        Singleton = {singleton_lit},\n"));
     out.push_str("        DispatchType = DispatchType.Native,\n");
     out.push_str("        Runtime = IntPtr.Zero,\n");
+    out.push_str(
+        "        // The managed implementation lives in a static field (managed references\n",
+    );
+    out.push_str(
+        "        // cannot be stored in a raw IntPtr); UserData is unused for this path.\n",
+    );
+    out.push_str("        UserData = IntPtr.Zero,\n");
     out.push_str(&format!(
         "        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&{},\n",
         create_stub
@@ -1907,6 +1922,7 @@ fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostC
     out.push_str(&format!("        Singleton = {singleton_lit},\n"));
     out.push_str("        DispatchType = DispatchType.VirtualMachine,\n");
     out.push_str("        Runtime = IntPtr.Zero,\n");
+    out.push_str("        UserData = loaderData,  // registrant-owned VM bridge data\n");
     out.push_str(&format!(
         "        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&{},\n",
         create_stub
@@ -1995,7 +2011,7 @@ fn generate_cs_host_thunk(
 
     out.push_str("        return new AbiError { Code = AbiErrorCode.Ok };\n");
     out.push_str("    } catch (Exception ex) {\n");
-    out.push_str("        var msg = StringHelpers.AllocString(ex.Message);\n");
+    out.push_str("        var msg = StringHelpers.StaticMessage(ex.Message);\n");
     out.push_str("        return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");

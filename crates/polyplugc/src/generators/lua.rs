@@ -9,7 +9,6 @@ use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -163,32 +162,7 @@ fn generate_bundle_manifest_lua(ir: &ValidatedIr) -> String {
         .collect();
     let function_count_toml: String = format!("{{ {} }}", fn_count_entries.join(", "));
 
-    let mut dep_toml: String = String::new();
-    for dep in &bundle.dependencies {
-        dep_toml.push_str("\n[[dependency]]\n");
-        match dep {
-            ResolvedDependency::ByContract {
-                contract,
-                min_version,
-                ..
-            } => {
-                dep_toml.push_str("kind = \"contract\"\n");
-                dep_toml.push_str(&format!("contract = \"{contract}\"\n"));
-                dep_toml.push_str(&format!("min_version = \"{min_version}.0\"\n"));
-            }
-            ResolvedDependency::ByBundle {
-                bundle,
-                contract,
-                min_version,
-                ..
-            } => {
-                dep_toml.push_str("kind = \"bundle\"\n");
-                dep_toml.push_str(&format!("bundle = \"{bundle}\"\n"));
-                dep_toml.push_str(&format!("contract = \"{contract}\"\n"));
-                dep_toml.push_str(&format!("min_version = \"{min_version}.0\"\n"));
-            }
-        }
-    }
+    let dep_toml: String = super::emit_manifest_dependencies(&bundle.dependencies);
 
     let reinit: bool = bundle.needs_reinit_on_dep_reload;
     let runtime: &str = &bundle.runtime;
@@ -355,6 +329,23 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
         out.push_str(&format!("    M._register_{plugin_var}()\n"));
     }
     out.push_str("    return polyplug_guest.AbiErrorCode.Ok\n");
+    out.push_str("end\n\n");
+
+    out.push_str("--- Get a host extension by name. Returns nil if not registered.\n");
+    out.push_str("-- @param name string Extension name (as a Lua string).\n");
+    out.push_str("-- @return cdata|nil Opaque extension pointer, or nil if not registered.\n");
+    out.push_str("function M.polyplug_get_extension(name)\n");
+    out.push_str("    local host_ptr = polyplug_guest.get_host_interface()\n");
+    out.push_str("    if host_ptr == nil then return nil end\n");
+    out.push_str("    local hash = 2166136261\n");
+    out.push_str("    for i = 1, #name do\n");
+    out.push_str("        hash = bit.bxor(hash, name:byte(i))\n");
+    out.push_str("        hash = bit.band(hash * 16777619, 0xFFFFFFFF)\n");
+    out.push_str("    end\n");
+    out.push_str("    local host = ffi.cast('HostInterface*', ffi.cast('uintptr_t', host_ptr))\n");
+    out.push_str("    local ptr = host.get_extension(host_ptr, hash)\n");
+    out.push_str("    if ptr == nil then return nil end\n");
+    out.push_str("    return ptr\n");
     out.push_str("end\n\n");
 
     out.push_str("return M\n");
@@ -595,10 +586,12 @@ fn generate_guest_plugin_interface(
     }
     out.push_str("end\n");
 
-    // _register_<plugin>() builds the low-level dispatch handlers and appends
-    // them to _G._polyplug_handlers. Each handler has the signature
-    // (args_ptr, out_ptr) with i64 pointer integers, marshals the inputs,
-    // invokes the stored high-level impl, and writes the result to out_ptr.
+    // _register_<plugin>() builds the low-level dispatch handlers and stores them
+    // under a per-contract entry in _G._polyplug_handlers, keyed by contract name.
+    // The loader iterates every entry and registers one GuestContractInterface per
+    // contract, so multi-contract bundles register ALL their contracts. Each handler
+    // has the signature (args_ptr, out_ptr) with i64 pointer integers, marshals the
+    // inputs, invokes the stored high-level impl, and writes the result to out_ptr.
     out.push_str(&format!("function M._register_{plugin_var}()\n"));
     out.push_str("    local functions = {}\n");
     for (idx, func) in contract.functions.iter().enumerate() {
@@ -609,20 +602,17 @@ fn generate_guest_plugin_interface(
         out.push_str("    end\n");
     }
     out.push_str("    _G._polyplug_handlers = _G._polyplug_handlers or {}\n");
-    out.push_str("    if _G._polyplug_handlers.contract_name == nil then\n");
     out.push_str(&format!(
-        "        _G._polyplug_handlers.contract_name = \"{}\"\n",
+        "    _G._polyplug_handlers[\"{}\"] = {{\n",
         contract.name
     ));
     out.push_str(&format!(
-        "        _G._polyplug_handlers.contract_version = {}\n",
+        "        contract_version = {},\n",
         contract.version.major
     ));
-    out.push_str(&format!(
-        "        _G._polyplug_handlers.plugin_name = \"{plugin_name}\"\n"
-    ));
-    out.push_str("        _G._polyplug_handlers.functions = functions\n");
-    out.push_str("    end\n");
+    out.push_str(&format!("        plugin_name = \"{plugin_name}\",\n"));
+    out.push_str("        functions = functions,\n");
+    out.push_str("    }\n");
     out.push_str("end\n\n");
 
     Ok(())

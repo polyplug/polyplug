@@ -10,7 +10,6 @@ use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -407,7 +406,9 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
     out.push_str("from polyplug_abi import AbiErrorCode, AbiError, DispatchType, DispatchMechanisms, NativeDispatch, HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version\n");
-    out.push_str("from polyplug_guest import store_host_interface, _init_allocator\n\n");
+    out.push_str(
+        "from polyplug_guest import store_host_interface, get_host_interface, _init_allocator\n\n",
+    );
     out.push_str("if TYPE_CHECKING:\n");
     out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
     out.push_str("    ctypes.POINTER = _CtypesPointer  # type: ignore[assignment]\n\n");
@@ -518,6 +519,23 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
             out.push_str("        raise RuntimeError(\"plugin registration failed\")\n\n");
         }
     }
+
+    out.push_str("def polyplug_get_extension(name: bytes) -> int:\n");
+    out.push_str("    \"\"\"Get a host extension by name. Returns 0 (null) if not registered.\n\n");
+    out.push_str("    Args:\n");
+    out.push_str("        name: Extension name as UTF-8 bytes.\n");
+    out.push_str("    Returns:\n");
+    out.push_str("        Opaque extension pointer as int, or 0 if not registered.\n");
+    out.push_str("    \"\"\"\n");
+    out.push_str("    host_ptr: int = get_host_interface()\n");
+    out.push_str("    if host_ptr == 0:\n");
+    out.push_str("        return 0\n");
+    out.push_str("    hash_val: int = 2166136261\n");
+    out.push_str("    for byte in name:\n");
+    out.push_str("        hash_val ^= byte\n");
+    out.push_str("        hash_val = (hash_val * 16777619) & 0xFFFFFFFF\n");
+    out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))\n");
+    out.push_str("    return host.contents.get_extension(host_ptr, ctypes.c_uint32(hash_val))\n\n");
 
     out
 }
@@ -1746,8 +1764,21 @@ fn emit_python_guest_host_contract_args_setup(out: &mut String, func: &ResolvedF
         return;
     }
 
-    // Multiple params: pack into inline struct
-    out.push_str("        args_val: dict[str, Any] = {}\n");
+    // Multiple params: pack into a ctypes.Structure laid out in ABI field order.
+    // A plain dict has no stable C layout and `ctypes.addressof(dict)` raises
+    // TypeError, so we define a Structure subclass and take the address of an
+    // instance of it.
+    out.push_str("        class _ArgsPack(ctypes.Structure):\n");
+    out.push_str("            _fields_ = [\n");
+    for param in &func.params {
+        let param_ty: String = python_type_name(&param.ty);
+        out.push_str(&format!(
+            "                (\"{}\", {}),\n",
+            param.name, param_ty
+        ));
+    }
+    out.push_str("            ]\n");
+    out.push_str("        args_val: _ArgsPack = _ArgsPack()\n");
     for param in &func.params {
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
@@ -1756,26 +1787,23 @@ fn emit_python_guest_host_contract_args_setup(out: &mut String, func: &ResolvedF
                     name = param.name
                 ));
                 out.push_str(&format!(
-                    "        args_val['{name}'] = StringView(ptr=ctypes.cast(ctypes.c_char_p({name}_bytes), ctypes.c_void_p), len=len({name}_bytes))\n",
+                    "        args_val.{name} = StringView(ptr=ctypes.cast(ctypes.c_char_p({name}_bytes), ctypes.c_void_p), len=len({name}_bytes))\n",
                     name = param.name
                 ));
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
                 out.push_str(&format!(
-                    "        args_val['{name}'] = Buffer(ptr=ctypes.c_void_p(ctypes.addressof({name}) if len({name}) > 0 else 0), len=len({name}))\n",
+                    "        args_val.{name} = Buffer(ptr=ctypes.c_void_p(ctypes.addressof({name}) if len({name}) > 0 else 0), len=len({name}))\n",
                     name = param.name
                 ));
             }
             _ => {
-                out.push_str(&format!(
-                    "        args_val['{}'] = {}\n",
-                    param.name, param.name
-                ));
+                out.push_str(&format!("        args_val.{0} = {0}\n", param.name));
             }
         }
     }
     out.push_str(
-        "        args_ptr: ctypes.c_void_p = ctypes.c_void_p(ctypes.addressof(args_val))\n",
+        "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(args_val), ctypes.c_void_p)\n",
     );
 }
 
@@ -1979,32 +2007,7 @@ fn generate_bundle_manifest_python(ir: &ValidatedIr) -> String {
 
     let reinit: bool = bundle.needs_reinit_on_dep_reload;
 
-    let mut dep_toml: String = String::new();
-    for dep in &bundle.dependencies {
-        dep_toml.push_str("\n[[dependency]]\n");
-        match dep {
-            ResolvedDependency::ByContract {
-                contract,
-                min_version,
-                ..
-            } => {
-                dep_toml.push_str("kind = \"contract\"\n");
-                dep_toml.push_str(&format!("contract = \"{contract}\"\n"));
-                dep_toml.push_str(&format!("min_version = \"{min_version}.0\"\n"));
-            }
-            ResolvedDependency::ByBundle {
-                bundle,
-                contract,
-                min_version,
-                ..
-            } => {
-                dep_toml.push_str("kind = \"bundle\"\n");
-                dep_toml.push_str(&format!("bundle = \"{bundle}\"\n"));
-                dep_toml.push_str(&format!("contract = \"{contract}\"\n"));
-                dep_toml.push_str(&format!("min_version = \"{min_version}.0\"\n"));
-            }
-        }
-    }
+    let dep_toml: String = super::emit_manifest_dependencies(&bundle.dependencies);
 
     let runtime: &str = &bundle.runtime;
 
@@ -2172,6 +2175,9 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     out.push_str(&format!("    interface.singleton = {singleton}\n"));
     out.push_str("    interface.dispatch_type = DispatchType.Native\n");
     out.push_str("    interface.runtime = 0  # Set by runtime during registration\n");
+    out.push_str("    # The managed implementation lives in a module global (Python objects\n");
+    out.push_str("    # cannot be stored in a raw c_void_p); user_data is unused for this path.\n");
+    out.push_str("    interface.user_data = 0\n");
     out.push_str(
         "    interface.create_instance = ctypes.cast(None, type(interface.create_instance))\n",
     );
@@ -2218,6 +2224,9 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     out.push_str(&format!("    interface.singleton = {singleton}\n"));
     out.push_str("    interface.dispatch_type = DispatchType.VirtualMachine\n");
     out.push_str("    interface.runtime = 0  # Set by runtime during registration\n");
+    out.push_str(
+        "    interface.user_data = 0  # VM dispatch routes through dispatch.vm.loader_data\n",
+    );
     out.push_str(
         "    interface.create_instance = ctypes.cast(None, type(interface.create_instance))\n",
     );

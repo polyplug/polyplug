@@ -121,13 +121,16 @@ fn invalid_escape_sequence_lone_backslash() {
 
 #[test]
 fn valid_escape_sequences_accepted() {
-    // Standard TOML escapes: `\\`, `\"`, `\n`, `\t`, `\r` must all be accepted.
+    // Standard TOML escapes: `\\`, `\"`, `\n`, `\t`, `\r` must all be accepted by
+    // the TOML lexer. The resulting contract name is not a valid identifier, so
+    // name validation (not the TOML parser) rejects it — which proves the escape
+    // was lexed successfully rather than producing a TOML parse error.
     let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(
         "[[contract]]\nname = \"esc\\\\slash\\\"quote\\nnewline\\ttab\"\nversion = \"1.0\"",
     );
     assert!(
-        result.is_ok(),
-        "expected valid TOML escape sequences to be accepted, got {result:?}"
+        matches!(result, Err(PolyplugcError::InvalidIdentifier { .. })),
+        "expected TOML escapes to lex (then fail identifier validation), got {result:?}"
     );
 }
 
@@ -309,12 +312,15 @@ fn unicode_escape_valid_codepoint_accepted() {
 
 #[test]
 fn long_unicode_escape_u_uppercase_valid() {
-    // `\U0001F600` (8 hex digits) — valid TOML long Unicode escape.
+    // `\U0001F600` (8 hex digits) — valid TOML long Unicode escape. The TOML
+    // lexer must accept it; the resulting name contains a non-identifier
+    // codepoint (emoji), so name validation rejects it afterwards. An
+    // InvalidIdentifier (not a TOML ValidationFailed) proves the escape lexed.
     let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> =
         parse_api_str("[[contract]]\nname = \"emoji\\U0001F600end\"\nversion = \"1.0\"");
     assert!(
-        result.is_ok(),
-        "expected \\U0001F600 long Unicode escape to be accepted, got {result:?}"
+        matches!(result, Err(PolyplugcError::InvalidIdentifier { .. })),
+        "expected \\U0001F600 long Unicode escape to lex (then fail identifier validation), got {result:?}"
     );
 }
 

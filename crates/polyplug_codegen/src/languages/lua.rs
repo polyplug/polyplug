@@ -237,8 +237,23 @@ impl LuaGenerator {
     }
 
     fn convert_param(param: &str) -> String {
-        let parts: Vec<&str> = param.splitn(2, ':').collect();
-        let type_part = if parts.len() == 2 { parts[1] } else { parts[0] };
+        // Split on the `name: type` separator, which is the first single `:`.
+        // Rust path separators (`::`) must not be treated as the separator, so
+        // skip any `:` that is part of a `::` sequence.
+        let bytes: &[u8] = param.as_bytes();
+        let mut type_part: &str = param;
+        let mut i: usize = 0;
+        while i < bytes.len() {
+            if bytes[i] == b':' {
+                let prev_colon: bool = i > 0 && bytes[i - 1] == b':';
+                let next_colon: bool = i + 1 < bytes.len() && bytes[i + 1] == b':';
+                if !prev_colon && !next_colon {
+                    type_part = &param[i + 1..];
+                    break;
+                }
+            }
+            i += 1;
+        }
         Self::rust_type_to_lua(type_part.trim())
     }
 

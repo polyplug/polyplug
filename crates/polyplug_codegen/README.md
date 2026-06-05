@@ -18,7 +18,6 @@ Code generator for polyplug host-side contract callers. Generates type-safe, hot
 - **C#** — .NET classes with `PluginGuard` and nullable factory methods
 - **Python** — Python 3.10+ classes with `PluginGuard` and `Optional` factory methods
 - **Lua** — LuaJIT FFI with table-based OOP and factory functions
-- **JavaScript (Deno)** — Deno FFI with private fields and factory methods
 - **JavaScript (QuickJS)** — QuickJS FFI with function pointer caching
 
 **Note on terminology:** The "factory methods" create **caller wrappers**, not plugin instances. Each plugin contract has exactly ONE implementation (stored in `OnceLock` on the plugin side). The generated callers are wrappers that hold `Arc` references to the shared vtable.
@@ -53,8 +52,7 @@ polyplugc generate --bundle bundle.toml --lang cpp --out cpp_out
 polyplugc generate --bundle bundle.toml --lang csharp --out csharp_out
 polyplugc generate --bundle bundle.toml --lang python --out python_out
 polyplugc generate --bundle bundle.toml --lang lua --out lua_out
-polyplugc generate --bundle bundle.toml --lang js_deno --out js_deno_out
-polyplugc generate --bundle bundle.toml --lang js_quickjs --out js_quickjs_out
+polyplugc generate --bundle bundle.toml --lang js-quickjs --out js_quickjs_out
 ```
 
 ## Caller Wrapper Pattern (Singleton Implementations)
@@ -309,7 +307,7 @@ end
 decoder:reset()  -- Optional - drops this wrapper's reference
 ```
 
-### JavaScript (Deno) Pattern
+### JavaScript (QuickJS) Pattern
 
 ```typescript
 export class ImageDecodeContract {
@@ -411,7 +409,7 @@ class PluginManager:
 static WRAPPERS: LazyLock<Mutex<HashMap<u64, Vec<Box<dyn Any + Send>>>> = ...;
 
 Runtime::builder()
-    .on_reload(|phase| {
+    .on_reload(|_user_data, phase| {
         if let ReloadPhase::Preparing { bundle_id, .. } = phase {
             WRAPPERS.lock().unwrap().remove(&bundle_id);  // Drop wrapper Arc references
         }

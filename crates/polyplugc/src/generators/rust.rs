@@ -423,32 +423,7 @@ fn generate_bundle_manifest(ir: &ValidatedIr) -> String {
         .collect();
     let function_count_toml: String = format!("{{ {} }}", fn_count_entries.join(", "));
 
-    let mut dep_toml: String = String::new();
-    for dep in &bundle.dependencies {
-        dep_toml.push_str("\n[[dependency]]\n");
-        match dep {
-            ResolvedDependency::ByContract {
-                contract,
-                min_version,
-                ..
-            } => {
-                dep_toml.push_str("kind = \"contract\"\n");
-                dep_toml.push_str(&format!("contract = \"{contract}\"\n"));
-                dep_toml.push_str(&format!("min_version = \"{min_version}.0\"\n"));
-            }
-            ResolvedDependency::ByBundle {
-                bundle,
-                contract,
-                min_version,
-                ..
-            } => {
-                dep_toml.push_str("kind = \"bundle\"\n");
-                dep_toml.push_str(&format!("bundle = \"{bundle}\"\n"));
-                dep_toml.push_str(&format!("contract = \"{contract}\"\n"));
-                dep_toml.push_str(&format!("min_version = \"{min_version}.0\"\n"));
-            }
-        }
-    }
+    let dep_toml: String = super::emit_manifest_dependencies(&bundle.dependencies);
 
     let reinit: bool = bundle.needs_reinit_on_dep_reload;
     let runtime: &str = &bundle.runtime;
@@ -572,7 +547,7 @@ fn generate_guest_interfaces_file(
     out.push_str("/// Falls back to a null message if allocation fails.\n");
     out.push_str("fn plugin_error_to_abi_error(e: GuestError) -> AbiError {\n");
     out.push_str("    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());\n");
-    out.push_str("    AbiError { code: e.code, message }\n");
+    out.push_str("    AbiError { code: e.code as u32, message }\n");
     out.push_str("}\n\n");
     for contract in &ir.contracts {
         let trait_name: String = contract_name_to_guest_trait(&contract.name);
@@ -924,17 +899,17 @@ fn generate_guest_abi_wrapper(
         "        let impl_ref: &dyn {trait_name} = match {contract_upper}_IMPL.get() {{\n"
     ));
     out.push_str("            Some(i) => i.as_ref(),\n");
-    out.push_str("            None => return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b\"implementation not registered\") },\n");
+    out.push_str("            None => return AbiError { code: AbiErrorCode::Generic as u32, message: string_view_from_static(b\"implementation not registered\") },\n");
     out.push_str("        };\n");
 
     if !func.params.is_empty() {
         out.push_str("        if args.is_null() {\n");
-        out.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer, message: string_view_from_static(b\"args pointer is null\") };\n");
+        out.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"args pointer is null\") };\n");
         out.push_str("        }\n");
     }
     if has_return {
         out.push_str("        if out.is_null() {\n");
-        out.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer, message: string_view_from_static(b\"out pointer is null\") };\n");
+        out.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"out pointer is null\") };\n");
         out.push_str("        }\n");
     }
 
@@ -1068,6 +1043,37 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("//   #[unsafe(no_mangle)]\n");
     out.push_str("//   pub extern \"C\" fn polyplug_abi_version() -> u32 { 1 }\n\n");
 
+    out.push_str("fn fnv1a_32(data: &[u8]) -> u32 {\n");
+    out.push_str("    let mut hash: u32 = 2_166_136_261_u32;\n");
+    out.push_str("    for &byte in data {\n");
+    out.push_str("        hash ^= byte as u32;\n");
+    out.push_str("        hash = hash.wrapping_mul(16_777_619_u32);\n");
+    out.push_str("    }\n");
+    out.push_str("    hash\n");
+    out.push_str("}\n\n");
+
+    out.push_str("/// Get a host extension by name.\n");
+    out.push_str("///\n");
+    out.push_str("/// Computes the extension ID via FNV-1a 32-bit hash of the name bytes,\n");
+    out.push_str("/// then calls `host.get_extension`. Returns `None` if not registered.\n");
+    out.push_str("///\n");
+    out.push_str("/// # Safety\n");
+    out.push_str("/// The returned pointer is valid only as long as the host runtime is alive.\n");
+    out.push_str("pub unsafe fn polyplug_get_extension(name: &[u8]) -> Option<*const ()> {\n");
+    out.push_str("    let host_ptr: *const HostInterface = polyplug_guest::get_host_vtable();\n");
+    out.push_str("    if host_ptr.is_null() {\n");
+    out.push_str("        return None;\n");
+    out.push_str("    }\n");
+    out.push_str("    // SAFETY: host_ptr was stored during polyplug_init and is valid for the plugin lifetime.\n");
+    out.push_str("    let host: &HostInterface = unsafe { &*host_ptr };\n");
+    out.push_str("    let extension_id: u32 = fnv1a_32(name);\n");
+    out.push_str("    // SAFETY: get_extension is a valid function pointer from the host ABI.\n");
+    out.push_str(
+        "    let ptr: *const () = unsafe { (host.get_extension)(host_ptr, extension_id) };\n",
+    );
+    out.push_str("    if ptr.is_null() { None } else { Some(ptr) }\n");
+    out.push_str("}\n\n");
+
     out.push_str("/// Register all plugin interfaces with the host.\n");
     out.push_str("///\n");
     out.push_str("/// # Safety\n");
@@ -1079,12 +1085,12 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str(") -> AbiError {\n");
     out.push_str("    if host.is_null() {\n");
     out.push_str(
-        "        return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b\"host is null\") };\n",
+        "        return AbiError { code: AbiErrorCode::Generic as u32, message: string_view_from_static(b\"host is null\") };\n",
     );
     out.push_str("    }\n");
     out.push_str("    if ctx.is_null() {\n");
     out.push_str(
-        "        return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b\"ctx is null\") };\n",
+        "        return AbiError { code: AbiErrorCode::Generic as u32, message: string_view_from_static(b\"ctx is null\") };\n",
     );
     out.push_str("    }\n");
     out.push_str("    // SAFETY: ctx is non-null and valid for the lifetime of this call as guaranteed by the host.\n");
@@ -1146,7 +1152,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
             ));
             out.push_str("    };\n");
             out.push_str(&format!(
-                "    if err_{plugin_upper}.code != AbiErrorCode::Ok {{\n"
+                "    if err_{plugin_upper}.code != AbiErrorCode::Ok as u32 {{\n"
             ));
             out.push_str(&format!("        return err_{plugin_upper};\n"));
             out.push_str("    }\n\n");
@@ -1181,7 +1187,9 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "        (host.register_contract)(host, &desc_{upper} as *const PluginDescriptor, &{upper}_INTERFACE as *const GuestContractInterface)\n"
             ));
             out.push_str("    };\n");
-            out.push_str(&format!("    if err_{upper}.code != AbiErrorCode::Ok {{\n"));
+            out.push_str(&format!(
+                "    if err_{upper}.code != AbiErrorCode::Ok as u32 {{\n"
+            ));
             out.push_str(&format!("        return err_{upper};\n"));
             out.push_str("    }\n\n");
         }
@@ -1425,7 +1433,7 @@ fn generate_host_fn_caller(
     out.push_str(&format!(
         "            if {fn_id}_u32 >= interface.dispatch.native.function_count {{\n"
     ));
-    out.push_str("                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b\"function not available in interface\") }\n");
+    out.push_str("                AbiError { code: AbiErrorCode::FunctionNotAvailable as u32, message: polyplug_abi::string_view_from_static(b\"function not available in interface\") }\n");
     out.push_str("            } else {\n");
     out.push_str("                match interface.dispatch_type {\n");
     out.push_str("                    DispatchType::Native => {\n");
@@ -1451,24 +1459,24 @@ fn generate_host_fn_caller(
     out.push_str("                }\n");
     out.push_str("            }\n");
     out.push_str("        };\n");
-    out.push_str("        if err.code != AbiErrorCode::Ok {\n");
+    out.push_str("        if err.code != AbiErrorCode::Ok as u32 {\n");
     out.push_str("            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {\n");
     out.push_str("                String::new()\n");
     out.push_str("            } else {\n");
-    out.push_str("                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data\n");
+    out.push_str("                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.\n");
     out.push_str(
-        "                // allocated by the plugin via host_alloc. We read it before freeing.\n",
+        "                // The message is owned by the producer (static or runtime-owned); the\n",
+    );
+    out.push_str(
+        "                // receiver must NEVER free it. We only copy it into an owned String.\n",
     );
     out.push_str("                let s: String = unsafe {\n");
     out.push_str("                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);\n");
     out.push_str("                    core::str::from_utf8_unchecked(slice).to_owned()\n");
     out.push_str("                };\n");
-    out.push_str("                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.\n");
-    out.push_str("                // We must free it after reading to avoid memory leak.\n");
-    out.push_str("                unsafe { polyplug_abi::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };\n");
     out.push_str("                s\n");
     out.push_str("            };\n");
-    out.push_str("            return Err(ContractError { code: err.code, message });\n");
+    out.push_str("            return Err(ContractError { code: AbiErrorCode::from_u32(err.code), message });\n");
     out.push_str("        }\n");
 
     // Return
@@ -1934,11 +1942,8 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!(
         "pub fn {factory_name}(implementation: Box<dyn {trait_name}>) -> &'static HostContractInterface {{\n"
     ));
-    // Static to store the implementation pointer for the create_instance stub
-    // SAFETY: This is set once during factory call and read by the stub.
-    out.push_str("    static IMPL_PTR: std::sync::atomic::AtomicPtr<c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());\n\n");
-    // Wrap the fat pointer in a Box so we can store a thin pointer to it in impl_ptr.
-    // SAFETY: The fat pointer (*const dyn Trait) is 128 bits, but impl_ptr is 64 bits.
+    // Wrap the fat pointer in a Box so we can store a thin pointer to it in user_data.
+    // SAFETY: The fat pointer (*const dyn Trait) is 128 bits, but user_data is 64 bits.
     // We wrap it in a Box<*const dyn Trait> and leak that, storing a pointer to the wrapper.
     out.push_str(&format!(
         "    let fat_ptr: *const dyn {trait_name} = Box::into_raw(implementation);\n"
@@ -1947,11 +1952,8 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
         "    let wrapper: Box<*const dyn {trait_name}> = Box::new(fat_ptr);\n"
     ));
     out.push_str(&format!(
-        "    let impl_ptr: *const *const dyn {trait_name} = Box::into_raw(wrapper);\n"
+        "    let impl_ptr: *const *const dyn {trait_name} = Box::into_raw(wrapper);\n\n"
     ));
-    out.push_str(
-        "    IMPL_PTR.store(impl_ptr as *mut c_void, std::sync::atomic::Ordering::SeqCst);\n\n",
-    );
 
     // Generate thunks for each function
     for func in &contract.functions {
@@ -1989,12 +1991,20 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
         contract.name
     ));
     out.push_str("    /// For host contracts, the instance is the implementation object.\n");
-    out.push_str("    /// This stub returns the impl_ptr as the instance data.\n");
+    out.push_str(
+        "    /// This stub returns the registrant-owned `user_data` as the instance data.\n",
+    );
     out.push_str(&format!("    unsafe extern \"C\" fn {create_stub_name}(\n"));
-    out.push_str("        _this: *const HostContractInterface,\n");
+    out.push_str("        this: *const HostContractInterface,\n");
     out.push_str("        _args: *const (),\n");
     out.push_str("    ) -> HostContractInstance {\n");
-    out.push_str("        HostContractInstance { data: IMPL_PTR.load(std::sync::atomic::Ordering::SeqCst) }\n");
+    out.push_str(
+        "        // SAFETY: `this` is a valid HostContractInterface pointer per ABI contract.\n",
+    );
+    out.push_str(
+        "        // `user_data` holds the implementation pointer stored at registration.\n",
+    );
+    out.push_str("        HostContractInstance { data: unsafe { (*this).user_data } }\n");
     out.push_str("    }\n\n");
 
     // Destroy instance stub
@@ -2033,6 +2043,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!("        singleton: {singleton},\n"));
     out.push_str("        dispatch_type: DispatchType::Native,\n");
     out.push_str("        runtime: std::ptr::null_mut(),\n");
+    out.push_str("        user_data: impl_ptr as *mut c_void,\n");
     out.push_str(&format!("        create_instance: {create_stub_name},\n"));
     out.push_str(&format!("        destroy_instance: {destroy_stub_name},\n"));
     out.push_str("        dispatch: DispatchMechanisms {\n");
@@ -2073,10 +2084,6 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("        out: *mut (),\n");
     out.push_str("    ) -> AbiError,\n");
     out.push_str(") -> &'static HostContractInterface {\n");
-    // Static to store the bridge_data for the create_instance stub
-    // SAFETY: This is set once during factory call and read by the stub.
-    out.push_str("    static BRIDGE_DATA: std::sync::atomic::AtomicPtr<c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());\n");
-    out.push_str("    BRIDGE_DATA.store(bridge_data, std::sync::atomic::Ordering::SeqCst);\n\n");
 
     // Generate instance lifecycle stubs for VM
     let vm_create_stub_name: String = format!(
@@ -2093,14 +2100,18 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
         "    /// Create instance stub for `{}` host contract (VM dispatch).\n",
         contract.name
     ));
-    out.push_str("    /// Returns bridge_data as instance for VM-based implementations.\n");
+    out.push_str("    /// Returns the registrant-owned `user_data` (bridge_data) as instance for VM-based implementations.\n");
     out.push_str(&format!(
         "    unsafe extern \"C\" fn {vm_create_stub_name}(\n"
     ));
-    out.push_str("        _this: *const HostContractInterface,\n");
+    out.push_str("        this: *const HostContractInterface,\n");
     out.push_str("        _args: *const (),\n");
     out.push_str("    ) -> HostContractInstance {\n");
-    out.push_str("        HostContractInstance { data: BRIDGE_DATA.load(std::sync::atomic::Ordering::SeqCst) }\n");
+    out.push_str(
+        "        // SAFETY: `this` is a valid HostContractInterface pointer per ABI contract.\n",
+    );
+    out.push_str("        // `user_data` holds the bridge_data stored at registration.\n");
+    out.push_str("        HostContractInstance { data: unsafe { (*this).user_data } }\n");
     out.push_str("    }\n\n");
 
     // Destroy instance stub for VM
@@ -2131,6 +2142,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!("        singleton: {singleton},\n"));
     out.push_str("        dispatch_type: DispatchType::VirtualMachine,\n");
     out.push_str("        runtime: std::ptr::null_mut(),\n");
+    out.push_str("        user_data: bridge_data,\n");
     out.push_str(&format!(
         "        create_instance: {vm_create_stub_name},\n"
     ));
@@ -2218,7 +2230,7 @@ fn generate_host_thunk(
     out.push_str("        })) {\n");
     out.push_str("            Ok(err) => err,\n");
     out.push_str("            Err(_) => AbiError {\n");
-    out.push_str("                code: AbiErrorCode::Panic,\n");
+    out.push_str("                code: AbiErrorCode::Panic as u32,\n");
     out.push_str(&format!(
         "                message: string_view_from_static(b\"panic in host.{}::{}\"),\n",
         trait_name.to_lowercase().replace("host", ""),
@@ -2603,24 +2615,24 @@ fn generate_guest_host_contract_method(
     out.push_str("            }\n");
     out.push_str("        };\n\n");
 
-    out.push_str("        if err.code != AbiErrorCode::Ok {\n");
+    out.push_str("        if err.code != AbiErrorCode::Ok as u32 {\n");
     out.push_str("            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {\n");
     out.push_str("                String::new()\n");
     out.push_str("            } else {\n");
-    out.push_str("                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data\n");
+    out.push_str("                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.\n");
     out.push_str(
-        "                // allocated by the host via host_alloc. We read it before freeing.\n",
+        "                // The message is owned by the producer (static or runtime-owned); the\n",
+    );
+    out.push_str(
+        "                // receiver must NEVER free it. We only copy it into an owned String.\n",
     );
     out.push_str("                let s: String = unsafe {\n");
     out.push_str("                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);\n");
     out.push_str("                    core::str::from_utf8_unchecked(slice).to_owned()\n");
     out.push_str("                };\n");
-    out.push_str("                // SAFETY: err.message.ptr was allocated by the host via host_alloc with align 1.\n");
-    out.push_str("                // We must free it after reading to avoid memory leak.\n");
-    out.push_str("                unsafe { polyplug_guest::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };\n");
     out.push_str("                s\n");
     out.push_str("            };\n");
-    out.push_str("            return Err(HostContractError { code: err.code, message });\n");
+    out.push_str("            return Err(HostContractError { code: AbiErrorCode::from_u32(err.code), message });\n");
     out.push_str("        }\n\n");
 
     if func.returns.is_some() {

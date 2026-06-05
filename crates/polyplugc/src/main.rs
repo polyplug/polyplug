@@ -1,16 +1,11 @@
-mod generators;
-mod ir;
-mod pack;
-mod parser;
-
 use std::fs;
 use std::path::PathBuf;
 
 use clap::Parser;
 use clap::Subcommand;
 
-use generators::{CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles};
-use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, PolyplugcError, Side};
+use polyplug_codegen::{GenerateConfig, GenerateOutput, PolyplugcError, Side};
+use polyplugc::{PackConfig, generate, pack, parse_lang, parser};
 
 /// polyplugc — code generator for the polyplug plugin runtime.
 #[derive(Debug, Parser)]
@@ -89,7 +84,7 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
             lang,
             out,
         } => {
-            let (manifest, side) = if let Some(api_path) = api {
+            let (manifest, side): (PathBuf, Side) = if let Some(api_path) = api {
                 (api_path, Side::Host)
             } else if let Some(bundle_path) = bundle {
                 (bundle_path, Side::Guest)
@@ -99,29 +94,25 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
                 });
             };
 
-            let lang_enum = parse_lang(&lang)?;
-
-            let config = GenerateConfig {
+            let config: GenerateConfig = GenerateConfig {
                 api_toml: manifest,
-                lang: lang_enum,
+                lang: parse_lang(&lang)?,
                 side,
                 out_dir: out.clone(),
             };
 
-            let output = generate(config)?;
-
-            // Write generated files
+            let output: GenerateOutput = generate(config)?;
             write_files(&output, &out)?;
         }
 
         Command::Validate { api, bundle } => {
-            let manifest = api
-                .or(bundle)
-                .ok_or_else(|| PolyplugcError::ValidationFailed {
-                    message: "Must specify --api or --bundle".to_owned(),
-                })?;
+            let manifest: PathBuf =
+                api.or(bundle)
+                    .ok_or_else(|| PolyplugcError::ValidationFailed {
+                        message: "Must specify --api or --bundle".to_owned(),
+                    })?;
 
-            // Just parse to validate
+            // Just parse to validate.
             if manifest.ends_with("bundle.toml") {
                 parser::parse_bundle_with_api(&manifest)?;
             } else {
@@ -136,103 +127,43 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
             lang,
             out,
         } => {
-            let manifest = api
-                .or(bundle)
-                .ok_or_else(|| PolyplugcError::ValidationFailed {
-                    message: "Must specify --api or --bundle".to_owned(),
-                })?;
-
-            let lang_enum = parse_lang(&lang)?;
-
-            let ir: crate::ir::ValidatedIr = if manifest.ends_with("bundle.toml") {
-                parser::parse_bundle_with_api(&manifest)?
-            } else {
-                parser::parse_api(&manifest)?
-            };
-
-            pack::run(&ir, &out, lang_enum.as_str())?;
+            pack(PackConfig {
+                api,
+                bundle,
+                lang,
+                out,
+            })?;
         }
     }
     Ok(())
 }
 
-fn parse_lang(lang: &str) -> Result<Lang, PolyplugcError> {
-    match lang {
-        "rust" => Ok(Lang::Rust),
-        "cpp" | "c++" => Ok(Lang::Cpp),
-        "csharp" | "c#" => Ok(Lang::CSharp),
-        "python" | "py" => Ok(Lang::Python),
-        "lua" => Ok(Lang::Lua),
-        "js-quickjs" => Ok(Lang::JsQuickJs),
-        other => Err(PolyplugcError::ValidationFailed {
-            message: format!(
-                "Unknown language: `{other}`. Supported: rust, cpp, csharp, python, lua, js-quickjs"
-            ),
-        }),
-    }
-}
-
-fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError> {
-    let file_content: String =
-        fs::read_to_string(&config.api_toml).map_err(|e: std::io::Error| {
-            PolyplugcError::ReadFailed {
-                path: config.api_toml.to_string_lossy().to_string(),
-                source: e,
-            }
-        })?;
-    let ir: crate::ir::ValidatedIr = if file_content.contains("[bundle]") {
-        parser::parse_bundle_with_api(&config.api_toml)?
-    } else {
-        parser::parse_api(&config.api_toml)?
-    };
-
-    let generator: Box<dyn CodeGenerator> = match config.lang {
-        Lang::Rust => Box::new(generators::rust::RustGenerator),
-        Lang::Cpp => Box::new(generators::cpp::CppGenerator),
-        Lang::CSharp => Box::new(generators::csharp::CSharpGenerator),
-        Lang::Python => Box::new(generators::python::PythonGenerator),
-        Lang::Lua => Box::new(generators::lua::LuaGenerator),
-        Lang::JsQuickJs => Box::new(generators::js_quickjs::JsQuickjsGenerator),
-    };
-
-    let mut files: GeneratedFiles = GeneratedFiles::default();
-    match config.side {
-        Side::Host => generator.generate_host(&ir, &mut files)?,
-        Side::Guest => generator.generate_guest(&ir, &mut files)?,
-    }
-
-    let public_files: Vec<polyplug_codegen::GeneratedFile> = files
-        .files
-        .into_iter()
-        .map(|f: InternalGeneratedFile| polyplug_codegen::GeneratedFile {
-            path: f.path,
-            content: f.content,
-        })
-        .collect();
-
-    Ok(GenerateOutput {
-        files: public_files,
-    })
-}
-
 fn write_files(output: &GenerateOutput, out_dir: &std::path::Path) -> Result<(), PolyplugcError> {
     for file in &output.files {
-        let file_path = out_dir.join(&file.path);
+        let file_path: PathBuf = out_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| PolyplugcError::WriteFailed {
-                path: parent.to_string_lossy().into_owned(),
-                source: e,
+            fs::create_dir_all(parent).map_err(|e: std::io::Error| {
+                PolyplugcError::WriteFailed {
+                    path: parent.to_string_lossy().into_owned(),
+                    source: e,
+                }
             })?;
         }
-        fs::write(&file_path, &file.content).map_err(|e| PolyplugcError::WriteFailed {
-            path: file_path.to_string_lossy().into_owned(),
-            source: e,
+        fs::write(&file_path, &file.content).map_err(|e: std::io::Error| {
+            PolyplugcError::WriteFailed {
+                path: file_path.to_string_lossy().into_owned(),
+                source: e,
+            }
         })?;
 
         // Format Rust source files with rustfmt so generated output is already canonical.
         // rustfmt is a best-effort post-pass: if it is absent or fails (e.g. syntax error
         // in generated code that cargo will catch later), we do not abort the write.
-        if file_path.extension().and_then(|e| e.to_str()) == Some("rs") {
+        if file_path
+            .extension()
+            .and_then(|e: &std::ffi::OsStr| e.to_str())
+            == Some("rs")
+        {
             let _ = std::process::Command::new("rustfmt")
                 .arg("--edition")
                 .arg("2024")

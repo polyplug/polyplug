@@ -466,7 +466,7 @@ fn fns_array_size_equals_declared_function_count() {
         let fns: Vec<ResolvedFunction> = (0..n)
             .map(|i: usize| make_fn(&format!("fn_{i}"), i as u32, vec![], None))
             .collect();
-        let contract_name: String = format!("array.sz.{n}");
+        let contract_name: String = format!("array.sz.n{n}");
         let test_tag: String = format!("fns_array_size_{n}");
         let ir: ValidatedIr = make_ir(&contract_name, 1, fns);
         let interfaces: String = generate_guest_interfaces(ir, &test_tag);

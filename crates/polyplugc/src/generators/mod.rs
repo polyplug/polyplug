@@ -9,12 +9,62 @@ pub(crate) mod lua;
 pub(crate) mod python;
 pub(crate) mod rust;
 
+use crate::ir::ResolvedDependency;
 use crate::ir::ValidatedIr;
 use polyplug_codegen::PolyplugcError;
 
 /// Check if a runtime is a native runtime.
 pub fn is_native_runtime(runtime: &str) -> bool {
     runtime.to_lowercase() == "native"
+}
+
+/// Emit the `[[dependency]]` tables for a bundle manifest.
+///
+/// This is the single, canonical emitter shared by every language generator so that
+/// all generators produce byte-identical manifest dependency tables. The output emits
+/// the full union of fields the runtime manifest parser (`RawManifestDependency`)
+/// requires:
+///
+/// - `kind` — REQUIRED (no serde default); `"contract"` or `"bundle"`.
+/// - `contract` — the contract name.
+/// - `contract_id` — hex `0x{:016X}`; the runtime defaults it to 0 only when absent,
+///   so it is always emitted to keep `ByContract` deps resolvable.
+/// - `bundle` / `bundle_id` — emitted only for `ByBundle`; without `bundle_id` the
+///   runtime drops the dependency with a warning.
+/// - `min_version` — a quoted TOML string `"{major}.0"` (the parser deserializes it
+///   into a `String`; a bare integer fails to parse).
+pub(crate) fn emit_manifest_dependencies(dependencies: &[ResolvedDependency]) -> String {
+    let mut dep_toml: String = String::new();
+    for dep in dependencies {
+        dep_toml.push_str("\n[[dependency]]\n");
+        match dep {
+            ResolvedDependency::ByContract {
+                contract,
+                contract_id,
+                min_version,
+            } => {
+                dep_toml.push_str("kind = \"contract\"\n");
+                dep_toml.push_str(&format!("contract = \"{contract}\"\n"));
+                dep_toml.push_str(&format!("contract_id = 0x{contract_id:016X}\n"));
+                dep_toml.push_str(&format!("min_version = \"{min_version}.0\"\n"));
+            }
+            ResolvedDependency::ByBundle {
+                bundle,
+                bundle_id,
+                contract,
+                contract_id,
+                min_version,
+            } => {
+                dep_toml.push_str("kind = \"bundle\"\n");
+                dep_toml.push_str(&format!("bundle = \"{bundle}\"\n"));
+                dep_toml.push_str(&format!("bundle_id = 0x{bundle_id:016X}\n"));
+                dep_toml.push_str(&format!("contract = \"{contract}\"\n"));
+                dep_toml.push_str(&format!("contract_id = 0x{contract_id:016X}\n"));
+                dep_toml.push_str(&format!("min_version = \"{min_version}.0\"\n"));
+            }
+        }
+    }
+    dep_toml
 }
 
 /// Format the manifest file field based on ResolvedBundleFile.

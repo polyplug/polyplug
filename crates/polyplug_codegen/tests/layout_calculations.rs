@@ -12,7 +12,7 @@
 
 #![allow(clippy::expect_used)]
 
-use std::mem::{align_of, offset_of, size_of};
+use core::mem::{align_of, offset_of, size_of};
 
 // ─── Category 1: Primitive Types (6 tests) ─────────────────────────────────────
 
@@ -181,6 +181,8 @@ fn layout_enum_u8_size_align() {
         1,
         "#[repr(u8)] enum alignment must be 1 byte"
     );
+    assert_eq!(EnumU8::A as u8, 0, "EnumU8::A discriminant must be 0");
+    assert_eq!(EnumU8::B as u8, 1, "EnumU8::B discriminant must be 1");
 }
 
 /// #[repr(u16)] enum: size=2, align=2
@@ -203,6 +205,8 @@ fn layout_enum_u16_size_align() {
         2,
         "#[repr(u16)] enum alignment must be 2 bytes"
     );
+    assert_eq!(EnumU16::A as u16, 0, "EnumU16::A discriminant must be 0");
+    assert_eq!(EnumU16::B as u16, 1, "EnumU16::B discriminant must be 1");
 }
 
 /// #[repr(u32)] enum: size=4, align=4
@@ -225,6 +229,8 @@ fn layout_enum_u32_size_align() {
         4,
         "#[repr(u32)] enum alignment must be 4 bytes"
     );
+    assert_eq!(EnumU32::A as u32, 0, "EnumU32::A discriminant must be 0");
+    assert_eq!(EnumU32::B as u32, 1, "EnumU32::B discriminant must be 1");
 }
 
 /// LogLevel (repr=u32): size=4, align=4
@@ -271,6 +277,11 @@ fn layout_enum_single_variant() {
         align_of::<SingleVariant>(),
         4,
         "Single variant #[repr(u32)] enum alignment must be 4 bytes"
+    );
+    assert_eq!(
+        SingleVariant::OnlyOne as u32,
+        42,
+        "SingleVariant::OnlyOne discriminant must be 42"
     );
 }
 
@@ -930,6 +941,8 @@ fn layout_enum_u64_size_align() {
         8,
         "#[repr(u64)] enum alignment must be 8 bytes"
     );
+    assert_eq!(EnumU64::A as u64, 0, "EnumU64::A discriminant must be 0");
+    assert_eq!(EnumU64::B as u64, 1, "EnumU64::B discriminant must be 1");
 }
 
 /// i32, i64, f32, f64 primitive type layouts

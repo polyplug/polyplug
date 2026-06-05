@@ -93,6 +93,18 @@ pub enum PolyplugcError {
         value: u32,
         version_str: String,
     },
+
+    #[error(
+        "invalid {kind} name `{name}` in `{context}`: names must match [A-Za-z_][A-Za-z0-9_]* (a valid identifier)"
+    )]
+    InvalidIdentifier {
+        kind: String,
+        name: String,
+        context: String,
+    },
+
+    #[error("duplicate function name `{function}` in contract `{contract}`")]
+    DuplicateFunctionName { contract: String, function: String },
 }
 
 #[cfg(test)]

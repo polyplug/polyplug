@@ -154,7 +154,7 @@ pub unsafe extern "C" fn polyplug_init(
     _ctx: *const BundleInitContext,
 ) -> AbiError {
     if host.is_null() {
-        return AbiError { code: AbiErrorCode::Generic, message: string_view_null() };
+        return AbiError { code: AbiErrorCode::Generic as u32, message: string_view_null() };
     }
 
     // Set the implementation before registering
@@ -202,7 +202,7 @@ unsafe extern "C" fn capture_interface_callback(
 ) -> AbiError {
     CAPTURED_INTERFACE.with(|cell| cell.set(interface));
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: string_view_null(),
     }
 }
@@ -257,19 +257,6 @@ unsafe extern "C" fn stub_resolve_guest_contract(
     core::ptr::null()
 }
 
-unsafe extern "C" fn stub_call_guest_method(
-    _host: *const HostInterface,
-    _instance: GuestContractInstance,
-    _method_id: u32,
-    _args: *const (),
-    _out: *mut (),
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic,
-        message: string_view_null(),
-    }
-}
-
 unsafe extern "C" fn stub_get_host_contract(
     _host: *const HostInterface,
     _contract_id: u64,
@@ -302,7 +289,7 @@ unsafe extern "C" fn stub_load_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -313,7 +300,7 @@ unsafe extern "C" fn stub_reload_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -323,7 +310,7 @@ unsafe extern "C" fn stub_register_host_contract(
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -334,7 +321,7 @@ unsafe extern "C" fn stub_register_loader(
     _loader_ptr: *mut c_void,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -349,6 +336,13 @@ unsafe extern "C" fn stub_get_last_error(
 
 unsafe extern "C" fn stub_get_error_len(_this: *const HostInterface) -> usize {
     0
+}
+
+unsafe extern "C" fn stub_get_extension(
+    _this: *const HostInterface,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
 }
 
 // ─── Test ─────────────────────────────────────────────────────────────────────
@@ -428,7 +422,6 @@ fn test_rust_codegen_compile_and_run() {
         find_guest_contract: stub_find_guest_contract,
         find_all_guest_contracts: stub_find_all_guest_contracts,
         resolve_guest_contract: stub_resolve_guest_contract,
-        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
         resolve_host_contract_interface: stub_resolve_host_contract_interface,
         list_bundles: stub_list_bundles,
@@ -439,6 +432,7 @@ fn test_rust_codegen_compile_and_run() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
+        get_extension: stub_get_extension,
     };
 
     // SAFETY: init_fn is valid; host_abi lives for the duration of the call.
@@ -455,7 +449,7 @@ fn test_rust_codegen_compile_and_run() {
     };
     assert_eq!(
         init_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "polyplug_init must return Ok"
     );
 
@@ -505,7 +499,7 @@ fn test_rust_codegen_compile_and_run() {
 
     assert_eq!(
         call_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "add(3, 5) must return Ok"
     );
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");

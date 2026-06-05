@@ -782,3 +782,83 @@ fn second_contract_has_bad_type_rejected() {
         "expected UnknownType for Phantom in second contract, got {err:?}",
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Identifier validation + duplicate detection
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn invalid_contract_name_segment_rejected() {
+    // A dotted contract name with a segment that is not a valid identifier
+    // (starts with a digit) must be rejected — it would produce broken codegen.
+    let err: PolyplugcError =
+        api_err("[[plugin_contract]]\nname = \"pipeline.1bad\"\nversion = \"1.0\"\n");
+    assert!(
+        matches!(err, PolyplugcError::InvalidIdentifier { ref kind, .. } if kind == "contract"),
+        "expected InvalidIdentifier(contract) for `pipeline.1bad`, got {err:?}",
+    );
+}
+
+#[test]
+fn invalid_function_name_rejected() {
+    let err: PolyplugcError = api_err(concat!(
+        "[[plugin_contract]]\nname = \"svc.ok\"\nversion = \"1.0\"\n\n",
+        "[[plugin_contract.functions]]\nname = \"has space\"\n",
+    ));
+    assert!(
+        matches!(err, PolyplugcError::InvalidIdentifier { ref kind, .. } if kind == "function"),
+        "expected InvalidIdentifier(function) for `has space`, got {err:?}",
+    );
+}
+
+#[test]
+fn invalid_param_name_rejected() {
+    let err: PolyplugcError = api_err(concat!(
+        "[[plugin_contract]]\nname = \"svc.ok\"\nversion = \"1.0\"\n\n",
+        "[[plugin_contract.functions]]\nname = \"go\"\n\n",
+        "[[plugin_contract.functions.params]]\nname = \"1arg\"\ntype = \"StringView\"\n",
+    ));
+    assert!(
+        matches!(err, PolyplugcError::InvalidIdentifier { ref kind, .. } if kind == "parameter"),
+        "expected InvalidIdentifier(parameter) for `1arg`, got {err:?}",
+    );
+}
+
+#[test]
+fn duplicate_plugin_contract_name_rejected() {
+    let err: PolyplugcError = api_err(concat!(
+        "[[plugin_contract]]\nname = \"svc.dup\"\nversion = \"1.0\"\n\n",
+        "[[plugin_contract]]\nname = \"svc.dup\"\nversion = \"1.0\"\n",
+    ));
+    assert!(
+        matches!(err, PolyplugcError::DuplicateContractName { ref name } if name == "svc.dup"),
+        "expected DuplicateContractName for `svc.dup`, got {err:?}",
+    );
+}
+
+#[test]
+fn duplicate_function_name_within_contract_rejected() {
+    let err: PolyplugcError = api_err(concat!(
+        "[[plugin_contract]]\nname = \"svc.ok\"\nversion = \"1.0\"\n\n",
+        "[[plugin_contract.functions]]\nname = \"run\"\n\n",
+        "[[plugin_contract.functions]]\nname = \"run\"\n",
+    ));
+    assert!(
+        matches!(
+            err,
+            PolyplugcError::DuplicateFunctionName { ref contract, ref function }
+                if contract == "svc.ok" && function == "run"
+        ),
+        "expected DuplicateFunctionName for `run` in `svc.ok`, got {err:?}",
+    );
+}
+
+#[test]
+fn valid_dotted_contract_name_accepted() {
+    // Sanity: a normal dotted PascalCase contract name must still parse.
+    let ir: polyplugc::ir::ValidatedIr =
+        parse_api_str("[[plugin_contract]]\nname = \"pipeline.Decoder\"\nversion = \"1.0\"\n")
+            .expect("valid dotted contract name must parse");
+    assert_eq!(ir.contracts.len(), 1);
+    assert_eq!(ir.contracts[0].name, "pipeline.Decoder");
+}

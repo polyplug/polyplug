@@ -385,6 +385,69 @@ fn check_enum_chained_refs(
     Ok(())
 }
 
+/// Return `true` if `name` is a valid identifier: `[A-Za-z_][A-Za-z0-9_]*`.
+fn is_valid_identifier(name: &str) -> bool {
+    let mut chars: core::str::Chars<'_> = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c: char| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Validate a plain identifier (function/param name). Names flow verbatim into
+/// generated source, so invalid identifiers must be rejected before codegen.
+fn validate_identifier(name: &str, kind: &str, context: &str) -> Result<(), PolyplugcError> {
+    if is_valid_identifier(name) {
+        Ok(())
+    } else {
+        Err(PolyplugcError::InvalidIdentifier {
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+            context: context.to_owned(),
+        })
+    }
+}
+
+/// Validate a (possibly dotted) contract name. Each dot-separated segment must
+/// be a valid identifier — e.g. `pipeline.Decoder`, `host.fs.reader`.
+fn validate_contract_name(name: &str, kind: &str) -> Result<(), PolyplugcError> {
+    if !name.is_empty() && name.split('.').all(is_valid_identifier) {
+        Ok(())
+    } else {
+        Err(PolyplugcError::InvalidIdentifier {
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+            context: name.to_owned(),
+        })
+    }
+}
+
+/// Validate names within a contract: the contract name itself, every function
+/// name (also checking for duplicates), and every parameter name.
+fn validate_contract_members(
+    contract_name: &str,
+    kind: &str,
+    functions: &[RawFunction],
+) -> Result<(), PolyplugcError> {
+    validate_contract_name(contract_name, kind)?;
+    let mut seen_functions: Vec<&str> = Vec::with_capacity(functions.len());
+    for raw_fn in functions {
+        validate_identifier(&raw_fn.name, "function", contract_name)?;
+        if seen_functions.contains(&raw_fn.name.as_str()) {
+            return Err(PolyplugcError::DuplicateFunctionName {
+                contract: contract_name.to_owned(),
+                function: raw_fn.name.clone(),
+            });
+        }
+        seen_functions.push(&raw_fn.name);
+        for p in &raw_fn.params {
+            validate_identifier(&p.name, "parameter", &raw_fn.name)?;
+        }
+    }
+    Ok(())
+}
+
 fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
     let known_type_names: Vec<String> = raw.types.iter().map(|t| t.name.clone()).collect();
 
@@ -453,8 +516,20 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
         });
     }
 
+    // Reject duplicate plugin-contract names (mirrors the host-contract dup check below).
+    let mut seen_plugin_contracts: Vec<&str> = Vec::with_capacity(raw.plugin_contract.len());
+    for raw_contract in &raw.plugin_contract {
+        if seen_plugin_contracts.contains(&raw_contract.name.as_str()) {
+            return Err(PolyplugcError::DuplicateContractName {
+                name: raw_contract.name.clone(),
+            });
+        }
+        seen_plugin_contracts.push(&raw_contract.name);
+    }
+
     let mut resolved_contracts: Vec<ResolvedContract> = Vec::new();
     for raw_contract in &raw.plugin_contract {
+        validate_contract_members(&raw_contract.name, "contract", &raw_contract.functions)?;
         let version: Version = Version::parse(&raw_contract.version)?;
         let contract_id: u64 = compute_contract_id(&raw_contract.name, version.major);
 
@@ -473,7 +548,12 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
                 .returns
                 .as_deref()
                 .map(|r| resolve_type_ref(r, &raw_contract.name, &all_known_names))
-                .transpose()?;
+                .transpose()?
+                // An explicit `return = "void"` means "no return"; normalize it to
+                // None so all generators treat it uniformly as a void function.
+                .filter(|ty: &ResolvedTypeRef| {
+                    !matches!(ty, ResolvedTypeRef::AbiType(crate::ir::AbiBuiltin::Void))
+                });
             functions.push(ResolvedFunction {
                 name: raw_fn.name.clone(),
                 function_id: function_id as u32,
@@ -492,6 +572,11 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
 
     let mut resolved_host_contracts: Vec<ResolvedHostContract> = Vec::new();
     for raw_host_contract in &raw.host_contract {
+        validate_contract_members(
+            &raw_host_contract.name,
+            "host contract",
+            &raw_host_contract.functions,
+        )?;
         let version: Version = Version::parse(&raw_host_contract.version)?;
         let contract_id: u64 = compute_host_contract_id(&raw_host_contract.name, version.major);
 
@@ -510,7 +595,12 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
                 .returns
                 .as_deref()
                 .map(|r| resolve_type_ref(r, &raw_host_contract.name, &all_known_names))
-                .transpose()?;
+                .transpose()?
+                // An explicit `return = "void"` means "no return"; normalize it to
+                // None so all generators treat it uniformly as a void function.
+                .filter(|ty: &ResolvedTypeRef| {
+                    !matches!(ty, ResolvedTypeRef::AbiType(crate::ir::AbiBuiltin::Void))
+                });
             functions.push(ResolvedFunction {
                 name: raw_fn.name.clone(),
                 function_id: function_id as u32,

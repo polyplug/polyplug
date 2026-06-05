@@ -14,7 +14,6 @@ use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedPlugin;
@@ -499,14 +498,14 @@ fn generate_cpp_guest_abi_wrapper(
     if has_params {
         out.push_str("        if (args == nullptr) {\n");
         out.push_str(
-            "            return AbiError{AbiErrorCode::InvalidPointer, StringView{nullptr, 0}};\n",
+            "            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};\n",
         );
         out.push_str("        }\n");
     }
     if !is_void_return {
         out.push_str("        if (out == nullptr) {\n");
         out.push_str(
-            "            return AbiError{AbiErrorCode::InvalidPointer, StringView{nullptr, 0}};\n",
+            "            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};\n",
         );
         out.push_str("        }\n");
     }
@@ -519,7 +518,7 @@ fn generate_cpp_guest_abi_wrapper(
         // For void, emit success return (call_expr already emits the call + newline)
         out.push_str("        // SAFETY: out pointer is not dereferenced for void return per ABI contract.\n");
         out.push_str("        (void)out;\n");
-        out.push_str("        return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};\n");
+        out.push_str("        return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
     } else {
         let ret_type: String = func
             .returns
@@ -534,18 +533,30 @@ fn generate_cpp_guest_abi_wrapper(
             "        *static_cast<{}*>(out) = result;\n",
             ret_type
         ));
-        out.push_str("        return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};\n");
+        out.push_str("        return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
     }
 
-    out.push_str("    } catch (const std::exception& e) {\n");
-    out.push_str("        // SAFETY: e.what() returns a valid null-terminated C string; reinterpret_cast preserves pointer validity.\n");
-    out.push_str("        return AbiError{AbiErrorCode::Generic, StringView{reinterpret_cast<const uint8_t*>(e.what()), std::strlen(e.what())}};\n");
+    out.push_str("    } catch (const std::exception&) {\n");
+    out.push_str(
+        "        // The AbiError message must outlive this stack frame; the host never frees it.\n",
+    );
+    out.push_str(
+        "        // e.what() points into the (about-to-be-destroyed) exception object, so we\n",
+    );
+    out.push_str("        // return a static literal instead of a dangling pointer.\n");
+    out.push_str(
+        "        // SAFETY: err_msg is a static constexpr string literal with known length 26.\n",
+    );
+    out.push_str(
+        "        static constexpr const char* err_msg = \"guest threw std::exception\";\n",
+    );
+    out.push_str("        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 26}};\n");
     out.push_str("    } catch (...) {\n");
     out.push_str(
         "        // SAFETY: panic_msg is a static constexpr string literal with known length 15.\n",
     );
     out.push_str("        static constexpr const char* panic_msg = \"plugin panicked\";\n");
-    out.push_str("        return AbiError{AbiErrorCode::Panic, StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};\n");
+    out.push_str("        return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
 
@@ -686,7 +697,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         "        static constexpr const char* err_msg = \"null parameter in polyplug_init\";\n",
     );
     out.push_str(
-        "        return AbiError{AbiErrorCode::Generic, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};\n",
+        "        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};\n",
     );
     out.push_str("    }\n\n");
     out.push_str(
@@ -738,7 +749,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
                 upper = plugin_upper
             ));
             out.push_str(&format!(
-                "    if (err_{}.code != AbiErrorCode::Ok) return err_{};\n\n",
+                "    if (err_{}.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return err_{};\n\n",
                 plugin_upper, plugin_upper
             ));
         }
@@ -748,7 +759,32 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         }
     }
 
-    out.push_str("    return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};\n");
+    out.push_str(
+        "    return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n",
+    );
+    out.push_str("}\n\n");
+
+    out.push_str("/// Get a host extension by name (pointer + length).\n");
+    out.push_str("///\n");
+    out.push_str("/// Computes extension_id = fnv1a_32(name), then calls host->get_extension.\n");
+    out.push_str("/// Returns nullptr if the host interface is not yet initialized or the\n");
+    out.push_str("/// extension is not registered.\n");
+    out.push_str(
+        "inline const void* polyplug_get_extension(const char* name, size_t name_len) noexcept {\n",
+    );
+    out.push_str("    const HostInterface* host = polyplug::get_host_interface();\n");
+    out.push_str("    if (!host) return nullptr;\n");
+    out.push_str("    uint32_t hash = 2166136261u;\n");
+    out.push_str("    for (size_t i = 0; i < name_len; ++i) {\n");
+    out.push_str("        hash ^= static_cast<uint8_t>(name[i]);\n");
+    out.push_str("        hash *= 16777619u;\n");
+    out.push_str("    }\n");
+    out.push_str("    return host->get_extension(host, hash);\n");
+    out.push_str("}\n");
+    out.push_str("/// Convenience overload for string literals.\n");
+    out.push_str("template<size_t N>\n");
+    out.push_str("inline const void* polyplug_get_extension(const char (&name)[N]) noexcept {\n");
+    out.push_str("    return polyplug_get_extension(name, N - 1);\n");
     out.push_str("}\n");
 
     Ok(out)
@@ -797,7 +833,7 @@ fn generate_init_hpp_register_contract(
         upper = upper
     ));
     out.push_str(&format!(
-        "    if (err_{}.code != AbiErrorCode::Ok) return err_{};\n\n",
+        "    if (err_{}.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return err_{};\n\n",
         upper, upper
     ));
 
@@ -913,33 +949,7 @@ fn generate_bundle_manifest_cpp(ir: &ValidatedIr) -> String {
     let function_count_toml: String = format!("{{ {} }}", fn_count_entries.join(", "));
 
     // Build [[dependency]] tables
-    let mut dep_tables: String = String::new();
-    for dep in &bundle.dependencies {
-        match dep {
-            ResolvedDependency::ByContract {
-                contract,
-                contract_id,
-                min_version,
-            } => {
-                dep_tables.push_str(&format!(
-                    "[[dependency]]\ncontract = \"{}\"\ncontract_id = 0x{:016X}\nmin_version = {}\n\n",
-                    contract, contract_id, min_version
-                ));
-            }
-            ResolvedDependency::ByBundle {
-                bundle: dep_bundle,
-                bundle_id,
-                contract,
-                contract_id,
-                min_version,
-            } => {
-                dep_tables.push_str(&format!(
-                    "[[dependency]]\nbundle = \"{}\"\nbundle_id = 0x{:016X}\ncontract = \"{}\"\ncontract_id = 0x{:016X}\nmin_version = {}\n\n",
-                    dep_bundle, bundle_id, contract, contract_id, min_version
-                ));
-            }
-        }
-    }
+    let dep_tables: String = super::emit_manifest_dependencies(&bundle.dependencies);
 
     let reinit: bool = bundle.needs_reinit_on_dep_reload;
     let runtime: &str = "native";
@@ -1229,7 +1239,7 @@ fn generate_cpp_host_function(
     out.push_str("        // SAFETY: interface_ is valid for the lifetime of this wrapper.\n");
     out.push_str("        if (!interface_) {\n");
     out.push_str("            static constexpr const char* err_msg = \"interface is null\";\n");
-    out.push_str("            polyplug::check_abi_error(AbiError{AbiErrorCode::InvalidPointer, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});\n");
+    out.push_str("            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});\n");
     out.push_str("        }\n");
 
     let out_ptr_expr: &str = if is_void_return {
@@ -1249,7 +1259,7 @@ fn generate_cpp_host_function(
         fn_id
     ));
     out.push_str("            static constexpr const char* err_msg = \"function not available in interface\";\n");
-    out.push_str("            polyplug::check_abi_error(AbiError{AbiErrorCode::FunctionNotAvailable, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});\n");
+    out.push_str("            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});\n");
     out.push_str("        }\n");
 
     // Dispatch via the resolved interface, branching on its dispatch type so
@@ -1672,7 +1682,7 @@ fn generate_cpp_guest_host_contract_method(
     out.push_str("        }\n\n");
 
     // Error handling - for now, just return default on error
-    out.push_str("        if (err.code != AbiErrorCode::Ok) {\n");
+    out.push_str("        if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {\n");
     if func.returns.is_some() {
         out.push_str(&format!("            return {}{{}};\n", return_type));
     } else {
@@ -1948,8 +1958,7 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
         "const HostContractInterface* {}(std::unique_ptr<T> impl) noexcept {{\n",
         factory_name
     ));
-    out.push_str("    static T* s_impl = nullptr;\n");
-    out.push_str("    s_impl = impl.release();\n\n");
+    out.push_str("    T* impl_ptr = impl.release();\n\n");
 
     // Generate thunks for each function
     for func in &contract.functions {
@@ -1982,17 +1991,11 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
         "    static constexpr HostContractInterface_create_instance_fn create_instance_stub =\n",
     );
     out.push_str(
-        "        +[](const HostContractInterface* /*this*/, const void* /*args*/) noexcept -> HostContractInstance {\n",
+        "        +[](const HostContractInterface* self, const void* /*args*/) noexcept -> HostContractInstance {\n",
     );
-    if singleton {
-        out.push_str("        // Singleton: return pointer to static impl as instance data\n");
-        out.push_str("        return HostContractInstance{static_cast<void*>(s_impl)};\n");
-    } else {
-        out.push_str(
-            "        // Multi-instance: not supported in host-side factory, use custom factory\n",
-        );
-        out.push_str("        return HostContractInstance{nullptr};\n");
-    }
+    out.push_str("        // Return the registrant-owned user_data as the instance; the thunks\n");
+    out.push_str("        // recover the implementation from it (no static state).\n");
+    out.push_str("        return HostContractInstance{self->user_data};\n");
     out.push_str("    };\n\n");
 
     // destroy_instance stub for host-side factory (captureless lambda → fn ptr).
@@ -2002,7 +2005,9 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     );
     out.push_str("        +[](const HostContractInterface* /*this*/, HostContractInstance /*instance*/) noexcept -> void {\n");
     if singleton {
-        out.push_str("        // Singleton: no-op, s_impl lives for program lifetime\n");
+        out.push_str(
+            "        // Singleton: no-op, the implementation lives for program lifetime\n",
+        );
     } else {
         out.push_str(
             "        // Multi-instance: not supported in host-side factory, use custom factory\n",
@@ -2021,6 +2026,7 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     out.push_str(&format!("        {},  // singleton\n", singleton));
     out.push_str("        DispatchType::Native,  // dispatch_type\n");
     out.push_str("        nullptr,  // runtime (set by polyplug during registration)\n");
+    out.push_str("        nullptr,  // user_data (set below to the registrant-owned impl)\n");
     out.push_str("        create_instance_stub,  // create_instance\n");
     out.push_str("        destroy_instance_stub,  // destroy_instance\n");
     out.push_str("        DispatchMechanisms{ .native = NativeDispatch{\n");
@@ -2028,7 +2034,10 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     out.push_str("            FUNCTIONS,  // functions\n");
     out.push_str("        } },  // dispatch.native\n");
     out.push_str("    };  // dispatch\n\n");
-    out.push_str("    (void)s_impl;  // Suppress unused warning - used by thunks\n");
+    out.push_str(
+        "    // Route the implementation through user_data; create_instance reads it via `this`.\n",
+    );
+    out.push_str("    s_interface.user_data = static_cast<void*>(impl_ptr);\n");
     out.push_str("    return &s_interface;\n");
     out.push_str("}\n\n");
 
@@ -2084,6 +2093,7 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     out.push_str(&format!("        {},  // singleton\n", singleton));
     out.push_str("        DispatchType::VirtualMachine,  // dispatch_type\n");
     out.push_str("        nullptr,  // runtime (set by polyplug during registration)\n");
+    out.push_str("        loader_data,  // user_data (registrant-owned VM bridge data)\n");
     out.push_str("        vm_create_instance_stub,  // create_instance\n");
     out.push_str("        vm_destroy_instance_stub,  // destroy_instance\n");
     // `dispatch` is a union; the VM variant is not the first member, so it must
@@ -2102,7 +2112,7 @@ fn generate_cpp_host_thunk(
     out: &mut String,
     func: &ResolvedFunction,
     contract_name: &str,
-    _trait_name: &str,
+    trait_name: &str,
 ) {
     let thunk_name: String = format!(
         "{}_{}_thunk",
@@ -2113,17 +2123,18 @@ fn generate_cpp_host_thunk(
 
     // Emit the thunk as a captureless lambda. C++ forbids defining a named
     // function inside another function body, but a captureless lambda decays to
-    // a plain function pointer and may freely reference the function-local
-    // `s_impl` static (it is not a capture).
+    // a plain function pointer. The implementation is recovered from the instance
+    // token, which create_instance sets from the interface's user_data (no static).
     out.push_str(&format!(
         "    static constexpr auto {} = +[](HostContractInstance instance, const void* args, void* out) noexcept -> AbiError {{\n",
         thunk_name
     ));
-    out.push_str(
-        "        (void)instance;  // Instance data passed by caller, we use s_impl directly\n",
-    );
-    out.push_str("        if (s_impl == nullptr) {\n");
-    out.push_str("            return AbiError{AbiErrorCode::Panic, StringView{nullptr, 0}};\n");
+    out.push_str(&format!(
+        "        auto* impl = static_cast<{}*>(instance.data);\n",
+        trait_name
+    ));
+    out.push_str("        if (impl == nullptr) {\n");
+    out.push_str("            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};\n");
     out.push_str("        }\n");
     out.push_str("        try {\n");
 
@@ -2152,9 +2163,9 @@ fn generate_cpp_host_thunk(
         out.push_str("            (void)out;\n");
     }
 
-    out.push_str("            return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};\n");
+    out.push_str("            return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
     out.push_str("        } catch (...) {\n");
-    out.push_str("            return AbiError{AbiErrorCode::Panic, StringView{nullptr, 0}};\n");
+    out.push_str("            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};\n");
     out.push_str("        }\n");
     out.push_str("    };\n\n");
 }
@@ -2264,12 +2275,12 @@ fn generate_cpp_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_r
             .map(cpp_host_return_type_name)
             .unwrap_or_else(|| "void".to_owned());
         out.push_str(&format!(
-            "            {} result = s_impl->{}({});\n",
+            "            {} result = impl->{}({});\n",
             ret_ty, func.name, call_args
         ));
     } else {
         out.push_str(&format!(
-            "            s_impl->{}({});\n",
+            "            impl->{}({});\n",
             func.name, call_args
         ));
     }
@@ -3164,8 +3175,16 @@ mod tests {
             "missing unique_ptr: {out}"
         );
         assert!(
-            out.contains("static T* s_impl = nullptr"),
-            "missing static impl: {out}"
+            out.contains("T* impl_ptr = impl.release();"),
+            "implementation must be released into a local, not a static: {out}"
+        );
+        assert!(
+            out.contains("s_interface.user_data = static_cast<void*>(impl_ptr);"),
+            "implementation must be routed through user_data, not a static: {out}"
+        );
+        assert!(
+            !out.contains("s_impl"),
+            "host factory must not hold the implementation in a static: {out}"
         );
         assert!(
             out.contains("static void* const FUNCTIONS"),

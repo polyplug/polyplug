@@ -41,9 +41,11 @@ impl CppGenerator {
             return Self::rust_type_to_cpp(inner);
         }
 
-        // Handle Array<T> — returns void* for items; actual handling in generate_struct.
+        // Handle Array<T> — maps to the C++ Array struct. Struct field expansion
+        // happens in generate_struct (which checks is_array before calling this);
+        // this path is only reached for function pointer return types.
         if Self::is_array(rust_type) {
-            return String::from("void*");
+            return String::from("Array");
         }
 
         if rust_type.contains("extern\"C\"fn") || rust_type.contains("extern\"C\"") {
@@ -199,8 +201,23 @@ impl CppGenerator {
     }
 
     fn convert_param(param: &str) -> String {
-        let parts: Vec<&str> = param.splitn(2, ':').collect();
-        let type_part = if parts.len() == 2 { parts[1] } else { parts[0] };
+        // Split on the `name: type` separator, which is the first single `:`.
+        // Rust path separators (`::`) must not be treated as the separator, so
+        // skip any `:` that is part of a `::` sequence.
+        let bytes: &[u8] = param.as_bytes();
+        let mut type_part: &str = param;
+        let mut i: usize = 0;
+        while i < bytes.len() {
+            if bytes[i] == b':' {
+                let prev_colon: bool = i > 0 && bytes[i - 1] == b':';
+                let next_colon: bool = i + 1 < bytes.len() && bytes[i + 1] == b':';
+                if !prev_colon && !next_colon {
+                    type_part = &param[i + 1..];
+                    break;
+                }
+            }
+            i += 1;
+        }
         Self::rust_type_to_cpp(type_part.trim())
     }
 
@@ -455,12 +472,10 @@ impl CodeGenerator for CppGenerator {
         header.push_str("#include <string>\n");
         header.push_str("#include <string_view>\n");
         header.push_str("#include <vector>\n\n");
-        // Host allocator entry points exported by the polyplug runtime.
-        // The inline helpers below (and guest operator new/delete) call these.
-        header.push_str("extern \"C\" {\n");
-        header.push_str("uint8_t* polyplug_host_alloc(size_t size, size_t align);\n");
-        header.push_str("void polyplug_host_free(uint8_t* ptr, size_t size, size_t align);\n");
-        header.push_str("}\n\n");
+        // abi.hpp is pure ABI: structs, enums, and borrowing helpers only — no
+        // link-time dependency on the host. Cross-boundary allocation lives in the
+        // guest SDK (polyplug::alloc_string), which routes through the stored
+        // HostInterface function pointers.
         header
     }
 }

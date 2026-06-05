@@ -10,8 +10,6 @@ use crate::ir::ValidatedIr;
 use generators::{CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles};
 use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, PolyplugcError, Side};
 
-pub use polyplug_codegen::GeneratedFile;
-
 pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError> {
     let file_content: String =
         fs::read_to_string(&config.api_toml).map_err(|e: std::io::Error| {
@@ -83,7 +81,7 @@ pub fn pack(config: PackConfig) -> Result<(), PolyplugcError> {
     pack::run(&ir, &config.out, lang_enum.as_str())
 }
 
-fn parse_lang(lang: &str) -> Result<Lang, PolyplugcError> {
+pub fn parse_lang(lang: &str) -> Result<Lang, PolyplugcError> {
     match lang {
         "rust" => Ok(Lang::Rust),
         "cpp" | "c++" => Ok(Lang::Cpp),
