@@ -176,6 +176,13 @@ The strategy: minimize FFI crossings, not eliminate them.
 
 ## Benchmark Results
 
+> **Caveat: these are design-time estimates, not measurements.** The numbers
+> below illustrate the expected shape of the trade-off and have not been
+> produced by running the benchmark suites. To obtain real figures, run the
+> Criterion benches with `cargo bench` (suites live under `crates/*/benches/`,
+> e.g. `cargo bench -p polyplug`). Do not cite these estimates as observed
+> results.
+
 | Operation | FFI Approach | Native Helpers | Improvement |
 |-----------|-------------|----------------|-------------|
 | C# string → UTF-8 | ~67ns | ~42ns | 1.6x |
@@ -183,7 +190,7 @@ The strategy: minimize FFI crossings, not eliminate them.
 | JS string → UTF-8 | ~95ns | ~58ns | 1.6x |
 | Lua string → UTF-8 | ~25ns | ~18ns | 1.4x |
 
-**Average improvement**: 1.6x faster for string operations.
+**Estimated average improvement**: ~1.6x faster for string operations.
 
 ## Trade-offs
 

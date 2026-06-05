@@ -56,6 +56,7 @@ The use of a 64-bit hash space ensures that for typical deployment sizes (hundre
 ### Deployment Constraints
 - **Unique Names**: Bundle names must be unique within a single application deployment. A name collision results in a `bundle_id` collision, which the runtime will reject during the second bundle's registration.
 - **Baking the ID**: The `polyplugc` compiler bakes the computed ID into the generated guest code as a constant. This allows the guest to identify itself to the host during the `polyplug_init` call.
+- **Enforced at load**: The manifest's declared `id` is no longer trusted blindly. `Manifest::validate` (in `crates/polyplug/src/loader/manifest.rs`) recomputes `polyplug_utils::bundle_id(name)` and rejects the bundle with `LoaderError::BundleTampered { bundle, expected, found }` if the declared `id` does not match. A tampered or hand-edited manifest cannot impersonate another bundle's identity.
 
 ### The Null Bundle (ID 0)
 A `bundle_id` of `0` is reserved. It represents the "System Context" or "Host Context".
@@ -196,12 +197,14 @@ The following table summarizes the sizes and alignments of the core ABI types on
 | `AbiError` | 24 | 8 | `code`, `message` (StringView) |
 
 `HostInterface`'s 17 function pointers (offsets verified in
-`crates/polyplug_abi/src/host/host_interface.rs`): `register_contract`, `alloc`, `free`,
-`find_guest_contract`, `find_all_guest_contracts`, `resolve_guest_contract`,
-`call_guest_method`, `get_host_contract`, `resolve_host_contract_interface`, `list_bundles`,
-`get_dependencies`, `load_bundle`, `reload_bundle`, `register_host_contract`,
-`register_loader`, `get_last_error`, `get_error_len`. There is no `get_extension`,
-`find_by_bundle`, or `resolve_plugin` pointer in `HostInterface`.
+`crates/polyplug_abi/src/host/host_interface.rs`): `register_contract` (8), `alloc` (16),
+`free` (24), `find_guest_contract` (32), `find_all_guest_contracts` (40),
+`resolve_guest_contract` (48), `get_host_contract` (56),
+`resolve_host_contract_interface` (64), `list_bundles` (72), `get_dependencies` (80),
+`load_bundle` (88), `reload_bundle` (96), `register_host_contract` (104),
+`register_loader` (112), `get_last_error` (120), `get_error_len` (128),
+`get_extension` (136). There is no `call_guest_method`, `find_by_bundle`, or
+`resolve_plugin` pointer in `HostInterface`.
 
 ### Pointer Validity After Resolution
 The C ABI deals in raw handles and pointers: `find_guest_contract` returns a
@@ -247,7 +250,7 @@ Isolating plugin crashes requires either:
 - **Out-of-process execution** — violates the zero-overhead hot path goal. A single indirect call becomes an IPC round-trip (~microseconds instead of nanoseconds). This is a fundamental incompatibility with polyplug's core design principle.
 - **OS-level sandboxing** (seccomp, pledge, etc.) — platform-specific, adds significant complexity, and still cannot prevent all crash vectors.
 
-polyplug's position: the hot path must be a single indirect call. Plugin crash isolation is incompatible with that goal. App developers who need crash isolation must run untrusted plugins in a separate worker process with their own IPC layer. polyplug is not the right tool for untrusted plugin execution. See Non-Goals in the PRD.
+polyplug's position: the hot path must be a single indirect call. Plugin crash isolation is incompatible with that goal. App developers who need crash isolation must run untrusted plugins in a separate worker process with their own IPC layer. polyplug is not the right tool for untrusted plugin execution.
 
 ### Input validation at the host boundary
 
@@ -271,21 +274,23 @@ Even with trusted plugins, malformed or corrupted plugin binaries are a real sce
 
 ## 7. ABI Freeze Notice
 
-The core polyplug ABI is frozen as of Epic 9.7. This freeze ensures that bundles compiled today remain binary-compatible with future versions of the runtime.
+The core polyplug ABI **freezes at v1.0**. There is no public release yet, so the project is currently pre-1.0: ABI-visible changes are still permitted, but only after explicit owner approval (see CLAUDE.md Rule 7). At and after v1.0 the freeze becomes absolute, ensuring that bundles compiled then remain binary-compatible with future runtime versions.
 
 ### Frozen Surface Areas
-The following structures have fixed layouts and sizes. Any modification to these (e.g., adding a field or changing field order) is a breaking change. Sizes are verified by the layout tests in `crates/polyplug_abi`.
+The following structures have the layouts and sizes that will be frozen at v1.0. At/after v1.0, any modification to these (e.g., adding a field or changing field order) is a breaking change. Sizes are verified by the layout tests in `crates/polyplug_abi`.
 - **`HostInterface` (144 bytes)**: An opaque `runtime` pointer followed by 17 function pointers (full list in §5).
 - **`GuestContractInterface` (24 bytes)**: Fixed header before the function pointer array.
 - **`GuestContractHandle` (4 bytes)**: a single 4-byte `index` (no generation field).
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
 
-### Extensibility via host contracts
+### Extensibility via host contracts and extensions
 To support future capabilities without breaking the ABI, the host exposes contracts through
 `HostInterface::get_host_contract(contract_id, min_version)` (and
 `resolve_host_contract_interface`). New host-side capabilities are added as new host contracts
-that plugins resolve by ID, rather than by extending the frozen `HostInterface` struct. There
-is no `get_extension` entry point.
+that plugins resolve by ID, rather than by extending the frozen `HostInterface` struct.
+In addition, `HostInterface::get_extension(extension_id)` returns host-provided opaque
+pointers keyed by a 32-bit FNV-1a hash of the extension name, giving the host a second,
+ID-based extension channel that also avoids changing the struct layout.
 
 ## Hot-Reload Safety Guarantees
 
@@ -341,7 +346,7 @@ were deliberately removed). VM-backed bundles (Python, .NET, Lua, JS) are not re
 return `HotReloadDisabled`. See the Hot-Reload Safety Guarantees section above.
 
 ### Scripting and JS Bindings ✅ done (Epics 10–11, 11.5)
-Python, Lua, JavaScript (QuickJS and Deno/V8) plugins are implemented. All respect the same trust model rules — scripted plugins have their own bundle ID and declare dependencies in `bundle.toml`. The runtime enforces these through the same `INIT_BUNDLE_ID` mechanism used by native code.
+Python, Lua, and JavaScript (QuickJS) plugins are implemented. All respect the same trust model rules — scripted plugins have their own bundle ID and declare dependencies in `bundle.toml`. The runtime enforces these through the same `INIT_BUNDLE_ID` mechanism used by native code.
 
 ### Priority Resolution
 A weighting system for multi-impl providers is planned for a future version. This will allow the host or a "Coordinator Bundle" to assign priorities to implementations, ensuring that `find_by_contract` returns the "best" provider rather than just the first one registered.
@@ -359,7 +364,7 @@ Isolating plugin crashes would require either:
 - Out-of-process execution with IPC — violates the zero-overhead hot-path goal
 - OS-level sandboxing (seccomp, pledge) — platform-specific, adds significant complexity
 
-Neither is acceptable for v1. See PRD section 27 (Non-Goals).
+Neither is acceptable for v1.
 
 App developers who need crash isolation should run plugins in a separate worker process
 and communicate via IPC. polyplug does not provide this facility.
@@ -367,13 +372,15 @@ and communicate via IPC. polyplug does not provide this facility.
 
 
 // =============================================================================
-// ABI FROZEN — pre-v1.0 (HostInterface rt_ctx refactoring)
+// ABI FREEZE TARGET — v1.0 (currently pre-1.0, no public release yet)
 // =============================================================================
 //
-// The following types and function signatures constitute the frozen polyplug ABI.
-// NO CHANGES to #[repr(C)] structs, function pointer signatures, or the field
-// order of HostInterface are permitted after this point.
+// The following types and function signatures constitute the polyplug ABI that
+// freezes at v1.0. While pre-1.0, changes to #[repr(C)] structs, function pointer
+// signatures, or the field order of HostInterface ARE permitted, but ONLY after
+// explicit owner approval — never unilaterally. At and after v1.0, NO such changes
+// are permitted.
 //
-// All new functionality must go through the host contract mechanism (get_host_contract).
-// For rationale and trust model, see TRUST_MODEL.md.
+// New functionality should go through the host contract mechanism (get_host_contract)
+// or get_extension. For rationale and trust model, see TRUST_MODEL.md.
 // =============================================================================

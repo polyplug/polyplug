@@ -11,16 +11,8 @@ This document uses the following terminology (current as of v1.1):
 This document is the **canonical reference** for the `DataRecord` type used across all
 example plugins in the `examples/` directory (decoder, transformer, encoder, reporter, validator). All language
 bindings must mirror these layouts **inline** — plugins must NOT depend on any shared
-crate or library for these definitions. The polyplug ABI is **frozen as of Epic 9.7**
-(see `crates/polyplug/src/abi/mod.rs`).
-
-## Overview
-
-This document is the **canonical reference** for the `DataRecord` type used across all
-showcase plugins (decoder, transformer, encoder, reporter, validator). All language
-bindings must mirror these layouts **inline** — plugins must NOT depend on any shared
-crate or library for these definitions. The polyplug ABI is **frozen as of Epic 9.7**
-(see `crates/polyplug/src/abi/mod.rs`).
+crate or library for these definitions. The polyplug ABI **freezes at v1.0**
+(currently pre-1.0; see `crates/polyplug_abi/`).
 
 The rule: every language plugin copies these `#[repr(C)]`-compatible struct definitions
 verbatim. If the definitions here and the plugin's local copy diverge, the plugin will
@@ -188,7 +180,7 @@ ffi.cdef[[
 ## AbiError Layout
 
 `AbiError` is returned by value from every ABI call. Defined in
-`crates/polyplug/src/abi/mod.rs`. Mirror inline in all plugins.
+`crates/polyplug_abi/src/types/abi_error.rs`. Mirror inline in all plugins.
 
 ```
 AbiError — total: 24 bytes, align: 8
@@ -200,23 +192,38 @@ AbiError — total: 24 bytes, align: 8
 ```
 
 ```rust
-/// ABI error — mirrors polyplug::abi::AbiError.
+/// ABI error — mirrors polyplug_abi::types::AbiError.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct AbiError {
     pub code:    u32,        // 0 = AbiErrorCode::Ok
-    pub message: StringView, // host_alloc'd; caller frees. NULL if code==0.
+    pub message: StringView, // static or runtime-owned; receiver must NEVER free. NULL if code==0.
 }
 ```
 
+`code` is a raw `u32` at the ABI boundary, **not** the `AbiErrorCode` enum.
+Plugins are untrusted and return `AbiError` by value across the C ABI, so any
+32-bit pattern can land here — including values that are not declared
+discriminants of the frozen `AbiErrorCode` enum. Materializing such a value as
+the enum would be instant undefined behaviour, so the field stays a raw `u32`.
+Construct it with `AbiErrorCode::X as u32` and interpret it with
+`AbiErrorCode::from_u32`, which is total and safe. The reserved values below
+correspond to the `AbiErrorCode` enum; any other value (plugin-defined or
+hostile) collapses to `Generic` when converted.
+
 Reserved error codes (0–255 runtime, 256+ plugin-defined):
-- `0`  — `AbiErrorCode::Ok`
-- `1`  — `AbiErrorCode::Generic`
-- `2`  — `AbiErrorCode::BufferTooSmall`
-- `3`  — `AbiErrorCode::Panic`
-- `4`  — `AbiErrorCode::NotFound`
-- `5`  — `AbiErrorCode::StaleHandle`
-- `6`  — `AbiErrorCode::FunctionNotAvailable`
+- `0`   — `AbiErrorCode::Ok`
+- `1`   — `AbiErrorCode::Generic`
+- `2`   — `AbiErrorCode::BufferTooSmall`
+- `3`   — `AbiErrorCode::Panic`
+- `4`   — `AbiErrorCode::NotFound`
+- `5`   — `AbiErrorCode::StaleHandle`
+- `6`   — `AbiErrorCode::FunctionNotAvailable`
+- `7`   — `AbiErrorCode::DuplicateProvider`
+- `8`   — `AbiErrorCode::InvalidPointer`
+- `100` — `AbiErrorCode::HostContractNotFound`
+- `101` — `AbiErrorCode::HostContractVersionMismatch`
+- `102` — `AbiErrorCode::HostContractCallFailed`
 
 ---
 

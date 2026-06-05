@@ -89,6 +89,14 @@ returns = "void"
 
 **Important**: Host contract names must start with the `host.` prefix. This distinguishes them from plugin contracts and ensures unique contract IDs.
 
+> **How the impl is carried.** A host contract factory no longer relies on static or
+> thread-local storage. The registrant's implementation pointer is stored in the
+> `user_data` field of `HostContractInterface` (offset 40), and `create_instance` /
+> `destroy_instance` recover it via `(*this).user_data`. The runtime never reads, writes,
+> or frees the pointee — it only stores the pointer. (C# and Python keep an additional
+> managed-side reference to the implementation object by documented necessity, so the GC
+> does not collect it while the runtime holds the raw `user_data` pointer.)
+
 ### Step 2: Generate Code
 
 Generate code for both host and guest sides:
@@ -231,7 +239,7 @@ local registration = require("generated.registration")
 registration.register_host_logger(runtime, logger)
 ```
 
-### JavaScript (VM Host - Deno)
+### JavaScript (VM Host - QuickJS)
 
 ```typescript
 // 1. Define the implementation
@@ -467,48 +475,3 @@ For VM-based hosts (Python, Lua, JavaScript):
 - JavaScript: Context access is serialized by mutex
 
 Host contract implementations should be thread-safe and avoid long-running operations.
-
-## Complete Example
-
-See `examples/host_contracts/logger/` for a complete working example with:
-
-- Host implementations in all 6 languages
-- Guest plugin in all 6 languages
-- Bidirectional communication (host calls plugin, plugin calls host)
-- Full build scripts and documentation
-
-Run the example:
-
-```bash
-cd examples/host_contracts/logger
-./build.sh
-./host/rust/target/release/logger_host
-```
-
-Expected output:
-
-```
-loading plugins from: examples/host_contracts/logger/plugins
-
-  loaded: rust_worker
-
-discovered 1 bundles
-
-=== Logger Host (Rust) ===
-
-Input: "hello world"
-
-[PLUGIN LOG] Processing input: hello world
-[PLUGIN LOG] Step 1: Analyzing input
-[PLUGIN LOG] Step 2: Transforming data
-[PLUGIN LOG] Step 3: Generating output
-[host] do_work("hello world") = "WORKED: HELLO WORLD"
-
-done.
-```
-
-## Next Steps
-
-- See `HOST_CONTRACTS_API.md` for detailed API reference
-- See `MIGRATION.md` for migration from the Extension system
-- Explore `examples/host_contracts/` for working examples

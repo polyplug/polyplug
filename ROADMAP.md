@@ -1,8 +1,9 @@
 # polyplug Roadmap
 
 Three goals, in order of dependency. Each is an independently executable
-orchestrated session. The ABI is not yet frozen — all goals may touch
-`HostInterface` freely.
+orchestrated session. The ABI freezes at v1.0 and the project is still pre-1.0,
+so these goals may touch `HostInterface` — but only with explicit owner approval,
+never unilaterally (see CLAUDE.md Rule 7).
 
 ---
 
@@ -28,34 +29,26 @@ generation and manifest emission.
 
 ---
 
-## Goal 2 — Extension System
+## Goal 2 — Extension System ✅ Done
 
-Add `get_extension(extension_id: u32) → *const ()` to `HostInterface`:
-a lightweight optional-capability probe. The host registers extension
-pointers by ID (no versioning, no contract machinery); plugins call
-`host->get_extension(id)` and cast the result to the expected struct if
-non-null. Designed for optional host capabilities: tracing, debug hooks,
-custom metrics, etc.
+The extension system has shipped. `get_extension(extension_id: u32) → *const ()` is the
+17th function pointer on `HostInterface` (offset 136; struct is 144 bytes). The host
+registers extension pointers by ID (no versioning, no contract machinery); plugins call
+`host->get_extension(id)` and cast the result to the expected struct if non-null. It is
+designed for optional host capabilities: tracing, debug hooks, custom metrics, etc.
 
-### Changes required
+Delivered:
 
-| Area | What changes |
-|---|---|
-| `polyplug_abi` | Add `get_extension` fn pointer to `HostInterface` (17 → 18 fields, 144 → 152 bytes). Update size/count doc comment. |
-| `polyplug_utils` | Add `fnv1a_32(name: &[u8]) → u32` alongside existing `fnv1a_64`. |
-| `polyplug` crate | `Runtime` gains `extensions: HashMap<u32, *const ()>`; `RuntimeBuilder` gains `register_extension(id, ptr)`; `host_bridge.rs` gains `host_get_extension` wired to the new field. |
-| All 6 SDKs | Update `HostInterface` ABI definitions (`sdks/rust`, `cpp`, `csharp`, `python`, `lua`, `js`). |
-| All 6 generators | `HostInterface` in generated guest code includes the new field (`crates/polyplug_codegen/src/languages/`). |
-| `sdk_validator` | Add check for the new field. |
+- `polyplug_abi`: `get_extension` fn pointer on `HostInterface`.
+- `polyplug_utils`: `fnv1a_32(name: &[u8]) → u32` alongside `fnv1a_64`.
+- `polyplug` crate: `Runtime.extensions` map, `Runtime::register_extension`, and
+  `host_get_extension` wired to the `get_extension` field.
+- All 6 SDK `HostInterface` ABI definitions and the 6 generators carry the field.
+- `sdk_validator` checks for the field.
 
-No built-in extensions — generic mechanism only.
-
-Tests: register → get returns pointer; unknown id → null; null
-`HostInterface` → null.
-
-Lifetime contract: extension pointers are registered once at startup and are
-valid for the runtime's entire lifetime. Plugins read and cast; they never
-free. This follows the existing "host owns ABI-crossing memory" model.
+Generic mechanism only — no built-in extensions. Lifetime contract: extension pointers are
+registered once at startup and valid for the runtime's entire lifetime; plugins read and
+cast, never free, following the "host owns ABI-crossing memory" model.
 
 ---
 

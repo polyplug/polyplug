@@ -31,7 +31,7 @@ polyplug is a universal, blazing-fast, cross-language plugin runtime platform wr
 | `polyplug_js` | Loader for JavaScript (QuickJS) bundles |
 | `polyplug_dotnet` | Loader for .NET/C# bundles |
 | `polyplug_guest` | Guest-side Rust helper (links into plugin dylibs) |
-| `polyplug_codegen` | Code-generation library used by `polyplugc` |
+| `polyplug_codegen` | ABI-SDK code-generation library; its `languages/` emitters are driven by `polyplug_abi`'s build script. `polyplugc` consumes only its shared `data`/`error`/config types |
 | `polyplugc` | CLI tool: parses contract `.toml`, generates host/guest bindings |
 | `sdk_validator` | Validates SDK correctness against the ABI |
 
@@ -44,7 +44,7 @@ void* polyplug_runtime_create(const void* config);   // returns HostInterface po
 void  polyplug_runtime_destroy(void* host);
 ```
 
-All other operations go through **`HostInterface` struct fields** (function pointers). `HostInterface` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields), `align = 8`.
+All other operations go through **`HostInterface` struct fields** (function pointers). `HostInterface` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields, the 17th being `get_extension` at offset 136), `align = 8`. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostInterface` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.
 
 ### `polyplug_init` — the plugin entry point
 
@@ -62,10 +62,19 @@ The 3-argument form `fn(rt_ctx, host, ctx)` is **gone** — do not use it.
 
 ### Code Generators (`polyplug_codegen`)
 
-Generators live in `crates/polyplug_codegen/src/languages/`:
-`rust.rs`, `cpp.rs`, `csharp.rs`, `python.rs`, `lua.rs`, `js.rs`
+There are **two separate codegen pipelines** — they share no language emitters by design:
 
-`polyplugc` (in `crates/polyplugc/src/`) is the CLI binary that drives codegen. Its `src/generators/` re-uses the same set: `rust.rs`, `cpp.rs`, `csharp.rs`, `python.rs`, `lua.rs`, `js_quickjs.rs`.
+- **ABI-SDK emitters** live in `crates/polyplug_codegen/src/languages/`:
+  `rust.rs`, `cpp.rs`, `csharp.rs`, `python.rs`, `lua.rs`, `js.rs`. They are driven at
+  build time by `crates/polyplug_abi/build/generate.rs`, which emits the `sdks/*/abi`
+  files from the extracted ABI types.
+- **Contract-plugin generators** live in `crates/polyplugc/src/generators/`:
+  `rust.rs`, `cpp.rs`, `csharp.rs`, `python.rs`, `lua.rs`, `js_quickjs.rs`. They are driven
+  by the `polyplugc` CLI to generate per-contract host/guest bindings.
+
+`polyplugc` does **not** reuse `polyplug_codegen`'s `languages/` emitters — it depends on
+`polyplug_codegen` only for shared `data` / `error` / config types (e.g. `GenerateConfig`,
+`PolyplugcError`, `ResolvedBundleFile`).
 
 There is **no `js_deno.rs`** — JS generation targets QuickJS only.
 
@@ -292,14 +301,18 @@ unsafe {
 
 ### 7. ABI Stability
 
-**The core ABI is frozen. Once released at v1, no ABI-visible struct or function signature may change.**
+**The core ABI freezes at v1.0. There is no public release yet, so the project is currently pre-1.0.**
 
-- Never add fields to `#[repr(C)]` structs that are part of the frozen ABI
-- Never change the order of fields in ABI structs
-- Never change function signatures in the core ABI
-- All new functionality goes through the extension system
+- **Pre-1.0 (current state):** ABI-visible changes (struct fields, field order, function
+  signatures) ARE permitted, but only after explicit discussion with and approval from the
+  owner. No unilateral ABI changes — ever.
+- **At and after v1.0:** the ABI is frozen. The rules below apply with no exceptions:
+  - Never add fields to `#[repr(C)]` structs that are part of the frozen ABI
+  - Never change the order of fields in ABI structs
+  - Never change function signatures in the core ABI
+  - All new functionality goes through the extension system
 
-If you believe an ABI change is necessary, stop and raise it as a discussion. Do not proceed unilaterally.
+If you believe an ABI change is necessary, stop and raise it as a discussion with the owner. Do not proceed unilaterally.
 
 ---
 
@@ -775,7 +788,7 @@ polyplug/
 | `.expect()` in production | proper error types + `?` |
 | `return Err("string")` | `return Err(MyError::Variant)` |
 | `unsafe { ... }` no comment | `// SAFETY: ...` before every unsafe block |
-| modifying ABI structs | new functionality via extension system only |
+| unilateral ABI struct changes | pre-1.0: only with owner approval; at/after 1.0: new functionality via extension system only |
 | editing generated files | fix the generator, re-run polyplugc |
 | `fn polyplug_init(rt_ctx, host, ctx)` (3 args) | `fn polyplug_init(host, ctx)` (2 args — canonical) |
 | different ABI mechanisms per generator | identical `polyplug_init` + `register_contract` across all generators |

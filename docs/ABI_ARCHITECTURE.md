@@ -37,100 +37,53 @@ AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx);
 ### BundleInitContext
 ```c
 typedef struct {
-    StringView bundle_path;      // Absolute path to plugin directory
-    uint32_t host_abi_version;   // Host's ABI version for negotiation (Option C)
+    uint64_t   bundle_id;    // Bundle ID for dependency enforcement during init
+    StringView bundle_path;  // Absolute canonical path to the bundle directory
 } BundleInitContext;
 ```
+24 bytes total: `bundle_id` (8) + `bundle_path` (16).
 
-## Host ABI (libpolyplug.so Exports)
+## Host ABI (libpolyplug Exports)
 
-The runtime exports functions for host applications to call.
+The runtime exports exactly **two** `#[no_mangle]` C symbols, both runtime
+lifecycle entry points. Every other operation — including cross-boundary
+allocation (load/reload, discovery, resolution, registration, error handling,
+and `alloc` / `free`) — is reached through the function-pointer fields of the
+`HostInterface` returned by `polyplug_runtime_create`, not through additional
+C exports.
 
 ### Runtime Lifecycle
 ```c
-// Create a new runtime instance
-OpaqueRuntime* polyplug_runtime_create(void);
+// Create a new runtime instance. Pass NULL for config to use defaults.
+// Returns a HostInterface* that exposes all runtime operations.
+const HostInterface* polyplug_runtime_create(const void* config);
 
-// Destroy a runtime instance
-void polyplug_runtime_destroy(OpaqueRuntime* rt);
+// Destroy a runtime instance (double-destroy is a safe no-op).
+void polyplug_runtime_destroy(const HostInterface* host);
 ```
 
-### Plugin Loading
+### Cross-Boundary Allocator (via HostInterface fields)
 ```c
-// Load a plugin bundle
-uint32_t polyplug_runtime_load_bundle(
-    OpaqueRuntime* rt,
-    const uint8_t* path,
-    size_t path_len
-);
+// Allocate memory that crosses the plugin/host boundary.
+// Returns NULL for size == 0 or invalid alignment.
+uint8_t* host->alloc(const HostInterface* host, size_t size, size_t align);
 
-// Reload a plugin bundle (hot-reload)
-uint32_t polyplug_runtime_reload_bundle(
-    OpaqueRuntime* rt,
-    const uint8_t* path,
-    size_t path_len
-);
+// Free memory previously allocated by host->alloc.
+// Must pass the SAME size and align used for the allocation.
+void host->free(const HostInterface* host, uint8_t* ptr, size_t size, size_t align);
 ```
 
-### Plugin Discovery
-```c
-// Find plugin by contract
-uint64_t polyplug_runtime_find_by_contract(
-    OpaqueRuntime* rt,
-    uint64_t contract_id,
-    uint32_t min_version
-);
+### All Other Operations (via HostInterface fields)
 
-// Find plugin by bundle + contract
-uint64_t polyplug_runtime_find_by_bundle(
-    OpaqueRuntime* rt,
-    uint64_t bundle_id,
-    uint64_t contract_id,
-    uint32_t min_version
-);
-
-// Find all plugins matching contract
-size_t polyplug_runtime_find_all_by_contract(
-    OpaqueRuntime* rt,
-    uint64_t contract_id,
-    uint32_t min_version,
-    uint64_t* out,
-    size_t out_cap
-);
-```
-
-### Plugin Resolution
-```c
-// Resolve handle to interface
-OpaquePluginGuard* polyplug_runtime_resolve_plugin(
-    OpaqueRuntime* rt,
-    uint64_t packed_handle
-);
-
-// Release guard
-void polyplug_runtime_plugin_release(OpaquePluginGuard* guard);
-
-// Get interface pointer
-const void* polyplug_runtime_plugin_interface(OpaquePluginGuard* guard);
-```
-
-### Error Handling
-```c
-// Get last error message
-size_t polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
-
-// Get error message length
-size_t polyplug_runtime_error_message_len(void);
-```
-
-### Loader Registration
-```c
-// Register custom loader
-uint32_t polyplug_runtime_register_loader(
-    OpaqueRuntime* rt,
-    void* loader_ptr
-);
-```
+`polyplug_runtime_create` returns a pointer to `HostInterface`, a `144`-byte
+`#[repr(C)]` struct: one opaque runtime pointer plus 17 function-pointer fields
+(the 17th being `get_extension` at offset 136). Host applications and plugins call
+these fields using the self-passing pattern, e.g. `host->load_bundle(host, path, path_len)`.
+The fields cover bundle lifecycle (`load_bundle`, `reload_bundle`), contract
+discovery (`find_guest_contract`, `find_all_guest_contracts`,
+`resolve_guest_contract`), registration (`register_contract`,
+`register_host_contract`, `register_loader`), and error handling
+(`get_last_error`, `get_error_len`), among others.
 
 ## Execution Flow
 
@@ -138,10 +91,10 @@ uint32_t polyplug_runtime_register_loader(
 Host Application
     │
     ▼
-polyplug_runtime_create() ──► Runtime Instance
+polyplug_runtime_create() ──► HostInterface* (Runtime Instance)
     │
     ▼
-polyplug_runtime_load_bundle()
+host->load_bundle(host, path, len)
     │
     ├── dlopen(plugin.so)
     ├── dlsym(polyplug_abi_version) ──► Check version
@@ -155,29 +108,30 @@ Call: polyplug_init(host, ctx)
     └── Interfaces stored in RuntimeStore
     │
     ▼
-polyplug_runtime_find_by_contract() ──► Get handle
+host->find_guest_contract(host, contract_id, ver) ──► Get handle
     │
     ▼
-polyplug_runtime_resolve_plugin() ──► Get interface
+host->resolve_guest_contract(host, handle) ──► Get interface
     │
     ▼
 Call plugin functions via interface
     │
     ▼
-polyplug_runtime_destroy()
+polyplug_runtime_destroy(host)
 ```
 
 ## ABI Stability
 
-The core ABI is frozen per §7 of AGENTS.md:
+The core ABI freezes at v1.0 per §7 of CLAUDE.md. The project is currently pre-1.0
+(no public release yet), so ABI-visible changes are still permitted with explicit
+owner approval. At and after v1.0:
 - `HostInterface` layout cannot change
-- `BundleInitContext` can add fields but not remove
+- `BundleInitContext` layout cannot change (no field additions or removals)
 - `polyplug_init` signature is fixed (2 params)
-- All additions go through extension system
+- All additions go through the host contract / extension system
 
 ## Future Extensions
 
 New functionality should use:
 1. Host contract interfaces resolved via `HostInterface.get_host_contract`
-2. New fields in `BundleInitContext` (backward compatible)
-3. New host ABI functions (doesn't break plugins)
+2. The extension system via `HostInterface.get_extension`

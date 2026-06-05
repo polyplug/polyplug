@@ -42,60 +42,56 @@ The runtime notifies the host before and after interface swap, plus failure case
 
 - **Preparing**: "I want to reload this bundle. Destroy your caller wrappers (drop all instances)."
 - **Reloaded**: "Reload complete. You can create new caller wrappers (pointing to new interface)."
-- **Failed**: "Reload aborted - instances not destroyed. Old interface kept."
+- **Failed**: "Reload aborted - old interface kept, no swap occurred."
 
-### 4. Retry Mechanism
+### 4. Leak Check (Informational, Non-Blocking)
 
-If caller wrappers are still held after the initial `Preparing` notification:
+The `Preparing` callback fires exactly **once**; there is no retry loop. After
+the callback returns, the runtime checks `Arc::strong_count` on each interface
+slot for the bundle. If any count is still greater than 1 — meaning the host may
+not have dropped all caller wrappers — the runtime emits a warning via
+`emit_warning` and **proceeds with the reload anyway**. The check is purely
+informational; it never blocks, retries, or aborts the reload.
 
-1. Runtime waits for `hot_reload_retry_interval` (default: 1 second)
-2. Fires `Preparing` again with incremented `retry_count`
-3. Repeats until `hot_reload_max_retries` is reached
-4. If `hot_reload_abort_on_max_retries=true`, fires `Failed` and aborts
-5. If `hot_reload_abort_on_max_retries=false`, continues retrying indefinitely
+The safety contract is therefore on the host: it MUST drop all instances inside
+the `Preparing` callback. A dangling wrapper that calls into a swapped interface
+is the host's responsibility.
 
-This gives the host multiple chances to drop wrapper references before the reload is aborted.
+### 5. Failure Handling
 
-### 5. Stuck Detection and Abort
+A reload fails only if the new library fails to load or its `polyplug_init`
+returns an error. In that case the runtime:
+1. Closes the reload window — no interface swap occurs
+2. Fires the `Failed` notification with a reason string
+3. Returns the error from `reload_bundle()`
 
-If the host doesn't drop all wrapper references after max retries, the runtime:
-1. Sends `Failed` notification to host with reason string
-2. Keeps old interface (no swap occurred)
-3. Logs warning via `on_warning` callback
-4. Returns error from `reload_bundle()`
-
-**This is safer than force-proceed** (could crash) or infinite retry (hangs).
-
-The default behavior (`abort_on_max_retries=true`) aborts after 3 retries (~4 seconds total).
-Set `abort_on_max_retries=false` to retry indefinitely (useful for development).
+The old interface stays active and valid.
 
 ---
 
 ## API Design (Rust)
 
-### ReloadPhase Enum
+### ReloadPhase Struct
+
+`ReloadPhase` is an FFI-safe `#[repr(C)]` struct (a tagged union — `phase_type`
+selects the active variant), not a Rust enum. There is no `retry_count` field.
 
 ```rust
-/// Phase of a hot-reload operation for notification callbacks.
-#[derive(Debug, Clone)]
-pub enum ReloadPhase {
-    /// BEFORE interface swap - host must destroy instances
-    Preparing {
-        bundle_id: u64,
-        bundle_name: String,
-        retry_count: u32,  // 0 = first attempt, 1+ = retry
-    },
-    /// AFTER interface swap - host can create new instances
-    Reloaded {
-        bundle_id: u64,
-        bundle_name: String,
-    },
-    /// Reload ABORTED - old interface kept, no swap occurred
-    Failed {
-        bundle_id: u64,
-        bundle_name: String,
-        reason: String,
-    },
+#[repr(u32)]
+pub enum ReloadPhaseType {
+    Preparing = 0,  // BEFORE interface swap — host must destroy instances
+    Reloaded  = 1,  // AFTER interface swap — host can create new instances
+    Failed    = 2,  // reload aborted — old interface kept, no swap occurred
+}
+
+/// FFI-safe reload phase for hot-reload callbacks.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ReloadPhase {
+    pub phase_type:  ReloadPhaseType,
+    pub bundle_id:   BundleId,
+    pub bundle_name: StringView,  // borrowed; do not store beyond the callback
+    pub reason:      StringView,  // only set for the Failed phase
 }
 ```
 
@@ -103,8 +99,14 @@ pub enum ReloadPhase {
 
 ```rust
 impl RuntimeBuilder {
-    /// Register a callback for reload notifications
-    pub fn on_reload(self, cb: impl Fn(ReloadPhase) + Send + Sync + 'static) -> Self;
+    /// Register a callback for reload notifications.
+    ///
+    /// The callback receives the opaque user-data pointer (forwarded unchanged from
+    /// `RuntimeConfig::on_reload_user_data`) and a `ReloadPhase`.
+    pub fn on_reload(
+        self,
+        cb: impl Fn(*mut core::ffi::c_void, ReloadPhase) + Send + Sync + 'static,
+    ) -> Self;
 }
 ```
 
@@ -112,18 +114,21 @@ impl RuntimeBuilder {
 
 ```rust
 pub struct RuntimeConfig {
-    /// Whether hot-reload is enabled. Default: false
+    /// Version compatibility policy for loaded bundles. (offset 0)
+    pub compatibility: Compatibility,
+
+    /// Whether hot-reload is enabled. Default: false (offset 4)
     pub hot_reload_enabled: bool,
 
-    /// Maximum retry attempts. Default: 3
-    pub hot_reload_max_retries: u32,
+    /// Optional FFI callback invoked for each reload phase. (offset 8)
+    /// The first argument is the opaque `on_reload_user_data` pointer.
+    pub on_reload: Option<unsafe extern "C" fn(*mut core::ffi::c_void, ReloadPhase)>,
 
-    /// Interval between retries. Default: 1 second
-    pub hot_reload_retry_interval: Duration,
-
-    /// Whether to abort after max retries. Default: true
-    pub hot_reload_abort_on_max_retries: bool,
+    /// Opaque user-data pointer forwarded to `on_reload` as its first argument. (offset 16)
+    /// Owned by the host; the runtime only forwards it, never reads or frees it.
+    pub on_reload_user_data: *mut core::ffi::c_void,
 }
+// sizeof(RuntimeConfig) == 24, align 8 on 64-bit.
 ```
 
 #### Why `hot_reload_enabled` Defaults to `false`
@@ -148,29 +153,26 @@ rt.reload_bundle(path)?;  // Returns Err(RuntimeError::HotReloadDisabled)
 
 ```rust
 use polyplug::RuntimeConfig;
-use std::time::Duration;
+use polyplug_abi::runtime::{Compatibility, ReloadPhaseType};
 
 let config = RuntimeConfig {
+    compatibility: Compatibility::Strict,
     hot_reload_enabled: true,  // REQUIRED for reload_bundle()
-    hot_reload_max_retries: 5,
-    hot_reload_retry_interval: Duration::from_secs(2),
-    hot_reload_abort_on_max_retries: false,
+    on_reload: None,
+    on_reload_user_data: core::ptr::null_mut(),
 };
 
 let rt = Runtime::builder()
     .config(config)
-    .on_reload(|phase| match phase {
-        ReloadPhase::Preparing { bundle_id, retry_count, .. } => {
-            if retry_count > 0 {
-                eprintln!("WARNING: Reload retry {} for bundle {}", retry_count, bundle_id);
-            }
-            // Destroy instances for this bundle
+    .on_reload(|_user_data, phase| match phase.phase_type {
+        ReloadPhaseType::Preparing => {
+            // Destroy all caller wrappers for phase.bundle_id here.
         }
-        ReloadPhase::Reloaded { bundle_id, .. } => {
-            println!("Reloaded bundle {}", bundle_id);
+        ReloadPhaseType::Reloaded => {
+            println!("Reloaded bundle {:?}", phase.bundle_id);
         }
-        ReloadPhase::Failed { bundle_id, reason, .. } => {
-            eprintln!("ERROR: Reload failed for bundle {}: {}", bundle_id, reason);
+        ReloadPhaseType::Failed => {
+            eprintln!("ERROR: Reload failed for bundle {:?}", phase.bundle_id);
         }
     })
     .build()?;
@@ -206,7 +208,7 @@ For language-specific API details and examples, see the SDK documentation:
 │  RELOAD TRIGGERED                                                   │
 │  ─────────────────                                                  │
 │                                                                      │
-│  1. Runtime: on_reload(Preparing { bundle_id, retry: 0 })           │
+│  1. Runtime: on_reload(Preparing { bundle_id })                     │
 │     │                                                                │
 │     ▼                                                                │
 │  2. Host: instances[bundle_id].clear()                              │
@@ -215,64 +217,30 @@ For language-specific API details and examples, see the SDK documentation:
 │     ├─ encoder_instance destroyed                                   │
 │     │                                                                │
 │     ▼                                                                │
-│  3. All instances destroyed - safe to swap                          │
+│  3. Runtime: Arc::strong_count check (informational only) — emits   │
+│     a warning if refs remain, then proceeds with the reload anyway. │
 │     │                                                                │
 │     ▼                                                                │
-│  4. Runtime: apply_reload_swap(new_interface)  ← RwLock write      │
+│  4. Runtime: loader.reload() → load + polyplug_init                 │
+│     │                                                                │
+│     ├─ FAILURE ─► on_reload(Failed { bundle_id, reason })           │
+│     │            keep old interface, return error                   │
+│     │                                                                │
+│     ▼ SUCCESS                                                       │
+│  5. Runtime: apply_reload_swap(new_interface)  ← RwLock write      │
 │     │                                                                │
 │     ▼                                                                │
-│  5. Runtime: on_reload(Reloaded { bundle_id })                      │
+│  6. Runtime: on_reload(Reloaded { bundle_id })                      │
 │     │                                                                │
 │     ▼                                                                │
-│  6. Host: Can create new instances now                              │
-│                                                                      │
-│  ─────────────────────────────────────────────────────────────────  │
-│                                                                      │
-│  IF STUCK (instances not destroyed after 1 second):                 │
-│                                                                      │
-│  2b. Runtime: on_reload(Preparing { bundle_id, retry: 1 })          │
-│      Host: "I missed something!" → Force cleanup                    │
-│      Wait 1 second...                                               │
-│                                                                      │
-│  2c. Runtime: on_reload(Preparing { bundle_id, retry: 2 })          │
-│      Host: Still stuck? Search for leaks                            │
-│      Wait 1 second...                                               │
-│                                                                      │
-│  2d. Runtime: on_reload(Preparing { bundle_id, retry: 3 })          │
-│      Host: Last chance!                                             │
-│      Wait 1 second...                                               │
-│                                                                      │
-│  ─────────────────────────────────────────────────────────────────  │
-│                                                                      │
-│  IF STILL STUCK AFTER MAX RETRIES (3):                              │
-│                                                                      │
-│  3. Runtime: emit_warning("reload stuck, aborting...")              │
-│     │                                                                │
-│     ▼                                                                │
-│  4. Runtime: on_reload(Failed { bundle_id, reason })                │
-│     │                                                                │
-│     ▼                                                                │
-│  5. Runtime: Return error, keep old interface                       │
-│     │                                                                │
-│     ▼                                                                │
-│  6. Host: Log error, alert user, or investigate leak                │
+│  7. Host: Can create new instances now                              │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## Retry and Abort Behavior
-
-| Retry | Action | Timeout |
-|-------|--------|---------|
-| 0 | First `Preparing` notification | 1 second |
-| 1 | Second `Preparing` (retry) | 1 second |
-| 2 | Third `Preparing` (retry) | 1 second |
-| 3 | Fourth `Preparing` (retry) | 1 second |
-| >3 | **ABORT** → `Failed` notification | - |
-
-**Total time before abort: ~4 seconds** (initial + 3 retries)
+The reload is a single attempt: `Preparing` fires once, the leak check is
+informational, and the reload proceeds regardless. There is no waiting, no
+retry loop, and no max-retry abort.
 
 ---
 
@@ -296,11 +264,12 @@ if (!decoder) { /* handle error */ }
 PipelineDecoder decoder(rt);  // Throws on error? Inconsistent with C++ patterns.
 ```
 
-### 3. Why Retry Count?
+### 3. Why an Informational Leak Check Instead of Retries?
 
-- **Debugging**: Host knows it missed cleanup
-- **Recovery**: Host can search for leaked instances
-- **Observability**: Logs show "stuck" situations
+- **Determinism**: A single reload attempt has predictable, bounded timing
+- **No hangs**: The runtime never blocks waiting for the host to drop refs
+- **Observability**: A warning surfaces a suspected leak without aborting
+- **Clear contract**: The host owns instance lifetime in the `Preparing` callback
 
 ### 4. Why Per-Bundle Tracking?
 
@@ -308,11 +277,11 @@ PipelineDecoder decoder(rt);  // Throws on error? Inconsistent with C++ patterns
 - **Efficiency**: Don't need to destroy all instances
 - **Simplicity**: Clear mental model for host developers
 
-### 5. Why Abort After Max Retries?
+### 5. Why Fire `Failed` on Init Failure?
 
-- **Safety**: Force-proceed could cause use-after-free
-- **Visibility**: `Failed` notification tells host exactly what happened
-- **Recovery**: Host can investigate and fix the leak, then retry reload
+- **Visibility**: The `Failed` notification tells the host exactly what happened
+- **Safety**: No swap occurs, so the old interface stays valid
+- **Recovery**: Host can fix the bundle and trigger the reload again
 
 ### 6. Why Opt-In via `hot_reload_enabled`?
 
