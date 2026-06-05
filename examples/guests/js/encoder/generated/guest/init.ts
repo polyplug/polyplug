@@ -13,6 +13,27 @@ function storeHostVtable(lo: number, hi: number): void {
     (globalThis as any).polyplug._hostVtableHi = hi;
 }
 
+/**
+ * Get a host extension by name.
+ *
+ * Computes the extension ID via FNV-1a 32-bit hash of the UTF-8 encoded name,
+ * then calls polyplug.getExtension. Returns 0 if not registered.
+ *
+ * @param name - Extension name string.
+ * @returns Opaque extension pointer as number, or 0 if not registered.
+ */
+export function polyplug_get_extension(name: string): number {
+    const polyplug = (globalThis as any).polyplug;
+    if (!polyplug) return 0;
+    const enc: Uint8Array = new TextEncoder().encode(name);
+    let hash: number = 2166136261;
+    for (let i = 0; i < enc.length; i++) {
+        hash = (Math.imul(hash ^ enc[i], 16777619)) >>> 0;
+    }
+    const result: unknown = polyplug.getExtension(hash);
+    return (result as number) ?? 0;
+}
+
 // ABI error codes (match polyplug_abi.AbiErrorCode)
 const AbiErrorCode = {
     Ok: 0,
@@ -59,7 +80,8 @@ export function polyplug_init(
         ENCODER_INTERFACE.contractHi,
         ENCODER_INTERFACE,
         ENCODER_INTERFACE.fnCount,
-        ENCODER_INTERFACE.contractName
+        ENCODER_INTERFACE.contractName,
+        ENCODER_INTERFACE.version
     );
 
     return { code: AbiErrorCode.Ok, message: { ptr: 0, len: 0 } };

@@ -26,6 +26,35 @@ use polyplug_guest::string_view_from_static;
 //   #[unsafe(no_mangle)]
 //   pub extern "C" fn polyplug_abi_version() -> u32 { 1 }
 
+fn fnv1a_32(data: &[u8]) -> u32 {
+    let mut hash: u32 = 2_166_136_261_u32;
+    for &byte in data {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(16_777_619_u32);
+    }
+    hash
+}
+
+/// Get a host extension by name.
+///
+/// Computes the extension ID via FNV-1a 32-bit hash of the name bytes,
+/// then calls `host.get_extension`. Returns `None` if not registered.
+///
+/// # Safety
+/// The returned pointer is valid only as long as the host runtime is alive.
+pub unsafe fn polyplug_get_extension(name: &[u8]) -> Option<*const ()> {
+    let host_ptr: *const HostInterface = polyplug_guest::get_host_vtable();
+    if host_ptr.is_null() {
+        return None;
+    }
+    // SAFETY: host_ptr was stored during polyplug_init and is valid for the plugin lifetime.
+    let host: &HostInterface = unsafe { &*host_ptr };
+    let extension_id: u32 = fnv1a_32(name);
+    // SAFETY: get_extension is a valid function pointer from the host ABI.
+    let ptr: *const () = unsafe { (host.get_extension)(host_ptr, extension_id) };
+    if ptr.is_null() { None } else { Some(ptr) }
+}
+
 /// Register all plugin interfaces with the host.
 ///
 /// # Safety
@@ -37,13 +66,13 @@ pub unsafe extern "C" fn polyplug_init(
 ) -> AbiError {
     if host.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: string_view_from_static(b"host is null"),
         };
     }
     if ctx.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: string_view_from_static(b"ctx is null"),
         };
     }
@@ -89,7 +118,7 @@ pub unsafe extern "C" fn polyplug_init(
             &TRANSFORMER_INTERFACE as *const GuestContractInterface,
         )
     };
-    if err_TRANSFORMER.code != AbiErrorCode::Ok {
+    if err_TRANSFORMER.code != AbiErrorCode::Ok as u32 {
         return err_TRANSFORMER;
     }
 

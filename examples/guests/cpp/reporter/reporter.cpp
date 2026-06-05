@@ -14,9 +14,9 @@ public:
         if (std::getline(iss, name, '|') && std::getline(iss, value, '|') && std::getline(iss, count_str, '|')) {
             std::ostringstream oss;
             oss << "Report: " << name << " has value '" << value << "' with count " << count_str;
-            return polyplug::abi::alloc_string(oss.str());
+            return polyplug::alloc_string(oss.str());
         }
-        return polyplug::abi::alloc_string("ERROR:invalid input format");
+        return polyplug::alloc_string("ERROR:invalid input format");
     }
 };
 

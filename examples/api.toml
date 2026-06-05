@@ -90,7 +90,7 @@ version = "1.0.0"
 [[host_contract.functions]]
 name = "log"
 params = [{ name = "message", type = "StringView" }]
-returns = "void"
+return = "void"
 
 [[host_contract.functions]]
 name = "log_with_level"
@@ -98,4 +98,4 @@ params = [
     { name = "level", type = "LogLevel" },
     { name = "message", type = "StringView" }
 ]
-returns = "void"
+return = "void"

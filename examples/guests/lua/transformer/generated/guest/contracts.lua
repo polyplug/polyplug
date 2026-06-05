@@ -26,12 +26,11 @@ function M._register_TRANSFORMER()
         end
     end
     _G._polyplug_handlers = _G._polyplug_handlers or {}
-    if _G._polyplug_handlers.contract_name == nil then
-        _G._polyplug_handlers.contract_name = "data.Transformer"
-        _G._polyplug_handlers.contract_version = 1
-        _G._polyplug_handlers.plugin_name = "transformer"
-        _G._polyplug_handlers.functions = functions
-    end
+    _G._polyplug_handlers["data.Transformer"] = {
+        contract_version = 1,
+        plugin_name = "transformer",
+        functions = functions,
+    }
 end
 
 
@@ -43,6 +42,23 @@ function polyplug_init(host_ptr, ctx_ptr)
     polyplug_guest.store_host_interface(host_ptr)
     M._register_TRANSFORMER()
     return polyplug_guest.AbiErrorCode.Ok
+end
+
+--- Get a host extension by name. Returns nil if not registered.
+-- @param name string Extension name (as a Lua string).
+-- @return cdata|nil Opaque extension pointer, or nil if not registered.
+function M.polyplug_get_extension(name)
+    local host_ptr = polyplug_guest.get_host_interface()
+    if host_ptr == nil then return nil end
+    local hash = 2166136261
+    for i = 1, #name do
+        hash = bit.bxor(hash, name:byte(i))
+        hash = bit.band(hash * 16777619, 0xFFFFFFFF)
+    end
+    local host = ffi.cast('HostInterface*', ffi.cast('uintptr_t', host_ptr))
+    local ptr = host.get_extension(host_ptr, hash)
+    if ptr == nil then return nil end
+    return ptr
 end
 
 return M

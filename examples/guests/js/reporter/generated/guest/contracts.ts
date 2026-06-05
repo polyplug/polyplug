@@ -29,6 +29,7 @@ export const REPORTER_INTERFACE = {
     fnCount: 1,
     functions: null as unknown as number[],
     contractName: "data.Reporter@1",
+    version: 0x00010000,
 };
 
 export const REPORTER_DESCRIPTOR = {

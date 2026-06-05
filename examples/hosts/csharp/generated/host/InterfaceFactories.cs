@@ -21,7 +21,7 @@ private static AbiError host_logger_log_thunk(IntPtr implPtr, IntPtr argsPtr, In
         _ = outPtr;
         return new AbiError { Code = AbiErrorCode.Ok };
     } catch (Exception ex) {
-        var msg = StringHelpers.AllocString(ex.Message);
+        var msg = StringHelpers.StaticMessage(ex.Message);
         return new AbiError { Code = AbiErrorCode.Panic, Message = msg };
     }
 }
@@ -44,7 +44,7 @@ private static AbiError host_logger_log_with_level_thunk(IntPtr implPtr, IntPtr 
         _ = outPtr;
         return new AbiError { Code = AbiErrorCode.Ok };
     } catch (Exception ex) {
-        var msg = StringHelpers.AllocString(ex.Message);
+        var msg = StringHelpers.StaticMessage(ex.Message);
         return new AbiError { Code = AbiErrorCode.Panic, Message = msg };
     }
 }
@@ -87,6 +87,9 @@ public static unsafe HostContractInterface CreateHostLoggerInterface<T>(T impl) 
         Singleton = false,
         DispatchType = DispatchType.Native,
         Runtime = IntPtr.Zero,
+        // The managed implementation lives in a static field (managed references
+        // cannot be stored in a raw IntPtr); UserData is unused for this path.
+        UserData = IntPtr.Zero,
         CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&host_logger_create_instance_stub,
         DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, HostContractInstance, void>)&host_logger_destroy_instance_stub,
         Dispatch = new DispatchMechanisms {
@@ -115,6 +118,7 @@ public static unsafe HostContractInterface CreateHostLoggerInterfaceVm(
         Singleton = false,
         DispatchType = DispatchType.VirtualMachine,
         Runtime = IntPtr.Zero,
+        UserData = loaderData,  // registrant-owned VM bridge data
         CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&host_logger_create_instance_stub,
         DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, HostContractInstance, void>)&host_logger_destroy_instance_stub,
         Dispatch = new DispatchMechanisms {

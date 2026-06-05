@@ -38,7 +38,7 @@ export function createHostLoggerVtable(impl: contracts.HostLogger): HostContract
                 return AbiErrorCode.Panic;
             }
             const level: LogLevel = 0;
-            const message: string = 0;
+            const message = '';
             impl.LogWithLevel(level, message);
             return AbiErrorCode.Ok;
         } catch (e) {
@@ -51,7 +51,7 @@ export function createHostLoggerVtable(impl: contracts.HostLogger): HostContract
         _host_logger_log_with_level_thunk,
     ];
 
-    const interface: HostContractVTable = {
+    const vtable: HostContractVTable = {
         header: {
             vtableVersion: 1,
             contractIdLo: 0x845853BB,
@@ -70,7 +70,7 @@ export function createHostLoggerVtable(impl: contracts.HostLogger): HostContract
         },
     };
 
-    return interface;
+    return vtable;
 }
 
 let _HostLogger_impl: contracts.HostLogger | null = null;
@@ -80,7 +80,7 @@ export function createHostLoggerVtableVm(
     bridgeData: { lo: number; hi: number },
     dispatchFn: (bridgeData: { lo: number; hi: number }, fnId: number, args: number, out: number) => number,
 ): HostContractVTable {
-    const interface: HostContractVTable = {
+    const vtable: HostContractVTable = {
         header: {
             vtableVersion: 1,
             contractIdLo: 0x845853BB,
@@ -99,6 +99,6 @@ export function createHostLoggerVtableVm(
         },
     };
 
-    return interface;
+    return vtable;
 }
 

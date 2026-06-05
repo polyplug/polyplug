@@ -14,10 +14,10 @@ public:
         if (std::getline(iss, name, '|') && std::getline(iss, value, '|') && std::getline(iss, count_str, '|') && !name.empty() && !value.empty()) {
             try {
                 std::stoi(count_str);
-                return polyplug::abi::alloc_string("VALID:" + s);
+                return polyplug::alloc_string("VALID:" + s);
             } catch (...) {}
         }
-        return polyplug::abi::alloc_string("INVALID:expected name|value|count");
+        return polyplug::alloc_string("INVALID:expected name|value|count");
     }
 };
 

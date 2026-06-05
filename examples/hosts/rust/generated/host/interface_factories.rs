@@ -37,13 +37,9 @@ use polyplug_abi::string_view_from_static;
 pub fn create_host_logger_interface(
     implementation: Box<dyn HostLogger>,
 ) -> &'static HostContractInterface {
-    static IMPL_PTR: std::sync::atomic::AtomicPtr<c_void> =
-        std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-
     let fat_ptr: *const dyn HostLogger = Box::into_raw(implementation);
     let wrapper: Box<*const dyn HostLogger> = Box::new(fat_ptr);
     let impl_ptr: *const *const dyn HostLogger = Box::into_raw(wrapper);
-    IMPL_PTR.store(impl_ptr as *mut c_void, std::sync::atomic::Ordering::SeqCst);
 
     // SAFETY: impl_ptr is a valid *const T from Box::into_raw, args/out are valid per ABI contract.
     unsafe extern "C" fn host_logger_log_thunk(
@@ -68,7 +64,7 @@ pub fn create_host_logger_interface(
         })) {
             Ok(err) => err,
             Err(_) => AbiError {
-                code: AbiErrorCode::Panic,
+                code: AbiErrorCode::Panic as u32,
                 message: string_view_from_static(b"panic in host.logger::log"),
             },
         }
@@ -99,7 +95,7 @@ pub fn create_host_logger_interface(
         })) {
             Ok(err) => err,
             Err(_) => AbiError {
-                code: AbiErrorCode::Panic,
+                code: AbiErrorCode::Panic as u32,
                 message: string_view_from_static(b"panic in host.logger::log_with_level"),
             },
         }
@@ -110,13 +106,15 @@ pub fn create_host_logger_interface(
 
     /// Create instance stub for `host.logger` host contract.
     /// For host contracts, the instance is the implementation object.
-    /// This stub returns the impl_ptr as the instance data.
+    /// This stub returns the registrant-owned `user_data` as the instance data.
     unsafe extern "C" fn host_logger_create_instance_stub(
-        _this: *const HostContractInterface,
+        this: *const HostContractInterface,
         _args: *const (),
     ) -> HostContractInstance {
+        // SAFETY: `this` is a valid HostContractInterface pointer per ABI contract.
+        // `user_data` holds the implementation pointer stored at registration.
         HostContractInstance {
-            data: IMPL_PTR.load(std::sync::atomic::Ordering::SeqCst),
+            data: unsafe { (*this).user_data },
         }
     }
 
@@ -140,6 +138,7 @@ pub fn create_host_logger_interface(
         singleton: false,
         dispatch_type: DispatchType::Native,
         runtime: std::ptr::null_mut(),
+        user_data: impl_ptr as *mut c_void,
         create_instance: host_logger_create_instance_stub,
         destroy_instance: host_logger_destroy_instance_stub,
         dispatch: DispatchMechanisms {
@@ -173,18 +172,16 @@ pub fn create_host_logger_interface_vm(
         out: *mut (),
     ) -> AbiError,
 ) -> &'static HostContractInterface {
-    static BRIDGE_DATA: std::sync::atomic::AtomicPtr<c_void> =
-        std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-    BRIDGE_DATA.store(bridge_data, std::sync::atomic::Ordering::SeqCst);
-
     /// Create instance stub for `host.logger` host contract (VM dispatch).
-    /// Returns bridge_data as instance for VM-based implementations.
+    /// Returns the registrant-owned `user_data` (bridge_data) as instance for VM-based implementations.
     unsafe extern "C" fn host_logger_vm_create_instance_stub(
-        _this: *const HostContractInterface,
+        this: *const HostContractInterface,
         _args: *const (),
     ) -> HostContractInstance {
+        // SAFETY: `this` is a valid HostContractInterface pointer per ABI contract.
+        // `user_data` holds the bridge_data stored at registration.
         HostContractInstance {
-            data: BRIDGE_DATA.load(std::sync::atomic::Ordering::SeqCst),
+            data: unsafe { (*this).user_data },
         }
     }
 
@@ -206,6 +203,7 @@ pub fn create_host_logger_interface_vm(
         singleton: false,
         dispatch_type: DispatchType::VirtualMachine,
         runtime: std::ptr::null_mut(),
+        user_data: bridge_data,
         create_instance: host_logger_vm_create_instance_stub,
         destroy_instance: host_logger_vm_destroy_instance_stub,
         dispatch: DispatchMechanisms {

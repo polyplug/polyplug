@@ -50,7 +50,8 @@ public sealed class HostLoggerContract {
                 return;
             }
 
-            var message_view = StringHelpers.AllocString(message);
+            using var message_pin = new PinnedUtf8(message);
+            var message_view = message_pin.View;
             var argsPtr = (IntPtr)(&message_view);
             var outPtr = IntPtr.Zero;
 
@@ -90,9 +91,10 @@ public sealed class HostLoggerContract {
                 return;
             }
 
+            using var message_pin = new PinnedUtf8(message);
             var args = new HostLoggerContractLogWithLevelArgs {
                 Level = level,
-                Message = StringHelpers.AllocString(message),
+                Message = message_pin.View,
             };
             var argsPtr = (IntPtr)(&args);
             var outPtr = IntPtr.Zero;

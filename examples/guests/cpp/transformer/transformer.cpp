@@ -16,9 +16,9 @@ public:
             for (auto& c : name) c = ::toupper(c);
             std::ostringstream oss;
             oss << "TRANSFORMED:" << name << "|" << value << " (transformed)|" << (count + 1);
-            return polyplug::abi::alloc_string(oss.str());
+            return polyplug::alloc_string(oss.str());
         }
-        return polyplug::abi::alloc_string("ERROR:invalid input format");
+        return polyplug::alloc_string("ERROR:invalid input format");
     }
 };
 

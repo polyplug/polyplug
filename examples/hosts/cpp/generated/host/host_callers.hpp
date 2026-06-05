@@ -97,13 +97,13 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{AbiErrorCode::InvalidPointer, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
         if (0U >= interface_->dispatch.native.function_count) {
             static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{AbiErrorCode::FunctionNotAvailable, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
         AbiError err{};
         switch (interface_->dispatch_type) {
@@ -223,13 +223,13 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{AbiErrorCode::InvalidPointer, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
         if (0U >= interface_->dispatch.native.function_count) {
             static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{AbiErrorCode::FunctionNotAvailable, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
         AbiError err{};
         switch (interface_->dispatch_type) {
@@ -349,13 +349,13 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{AbiErrorCode::InvalidPointer, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
         if (0U >= interface_->dispatch.native.function_count) {
             static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{AbiErrorCode::FunctionNotAvailable, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
         AbiError err{};
         switch (interface_->dispatch_type) {
@@ -475,13 +475,13 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{AbiErrorCode::InvalidPointer, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
         if (0U >= interface_->dispatch.native.function_count) {
             static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{AbiErrorCode::FunctionNotAvailable, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
         AbiError err{};
         switch (interface_->dispatch_type) {
@@ -601,13 +601,13 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{AbiErrorCode::InvalidPointer, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
         if (0U >= interface_->dispatch.native.function_count) {
             static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{AbiErrorCode::FunctionNotAvailable, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
         AbiError err{};
         switch (interface_->dispatch_type) {

@@ -125,7 +125,7 @@ console.log("");
 
 // Dispatch the full data-processing pipeline through the generated host callers.
 // Each stage resolves its contract via findGuestContract + resolveGuestContractInterface,
-// then dispatches through HostInterface.call_guest_method. Stages whose contract is
+// then dispatches directly through the resolved interface. Stages whose contract is
 // not registered are skipped (mirrors the rust/python reference hosts).
 const decoder = PipelineDecoderContract.create(rt);
 if (decoder) {

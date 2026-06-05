@@ -128,30 +128,22 @@ impl HostLoggerCaller {
             }
         };
 
-        if err.code != AbiErrorCode::Ok {
+        if err.code != AbiErrorCode::Ok as u32 {
             let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
                 String::new()
             } else {
-                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
-                // allocated by the host via host_alloc. We read it before freeing.
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.
+                // The message is owned by the producer (static or runtime-owned); the
+                // receiver must NEVER free it. We only copy it into an owned String.
                 let s: String = unsafe {
                     let slice: &[u8] =
                         core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
-                // SAFETY: err.message.ptr was allocated by the host via host_alloc with align 1.
-                // We must free it after reading to avoid memory leak.
-                unsafe {
-                    polyplug_guest::ffi::polyplug_host_free(
-                        err.message.ptr as *mut u8,
-                        err.message.len,
-                        1,
-                    )
-                };
                 s
             };
             return Err(HostContractError {
-                code: err.code,
+                code: AbiErrorCode::from_u32(err.code),
                 message,
             });
         }
@@ -210,30 +202,22 @@ impl HostLoggerCaller {
             }
         };
 
-        if err.code != AbiErrorCode::Ok {
+        if err.code != AbiErrorCode::Ok as u32 {
             let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
                 String::new()
             } else {
-                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
-                // allocated by the host via host_alloc. We read it before freeing.
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.
+                // The message is owned by the producer (static or runtime-owned); the
+                // receiver must NEVER free it. We only copy it into an owned String.
                 let s: String = unsafe {
                     let slice: &[u8] =
                         core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
-                // SAFETY: err.message.ptr was allocated by the host via host_alloc with align 1.
-                // We must free it after reading to avoid memory leak.
-                unsafe {
-                    polyplug_guest::ffi::polyplug_host_free(
-                        err.message.ptr as *mut u8,
-                        err.message.len,
-                        1,
-                    )
-                };
                 s
             };
             return Err(HostContractError {
-                code: err.code,
+                code: AbiErrorCode::from_u32(err.code),
                 message,
             });
         }

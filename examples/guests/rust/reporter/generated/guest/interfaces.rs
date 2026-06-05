@@ -29,7 +29,7 @@ use std::sync::OnceLock;
 fn plugin_error_to_abi_error(e: GuestError) -> AbiError {
     let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());
     AbiError {
-        code: e.code,
+        code: e.code as u32,
         message,
     }
 }
@@ -77,20 +77,20 @@ extern "C" fn reporter_report_abi(
             Some(i) => i.as_ref(),
             None => {
                 return AbiError {
-                    code: AbiErrorCode::Generic,
+                    code: AbiErrorCode::Generic as u32,
                     message: string_view_from_static(b"implementation not registered"),
                 };
             }
         };
         if args.is_null() {
             return AbiError {
-                code: AbiErrorCode::InvalidPointer,
+                code: AbiErrorCode::InvalidPointer as u32,
                 message: string_view_from_static(b"args pointer is null"),
             };
         }
         if out.is_null() {
             return AbiError {
-                code: AbiErrorCode::InvalidPointer,
+                code: AbiErrorCode::InvalidPointer as u32,
                 message: string_view_from_static(b"out pointer is null"),
             };
         }

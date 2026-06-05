@@ -56,11 +56,16 @@ class HostLoggerContract:
             return
         iface: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractInterface)).contents
         dispatch_type: int = iface.dispatch_type
-        args_val: dict[str, Any] = {}
-        args_val['level'] = level
+        class _ArgsPack(ctypes.Structure):
+            _fields_ = [
+                ("level", LogLevel),
+                ("message", StringView),
+            ]
+        args_val: _ArgsPack = _ArgsPack()
+        args_val.level = level
         message_bytes: bytes = message.encode('utf-8')
-        args_val['message'] = StringView(ptr=ctypes.cast(ctypes.c_char_p(message_bytes), ctypes.c_void_p), len=len(message_bytes))
-        args_ptr: ctypes.c_void_p = ctypes.c_void_p(ctypes.addressof(args_val))
+        args_val.message = StringView(ptr=ctypes.cast(ctypes.c_char_p(message_bytes), ctypes.c_void_p), len=len(message_bytes))
+        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(args_val), ctypes.c_void_p)
         out_ptr: ctypes.c_void_p = ctypes.c_void_p()
         err: AbiError
         if dispatch_type == DispatchType.Native:

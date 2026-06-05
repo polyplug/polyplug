@@ -6,7 +6,7 @@ from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
 from polyplug_abi import AbiErrorCode, AbiError, DispatchType, DispatchMechanisms, NativeDispatch, HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version
-from polyplug_guest import store_host_interface, _init_allocator
+from polyplug_guest import store_host_interface, get_host_interface, _init_allocator
 
 if TYPE_CHECKING:
     from ctypes import _Pointer as _CtypesPointer
@@ -113,4 +113,22 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
     )
     if err_DECODER.code != AbiErrorCode.Ok:
         raise RuntimeError("plugin registration failed")
+
+def polyplug_get_extension(name: bytes) -> int:
+    """Get a host extension by name. Returns 0 (null) if not registered.
+
+    Args:
+        name: Extension name as UTF-8 bytes.
+    Returns:
+        Opaque extension pointer as int, or 0 if not registered.
+    """
+    host_ptr: int = get_host_interface()
+    if host_ptr == 0:
+        return 0
+    hash_val: int = 2166136261
+    for byte in name:
+        hash_val ^= byte
+        hash_val = (hash_val * 16777619) & 0xFFFFFFFF
+    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
+    return host.contents.get_extension(host_ptr, ctypes.c_uint32(hash_val))
 

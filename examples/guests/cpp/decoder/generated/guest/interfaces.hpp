@@ -28,10 +28,10 @@ inline AbiError decoder_decode_abi(GuestContractInstance instance, const void* a
     (void)instance;  // Suppress unused warning for stateless plugins.
     try {
         if (args == nullptr) {
-            return AbiError{AbiErrorCode::InvalidPointer, StringView{nullptr, 0}};
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
         }
         if (out == nullptr) {
-            return AbiError{AbiErrorCode::InvalidPointer, StringView{nullptr, 0}};
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
         }
         // SAFETY: args is a valid const void* pointing to a StringView per ABI contract.
 // The host guarantees proper alignment and size before calling this wrapper.
@@ -39,14 +39,18 @@ auto result = g_decoder_impl->decode(*static_cast<const StringView*>(args));
         // SAFETY: out is a valid void* pointing to a StringView per ABI contract.
         // The host guarantees proper alignment and size before calling this wrapper.
         *static_cast<StringView*>(out) = result;
-        return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};
-    } catch (const std::exception& e) {
-        // SAFETY: e.what() returns a valid null-terminated C string; reinterpret_cast preserves pointer validity.
-        return AbiError{AbiErrorCode::Generic, StringView{reinterpret_cast<const uint8_t*>(e.what()), std::strlen(e.what())}};
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+    } catch (const std::exception&) {
+        // The AbiError message must outlive this stack frame; the host never frees it.
+        // e.what() points into the (about-to-be-destroyed) exception object, so we
+        // return a static literal instead of a dangling pointer.
+        // SAFETY: err_msg is a static constexpr string literal with known length 26.
+        static constexpr const char* err_msg = "guest threw std::exception";
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 26}};
     } catch (...) {
         // SAFETY: panic_msg is a static constexpr string literal with known length 15.
         static constexpr const char* panic_msg = "plugin panicked";
-        return AbiError{AbiErrorCode::Panic, StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};
     }
 }
 

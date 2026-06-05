@@ -63,7 +63,7 @@ public:
             }
         }
 
-        if (err.code != AbiErrorCode::Ok) {
+        if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             return;
         }
 
@@ -96,7 +96,7 @@ public:
             }
         }
 
-        if (err.code != AbiErrorCode::Ok) {
+        if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             return;
         }
 

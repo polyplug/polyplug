@@ -29,6 +29,7 @@ export const DECODER_INTERFACE = {
     fnCount: 1,
     functions: null as unknown as number[],
     contractName: "pipeline.Decoder@1",
+    version: 0x00010000,
 };
 
 export const DECODER_DESCRIPTOR = {

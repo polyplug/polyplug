@@ -27,10 +27,10 @@ public static class EncoderInterfaces {
             // call impl
             return new AbiError { Code = AbiErrorCode.Ok };
         } catch (Polyplug.Guest.GuestException ex) {
-            var msg = StringHelpers.AllocString(ex.Message);
+            var msg = StringHelpers.StaticMessage(ex.Message);
             return new AbiError { Code = ex.Code, Message = msg };
         } catch {
-            var msg = StringHelpers.AllocString("plugin panicked");
+            var msg = StringHelpers.StaticMessage("plugin panicked");
             return new AbiError { Code = AbiErrorCode.Panic, Message = msg };
         }
     }

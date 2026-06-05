@@ -75,6 +75,9 @@ def create_host_logger_interface(impl: HostLogger) -> HostContractInterface:
     interface.singleton = false
     interface.dispatch_type = DispatchType.Native
     interface.runtime = 0  # Set by runtime during registration
+    # The managed implementation lives in a module global (Python objects
+    # cannot be stored in a raw c_void_p); user_data is unused for this path.
+    interface.user_data = 0
     interface.create_instance = ctypes.cast(None, type(interface.create_instance))
     interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))
     interface.dispatch.native.function_count = 2
@@ -103,6 +106,7 @@ def create_host_logger_interface_vm(
     interface.singleton = false
     interface.dispatch_type = DispatchType.VirtualMachine
     interface.runtime = 0  # Set by runtime during registration
+    interface.user_data = 0  # VM dispatch routes through dispatch.vm.loader_data
     interface.create_instance = ctypes.cast(None, type(interface.create_instance))
     interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))
     interface.dispatch.vm.call = ctypes.cast(dispatch_fn, type(interface.dispatch.vm.call))

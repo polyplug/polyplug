@@ -114,7 +114,7 @@ impl PipelineDecoderContract {
         let err: AbiError = unsafe {
             if 0_u32 >= interface.dispatch.native.function_count {
                 AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::string_view_from_static(
                         b"function not available in interface",
                     ),
@@ -146,30 +146,22 @@ impl PipelineDecoderContract {
                 }
             }
         };
-        if err.code != AbiErrorCode::Ok {
+        if err.code != AbiErrorCode::Ok as u32 {
             let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
                 String::new()
             } else {
-                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
-                // allocated by the plugin via host_alloc. We read it before freeing.
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.
+                // The message is owned by the producer (static or runtime-owned); the
+                // receiver must NEVER free it. We only copy it into an owned String.
                 let s: String = unsafe {
                     let slice: &[u8] =
                         core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
-                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
-                // We must free it after reading to avoid memory leak.
-                unsafe {
-                    polyplug_abi::ffi::polyplug_host_free(
-                        err.message.ptr as *mut u8,
-                        err.message.len,
-                        1,
-                    )
-                };
                 s
             };
             return Err(ContractError {
-                code: err.code,
+                code: AbiErrorCode::from_u32(err.code),
                 message,
             });
         }
@@ -269,7 +261,7 @@ impl DataTransformerContract {
         let err: AbiError = unsafe {
             if 0_u32 >= interface.dispatch.native.function_count {
                 AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::string_view_from_static(
                         b"function not available in interface",
                     ),
@@ -301,30 +293,22 @@ impl DataTransformerContract {
                 }
             }
         };
-        if err.code != AbiErrorCode::Ok {
+        if err.code != AbiErrorCode::Ok as u32 {
             let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
                 String::new()
             } else {
-                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
-                // allocated by the plugin via host_alloc. We read it before freeing.
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.
+                // The message is owned by the producer (static or runtime-owned); the
+                // receiver must NEVER free it. We only copy it into an owned String.
                 let s: String = unsafe {
                     let slice: &[u8] =
                         core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
-                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
-                // We must free it after reading to avoid memory leak.
-                unsafe {
-                    polyplug_abi::ffi::polyplug_host_free(
-                        err.message.ptr as *mut u8,
-                        err.message.len,
-                        1,
-                    )
-                };
                 s
             };
             return Err(ContractError {
-                code: err.code,
+                code: AbiErrorCode::from_u32(err.code),
                 message,
             });
         }
@@ -424,7 +408,7 @@ impl PipelineEncoderContract {
         let err: AbiError = unsafe {
             if 0_u32 >= interface.dispatch.native.function_count {
                 AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::string_view_from_static(
                         b"function not available in interface",
                     ),
@@ -456,30 +440,22 @@ impl PipelineEncoderContract {
                 }
             }
         };
-        if err.code != AbiErrorCode::Ok {
+        if err.code != AbiErrorCode::Ok as u32 {
             let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
                 String::new()
             } else {
-                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
-                // allocated by the plugin via host_alloc. We read it before freeing.
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.
+                // The message is owned by the producer (static or runtime-owned); the
+                // receiver must NEVER free it. We only copy it into an owned String.
                 let s: String = unsafe {
                     let slice: &[u8] =
                         core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
-                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
-                // We must free it after reading to avoid memory leak.
-                unsafe {
-                    polyplug_abi::ffi::polyplug_host_free(
-                        err.message.ptr as *mut u8,
-                        err.message.len,
-                        1,
-                    )
-                };
                 s
             };
             return Err(ContractError {
-                code: err.code,
+                code: AbiErrorCode::from_u32(err.code),
                 message,
             });
         }
@@ -579,7 +555,7 @@ impl DataReporterContract {
         let err: AbiError = unsafe {
             if 0_u32 >= interface.dispatch.native.function_count {
                 AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::string_view_from_static(
                         b"function not available in interface",
                     ),
@@ -611,30 +587,22 @@ impl DataReporterContract {
                 }
             }
         };
-        if err.code != AbiErrorCode::Ok {
+        if err.code != AbiErrorCode::Ok as u32 {
             let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
                 String::new()
             } else {
-                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
-                // allocated by the plugin via host_alloc. We read it before freeing.
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.
+                // The message is owned by the producer (static or runtime-owned); the
+                // receiver must NEVER free it. We only copy it into an owned String.
                 let s: String = unsafe {
                     let slice: &[u8] =
                         core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
-                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
-                // We must free it after reading to avoid memory leak.
-                unsafe {
-                    polyplug_abi::ffi::polyplug_host_free(
-                        err.message.ptr as *mut u8,
-                        err.message.len,
-                        1,
-                    )
-                };
                 s
             };
             return Err(ContractError {
-                code: err.code,
+                code: AbiErrorCode::from_u32(err.code),
                 message,
             });
         }
@@ -734,7 +702,7 @@ impl PipelineValidatorContract {
         let err: AbiError = unsafe {
             if 0_u32 >= interface.dispatch.native.function_count {
                 AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::string_view_from_static(
                         b"function not available in interface",
                     ),
@@ -766,30 +734,22 @@ impl PipelineValidatorContract {
                 }
             }
         };
-        if err.code != AbiErrorCode::Ok {
+        if err.code != AbiErrorCode::Ok as u32 {
             let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
                 String::new()
             } else {
-                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
-                // allocated by the plugin via host_alloc. We read it before freeing.
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.
+                // The message is owned by the producer (static or runtime-owned); the
+                // receiver must NEVER free it. We only copy it into an owned String.
                 let s: String = unsafe {
                     let slice: &[u8] =
                         core::slice::from_raw_parts(err.message.ptr, err.message.len);
                     core::str::from_utf8_unchecked(slice).to_owned()
                 };
-                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
-                // We must free it after reading to avoid memory leak.
-                unsafe {
-                    polyplug_abi::ffi::polyplug_host_free(
-                        err.message.ptr as *mut u8,
-                        err.message.len,
-                        1,
-                    )
-                };
                 s
             };
             return Err(ContractError {
-                code: err.code,
+                code: AbiErrorCode::from_u32(err.code),
                 message,
             });
         }

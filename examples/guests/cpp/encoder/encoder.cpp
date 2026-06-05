@@ -10,7 +10,7 @@ public:
         std::string_view sv = polyplug::abi::strip_prefix(input, "TRANSFORMED:");
         std::string s(sv);
         std::replace(s.begin(), s.end(), '|', ',');
-        return polyplug::abi::alloc_string(s);
+        return polyplug::alloc_string(s);
     }
 };
 

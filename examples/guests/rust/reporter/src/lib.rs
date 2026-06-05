@@ -12,7 +12,9 @@ struct Plugin;
 
 impl DataReporterGuestContract for Plugin {
     fn report(&self, input: StringView) -> Result<StringView, GuestError> {
-        let s = to_str(input);
+        // SAFETY: `input` is a valid StringView whose bytes stay live for the
+        // duration of this call, per the ABI contract for dispatch arguments.
+        let s: &str = unsafe { to_str(&input) };
 
         // Try to get host logger and log messages
         // SAFETY: get_host_vtable() returns a valid pointer or null

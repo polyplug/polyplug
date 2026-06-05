@@ -9,7 +9,7 @@ public:
     StringView decode(StringView input) override {
         std::string s = polyplug::abi::to_string(input);
         std::replace(s.begin(), s.end(), ',', '|');
-        return polyplug::abi::alloc_string("DECODED:" + s);
+        return polyplug::alloc_string("DECODED:" + s);
     }
 };
 

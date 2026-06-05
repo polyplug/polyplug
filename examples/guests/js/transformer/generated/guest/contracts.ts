@@ -29,6 +29,7 @@ export const TRANSFORMER_INTERFACE = {
     fnCount: 1,
     functions: null as unknown as number[],
     contractName: "data.Transformer@1",
+    version: 0x00010000,
 };
 
 export const TRANSFORMER_DESCRIPTOR = {

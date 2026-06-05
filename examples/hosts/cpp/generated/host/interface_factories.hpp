@@ -20,28 +20,27 @@ using namespace polyplug_generated;
 /// The implementation unique_ptr is released and managed internally.
 template<typename T>
 const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> impl) noexcept {
-    static T* s_impl = nullptr;
-    s_impl = impl.release();
+    T* impl_ptr = impl.release();
 
     static constexpr auto host_logger_log_thunk = +[](HostContractInstance instance, const void* args, void* out) noexcept -> AbiError {
-        (void)instance;  // Instance data passed by caller, we use s_impl directly
-        if (s_impl == nullptr) {
-            return AbiError{AbiErrorCode::Panic, StringView{nullptr, 0}};
+        auto* impl = static_cast<HostLogger*>(instance.data);
+        if (impl == nullptr) {
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};
         }
         try {
             StringView message = *static_cast<const StringView*>(args);
-            s_impl->log(message);
+            impl->log(message);
             (void)out;
-            return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
         } catch (...) {
-            return AbiError{AbiErrorCode::Panic, StringView{nullptr, 0}};
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};
         }
     };
 
     static constexpr auto host_logger_log_with_level_thunk = +[](HostContractInstance instance, const void* args, void* out) noexcept -> AbiError {
-        (void)instance;  // Instance data passed by caller, we use s_impl directly
-        if (s_impl == nullptr) {
-            return AbiError{AbiErrorCode::Panic, StringView{nullptr, 0}};
+        auto* impl = static_cast<HostLogger*>(instance.data);
+        if (impl == nullptr) {
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};
         }
         try {
             struct LOG_WITH_LEVELArgs {
@@ -51,11 +50,11 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
             const LOG_WITH_LEVELArgs* packed = static_cast<const LOG_WITH_LEVELArgs*>(args);
             LogLevel level = packed->level;
             StringView message = packed->message;
-            s_impl->log_with_level(level, message);
+            impl->log_with_level(level, message);
             (void)out;
-            return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
         } catch (...) {
-            return AbiError{AbiErrorCode::Panic, StringView{nullptr, 0}};
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};
         }
     };
 
@@ -66,9 +65,10 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
 
     // create_instance stub - host owns the singleton instance lifecycle
     static constexpr HostContractInterface_create_instance_fn create_instance_stub =
-        +[](const HostContractInterface* /*this*/, const void* /*args*/) noexcept -> HostContractInstance {
-        // Multi-instance: not supported in host-side factory, use custom factory
-        return HostContractInstance{nullptr};
+        +[](const HostContractInterface* self, const void* /*args*/) noexcept -> HostContractInstance {
+        // Return the registrant-owned user_data as the instance; the thunks
+        // recover the implementation from it (no static state).
+        return HostContractInstance{self->user_data};
     };
 
     // destroy_instance stub - host owns the singleton instance lifecycle
@@ -83,6 +83,7 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
         false,  // singleton
         DispatchType::Native,  // dispatch_type
         nullptr,  // runtime (set by polyplug during registration)
+        nullptr,  // user_data (set below to the registrant-owned impl)
         create_instance_stub,  // create_instance
         destroy_instance_stub,  // destroy_instance
         DispatchMechanisms{ .native = NativeDispatch{
@@ -91,7 +92,8 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
         } },  // dispatch.native
     };  // dispatch
 
-    (void)s_impl;  // Suppress unused warning - used by thunks
+    // Route the implementation through user_data; create_instance reads it via `this`.
+    s_interface.user_data = static_cast<void*>(impl_ptr);
     return &s_interface;
 }
 
@@ -128,6 +130,7 @@ const HostContractInterface* create_host_logger_interface_vm(
         false,  // singleton
         DispatchType::VirtualMachine,  // dispatch_type
         nullptr,  // runtime (set by polyplug during registration)
+        loader_data,  // user_data (registrant-owned VM bridge data)
         vm_create_instance_stub,  // create_instance
         vm_destroy_instance_stub,  // destroy_instance
         DispatchMechanisms{ .vm = VmDispatch{

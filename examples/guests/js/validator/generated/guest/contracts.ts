@@ -29,6 +29,7 @@ export const VALIDATOR_INTERFACE = {
     fnCount: 1,
     functions: null as unknown as number[],
     contractName: "pipeline.Validator@1",
+    version: 0x00010000,
 };
 
 export const VALIDATOR_DESCRIPTOR = {

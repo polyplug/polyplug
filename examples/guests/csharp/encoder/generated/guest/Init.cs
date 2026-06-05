@@ -43,4 +43,18 @@ public static class Plugin {
             System.Threading.Thread.EndThreadAffinity();
         }
     }
+
+    /// <summary>Gets a host extension by name.</summary>
+    /// <param name="name">Extension name as UTF-8 bytes.</param>
+    /// <returns>
+    /// Opaque extension pointer, or <see cref="IntPtr.Zero"/> if not registered.
+    /// </returns>
+    public static IntPtr GetExtension(System.ReadOnlySpan<byte> name) {
+        uint hash = 2166136261u;
+        foreach (byte b in name) {
+            hash ^= b;
+            hash *= 16777619u;
+        }
+        return PolyplugHost.GetExtension(hash);
+    }
 }

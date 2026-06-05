@@ -57,6 +57,7 @@ fn run() -> Result<(), String> {
         compatibility: polyplug_abi::Compatibility::Strict,
         hot_reload_enabled: true,
         on_reload: None,
+        on_reload_user_data: core::ptr::null_mut(),
     };
 
     let runtime: &'static Runtime = Box::leak(Box::new(
@@ -66,15 +67,17 @@ fn run() -> Result<(), String> {
             .loader(LuaLoader::new(LuaConfig::default()))
             .loader(PythonLoader::new(PythonConfig::default()))
             .config(config)
-            .on_reload(|phase: ReloadPhase| match phase.phase_type {
-                ReloadPhaseType::Preparing => {
-                    eprintln!("[HOT-RELOAD] Preparing: (id=0x{:016X})", phase.bundle_id);
-                }
-                ReloadPhaseType::Reloaded => {
-                    eprintln!("[HOT-RELOAD] Reloaded: (id=0x{:016X})", phase.bundle_id);
-                }
-                ReloadPhaseType::Failed => {
-                    eprintln!("[HOT-RELOAD] Failed: (id=0x{:016X})", phase.bundle_id);
+            .on_reload(|_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
+                match phase.phase_type {
+                    ReloadPhaseType::Preparing => {
+                        eprintln!("[HOT-RELOAD] Preparing: (id=0x{:016X})", phase.bundle_id);
+                    }
+                    ReloadPhaseType::Reloaded => {
+                        eprintln!("[HOT-RELOAD] Reloaded: (id=0x{:016X})", phase.bundle_id);
+                    }
+                    ReloadPhaseType::Failed => {
+                        eprintln!("[HOT-RELOAD] Failed: (id=0x{:016X})", phase.bundle_id);
+                    }
                 }
             })
             .build()

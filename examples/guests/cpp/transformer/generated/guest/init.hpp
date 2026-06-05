@@ -18,7 +18,7 @@ extern "C" uint32_t polyplug_abi_version() { return 1U; }
 extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx) {
     if (!host || !ctx) {
         static constexpr const char* err_msg = "null parameter in polyplug_init";
-        return AbiError{AbiErrorCode::Generic, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};
     }
 
     // Store host interface for later access via polyplug::get_host_interface()
@@ -32,7 +32,28 @@ extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitCon
         { 1U, 0U, 0U }  // version (Version)
     };
     AbiError err_TRANSFORMER = host->register_contract(host, &desc_TRANSFORMER, &polyplug_plugin::TRANSFORMER_INTERFACE);
-    if (err_TRANSFORMER.code != AbiErrorCode::Ok) return err_TRANSFORMER;
+    if (err_TRANSFORMER.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return err_TRANSFORMER;
 
-    return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};
+    return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+}
+
+/// Get a host extension by name (pointer + length).
+///
+/// Computes extension_id = fnv1a_32(name), then calls host->get_extension.
+/// Returns nullptr if the host interface is not yet initialized or the
+/// extension is not registered.
+inline const void* polyplug_get_extension(const char* name, size_t name_len) noexcept {
+    const HostInterface* host = polyplug::get_host_interface();
+    if (!host) return nullptr;
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < name_len; ++i) {
+        hash ^= static_cast<uint8_t>(name[i]);
+        hash *= 16777619u;
+    }
+    return host->get_extension(host, hash);
+}
+/// Convenience overload for string literals.
+template<size_t N>
+inline const void* polyplug_get_extension(const char (&name)[N]) noexcept {
+    return polyplug_get_extension(name, N - 1);
 }
