@@ -9,12 +9,20 @@
 use super::types::*;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::CallArena;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
+
+/// Size of each caller's inline call-arena buffer.
+///
+/// Variable-size VM return values (strings, buffers) are bump-allocated
+/// from this buffer; outputs larger than it spill into host-allocated
+/// overflow blocks that the arena frees on the next reset.
+const CALL_ARENA_BUF_LEN: usize = 512;
 
 /// Host-side error type for contract calls.
 #[derive(Debug)]
@@ -41,6 +49,13 @@ impl ContractError {
 /// - `new()`: calls `create_instance` on the resolved interface
 /// - `drop()`: calls `destroy_instance` to clean up
 /// - dispatch: passes `instance` to all method calls
+///
+/// # Call-arena lifetime
+///
+/// Methods returning variable-size values (`StringView`, `Buffer`, or structs
+/// that may embed one) take `&mut self` and reset this caller's arena at the
+/// start of the call. Any view returned by such a method borrows arena memory
+/// and is valid only until the next arena-backed call on the same caller.
 pub struct PipelineDecoderContract {
     /// Resolved interface pointer from the registry.
     interface: *const GuestContractInterface,
@@ -48,6 +63,11 @@ pub struct PipelineDecoderContract {
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
     host: *const HostApi,
+    /// Stable-address backing buffer for the per-call arena. Boxed so the
+    /// arena's interior pointers stay valid when the caller is moved.
+    arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,
+    /// Per-call bump arena over `arena_buf`, reset at each arena-backed call.
+    arena: CallArena,
 }
 
 impl PipelineDecoderContract {
@@ -75,10 +95,16 @@ impl PipelineDecoderContract {
         // handle from `create_instance` and use it as an opaque dispatch token.
         let instance: GuestContractInstance =
             unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        // Box the backing buffer first so the arena's interior pointers refer
+        // to a stable heap address that survives moving the caller value.
+        let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
+        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
         Some(PipelineDecoderContract {
             interface,
             instance,
             host,
+            arena_buf,
+            arena,
         })
     }
 
@@ -101,7 +127,12 @@ impl PipelineDecoderContract {
 
     /// Call `decode` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
-    pub fn decode(&self, input: StringView) -> Result<StringView, ContractError> {
+    /// Returns a value borrowing this caller's arena; it stays valid until
+    /// the next arena-backed call on this caller.
+    pub fn decode(&mut self, input: StringView) -> Result<StringView, ContractError> {
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        self.arena.reset();
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
         let mut out_val: StringView = unsafe { core::mem::zeroed() };
@@ -141,7 +172,7 @@ impl PipelineDecoderContract {
                             0_u32,
                             args_ptr,
                             out_ptr,
-                            core::ptr::null_mut(),
+                            &mut self.arena as *mut CallArena,
                         )
                     }
                 }
@@ -172,6 +203,8 @@ impl PipelineDecoderContract {
 
 impl Drop for PipelineDecoderContract {
     fn drop(&mut self) {
+        // Free any overflow blocks the arena still holds before dropping.
+        self.arena.reset();
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         // The interface pointer is stored for the lifetime of this wrapper.
@@ -189,6 +222,13 @@ impl Drop for PipelineDecoderContract {
 /// - `new()`: calls `create_instance` on the resolved interface
 /// - `drop()`: calls `destroy_instance` to clean up
 /// - dispatch: passes `instance` to all method calls
+///
+/// # Call-arena lifetime
+///
+/// Methods returning variable-size values (`StringView`, `Buffer`, or structs
+/// that may embed one) take `&mut self` and reset this caller's arena at the
+/// start of the call. Any view returned by such a method borrows arena memory
+/// and is valid only until the next arena-backed call on the same caller.
 pub struct DataTransformerContract {
     /// Resolved interface pointer from the registry.
     interface: *const GuestContractInterface,
@@ -196,6 +236,11 @@ pub struct DataTransformerContract {
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
     host: *const HostApi,
+    /// Stable-address backing buffer for the per-call arena. Boxed so the
+    /// arena's interior pointers stay valid when the caller is moved.
+    arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,
+    /// Per-call bump arena over `arena_buf`, reset at each arena-backed call.
+    arena: CallArena,
 }
 
 impl DataTransformerContract {
@@ -223,10 +268,16 @@ impl DataTransformerContract {
         // handle from `create_instance` and use it as an opaque dispatch token.
         let instance: GuestContractInstance =
             unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        // Box the backing buffer first so the arena's interior pointers refer
+        // to a stable heap address that survives moving the caller value.
+        let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
+        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
         Some(DataTransformerContract {
             interface,
             instance,
             host,
+            arena_buf,
+            arena,
         })
     }
 
@@ -249,7 +300,12 @@ impl DataTransformerContract {
 
     /// Call `transform` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
-    pub fn transform(&self, input: StringView) -> Result<StringView, ContractError> {
+    /// Returns a value borrowing this caller's arena; it stays valid until
+    /// the next arena-backed call on this caller.
+    pub fn transform(&mut self, input: StringView) -> Result<StringView, ContractError> {
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        self.arena.reset();
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
         let mut out_val: StringView = unsafe { core::mem::zeroed() };
@@ -289,7 +345,7 @@ impl DataTransformerContract {
                             0_u32,
                             args_ptr,
                             out_ptr,
-                            core::ptr::null_mut(),
+                            &mut self.arena as *mut CallArena,
                         )
                     }
                 }
@@ -320,6 +376,8 @@ impl DataTransformerContract {
 
 impl Drop for DataTransformerContract {
     fn drop(&mut self) {
+        // Free any overflow blocks the arena still holds before dropping.
+        self.arena.reset();
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         // The interface pointer is stored for the lifetime of this wrapper.
@@ -337,6 +395,13 @@ impl Drop for DataTransformerContract {
 /// - `new()`: calls `create_instance` on the resolved interface
 /// - `drop()`: calls `destroy_instance` to clean up
 /// - dispatch: passes `instance` to all method calls
+///
+/// # Call-arena lifetime
+///
+/// Methods returning variable-size values (`StringView`, `Buffer`, or structs
+/// that may embed one) take `&mut self` and reset this caller's arena at the
+/// start of the call. Any view returned by such a method borrows arena memory
+/// and is valid only until the next arena-backed call on the same caller.
 pub struct PipelineEncoderContract {
     /// Resolved interface pointer from the registry.
     interface: *const GuestContractInterface,
@@ -344,6 +409,11 @@ pub struct PipelineEncoderContract {
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
     host: *const HostApi,
+    /// Stable-address backing buffer for the per-call arena. Boxed so the
+    /// arena's interior pointers stay valid when the caller is moved.
+    arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,
+    /// Per-call bump arena over `arena_buf`, reset at each arena-backed call.
+    arena: CallArena,
 }
 
 impl PipelineEncoderContract {
@@ -371,10 +441,16 @@ impl PipelineEncoderContract {
         // handle from `create_instance` and use it as an opaque dispatch token.
         let instance: GuestContractInstance =
             unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        // Box the backing buffer first so the arena's interior pointers refer
+        // to a stable heap address that survives moving the caller value.
+        let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
+        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
         Some(PipelineEncoderContract {
             interface,
             instance,
             host,
+            arena_buf,
+            arena,
         })
     }
 
@@ -397,7 +473,12 @@ impl PipelineEncoderContract {
 
     /// Call `encode` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
-    pub fn encode(&self, input: StringView) -> Result<StringView, ContractError> {
+    /// Returns a value borrowing this caller's arena; it stays valid until
+    /// the next arena-backed call on this caller.
+    pub fn encode(&mut self, input: StringView) -> Result<StringView, ContractError> {
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        self.arena.reset();
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
         let mut out_val: StringView = unsafe { core::mem::zeroed() };
@@ -437,7 +518,7 @@ impl PipelineEncoderContract {
                             0_u32,
                             args_ptr,
                             out_ptr,
-                            core::ptr::null_mut(),
+                            &mut self.arena as *mut CallArena,
                         )
                     }
                 }
@@ -468,6 +549,8 @@ impl PipelineEncoderContract {
 
 impl Drop for PipelineEncoderContract {
     fn drop(&mut self) {
+        // Free any overflow blocks the arena still holds before dropping.
+        self.arena.reset();
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         // The interface pointer is stored for the lifetime of this wrapper.
@@ -485,6 +568,13 @@ impl Drop for PipelineEncoderContract {
 /// - `new()`: calls `create_instance` on the resolved interface
 /// - `drop()`: calls `destroy_instance` to clean up
 /// - dispatch: passes `instance` to all method calls
+///
+/// # Call-arena lifetime
+///
+/// Methods returning variable-size values (`StringView`, `Buffer`, or structs
+/// that may embed one) take `&mut self` and reset this caller's arena at the
+/// start of the call. Any view returned by such a method borrows arena memory
+/// and is valid only until the next arena-backed call on the same caller.
 pub struct DataReporterContract {
     /// Resolved interface pointer from the registry.
     interface: *const GuestContractInterface,
@@ -492,6 +582,11 @@ pub struct DataReporterContract {
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
     host: *const HostApi,
+    /// Stable-address backing buffer for the per-call arena. Boxed so the
+    /// arena's interior pointers stay valid when the caller is moved.
+    arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,
+    /// Per-call bump arena over `arena_buf`, reset at each arena-backed call.
+    arena: CallArena,
 }
 
 impl DataReporterContract {
@@ -519,10 +614,16 @@ impl DataReporterContract {
         // handle from `create_instance` and use it as an opaque dispatch token.
         let instance: GuestContractInstance =
             unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        // Box the backing buffer first so the arena's interior pointers refer
+        // to a stable heap address that survives moving the caller value.
+        let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
+        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
         Some(DataReporterContract {
             interface,
             instance,
             host,
+            arena_buf,
+            arena,
         })
     }
 
@@ -545,7 +646,12 @@ impl DataReporterContract {
 
     /// Call `report` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
-    pub fn report(&self, input: StringView) -> Result<StringView, ContractError> {
+    /// Returns a value borrowing this caller's arena; it stays valid until
+    /// the next arena-backed call on this caller.
+    pub fn report(&mut self, input: StringView) -> Result<StringView, ContractError> {
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        self.arena.reset();
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
         let mut out_val: StringView = unsafe { core::mem::zeroed() };
@@ -585,7 +691,7 @@ impl DataReporterContract {
                             0_u32,
                             args_ptr,
                             out_ptr,
-                            core::ptr::null_mut(),
+                            &mut self.arena as *mut CallArena,
                         )
                     }
                 }
@@ -616,6 +722,8 @@ impl DataReporterContract {
 
 impl Drop for DataReporterContract {
     fn drop(&mut self) {
+        // Free any overflow blocks the arena still holds before dropping.
+        self.arena.reset();
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         // The interface pointer is stored for the lifetime of this wrapper.
@@ -633,6 +741,13 @@ impl Drop for DataReporterContract {
 /// - `new()`: calls `create_instance` on the resolved interface
 /// - `drop()`: calls `destroy_instance` to clean up
 /// - dispatch: passes `instance` to all method calls
+///
+/// # Call-arena lifetime
+///
+/// Methods returning variable-size values (`StringView`, `Buffer`, or structs
+/// that may embed one) take `&mut self` and reset this caller's arena at the
+/// start of the call. Any view returned by such a method borrows arena memory
+/// and is valid only until the next arena-backed call on the same caller.
 pub struct PipelineValidatorContract {
     /// Resolved interface pointer from the registry.
     interface: *const GuestContractInterface,
@@ -640,6 +755,11 @@ pub struct PipelineValidatorContract {
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
     host: *const HostApi,
+    /// Stable-address backing buffer for the per-call arena. Boxed so the
+    /// arena's interior pointers stay valid when the caller is moved.
+    arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,
+    /// Per-call bump arena over `arena_buf`, reset at each arena-backed call.
+    arena: CallArena,
 }
 
 impl PipelineValidatorContract {
@@ -667,10 +787,16 @@ impl PipelineValidatorContract {
         // handle from `create_instance` and use it as an opaque dispatch token.
         let instance: GuestContractInstance =
             unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        // Box the backing buffer first so the arena's interior pointers refer
+        // to a stable heap address that survives moving the caller value.
+        let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
+        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
         Some(PipelineValidatorContract {
             interface,
             instance,
             host,
+            arena_buf,
+            arena,
         })
     }
 
@@ -693,7 +819,12 @@ impl PipelineValidatorContract {
 
     /// Call `validate` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
-    pub fn validate(&self, input: StringView) -> Result<StringView, ContractError> {
+    /// Returns a value borrowing this caller's arena; it stays valid until
+    /// the next arena-backed call on this caller.
+    pub fn validate(&mut self, input: StringView) -> Result<StringView, ContractError> {
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        self.arena.reset();
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
         let mut out_val: StringView = unsafe { core::mem::zeroed() };
@@ -733,7 +864,7 @@ impl PipelineValidatorContract {
                             0_u32,
                             args_ptr,
                             out_ptr,
-                            core::ptr::null_mut(),
+                            &mut self.arena as *mut CallArena,
                         )
                     }
                 }
@@ -764,6 +895,8 @@ impl PipelineValidatorContract {
 
 impl Drop for PipelineValidatorContract {
     fn drop(&mut self) {
+        // Free any overflow blocks the arena still holds before dropping.
+        self.arena.reset();
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         // The interface pointer is stored for the lifetime of this wrapper.

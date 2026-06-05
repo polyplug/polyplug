@@ -1,12 +1,26 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
+
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::Array;
+use polyplug_abi::CallArena;
+use polyplug_abi::DependencyInfo;
 use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostApi;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::StringView;
+use polyplug_abi::VmLoaderData;
 use polyplug_native::NativeLoader;
+use polyplug_utils::BundleId;
 
 fn test_add_contract_id() -> u64 {
     polyplug_utils::guest_contract_id("test.add", 1)
@@ -172,3 +186,327 @@ fn test_host_caller_reset_is_noop() {
     let result: u32 = caller.add(5, 7).expect("add should work after reset");
     assert_eq!(result, 12_u32, "add(5, 7) should return 12");
 }
+
+// ─── Per-caller arena reuse (VM dispatch, &mut self caller) ────────────────────
+//
+// Mirrors the generated host caller for a `StringView`-returning VM contract: a
+// caller owns a boxed 512-byte buffer plus a `CallArena`, resets the arena at
+// every call, and passes it to the VM `call`. This proves the generated `&mut
+// self` design reuses its buffer — small returns never hit the host allocator
+// after warmup, and a view stays valid until the next arena-backed call.
+
+static CALLER_ARENA_ALLOC_CALLS: AtomicU64 = AtomicU64::new(0);
+
+unsafe extern "C" fn caller_counting_alloc(
+    _this: *const HostApi,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    CALLER_ARENA_ALLOC_CALLS.fetch_add(1, Ordering::SeqCst);
+    let layout: core::alloc::Layout =
+        core::alloc::Layout::from_size_align(size, align).expect("valid layout");
+    // SAFETY: every arena overflow request has non-zero size, so the layout is non-zero.
+    unsafe { std::alloc::alloc(layout) }
+}
+
+unsafe extern "C" fn caller_counting_free(
+    _this: *const HostApi,
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+) {
+    let layout: core::alloc::Layout =
+        core::alloc::Layout::from_size_align(size, align).expect("valid layout");
+    // SAFETY: ptr/size/align match the allocation made by caller_counting_alloc.
+    unsafe { std::alloc::dealloc(ptr, layout) }
+}
+
+unsafe extern "C" fn caller_stub_register_guest(
+    _this: *const HostApi,
+    _descriptor: *const PluginDescriptor,
+    _interface: *const GuestContractInterface,
+) -> AbiError {
+    AbiError::ok()
+}
+
+unsafe extern "C" fn caller_stub_find(
+    _this: *const HostApi,
+    _id: u64,
+    _ver: u32,
+) -> GuestContractHandle {
+    GuestContractHandle::null()
+}
+
+unsafe extern "C" fn caller_stub_find_all(
+    _this: *const HostApi,
+    _id: u64,
+    _ver: u32,
+) -> Array<GuestContractHandle> {
+    Array::empty()
+}
+
+unsafe extern "C" fn caller_stub_resolve_guest(
+    _this: *const HostApi,
+    _handle: GuestContractHandle,
+) -> *const GuestContractInterface {
+    core::ptr::null()
+}
+
+unsafe extern "C" fn caller_stub_get_host_contract(
+    _this: *const HostApi,
+    _id: u64,
+    _ver: u32,
+) -> HostContractInstance {
+    HostContractInstance::null()
+}
+
+unsafe extern "C" fn caller_stub_resolve_host_interface(
+    _this: *const HostApi,
+    _id: u64,
+    _ver: u32,
+) -> *const HostContractInterface {
+    core::ptr::null()
+}
+
+unsafe extern "C" fn caller_stub_list_bundles(_this: *const HostApi) -> Array<BundleId> {
+    Array::empty()
+}
+
+unsafe extern "C" fn caller_stub_get_deps(_this: *const HostApi) -> Array<DependencyInfo> {
+    Array::empty()
+}
+
+unsafe extern "C" fn caller_stub_load(_this: *const HostApi, _p: *const u8, _l: usize) -> AbiError {
+    AbiError::ok()
+}
+
+unsafe extern "C" fn caller_stub_register_host(
+    _this: *const HostApi,
+    _interface: *const HostContractInterface,
+) -> AbiError {
+    AbiError::ok()
+}
+
+unsafe extern "C" fn caller_stub_register_loader(
+    _this: *const HostApi,
+    _name: StringView,
+    _loader: *mut core::ffi::c_void,
+) -> AbiError {
+    AbiError::ok()
+}
+
+unsafe extern "C" fn caller_stub_get_last_error(
+    _this: *const HostApi,
+    _buf: *mut u8,
+    _len: usize,
+) -> usize {
+    0
+}
+
+unsafe extern "C" fn caller_stub_get_len(_this: *const HostApi) -> usize {
+    0
+}
+
+unsafe extern "C" fn caller_stub_get_extension(_this: *const HostApi, _id: u32) -> *const () {
+    core::ptr::null()
+}
+
+fn counting_host() -> HostApi {
+    HostApi {
+        runtime: core::ptr::null_mut(),
+        register_guest_contract: caller_stub_register_guest,
+        alloc: caller_counting_alloc,
+        free: caller_counting_free,
+        find_guest_contract: caller_stub_find,
+        find_all_guest_contracts: caller_stub_find_all,
+        resolve_guest_contract: caller_stub_resolve_guest,
+        get_host_contract: caller_stub_get_host_contract,
+        resolve_host_contract_interface: caller_stub_resolve_host_interface,
+        list_bundles: caller_stub_list_bundles,
+        get_dependencies: caller_stub_get_deps,
+        load_bundle: caller_stub_load,
+        reload_bundle: caller_stub_load,
+        register_host_contract: caller_stub_register_host,
+        register_loader: caller_stub_register_loader,
+        get_last_error: caller_stub_get_last_error,
+        get_error_len: caller_stub_get_len,
+        get_extension: caller_stub_get_extension,
+    }
+}
+
+/// Fake VM `call`: echoes the 11-byte input string into arena memory and writes
+/// the resulting `StringView` to `out`. A null arena would force a host alloc.
+unsafe extern "C" fn echo_vm_call(
+    _loader_data: VmLoaderData,
+    _instance: GuestContractInstance,
+    _fn_id: u32,
+    args: *const (),
+    out: *mut (),
+    arena: *mut CallArena,
+) -> AbiError {
+    if arena.is_null() || args.is_null() || out.is_null() {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::null(),
+        };
+    }
+    // SAFETY: args points to a valid StringView per the caller contract.
+    let input: &StringView = unsafe { &*(args as *const StringView) };
+    // SAFETY: arena is the per-caller CallArena, reset by the caller for this call.
+    let dst: *mut u8 = unsafe { (*arena).alloc(input.len, 1) };
+    if dst.is_null() {
+        return AbiError {
+            code: AbiErrorCode::Generic as u32,
+            message: StringView::null(),
+        };
+    }
+    // SAFETY: dst owns input.len bytes from the arena; input.ptr is valid for input.len.
+    unsafe { core::ptr::copy_nonoverlapping(input.ptr, dst, input.len) };
+    // SAFETY: out points to a valid StringView slot per the caller contract.
+    unsafe {
+        core::ptr::write(
+            out as *mut StringView,
+            StringView {
+                ptr: dst,
+                len: input.len,
+            },
+        );
+    }
+    AbiError::ok()
+}
+
+const ARENA_BUF_LEN: usize = 512;
+
+/// Caller mirroring the generated `&mut self` arena caller for a VM contract.
+struct EchoVmCaller {
+    vtable: *const GuestContractInterface,
+    _arena_buf: Box<[u8; ARENA_BUF_LEN]>,
+    arena: CallArena,
+}
+
+impl EchoVmCaller {
+    fn new(vtable: *const GuestContractInterface, host: *const HostApi) -> Self {
+        let mut arena_buf: Box<[u8; ARENA_BUF_LEN]> = Box::new([0u8; ARENA_BUF_LEN]);
+        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
+        Self {
+            vtable,
+            _arena_buf: arena_buf,
+            arena,
+        }
+    }
+
+    fn echo(&mut self, input: StringView) -> StringView {
+        self.arena.reset();
+        let mut out: StringView = StringView::null();
+        // SAFETY: vtable is valid; args/out point to valid StringView slots; arena is per-caller.
+        let err: AbiError = unsafe {
+            let vtable: &GuestContractInterface = &*self.vtable;
+            (vtable.dispatch.vm.call)(
+                vtable.dispatch.vm.loader_data,
+                GuestContractInstance::null(),
+                0_u32,
+                &input as *const StringView as *const (),
+                &mut out as *mut StringView as *mut (),
+                &mut self.arena as *mut CallArena,
+            )
+        };
+        assert_eq!(err.code, AbiErrorCode::Ok as u32, "echo must return Ok");
+        out
+    }
+}
+
+impl Drop for EchoVmCaller {
+    fn drop(&mut self) {
+        self.arena.reset();
+    }
+}
+
+#[test]
+fn test_host_caller_arena_reuses_buffer_across_calls() {
+    use polyplug_abi::DispatchMechanisms;
+    use polyplug_abi::DispatchType;
+    use polyplug_abi::Version;
+    use polyplug_abi::VmDispatch;
+
+    CALLER_ARENA_ALLOC_CALLS.store(0, Ordering::SeqCst);
+
+    let interface: GuestContractInterface = GuestContractInterface {
+        contract_id: polyplug_utils::GuestContractId::from_u64(0),
+        contract_version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
+        dispatch_type: DispatchType::VirtualMachine,
+        create_instance: vm_noop_create,
+        destroy_instance: vm_noop_destroy,
+        dispatch: DispatchMechanisms {
+            vm: VmDispatch {
+                call: echo_vm_call,
+                loader_data: VmLoaderData {
+                    data: core::ptr::null_mut(),
+                },
+            },
+        },
+    };
+
+    let host: HostApi = counting_host();
+    let mut caller: EchoVmCaller = EchoVmCaller::new(
+        &interface as *const GuestContractInterface,
+        &host as *const HostApi,
+    );
+
+    let input_bytes: &[u8] = b"hello arena";
+    let input: StringView = StringView {
+        ptr: input_bytes.as_ptr(),
+        len: input_bytes.len(),
+    };
+
+    const ITERATIONS: usize = 10_000;
+    const WARMUP: usize = 4;
+
+    let mut prev: Option<StringView> = None;
+    for i in 0..ITERATIONS {
+        // The previous call's view stays valid until this call resets the arena.
+        if let Some(p) = prev.take() {
+            // SAFETY: p borrows arena memory valid until the next echo() reset.
+            let s: &[u8] = unsafe { core::slice::from_raw_parts(p.ptr, p.len) };
+            assert_eq!(
+                s, input_bytes,
+                "previous view must read correctly (iter {i})"
+            );
+        }
+
+        let before: u64 = CALLER_ARENA_ALLOC_CALLS.load(Ordering::SeqCst);
+        let out: StringView = caller.echo(input);
+        let after: u64 = CALLER_ARENA_ALLOC_CALLS.load(Ordering::SeqCst);
+
+        // SAFETY: out borrows arena memory valid until the next echo() reset.
+        let out_slice: &[u8] = unsafe { core::slice::from_raw_parts(out.ptr, out.len) };
+        assert_eq!(out_slice, input_bytes, "echo value (iter {i})");
+
+        if i >= WARMUP {
+            assert_eq!(
+                before, after,
+                "after warmup, a small echo must not hit the host allocator (iter {i})"
+            );
+        }
+        prev = Some(out);
+    }
+
+    drop(caller);
+    assert_eq!(
+        CALLER_ARENA_ALLOC_CALLS.load(Ordering::SeqCst),
+        0,
+        "the 512-byte arena serves every 11-byte echo with zero host allocations"
+    );
+}
+
+unsafe extern "C" fn vm_noop_create(
+    _host: *const HostApi,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+unsafe extern "C" fn vm_noop_destroy(_host: *const HostApi, _instance: GuestContractInstance) {}

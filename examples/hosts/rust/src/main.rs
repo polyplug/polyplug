@@ -108,7 +108,7 @@ fn run() -> Result<(), String> {
     let input: &str = "name,value,42";
     println!("Input: \"{input}\"\n");
 
-    if let Some(decoder) =
+    if let Some(mut decoder) =
         find_contract::<PipelineDecoderContract>(runtime, PIPELINE_DECODER_CONTRACT_ID)
     {
         let result_sv: StringView = decoder
@@ -125,7 +125,7 @@ fn run() -> Result<(), String> {
     }
 
     let decoded: String = format!("DECODED:{}", input.replace(',', "|"));
-    if let Some(transformer) =
+    if let Some(mut transformer) =
         find_contract::<DataTransformerContract>(runtime, DATA_TRANSFORMER_CONTRACT_ID)
     {
         let result_sv: StringView = transformer
@@ -142,7 +142,7 @@ fn run() -> Result<(), String> {
     }
 
     let transformed: &str = "TRANSFORMED:NAME|value (transformed)|43";
-    if let Some(encoder) =
+    if let Some(mut encoder) =
         find_contract::<PipelineEncoderContract>(runtime, PIPELINE_ENCODER_CONTRACT_ID)
     {
         let result_sv: StringView = encoder
@@ -158,7 +158,7 @@ fn run() -> Result<(), String> {
         println!("[encoder] encode(\"{}\") = \"{}\"", transformed, result);
     }
 
-    if let Some(reporter) =
+    if let Some(mut reporter) =
         find_contract::<DataReporterContract>(runtime, DATA_REPORTER_CONTRACT_ID)
     {
         let result_sv: StringView = reporter
@@ -174,7 +174,7 @@ fn run() -> Result<(), String> {
         println!("[reporter] report(\"{}\") = \"{}\"", transformed, result);
     }
 
-    if let Some(validator) =
+    if let Some(mut validator) =
         find_contract::<PipelineValidatorContract>(runtime, PIPELINE_VALIDATOR_CONTRACT_ID)
     {
         let result_sv: StringView = validator

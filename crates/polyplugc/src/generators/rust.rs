@@ -131,7 +131,16 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("use polyplug_abi::StringView;\n");
         callers_out.push_str("use polyplug_abi::GuestContractHandle;\n");
         callers_out.push_str("use polyplug_abi::GuestContractInstance;\n");
+        callers_out.push_str("use polyplug_abi::CallArena;\n");
         callers_out.push_str("use super::types::*;\n\n");
+        callers_out.push_str("/// Size of each caller's inline call-arena buffer.\n");
+        callers_out.push_str("///\n");
+        callers_out
+            .push_str("/// Variable-size VM return values (strings, buffers) are bump-allocated\n");
+        callers_out
+            .push_str("/// from this buffer; outputs larger than it spill into host-allocated\n");
+        callers_out.push_str("/// overflow blocks that the arena frees on the next reset.\n");
+        callers_out.push_str("const CALL_ARENA_BUF_LEN: usize = 512;\n\n");
         callers_out.push_str("/// Host-side error type for contract calls.\n");
         callers_out.push_str("#[derive(Debug)]\n");
         callers_out.push_str("pub struct ContractError {\n");
@@ -1269,12 +1278,35 @@ fn dep_min_version(dep: &ResolvedDependency) -> u32 {
     }
 }
 
+/// Whether a function returns a variable-size value the guest writes into the
+/// call arena (a `StringView`, a `Buffer`, or any user-defined struct that may
+/// embed one). Such functions receive a per-caller `CallArena`; all others pass
+/// a null arena and the VM bridge falls back to per-value `host->alloc`.
+///
+/// Passing an arena where none is needed is harmless; passing null where one is
+/// needed only loses the optimisation. The conservative `UserDefined` case keeps
+/// the rule sound without resolving struct fields here.
+fn fn_needs_arena(func: &ResolvedFunction) -> bool {
+    matches!(
+        &func.returns,
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
+            | Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer))
+            | Some(ResolvedTypeRef::UserDefined(_))
+    )
+}
+
+/// Whether any function on the contract needs a call arena.
+fn contract_needs_arena(contract: &ResolvedContract) -> bool {
+    contract.functions.iter().any(fn_needs_arena)
+}
+
 /// Generate the full caller struct + impl for one contract.
 fn generate_host_contract_caller(
     out: &mut String,
     contract: &ResolvedContract,
 ) -> Result<(), PolyplugcError> {
     let struct_name: String = contract_name_to_struct(&contract.name);
+    let needs_arena: bool = contract_needs_arena(contract);
 
     out.push_str(&format!(
         "/// Host caller for contract `{}` (id=0x{:016X})\n",
@@ -1285,6 +1317,17 @@ fn generate_host_contract_caller(
     out.push_str("/// - `new()`: calls `create_instance` on the resolved interface\n");
     out.push_str("/// - `drop()`: calls `destroy_instance` to clean up\n");
     out.push_str("/// - dispatch: passes `instance` to all method calls\n");
+    if needs_arena {
+        out.push_str("///\n");
+        out.push_str(
+            "/// # Call-arena lifetime\n\
+             ///\n\
+             /// Methods returning variable-size values (`StringView`, `Buffer`, or structs\n\
+             /// that may embed one) take `&mut self` and reset this caller's arena at the\n\
+             /// start of the call. Any view returned by such a method borrows arena memory\n\
+             /// and is valid only until the next arena-backed call on the same caller.\n",
+        );
+    }
     out.push_str(&format!("pub struct {struct_name} {{\n"));
     out.push_str("    /// Resolved interface pointer from the registry.\n");
     out.push_str("    interface: *const GuestContractInterface,\n");
@@ -1292,6 +1335,17 @@ fn generate_host_contract_caller(
     out.push_str("    instance: GuestContractInstance,\n");
     out.push_str("    /// Host interface pointer (needed for create/destroy_instance).\n");
     out.push_str("    host: *const HostApi,\n");
+    if needs_arena {
+        out.push_str(
+            "    /// Stable-address backing buffer for the per-call arena. Boxed so the\n\
+             \x20   /// arena's interior pointers stay valid when the caller is moved.\n",
+        );
+        out.push_str("    arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,\n");
+        out.push_str(
+            "    /// Per-call bump arena over `arena_buf`, reset at each arena-backed call.\n",
+        );
+        out.push_str("    arena: CallArena,\n");
+    }
     out.push_str("}\n\n");
 
     out.push_str(&format!("impl {struct_name} {{\n"));
@@ -1324,9 +1378,25 @@ fn generate_host_contract_caller(
     out.push_str("        let instance: GuestContractInstance = unsafe {\n");
     out.push_str("            ((*interface).create_instance)(host, core::ptr::null())\n");
     out.push_str("        };\n");
-    out.push_str(&format!(
-        "        Some({struct_name} {{ interface, instance, host }})\n"
-    ));
+    if needs_arena {
+        out.push_str(
+            "        // Box the backing buffer first so the arena's interior pointers refer\n",
+        );
+        out.push_str(
+            "        // to a stable heap address that survives moving the caller value.\n",
+        );
+        out.push_str("        let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);\n");
+        out.push_str(
+            "        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);\n",
+        );
+        out.push_str(&format!(
+            "        Some({struct_name} {{ interface, instance, host, arena_buf, arena }})\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "        Some({struct_name} {{ interface, instance, host }})\n"
+        ));
+    }
     out.push_str("    }\n\n");
     out.push_str("    /// Check if this caller holds a resolved contract interface.\n");
     out.push_str("    pub fn is_valid(&self) -> bool {\n");
@@ -1356,6 +1426,12 @@ fn generate_host_contract_caller(
     // Generate Drop impl
     out.push_str(&format!("impl Drop for {struct_name} {{\n"));
     out.push_str("    fn drop(&mut self) {\n");
+    if needs_arena {
+        out.push_str(
+            "        // Free any overflow blocks the arena still holds before dropping.\n",
+        );
+        out.push_str("        self.arena.reset();\n");
+    }
     out.push_str("        // Destroy instance via factory\n");
     out.push_str("        // SAFETY: instance was created by create_instance and is valid.\n");
     out.push_str("        // The interface pointer is stored for the lifetime of this wrapper.\n");
@@ -1395,10 +1471,28 @@ fn generate_host_fn_caller(
         func.name, fn_id
     ));
     out.push_str("    #[allow(clippy::absurd_extreme_comparisons)]\n");
+    let needs_arena: bool = fn_needs_arena(func);
+    let self_param: &str = if needs_arena { "&mut self" } else { "&self" };
+    if needs_arena {
+        out.push_str(
+            "    /// Returns a value borrowing this caller's arena; it stays valid until\n\
+             \x20   /// the next arena-backed call on this caller.\n",
+        );
+    }
     out.push_str(&format!(
-        "    pub fn {}(&self{}) -> Result<{ret_type}, ContractError> {{\n",
+        "    pub fn {}({self_param}{}) -> Result<{ret_type}, ContractError> {{\n",
         func.name, sig_params
     ));
+
+    if needs_arena {
+        out.push_str(
+            "        // Reset the arena at call start: frees the previous call's overflow\n",
+        );
+        out.push_str(
+            "        // blocks and rewinds the primary region, invalidating prior views.\n",
+        );
+        out.push_str("        self.arena.reset();\n");
+    }
 
     // args setup
     emit_args_setup(out, func, contract_struct);
@@ -1456,9 +1550,15 @@ fn generate_host_fn_caller(
     out.push_str(&format!("                            {fn_id}_u32,\n"));
     out.push_str("                            args_ptr,\n");
     out.push_str("                            out_ptr,\n");
-    // TODO(call-arena wave B): thread a per-caller CallArena here. The VM bridge
-    // tolerates a null arena and falls back to per-value host allocation.
-    out.push_str("                            core::ptr::null_mut(),\n");
+    if needs_arena {
+        // The guest writes its variable-size return into this per-caller arena;
+        // the returned view is valid until the caller's next arena-backed call.
+        out.push_str("                            &mut self.arena as *mut CallArena,\n");
+    } else {
+        // No variable-size output: a null arena makes the bridge fall back to
+        // per-value host allocation.
+        out.push_str("                            core::ptr::null_mut(),\n");
+    }
     out.push_str("                        )\n");
     out.push_str("                    }\n");
     out.push_str("                }\n");
@@ -3021,6 +3121,96 @@ mod tests {
         assert_eq!(
             host_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
             "MyStruct"
+        );
+    }
+
+    #[test]
+    fn host_caller_with_stringview_return_uses_arena() {
+        use crate::ir::Version;
+
+        let contract: ResolvedContract = ResolvedContract {
+            name: "pipeline.decoder".to_owned(),
+            contract_id: 0x1234_5678_9ABC_DEF0_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "decode".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "input".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_host_contract_caller(&mut out, &contract).expect("generate caller");
+
+        assert!(
+            out.contains("arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>"),
+            "StringView-returning caller must own a boxed arena buffer: {out}"
+        );
+        assert!(
+            out.contains("arena: CallArena"),
+            "StringView-returning caller must own a CallArena: {out}"
+        );
+        assert!(
+            out.contains("pub fn decode(&mut self"),
+            "arena-backed method must take &mut self: {out}"
+        );
+        assert!(
+            out.contains("self.arena.reset();"),
+            "arena-backed method must reset the arena at call start: {out}"
+        );
+        assert!(
+            out.contains("&mut self.arena as *mut CallArena,"),
+            "arena-backed VM call must pass the per-caller arena: {out}"
+        );
+        assert!(
+            !out.contains("pub fn decode(&self"),
+            "arena-backed method must NOT remain &self: {out}"
+        );
+    }
+
+    #[test]
+    fn host_caller_with_primitive_return_passes_null_arena() {
+        use crate::ir::Version;
+
+        let contract: ResolvedContract = ResolvedContract {
+            name: "math.adder".to_owned(),
+            contract_id: 0x0FED_CBA9_8765_4321_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "add".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "a".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                }],
+                returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_host_contract_caller(&mut out, &contract).expect("generate caller");
+
+        assert!(
+            !out.contains("arena: CallArena"),
+            "primitive-returning caller must not own an arena: {out}"
+        );
+        assert!(
+            out.contains("pub fn add(&self"),
+            "non-arena method must remain &self: {out}"
+        );
+        assert!(
+            out.contains("core::ptr::null_mut(),"),
+            "non-arena VM call must pass a null arena: {out}"
         );
     }
 
