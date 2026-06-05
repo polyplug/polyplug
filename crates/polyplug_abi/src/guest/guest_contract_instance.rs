@@ -15,7 +15,7 @@
 //!
 //! # Layout
 //! - `data`: Opaque instance pointer (owned by guest)
-//! - `contract_id`: Contract ID for zero-overhead dispatch
+//! - `contract_id`: Contract ID stamped at instance creation
 
 use core::ffi::c_void;
 
@@ -43,11 +43,7 @@ use polyplug_utils::GuestContractId;
 ///
 /// # Layout
 /// - `data`: Opaque instance pointer (owned by guest)
-/// - `contract_id`: Contract ID for zero-overhead dispatch
-///
-/// # Dispatch
-/// The `contract_id` field enables `call_guest_method` to dispatch without
-/// looking up the contract in a map. This is zero-overhead dispatch.
+/// - `contract_id`: Contract ID stamped at instance creation
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GuestContractInstance {
@@ -58,12 +54,10 @@ pub struct GuestContractInstance {
     /// Guest owns the memory. Host must not free or modify.
     /// Must be freed via GuestContractInterface::destroy_instance.
     pub data: *mut c_void,
-    /// Contract ID for zero-overhead dispatch.
-    /// Enables call_guest_method to dispatch without lookup.
+    /// Contract ID stamped at instance creation.
     ///
     /// # Purpose
-    /// Eliminates the need to look up which contract an instance belongs to.
-    /// The contract_id is set by create_instance and used for direct dispatch.
+    /// Identifies which contract an instance belongs to. Set by `create_instance`.
     pub contract_id: GuestContractId,
 }
 

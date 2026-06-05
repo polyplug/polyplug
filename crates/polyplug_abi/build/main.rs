@@ -9,9 +9,6 @@
 //! 6. Writes generated SDK files to `sdks/{lang}/abi/`
 //! 7. Emits `cargo:rerun-if-changed` for all tracked source files
 
-#![allow(clippy::expect_used)]
-#![allow(clippy::unwrap_used)]
-
 mod extractor;
 mod generate;
 mod mapper;
@@ -33,19 +30,18 @@ const LOADER_CRATES: &[&str] = &[
     "polyplug_dotnet",
 ];
 
-fn main() {
-    let manifest_dir: PathBuf = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+fn main() -> Result<(), Box<dyn core::error::Error>> {
+    let manifest_dir: PathBuf = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let workspace_root: PathBuf = manifest_dir
         .parent()
-        .expect("polyplug_abi should be in crates/ directory")
+        .ok_or("polyplug_abi should be in crates/ directory")?
         .parent()
-        .expect("crates/ should be in workspace root")
+        .ok_or("crates/ should be in workspace root")?
         .to_path_buf();
 
     // ─── Step 1: Extract ABI types from polyplug_abi module tree ─────────────
     let src_dir: PathBuf = manifest_dir.join("src");
-    let (mut abi_types, mut tracked_files) =
-        extract_from_dir(&src_dir).expect("Failed to extract ABI types from module tree");
+    let (mut abi_types, mut tracked_files) = extract_from_dir(&src_dir)?;
 
     // ─── Step 2: Scan loader crates for config structs ───────────────────────
     for loader_name in LOADER_CRATES {
@@ -65,11 +61,14 @@ fn main() {
 
         if let Some(target_path) = target {
             // Extract types from the loader config file
-            let source: String = fs::read_to_string(&target_path)
-                .unwrap_or_else(|e| panic!("Failed to read {}: {}", target_path.display(), e));
+            let source: String =
+                fs::read_to_string(&target_path).map_err(|e: std::io::Error| {
+                    format!("Failed to read {}: {}", target_path.display(), e)
+                })?;
 
-            let file: syn::File = syn::parse_file(&source)
-                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", target_path.display(), e));
+            let file: syn::File = syn::parse_file(&source).map_err(|e: syn::Error| {
+                format!("Failed to parse {}: {}", target_path.display(), e)
+            })?;
 
             let mut loader_types: types::AbiTypes = types::AbiTypes::new();
 
@@ -101,8 +100,8 @@ fn main() {
     }
 
     // ─── Step 3: Generate SDKs ───────────────────────────────────────────────
-    generate_all_sdks(&mut abi_types, &workspace_root, &tracked_files)
-        .expect("Failed to generate SDKs");
+    generate_all_sdks(&mut abi_types, &workspace_root, &tracked_files)?;
+    Ok(())
 }
 
 /// Check if a visibility is public.

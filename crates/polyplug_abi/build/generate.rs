@@ -244,21 +244,95 @@ public static unsafe class StringHelpers
     }
 
     /// <summary>
-    /// Allocates a StringView from a .NET string using the host allocator.
-    /// The returned StringView owns its memory and must be freed by the host.
+    /// Returns a process-lifetime <see cref="StringView"/> for a string that
+    /// crosses the ABI boundary as an <see cref="AbiError.Message"/>.
     /// </summary>
-    public static StringView AllocString(string value)
+    /// <remarks>
+    /// Per the ABI ownership contract, an AbiError.Message is a static or
+    /// runtime-owned string that the receiver MUST NEVER free. This helper pins
+    /// the UTF-8 bytes for the lifetime of the process (equivalent to .rodata),
+    /// caching one buffer per distinct string so repeated errors never leak a new
+    /// GCHandle. It is the only sound way to hand the host a borrowed message that
+    /// nobody frees. Use it for fixed error literals — NOT for per-call argument
+    /// strings (use <see cref="PinnedUtf8"/> for those).
+    /// </remarks>
+    public static StringView StaticMessage(string value)
     {
         if (string.IsNullOrEmpty(value))
             return new StringView { Ptr = IntPtr.Zero, Len = 0 };
 
-        byte[] bytes = Encoding.UTF8.GetBytes(value);
-        GCHandle handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
-        return new StringView
+        lock (s_staticMessages)
         {
-            Ptr = handle.AddrOfPinnedObject(),
+            if (s_staticMessages.TryGetValue(value, out StringView cached))
+                return cached;
+
+            byte[] bytes = Encoding.UTF8.GetBytes(value);
+            // Never freed: pinned for the process lifetime, mirroring .rodata.
+            GCHandle handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+            StringView view = new StringView
+            {
+                Ptr = handle.AddrOfPinnedObject(),
+                Len = (nuint)bytes.Length,
+            };
+            s_staticMessages[value] = view;
+            return view;
+        }
+    }
+
+    private static readonly System.Collections.Generic.Dictionary<string, StringView> s_staticMessages =
+        new System.Collections.Generic.Dictionary<string, StringView>();
+}
+
+/// <summary>
+/// Call-scoped pin of a .NET string's UTF-8 bytes, exposing a borrowed
+/// <see cref="StringView"/> for passing a string ARGUMENT across the ABI
+/// boundary. The argument is borrowed for the duration of the call only:
+/// construct a <see cref="PinnedUtf8"/>, pass <see cref="View"/> into the call,
+/// then dispose to release the pin.
+/// </summary>
+/// <remarks>
+/// This is the correct mechanism for argument strings. It pins managed bytes
+/// only for the call and frees the <see cref="GCHandle"/> on <see cref="Dispose"/>,
+/// so there is no per-call leak. The host never frees this memory — it only reads
+/// it for the duration of the call. For AbiError.Message values, use
+/// <see cref="StringHelpers.StaticMessage"/> instead.
+/// </remarks>
+public sealed class PinnedUtf8 : IDisposable
+{
+    private GCHandle _handle;
+    private bool _pinned;
+
+    /// <summary>
+    /// The borrowed <see cref="StringView"/> over the pinned UTF-8 bytes. Valid
+    /// only until <see cref="Dispose"/> is called.
+    /// </summary>
+    public StringView View { get; }
+
+    public PinnedUtf8(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            View = new StringView { Ptr = IntPtr.Zero, Len = 0 };
+            return;
+        }
+
+        byte[] bytes = Encoding.UTF8.GetBytes(value);
+        _handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+        _pinned = true;
+        View = new StringView
+        {
+            Ptr = _handle.AddrOfPinnedObject(),
             Len = (nuint)bytes.Length,
         };
+    }
+
+    public void Dispose()
+    {
+        if (_pinned)
+        {
+            _handle.Free();
+            _pinned = false;
+        }
     }
 }
 "#;
@@ -579,15 +653,9 @@ inline StringView string_view(std::string_view s) noexcept {
     return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
 }
 
-/// Allocate StringView from std::string using host allocator
-inline StringView alloc_string(const std::string& s) {
-    auto* ptr = static_cast<uint8_t*>(polyplug_host_alloc(s.size(), 1));
-    if (!ptr) {
-        return StringView{nullptr, 0};
-    }
-    std::memcpy(ptr, s.data(), s.size());
-    return StringView{ptr, s.size()};
-}
+// NOTE: cross-boundary allocation (alloc_string) lives in the guest SDK
+// (polyplug::alloc_string in guest.hpp), which routes through the stored
+// HostInterface. abi.hpp stays pure ABI with no link-time host dependency.
 
 } // namespace abi
 } // namespace polyplug
@@ -609,13 +677,13 @@ const KNOWN_SIZES: &[(&str, usize)] = &[
     ("GuestContractInterface", 56),
     ("GuestContractInstance", 16),
     ("HostInterface", 144),
-    ("HostContractInterface", 72),
+    ("HostContractInterface", 80),
     ("HostContractInstance", 8),
     ("RuntimeInterface", 96),
     ("GuestContractHandle", 4),
     ("PluginDescriptor", 48),
     ("BundleInitContext", 24),
-    ("RuntimeConfig", 16),
+    ("RuntimeConfig", 24),
     ("ReloadPhase", 48),
     ("NativeDispatch", 16),
     ("VmDispatch", 16),
@@ -1699,7 +1767,16 @@ fn generate_lua_layout_tests(sized_structs: &[(&str, usize)]) -> String {
     let mut output = String::new();
     output.push_str("-- Layout tests for polyplug ABI structs.\n");
     output.push_str("-- AUTO-GENERATED by polyplug_abi build script — do not edit.\n\n");
-    output.push_str("local ffi = require(\"ffi\")\n\n");
+    // Resolve sibling modules (abi.lua) when run standalone from any directory,
+    // then load abi.lua so its `ffi.cdef` struct declarations are registered
+    // before `ffi.sizeof` is called. Without this, `ffi.sizeof("NativeDispatch")`
+    // fails with "declaration specifier expected" — the types are undeclared.
+    output.push_str(
+        "local script_dir = (arg and arg[0] or \"\"):match(\"^(.*[/\\\\])\") or \"./\"\n",
+    );
+    output.push_str("package.path = script_dir .. \"?.lua;\" .. package.path\n");
+    output.push_str("local ffi = require(\"ffi\")\n");
+    output.push_str("require(\"abi\")\n\n");
 
     for (name, size) in sized_structs {
         output.push_str(&format!(
@@ -1724,7 +1801,8 @@ fn generate_js_layout_tests(sized_structs: &[(&str, usize)]) -> String {
             to_upper_snake_case_for_generate(name)
         ));
     }
-    output.push_str("} from \"./abi.ts\";\n\n");
+    output.push_str("} from \"./abi.ts\";\n");
+    output.push_str("import { assert } from \"jsr:@std/assert\";\n\n");
 
     for (name, size) in sized_structs {
         let const_name = format!("{}_SIZE", to_upper_snake_case_for_generate(name));

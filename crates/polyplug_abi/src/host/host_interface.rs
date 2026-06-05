@@ -29,7 +29,7 @@ use core::ffi::c_void;
 use polyplug_utils::BundleId;
 
 use crate::{
-    guest::{GuestContractInstance, GuestContractInterface},
+    guest::GuestContractInterface,
     plugin::{GuestContractHandle, PluginDescriptor},
     types::{AbiError, Array, DependencyInfo, StringView},
 };
@@ -38,6 +38,7 @@ use crate::{
 ///
 /// Contains an opaque runtime pointer and function pointers for guest calls.
 /// All functions use self-passing pattern (receive HostInterface pointer as first parameter).
+/// `HostInterface` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
 ///
 /// # Who provides
 /// The runtime creates this struct and passes it to `polyplug_init()`.
@@ -162,27 +163,6 @@ pub struct HostInterface {
         this: *const HostInterface,
         handle: GuestContractHandle,
     ) -> *const GuestContractInterface,
-    /// Call a method on a guest contract instance.
-    ///
-    /// This is the cross-dispatch mechanism for calling methods across
-    /// different dispatch types (Native vs VM).
-    ///
-    /// # Arguments
-    /// - `this`: HostInterface pointer (self-passing)
-    /// - `instance`: GuestContractInstance with contract_id for dispatch
-    /// - `method_id`: Method index within the contract
-    /// - `args`: Pointer to packed arguments (contract-specific layout)
-    /// - `out`: Pointer to output buffer for return value
-    ///
-    /// # Returns
-    /// AbiError::OK on success, error code on failure.
-    pub call_guest_method: unsafe extern "C" fn(
-        this: *const HostInterface,
-        instance: GuestContractInstance,
-        method_id: u32,
-        args: *const (),
-        out: *mut (),
-    ) -> AbiError,
     /// Get a host contract instance by contract_id and minimum version.
     ///
     /// For singleton host contracts, returns the same instance every time.
@@ -331,6 +311,22 @@ pub struct HostInterface {
     /// # Returns
     /// Length of last error message (0 if no error).
     pub get_error_len: unsafe extern "C" fn(this: *const HostInterface) -> usize,
+    /// Get a registered extension by extension ID.
+    ///
+    /// Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
+    /// of the extension name. Use `polyplug_utils::fnv1a_32(name.as_bytes())` to
+    /// compute the ID.
+    ///
+    /// Returns null if no extension is registered for the given ID.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `extension_id`: 32-bit FNV-1a hash of the extension name
+    ///
+    /// # Returns
+    /// Opaque pointer to the extension, or null if not registered.
+    pub get_extension:
+        unsafe extern "C" fn(this: *const HostInterface, extension_id: u32) -> *const (),
 }
 
 // SAFETY: HostInterface contains an opaque pointer and function pointers.
@@ -355,10 +351,10 @@ mod tests {
         // HostInterface: runtime pointer (8 bytes) + 17 extern "C" fn pointers (136 bytes).
         // Total: 144 bytes (18 pointer-sized fields)
         // Fields: runtime, register_contract, alloc, free, find_guest_contract,
-        //         find_all_guest_contracts, resolve_guest_contract, call_guest_method,
+        //         find_all_guest_contracts, resolve_guest_contract,
         //         get_host_contract, resolve_host_contract_interface, list_bundles,
         //         get_dependencies, load_bundle, reload_bundle, register_host_contract,
-        //         register_loader, get_last_error, get_error_len
+        //         register_loader, get_last_error, get_error_len, get_extension
         assert_eq!(size_of::<HostInterface>(), 144);
         assert_eq!(align_of::<HostInterface>(), 8);
         // Existing fields (unchanged offsets)
@@ -366,25 +362,23 @@ mod tests {
         assert_eq!(offset_of!(HostInterface, register_contract), 8);
         assert_eq!(offset_of!(HostInterface, alloc), 16);
         assert_eq!(offset_of!(HostInterface, free), 24);
-        // Renamed fields (same offsets)
         assert_eq!(offset_of!(HostInterface, find_guest_contract), 32);
         assert_eq!(offset_of!(HostInterface, find_all_guest_contracts), 40);
         assert_eq!(offset_of!(HostInterface, resolve_guest_contract), 48);
-        assert_eq!(offset_of!(HostInterface, call_guest_method), 56);
-        assert_eq!(offset_of!(HostInterface, get_host_contract), 64);
+        assert_eq!(offset_of!(HostInterface, get_host_contract), 56);
         assert_eq!(
             offset_of!(HostInterface, resolve_host_contract_interface),
-            72
+            64
         );
-        assert_eq!(offset_of!(HostInterface, list_bundles), 80);
-        assert_eq!(offset_of!(HostInterface, get_dependencies), 88);
-        // New fields (appended at end)
-        assert_eq!(offset_of!(HostInterface, load_bundle), 96);
-        assert_eq!(offset_of!(HostInterface, reload_bundle), 104);
-        assert_eq!(offset_of!(HostInterface, register_host_contract), 112);
-        assert_eq!(offset_of!(HostInterface, register_loader), 120);
-        assert_eq!(offset_of!(HostInterface, get_last_error), 128);
-        assert_eq!(offset_of!(HostInterface, get_error_len), 136);
+        assert_eq!(offset_of!(HostInterface, list_bundles), 72);
+        assert_eq!(offset_of!(HostInterface, get_dependencies), 80);
+        assert_eq!(offset_of!(HostInterface, load_bundle), 88);
+        assert_eq!(offset_of!(HostInterface, reload_bundle), 96);
+        assert_eq!(offset_of!(HostInterface, register_host_contract), 104);
+        assert_eq!(offset_of!(HostInterface, register_loader), 112);
+        assert_eq!(offset_of!(HostInterface, get_last_error), 120);
+        assert_eq!(offset_of!(HostInterface, get_error_len), 128);
+        assert_eq!(offset_of!(HostInterface, get_extension), 136);
     }
 
     /// Verify HostInterface has runtime: *mut c_void field at offset 0.
@@ -397,12 +391,12 @@ mod tests {
     /// Verify list_bundles field exists.
     #[test]
     fn list_bundles_field_exists() {
-        assert_eq!(offset_of!(HostInterface, list_bundles), 80);
+        assert_eq!(offset_of!(HostInterface, list_bundles), 72);
     }
 
     /// Verify get_dependencies field exists.
     #[test]
     fn get_dependencies_field_exists() {
-        assert_eq!(offset_of!(HostInterface, get_dependencies), 88);
+        assert_eq!(offset_of!(HostInterface, get_dependencies), 80);
     }
 }

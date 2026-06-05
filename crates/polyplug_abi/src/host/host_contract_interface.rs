@@ -81,6 +81,15 @@ pub struct HostContractInterface {
     /// # Ownership
     /// Owned by the runtime. Host contract implementations must not free.
     pub runtime: *mut c_void,
+    /// Opaque per-interface user-data pointer.
+    ///
+    /// `create_instance` and `destroy_instance` can read it via their `this`
+    /// parameter (`(*this).user_data`) to recover registrant-owned context.
+    ///
+    /// # Ownership
+    /// Owned by the registrant (the host application). The runtime never reads,
+    /// writes, or frees the pointee — it only stores the pointer.
+    pub user_data: *mut c_void,
     /// Create a new instance of this host contract.
     ///
     /// For singleton contracts, this is typically called once and the instance
@@ -142,19 +151,21 @@ mod tests {
         //   dispatch_type (DispatchType/u32): 4 bytes @ offset 24
         //   [padding 4 bytes for alignment to *mut c_void (8-byte align)]
         //   runtime (*mut c_void): 8 bytes @ offset 32
-        //   create_instance (fn ptr): 8 bytes @ offset 40
-        //   destroy_instance (fn ptr): 8 bytes @ offset 48
-        //   dispatch (union): 16 bytes @ offset 56
-        // Total: 72 bytes
-        assert_eq!(size_of::<HostContractInterface>(), 72);
+        //   user_data (*mut c_void): 8 bytes @ offset 40
+        //   create_instance (fn ptr): 8 bytes @ offset 48
+        //   destroy_instance (fn ptr): 8 bytes @ offset 56
+        //   dispatch (union): 16 bytes @ offset 64
+        // Total: 80 bytes
+        assert_eq!(size_of::<HostContractInterface>(), 80);
         assert_eq!(align_of::<HostContractInterface>(), 8);
         assert_eq!(offset_of!(HostContractInterface, contract_id), 0);
         assert_eq!(offset_of!(HostContractInterface, contract_version), 8);
         assert_eq!(offset_of!(HostContractInterface, singleton), 20);
         assert_eq!(offset_of!(HostContractInterface, dispatch_type), 24);
         assert_eq!(offset_of!(HostContractInterface, runtime), 32);
-        assert_eq!(offset_of!(HostContractInterface, create_instance), 40);
-        assert_eq!(offset_of!(HostContractInterface, destroy_instance), 48);
-        assert_eq!(offset_of!(HostContractInterface, dispatch), 56);
+        assert_eq!(offset_of!(HostContractInterface, user_data), 40);
+        assert_eq!(offset_of!(HostContractInterface, create_instance), 48);
+        assert_eq!(offset_of!(HostContractInterface, destroy_instance), 56);
+        assert_eq!(offset_of!(HostContractInterface, dispatch), 64);
     }
 }

@@ -60,6 +60,6 @@ mod tests {
     fn test_abi_error_ok() {
         let e: AbiError = AbiError::ok();
         assert!(e.is_ok());
-        assert_eq!(e.code, AbiErrorCode::Ok);
+        assert_eq!(e.code, AbiErrorCode::Ok as u32);
     }
 }

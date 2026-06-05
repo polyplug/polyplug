@@ -24,7 +24,7 @@
 //! All functions take `self: *const RuntimeInterface` as the first parameter.
 //! SDKs hide this detail from users, automatically passing the interface pointer.
 
-use core::ffi::{c_char, c_void};
+use core::ffi::c_void;
 
 use crate::{
     guest::GuestContractInterface,
@@ -79,13 +79,13 @@ pub struct RuntimeInterface {
     ///
     /// # Arguments
     /// - `this`: RuntimeInterface pointer (self-passing)
-    /// - `path`: Path to the bundle directory or manifest file
+    /// - `path`: UTF-8 path to the bundle directory or manifest file (not null-terminated)
     ///
     /// # Returns
     /// AbiError::OK on success, error code on failure.
     /// Use `get_last_error()` for detailed error message.
     pub load_bundle:
-        unsafe extern "C" fn(this: *const RuntimeInterface, path: *const c_char) -> AbiError,
+        unsafe extern "C" fn(this: *const RuntimeInterface, path: StringView) -> AbiError,
     /// Reload a bundle (hot-reload).
     ///
     /// Triggers hot-reload of the specified bundle. The runtime will:
