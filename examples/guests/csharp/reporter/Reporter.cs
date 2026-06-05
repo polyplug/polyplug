@@ -1,19 +1,28 @@
-using System;
+using System.Runtime.CompilerServices;
 using Polyplug.Guest;
 using Polyplug.Abi;
 
 namespace Reporter;
 
-public static class Plugin
+public sealed class ReporterPlugin : IDataReporterGuestContract
 {
-    public static StringView Report(StringView input)
+    public StringView Report(StringView input)
     {
-        var s = StringHelpers.StripPrefix(input, "TRANSFORMED:");
-        var parts = s.Split('|');
+        string s = StringHelpers.StripPrefix(input, "TRANSFORMED:");
+        string[] parts = s.Split('|');
         if (parts.Length >= 3)
         {
-            return StringHelpers.AllocString($"Report: {parts[0]} has value '{parts[1]}' with count {parts[2]}");
+            return PolyplugHost.AllocString($"Report: {parts[0]} has value '{parts[1]}' with count {parts[2]}");
         }
-        return StringHelpers.AllocString("INVALID:format");
+        return PolyplugHost.AllocString("INVALID:format");
+    }
+}
+
+public static class Registration
+{
+    [ModuleInitializer]
+    public static void Register()
+    {
+        ReporterInterfaces.SetReporterImpl(new ReporterPlugin());
     }
 }

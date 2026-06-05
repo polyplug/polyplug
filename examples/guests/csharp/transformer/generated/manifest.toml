@@ -6,4 +6,4 @@ runtime = "csharp"
 provides = ["data.Transformer@1"]
 function_count = { "data.Transformer@1" = 1 }
 needs_reinit_on_dep_reload = false
-file = "decoder.dll"
+file = "transformer.dll"

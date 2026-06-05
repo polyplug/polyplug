@@ -80,7 +80,7 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
             AbiError err = dispatch(_instance, argsPtr, outPtr);
-            if (err.Code != AbiErrorCode.Ok) {
+            if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
             return result;
@@ -160,7 +160,7 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
             AbiError err = dispatch(_instance, argsPtr, outPtr);
-            if (err.Code != AbiErrorCode.Ok) {
+            if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
             return result;
@@ -240,7 +240,7 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
             AbiError err = dispatch(_instance, argsPtr, outPtr);
-            if (err.Code != AbiErrorCode.Ok) {
+            if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
             return result;
@@ -320,7 +320,7 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
             AbiError err = dispatch(_instance, argsPtr, outPtr);
-            if (err.Code != AbiErrorCode.Ok) {
+            if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
             return result;
@@ -400,7 +400,7 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
             AbiError err = dispatch(_instance, argsPtr, outPtr);
-            if (err.Code != AbiErrorCode.Ok) {
+            if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
             return result;

@@ -138,6 +138,41 @@ for lang in $LANGS; do
     done
 done
 
+# C# guests are built and published separately. They require the .NET runtime
+# and the dotnet loader, which none of the example hosts register — so their
+# bundles must NOT land in $PLUGINS_DIR (the shared scan path the hosts walk),
+# or every host would fail to load a runtime it has no loader for. Publish each
+# into its own bundle under $CSHARP_PLUGINS_DIR instead. `dotnet publish` emits
+# the plugin DLL plus its Polyplug.Abi/Polyplug.Guest dependencies; the dotnet
+# loader generates the runtimeconfig and probes the bundle dir at load time.
+require_tool dotnet "csharp guests"
+CSHARP_PLUGINS_DIR="$SCRIPT_DIR/plugins-csharp"
+rm -rf "$CSHARP_PLUGINS_DIR"
+mkdir -p "$CSHARP_PLUGINS_DIR"
+for plugin in $PLUGINS; do
+    dir="guests/csharp/$plugin"
+    if [ ! -d "$dir" ]; then
+        continue
+    fi
+
+    bundle_name="csharp_${plugin}"
+    echo "  building: $bundle_name"
+
+    "$POLYPLUGC" generate --bundle "$dir/bundle.toml" --lang csharp --out "$dir/generated" \
+        || fail "$bundle_name (polyplugc generate)"
+
+    csproj=$(ls "$dir"/*.csproj 2>/dev/null | head -n 1)
+    if [ -z "$csproj" ]; then
+        fail "$bundle_name (no .csproj found)"
+    fi
+
+    bundle_dir="$CSHARP_PLUGINS_DIR/$bundle_name"
+    dotnet publish -c Release "$csproj" -o "$bundle_dir" \
+        || fail "$bundle_name (dotnet publish)"
+
+    cp "$dir/generated/manifest.toml" "$bundle_dir/" || fail "$bundle_name (copy manifest.toml)"
+done
+
 # [3.5/4] Generate HOST code with host contracts
 echo "[3.5/4] Generating host code with host contracts..."
 for lang in rust cpp csharp python lua js-quickjs; do
@@ -171,6 +206,9 @@ echo "=== Build complete ==="
 echo ""
 echo "Plugins: $PLUGINS_DIR"
 ls -la "$PLUGINS_DIR"
+echo ""
+echo "C# plugins: $CSHARP_PLUGINS_DIR"
+ls -la "$CSHARP_PLUGINS_DIR"
 echo ""
 echo "Run hosts:"
 echo "  Rust:  ./hosts/rust/target/release/pipeline_host"

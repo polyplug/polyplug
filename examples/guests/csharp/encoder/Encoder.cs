@@ -1,14 +1,23 @@
-using System;
+using System.Runtime.CompilerServices;
 using Polyplug.Guest;
 using Polyplug.Abi;
 
 namespace Encoder;
 
-public static class Plugin
+public sealed class EncoderPlugin : IPipelineEncoderGuestContract
 {
-    public static StringView Encode(StringView input)
+    public StringView Encode(StringView input)
     {
-        var s = StringHelpers.StripPrefix(input, "TRANSFORMED:");
-        return StringHelpers.AllocString(s.Replace('|', ','));
+        string s = StringHelpers.StripPrefix(input, "TRANSFORMED:");
+        return PolyplugHost.AllocString(s.Replace('|', ','));
+    }
+}
+
+public static class Registration
+{
+    [ModuleInitializer]
+    public static void Register()
+    {
+        EncoderInterfaces.SetEncoderImpl(new EncoderPlugin());
     }
 }

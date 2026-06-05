@@ -318,49 +318,18 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             ));
 
             // [UnmanagedCallersOnly] ABI methods
+            let impl_field: String = format!("_impl_{lower}");
             for func in &contract.functions {
                 let fn_name: String = func.name.replace('-', "_");
                 let abi_method: String = format!("{lower}_{fn_name}_abi");
-                let has_return: bool = func.returns.is_some();
-                let has_params: bool = !func.params.is_empty();
                 out.push_str(
                     "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
                 );
                 out.push_str(&format!(
-                    "    private static AbiError {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {{\n",
+                    "    private static unsafe AbiError {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {{\n",
                     abi_method
                 ));
-                out.push_str(
-                    "        // Instance is ignored for stateless plugins (instance is null).\n",
-                );
-                out.push_str("        // For stateful plugins, users override create_instance and use instance.Data.\n");
-                out.push_str("        try {\n");
-                if has_params {
-                    out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
-                    out.push_str("                return new AbiError { Code = AbiErrorCode.InvalidPointer };\n");
-                    out.push_str("            }\n");
-                }
-                if has_return {
-                    out.push_str("            if (outPtr == IntPtr.Zero) {\n");
-                    out.push_str("                return new AbiError { Code = AbiErrorCode.InvalidPointer };\n");
-                    out.push_str("            }\n");
-                }
-                out.push_str(&format!(
-                    "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, \"not initialized\");\n"
-                ));
-                out.push_str("            // call impl\n");
-                out.push_str("            return new AbiError { Code = AbiErrorCode.Ok };\n");
-                out.push_str("        } catch (Polyplug.Guest.GuestException ex) {\n");
-                out.push_str("            var msg = StringHelpers.StaticMessage(ex.Message);\n");
-                out.push_str(
-                    "            return new AbiError { Code = ex.Code, Message = msg };\n",
-                );
-                out.push_str("        } catch {\n");
-                out.push_str(
-                    "            var msg = StringHelpers.StaticMessage(\"plugin panicked\");\n",
-                );
-                out.push_str("            return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n");
-                out.push_str("        }\n");
+                emit_cs_guest_dispatch_body(&mut out, &impl_field, &class_name, func);
                 out.push_str("    }\n\n");
             }
 
@@ -407,43 +376,38 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                 ));
             }
             out.push_str("            };\n");
-            out.push_str("        }\n");
             out.push_str(&format!(
-                "        _{upper}_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc({upper}_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
+                "            _{upper}_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc({upper}_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
             ));
             out.push_str(&format!(
-                "        {upper}_INTERFACE = new GuestContractInterface {{\n"
-            ));
-            out.push_str(&format!("            ContractId = {upper}_CONTRACT_ID,\n"));
-            out.push_str(&format!(
-                "            ContractVersion = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"
-            ));
-            // Default to native dispatch when no bundle info is available
-            let dispatch_type_str: &str = if true {
-                "DispatchType.Native"
-            } else {
-                "DispatchType.VirtualMachine"
-            };
-            out.push_str(&format!(
-                "            DispatchType = {dispatch_type_str},\n"
+                "            {upper}_INTERFACE = new GuestContractInterface {{\n"
             ));
             out.push_str(&format!(
-                "            CreateInstance = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstanceStub,\n"
+                "                ContractId = {upper}_CONTRACT_ID,\n"
             ));
             out.push_str(&format!(
-                "            DestroyInstance = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstanceStub,\n"
+                "                ContractVersion = new Polyplug.Abi.Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"
             ));
-            out.push_str("            Dispatch = new DispatchMechanisms {\n");
-            out.push_str("                Native = new NativeDispatch {\n");
+            // No bundle info is available here, so default to native dispatch.
+            out.push_str("                DispatchType = DispatchType.Native,\n");
             out.push_str(&format!(
-                "                    FunctionCount = {fn_count}u,\n"
+                "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstanceStub,\n"
             ));
             out.push_str(&format!(
-                "                    Functions = _{upper}_pin_handle.AddrOfPinnedObject(),\n"
+                "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstanceStub,\n"
             ));
+            out.push_str("                Dispatch = new DispatchMechanisms {\n");
+            out.push_str("                    Native = new NativeDispatch {\n");
+            out.push_str(&format!(
+                "                        FunctionCount = {fn_count}u,\n"
+            ));
+            out.push_str(&format!(
+                "                        Functions = _{upper}_pin_handle.AddrOfPinnedObject(),\n"
+            ));
+            out.push_str("                    },\n");
             out.push_str("                },\n");
-            out.push_str("            },\n");
-            out.push_str("        };\n");
+            out.push_str("            };\n");
+            out.push_str("        }\n");
             out.push_str("    }\n");
             out.push_str("}\n\n");
         }
@@ -500,48 +464,17 @@ fn generate_cs_guest_plugin_interface(
     ));
 
     // [UnmanagedCallersOnly] ABI methods
+    let impl_field: String = format!("_impl_{lower}", lower = plugin_lower);
+    let arg_pack_prefix: String = pascal_case(&contract.name) + "Contract";
     for func in &contract.functions {
         let fn_name: String = func.name.replace('-', "_");
         let abi_method: String = format!("{lower}_{fn_name}_abi", lower = plugin_lower);
-        let has_return: bool = func.returns.is_some();
-        let has_params: bool = !func.params.is_empty();
         out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
         out.push_str(&format!(
-            "    private static AbiError {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {{\n",
+            "    private static unsafe AbiError {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {{\n",
             abi_method
         ));
-        out.push_str("        // Instance is ignored for stateless plugins (instance is null).\n");
-        out.push_str("        // For stateful plugins, users override create_instance and use instance.Data.\n");
-        out.push_str("        try {\n");
-        if has_params {
-            out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
-            out.push_str(
-                "                return new AbiError { Code = AbiErrorCode.InvalidPointer };\n",
-            );
-            out.push_str("            }\n");
-        }
-        if has_return {
-            out.push_str("            if (outPtr == IntPtr.Zero) {\n");
-            out.push_str(
-                "                return new AbiError { Code = AbiErrorCode.InvalidPointer };\n",
-            );
-            out.push_str("            }\n");
-        }
-        out.push_str(&format!(
-            "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, \"not initialized\");\n",
-            lower = plugin_lower
-        ));
-        out.push_str("            // call impl\n");
-        out.push_str("            return new AbiError { Code = AbiErrorCode.Ok };\n");
-        out.push_str("        } catch (Polyplug.Guest.GuestException ex) {\n");
-        out.push_str("            var msg = StringHelpers.StaticMessage(ex.Message);\n");
-        out.push_str("            return new AbiError { Code = ex.Code, Message = msg };\n");
-        out.push_str("        } catch {\n");
-        out.push_str("            var msg = StringHelpers.StaticMessage(\"plugin panicked\");\n");
-        out.push_str(
-            "            return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n",
-        );
-        out.push_str("        }\n");
+        emit_cs_guest_dispatch_body(out, &impl_field, &arg_pack_prefix, func);
         out.push_str("    }\n\n");
     }
 
@@ -599,21 +532,20 @@ fn generate_cs_guest_plugin_interface(
         ));
     }
     out.push_str("            };\n");
-    out.push_str("        }\n");
     out.push_str(&format!(
-        "        _{upper}_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc({upper}_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);\n",
+        "            _{upper}_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc({upper}_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);\n",
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "        {upper}_INTERFACE = new GuestContractInterface {{\n",
+        "            {upper}_INTERFACE = new GuestContractInterface {{\n",
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "            ContractId = {upper}_CONTRACT_ID,\n",
+        "                ContractId = {upper}_CONTRACT_ID,\n",
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "            ContractVersion = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"
+        "                ContractVersion = new Polyplug.Abi.Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"
     ));
     let dispatch_type_str: &str = if is_native {
         "DispatchType.Native"
@@ -621,30 +553,123 @@ fn generate_cs_guest_plugin_interface(
         "DispatchType.VirtualMachine"
     };
     out.push_str(&format!(
-        "            DispatchType = {dispatch_type_str},\n"
+        "                DispatchType = {dispatch_type_str},\n"
     ));
     out.push_str(&format!(
-        "            CreateInstance = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstanceStub,\n",
+        "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstanceStub,\n",
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "            DestroyInstance = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstanceStub,\n",
+        "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstanceStub,\n",
         upper = plugin_upper
     ));
-    out.push_str("            Dispatch = new DispatchMechanisms {\n");
-    out.push_str("                Native = new NativeDispatch {\n");
+    out.push_str("                Dispatch = new DispatchMechanisms {\n");
+    out.push_str("                    Native = new NativeDispatch {\n");
     out.push_str(&format!(
-        "                    FunctionCount = {fn_count}u,\n"
+        "                        FunctionCount = {fn_count}u,\n"
     ));
     out.push_str(&format!(
-        "                    Functions = _{upper}_pin_handle.AddrOfPinnedObject(),\n",
+        "                        Functions = _{upper}_pin_handle.AddrOfPinnedObject(),\n",
         upper = plugin_upper
     ));
+    out.push_str("                    },\n");
     out.push_str("                },\n");
-    out.push_str("            },\n");
-    out.push_str("        };\n");
+    out.push_str("            };\n");
+    out.push_str("        }\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
+}
+
+/// Emit the body of a guest contract ABI thunk: validate pointers, marshal the
+/// arguments from `argsPtr`, invoke the registered implementation, and write the
+/// result back through `outPtr`. Mirrors the dispatch semantics of the Rust
+/// generator so every language produces identical ABI behaviour.
+fn emit_cs_guest_dispatch_body(
+    out: &mut String,
+    impl_field: &str,
+    contract_struct: &str,
+    func: &ResolvedFunction,
+) {
+    let method_name: String = pascal_case(&func.name);
+    let has_return: bool = func.returns.is_some();
+    let has_params: bool = !func.params.is_empty();
+
+    out.push_str("        // Instance is ignored for stateless plugins (instance is null).\n");
+    out.push_str(
+        "        // For stateful plugins, users override create_instance and use instance.Data.\n",
+    );
+    out.push_str("        try {\n");
+    if has_params {
+        out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
+        out.push_str(
+            "                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n",
+        );
+        out.push_str("            }\n");
+    }
+    if has_return {
+        out.push_str("            if (outPtr == IntPtr.Zero) {\n");
+        out.push_str(
+            "                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n",
+        );
+        out.push_str("            }\n");
+    }
+    out.push_str(&format!(
+        "            var impl = {impl_field} ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.Generic, \"not initialized\");\n"
+    ));
+
+    // Marshal arguments and build the implementation call expression.
+    let call_args: String = if !has_params {
+        String::new()
+    } else if func.params.len() == 1 {
+        let param: &ResolvedParam = &func.params[0];
+        let cs_ty: String = cs_type_name(&param.ty);
+        match &param.ty {
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str(&format!(
+                    "            ref var {0} = ref *({1}*)argsPtr;\n",
+                    param.name, cs_ty
+                ));
+                format!("ref {}", param.name)
+            }
+            _ => {
+                out.push_str(&format!(
+                    "            var {0} = *({1}*)argsPtr;\n",
+                    param.name, cs_ty
+                ));
+                param.name.clone()
+            }
+        }
+    } else {
+        let struct_name: String = format!("{}{}Args", contract_struct, method_name);
+        out.push_str(&format!(
+            "            var packed = *({struct_name}*)argsPtr;\n"
+        ));
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| format!("packed.{}", pascal_case(&p.name)))
+            .collect::<Vec<String>>()
+            .join(", ")
+    };
+
+    if has_return {
+        let ret_ty: String = cs_return_type(func);
+        out.push_str(&format!(
+            "            var result = impl.{method_name}({call_args});\n"
+        ));
+        out.push_str(&format!("            *({ret_ty}*)outPtr = result;\n"));
+    } else {
+        out.push_str(&format!("            impl.{method_name}({call_args});\n"));
+    }
+    out.push_str("            return new AbiError { Code = (uint)AbiErrorCode.Ok };\n");
+    out.push_str("        } catch (Polyplug.Guest.GuestException ex) {\n");
+    out.push_str("            var msg = StringHelpers.StaticMessage(ex.Message);\n");
+    out.push_str("            return new AbiError { Code = ex.Code, Message = msg };\n");
+    out.push_str("        } catch {\n");
+    out.push_str("            var msg = StringHelpers.StaticMessage(\"plugin panicked\");\n");
+    out.push_str(
+        "            return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };\n",
+    );
+    out.push_str("        }\n");
 }
 
 /// Generate `guest/Init.cs` — the [UnmanagedCallersOnly] PolyplugInit entry point.
@@ -739,14 +764,14 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                     out.push_str(&format!(
                         "                    ContractName = new StringView {{ Ptr = contractHandle_{plugin_lower}.AddrOfPinnedObject(), Len = (nuint)contract_name_{plugin_lower}.Length }},\n"
                     ));
-                    out.push_str(&format!("                    Version = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
+                    out.push_str(&format!("                    Version = new Polyplug.Abi.Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
                     out.push_str("                };\n");
                     out.push_str("                var host = (HostApi*)hostPtr;\n");
                     out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;\n");
                     out.push_str(&format!(
                         "                var err_{plugin_lower} = registerFn(hostPtr, &desc_{plugin_lower}, interfacePtr_{plugin_lower});\n"
                     ));
-                    out.push_str(&format!("                if (err_{plugin_lower}.Code != AbiErrorCode.Ok) return err_{plugin_lower}.Code;\n"));
+                    out.push_str(&format!("                if (err_{plugin_lower}.Code != (uint)AbiErrorCode.Ok) return (AbiErrorCode)err_{plugin_lower}.Code;\n"));
                     out.push_str("            }\n");
                     out.push_str("            } finally {\n");
                     out.push_str(&format!(
@@ -796,14 +821,14 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "                    ContractName = new StringView {{ Ptr = contractHandle_{lower}.AddrOfPinnedObject(), Len = (nuint)contract_name_{lower}.Length }},\n"
             ));
-            out.push_str(&format!("                    Version = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
+            out.push_str(&format!("                    Version = new Polyplug.Abi.Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
             out.push_str("                };\n");
             out.push_str("                var host = (HostApi*)hostPtr;\n");
             out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;\n");
             out.push_str(&format!(
                 "                var err_{lower} = registerFn(hostPtr, &desc_{lower}, interfacePtr_{lower});\n"
             ));
-            out.push_str(&format!("                if (err_{lower}.Code != AbiErrorCode.Ok) return err_{lower}.Code;\n"));
+            out.push_str(&format!("                if (err_{lower}.Code != (uint)AbiErrorCode.Ok) return (AbiErrorCode)err_{lower}.Code;\n"));
             out.push_str("            }\n");
             out.push_str("            } finally {\n");
             out.push_str(&format!("                nameHandle_{lower}.Free();\n"));
@@ -1051,7 +1076,7 @@ fn generate_host_fn_caller(
 
     // Dispatch with instance as first argument
     out.push_str("            AbiError err = dispatch(_instance, argsPtr, outPtr);\n");
-    out.push_str("            if (err.Code != AbiErrorCode.Ok) {\n");
+    out.push_str("            if (err.Code != (uint)AbiErrorCode.Ok) {\n");
     out.push_str("                throw new InvalidOperationException($\"plugin call failed: code={err.Code}\");\n");
     out.push_str("            }\n");
     if has_return {
@@ -1190,15 +1215,17 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     out.push_str("        }\n");
     out.push_str("        unsafe {\n");
     out.push_str("            var hostInterface = (HostApi*)host;\n");
+    out.push_str("            var getHostContractFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->GetHostContract;\n");
+    out.push_str("            var resolveInterfaceFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->ResolveHostContractInterface;\n");
     out.push_str(&format!(
-        "            var instance = hostInterface->GetHostContract(host, 0x{:016X}UL, minVersion);\n",
+        "            var instance = getHostContractFn(host, 0x{:016X}UL, minVersion);\n",
         contract.contract_id
     ));
     out.push_str("            if (instance == IntPtr.Zero) {\n");
     out.push_str("                return null;\n");
     out.push_str("            }\n");
     out.push_str(&format!(
-        "            var iface = hostInterface->ResolveHostContractInterface(host, 0x{:016X}UL, minVersion);\n",
+        "            var iface = resolveInterfaceFn(host, 0x{:016X}UL, minVersion);\n",
         contract.contract_id
     ));
     out.push_str("            if (iface == IntPtr.Zero) {\n");
@@ -1323,7 +1350,7 @@ fn generate_cs_guest_host_contract_method(
     out.push_str("            }\n\n");
 
     // Error handling
-    out.push_str("            if (err.Code != AbiErrorCode.Ok) {\n");
+    out.push_str("            if (err.Code != (uint)AbiErrorCode.Ok) {\n");
     if has_return {
         out.push_str(&format!(
             "                return default({});\n",
@@ -1454,6 +1481,18 @@ fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("using Polyplug.Abi;\n");
     out.push_str("using System.Runtime.CompilerServices;\n");
     out.push_str("using System.Runtime.InteropServices;\n\n");
+
+    // Emit arg-pack structs for host contract functions with 2+ parameters.
+    // The caller methods marshal multi-arg calls through these structs.
+    for contract in &ir.host_contracts {
+        let caller_name: String = host_contract_name_to_cs_caller(&contract.name);
+        for func in &contract.functions {
+            if needs_arg_pack(&func.params) {
+                out.push_str(&emit_cs_arg_pack(&caller_name, func));
+                out.push('\n');
+            }
+        }
+    }
 
     for contract in &ir.host_contracts {
         generate_cs_guest_host_contract_caller(&mut out, contract);
@@ -2009,10 +2048,12 @@ fn generate_cs_host_thunk(
         out.push_str("        _ = outPtr;\n");
     }
 
-    out.push_str("        return new AbiError { Code = AbiErrorCode.Ok };\n");
+    out.push_str("        return new AbiError { Code = (uint)AbiErrorCode.Ok };\n");
     out.push_str("    } catch (Exception ex) {\n");
     out.push_str("        var msg = StringHelpers.StaticMessage(ex.Message);\n");
-    out.push_str("        return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n");
+    out.push_str(
+        "        return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };\n",
+    );
     out.push_str("    }\n");
     out.push_str("}\n\n");
 }

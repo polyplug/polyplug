@@ -6,4 +6,4 @@ runtime = "csharp"
 provides = ["pipeline.Validator@1"]
 function_count = { "pipeline.Validator@1" = 1 }
 needs_reinit_on_dep_reload = false
-file = "decoder.dll"
+file = "validator.dll"

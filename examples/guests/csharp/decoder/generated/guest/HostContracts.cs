@@ -6,6 +6,12 @@ using Polyplug.Abi;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+public struct HostLoggerContractLogWithLevelArgs {
+    public LogLevel Level;
+    public Polyplug.Abi.StringView Message;
+}
+
 /// <summary>
 /// Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 /// Plugins use this class to call host-provided functionality.
@@ -23,11 +29,13 @@ public sealed class HostLoggerContract {
         }
         unsafe {
             var hostInterface = (HostApi*)host;
-            var instance = hostInterface->GetHostContract(host, 0xF53EB5F2845853BBUL, minVersion);
+            var getHostContractFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->GetHostContract;
+            var resolveInterfaceFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->ResolveHostContractInterface;
+            var instance = getHostContractFn(host, 0xF53EB5F2845853BBUL, minVersion);
             if (instance == IntPtr.Zero) {
                 return null;
             }
-            var iface = hostInterface->ResolveHostContractInterface(host, 0xF53EB5F2845853BBUL, minVersion);
+            var iface = resolveInterfaceFn(host, 0xF53EB5F2845853BBUL, minVersion);
             if (iface == IntPtr.Zero) {
                 return null;
             }
@@ -72,7 +80,7 @@ public sealed class HostLoggerContract {
                     return;
             }
 
-            if (err.Code != AbiErrorCode.Ok) {
+            if (err.Code != (uint)AbiErrorCode.Ok) {
                 return;
             }
 
@@ -116,7 +124,7 @@ public sealed class HostLoggerContract {
                     return;
             }
 
-            if (err.Code != AbiErrorCode.Ok) {
+            if (err.Code != (uint)AbiErrorCode.Ok) {
                 return;
             }
 

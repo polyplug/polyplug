@@ -24,12 +24,12 @@ public static class Plugin {
                 var desc_reporter = new PluginDescriptor {
                     Name = new StringView { Ptr = nameHandle_reporter.AddrOfPinnedObject(), Len = (nuint)plugin_name_reporter.Length },
                     ContractName = new StringView { Ptr = contractHandle_reporter.AddrOfPinnedObject(), Len = (nuint)contract_name_reporter.Length },
-                    Version = new Version { Major = 1u, Minor = 0u, Patch = 0u },
+                    Version = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 };
                 var host = (HostApi*)hostPtr;
                 var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;
                 var err_reporter = registerFn(hostPtr, &desc_reporter, interfacePtr_reporter);
-                if (err_reporter.Code != AbiErrorCode.Ok) return err_reporter.Code;
+                if (err_reporter.Code != (uint)AbiErrorCode.Ok) return (AbiErrorCode)err_reporter.Code;
             }
             } finally {
                 nameHandle_reporter.Free();

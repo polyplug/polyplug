@@ -13,25 +13,27 @@ public static class TransformerInterfaces {
     public static void SetTransformerImpl(IDataTransformerGuestContract impl) { _impl_transformer = impl; }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static AbiError transformer_transform_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
+    private static unsafe AbiError transformer_transform_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
         // Instance is ignored for stateless plugins (instance is null).
         // For stateful plugins, users override create_instance and use instance.Data.
         try {
             if (argsPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiErrorCode.InvalidPointer };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
             if (outPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiErrorCode.InvalidPointer };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
-            var impl = _impl_transformer ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, "not initialized");
-            // call impl
-            return new AbiError { Code = AbiErrorCode.Ok };
+            var impl = _impl_transformer ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.Generic, "not initialized");
+            var input = *(Polyplug.Abi.StringView*)argsPtr;
+            var result = impl.Transform(input);
+            *(Polyplug.Abi.StringView*)outPtr = result;
+            return new AbiError { Code = (uint)AbiErrorCode.Ok };
         } catch (Polyplug.Guest.GuestException ex) {
             var msg = StringHelpers.StaticMessage(ex.Message);
             return new AbiError { Code = ex.Code, Message = msg };
         } catch {
             var msg = StringHelpers.StaticMessage("plugin panicked");
-            return new AbiError { Code = AbiErrorCode.Panic, Message = msg };
+            return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
         }
     }
 
@@ -55,21 +57,21 @@ public static class TransformerInterfaces {
             TRANSFORMER_FNS = new IntPtr[] {
                 (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError>)&transformer_transform_abi,
             };
-        }
-        _TRANSFORMER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(TRANSFORMER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
-        TRANSFORMER_INTERFACE = new GuestContractInterface {
-            ContractId = TRANSFORMER_CONTRACT_ID,
-            ContractVersion = new Version { Major = 1u, Minor = 0u, Patch = 0u },
-            DispatchType = DispatchType.VirtualMachine,
-            CreateInstance = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&TRANSFORMER_CreateInstanceStub,
-            DestroyInstance = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&TRANSFORMER_DestroyInstanceStub,
-            Dispatch = new DispatchMechanisms {
-                Native = new NativeDispatch {
-                    FunctionCount = 1u,
-                    Functions = _TRANSFORMER_pin_handle.AddrOfPinnedObject(),
+            _TRANSFORMER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(TRANSFORMER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
+            TRANSFORMER_INTERFACE = new GuestContractInterface {
+                ContractId = TRANSFORMER_CONTRACT_ID,
+                ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
+                DispatchType = DispatchType.VirtualMachine,
+                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&TRANSFORMER_CreateInstanceStub,
+                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&TRANSFORMER_DestroyInstanceStub,
+                Dispatch = new DispatchMechanisms {
+                    Native = new NativeDispatch {
+                        FunctionCount = 1u,
+                        Functions = _TRANSFORMER_pin_handle.AddrOfPinnedObject(),
+                    },
                 },
-            },
-        };
+            };
+        }
     }
 }
 

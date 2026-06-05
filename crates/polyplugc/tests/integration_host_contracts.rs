@@ -447,7 +447,7 @@ fn test_csharp_guest_host_contract_callers_use_real_abi_types() {
         "guest caller must read the flat Dispatch.Vm fields: {callers}"
     );
     assert!(
-        callers.contains("err.Code != AbiErrorCode.Ok"),
+        callers.contains("err.Code != (uint)AbiErrorCode.Ok"),
         "guest caller must check the AbiError code via the AbiErrorCode enum: {callers}"
     );
 

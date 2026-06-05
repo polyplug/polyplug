@@ -1,14 +1,23 @@
-using System;
+using System.Runtime.CompilerServices;
 using Polyplug.Guest;
 using Polyplug.Abi;
 
 namespace Decoder;
 
-public static class Plugin
+public sealed class DecoderPlugin : IPipelineDecoderGuestContract
 {
-    public static StringView Decode(StringView input)
+    public StringView Decode(StringView input)
     {
-        var s = StringHelpers.ToString(input).Replace(',', '|');
-        return StringHelpers.AllocString($"DECODED:{s}");
+        string s = StringHelpers.ToString(input).Replace(',', '|');
+        return PolyplugHost.AllocString($"DECODED:{s}");
+    }
+}
+
+public static class Registration
+{
+    [ModuleInitializer]
+    public static void Register()
+    {
+        DecoderInterfaces.SetDecoderImpl(new DecoderPlugin());
     }
 }

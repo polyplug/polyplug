@@ -3,7 +3,7 @@ name = "csharp_encoder"
 version = "1.0.0"
 api = "../../../api.toml"
 runtime = "csharp"
-file = "decoder.dll"
+file = "encoder.dll"
 
 [[plugin]]
 name = "encoder"

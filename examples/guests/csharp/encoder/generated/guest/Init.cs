@@ -24,12 +24,12 @@ public static class Plugin {
                 var desc_encoder = new PluginDescriptor {
                     Name = new StringView { Ptr = nameHandle_encoder.AddrOfPinnedObject(), Len = (nuint)plugin_name_encoder.Length },
                     ContractName = new StringView { Ptr = contractHandle_encoder.AddrOfPinnedObject(), Len = (nuint)contract_name_encoder.Length },
-                    Version = new Version { Major = 1u, Minor = 0u, Patch = 0u },
+                    Version = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 };
                 var host = (HostApi*)hostPtr;
                 var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;
                 var err_encoder = registerFn(hostPtr, &desc_encoder, interfacePtr_encoder);
-                if (err_encoder.Code != AbiErrorCode.Ok) return err_encoder.Code;
+                if (err_encoder.Code != (uint)AbiErrorCode.Ok) return (AbiErrorCode)err_encoder.Code;
             }
             } finally {
                 nameHandle_encoder.Free();

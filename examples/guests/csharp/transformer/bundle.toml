@@ -3,7 +3,7 @@ name = "csharp_transformer"
 version = "1.0.0"
 api = "../../../api.toml"
 runtime = "csharp"
-file = "decoder.dll"
+file = "transformer.dll"
 
 [[plugin]]
 name = "transformer"

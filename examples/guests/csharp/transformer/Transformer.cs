@@ -1,21 +1,30 @@
-using System;
+using System.Runtime.CompilerServices;
 using Polyplug.Guest;
 using Polyplug.Abi;
 
 namespace Transformer;
 
-public static class Plugin
+public sealed class TransformerPlugin : IDataTransformerGuestContract
 {
-    public static StringView Transform(StringView input)
+    public StringView Transform(StringView input)
     {
-        var s = StringHelpers.StripPrefix(input, "DECODED:");
-        var parts = s.Split('|');
-        if (parts.Length >= 3 && int.TryParse(parts[2], out var count))
+        string s = StringHelpers.StripPrefix(input, "DECODED:");
+        string[] parts = s.Split('|');
+        if (parts.Length >= 3 && int.TryParse(parts[2], out int count))
         {
-            var name = parts[0].ToUpper();
-            var value = $"{parts[1]} (transformed)";
-            return StringHelpers.AllocString($"TRANSFORMED:{name}|{value}|{count + 1}");
+            string name = parts[0].ToUpper();
+            string value = $"{parts[1]} (transformed)";
+            return PolyplugHost.AllocString($"TRANSFORMED:{name}|{value}|{count + 1}");
         }
-        return StringHelpers.AllocString("INVALID:format");
+        return PolyplugHost.AllocString("INVALID:format");
+    }
+}
+
+public static class Registration
+{
+    [ModuleInitializer]
+    public static void Register()
+    {
+        TransformerInterfaces.SetTransformerImpl(new TransformerPlugin());
     }
 }

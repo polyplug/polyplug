@@ -13,25 +13,27 @@ public static class ValidatorInterfaces {
     public static void SetValidatorImpl(IPipelineValidatorGuestContract impl) { _impl_validator = impl; }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static AbiError validator_validate_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
+    private static unsafe AbiError validator_validate_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
         // Instance is ignored for stateless plugins (instance is null).
         // For stateful plugins, users override create_instance and use instance.Data.
         try {
             if (argsPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiErrorCode.InvalidPointer };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
             if (outPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiErrorCode.InvalidPointer };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
-            var impl = _impl_validator ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, "not initialized");
-            // call impl
-            return new AbiError { Code = AbiErrorCode.Ok };
+            var impl = _impl_validator ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.Generic, "not initialized");
+            var input = *(Polyplug.Abi.StringView*)argsPtr;
+            var result = impl.Validate(input);
+            *(Polyplug.Abi.StringView*)outPtr = result;
+            return new AbiError { Code = (uint)AbiErrorCode.Ok };
         } catch (Polyplug.Guest.GuestException ex) {
             var msg = StringHelpers.StaticMessage(ex.Message);
             return new AbiError { Code = ex.Code, Message = msg };
         } catch {
             var msg = StringHelpers.StaticMessage("plugin panicked");
-            return new AbiError { Code = AbiErrorCode.Panic, Message = msg };
+            return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
         }
     }
 
@@ -55,21 +57,21 @@ public static class ValidatorInterfaces {
             VALIDATOR_FNS = new IntPtr[] {
                 (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError>)&validator_validate_abi,
             };
-        }
-        _VALIDATOR_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(VALIDATOR_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
-        VALIDATOR_INTERFACE = new GuestContractInterface {
-            ContractId = VALIDATOR_CONTRACT_ID,
-            ContractVersion = new Version { Major = 1u, Minor = 0u, Patch = 0u },
-            DispatchType = DispatchType.VirtualMachine,
-            CreateInstance = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&VALIDATOR_CreateInstanceStub,
-            DestroyInstance = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&VALIDATOR_DestroyInstanceStub,
-            Dispatch = new DispatchMechanisms {
-                Native = new NativeDispatch {
-                    FunctionCount = 1u,
-                    Functions = _VALIDATOR_pin_handle.AddrOfPinnedObject(),
+            _VALIDATOR_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(VALIDATOR_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
+            VALIDATOR_INTERFACE = new GuestContractInterface {
+                ContractId = VALIDATOR_CONTRACT_ID,
+                ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
+                DispatchType = DispatchType.VirtualMachine,
+                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&VALIDATOR_CreateInstanceStub,
+                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&VALIDATOR_DestroyInstanceStub,
+                Dispatch = new DispatchMechanisms {
+                    Native = new NativeDispatch {
+                        FunctionCount = 1u,
+                        Functions = _VALIDATOR_pin_handle.AddrOfPinnedObject(),
+                    },
                 },
-            },
-        };
+            };
+        }
     }
 }
 

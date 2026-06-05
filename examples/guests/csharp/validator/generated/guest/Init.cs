@@ -24,12 +24,12 @@ public static class Plugin {
                 var desc_validator = new PluginDescriptor {
                     Name = new StringView { Ptr = nameHandle_validator.AddrOfPinnedObject(), Len = (nuint)plugin_name_validator.Length },
                     ContractName = new StringView { Ptr = contractHandle_validator.AddrOfPinnedObject(), Len = (nuint)contract_name_validator.Length },
-                    Version = new Version { Major = 1u, Minor = 0u, Patch = 0u },
+                    Version = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 };
                 var host = (HostApi*)hostPtr;
                 var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;
                 var err_validator = registerFn(hostPtr, &desc_validator, interfacePtr_validator);
-                if (err_validator.Code != AbiErrorCode.Ok) return err_validator.Code;
+                if (err_validator.Code != (uint)AbiErrorCode.Ok) return (AbiErrorCode)err_validator.Code;
             }
             } finally {
                 nameHandle_validator.Free();
