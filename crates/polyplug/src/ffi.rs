@@ -50,9 +50,11 @@ pub unsafe extern "C" fn polyplug_runtime_create(
             builder = builder.config(rt_config.clone());
 
             if let Some(cb) = rt_config.on_reload {
-                builder = builder.on_reload(move |phase| {
+                builder = builder.on_reload(move |user_data, phase| {
                     // SAFETY: cb is a valid extern "C" function pointer provided by the caller.
-                    unsafe { cb(phase) };
+                    // user_data is the opaque pointer the caller stored in RuntimeConfig and
+                    // is forwarded unchanged.
+                    unsafe { cb(user_data, phase) };
                 });
             }
         }
@@ -83,7 +85,10 @@ pub unsafe extern "C" fn polyplug_runtime_create(
 ///
 /// # Safety
 /// `host` must be a non-null pointer previously returned by `polyplug_runtime_create`.
-/// Must not be called more than once for the same pointer.
+///
+/// Calling this more than once for the same pointer is safe: the first call
+/// reclaims the runtime and nulls the `runtime` field, so subsequent calls
+/// observe a null field and become a no-op.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostInterface) {
     std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
@@ -94,8 +99,22 @@ pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostInterface) {
             // The 'static HostInterface itself remains leaked, which is intentional.
             let runtime_ptr: *const core::ffi::c_void = unsafe { (*host).runtime };
             if !runtime_ptr.is_null() {
+                // Null the field BEFORE dropping the Arc so a concurrent or repeat
+                // destroy observes null and skips the reclaim — making double-destroy
+                // a safe no-op instead of a double-free (use-after-free) hazard. The
+                // runtime owns its leaked 'static HostInterface, so mutating this
+                // field through a shared reference is sound: no other code reads or
+                // writes it after destruction begins.
+                // SAFETY: host is a valid, properly aligned HostInterface pointer; the
+                // `runtime` field is in-bounds and we hold exclusive logical ownership
+                // during destruction.
+                unsafe {
+                    let runtime_field: *mut *const core::ffi::c_void =
+                        core::ptr::addr_of!((*host).runtime) as *mut *const core::ffi::c_void;
+                    core::ptr::write(runtime_field, core::ptr::null());
+                }
                 // SAFETY: runtime_ptr was produced by Arc::into_raw in polyplug_runtime_create
-                // and has not been reclaimed before (caller guarantees a single destroy).
+                // and the field-null above guarantees it is reclaimed at most once.
                 let _runtime: std::sync::Arc<Runtime> =
                     unsafe { std::sync::Arc::from_raw(runtime_ptr as *const Runtime) };
             }
@@ -120,6 +139,23 @@ mod tests {
     }
 
     #[test]
+    fn double_destroy_is_a_safe_noop() {
+        // SAFETY: polyplug_runtime_create has no pointer preconditions.
+        let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        assert!(!host.is_null());
+
+        // SAFETY: host was returned by polyplug_runtime_create. The first destroy
+        // reclaims the runtime and nulls (*host).runtime; the second observes the
+        // null field and is a no-op (no double-free / UAF).
+        unsafe {
+            polyplug_runtime_destroy(host);
+            // The runtime field must be null after the first reclaim.
+            assert!((*host).runtime.is_null());
+            polyplug_runtime_destroy(host);
+        }
+    }
+
+    #[test]
     fn multiple_ffi_runtimes_are_isolated() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
         let host1: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
@@ -128,6 +164,40 @@ mod tests {
         assert!(!host1.is_null());
         assert!(!host2.is_null());
         assert_ne!(host1, host2);
+
+        // Drive divergent state into runtime 1 ONLY: a load_bundle with a null path
+        // fails and records a per-runtime last_error. Runtime 2 is left untouched.
+        // SAFETY: host1 is a valid HostInterface; passing a null path is the path
+        // explicitly handled by host_load_bundle (sets last_error, returns error).
+        let rc1: polyplug_abi::AbiError =
+            unsafe { ((*host1).load_bundle)(host1, core::ptr::null(), 0) };
+        assert_eq!(rc1.code, AbiErrorCode::InvalidPointer as u32);
+
+        // Runtime 1 must now observe its own error; runtime 2 must observe none —
+        // proving last_error state is instance-owned, not shared (Rule 12 isolation).
+        // SAFETY: host1 is a valid HostInterface pointer.
+        let len1: usize = unsafe { ((*host1).get_error_len)(host1) };
+        // SAFETY: host2 is a valid HostInterface pointer.
+        let len2: usize = unsafe { ((*host2).get_error_len)(host2) };
+        assert!(
+            len1 > 0,
+            "runtime 1 must have its own last_error after a failed load"
+        );
+        assert_eq!(
+            len2, 0,
+            "runtime 2 must NOT see runtime 1's error — state must be isolated"
+        );
+
+        // The reverse: drive a different error into runtime 2 and confirm runtime 1's
+        // error is unaffected (each keeps its own most-recent error independently).
+        // SAFETY: host2 is valid; null path is the handled error path.
+        let rc2: polyplug_abi::AbiError =
+            unsafe { ((*host2).load_bundle)(host2, core::ptr::null(), 0) };
+        assert_eq!(rc2.code, AbiErrorCode::InvalidPointer as u32);
+        // SAFETY: both hosts valid.
+        let len2_after: usize = unsafe { ((*host2).get_error_len)(host2) };
+        assert!(len2_after > 0, "runtime 2 now has its own last_error");
+
         // SAFETY: host1 and host2 were each returned by polyplug_runtime_create,
         // are non-null, and are destroyed exactly once here.
         unsafe {
@@ -144,11 +214,13 @@ mod tests {
             compatibility: Compatibility::Strict,
             hot_reload_enabled: true,
             on_reload: None,
+            on_reload_user_data: core::ptr::null_mut(),
         };
         let config2: RuntimeConfig = RuntimeConfig {
             compatibility: Compatibility::Relaxed,
             hot_reload_enabled: false,
             on_reload: None,
+            on_reload_user_data: core::ptr::null_mut(),
         };
 
         // SAFETY: config1 points to a valid RuntimeConfig owned by this stack frame.
@@ -176,7 +248,7 @@ mod tests {
 
         // SAFETY: host is valid, testing null path handling
         let result = unsafe { ((*host).load_bundle)(host, core::ptr::null(), 0) };
-        assert_eq!(result.code, AbiErrorCode::InvalidPointer);
+        assert_eq!(result.code, AbiErrorCode::InvalidPointer as u32);
 
         // SAFETY: host was returned by polyplug_runtime_create and is destroyed once.
         unsafe { polyplug_runtime_destroy(host) };
@@ -303,7 +375,7 @@ mod tests {
                     // SAFETY: host is valid, testing load_bundle error handling
                     let result = unsafe { ((*host).load_bundle)(host, b"/bad".as_ptr(), 4) };
 
-                    if result.code == AbiErrorCode::Ok {
+                    if result.code == AbiErrorCode::Ok as u32 {
                         success.fetch_add(1, Ordering::SeqCst);
                     } else {
                         errors.fetch_add(1, Ordering::SeqCst);
@@ -374,8 +446,6 @@ mod tests {
         let ptr = iface.find_all_guest_contracts as *const ();
         assert!(!ptr.is_null());
         let ptr = iface.resolve_guest_contract as *const ();
-        assert!(!ptr.is_null());
-        let ptr = iface.call_guest_method as *const ();
         assert!(!ptr.is_null());
         let ptr = iface.get_host_contract as *const ();
         assert!(!ptr.is_null());

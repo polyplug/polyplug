@@ -71,10 +71,12 @@ impl RuntimeBuilder {
 
     /// Register a callback fired after each successful interface swap, before dlclose.
     ///
-    /// The callback receives a `ReloadPhase` describing the reload phase.
+    /// The callback receives the opaque `RuntimeConfig::on_reload_user_data` pointer
+    /// (forwarded unchanged) and a `ReloadPhase` describing the reload phase. Set the
+    /// user-data pointer through [`RuntimeBuilder::config`].
     pub fn on_reload(
         mut self,
-        cb: impl Fn(polyplug_abi::runtime::ReloadPhase) + Send + Sync + 'static,
+        cb: impl Fn(*mut core::ffi::c_void, polyplug_abi::runtime::ReloadPhase) + Send + Sync + 'static,
     ) -> RuntimeBuilder {
         self.on_reload_cb = Some(std::sync::Arc::new(cb));
         self
@@ -112,7 +114,6 @@ impl RuntimeBuilder {
             find_guest_contract: crate::runtime::host_find_guest_contract,
             find_all_guest_contracts: crate::runtime::host_find_all_guest_contracts,
             resolve_guest_contract: crate::runtime::host_resolve_guest_contract,
-            call_guest_method: crate::runtime::host_call_method,
             get_host_contract: crate::runtime::host_get_host_contract,
             resolve_host_contract_interface: crate::runtime::host_resolve_host_contract_interface,
             list_bundles: crate::runtime::host_list_bundles,
@@ -124,6 +125,7 @@ impl RuntimeBuilder {
             register_loader: crate::runtime::host_register_loader,
             get_last_error: crate::runtime::host_get_last_error,
             get_error_len: crate::runtime::host_get_error_len,
+            get_extension: crate::runtime::host_get_extension,
         }));
 
         let mut loader_map: HashMap<String, Box<dyn BundleLoader>> = HashMap::new();
@@ -156,7 +158,7 @@ impl RuntimeBuilder {
         let runtime: Runtime = Runtime {
             registry: Arc::clone(&registry),
             host_abi,
-            loaders: loader_map,
+            loaders: std::sync::RwLock::new(loader_map),
             bundle_manifests: std::sync::Mutex::new(manifests_map),
             on_reload_cb: self.on_reload_cb,
             config: self.config,
@@ -165,6 +167,8 @@ impl RuntimeBuilder {
             host_contracts: std::sync::RwLock::new(HashMap::new()),
             singleton_instances: std::sync::RwLock::new(HashMap::new()),
             host_runtime: self.host_runtime,
+            extensions: std::sync::RwLock::new(HashMap::new()),
+            init_bundle_stack: std::sync::Mutex::new(HashMap::new()),
         };
 
         let runtime: Arc<Runtime> = Arc::new(runtime);
@@ -214,11 +218,8 @@ impl RuntimeBuilder {
                         })
                     })?;
 
-                let loader: &dyn BundleLoader = runtime
-                    .loaders
-                    .get(&manifest.runtime)
-                    .map(Box::as_ref)
-                    .ok_or_else(|| {
+                let loader: &dyn BundleLoader =
+                    runtime.loader_for(&manifest.runtime).ok_or_else(|| {
                         RuntimeError::Loader(LoaderError::NoLoaderForRuntime {
                             bundle: bundle_path.display().to_string(),
                             runtime_name: manifest.runtime.clone(),

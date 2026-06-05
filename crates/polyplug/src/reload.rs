@@ -95,12 +95,9 @@ impl Runtime {
         let manifest: ManifestData =
             crate::loader::parse_manifest(bundle_dir).map_err(RuntimeError::Loader)?;
 
-        // Find the loader
-        let loader: &dyn crate::loader::BundleLoader = self
-            .loaders
-            .get(&manifest.runtime)
-            .map(Box::as_ref)
-            .ok_or_else(|| {
+        // Find the loader (lock released before reload() runs — see `loader_for`).
+        let loader: &dyn crate::loader::BundleLoader =
+            self.loader_for(&manifest.runtime).ok_or_else(|| {
                 RuntimeError::Loader(crate::error::LoaderError::NoLoaderForRuntime {
                     bundle: path.display().to_string(),
                     runtime_name: manifest.runtime.clone(),
@@ -118,11 +115,14 @@ impl Runtime {
                 error: format!("bundle library not found at {}", path.display()),
             });
             if let Some(cb) = self.on_reload_cb() {
-                cb(ReloadPhase::failed(
-                    bundle_id,
-                    string_view(&manifest.name),
-                    string_view(&err.to_string()),
-                ));
+                cb(
+                    self.config().on_reload_user_data,
+                    ReloadPhase::failed(
+                        bundle_id,
+                        string_view(&manifest.name),
+                        string_view(&err.to_string()),
+                    ),
+                );
             }
             return Err(err);
         }
@@ -132,10 +132,10 @@ impl Runtime {
 
         // Fire Preparing callback
         if let Some(cb) = self.on_reload_cb() {
-            cb(ReloadPhase::preparing(
-                bundle_id,
-                string_view(&manifest.name),
-            ));
+            cb(
+                self.config().on_reload_user_data,
+                ReloadPhase::preparing(bundle_id, string_view(&manifest.name)),
+            );
         }
 
         // ─── Warning Check: Informational only, not blocking ─────────────────
@@ -154,6 +154,12 @@ impl Runtime {
                 }
             }
         }
+
+        // Open the reload window: interfaces registered during loader.reload() are
+        // kept out of the find index (pending) so readers never see two live slots
+        // per contract during the swap window. apply_reload_swap closes it on success;
+        // the failure path closes it explicitly below.
+        self.registry.begin_reload(bundle_id);
 
         // Call loader's reload() - this does load+init, registering new interfaces
         let result: Result<(), crate::error::RuntimeError> = loader.reload(&manifest, self);
@@ -180,21 +186,27 @@ impl Runtime {
 
                 // Fire Reloaded callback
                 if let Some(cb) = self.on_reload_cb() {
-                    cb(ReloadPhase::reloaded(
-                        bundle_id,
-                        string_view(&manifest.name),
-                    ));
+                    cb(
+                        self.config().on_reload_user_data,
+                        ReloadPhase::reloaded(bundle_id, string_view(&manifest.name)),
+                    );
                 }
                 Ok(())
             }
             Err(e) => {
+                // Close the reload window: init failed, so no swap happens. Any slots
+                // registered before the failure stay pending (out of the find index).
+                self.registry.end_reload(bundle_id);
                 // Fire Failed callback - NO interface swap on failure
                 if let Some(cb) = self.on_reload_cb() {
-                    cb(ReloadPhase::failed(
-                        bundle_id,
-                        string_view(&manifest.name),
-                        string_view(&e.to_string()),
-                    ));
+                    cb(
+                        self.config().on_reload_user_data,
+                        ReloadPhase::failed(
+                            bundle_id,
+                            string_view(&manifest.name),
+                            string_view(&e.to_string()),
+                        ),
+                    );
                 }
                 Err(e)
             }

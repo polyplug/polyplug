@@ -17,7 +17,6 @@ polyplug_abi = { workspace = true }
 polyplug_utils = { workspace = true }
 
 libloading = { workspace = true }
-thiserror = { workspace = true }
 
 [lints]
 workspace = true

@@ -17,7 +17,7 @@ use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, Buffer, BundleInitContext, GuestContractHandle,
-    GuestContractInstance, GuestContractInterface, HostInterface, PluginDescriptor, StringView,
+    GuestContractInterface, HostInterface, PluginDescriptor, StringView,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -104,20 +104,6 @@ unsafe extern "C" fn stub_resolve_guest_contract(
     core::ptr::null()
 }
 
-/// Stub call_guest_method -- returns Ok.
-unsafe extern "C" fn stub_call_guest_method(
-    _this: *const HostInterface,
-    _instance: GuestContractInstance,
-    _method_id: u32,
-    _args: *const (),
-    _out: *mut (),
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok,
-        message: StringView::null(),
-    }
-}
-
 /// Stub get_host_contract -- returns null instance.
 unsafe extern "C" fn stub_get_host_contract(
     _this: *const HostInterface,
@@ -155,7 +141,7 @@ unsafe extern "C" fn stub_load_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -167,7 +153,7 @@ unsafe extern "C" fn stub_reload_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -178,7 +164,7 @@ unsafe extern "C" fn stub_register_host_contract(
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -190,7 +176,7 @@ unsafe extern "C" fn stub_register_loader(
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -207,6 +193,14 @@ unsafe extern "C" fn stub_get_last_error(
 /// Stub get_error_len callback.
 unsafe extern "C" fn stub_get_error_len(_this: *const HostInterface) -> usize {
     0
+}
+
+/// Stub get_extension callback.
+unsafe extern "C" fn stub_get_extension(
+    _this: *const HostInterface,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
 }
 
 /// Stub alloc callback.
@@ -238,7 +232,7 @@ unsafe extern "C" fn registry_register_callback(
 ) -> AbiError {
     if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: AbiErrorCode::InvalidPointer,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::null(),
         };
     }
@@ -273,11 +267,11 @@ unsafe extern "C" fn registry_register_callback(
 
     match result {
         Ok(_) => AbiError {
-            code: AbiErrorCode::Ok,
+            code: AbiErrorCode::Ok as u32,
             message: StringView::null(),
         },
         Err(_) => AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
     }
@@ -327,7 +321,6 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         find_guest_contract: stub_find_guest_contract,
         find_all_guest_contracts: stub_find_all_guest_contracts,
         resolve_guest_contract: stub_resolve_guest_contract,
-        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
         resolve_host_contract_interface: stub_resolve_host_contract_interface,
         list_bundles: stub_list_bundles,
@@ -338,6 +331,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
+        get_extension: stub_get_extension,
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -353,7 +347,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
     };
     assert_eq!(
         init_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "polyplug_init must succeed"
     );
 
@@ -417,7 +411,7 @@ fn stress_large_buffer_fill_and_read() {
 
     assert_eq!(
         call_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "memory_fill_preallocated_buffer must return Ok"
     );
     assert_eq!(
@@ -437,9 +431,9 @@ fn stress_large_buffer_fill_and_read() {
     // SAFETY: ptr was allocated by polyplug_host_alloc with BUFFER_SIZE and align=1.
     unsafe { polyplug_host_free(ptr, BUFFER_SIZE, 1) };
 
-    // TrackingAllocator verifies the tracking layer is balanced (0 allocs, 0 frees through it).
-    let tracker: TrackingAllocator = TrackingAllocator::new();
-    tracker.assert_no_leaks();
+    // The allocations above go directly through polyplug_host_alloc/free, not through
+    // a TrackingAllocator, so there is nothing for a tracker to observe here. (A fresh
+    // tracker created at this point would only assert 0 == 0 — vacuously.)
 
     core::mem::forget(library);
 }
@@ -478,7 +472,7 @@ fn stress_string_view_non_ascii_utf8() {
 
     assert_eq!(
         call_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "memory_echo_string_view must return Ok"
     );
     assert_eq!(
@@ -497,9 +491,8 @@ fn stress_string_view_non_ascii_utf8() {
         core::str::from_utf8(returned_bytes).expect("echoed StringView must be valid UTF-8");
     assert_eq!(returned_str, "café", "echoed string must equal input");
 
-    // TrackingAllocator verifies the tracking layer is balanced (no allocs/frees through it).
-    let tracker: TrackingAllocator = TrackingAllocator::new();
-    tracker.assert_no_leaks();
+    // No TrackingAllocator is involved on this path (the echo returns a borrowed view),
+    // so there is nothing for a tracker to observe — a fresh tracker would assert 0 == 0.
 
     core::mem::forget(library);
 }
@@ -548,7 +541,7 @@ fn stress_zero_length_buffer_and_string_view() {
 
     assert_eq!(
         call_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "memory_zero_length_roundtrip must return Ok"
     );
     assert_eq!(
@@ -560,9 +553,8 @@ fn stress_zero_length_buffer_and_string_view() {
         "zero-length StringView.len must round-trip as 0"
     );
 
-    // TrackingAllocator verifies the tracking layer is balanced.
-    let tracker: TrackingAllocator = TrackingAllocator::new();
-    tracker.assert_no_leaks();
+    // This path does not allocate through a TrackingAllocator, so a fresh tracker
+    // here would only assert 0 == 0 (vacuous) — omitted.
 
     core::mem::forget(library);
 }
@@ -622,7 +614,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
                 };
                 assert_eq!(
                     result.code,
-                    AbiErrorCode::Ok,
+                    AbiErrorCode::Ok as u32,
                     "thread {}: fill must return Ok",
                     thread_idx
                 );
@@ -663,9 +655,10 @@ fn stress_concurrent_8_threads_no_shared_memory() {
         THREAD_COUNT
     );
 
-    // TrackingAllocator is thread-local; verify the tracking layer is balanced on this thread.
-    let tracker: TrackingAllocator = TrackingAllocator::new();
-    tracker.assert_no_leaks();
+    // The per-thread allocations above went directly through polyplug_host_alloc/free,
+    // not through a TrackingAllocator, and balance is verified by the alloc/free counter
+    // assertions above. A fresh tracker on this coordinating thread observed nothing, so
+    // asserting on it would be vacuous — omitted.
 
     core::mem::forget(library);
 }
@@ -721,7 +714,6 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         find_guest_contract: stub_find_guest_contract,
         find_all_guest_contracts: stub_find_all_guest_contracts,
         resolve_guest_contract: stub_resolve_guest_contract,
-        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
         resolve_host_contract_interface: stub_resolve_host_contract_interface,
         list_bundles: stub_list_bundles,
@@ -732,6 +724,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
+        get_extension: stub_get_extension,
     };
 
     let args: AllocArgs = AllocArgs {
@@ -762,7 +755,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
 
     assert_eq!(
         call_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "memory_alloc_buffer_via_host must return Ok"
     );
     assert!(
@@ -855,7 +848,7 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
 
     assert_eq!(
         call_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "memory_fill_preallocated_buffer must return Ok"
     );
     assert_eq!(out, 64_u32, "written byte count must be 64");

@@ -7,8 +7,8 @@ use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::{
-    AbiError, AbiErrorCode, Buffer, BundleInitContext, GuestContractHandle, GuestContractInstance,
-    GuestContractInterface, HostInterface, PluginDescriptor, StringView,
+    AbiError, AbiErrorCode, Buffer, BundleInitContext, GuestContractHandle, GuestContractInterface,
+    HostInterface, PluginDescriptor, StringView,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -31,7 +31,7 @@ unsafe extern "C" fn registry_register_callback(
 ) -> AbiError {
     if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: AbiErrorCode::InvalidPointer,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::null(),
         };
     }
@@ -63,11 +63,11 @@ unsafe extern "C" fn registry_register_callback(
 
     match result {
         Ok(_) => AbiError {
-            code: AbiErrorCode::Ok,
+            code: AbiErrorCode::Ok as u32,
             message: StringView::null(),
         },
         Err(_) => AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
     }
@@ -115,20 +115,6 @@ unsafe extern "C" fn noop_resolve_guest_contract(
     core::ptr::null()
 }
 
-/// No-op call_guest_method callback.
-unsafe extern "C" fn noop_call_guest_method(
-    _this: *const HostInterface,
-    _instance: GuestContractInstance,
-    _method_id: u32,
-    _args: *const (),
-    _out: *mut (),
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok,
-        message: StringView::null(),
-    }
-}
-
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
     _this: *const HostInterface,
@@ -168,7 +154,7 @@ unsafe extern "C" fn noop_load_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -180,7 +166,7 @@ unsafe extern "C" fn noop_reload_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -191,7 +177,7 @@ unsafe extern "C" fn noop_register_host_contract(
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -203,7 +189,7 @@ unsafe extern "C" fn noop_register_loader(
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -220,6 +206,14 @@ unsafe extern "C" fn noop_get_last_error(
 /// No-op get_error_len callback.
 unsafe extern "C" fn noop_get_error_len(_this: *const HostInterface) -> usize {
     0
+}
+
+/// No-op get_extension callback.
+unsafe extern "C" fn noop_get_extension(
+    _this: *const HostInterface,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
 }
 
 fn load_memory_plugin() -> libloading::Library {
@@ -250,7 +244,6 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         find_guest_contract: noop_find_guest_contract,
         find_all_guest_contracts: noop_find_all_guest_contracts,
         resolve_guest_contract: noop_resolve_guest_contract,
-        call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
         resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
@@ -261,6 +254,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         register_loader: noop_register_loader,
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
+        get_extension: noop_get_extension,
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -277,7 +271,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
     };
     assert_eq!(
         init_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "polyplug_init must succeed"
     );
 
@@ -340,7 +334,7 @@ fn test_misaligned_buffer_fill() {
 
     assert_ne!(
         call_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "misaligned buffer must error"
     );
     assert_eq!(out, 0_u32, "out must remain zero on error");
@@ -383,7 +377,11 @@ fn test_stringview_cross_thread_echo() {
                 )
             };
 
-            assert_eq!(call_result.code, AbiErrorCode::Ok, "echo must return Ok");
+            assert_eq!(
+                call_result.code,
+                AbiErrorCode::Ok as u32,
+                "echo must return Ok"
+            );
             assert_eq!(out_sv.ptr, input_sv.ptr, "ptr must round-trip");
             assert_eq!(out_sv.len, input_sv.len, "len must round-trip");
 
@@ -437,7 +435,11 @@ fn test_buffer_cap_less_than_len() {
         )
     };
 
-    assert_ne!(call_result.code, AbiErrorCode::Ok, "cap < len must error");
+    assert_ne!(
+        call_result.code,
+        AbiErrorCode::Ok as u32,
+        "cap < len must error"
+    );
     assert_eq!(out, 0_u32, "out must remain zero on error");
 
     // SAFETY: ptr is valid for BUFFER_SIZE bytes.

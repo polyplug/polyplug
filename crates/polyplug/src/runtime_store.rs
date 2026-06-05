@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use polyplug_abi::RuntimeLanguage;
+use polyplug_abi::dispatch::dispatch_type::DispatchType;
 use polyplug_abi::types::Version;
 use polyplug_abi::{
     GuestContractHandle, GuestContractInstance, GuestContractInterface, HostInterface,
@@ -88,10 +89,41 @@ pub struct BundleData {
     pub descriptor: BundleDescriptor,
 }
 
+/// Copy a `StringView`'s bytes into an owned, lossy-UTF-8 `String`.
+///
+/// # Safety
+/// `sv.ptr` must be valid for `sv.len` bytes for the duration of this call, or be null.
+unsafe fn string_view_to_owned_string(sv: &polyplug_abi::types::StringView) -> String {
+    if sv.ptr.is_null() || sv.len == 0 {
+        return String::new();
+    }
+    // SAFETY: caller guarantees ptr/len describe a valid byte range for this call.
+    let bytes: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Owned copy of a plugin's [`PluginDescriptor`] for the registry to retain.
+///
+/// The ABI [`PluginDescriptor`] carries borrowed `StringView`s (`name`,
+/// `contract_name`) that point into the plugin's transient init-time buffers —
+/// some generators (e.g. C#) free those buffers as soon as `register_contract`
+/// returns. Retaining the raw descriptor would therefore dangle. This struct
+/// owns the string data so introspection stays valid for the registry's lifetime.
+#[derive(Debug, Clone)]
+pub struct OwnedPluginDescriptor {
+    /// Human-readable plugin name (owned copy of `PluginDescriptor.name`).
+    pub name: String,
+    /// Full contract name (owned copy of `PluginDescriptor.contract_name`).
+    pub contract_name: String,
+    /// Plugin version (a plain `Copy` value — no borrowed data).
+    pub version: Version,
+}
+
 /// Live plugin registration data.
 pub(crate) struct PluginEntry {
-    /// Plugin metadata — used by other crates for introspection.
-    pub _descriptor: PluginDescriptor,
+    /// Plugin metadata — owned so no borrowed `StringView`s are retained.
+    /// Used for registry introspection.
+    pub descriptor: OwnedPluginDescriptor,
     /// Full contract name string for collision detection.
     pub contract_name: String,
     /// The bundle this registration originates from.
@@ -134,6 +166,17 @@ struct RuntimeStoreData {
     /// held alive until all in-flight calls complete (TRUST_MODEL.md §Hot-Reload
     /// Safety Guarantees).
     retired_interfaces: Vec<Arc<GuestContractInterface>>,
+    /// Bundles currently inside a hot-reload's re-init phase.
+    ///
+    /// While a bundle id is present here, contracts registered by that bundle are
+    /// "pending": their slot is created (and tracked in `bundle_data.plugin_slots`)
+    /// but NOT published into `guest_contract_index`, so `find`/`find_all` readers
+    /// never observe a transient second live slot per contract during the window
+    /// between `loader.reload()` (which re-runs init, registering fresh slots) and
+    /// `apply_reload_swap` (which reconciles). `apply_reload_swap` moves each new
+    /// interface into the already-published old slot and retires the pending slot,
+    /// so the contract stays single-slot throughout.
+    reloading_bundles: HashSet<BundleId>,
 }
 
 impl RuntimeStoreData {
@@ -146,6 +189,7 @@ impl RuntimeStoreData {
             bundle_name_index: HashMap::new(),
             bundle_declared_deps: HashMap::new(),
             retired_interfaces: Vec::new(),
+            reloading_bundles: HashSet::new(),
         }
     }
 }
@@ -194,6 +238,23 @@ impl RuntimeStore {
         // The ABI contract requires the pointer to remain valid for the library lifetime.
         let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
 
+        // The plugin is untrusted: `dispatch_type` is a `#[repr(u32)]` enum but the
+        // plugin-provided struct can hold any 32-bit pattern. Materializing an
+        // out-of-range value as the enum would be UB, so read the field as a raw
+        // `u32` and validate it via the total `DispatchType::from_u32` before use.
+        let dispatch_type: DispatchType = {
+            // SAFETY: interface_ptr is a valid 'static GuestContractInterface (ABI
+            // contract). We read the 4-byte `dispatch_type` field as a raw `u32`
+            // (never as the typed enum) so an out-of-range value is observed soundly.
+            let raw: u32 = unsafe {
+                core::ptr::read(core::ptr::addr_of!((*interface_ptr).dispatch_type) as *const u32)
+            };
+            match DispatchType::from_u32(raw) {
+                Some(dt) => dt,
+                None => return Err(RegistryError::InvalidDispatchType { value: raw }),
+            }
+        };
+
         let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -234,9 +295,22 @@ impl RuntimeStore {
                 new_idx
             });
 
+        // Copy the descriptor's borrowed `name` into an owned String NOW, while the
+        // plugin's init-time buffer is still valid. Storing the raw StringView would
+        // dangle once the plugin frees that buffer after register_contract returns.
+        // SAFETY: `descriptor.name` is a valid StringView for the duration of this
+        // call (the plugin owns the backing buffer during polyplug_init). We only
+        // read it; no aliasing or lifetime extension beyond this copy.
+        let owned_name: String = unsafe { string_view_to_owned_string(&descriptor.name) };
+        let owned_descriptor: OwnedPluginDescriptor = OwnedPluginDescriptor {
+            name: owned_name,
+            contract_name: contract_name.clone(),
+            version: descriptor.version,
+        };
+
         let slot: &mut PluginSlot = &mut data.slots[slot_idx as usize];
         slot.entry = Some(PluginEntry {
-            _descriptor: descriptor,
+            descriptor: owned_descriptor,
             contract_name,
             bundle_id,
         });
@@ -292,7 +366,7 @@ impl RuntimeStore {
             GuestContractInterface {
                 contract_id: (*interface_ptr).contract_id,
                 contract_version: (*interface_ptr).contract_version,
-                dispatch_type: (*interface_ptr).dispatch_type,
+                dispatch_type,
                 create_instance,
                 destroy_instance,
                 dispatch: core::ptr::read(core::ptr::addr_of!((*interface_ptr).dispatch)),
@@ -300,11 +374,18 @@ impl RuntimeStore {
         };
         slot.interface = Some(Arc::new(interface));
 
-        // Update contract_index: push slot_idx into the Vec for this contract_id
-        data.guest_contract_index
-            .entry(contract_id)
-            .or_default()
-            .push(slot_idx);
+        // Publish into guest_contract_index UNLESS this bundle is mid-reload. During a
+        // reload the freshly-registered slot is "pending": keeping it out of the find
+        // index prevents readers from transiently seeing two live slots per contract.
+        // apply_reload_swap later moves the interface into the already-published old
+        // slot and retires this pending slot, so the index is never double-populated.
+        let is_reloading: bool = data.reloading_bundles.contains(&bundle_id);
+        if !is_reloading {
+            data.guest_contract_index
+                .entry(contract_id)
+                .or_default()
+                .push(slot_idx);
+        }
 
         // Update bundle_data: push slot_idx into plugin_slots Vec for this bundle_id.
         // Note: descriptor is populated separately via register_bundle_metadata().
@@ -684,10 +765,46 @@ impl RuntimeStore {
     /// readers always observe either the complete old state or the complete new
     /// state — never a half-swapped registry with duplicate or orphaned slots.
     ///
+    /// # Dropped contracts (retire-not-drop)
+    /// If a contract that the old version provided is no longer provided by the new
+    /// version (no newly-registered slot matches its `contract_id`), the reload does
+    /// NOT fail. Instead the old slot is retired: its interface `Arc` is moved into
+    /// `retired_interfaces` (kept alive for in-flight readers holding raw pointers),
+    /// and the slot is removed from the find index so the dropped contract becomes
+    /// unresolvable via `find_*`. Previously-resolved raw pointers stay valid; new
+    /// lookups for the dropped contract simply return nothing.
+    ///
     /// # Errors
-    /// Returns `Err(RegistryError::InvalidHandle)` if any old slot has no
-    /// interface, and `Err(RegistryError::PluginNotFound)` if no newly-registered
-    /// slot matches an old slot's `contract_id`.
+    /// Returns `Err(RegistryError::InvalidHandle)` if any old slot has no interface.
+    /// Enter the reload window for `bundle_id`.
+    ///
+    /// Contracts registered by this bundle while the window is open are kept out of
+    /// `guest_contract_index` (pending) so concurrent `find`/`find_all` readers do
+    /// not observe a second live slot per contract. Pair with `apply_reload_swap`
+    /// (which closes the window) or `end_reload` on the failure path.
+    pub(crate) fn begin_reload(&self, bundle_id: BundleId) {
+        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
+            self.data.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        data.reloading_bundles.insert(bundle_id);
+    }
+
+    /// Close the reload window for `bundle_id` without reconciling.
+    ///
+    /// Used on the reload failure path (init failed) so the flag does not leak. Any
+    /// pending slots registered before the failure remain in `bundle_data` but out
+    /// of the find index; the caller is responsible for cleaning them up if needed.
+    pub(crate) fn end_reload(&self, bundle_id: BundleId) {
+        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
+            self.data.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        data.reloading_bundles.remove(&bundle_id);
+    }
+
     pub(crate) fn apply_reload_swap(
         &self,
         bundle_id: BundleId,
@@ -698,6 +815,9 @@ impl RuntimeStore {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
+        // Close the reload window: subsequent registrations (if any) publish normally,
+        // and the swap below makes the new interfaces visible via the old slots.
+        data.reloading_bundles.remove(&bundle_id);
 
         // Slots registered during this reload = current bundle slots minus old slots.
         let new_slots: Vec<u32> = match data.bundle_data.get(&bundle_id) {
@@ -719,19 +839,36 @@ impl RuntimeStore {
                 .ok_or(RegistryError::InvalidHandle { index: old_idx })?;
 
             // Find the newly-registered slot for the same contract_id.
-            let new_idx: u32 = new_slots
-                .iter()
-                .copied()
-                .find(|&idx| {
-                    data.slots
-                        .get(idx as usize)
-                        .and_then(|s| s.interface.as_ref())
-                        .is_some_and(|i| i.contract_id == old_contract_id)
-                })
-                .ok_or(RegistryError::PluginNotFound {
-                    contract_id: old_contract_id.id(),
-                    min_version: 0,
-                })?;
+            let matching_new_idx: Option<u32> = new_slots.iter().copied().find(|&idx| {
+                data.slots
+                    .get(idx as usize)
+                    .and_then(|s| s.interface.as_ref())
+                    .is_some_and(|i| i.contract_id == old_contract_id)
+            });
+
+            let new_idx: u32 = match matching_new_idx {
+                Some(idx) => idx,
+                None => {
+                    // Retire-not-drop: the new bundle version no longer provides this
+                    // contract. Do NOT fail the whole reload. Retire the old interface
+                    // (keep it alive for in-flight readers) and remove the old slot from
+                    // the find index so the dropped contract is no longer resolvable.
+                    if let Some(old_interface) = data.slots[old_idx as usize].interface.take() {
+                        data.retired_interfaces.push(old_interface);
+                    }
+                    data.slots[old_idx as usize].entry = None;
+                    if let Some(indices) = data.guest_contract_index.get_mut(&old_contract_id) {
+                        indices.retain(|&idx| idx != old_idx);
+                        if indices.is_empty() {
+                            data.guest_contract_index.remove(&old_contract_id);
+                        }
+                    }
+                    if let Some(bd) = data.bundle_data.get_mut(&bundle_id) {
+                        bd.plugin_slots.retain(|&idx| idx != old_idx);
+                    }
+                    continue;
+                }
+            };
 
             // Move the new interface into the old slot, retiring (not dropping)
             // the old interface so any in-flight reader holding a raw pointer
@@ -757,7 +894,55 @@ impl RuntimeStore {
             }
         }
 
+        // Publish any pending new slots that were NOT consumed by a swap above — these
+        // are brand-new contracts the reloaded version introduced (no matching old
+        // slot). They were registered pending (kept out of the find index during the
+        // window); now that reload is reconciled, make them discoverable.
+        for &new_idx in &new_slots {
+            // Determine the contract_id of a still-live pending slot, then drop the
+            // immutable borrow before mutating the index.
+            let contract_id: Option<GuestContractId> = match data.slots.get(new_idx as usize) {
+                // A consumed/retired slot has its entry cleared; skip those.
+                Some(slot) if slot.entry.is_some() => {
+                    slot.interface.as_ref().map(|i| i.contract_id)
+                }
+                _ => None,
+            };
+            if let Some(cid) = contract_id {
+                let indices: &mut Vec<u32> = data.guest_contract_index.entry(cid).or_default();
+                if !indices.contains(&new_idx) {
+                    indices.push(new_idx);
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    /// Return the owned descriptor for the plugin registered at `handle`'s slot.
+    ///
+    /// Exposes the registry's owned copy of the plugin's `PluginDescriptor` (name,
+    /// contract_name, version) for introspection. Returns `None` if the handle is
+    /// out of bounds or its slot is vacant. The returned data is owned (no borrowed
+    /// `StringView`s), so it stays valid independently of the plugin's transient
+    /// init-time buffers.
+    pub fn get_guest_contract_descriptor(
+        &self,
+        handle: GuestContractHandle,
+    ) -> Option<OwnedPluginDescriptor> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        if handle.is_null() {
+            return None;
+        }
+        let slot_idx: usize = handle.index as usize;
+        data.slots
+            .get(slot_idx)
+            .and_then(|slot: &PluginSlot| slot.entry.as_ref())
+            .map(|entry: &PluginEntry| entry.descriptor.clone())
     }
 
     /// Find all slot indices that were registered by `bundle_id`.
@@ -774,6 +959,55 @@ impl RuntimeStore {
             .get(&bundle_id)
             .map(|bd: &BundleData| bd.plugin_slots.clone())
             .unwrap_or_default()
+    }
+
+    /// Collect, for each slot registered by `bundle_id`, the registered contract
+    /// name, the interface's major version, and the actual native function count.
+    ///
+    /// The native function count is `Some(n)` only for `Native`-dispatch interfaces
+    /// (read from `dispatch.native.function_count`). For VM-dispatch interfaces the
+    /// count is `None` — the ABI does not expose a function count for VM dispatch,
+    /// so there is nothing to compare against the manifest.
+    pub fn bundle_native_function_counts(
+        &self,
+        bundle_id: BundleId,
+    ) -> Vec<(String, u32, Option<u32>)> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        let slots: &Vec<u32> = match data.bundle_data.get(&bundle_id) {
+            Some(bd) => &bd.plugin_slots,
+            None => return Vec::new(),
+        };
+        let mut result: Vec<(String, u32, Option<u32>)> = Vec::new();
+        for &slot_idx in slots {
+            let slot: &PluginSlot = match data.slots.get(slot_idx as usize) {
+                Some(s) => s,
+                None => continue,
+            };
+            let entry: &PluginEntry = match slot.entry.as_ref() {
+                Some(e) => e,
+                None => continue,
+            };
+            let interface: &Arc<GuestContractInterface> = match slot.interface.as_ref() {
+                Some(i) => i,
+                None => continue,
+            };
+            let major: u32 = interface.contract_version.major;
+            // Read the native function count only when dispatch is Native.
+            let native_count: Option<u32> = if interface.dispatch_type == DispatchType::Native {
+                // SAFETY: dispatch_type == Native means the `native` arm of the
+                // `dispatch` union is the active member (per the ABI contract), so
+                // reading `dispatch.native.function_count` is sound.
+                Some(unsafe { interface.dispatch.native.function_count })
+            } else {
+                None
+            };
+            result.push((entry.contract_name.clone(), major, native_count));
+        }
+        result
     }
 
     /// Collect the distinct contract IDs exported by `bundle_id`.
@@ -1022,6 +1256,7 @@ impl RuntimeStore {
         data.bundle_data.clear();
         data.bundle_name_index.clear();
         data.bundle_declared_deps.clear();
+        data.reloading_bundles.clear();
     }
 }
 
@@ -1355,6 +1590,117 @@ mod tests {
         assert!(
             missing.is_empty(),
             "non-existent name should return empty vec"
+        );
+    }
+
+    /// Item 7: during a reload, find_all must report exactly one slot per contract
+    /// throughout — never the transient two-live-slots window.
+    #[test]
+    fn reload_window_keeps_single_slot_per_contract() {
+        const CID: u64 = 0x1111_2222_3333_4444_u64;
+        let registry: RuntimeStore = RuntimeStore::new();
+        let bundle_id: BundleId = BundleId::from_u64(0xAAAA_u64);
+        let contract_id: GuestContractId = GuestContractId::from_u64(CID);
+
+        let descriptor_v1: PluginDescriptor = make_descriptor("plugin", "reload.contract");
+        let iface_v1: GuestContractInterface = mock_interface(CID);
+        // SAFETY: iface_v1 is a local 'static-shaped value used only for this test's lifetime.
+        let _h1: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                descriptor_v1,
+                &iface_v1,
+                "reload.contract".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("v1 registration");
+
+        let old_slots: Vec<u32> = registry.get_bundle_plugin_slots(bundle_id);
+        assert_eq!(old_slots.len(), 1, "one slot before reload");
+
+        let mut out: [GuestContractHandle; 8] = [GuestContractHandle::null(); 8];
+        assert_eq!(
+            registry.find_all_guest_contracts(contract_id, 0, &mut out),
+            1,
+            "exactly one provider before reload"
+        );
+
+        // Begin the reload window and register the new version (pending).
+        registry.begin_reload(bundle_id);
+        let descriptor_v2: PluginDescriptor = make_descriptor("plugin", "reload.contract");
+        let iface_v2: GuestContractInterface = mock_interface(CID);
+        // SAFETY: iface_v2 is a local value valid for this test's lifetime.
+        let _h2: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                descriptor_v2,
+                &iface_v2,
+                "reload.contract".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("v2 registration");
+
+        // CRITICAL: even though a second slot now exists, find_all must still see one.
+        assert_eq!(
+            registry.find_all_guest_contracts(contract_id, 0, &mut out),
+            1,
+            "exactly one provider DURING the reload window (no duplicate slot)"
+        );
+
+        // Reconcile: swap and close the window.
+        registry
+            .apply_reload_swap(bundle_id, &old_slots)
+            .expect("apply_reload_swap");
+
+        assert_eq!(
+            registry.find_all_guest_contracts(contract_id, 0, &mut out),
+            1,
+            "exactly one provider after reload"
+        );
+    }
+
+    /// Item 8: when the reloaded version drops a previously-provided contract,
+    /// apply_reload_swap must retire the old slot (not error), making the contract
+    /// unresolvable while not failing the reload.
+    #[test]
+    fn reload_dropping_contract_retires_old_slot() {
+        const CID: u64 = 0x5555_6666_7777_8888_u64;
+        let registry: RuntimeStore = RuntimeStore::new();
+        let bundle_id: BundleId = BundleId::from_u64(0xBBBB_u64);
+        let contract_id: GuestContractId = GuestContractId::from_u64(CID);
+
+        let descriptor: PluginDescriptor = make_descriptor("plugin", "dropped.contract");
+        let iface: GuestContractInterface = mock_interface(CID);
+        // SAFETY: iface is a local value valid for this test's lifetime.
+        let _h: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                descriptor,
+                &iface,
+                "dropped.contract".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("registration");
+
+        let old_slots: Vec<u32> = registry.get_bundle_plugin_slots(bundle_id);
+        assert_eq!(old_slots.len(), 1);
+
+        // Begin a reload that registers NO new slot for this contract (it is dropped).
+        registry.begin_reload(bundle_id);
+        // apply_reload_swap must succeed (retire-not-drop), not error.
+        registry
+            .apply_reload_swap(bundle_id, &old_slots)
+            .expect("apply_reload_swap must not fail when a contract is dropped");
+
+        let mut out: [GuestContractHandle; 4] = [GuestContractHandle::null(); 4];
+        assert_eq!(
+            registry.find_all_guest_contracts(contract_id, 0, &mut out),
+            0,
+            "dropped contract must be unresolvable after reload"
+        );
+        assert!(
+            registry.find(contract_id, 0).is_err(),
+            "find must fail for a dropped contract"
         );
     }
 }

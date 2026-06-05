@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug_abi::HostInterface;
+use polyplug_utils::bundle_id;
 
 fn load_bundle_path(host: *const HostInterface, dir: &str) -> polyplug_abi::AbiError {
     let bytes: &[u8] = dir.as_bytes();
@@ -28,8 +29,11 @@ fn cleanup(dir: &PathBuf) {
 
 fn write_manifest(dir: &Path, name: &str, runtime: &str, file: &str) {
     let manifest_toml: String = format!(
-        "id = 1\nname = \"{}\"\nruntime = \"{}\"\nfile = \"{}\"\n",
-        name, runtime, file
+        "id = {}\nname = \"{}\"\nruntime = \"{}\"\nfile = \"{}\"\n",
+        bundle_id(name),
+        name,
+        runtime,
+        file
     );
     fs::write(dir.join("manifest.toml"), manifest_toml).expect("write manifest");
 }
@@ -47,7 +51,7 @@ fn test_truncated_so() {
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8 path"));
     assert_ne!(
         rc.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "truncated .so must produce error"
     );
     cleanup(&dir);
@@ -67,7 +71,7 @@ fn test_wrong_magic_bytes() {
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8"));
     assert_ne!(
         rc.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "wrong magic bytes must produce error"
     );
     cleanup(&dir);
@@ -84,7 +88,7 @@ fn test_missing_init_symbol() {
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir);
     assert_ne!(
         rc.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "plugin missing polyplug_init must produce error"
     );
     let mut buf: [u8; 256] = [0u8; 256];
@@ -110,7 +114,7 @@ fn test_so_file_missing_from_bundle() {
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8"));
     assert_ne!(
         rc.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "missing .so file must produce error"
     );
     cleanup(&dir);
@@ -129,7 +133,7 @@ fn test_unknown_runtime() {
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8"));
     assert_ne!(
         rc.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "unknown runtime must produce error"
     );
     cleanup(&dir);

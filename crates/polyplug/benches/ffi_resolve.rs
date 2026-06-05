@@ -20,7 +20,6 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
 use polyplug_abi::GuestContractHandle;
-use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostInterface;
 use polyplug_abi::PluginDescriptor;
@@ -52,7 +51,7 @@ unsafe extern "C" fn bench_register_callback(
 ) -> AbiError {
     if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         };
     }
@@ -91,7 +90,7 @@ unsafe extern "C" fn bench_register_callback(
             AbiError::ok()
         }
         Err(_) => AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
     }
@@ -143,20 +142,6 @@ unsafe extern "C" fn bench_resolve_guest_contract(
             .resolve_guest_contract(handle)
             .unwrap_or(core::ptr::null())
     })
-}
-
-/// call_guest_method stub — returns error (not used in this bench).
-unsafe extern "C" fn bench_call_guest_method(
-    _this: *const HostInterface,
-    _instance: GuestContractInstance,
-    _method_id: u32,
-    _args: *const (),
-    _out: *mut (),
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic,
-        message: StringView::null(),
-    }
 }
 
 unsafe extern "C" fn bench_get_host_contract(
@@ -217,7 +202,7 @@ unsafe extern "C" fn bench_load_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Generic,
+        code: AbiErrorCode::Generic as u32,
         message: StringView::null(),
     }
 }
@@ -228,7 +213,7 @@ unsafe extern "C" fn bench_reload_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Generic,
+        code: AbiErrorCode::Generic as u32,
         message: StringView::null(),
     }
 }
@@ -238,7 +223,7 @@ unsafe extern "C" fn bench_register_host_contract(
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Generic,
+        code: AbiErrorCode::Generic as u32,
         message: StringView::null(),
     }
 }
@@ -249,7 +234,7 @@ unsafe extern "C" fn bench_register_loader(
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Generic,
+        code: AbiErrorCode::Generic as u32,
         message: StringView::null(),
     }
 }
@@ -266,6 +251,13 @@ unsafe extern "C" fn bench_get_error_len(_this: *const HostInterface) -> usize {
     0
 }
 
+unsafe extern "C" fn bench_get_extension(
+    _this: *const HostInterface,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
+}
+
 // ─── Setup helper ────────────────────────────────────────────────────────────
 
 /// Build a HostInterface backed by the thread-local BENCH_REGISTRY.
@@ -278,7 +270,6 @@ fn build_host_interface() -> HostInterface {
         find_guest_contract: bench_find_guest_contract,
         find_all_guest_contracts: bench_find_all_guest_contracts,
         resolve_guest_contract: bench_resolve_guest_contract,
-        call_guest_method: bench_call_guest_method,
         get_host_contract: bench_get_host_contract,
         resolve_host_contract_interface: bench_resolve_host_contract_interface,
         list_bundles: bench_list_bundles,
@@ -289,6 +280,7 @@ fn build_host_interface() -> HostInterface {
         register_loader: bench_register_loader,
         get_last_error: bench_get_last_error,
         get_error_len: bench_get_error_len,
+        get_extension: bench_get_extension,
     }
 }
 

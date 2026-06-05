@@ -54,9 +54,6 @@ pub enum JsBridgeError {
     ContextCreationFailed(String),
 }
 
-/// Type alias for a persistent JS function stored across scope boundaries.
-type PersistentFunction = Persistent<Function<'static>>;
-
 /// Bridge for JavaScript hosts implementing host contracts.
 ///
 /// This bridge stores JavaScript callable functions and dispatches calls through
@@ -96,7 +93,7 @@ pub struct JsHostBridge {
     /// Registered host contract implementations.
     /// Key: contract_id (FNV-1a hash of "host_contract:name@major")
     /// Value: JavaScript callable function (Persistent<Function<'static>>)
-    contracts: RwLock<HashMap<u64, PersistentFunction>>,
+    contracts: RwLock<HashMap<u64, Persistent<Function<'static>>>>,
 }
 
 impl JsHostBridge {
@@ -196,8 +193,8 @@ impl RuntimeLanguageBridge for JsHostBridge {
         implementation: Box<dyn core::any::Any>,
     ) -> Result<(), BridgeError> {
         // Attempt to downcast to Persistent<Function<'static>>
-        let callable: PersistentFunction = implementation
-            .downcast::<PersistentFunction>()
+        let callable: Persistent<Function<'static>> = implementation
+            .downcast::<Persistent<Function<'static>>>()
             .map_err(|_| BridgeError::TypeMismatch {
                 contract_id,
                 expected: "Persistent<Function<'static>>".to_owned(),
@@ -206,7 +203,10 @@ impl RuntimeLanguageBridge for JsHostBridge {
             .map(|boxed| *boxed)?;
 
         // Acquire write lock and insert
-        let mut contracts: std::sync::RwLockWriteGuard<'_, HashMap<u64, PersistentFunction>> = self
+        let mut contracts: std::sync::RwLockWriteGuard<
+            '_,
+            HashMap<u64, Persistent<Function<'static>>>,
+        > = self
             .contracts
             .write()
             .map_err(|_| BridgeError::VmRegistrationFailed {
@@ -253,7 +253,7 @@ impl RuntimeLanguageBridge for JsHostBridge {
     ///
     /// For MVP, this implementation provides basic dispatch functionality.
     /// Full type marshaling for all primitive types will be added in future tasks.
-    fn call_host_contract(
+    unsafe fn call_host_contract(
         &self,
         contract_id: u64,
         fn_id: u32,
@@ -261,24 +261,26 @@ impl RuntimeLanguageBridge for JsHostBridge {
         out: *mut (),
     ) -> AbiError {
         // Step 1: Look up the registered callable
-        let contracts_guard: std::sync::RwLockReadGuard<'_, HashMap<u64, PersistentFunction>> =
-            match self.contracts.read() {
-                Ok(guard) => guard,
-                Err(_) => {
-                    return AbiError {
-                        code: AbiErrorCode::HostContractCallFailed,
-                        message: StringView::from_static(
-                            b"failed to acquire read lock on contracts map",
-                        ),
-                    };
-                }
-            };
+        let contracts_guard: std::sync::RwLockReadGuard<
+            '_,
+            HashMap<u64, Persistent<Function<'static>>>,
+        > = match self.contracts.read() {
+            Ok(guard) => guard,
+            Err(_) => {
+                return AbiError {
+                    code: AbiErrorCode::HostContractCallFailed as u32,
+                    message: StringView::from_static(
+                        b"failed to acquire read lock on contracts map",
+                    ),
+                };
+            }
+        };
 
-        let callable: &PersistentFunction = match contracts_guard.get(&contract_id) {
+        let callable: &Persistent<Function<'static>> = match contracts_guard.get(&contract_id) {
             Some(f) => f,
             None => {
                 return AbiError {
-                    code: AbiErrorCode::HostContractNotFound,
+                    code: AbiErrorCode::HostContractNotFound as u32,
                     message: StringView::from_static(b"host contract not found"),
                 };
             }
@@ -318,9 +320,9 @@ impl RuntimeLanguageBridge for JsHostBridge {
         match call_result {
             Ok(0) => AbiError::ok(),
             Ok(code) => AbiError {
-                // Safe: from_u32 does an exhaustive match; unknown codes map to Generic.
-                // Previous transmute::<u32, AbiErrorCode> caused SIGABRT on invalid discriminants.
-                code: AbiErrorCode::from_u32(code as u32),
+                // AbiError.code is a raw u32, so the plugin-provided code is stored
+                // verbatim — no enum materialization, hence no UB on unknown values.
+                code: code as u32,
                 message: StringView::null(),
             },
             Err(e) => {
@@ -336,7 +338,7 @@ impl RuntimeLanguageBridge for JsHostBridge {
                 // 3. This matches the pattern used in other loaders
                 let message_static: &'static str = Box::leak(message.into_boxed_str());
                 AbiError {
-                    code: AbiErrorCode::HostContractCallFailed,
+                    code: AbiErrorCode::HostContractCallFailed as u32,
                     message: StringView {
                         ptr: message_static.as_ptr(),
                         len: message_static.len(),
@@ -348,7 +350,7 @@ impl RuntimeLanguageBridge for JsHostBridge {
 }
 
 // SAFETY: JsHostBridge is Send because:
-// - RwLock<HashMap<u64, PersistentFunction>> is Send (RwLock is Send, HashMap is Send)
+// - RwLock<HashMap<u64, Persistent<Function<'static>>>> is Send (RwLock is Send, HashMap is Send)
 // - Runtime is Send when compiled with rquickjs's `parallel` feature (which we use)
 // - Context is Send when compiled with rquickjs's `parallel` feature
 // - Persistent<Function<'static>> is Send when compiled with rquickjs's `parallel` feature
@@ -373,7 +375,7 @@ mod tests {
     #[test]
     fn bridge_new_creates_empty_bridge() {
         let bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
-        let contracts: std::sync::RwLockReadGuard<'_, HashMap<u64, PersistentFunction>> =
+        let contracts: std::sync::RwLockReadGuard<'_, HashMap<u64, Persistent<Function<'static>>>> =
             bridge.contracts.read().expect("read lock");
         assert!(contracts.is_empty());
     }
@@ -381,7 +383,7 @@ mod tests {
     #[test]
     fn bridge_with_capacity_creates_empty_bridge() {
         let bridge: JsHostBridge = JsHostBridge::with_capacity(10).expect("bridge creation");
-        let contracts: std::sync::RwLockReadGuard<'_, HashMap<u64, PersistentFunction>> =
+        let contracts: std::sync::RwLockReadGuard<'_, HashMap<u64, Persistent<Function<'static>>>> =
             bridge.contracts.read().expect("read lock");
         assert!(contracts.is_empty());
     }
@@ -411,7 +413,7 @@ mod tests {
         let mut bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
 
         // Create a simple JS callable
-        let persistent: PersistentFunction = bridge.context().with(|ctx| {
+        let persistent: Persistent<Function<'static>> = bridge.context().with(|ctx| {
             let callable: Function<'_> = ctx
                 .eval::<Function<'_>, _>("(function(fn_id, args, out) { return 0; })")
                 .expect("eval function");
@@ -424,7 +426,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Verify it's stored
-        let contracts: std::sync::RwLockReadGuard<'_, HashMap<u64, PersistentFunction>> =
+        let contracts: std::sync::RwLockReadGuard<'_, HashMap<u64, Persistent<Function<'static>>>> =
             bridge.contracts.read().expect("read lock");
         assert!(contracts.contains_key(&1234));
     }
@@ -434,14 +436,14 @@ mod tests {
         let mut bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
 
         // Create two JS callables
-        let persistent1: PersistentFunction = bridge.context().with(|ctx| {
+        let persistent1: Persistent<Function<'static>> = bridge.context().with(|ctx| {
             let callable: Function<'_> = ctx
                 .eval::<Function<'_>, _>("(function(fn_id, args, out) { return 0; })")
                 .expect("eval function");
             Persistent::save(&ctx, callable)
         });
 
-        let persistent2: PersistentFunction = bridge.context().with(|ctx| {
+        let persistent2: Persistent<Function<'static>> = bridge.context().with(|ctx| {
             let callable: Function<'_> = ctx
                 .eval::<Function<'_>, _>("(function(fn_id, args, out) { return 1; })")
                 .expect("eval function");
@@ -468,7 +470,7 @@ mod tests {
     fn bridge_register_host_contract_type_mismatch_fails() {
         let mut bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
 
-        // Try to register a non-PersistentFunction
+        // Try to register a non-Persistent<Function<'static>>
         let result: Result<(), BridgeError> = bridge.register_host_contract(1234, Box::new(42i32));
         assert!(result.is_err());
         let err: BridgeError = result.expect_err("should fail");
@@ -485,9 +487,11 @@ mod tests {
     fn bridge_call_host_contract_not_found() {
         let bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
 
+        // SAFETY: null pointers are valid here — the lookup fails before any
+        // pointer is dereferenced (contract 9999 is not registered).
         let result: AbiError =
-            bridge.call_host_contract(9999, 0, core::ptr::null(), core::ptr::null_mut());
-        assert_eq!(result.code, AbiErrorCode::HostContractNotFound);
+            unsafe { bridge.call_host_contract(9999, 0, core::ptr::null(), core::ptr::null_mut()) };
+        assert_eq!(result.code, AbiErrorCode::HostContractNotFound as u32);
     }
 
     #[test]
@@ -495,7 +499,7 @@ mod tests {
         let mut bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
 
         // Create a simple JS callable that returns 0 (success)
-        let persistent: PersistentFunction = bridge.context().with(|ctx| {
+        let persistent: Persistent<Function<'static>> = bridge.context().with(|ctx| {
             let callable: Function<'_> = ctx
                 .eval::<Function<'_>, _>("(function(fn_id, args, out) { return 0; })")
                 .expect("eval function");
@@ -508,8 +512,10 @@ mod tests {
             .expect("register");
 
         // Call it
+        // SAFETY: the registered JS function treats args/out as opaque BigInts and
+        // never dereferences them, so passing null pointers is sound here.
         let result: AbiError =
-            bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut());
+            unsafe { bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut()) };
         assert!(result.is_ok());
     }
 
@@ -518,7 +524,7 @@ mod tests {
         let mut bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
 
         // Create a JS callable that returns a non-zero error code
-        let persistent: PersistentFunction = bridge.context().with(|ctx| {
+        let persistent: Persistent<Function<'static>> = bridge.context().with(|ctx| {
             let callable: Function<'_> = ctx
                 .eval::<Function<'_>, _>("(function(fn_id, args, out) { return 42; })")
                 .expect("eval function");
@@ -531,9 +537,11 @@ mod tests {
             .expect("register");
 
         // Call it - should return error code 42 (user-defined error)
+        // SAFETY: the registered JS function never dereferences args/out, so passing
+        // null pointers is sound here.
         let result: AbiError =
-            bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut());
-        assert_eq!(result.code, AbiErrorCode::from_u32(42));
+            unsafe { bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut()) };
+        assert_eq!(result.code, 42_u32);
     }
 
     #[test]
@@ -541,7 +549,7 @@ mod tests {
         let mut bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
 
         // Create a JS callable that throws an exception
-        let persistent: PersistentFunction = bridge.context().with(|ctx| {
+        let persistent: Persistent<Function<'static>> = bridge.context().with(|ctx| {
             let callable: Function<'_> = ctx
                 .eval::<Function<'_>, _>(
                     "(function(fn_id, args, out) { throw new Error('test error'); })",
@@ -556,9 +564,11 @@ mod tests {
             .expect("register");
 
         // Call it - should return error
+        // SAFETY: the registered JS function throws before touching args/out, so
+        // passing null pointers is sound here.
         let result: AbiError =
-            bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut());
-        assert_eq!(result.code, AbiErrorCode::HostContractCallFailed);
+            unsafe { bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut()) };
+        assert_eq!(result.code, AbiErrorCode::HostContractCallFailed as u32);
     }
 
     #[test]
@@ -566,7 +576,7 @@ mod tests {
         let mut bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
 
         // Create a JS callable that returns fn_id * 2 as error code
-        let persistent: PersistentFunction = bridge.context().with(|ctx| {
+        let persistent: Persistent<Function<'static>> = bridge.context().with(|ctx| {
             let callable: Function<'_> = ctx
                 .eval::<Function<'_>, _>("(function(fn_id, args, out) { return fn_id * 2; })")
                 .expect("eval function");
@@ -579,8 +589,10 @@ mod tests {
             .expect("register");
 
         // Call with fn_id=5, expect error code 10 (user-defined error)
+        // SAFETY: the registered JS function never dereferences args/out, so passing
+        // null pointers is sound here.
         let result: AbiError =
-            bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut());
-        assert_eq!(result.code, AbiErrorCode::from_u32(10));
+            unsafe { bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut()) };
+        assert_eq!(result.code, 10_u32);
     }
 }

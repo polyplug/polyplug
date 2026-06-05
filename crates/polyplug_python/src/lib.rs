@@ -109,8 +109,9 @@ impl BundleLoader for PythonLoader {
         // The interface already has the runtime pointer set internally.
         let host_interface: *const HostInterface = runtime.as_context_ptr();
 
-        // Set bundle_id in TLS for dependency enforcement during init.
-        polyplug::runtime::set_init_bundle_id(bundle_id);
+        // Push bundle_id onto the runtime's per-thread init stack for dependency
+        // enforcement during init (instance-owned; Rule 12 — no thread-locals).
+        runtime.push_init_bundle_id(bundle_id);
 
         // Serialize the snapshot→exec→isolate critical section against other
         // concurrent Python loads sharing this process's interpreter. CPython
@@ -277,8 +278,8 @@ impl BundleLoader for PythonLoader {
             Ok::<(), RuntimeError>(())
         })?;
 
-        // Clear bundle_id TLS after init completes.
-        polyplug::runtime::clear_init_bundle_id();
+        // Pop bundle_id from the runtime's per-thread init stack after init completes.
+        runtime.pop_init_bundle_id();
 
         Ok(())
     }

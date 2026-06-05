@@ -183,7 +183,7 @@ pub trait RuntimeLanguageBridge: Send + Sync {
     /// - `args` must point to valid ABI-packed arguments for the contract
     /// - `out` must point to a valid buffer sized for the return type
     /// - The caller must ensure proper alignment of both pointers
-    fn call_host_contract(
+    unsafe fn call_host_contract(
         &self,
         contract_id: u64,
         fn_id: u32,

@@ -134,16 +134,16 @@ impl TestNativeLoader {
         };
 
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
-        polyplug::set_init_bundle_id(expected_bundle_id.id());
+        runtime.push_init_bundle_id(expected_bundle_id.id());
 
         let host_abi: &'static HostInterface = runtime.host_abi();
         // SAFETY: host_abi is a valid HostInterface reference from the runtime; init_fn_ptr is a
         // valid function pointer; ctx is stack-allocated and outlives the call.
         let init_result: AbiError = unsafe { init_fn_ptr(host_abi as *const HostInterface, &ctx) };
 
-        polyplug::clear_init_bundle_id();
+        runtime.pop_init_bundle_id();
 
-        if init_result.code != AbiErrorCode::Ok {
+        if init_result.code != AbiErrorCode::Ok as u32 {
             let error_msg: String = if init_result.message.ptr.is_null() {
                 format!("init returned error code {:?}", init_result.code)
             } else {
@@ -212,7 +212,7 @@ pub unsafe fn register_native_loader(host: *const HostInterface) {
         unsafe { ((*host).register_loader)(host, StringView::from_static(name), loader) };
     assert_eq!(
         rc.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "register_loader must succeed for native loader"
     );
 }

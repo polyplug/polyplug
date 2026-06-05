@@ -173,7 +173,7 @@ impl RuntimeLanguageBridge for PythonHostBridge {
     ///
     /// For MVP, this implementation provides basic dispatch functionality.
     /// Full type marshaling for all primitive types will be added in future tasks.
-    fn call_host_contract(
+    unsafe fn call_host_contract(
         &self,
         contract_id: u64,
         fn_id: u32,
@@ -188,7 +188,7 @@ impl RuntimeLanguageBridge for PythonHostBridge {
                     Ok(guard) => guard,
                     Err(_) => {
                         return AbiError {
-                            code: AbiErrorCode::HostContractCallFailed,
+                            code: AbiErrorCode::HostContractCallFailed as u32,
                             message: StringView::from_static(
                                 b"failed to acquire read lock on contracts map",
                             ),
@@ -200,7 +200,7 @@ impl RuntimeLanguageBridge for PythonHostBridge {
                 Some(c) => c,
                 None => {
                     return AbiError {
-                        code: AbiErrorCode::HostContractNotFound,
+                        code: AbiErrorCode::HostContractNotFound as u32,
                         message: StringView::from_static(b"host contract not found"),
                     };
                 }
@@ -212,7 +212,7 @@ impl RuntimeLanguageBridge for PythonHostBridge {
             // Step 3: Verify it's callable
             if !bound_callable.is_callable() {
                 return AbiError {
-                    code: AbiErrorCode::HostContractCallFailed,
+                    code: AbiErrorCode::HostContractCallFailed as u32,
                     message: StringView::from_static(b"registered object is not callable"),
                 };
             }
@@ -242,7 +242,7 @@ impl RuntimeLanguageBridge for PythonHostBridge {
                     // 3. This matches the pattern used in other loaders
                     let message_static: &'static str = Box::leak(message.into_boxed_str());
                     AbiError {
-                        code: AbiErrorCode::HostContractCallFailed,
+                        code: AbiErrorCode::HostContractCallFailed as u32,
                         message: StringView {
                             ptr: message_static.as_ptr(),
                             len: message_static.len(),
@@ -381,9 +381,11 @@ mod tests {
     fn bridge_call_host_contract_not_found() {
         let bridge: PythonHostBridge = PythonHostBridge::new();
 
+        // SAFETY: null args/out are acceptable here — the call returns
+        // HostContractNotFound before dereferencing them (no contract registered).
         let result: AbiError =
-            bridge.call_host_contract(9999, 0, core::ptr::null(), core::ptr::null_mut());
-        assert_eq!(result.code, AbiErrorCode::HostContractNotFound);
+            unsafe { bridge.call_host_contract(9999, 0, core::ptr::null(), core::ptr::null_mut()) };
+        assert_eq!(result.code, AbiErrorCode::HostContractNotFound as u32);
     }
 
     #[test]
@@ -407,9 +409,10 @@ mod tests {
                 .expect("register");
         });
 
-        // Call it
+        // Call it.
+        // SAFETY: the registered lambda ignores args/out, so passing null is sound.
         let result: AbiError =
-            bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut());
+            unsafe { bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut()) };
         assert!(result.is_ok());
     }
 
@@ -438,10 +441,11 @@ mod tests {
                 .expect("register");
         });
 
-        // Call it - should return error
+        // Call it - should return error.
+        // SAFETY: the registered lambda ignores args/out, so passing null is sound.
         let result: AbiError =
-            bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut());
-        assert_eq!(result.code, AbiErrorCode::HostContractCallFailed);
+            unsafe { bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut()) };
+        assert_eq!(result.code, AbiErrorCode::HostContractCallFailed as u32);
     }
 
     #[test]
@@ -463,9 +467,11 @@ mod tests {
                 .expect("register");
         });
 
-        // Call it - should return error
+        // Call it - should return error.
+        // SAFETY: dispatch fails before touching args/out (registered object is not
+        // callable), so passing null is sound.
         let result: AbiError =
-            bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut());
-        assert_eq!(result.code, AbiErrorCode::HostContractCallFailed);
+            unsafe { bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut()) };
+        assert_eq!(result.code, AbiErrorCode::HostContractCallFailed as u32);
     }
 }

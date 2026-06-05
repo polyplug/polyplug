@@ -43,7 +43,7 @@ fn test_last_error_after_failed_load() {
         unsafe { ((*host).load_bundle)(host, bad_path.as_ptr(), bad_path.len()) };
     assert_ne!(
         result.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "Expected failure for non-existent path"
     );
     let err: String = read_last_error(host);

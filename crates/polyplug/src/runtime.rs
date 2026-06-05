@@ -19,13 +19,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::thread::ThreadId;
 
 use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
 use polyplug_abi::{
     GuestContractHandle, GuestContractInterface, HostContractInstance, HostContractInterface,
     HostInterface, PluginDescriptor, RuntimeLanguage, types::Version,
 };
-use polyplug_utils::{BundleId, GuestContractId};
+use polyplug_utils::{BundleId, GuestContractId, fnv1a_32};
 
 use crate::error::HostContractError;
 use crate::error::LoaderError;
@@ -37,38 +38,17 @@ use crate::loader::ManifestDependency;
 pub use crate::runtime_builder::RuntimeBuilder;
 use crate::runtime_store::RuntimeStore;
 
-// ─── TLS for Init Phase Bundle ID ─────────────────────────────────────────────
-
-// Thread-local storage for bundle_id during init phase.
-// Used by host_register_contract to enforce dependency constraints.
-// Set by loaders before calling polyplug_init, cleared after init completes.
-std::thread_local! {
-    static INIT_BUNDLE_ID: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
-}
-
-/// Set the bundle_id for the current thread init phase.
-/// Call this before plugin init, clear after init completes.
-pub fn set_init_bundle_id(bundle_id: u64) {
-    INIT_BUNDLE_ID.with(|id| id.set(bundle_id));
-}
-
-/// Clear the bundle_id after init phase completes.
-pub fn clear_init_bundle_id() {
-    INIT_BUNDLE_ID.with(|id| id.set(0));
-}
-
-/// Get the current init phase bundle_id.
-pub fn get_init_bundle_id() -> u64 {
-    INIT_BUNDLE_ID.with(|id| id.get())
-}
-
 // ─── Runtime Configuration ───────────────────────────────────────────────────
 
 /// Type alias for the warning callback to avoid repetition.
 pub(crate) type WarningCb = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Type alias for the reload callback.
-pub(crate) type ReloadCb = Arc<dyn Fn(polyplug_abi::runtime::ReloadPhase) + Send + Sync>;
+///
+/// The first argument is the opaque `on_reload_user_data` pointer from
+/// `RuntimeConfig`, forwarded unchanged on every invocation.
+pub(crate) type ReloadCb =
+    Arc<dyn Fn(*mut core::ffi::c_void, polyplug_abi::runtime::ReloadPhase) + Send + Sync>;
 
 /// Options for `Runtime::load_bundle_with`.
 ///
@@ -84,8 +64,14 @@ pub struct Runtime {
     pub(crate) registry: Arc<RuntimeStore>,
     /// The static HostInterface given to plugins. Must be 'static.
     pub(crate) host_abi: &'static HostInterface,
-    /// All register_guest_contracted loaders, keyed by runtime_name. Immutable after build().
-    pub(crate) loaders: HashMap<String, Box<dyn BundleLoader>>,
+    /// All registered loaders, keyed by runtime_name.
+    ///
+    /// Interior-mutable (`RwLock`) so loaders can be registered after `build()`
+    /// through a shared `&Runtime` (e.g. the `register_loader` HostInterface
+    /// callback), without ever forging a `&mut Runtime` from an `Arc`-shared
+    /// pointer (which would be aliasing UB). Load/reload paths take read guards;
+    /// registration takes a write guard.
+    pub(crate) loaders: RwLock<HashMap<String, Box<dyn BundleLoader>>>,
     /// ManifestData for all loaded bundles, keyed by bundle_name.
     /// Used by reload_bundle() for cascade detection.
     pub(crate) bundle_manifests: Mutex<HashMap<String, ManifestData>>,
@@ -103,6 +89,18 @@ pub struct Runtime {
     pub(crate) singleton_instances: RwLock<HashMap<u64, HostContractInstance>>,
     /// Host runtime type identifier.
     pub(crate) host_runtime: RuntimeLanguage,
+    /// Host-registered extensions, keyed by fnv1a_32 of the extension name.
+    /// Raw pointer stored as usize for Send+Sync. Callers are responsible for thread safety.
+    pub(crate) extensions: RwLock<HashMap<u32, usize>>,
+    /// Per-thread stack of bundle_ids currently inside `polyplug_init`.
+    ///
+    /// Replaces the former process-global `thread_local!` (Rule 12: no thread-locals
+    /// for runtime state — this is now instance-owned, so multiple runtimes in one
+    /// process stay isolated). A `Vec` per thread gives reentrancy safety: a nested
+    /// load on the same thread pushes its own id and pops it on completion, restoring
+    /// the outer bundle's id instead of clobbering it. Loaders push before calling
+    /// `polyplug_init` and pop afterwards (including the panic path).
+    pub(crate) init_bundle_stack: Mutex<HashMap<ThreadId, Vec<u64>>>,
 }
 
 impl Runtime {
@@ -250,6 +248,20 @@ impl Runtime {
         self.host_abi
     }
 
+    /// Register a host extension by name.
+    ///
+    /// Plugins retrieve extensions via `get_extension` on the HostInterface.
+    /// The extension_id is computed with `polyplug_utils::fnv1a_32(name.as_bytes())`.
+    ///
+    /// # Safety
+    /// `ptr` must remain valid for the lifetime of the runtime.
+    pub unsafe fn register_extension(&self, name: &str, ptr: *const ()) {
+        let extension_id: u32 = fnv1a_32(name.as_bytes());
+        if let Ok(mut map) = self.extensions.write() {
+            map.insert(extension_id, ptr as usize);
+        }
+    }
+
     /// Get the HostInterface pointer for passing to guest contracts.
     ///
     /// Returns the runtime's `'static` HostInterface, whose `runtime` field was
@@ -341,18 +353,100 @@ impl Runtime {
     /// Returns `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))` if a
     /// loader for the same runtime name is already register_guest_contracted.
     pub fn register_guest_contract_loader(
-        &mut self,
+        &self,
         loader: Box<dyn BundleLoader>,
     ) -> Result<(), RuntimeError> {
-        let name: &str = loader.runtime_name();
-        if self.loaders.contains_key(name) {
+        let name: String = loader.runtime_name().to_string();
+        let mut loaders: std::sync::RwLockWriteGuard<'_, HashMap<String, Box<dyn BundleLoader>>> =
+            self.loaders.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        if loaders.contains_key(&name) {
             return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
-                runtime_name: name.to_string(),
+                runtime_name: name,
             }));
         }
 
-        self.loaders.insert(name.to_string(), loader);
+        loaders.insert(name, loader);
         Ok(())
+    }
+
+    /// Resolve a loader by runtime name, returning a stable reference valid for the
+    /// runtime's lifetime.
+    ///
+    /// The returned reference is obtained under a short-lived read guard and then
+    /// detached. This is sound because loaders are append-only: once inserted into
+    /// the `loaders` map a `Box<dyn BundleLoader>` is never removed or replaced for
+    /// the runtime's lifetime, so the heap address behind the `Box` is stable. We
+    /// must NOT hold the `loaders` read guard across `BundleLoader::load`/`reload`,
+    /// because those run `polyplug_init`, which may call back into
+    /// `host_register_loader` and take the `loaders` write guard — holding a read
+    /// guard on the same thread would deadlock.
+    pub(crate) fn loader_for(&self, runtime_name: &str) -> Option<&dyn BundleLoader> {
+        let loaders: std::sync::RwLockReadGuard<'_, HashMap<String, Box<dyn BundleLoader>>> =
+            self.loaders.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        let loader_ptr: *const dyn BundleLoader = loaders.get(runtime_name).map(Box::as_ref)?;
+        // SAFETY: loaders are append-only (never removed or replaced for the runtime
+        // lifetime), so the `Box`'s heap allocation behind `loader_ptr` stays valid and
+        // pinned for as long as `&self` lives. Detaching the reference from the guard
+        // lets callers invoke load()/reload() without holding the lock (deadlock-free).
+        Some(unsafe { &*loader_ptr })
+    }
+
+    /// Push a bundle_id onto the current thread's init stack.
+    ///
+    /// Loaders call this immediately before invoking `polyplug_init`. The matching
+    /// [`Runtime::pop_init_bundle_id`] MUST be called afterwards (including on the
+    /// panic path) so the stack does not leak entries.
+    pub fn push_init_bundle_id(&self, bundle_id: u64) {
+        let mut stack: std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>> =
+            self.init_bundle_stack.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        stack
+            .entry(std::thread::current().id())
+            .or_default()
+            .push(bundle_id);
+    }
+
+    /// Pop the most recent bundle_id from the current thread's init stack.
+    ///
+    /// Restores the previous (outer) bundle_id for reentrant loads on the same thread.
+    pub fn pop_init_bundle_id(&self) {
+        let thread_id: ThreadId = std::thread::current().id();
+        let mut stack: std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>> =
+            self.init_bundle_stack.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        if let Some(thread_stack) = stack.get_mut(&thread_id) {
+            thread_stack.pop();
+            if thread_stack.is_empty() {
+                stack.remove(&thread_id);
+            }
+        }
+    }
+
+    /// Get the bundle_id currently inside `polyplug_init` on this thread.
+    ///
+    /// Returns 0 when this thread is not inside any plugin init phase (i.e. for
+    /// host-side lookups outside the init window).
+    pub(crate) fn current_init_bundle_id(&self) -> u64 {
+        let thread_id: ThreadId = std::thread::current().id();
+        let stack: std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>> =
+            self.init_bundle_stack.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        stack
+            .get(&thread_id)
+            .and_then(|thread_stack| thread_stack.last().copied())
+            .unwrap_or(0)
     }
 
     /// Load a single plugin bundle explicitly by path.
@@ -384,12 +478,12 @@ impl Runtime {
 
         let manifest: ManifestData = crate::loader::parse_manifest(bundle_dir)
             .map_err(|e: LoaderError| RuntimeError::Loader(e))?;
-        if manifest.id == 0 {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: path.display().to_string(),
-                error: "manifest.id is required but was 0 or missing".to_owned(),
-            }));
-        }
+        // Full manifest validation (required fields, id == FNV1a-64(name), well-formed
+        // provides/bundle_dependencies version specs). Folds in the former inline
+        // id == 0 check.
+        manifest
+            .validate()
+            .map_err(|e: LoaderError| RuntimeError::Loader(e))?;
 
         // Validate function_count entries for this explicit load
         if !opts.ignore_function_count_mismatch {
@@ -425,18 +519,15 @@ impl Runtime {
             }
         }
 
-        // Find the loader for this runtime
+        // Find the loader for this runtime. The lock is released before load() runs
+        // (see `loader_for`) so a plugin init that registers a loader cannot deadlock.
         let runtime_name: &str = &manifest.runtime;
-        let loader: &dyn BundleLoader = self
-            .loaders
-            .get(runtime_name)
-            .map(Box::as_ref)
-            .ok_or_else(|| {
-                RuntimeError::Loader(LoaderError::NoLoaderForRuntime {
-                    bundle: path.display().to_string(),
-                    runtime_name: runtime_name.to_owned(),
-                })
-            })?;
+        let loader: &dyn BundleLoader = self.loader_for(runtime_name).ok_or_else(|| {
+            RuntimeError::Loader(LoaderError::NoLoaderForRuntime {
+                bundle: path.display().to_string(),
+                runtime_name: runtime_name.to_owned(),
+            })
+        })?;
 
         // Declare this bundle's dependency contract_ids in the registry BEFORE
         // calling the loader. The loader runs `polyplug_init`, during which the
@@ -485,6 +576,16 @@ impl Runtime {
                 bundle_deps,
             );
 
+            // Real function_count validation: now that the bundle is loaded and its
+            // interfaces registered, compare the manifest's declared function counts
+            // against each native interface's actual `dispatch.native.function_count`.
+            // The pre-load presence check above only proves an entry exists; this
+            // proves the declared number matches reality. VM-dispatch interfaces have
+            // no exposed count and are skipped.
+            if !opts.ignore_function_count_mismatch && opts.compatibility != Compatibility::Yolo {
+                self.validate_loaded_function_counts(bundle_id, &manifest, opts.compatibility)?;
+            }
+
             let mut manifests: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> =
                 self.bundle_manifests.lock().unwrap_or_else(|e| {
                     eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
@@ -493,6 +594,52 @@ impl Runtime {
             manifests.insert(bundle_name, manifest);
         }
         result
+    }
+
+    /// Compare declared `function_count` entries against the actual native counts of
+    /// the bundle's freshly-registered interfaces.
+    ///
+    /// In `Strict` mode a mismatch is an error; in `Relaxed` mode it emits a warning.
+    /// Only native-dispatch interfaces carry an observable count; VM interfaces are
+    /// skipped (their count is `None`).
+    fn validate_loaded_function_counts(
+        &self,
+        bundle_id: BundleId,
+        manifest: &ManifestData,
+        compatibility: Compatibility,
+    ) -> Result<(), RuntimeError> {
+        let registered: Vec<(String, u32, Option<u32>)> =
+            self.registry.bundle_native_function_counts(bundle_id);
+        for (contract_name, major, actual_opt) in registered {
+            let actual: u32 = match actual_opt {
+                Some(n) => n,
+                None => continue, // VM dispatch: no observable count.
+            };
+            let key: String = format!("{}@{}", contract_name, major);
+            let declared: u32 = match manifest.function_count.get(&key) {
+                Some(n) => *n,
+                None => continue, // Missing-entry case already handled pre-load.
+            };
+            if declared != actual {
+                match compatibility {
+                    Compatibility::Strict => {
+                        return Err(RuntimeError::Loader(LoaderError::FunctionCountMismatch {
+                            contract: key,
+                            expected: declared,
+                            found: actual,
+                        }));
+                    }
+                    Compatibility::Relaxed => {
+                        self.emit_warning(&format!(
+                            "bundle `{}` contract `{}`: declared function_count {} but interface exports {}",
+                            manifest.name, key, declared, actual
+                        ));
+                    }
+                    Compatibility::Yolo => {}
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -675,7 +822,7 @@ fn string_view_to_string_owned(sv: &polyplug_abi::types::StringView) -> String {
 
 /// HostInterface.register_contract callback — register_guest_contracts a guest contract implementation with the runtime.
 ///
-/// Uses TLS for bundle_id during init phase (dependency enforcement).
+/// Reads bundle_id from the runtime's per-thread init stack (dependency enforcement).
 ///
 /// # Safety
 /// - this must be a valid HostInterface pointer with valid runtime field
@@ -688,7 +835,7 @@ pub(crate) unsafe extern "C" fn host_register_contract(
 ) -> polyplug_abi::types::AbiError {
     if this.is_null() {
         return polyplug_abi::types::AbiError {
-            code: polyplug_abi::types::AbiErrorCode::Generic,
+            code: polyplug_abi::types::AbiErrorCode::Generic as u32,
             message: polyplug_abi::types::StringView::null(),
         };
     }
@@ -696,15 +843,16 @@ pub(crate) unsafe extern "C" fn host_register_contract(
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     let registry: &RuntimeStore = &runtime.registry;
-    // Get bundle_id from TLS (set by loader before calling polyplug_init)
-    let bundle_id: u64 = get_init_bundle_id();
+    // Get bundle_id from the runtime's per-thread init stack (pushed by the loader
+    // before calling polyplug_init).
+    let bundle_id: u64 = runtime.current_init_bundle_id();
 
     // SAFETY: descriptor is provided by the plugin's polyplug_init function
     let desc: PluginDescriptor = unsafe { *descriptor };
 
     if desc.contract_name.ptr.is_null() || desc.contract_name.len == 0 {
         return polyplug_abi::types::AbiError {
-            code: polyplug_abi::types::AbiErrorCode::Generic,
+            code: polyplug_abi::types::AbiErrorCode::Generic as u32,
             message: polyplug_abi::types::StringView::from_static(
                 b"PluginDescriptor.contract_name is null or empty",
             ),
@@ -727,7 +875,7 @@ pub(crate) unsafe extern "C" fn host_register_contract(
         Err(e) => {
             eprintln!("[polyplug] registration failed for bundle {bundle_id}: {e}");
             polyplug_abi::types::AbiError {
-                code: polyplug_abi::types::AbiErrorCode::Generic,
+                code: polyplug_abi::types::AbiErrorCode::Generic as u32,
                 message: polyplug_abi::types::StringView::null(),
             }
         }
@@ -762,7 +910,7 @@ pub(crate) unsafe extern "C" fn host_free(
 
 /// HostInterface.find_by_contract callback — dispatches to runtime's registry with dependency enforcement.
 ///
-/// Uses TLS for bundle_id during init phase.
+/// Reads bundle_id from the runtime's per-thread init stack during the init phase.
 ///
 /// # Safety
 /// this must be a valid HostInterface pointer with valid runtime field.
@@ -778,8 +926,9 @@ pub(crate) unsafe extern "C" fn host_find_guest_contract(
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     let registry: &RuntimeStore = &runtime.registry;
-    // Get bundle_id from TLS for dependency enforcement during init phase
-    let caller_bundle_id: u64 = get_init_bundle_id();
+    // Get bundle_id from the runtime's per-thread init stack for dependency
+    // enforcement during the init phase.
+    let caller_bundle_id: u64 = runtime.current_init_bundle_id();
 
     if caller_bundle_id != 0
         && !registry.is_bundle_dependency_declared(
@@ -817,7 +966,7 @@ pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
     // Dependency enforcement during the init window: a plugin must not enumerate
     // providers of a contract it did not declare. Outside the window
     // (caller_bundle_id == 0, host-side lookups) enumeration is unrestricted.
-    let caller_bundle_id: u64 = get_init_bundle_id();
+    let caller_bundle_id: u64 = runtime.current_init_bundle_id();
     if caller_bundle_id != 0
         && !registry.is_bundle_dependency_declared(
             BundleId::from_u64(caller_bundle_id),
@@ -876,66 +1025,6 @@ pub unsafe extern "C" fn host_resolve_guest_contract(
     match registry.resolve_guest_contract(handle) {
         Ok(ptr) => ptr,
         Err(_) => core::ptr::null(),
-    }
-}
-
-/// HostInterface.call_guest_method callback — cross-dispatch method call for guest contracts.
-///
-/// This function enables plugins to call methods on other guest contract instances
-/// across different dispatch types (Native vs VM).
-///
-/// # Implementation Status
-/// **PLACEHOLDER** - Full implementation requires instance-to-contract mapping.
-///
-/// For full implementation, the runtime needs to track which contract each instance
-/// belongs to. Options:
-/// - Option A: instance.data contains a struct with `{ contract_id, state_ptr }`
-/// - Option B: Runtime tracks instance -> contract_id mapping separately
-///
-/// Once the contract is known:
-/// - Native dispatch: `dispatch.native.functions[method_id](instance, args, out)`
-/// - VM dispatch: `dispatch.vm.call(loader_data, instance, method_id, args, out)`
-///
-/// # Safety
-/// - this must be a valid HostInterface pointer with valid runtime field.
-/// - instance must be a valid GuestContractInstance (non-null data pointer).
-/// - args must point to valid ABI-packed arguments for the method.
-/// - out must point to a valid output buffer sized for the return type.
-pub(crate) unsafe extern "C" fn host_call_method(
-    this: *const HostInterface,
-    instance: polyplug_abi::GuestContractInstance,
-    _method_id: u32,
-    _args: *const (),
-    _out: *mut (),
-) -> polyplug_abi::types::AbiError {
-    use polyplug_abi::types::{AbiError, AbiErrorCode, StringView};
-
-    if this.is_null() {
-        return AbiError {
-            code: AbiErrorCode::InvalidPointer,
-            message: StringView::from_static(b"null HostInterface in call_guest_method"),
-        };
-    }
-    if instance.data.is_null() {
-        return AbiError {
-            code: AbiErrorCode::InvalidPointer,
-            message: StringView::from_static(b"null instance in call_guest_method"),
-        };
-    }
-
-    // SAFETY: this is a valid HostInterface pointer passed by the host.
-    // (*this).runtime contains a valid pointer to Runtime.
-    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-
-    // Cross-instance dispatch not yet implemented.
-    // This would require a contract-instance mapping to route calls to the correct plugin.
-    // Use call_guest_method on the specific contract interface instead.
-    runtime.set_last_error("call_guest_method: cross-instance dispatch not yet implemented");
-    AbiError {
-        code: AbiErrorCode::FunctionNotAvailable,
-        message: StringView::from_static(
-            b"call_guest_method: use contract interface for direct calls",
-        ),
     }
 }
 
@@ -1131,8 +1220,8 @@ pub(crate) unsafe extern "C" fn host_get_dependencies(
     // SAFETY: this is a valid HostInterface pointer.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
-    // Get bundle_id from TLS
-    let caller_bundle_id = get_init_bundle_id();
+    // Get bundle_id from the runtime's per-thread init stack.
+    let caller_bundle_id: u64 = runtime.current_init_bundle_id();
     if caller_bundle_id == 0 {
         return Array::empty();
     }
@@ -1200,7 +1289,7 @@ pub unsafe extern "C" fn host_load_bundle(
 
     if this.is_null() {
         return AbiError {
-            code: AbiErrorCode::InvalidPointer,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::from_static(b"null HostInterface in load_bundle"),
         };
     }
@@ -1210,7 +1299,7 @@ pub unsafe extern "C" fn host_load_bundle(
     if path.is_null() {
         runtime.set_last_error("null path pointer in load_bundle");
         return AbiError {
-            code: AbiErrorCode::InvalidPointer,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::from_static(b"null path pointer in load_bundle"),
         };
     }
@@ -1222,7 +1311,7 @@ pub unsafe extern "C" fn host_load_bundle(
         Err(e) => {
             runtime.set_last_error(e.to_string());
             return AbiError {
-                code: AbiErrorCode::Generic,
+                code: AbiErrorCode::Generic as u32,
                 message: StringView::null(),
             };
         }
@@ -1233,7 +1322,7 @@ pub unsafe extern "C" fn host_load_bundle(
         Err(e) => {
             runtime.set_last_error(e.to_string());
             AbiError {
-                code: AbiErrorCode::Generic,
+                code: AbiErrorCode::Generic as u32,
                 message: StringView::null(),
             }
         }
@@ -1256,7 +1345,7 @@ pub unsafe extern "C" fn host_reload_bundle(
 
     if this.is_null() {
         return AbiError {
-            code: AbiErrorCode::InvalidPointer,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::from_static(b"null HostInterface in reload_bundle"),
         };
     }
@@ -1266,7 +1355,7 @@ pub unsafe extern "C" fn host_reload_bundle(
     if path.is_null() {
         runtime.set_last_error("null path pointer in reload_bundle");
         return AbiError {
-            code: AbiErrorCode::InvalidPointer,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::from_static(b"null path pointer in reload_bundle"),
         };
     }
@@ -1278,7 +1367,7 @@ pub unsafe extern "C" fn host_reload_bundle(
         Err(e) => {
             runtime.set_last_error(e.to_string());
             return AbiError {
-                code: AbiErrorCode::Generic,
+                code: AbiErrorCode::Generic as u32,
                 message: StringView::null(),
             };
         }
@@ -1289,7 +1378,7 @@ pub unsafe extern "C" fn host_reload_bundle(
         Err(e) => {
             runtime.set_last_error(e.to_string());
             AbiError {
-                code: AbiErrorCode::Generic,
+                code: AbiErrorCode::Generic as u32,
                 message: StringView::null(),
             }
         }
@@ -1311,7 +1400,7 @@ pub(crate) unsafe extern "C" fn host_register_host_contract(
 
     if this.is_null() || interface.is_null() {
         return AbiError {
-            code: AbiErrorCode::InvalidPointer,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::from_static(b"null pointer in register_host_contract"),
         };
     }
@@ -1323,13 +1412,13 @@ pub(crate) unsafe extern "C" fn host_register_host_contract(
     match runtime.register_host_contract(interface_ref.contract_id.id(), interface_ref) {
         Ok(()) => AbiError::ok(),
         Err(crate::error::HostContractError::DuplicateContract { .. }) => AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: StringView::from_static(b"duplicate host contract registration"),
         },
         Err(e) => {
             runtime.set_last_error(e.to_string());
             AbiError {
-                code: AbiErrorCode::Generic,
+                code: AbiErrorCode::Generic as u32,
                 message: StringView::null(),
             }
         }
@@ -1353,13 +1442,16 @@ pub(crate) unsafe extern "C" fn host_register_loader(
 
     if this.is_null() || loader_ptr.is_null() {
         return AbiError {
-            code: AbiErrorCode::InvalidPointer,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::from_static(b"null pointer in register_loader"),
         };
     }
-    // SAFETY: this is a valid HostInterface pointer. (*this).runtime contains a valid pointer to Runtime.
-    // We need mutable access to register the loader.
-    let runtime: &mut Runtime = unsafe { &mut *((*this).runtime as *mut Runtime) };
+    // SAFETY: this is a valid HostInterface pointer. (*this).runtime contains a valid
+    // pointer to Runtime. A shared reference is sufficient — `register_guest_contract_loader`
+    // takes `&self` and uses the interior `RwLock` to mutate `loaders`. Forging a
+    // `&mut Runtime` from the Arc-shared pointer would be aliasing UB (other live
+    // `&Runtime` exist), so we never do that.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
     // SAFETY: loader_ptr is a *mut Box<dyn BundleLoader> erased to *mut c_void by a loader cdylib
     // compiled against the same polyplug rlib. Reconstituting via Box::from_raw is valid.
@@ -1371,7 +1463,7 @@ pub(crate) unsafe extern "C" fn host_register_loader(
         Err(e) => {
             runtime.set_last_error(e.to_string());
             AbiError {
-                code: AbiErrorCode::Generic,
+                code: AbiErrorCode::Generic as u32,
                 message: StringView::null(),
             }
         }
@@ -1428,6 +1520,23 @@ pub unsafe extern "C" fn host_get_error_len(this: *const HostInterface) -> usize
     runtime.last_error_len()
 }
 
+/// HostInterface.get_extension callback — returns a registered extension pointer.
+///
+/// # Safety
+/// - `this` must be a valid HostInterface pointer with valid runtime field
+/// - `extension_id` must be fnv1a_32 of the extension name
+pub(crate) unsafe extern "C" fn host_get_extension(
+    this: *const HostInterface,
+    extension_id: u32,
+) -> *const () {
+    // SAFETY: this is non-null per ABI contract; runtime field was set at init.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+    match runtime.extensions.read() {
+        Ok(map) => map.get(&extension_id).copied().unwrap_or(0) as *const (),
+        Err(_) => core::ptr::null(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -1458,7 +1567,7 @@ mod tests {
     fn host_callbacks_use_host_interface_self_passing() {
         // All host callback functions (host_register_contract, host_alloc, host_free,
         // host_find_guest_contract, host_find_all_guest_contracts, host_resolve_guest_contract,
-        // host_call_method, host_get_host_contract) use *const HostInterface as first parameter.
+        // host_get_host_contract) use *const HostInterface as first parameter.
         //
         // This is verified by the function signatures in this file using HostInterface.
         // The self-passing pattern allows extracting runtime from (*this).runtime.
@@ -1484,8 +1593,8 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        // Set TLS bundle_id to simulate init phase
-        set_init_bundle_id(0xDEAD_BEEF_u64);
+        // Push a bundle_id onto the runtime init stack to simulate init phase
+        runtime.push_init_bundle_id(0xDEAD_BEEF_u64);
 
         // Create a HostInterface with runtime pointer
         let host_interface: HostInterface = HostInterface {
@@ -1496,7 +1605,6 @@ mod tests {
             find_guest_contract: host_find_guest_contract,
             find_all_guest_contracts: host_find_all_guest_contracts,
             resolve_guest_contract: host_resolve_guest_contract,
-            call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
@@ -1508,9 +1616,10 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            get_extension: host_get_extension,
         };
 
-        // SAFETY: host_interface is valid with runtime pointer, TLS bundle_id is set
+        // SAFETY: host_interface is valid with runtime pointer; init bundle_id is set
         let handle: GuestContractHandle = unsafe {
             host_find_guest_contract(
                 &host_interface as *const HostInterface,
@@ -1523,8 +1632,8 @@ mod tests {
             "dep enforcement must return null for undeclared contract during init phase"
         );
 
-        // Clear TLS after test
-        clear_init_bundle_id();
+        // Pop the init bundle_id after test
+        runtime.pop_init_bundle_id();
     }
 
     fn create_bundle_dir(temp: &tempfile::TempDir, bundle_name: &str, runtime: &str) -> PathBuf {
@@ -1536,9 +1645,12 @@ mod tests {
         if let Err(e) = std::fs::write(&so_path, b"") {
             panic!("failed to write dummy so {}: {e}", so_path.display());
         }
+        // Emit the canonical id = FNV1a-64(name) so the manifest passes validation.
         let manifest: String = format!(
-            "id = 12345\nname = \"{}\"\nruntime = \"{}\"\nfile = \"dummy.so\"\n",
-            bundle_name, runtime
+            "id = {}\nname = \"{}\"\nruntime = \"{}\"\nfile = \"dummy.so\"\n",
+            BundleId::new(bundle_name).id(),
+            bundle_name,
+            runtime
         );
         let manifest_path: PathBuf = bundle_dir.join("manifest.toml");
         if let Err(e) = std::fs::write(&manifest_path, manifest) {
@@ -2051,6 +2163,7 @@ mod tests {
             singleton: true,
             dispatch_type: DispatchType::Native,
             runtime: core::ptr::null_mut(),
+            user_data: core::ptr::null_mut(),
             create_instance: stub_create_instance,
             destroy_instance: stub_destroy_instance,
             dispatch: DispatchMechanisms {
@@ -2223,7 +2336,6 @@ mod tests {
             find_guest_contract: host_find_guest_contract,
             find_all_guest_contracts: host_find_all_guest_contracts,
             resolve_guest_contract: host_resolve_guest_contract,
-            call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
@@ -2235,6 +2347,7 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            get_extension: host_get_extension,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -2264,7 +2377,6 @@ mod tests {
             find_guest_contract: host_find_guest_contract,
             find_all_guest_contracts: host_find_all_guest_contracts,
             resolve_guest_contract: host_resolve_guest_contract,
-            call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
@@ -2276,6 +2388,7 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            get_extension: host_get_extension,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -2339,6 +2452,7 @@ mod tests {
             singleton,
             dispatch_type: DispatchType::Native,
             runtime: core::ptr::null_mut(),
+            user_data: core::ptr::null_mut(),
             create_instance: counting_create_instance,
             destroy_instance: counting_destroy_instance,
             dispatch: DispatchMechanisms {
@@ -2376,7 +2490,6 @@ mod tests {
             find_guest_contract: host_find_guest_contract,
             find_all_guest_contracts: host_find_all_guest_contracts,
             resolve_guest_contract: host_resolve_guest_contract,
-            call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
@@ -2388,6 +2501,7 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            get_extension: host_get_extension,
         };
 
         // First call - creates instance
@@ -2465,7 +2579,6 @@ mod tests {
             find_guest_contract: host_find_guest_contract,
             find_all_guest_contracts: host_find_all_guest_contracts,
             resolve_guest_contract: host_resolve_guest_contract,
-            call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
@@ -2477,6 +2590,7 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            get_extension: host_get_extension,
         };
 
         // First call - creates instance (counter becomes 101)
@@ -2565,7 +2679,6 @@ mod tests {
             find_guest_contract: host_find_guest_contract,
             find_all_guest_contracts: host_find_all_guest_contracts,
             resolve_guest_contract: host_resolve_guest_contract,
-            call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
@@ -2577,6 +2690,7 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            get_extension: host_get_extension,
         };
 
         // Call singleton twice - should get same instance
@@ -2607,6 +2721,66 @@ mod tests {
         assert_ne!(
             s1.data, m2.data,
             "singleton and multi instances are different"
+        );
+    }
+
+    // ─── Extension System Tests ────────────────────────────────────────────────
+
+    #[test]
+    fn extension_round_trip() {
+        let runtime: Arc<Runtime> = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        static EXTENSION_VALUE: u32 = 0xDEAD_BEEF;
+        let ext_ptr: *const () = &EXTENSION_VALUE as *const u32 as *const ();
+
+        // SAFETY: ext_ptr points to a 'static variable; valid for the program lifetime.
+        unsafe { runtime.register_extension("test.extension", ext_ptr) };
+
+        let host: *const HostInterface = runtime.as_context_ptr();
+        let extension_id: u32 = polyplug_utils::fnv1a_32(b"test.extension");
+        // SAFETY: host points to the runtime's 'static HostInterface; runtime is live for the
+        // duration of this call. The get_extension callback reads from runtime.extensions which
+        // was populated above.
+        let retrieved: *const () = unsafe { ((*host).get_extension)(host, extension_id) };
+
+        assert!(
+            !retrieved.is_null(),
+            "registered extension must not be null"
+        );
+        assert_eq!(
+            retrieved, ext_ptr,
+            "retrieved pointer must equal registered pointer"
+        );
+    }
+
+    #[test]
+    fn extension_missing_returns_null() {
+        let runtime: Arc<Runtime> = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        let host: *const HostInterface = runtime.as_context_ptr();
+        let extension_id: u32 = polyplug_utils::fnv1a_32(b"nonexistent.extension");
+        // SAFETY: host points to the runtime's 'static HostInterface; runtime is live.
+        // No extension was registered, so the callback reads from an empty map.
+        let retrieved: *const () = unsafe { ((*host).get_extension)(host, extension_id) };
+
+        assert!(
+            retrieved.is_null(),
+            "unregistered extension must return null pointer"
+        );
+    }
+
+    #[test]
+    fn extension_id_collision_resistance() {
+        // Two distinct extension names must produce distinct extension IDs.
+        let id_logger: u32 = polyplug_utils::fnv1a_32(b"logger");
+        let id_tracer: u32 = polyplug_utils::fnv1a_32(b"tracer");
+        assert_ne!(
+            id_logger, id_tracer,
+            "different extension names must not collide"
         );
     }
 }

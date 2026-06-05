@@ -45,6 +45,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         contractHi: {contract_hi},
         fnCount: {fn_count},
         contractName: "{contract_name}",
+        version: 0x00010000,
         functions: [
             function(args, out) {{ return 0; }}
         ]
@@ -54,7 +55,8 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         vtable.contractHi,
         vtable,
         vtable.fnCount,
-        vtable.contractName
+        vtable.contractName,
+        vtable.version
     );
 }}
 "#
@@ -111,6 +113,7 @@ fn make_runtime_hot_reload() -> Arc<Runtime> {
             compatibility: Compatibility::Strict,
             hot_reload_enabled: true,
             on_reload: None,
+            on_reload_user_data: core::ptr::null_mut(),
         })
         .build()
         .expect("runtime build must succeed")
@@ -162,7 +165,7 @@ fn assert_vm_function_count(vtable: &GuestContractInterface, expected: u32) {
         };
         assert_eq!(
             result.code,
-            AbiErrorCode::Ok,
+            AbiErrorCode::Ok as u32,
             "fn_id {fn_id} must dispatch to Ok"
         );
     }
@@ -178,7 +181,7 @@ fn assert_vm_function_count(vtable: &GuestContractInterface, expected: u32) {
     };
     assert_eq!(
         missing.code,
-        AbiErrorCode::FunctionNotAvailable,
+        AbiErrorCode::FunctionNotAvailable as u32,
         "fn_id {expected} must report FunctionNotAvailable"
     );
 }
@@ -238,6 +241,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         contractHi: {},
         fnCount: {},
         contractName: "test.math",
+        version: 0x00010000,
         functions: [
             function(args, out) {{ return 0; }},
             function(args, out) {{ return 0; }},
@@ -249,7 +253,8 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         vtable.contractHi,
         vtable,
         vtable.fnCount,
-        vtable.contractName
+        vtable.contractName,
+        vtable.version
     );
 }}
 "#,
@@ -465,6 +470,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         contractHi: {},
         fnCount: 1,
         contractName: "test.bundlepath",
+        version: 0x00010000,
         functions: [function(args, out) {{ return 0; }}]
     }};
     polyplug.registerVtable(
@@ -472,7 +478,8 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         vtable.contractHi,
         vtable,
         vtable.fnCount,
-        vtable.contractName
+        vtable.contractName,
+        vtable.version
     );
 }}
 "#,
@@ -521,6 +528,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         contractHi: {},
         fnCount: 1,
         contractName: "test.methods",
+        version: 0x00010000,
         functions: [function(args, out) {{ return 0; }}]
     }};
     polyplug.registerVtable(
@@ -528,7 +536,8 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         vtable.contractHi,
         vtable,
         vtable.fnCount,
-        vtable.contractName
+        vtable.contractName,
+        vtable.version
     );
 }}
 "#,
@@ -593,6 +602,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         contractHi: {},
         fnCount: {},
         contractName: "test.vm_dispatch",
+        version: 0x00010000,
         functions: [
             function(args, out) {{ return 0; }},
             function(args, out) {{ return 0; }}
@@ -603,7 +613,8 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         vtable.contractHi,
         vtable,
         vtable.fnCount,
-        vtable.contractName
+        vtable.contractName,
+        vtable.version
     );
 }}
 "#,
@@ -648,14 +659,15 @@ fn js_alloc_and_free_calls_host_vtable() {
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.memory", 1);
 
     // Bundle calls alloc then free.
-    // alloc returns [ptr_lo, ptr_hi] tuple; free takes (ptr_lo, ptr_hi)
+    // alloc returns [ptr_lo, ptr_hi] tuple; free takes (ptr_lo, ptr_hi, size, align)
+    // — the size/align must match the allocation so the host actually frees it.
     let bundle: String = format!(
         r#"
 var result = polyplug.alloc(64);
 var ptr_lo = result[0];
 var ptr_hi = result[1];
 if (ptr_lo !== 0 || ptr_hi !== 0) {{
-    polyplug.free(ptr_lo, ptr_hi);
+    polyplug.free(ptr_lo, ptr_hi, 64, 1);
 }}
 function polyplug_init(rt_ctx, host_vtable, ctx) {{
     var descriptor = {{
@@ -670,6 +682,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         contractHi: {},
         fnCount: 1,
         contractName: "test.memory",
+        version: 0x00010000,
         functions: [function(args, out) {{ return 0; }}]
     }};
     polyplug.registerVtable(
@@ -677,7 +690,8 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         vtable.contractHi,
         vtable,
         vtable.fnCount,
-        vtable.contractName
+        vtable.contractName,
+        vtable.version
     );
 }}
 "#,
@@ -913,7 +927,7 @@ fn dispatch_vm_call_works_correctly() {
 
     assert_eq!(
         call_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "dispatch.vm.call must return Ok, got code={}",
         call_result.code
     );
@@ -949,6 +963,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         contractHi: {},
         fnCount: 1,
         contractName: "test.stringview.empty",
+        version: 0x00010000,
         functions: [function(args, out) {{ return 0; }}]
     }};
     polyplug.registerVtable(
@@ -956,7 +971,8 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         vtable.contractHi,
         vtable,
         vtable.fnCount,
-        vtable.contractName
+        vtable.contractName,
+        vtable.version
     );
     return {{ code: 0, message: null }};
 }}

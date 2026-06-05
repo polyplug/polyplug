@@ -178,14 +178,15 @@ impl BundleLoader for DotnetLoader {
             method_name_pdc.as_ref(),
         )?;
 
-        // SAFETY: bundle_path_static outlives this call; leaked intentionally.
+        // BundleInitContext.bundle_path is borrowed only for the duration of the
+        // managed_init call below, so a local String kept alive across that call
+        // is sufficient — no leak required. `bundle_dir_str` outlives `ctx`.
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
-        let bundle_path_static: &'static str = Box::leak(bundle_dir_str.into_boxed_str());
         let ctx = BundleInitContext {
             bundle_id,
             bundle_path: StringView {
-                ptr: bundle_path_static.as_ptr(),
-                len: bundle_path_static.len(),
+                ptr: bundle_dir_str.as_ptr(),
+                len: bundle_dir_str.len(),
             },
         };
 
@@ -193,24 +194,26 @@ impl BundleLoader for DotnetLoader {
         // This pointer is passed to the managed PolyplugInit as the first parameter.
         let host_interface: *const HostInterface = runtime.as_context_ptr();
 
-        // Set bundle_id in TLS for dependency enforcement during init.
-        polyplug::runtime::set_init_bundle_id(bundle_id);
+        // Push bundle_id onto the runtime's per-thread init stack for dependency
+        // enforcement during init. The matching pop MUST run on every exit path
+        // (success and error) so the stack never leaks an entry.
+        runtime.push_init_bundle_id(bundle_id);
 
         // SAFETY: managed_init is a valid fn ptr from CLR. host_interface and ctx are non-null and valid.
         // InitFn signature: (host, ctx) -> u32
         // The HostInterface pointer is passed directly (self-passing pattern).
         let result: u32 = unsafe { (*managed_init)(host_interface, &ctx) };
+
+        // Pop bundle_id from the init stack after init completes (always, including
+        // the error path) so the stack does not leak an entry.
+        runtime.pop_init_bundle_id();
+
         if result != 0 {
-            // Clear bundle_id TLS on error.
-            polyplug::runtime::clear_init_bundle_id();
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name,
                 error: format!("PolyplugInit returned {result}"),
             }));
         }
-
-        // Clear bundle_id TLS after init completes.
-        polyplug::runtime::clear_init_bundle_id();
 
         Ok(())
     }

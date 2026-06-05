@@ -58,7 +58,7 @@ impl BundleLoader for ProbeLoader {
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 
         // Enter the enforcement window, exactly as the native loader does.
-        polyplug::set_init_bundle_id(bundle_id.id());
+        runtime.push_init_bundle_id(bundle_id.id());
 
         // Probe the declared dependency: must resolve (non-null handle).
         // SAFETY: host_abi is a valid HostInterface from the runtime.
@@ -101,7 +101,7 @@ impl BundleLoader for ProbeLoader {
         let declared_all_len: usize = declared_all.len;
         let undeclared_all_len: usize = undeclared_all.len;
 
-        polyplug::clear_init_bundle_id();
+        runtime.pop_init_bundle_id();
 
         let mut guard: std::sync::MutexGuard<'_, ProbeResults> =
             self.results.lock().unwrap_or_else(|e| e.into_inner());
@@ -180,8 +180,9 @@ fn write_bundle(temp: &tempfile::TempDir, bundle_name: &str, declared_contract_i
     let bundle_dir: PathBuf = temp.path().join(bundle_name);
     std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
     std::fs::write(bundle_dir.join("dummy.so"), b"").expect("write dummy so");
+    let bundle_id: u64 = polyplug_utils::bundle_id(bundle_name);
     let manifest: String = format!(
-        "id = 999001\n\
+        "id = {bundle_id}\n\
          name = \"{bundle_name}\"\n\
          runtime = \"probe-enforce\"\n\
          file = \"dummy.so\"\n\

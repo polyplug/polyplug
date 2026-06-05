@@ -27,7 +27,7 @@ fn test_load_bundle_invalid_utf8_path() {
         unsafe { ((*host).load_bundle)(host, bad_path.as_ptr(), bad_path.len()) };
     assert_ne!(
         result.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "load_bundle with invalid UTF-8 path must return error"
     );
     let err: String = read_last_error(host);
@@ -50,7 +50,7 @@ fn test_reload_bundle_invalid_utf8_path() {
         unsafe { ((*host).reload_bundle)(host, bad_path.as_ptr(), bad_path.len()) };
     assert_ne!(
         result.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "reload_bundle with invalid UTF-8 path must return error"
     );
     let err: String = read_last_error(host);

@@ -21,7 +21,10 @@
 //!    and physically live under the bundle directory (the generated package,
 //!    the entry module, and the bundle's vendored `site-packages`).
 //! 2. Re-key each such module under a unique per-bundle prefix
-//!    (`__polyplug_bundle_<id>__.<original_name>`).
+//!    (`__polyplug_bundle_<id>_<nonce>__.<original_name>`). The `<nonce>` is a
+//!    process-global monotonic counter so two `Runtime` instances loading the
+//!    same-named bundle (whose `<id>` name-hash is identical) never collide in
+//!    the shared `sys.modules`.
 //! 3. Delete the original generic-name entries from `sys.modules`.
 //!
 //! Re-keying (rather than deleting) keeps every module object — and crucially
@@ -32,6 +35,8 @@
 //! This is surgical: only modules under the bundle directory are touched, never
 //! a `sys.modules.clear()` hammer, and shared interpreter state is left intact.
 
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
 use std::collections::HashSet;
 use std::ffi::CString;
 
@@ -145,9 +150,35 @@ pub(crate) fn snapshot_loaded_modules(
     Ok(names.into_iter().collect())
 }
 
+/// Monotonic counter that makes every isolation prefix globally unique within
+/// the process.
+///
+/// `bundle_id` alone is a name hash, so two `Runtime` instances (or repeated
+/// loads of the same-named bundle) would otherwise compute identical prefixes
+/// and clobber each other's `sys.modules` entries. Because CPython is shared
+/// process-wide (the documented Known Limitation that already sanctions
+/// `PYTHON_INIT: OnceLock` — see CLAUDE.md Rule 12), `sys.modules` is a single
+/// global namespace; the only way to guarantee non-colliding keys across
+/// runtimes is a process-global nonce. This counter is exempt from the
+/// no-globals rule under that same Known Limitation: it carries no runtime
+/// state, only a uniqueness ticket, and does not couple runtime instances.
+static ISOLATION_NONCE: AtomicU64 = AtomicU64::new(0);
+
+/// Build the unique `sys.modules` re-key prefix for one bundle isolation pass.
+///
+/// Combines the bundle's name-hash id (for human-readable correlation) with a
+/// process-global monotonic nonce (for guaranteed uniqueness across runtimes
+/// and repeated loads).
+fn next_isolation_prefix(bundle_id: u64) -> String {
+    let nonce: u64 = ISOLATION_NONCE.fetch_add(1, Ordering::Relaxed);
+    format!("__polyplug_bundle_{:016X}_{:016X}__", bundle_id, nonce)
+}
+
 /// Re-key all of a bundle's freshly imported, in-bundle modules under a unique
-/// per-bundle prefix derived from `bundle_id`, freeing the generic names for the
-/// next bundle. See the module-level documentation for the full rationale.
+/// per-bundle prefix, freeing the generic names for the next bundle. The prefix
+/// combines `bundle_id` with a process-global nonce so two runtimes loading the
+/// same-named bundle never collide in the shared `sys.modules`. See the
+/// module-level documentation for the full rationale.
 pub(crate) fn isolate_bundle_modules(
     py: Python<'_>,
     bundle_name: &str,
@@ -187,7 +218,7 @@ pub(crate) fn isolate_bundle_modules(
             },
         )?;
 
-    let prefix: String = format!("__polyplug_bundle_{:016X}__", bundle_id);
+    let prefix: String = next_isolation_prefix(bundle_id);
     let before_list: Vec<&str> = before.iter().map(|s: &String| s.as_str()).collect();
 
     helper
@@ -222,4 +253,53 @@ pub(crate) fn isolate_bundle_modules(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_isolation_prefix;
+    use std::collections::HashSet;
+
+    /// Two prefixes built from the *same* `bundle_id` must still differ, because
+    /// the process-global nonce advances on every call. This is what stops two
+    /// runtimes loading the same-named bundle from clobbering each other's
+    /// `sys.modules` entries.
+    #[test]
+    fn same_bundle_id_yields_distinct_prefixes() {
+        let bundle_id: u64 = 0xDEAD_BEEF_CAFE_0001;
+        let first: String = next_isolation_prefix(bundle_id);
+        let second: String = next_isolation_prefix(bundle_id);
+        assert_ne!(
+            first, second,
+            "identical bundle_id must still produce unique prefixes via the nonce"
+        );
+    }
+
+    /// A batch of prefixes (mixing repeated and distinct bundle ids) must be
+    /// pairwise unique across the whole process.
+    #[test]
+    fn prefixes_are_pairwise_unique() {
+        let mut seen: HashSet<String> = HashSet::new();
+        let ids: [u64; 4] = [1, 1, 2, 1];
+        for &id in ids.iter() {
+            for _ in 0..16 {
+                let prefix: String = next_isolation_prefix(id);
+                assert!(
+                    seen.insert(prefix.clone()),
+                    "prefix collision detected: {}",
+                    prefix
+                );
+            }
+        }
+    }
+
+    /// The prefix must embed the bundle id (for human-readable correlation) and
+    /// follow the documented `__polyplug_bundle_<id>_<nonce>__` shape.
+    #[test]
+    fn prefix_embeds_bundle_id_and_has_expected_shape() {
+        let bundle_id: u64 = 0x0123_4567_89AB_CDEF;
+        let prefix: String = next_isolation_prefix(bundle_id);
+        assert!(prefix.starts_with("__polyplug_bundle_0123456789ABCDEF_"));
+        assert!(prefix.ends_with("__"));
+    }
 }

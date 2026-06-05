@@ -41,7 +41,7 @@ fn trigger_error(host: *const HostInterface) {
         unsafe { ((*host).load_bundle)(host, path.as_ptr(), path.len()) };
     assert_ne!(
         result.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "load_bundle with non-existent path must return error"
     );
 }
@@ -361,7 +361,7 @@ fn last_error_large_message_handling() {
         unsafe { ((*host).load_bundle)(host, long_path.as_ptr(), long_path.len()) };
     assert_ne!(
         result.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "load_bundle with non-existent path must fail"
     );
 

@@ -73,12 +73,18 @@ pub(crate) fn init_context(
 
     // Step 2: Generate runtimeconfig.json content and write to a temp file.
     // NOTE: additionalProbingPaths set from first-loaded bundle dir only (CLR_CONTEXT is OnceCell).
-    let json: String = format!(
-        "{{\"runtimeOptions\":{{\"tfm\":\"{}\",\"framework\":{{\"name\":\"Microsoft.NETCore.App\",\"version\":\"{}\"}},\"additionalProbingPaths\":[\"{}\"]}}}}",
-        config.min_framework,
-        full_version,
-        bundle_dir.to_string_lossy()
-    );
+    // Build via serde_json so paths with backslashes (Windows) or quotes are escaped correctly.
+    let json: String = serde_json::json!({
+        "runtimeOptions": {
+            "tfm": config.min_framework,
+            "framework": {
+                "name": "Microsoft.NETCore.App",
+                "version": full_version
+            },
+            "additionalProbingPaths": [bundle_dir.to_string_lossy()]
+        }
+    })
+    .to_string();
     // hostfxr requires the runtimeconfig file to have a ".json" extension —
     // it uses the filename to detect the file type. tempfile::NamedTempFile::new()
     // creates files with no extension, causing hostfxr to reject the config.
@@ -295,7 +301,7 @@ impl DotnetContext {
 /// Scan well-known locations to find `libhostfxr.so` / `hostfxr.dll` without using
 /// the bundled `libnethost.a` from nethost-sys.
 ///
-/// Search order (matches the C++ reference implementation and Epic 9 PRD spec):
+/// Search order:
 /// 1. `DOTNET_ROOT` environment variable
 /// 2. `PATH` entries that contain a `dotnet` binary
 /// 3. Well-known system paths: `/usr/share/dotnet`, `/usr/lib/dotnet`, `~/.dotnet`

@@ -121,6 +121,7 @@ fn hot_reload_config() -> RuntimeConfig {
         compatibility: Compatibility::Yolo,
         hot_reload_enabled: true,
         on_reload: None,
+        on_reload_user_data: core::ptr::null_mut(),
     }
 }
 
@@ -138,8 +139,9 @@ fn write_bundle(
     std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
     std::fs::write(bundle_dir.join("dummy.so"), b"").expect("write dummy so");
 
+    let bundle_id: u64 = polyplug_utils::bundle_id(bundle_name);
     let mut manifest: String = format!(
-        "id = 777001\n\
+        "id = {bundle_id}\n\
          name = \"{bundle_name}\"\n\
          runtime = \"{runtime_name}\"\n\
          file = \"dummy.so\"\n\
@@ -185,8 +187,7 @@ fn cascade_reload_disabled_does_not_trigger() {
 
     let a_path: PathBuf = write_bundle(&temp, "bundle_a", "cascade-a", false, None);
     // B depends on A's contract but opts OUT of cascade reload.
-    let b_path: PathBuf =
-        write_bundle(&temp, "bundle_b", "cascade-b", false, Some(a_contract_id));
+    let b_path: PathBuf = write_bundle(&temp, "bundle_b", "cascade-b", false, Some(a_contract_id));
 
     runtime.load_bundle(a_path.as_path()).expect("load A");
     runtime.load_bundle(b_path.as_path()).expect("load B");

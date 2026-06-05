@@ -8,6 +8,7 @@ use polyplug::loader::BundleLoader;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug_abi::runtime::Compatibility;
+use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
 use std::fs;
 use std::path::PathBuf;
@@ -55,8 +56,11 @@ fn write_bundle_manifest(
 
     // Build TOML manifest string directly
     let mut manifest_toml: String = format!(
-        "id = 1\nname = \"{}\"\nruntime = \"test-noop\"\nfile = \"{}\"\nversion = \"{}\"\n",
-        bundle_name, so_name, version
+        "id = {}\nname = \"{}\"\nruntime = \"test-noop\"\nfile = \"{}\"\nversion = \"{}\"\n",
+        bundle_id(bundle_name),
+        bundle_name,
+        so_name,
+        version
     );
 
     if !provides.is_empty() {

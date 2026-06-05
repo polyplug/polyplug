@@ -161,8 +161,7 @@ fn dispatch_concurrent_with_reload_is_safe() {
                                 *const HostInterface,
                                 *const (),
                             )
-                                -> GuestContractInstance =
-                                (*interface_ptr).create_instance;
+                                -> GuestContractInstance = (*interface_ptr).create_instance;
                             let instance: GuestContractInstance =
                                 create_fn(core::ptr::null(), core::ptr::null());
                             assert!(instance.is_null(), "mock create_instance returns null");

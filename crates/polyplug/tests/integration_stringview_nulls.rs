@@ -5,11 +5,7 @@
 //! be preserved through any polyplug-internal API that processes StringViews.
 
 use polyplug_abi::StringView;
-
-unsafe extern "C" {
-    fn polyplug_host_alloc(size: usize, align: usize) -> *mut u8;
-    fn polyplug_host_free(ptr: *mut u8, size: usize, align: usize);
-}
+use polyplug_abi::ffi::{polyplug_host_alloc, polyplug_host_free};
 
 #[test]
 fn test_stringview_embedded_null_length() {
@@ -31,8 +27,8 @@ fn test_stringview_roundtrip_through_host_alloc() {
     // read it back, assert no truncation.
     let data: &[u8] = b"hello\x00world";
     let size: usize = data.len();
-    // SAFETY: size > 0, align = 1 is a power of two.
-    let ptr: *mut u8 = unsafe { polyplug_host_alloc(size, 1_usize) };
+    // polyplug_host_alloc is a safe wrapper: size > 0, align = 1 is a power of two.
+    let ptr: *mut u8 = polyplug_host_alloc(size, 1_usize);
     assert!(!ptr.is_null(), "host_alloc must succeed for size=11");
     // SAFETY: ptr is non-null and valid for `size` bytes.
     unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), ptr, size) };

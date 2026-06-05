@@ -6,8 +6,8 @@
 
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
-    AbiError, AbiErrorCode, BundleInitContext, GuestContractHandle, GuestContractInstance,
-    GuestContractInterface, HostInterface, PluginDescriptor, StringView,
+    AbiError, AbiErrorCode, BundleInitContext, GuestContractHandle, GuestContractInterface,
+    HostInterface, PluginDescriptor, StringView,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -28,7 +28,7 @@ unsafe extern "C" fn registry_register_callback(
 ) -> AbiError {
     if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: AbiErrorCode::InvalidPointer,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::null(),
         };
     }
@@ -64,11 +64,11 @@ unsafe extern "C" fn registry_register_callback(
 
     match result {
         Ok(_) => AbiError {
-            code: AbiErrorCode::Ok,
+            code: AbiErrorCode::Ok as u32,
             message: StringView::null(),
         },
         Err(_) => AbiError {
-            code: AbiErrorCode::Generic,
+            code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
     }
@@ -116,20 +116,6 @@ unsafe extern "C" fn noop_resolve_guest_contract(
     core::ptr::null()
 }
 
-/// No-op call_guest_method callback.
-unsafe extern "C" fn noop_call_guest_method(
-    _this: *const HostInterface,
-    _instance: GuestContractInstance,
-    _method_id: u32,
-    _args: *const (),
-    _out: *mut (),
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok,
-        message: StringView::null(),
-    }
-}
-
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
     _this: *const HostInterface,
@@ -169,7 +155,7 @@ unsafe extern "C" fn noop_load_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -181,7 +167,7 @@ unsafe extern "C" fn noop_reload_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -192,7 +178,7 @@ unsafe extern "C" fn noop_register_host_contract(
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -204,7 +190,7 @@ unsafe extern "C" fn noop_register_loader(
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -221,6 +207,14 @@ unsafe extern "C" fn noop_get_last_error(
 /// No-op get_error_len callback.
 unsafe extern "C" fn noop_get_error_len(_this: *const HostInterface) -> usize {
     0
+}
+
+/// No-op get_extension callback.
+unsafe extern "C" fn noop_get_extension(
+    _this: *const HostInterface,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
 }
 
 std::thread_local! {
@@ -268,7 +262,6 @@ fn test_dispatch_add_function() {
         find_guest_contract: noop_find_guest_contract,
         find_all_guest_contracts: noop_find_all_guest_contracts,
         resolve_guest_contract: noop_resolve_guest_contract,
-        call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
         resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
@@ -279,6 +272,7 @@ fn test_dispatch_add_function() {
         register_loader: noop_register_loader,
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
+        get_extension: noop_get_extension,
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -294,7 +288,7 @@ fn test_dispatch_add_function() {
     };
     assert_eq!(
         init_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "polyplug_init must succeed"
     );
 
@@ -343,7 +337,7 @@ fn test_dispatch_add_function() {
 
     assert_eq!(
         call_result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "add function must return Ok"
     );
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
@@ -382,7 +376,6 @@ fn test_dispatch_add_with_zero() {
         find_guest_contract: noop_find_guest_contract,
         find_all_guest_contracts: noop_find_all_guest_contracts,
         resolve_guest_contract: noop_resolve_guest_contract,
-        call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
         resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
@@ -393,6 +386,7 @@ fn test_dispatch_add_with_zero() {
         register_loader: noop_register_loader,
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
+        get_extension: noop_get_extension,
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -406,7 +400,7 @@ fn test_dispatch_add_with_zero() {
             &ctx as *const BundleInitContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok);
+    assert_eq!(init_result.code, AbiErrorCode::Ok as u32);
 
     let contract_id: GuestContractId = GuestContractId::new("test.add", 1);
     let handle: GuestContractHandle = DISPATCH_REGISTRY.with(|cell| {
@@ -437,7 +431,7 @@ fn test_dispatch_add_with_zero() {
         )
     };
 
-    assert_eq!(result.code, AbiErrorCode::Ok);
+    assert_eq!(result.code, AbiErrorCode::Ok as u32);
     assert_eq!(out, 0_u32, "add(0, 0) must equal 0");
 
     core::mem::forget(library);
@@ -472,7 +466,6 @@ fn test_dispatch_add_wrapping_overflow() {
         find_guest_contract: noop_find_guest_contract,
         find_all_guest_contracts: noop_find_all_guest_contracts,
         resolve_guest_contract: noop_resolve_guest_contract,
-        call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
         resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
@@ -483,6 +476,7 @@ fn test_dispatch_add_wrapping_overflow() {
         register_loader: noop_register_loader,
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
+        get_extension: noop_get_extension,
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -496,7 +490,7 @@ fn test_dispatch_add_wrapping_overflow() {
             &ctx as *const BundleInitContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok);
+    assert_eq!(init_result.code, AbiErrorCode::Ok as u32);
 
     let contract_id: GuestContractId = GuestContractId::new("test.add", 1);
     let handle: GuestContractHandle = DISPATCH_REGISTRY.with(|cell| {
@@ -528,7 +522,7 @@ fn test_dispatch_add_wrapping_overflow() {
         )
     };
 
-    assert_eq!(result.code, AbiErrorCode::Ok);
+    assert_eq!(result.code, AbiErrorCode::Ok as u32);
     assert_eq!(out, 0_u32, "u32::MAX + 1 wraps to 0");
 
     core::mem::forget(library);

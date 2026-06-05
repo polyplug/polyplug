@@ -142,6 +142,7 @@ fn hot_reload_config() -> polyplug::RuntimeConfig {
         compatibility: polyplug::Compatibility::Strict,
         hot_reload_enabled: true,
         on_reload: None,
+        on_reload_user_data: core::ptr::null_mut(),
     }
 }
 
@@ -461,7 +462,7 @@ fn stress_reload_callback_fires_on_every_cycle() {
             ..polyplug::RuntimeConfig::default()
         })
         .loader(TestNativeLoader::new())
-        .on_reload(move |ev: ReloadPhase| {
+        .on_reload(move |_user_data: *mut core::ffi::c_void, ev: ReloadPhase| {
             events_clone
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())

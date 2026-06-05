@@ -137,6 +137,9 @@ pub enum RegistryError {
 
     #[error("no plugin found for contract_id=0x{contract_id:016X} with min_version={min_version}")]
     PluginNotFound { contract_id: u64, min_version: u32 },
+
+    #[error("invalid dispatch_type {value} in guest contract interface (untrusted plugin)")]
+    InvalidDispatchType { value: u32 },
 }
 
 /// Errors from the capability graph.

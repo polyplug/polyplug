@@ -13,6 +13,7 @@ use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::HostInterface;
+use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
 
 mod common;
@@ -80,7 +81,7 @@ fn test_resolve_plugin_stale_handle() {
         unsafe { ((*host).load_bundle)(host, path_bytes.as_ptr(), path_bytes.len()) };
     assert_eq!(
         rc.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "plugin load must succeed"
     );
 
@@ -150,7 +151,7 @@ fn test_find_all_guest_contracts_single_plugin() {
         unsafe { ((*host).load_bundle)(host, v1_path_bytes.as_ptr(), v1_path_bytes.len()) };
     assert_eq!(
         rc.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "reload_plugin_v1 load must succeed"
     );
 
@@ -206,7 +207,7 @@ fn test_find_all_guest_contracts_multiple_plugins() {
         unsafe { ((*host).load_bundle)(host, rust_path_bytes.as_ptr(), rust_path_bytes.len()) };
     assert_eq!(
         rc_rust.code,
-        polyplug_abi::AbiErrorCode::Ok,
+        polyplug_abi::AbiErrorCode::Ok as u32,
         "test_plugin load must succeed"
     );
 
@@ -226,7 +227,8 @@ fn test_find_all_guest_contracts_multiple_plugins() {
         .expect("failed to copy cpp so");
 
     let manifest_toml: String = format!(
-        "id = 1\nname = \"cpp_test_adder\"\nruntime = \"native\"\nfile = \"{}\"\nversion = \"1.0\"\nprovides = [\"test.add\"]\nfunction_count = {{ \"test.add@1\" = 1 }}\n",
+        "id = {}\nname = \"cpp_test_adder\"\nruntime = \"native\"\nfile = \"{}\"\nversion = \"1.0\"\nprovides = [\"test.add\"]\nfunction_count = {{ \"test.add@1\" = 1 }}\n",
+        bundle_id("cpp_test_adder"),
         cpp_so_filename
     );
     std::fs::write(cpp_bundle_dir.join("manifest.toml"), manifest_toml)
@@ -238,7 +240,7 @@ fn test_find_all_guest_contracts_multiple_plugins() {
     // SAFETY: host is valid; cpp_path_bytes is valid UTF-8.
     let rc_cpp: polyplug_abi::AbiError =
         unsafe { ((*host).load_bundle)(host, cpp_path_bytes.as_ptr(), cpp_path_bytes.len()) };
-    if rc_cpp.code != polyplug_abi::AbiErrorCode::Ok {
+    if rc_cpp.code != polyplug_abi::AbiErrorCode::Ok as u32 {
         let mut err_buf: [u8; 512] = [0_u8; 512];
         // SAFETY: err_buf is a valid stack-allocated buffer; host is valid.
         let err_len: usize =

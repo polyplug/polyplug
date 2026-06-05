@@ -253,4 +253,102 @@ mod tests {
             "expected UnsatisfiedCapability when ByBundle dep is missing"
         );
     }
+
+    /// Build a `ManifestData` with one provides entry and (optionally) one ByContract
+    /// dependency, used by the version-gating tests below.
+    fn version_manifest(
+        name: &str,
+        version: &str,
+        provides: Vec<&str>,
+        dep: Option<RawManifestDependency>,
+    ) -> ManifestData {
+        ManifestData {
+            runtime: "native".to_owned(),
+            name: name.to_owned(),
+            dependencies: dep.into_iter().collect(),
+            id: 0,
+            version: version.to_owned(),
+            file: String::new(),
+            provides: provides.into_iter().map(str::to_owned).collect(),
+            function_count: std::collections::HashMap::new(),
+            needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
+            path: PathBuf::new(),
+        }
+    }
+
+    /// Item 6: the graph now derives a provider's `contract_id` from its REAL major
+    /// version (parsed from the `provides` `name@version` / bundle version), not a
+    /// hardcoded major 1. A requirement for a DIFFERENT major therefore has no
+    /// structural provider and fails with UnsatisfiedCapability.
+    ///
+    /// (Minor/patch version POLICY is enforced separately by
+    /// `validate_bundle_compatibility`, which is Compatibility-mode aware.)
+    #[test]
+    fn graph_rejects_major_version_mismatch() {
+        // Provider offers svc.api@2.0 → contract_id(name, major=2).
+        // Requirer needs svc.api at major 1 → contract_id(name, major=1): different id.
+        let req_cid: GuestContractId = GuestContractId::new("svc.api", 1);
+        let provider: ManifestData = version_manifest("provider", "2.0", vec!["svc.api@2.0"], None);
+        let requirer: ManifestData = version_manifest(
+            "requirer",
+            "1.0",
+            vec![],
+            Some(RawManifestDependency {
+                kind: "contract".to_owned(),
+                contract: "svc.api".to_owned(),
+                min_version: "1.0".to_owned(),
+                bundle: None,
+                contract_id: req_cid,
+                bundle_id: None,
+            }),
+        );
+
+        let manifests: Vec<(PathBuf, ManifestData)> = vec![
+            (PathBuf::from("provider.so"), provider),
+            (PathBuf::from("requirer.so"), requirer),
+        ];
+        let result: Result<CapabilityGraph, GraphError> =
+            CapabilityGraph::from_manifests(&manifests);
+        assert!(
+            matches!(result, Err(GraphError::UnsatisfiedCapability { .. })),
+            "a provider at major 2 must NOT satisfy a major-1 requirement, got ok={}",
+            result.is_ok()
+        );
+    }
+
+    /// Item 6: when the provider's major version matches the requirement's, the graph
+    /// resolves the structural edge and builds successfully.
+    #[test]
+    fn graph_accepts_matching_major_version() {
+        // Provider offers svc.api@2.3 → contract_id(name, major=2).
+        // Requirer needs the same major (its contract_id uses major 2).
+        let cid: GuestContractId = GuestContractId::new("svc.api", 2);
+        let provider: ManifestData = version_manifest("provider", "2.3", vec!["svc.api@2.3"], None);
+        let requirer: ManifestData = version_manifest(
+            "requirer",
+            "1.0",
+            vec![],
+            Some(RawManifestDependency {
+                kind: "contract".to_owned(),
+                contract: "svc.api".to_owned(),
+                min_version: "2.0".to_owned(),
+                bundle: None,
+                contract_id: cid,
+                bundle_id: None,
+            }),
+        );
+
+        let manifests: Vec<(PathBuf, ManifestData)> = vec![
+            (PathBuf::from("provider.so"), provider),
+            (PathBuf::from("requirer.so"), requirer),
+        ];
+        let result: Result<CapabilityGraph, GraphError> =
+            CapabilityGraph::from_manifests(&manifests);
+        assert!(
+            result.is_ok(),
+            "a provider at major 2 must satisfy a major-2 requirement, got error: {:?}",
+            result.err()
+        );
+    }
 }

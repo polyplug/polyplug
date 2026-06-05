@@ -31,7 +31,7 @@ unsafe extern "C" fn capture_register(
 ) -> AbiError {
     if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: polyplug_abi::AbiErrorCode::Generic,
+            code: polyplug_abi::AbiErrorCode::Generic as u32,
             message: polyplug_abi::StringView::null(),
         };
     }
@@ -50,7 +50,7 @@ unsafe extern "C" fn capture_register(
     });
 
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: polyplug_abi::StringView::null(),
     }
 }
@@ -102,21 +102,6 @@ unsafe extern "C" fn noop_resolve_guest_contract(
     core::ptr::null()
 }
 
-/// No-op call_guest_method callback.
-unsafe extern "C" fn noop_call_guest_method(
-    this: *const HostInterface,
-    _instance: polyplug_abi::GuestContractInstance,
-    _method_id: u32,
-    _args: *const (),
-    _out: *mut (),
-) -> AbiError {
-    let _ = this;
-    AbiError {
-        code: polyplug_abi::AbiErrorCode::Generic,
-        message: polyplug_abi::StringView::null(),
-    }
-}
-
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
     this: *const HostInterface,
@@ -159,7 +144,7 @@ unsafe extern "C" fn noop_load_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -171,7 +156,7 @@ unsafe extern "C" fn noop_reload_bundle(
     _path_len: usize,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -182,7 +167,7 @@ unsafe extern "C" fn noop_register_host_contract(
     _interface: *const polyplug_abi::HostContractInterface,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -194,7 +179,7 @@ unsafe extern "C" fn noop_register_loader(
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok,
+        code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     }
 }
@@ -211,6 +196,14 @@ unsafe extern "C" fn noop_get_last_error(
 /// No-op get_error_len callback.
 unsafe extern "C" fn noop_get_error_len(_this: *const HostInterface) -> usize {
     0
+}
+
+/// No-op get_extension callback.
+unsafe extern "C" fn noop_get_extension(
+    _this: *const HostInterface,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
 }
 
 std::thread_local! {
@@ -273,7 +266,6 @@ fn test_init_registers_interface() {
         find_guest_contract: noop_find_guest_contract,
         find_all_guest_contracts: noop_find_all_guest_contracts,
         resolve_guest_contract: noop_resolve_guest_contract,
-        call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
         resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
@@ -284,6 +276,7 @@ fn test_init_registers_interface() {
         register_loader: noop_register_loader,
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
+        get_extension: noop_get_extension,
     };
 
     // Clear thread-locals before calling init.
@@ -303,7 +296,7 @@ fn test_init_registers_interface() {
     };
 
     assert!(
-        result.code == AbiErrorCode::Ok,
+        result.code == AbiErrorCode::Ok as u32,
         "polyplug_init must return Ok"
     );
 

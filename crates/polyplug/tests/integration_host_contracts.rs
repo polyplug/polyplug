@@ -55,6 +55,7 @@ fn create_static_interface(
         singleton,
         dispatch_type: DispatchType::Native,
         runtime: core::ptr::null_mut(),
+        user_data: core::ptr::null_mut(),
         create_instance: noop_create_instance,
         destroy_instance: noop_destroy_instance,
         dispatch: DispatchMechanisms {

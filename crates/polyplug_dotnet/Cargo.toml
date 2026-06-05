@@ -19,6 +19,7 @@ netcorehost = { workspace = true, features = ["nethost", "net10_0"] }
 pelite = { workspace = true }
 tempfile = { workspace = true }
 once_cell = { workspace = true }
+serde_json = { workspace = true }
 
 [features]
 download-nethost = ["netcorehost/nethost-download"]

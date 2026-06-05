@@ -6,6 +6,7 @@
 
 // TODO: Move toml parse to host rust SDK
 
+use core::str::FromStr;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -79,8 +80,15 @@ where
             let mut os_arch_map: HashMap<String, HashMap<String, String>> = HashMap::new();
 
             while let Some(key) = map.next_key::<String>()? {
-                // Try to get the value as a nested table first
-                let value: Result<HashMap<String, String>, _> = map.next_value();
+                // Only nested arch→path tables (e.g. `linux.x86_64 = "..."`) are platform
+                // entries. TOML scopes any keys written after `[file]` under this table, so
+                // a manifest may carry non-platform siblings here (arrays/scalars such as a
+                // misplaced `provides`/`function_count`). Those legitimately fail to
+                // deserialize as a nested table and are skipped — a deserialize failure here
+                // means "not a platform entry", not "malformed platform table". A genuinely
+                // malformed platform table surfaces later as a "no file entry for platform"
+                // error when the active platform cannot be resolved.
+                let value: Result<HashMap<String, String>, M::Error> = map.next_value();
                 if let Ok(nested) = value {
                     os_arch_map.insert(key, nested);
                 }
@@ -246,7 +254,14 @@ impl ManifestData {
             .collect::<Vec<BundleDependency>>()
     }
 
-    /// Validate the manifest has all required fields.
+    /// Validate the manifest has all required fields and well-formed values.
+    ///
+    /// Checks performed:
+    /// - `runtime`, `name` are non-empty; `file` is present.
+    /// - `id` is non-zero (folded in from the former inline load-path check).
+    /// - `id` equals `polyplug_utils::bundle_id(name)` (TRUST_MODEL §2 identity).
+    /// - every `provides` / `bundle_dependencies` entry matches `name[@version]`
+    ///   grammar, with a parseable version when one is given.
     pub fn validate(&self) -> Result<(), crate::error::LoaderError> {
         if self.runtime.is_empty() {
             return Err(crate::error::LoaderError::ManifestParse {
@@ -264,6 +279,29 @@ impl ManifestData {
             return Err(crate::error::LoaderError::ManifestMissingFile {
                 bundle: self.name.clone(),
             });
+        }
+        if self.id == 0 {
+            return Err(crate::error::LoaderError::ManifestParse {
+                path: self.path.display().to_string(),
+                reason: "id field is required but was 0 or missing".to_owned(),
+            });
+        }
+
+        let expected_id: u64 = polyplug_utils::bundle_id(&self.name);
+        if self.id != expected_id {
+            return Err(crate::error::LoaderError::BundleTampered {
+                bundle: self.name.clone(),
+                expected: expected_id,
+                found: self.id,
+            });
+        }
+
+        // Validate provides / bundle_dependencies version specs.
+        for spec in &self.provides {
+            validate_name_version_spec(spec, "provides", &self.path)?;
+        }
+        for spec in &self.bundle_dependencies {
+            validate_name_version_spec(spec, "bundle_dependencies", &self.path)?;
         }
         Ok(())
     }
@@ -288,6 +326,43 @@ impl ManifestData {
         manifest.path = PathBuf::new();
         Ok(manifest)
     }
+}
+
+/// Validate a `name[@version]` spec used in `provides` / `bundle_dependencies`.
+///
+/// The name part must be non-empty. When an `@version` suffix is present it must
+/// parse as a [`Version`]; an empty or unparseable version is rejected so silent
+/// coercion to "no version" can no longer mask a malformed manifest.
+fn validate_name_version_spec(
+    spec: &str,
+    field: &str,
+    path: &std::path::Path,
+) -> Result<(), crate::error::LoaderError> {
+    let (name, version): (&str, Option<&str>) = match spec.split_once('@') {
+        Some((name, version_str)) => (name, Some(version_str)),
+        None => (spec, None),
+    };
+    if name.trim().is_empty() {
+        return Err(crate::error::LoaderError::ManifestParse {
+            path: path.display().to_string(),
+            reason: format!("{field} entry \"{spec}\" has an empty contract/bundle name"),
+        });
+    }
+    if let Some(version_str) = version {
+        // Canonical form is `name@major` (bare major, as hashed into contract ids);
+        // a full `major.minor.patch` version string is also accepted.
+        let is_bare_major: bool = version_str.parse::<u32>().is_ok();
+        if !is_bare_major && Version::from_str(version_str).is_err() {
+            return Err(crate::error::LoaderError::ManifestParse {
+                path: path.display().to_string(),
+                reason: format!(
+                    "{field} entry \"{spec}\" has an unparseable version spec \"{version_str}\" \
+                     (expected a bare major like \"name@1\" or a full version)"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Parse a manifest.toml file from a bundle directory.
@@ -384,6 +459,37 @@ mod tests {
             }
             Err(other) => panic!("unexpected error variant: {:?}", other),
             Ok(()) => panic!("expected ManifestMissingFile error, got Ok"),
+        }
+    }
+
+    // ── validate id == FNV1a-64(name) enforcement ─────────────────────────
+
+    #[test]
+    fn validate_ok_when_id_matches_bundle_id() {
+        let mut m: ManifestData = make_manifest("plugin.so", "my_plugin");
+        m.id = polyplug_utils::bundle_id("my_plugin");
+        assert!(
+            m.validate().is_ok(),
+            "validate must accept id == bundle_id(name)"
+        );
+    }
+
+    #[test]
+    fn validate_err_when_id_does_not_match_bundle_id() {
+        let mut m: ManifestData = make_manifest("plugin.so", "my_plugin");
+        m.id = polyplug_utils::bundle_id("my_plugin").wrapping_add(1);
+        match m.validate() {
+            Err(crate::error::LoaderError::BundleTampered {
+                bundle,
+                expected,
+                found,
+            }) => {
+                assert_eq!(bundle, "my_plugin");
+                assert_eq!(expected, polyplug_utils::bundle_id("my_plugin"));
+                assert_eq!(found, m.id);
+            }
+            Err(other) => panic!("unexpected error variant: {:?}", other),
+            Ok(()) => panic!("expected BundleTampered error, got Ok"),
         }
     }
 

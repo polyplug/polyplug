@@ -1,3 +1,4 @@
+use core::str::FromStr;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -50,7 +51,15 @@ impl CapabilityGraph {
     /// Build dependency edges between bundles.
     //
     //  For each bundle's `requires`, find which bundle `provides` that contract
-    //  and add a directed edge: requirer → provider.
+    //  (matched by `contract_id`, which encodes name + major version) and add a
+    //  directed edge: requirer → provider.
+    //
+    //  Version POLICY (minor/patch minimums, Strict/Relaxed/Yolo handling) is NOT
+    //  enforced here — it is owned by `validate_bundle_compatibility`, which has the
+    //  Compatibility mode in context and does the real `is_compatible_with` check.
+    //  This layer only resolves the structural edge: matching on `contract_id`
+    //  (name + major) is the correct major-version gate, since a different required
+    //  major yields a different contract_id and therefore "no provider".
     //
     //  Returns Err(UnsatisfiedCapability) if any requirement has no provider.
     pub fn build_edges(&mut self) -> Result<(), GraphError> {
@@ -158,19 +167,42 @@ impl CapabilityGraph {
         }
 
         for (_path, manifest) in manifests {
-            // Build provides capabilities
+            // The bundle's own version is the fallback provided-version when a
+            // provides entry does not pin one inline (via `name@version`).
+            //
+            // When neither an inline version nor a parseable bundle version is
+            // available, fall back to 1.0.0 (the documented default major). This
+            // keeps the derived contract_id (name + major) aligned with how requires
+            // resolve their contract_id — a versionless provider is treated as v1,
+            // matching `GuestContractId::new(name, 1)`.
+            let default_version: Version = Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            };
+            let bundle_version: Version =
+                Version::from_str(&manifest.version).unwrap_or(default_version);
+
+            // Build provides capabilities with their real versions.
+            //
+            // A provides entry may be `contract` or `contract@version`. The inline
+            // `@version` (when present) is the authoritative provided version; otherwise
+            // fall back to the bundle version. `ContractCapability::new` derives the
+            // contract_id from the bare name and the version's major component, matching
+            // how requires resolve their contract_id.
             let provides_caps: Vec<ContractCapability> = manifest
                 .provides
                 .iter()
-                .map(|name: &String| {
-                    ContractCapability::new(
-                        name.clone(),
-                        Version {
-                            major: 1,
-                            minor: 0,
-                            patch: 0,
-                        },
-                    )
+                .map(|spec: &String| {
+                    let (bare_name, provided_version): (&str, Version) = match spec.split_once('@')
+                    {
+                        Some((name, version_str)) => (
+                            name,
+                            Version::from_str(version_str).unwrap_or(bundle_version),
+                        ),
+                        None => (spec.as_str(), bundle_version),
+                    };
+                    ContractCapability::new(bare_name.to_owned(), provided_version)
                 })
                 .collect::<Vec<ContractCapability>>();
 
@@ -182,16 +214,21 @@ impl CapabilityGraph {
                     ManifestDependency::ByContract {
                         contract,
                         contract_id,
-                        ..
+                        min_version,
                     } => {
+                        // Real required version: parse the dependency's declared
+                        // min_version. An empty/unparseable spec means "any version"
+                        // (0.0.0), preserving prior permissive behaviour for those.
+                        let required_version: Version =
+                            Version::from_str(min_version).unwrap_or(Version {
+                                major: 0,
+                                minor: 0,
+                                patch: 0,
+                            });
                         let cap: ContractCapability = ContractCapability {
                             contract_name: contract.clone(),
                             contract_id: *contract_id,
-                            version: Version {
-                                major: 1,
-                                minor: 0,
-                                patch: 0,
-                            },
+                            version: required_version,
                         };
                         requires_caps.push(cap);
                     }
@@ -200,7 +237,7 @@ impl CapabilityGraph {
                         bundle_id: _,
                         contract,
                         contract_id,
-                        ..
+                        min_version,
                     } => {
                         // Validate bundle is in discovered set
                         if !discovered_bundles.contains(bundle) {
@@ -223,14 +260,17 @@ impl CapabilityGraph {
                                 ),
                             });
                         }
+                        // Real required version, same parsing rule as ByContract.
+                        let required_version: Version =
+                            Version::from_str(min_version).unwrap_or(Version {
+                                major: 0,
+                                minor: 0,
+                                patch: 0,
+                            });
                         let cap: ContractCapability = ContractCapability {
                             contract_name: contract.clone(),
                             contract_id: *contract_id,
-                            version: Version {
-                                major: 1,
-                                minor: 0,
-                                patch: 0,
-                            },
+                            version: required_version,
                         };
                         requires_caps.push(cap);
                     }

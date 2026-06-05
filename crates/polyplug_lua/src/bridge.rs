@@ -205,7 +205,7 @@ impl RuntimeLanguageBridge for LuaHostBridge {
     ///
     /// For MVP, this implementation provides basic dispatch functionality.
     /// Full type marshaling for all primitive types will be added in future tasks.
-    fn call_host_contract(
+    unsafe fn call_host_contract(
         &self,
         contract_id: u64,
         fn_id: u32,
@@ -218,7 +218,7 @@ impl RuntimeLanguageBridge for LuaHostBridge {
                 Ok(guard) => guard,
                 Err(_) => {
                     return AbiError {
-                        code: AbiErrorCode::HostContractCallFailed,
+                        code: AbiErrorCode::HostContractCallFailed as u32,
                         message: StringView::from_static(
                             b"failed to acquire read lock on contracts map",
                         ),
@@ -230,7 +230,7 @@ impl RuntimeLanguageBridge for LuaHostBridge {
             Some(f) => f,
             None => {
                 return AbiError {
-                    code: AbiErrorCode::HostContractNotFound,
+                    code: AbiErrorCode::HostContractNotFound as u32,
                     message: StringView::from_static(b"host contract not found"),
                 };
             }
@@ -264,7 +264,7 @@ impl RuntimeLanguageBridge for LuaHostBridge {
                 // 3. This matches the pattern used in other loaders
                 let message_static: &'static str = Box::leak(message.into_boxed_str());
                 AbiError {
-                    code: AbiErrorCode::HostContractCallFailed,
+                    code: AbiErrorCode::HostContractCallFailed as u32,
                     message: StringView {
                         ptr: message_static.as_ptr(),
                         len: message_static.len(),
@@ -410,9 +410,11 @@ mod tests {
     fn bridge_call_host_contract_not_found() {
         let bridge: LuaHostBridge = LuaHostBridge::new();
 
+        // SAFETY: null pointers are valid here — the lookup fails before any
+        // pointer is dereferenced (contract 9999 is not registered).
         let result: AbiError =
-            bridge.call_host_contract(9999, 0, core::ptr::null(), core::ptr::null_mut());
-        assert_eq!(result.code, AbiErrorCode::HostContractNotFound);
+            unsafe { bridge.call_host_contract(9999, 0, core::ptr::null(), core::ptr::null_mut()) };
+        assert_eq!(result.code, AbiErrorCode::HostContractNotFound as u32);
     }
 
     #[test]
@@ -432,8 +434,10 @@ mod tests {
             .expect("register");
 
         // Call it
+        // SAFETY: the registered Lua function treats args/out as opaque integers and
+        // never dereferences them, so passing null pointers is sound here.
         let result: AbiError =
-            bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut());
+            unsafe { bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut()) };
         assert!(result.is_ok());
     }
 
@@ -454,8 +458,10 @@ mod tests {
             .expect("register");
 
         // Call it - should return error
+        // SAFETY: the registered Lua function raises before touching args/out, so
+        // passing null pointers is sound here.
         let result: AbiError =
-            bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut());
-        assert_eq!(result.code, AbiErrorCode::HostContractCallFailed);
+            unsafe { bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut()) };
+        assert_eq!(result.code, AbiErrorCode::HostContractCallFailed as u32);
     }
 }

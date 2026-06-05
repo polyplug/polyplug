@@ -27,7 +27,7 @@ fn test_load_bundle_null_host() {
         unsafe { host_load_bundle(core::ptr::null(), path.as_ptr(), path.len()) };
     assert_eq!(
         result.code,
-        polyplug_abi::AbiErrorCode::InvalidPointer,
+        polyplug_abi::AbiErrorCode::InvalidPointer as u32,
         "load_bundle(null host) must return InvalidPointer"
     );
 }
@@ -42,7 +42,7 @@ fn test_load_bundle_null_path() {
         unsafe { ((*host).load_bundle)(host, core::ptr::null(), 0) };
     assert_eq!(
         result.code,
-        polyplug_abi::AbiErrorCode::InvalidPointer,
+        polyplug_abi::AbiErrorCode::InvalidPointer as u32,
         "load_bundle(null path) must return InvalidPointer"
     );
     // SAFETY: host is valid and was allocated by polyplug_runtime_create(core::ptr::null()).

@@ -63,10 +63,11 @@ local function impl_noop(_args_ptr, _out_ptr)
 end
 function polyplug_init(_registrar_ptr, _ctx_ptr)
     _G._polyplug_handlers = {
-        contract_name    = "test.loader",
-        contract_version = 1,
-        plugin_name      = "test-loader-unit",
-        functions        = { [0] = impl_noop },
+        ["test.loader"] = {
+            contract_version = 1,
+            plugin_name      = "test-loader-unit",
+            functions        = { [0] = impl_noop },
+        },
     }
 end
 "#
@@ -80,10 +81,37 @@ local function impl_a(_args_ptr, _out_ptr) end
 local function impl_b(_args_ptr, _out_ptr) end
 function polyplug_init(_registrar_ptr, _ctx_ptr)
     _G._polyplug_handlers = {
-        contract_name    = "test.two",
-        contract_version = 1,
-        plugin_name      = "test-two-unit",
-        functions        = { [0] = impl_a, [1] = impl_b },
+        ["test.two"] = {
+            contract_version = 1,
+            plugin_name      = "test-two-unit",
+            functions        = { [0] = impl_a, [1] = impl_b },
+        },
+    }
+end
+"#
+}
+
+/// A Lua plugin that registers TWO distinct contracts in one bundle. This is the
+/// regression fixture for the multi-contract bug: the old flat `_polyplug_handlers`
+/// table with a first-wins guard silently dropped the second contract.
+fn two_contract_plugin_script() -> &'static [u8] {
+    br#"
+local ffi = require("ffi")
+local function impl_first(_args_ptr, _out_ptr) end
+local function impl_second_a(_args_ptr, _out_ptr) end
+local function impl_second_b(_args_ptr, _out_ptr) end
+function polyplug_init(_registrar_ptr, _ctx_ptr)
+    _G._polyplug_handlers = {
+        ["test.first"] = {
+            contract_version = 1,
+            plugin_name      = "test-multi-first",
+            functions        = { [0] = impl_first },
+        },
+        ["test.second"] = {
+            contract_version = 1,
+            plugin_name      = "test-multi-second",
+            functions        = { [0] = impl_second_a, [1] = impl_second_b },
+        },
     }
 end
 "#
@@ -301,7 +329,7 @@ fn assert_function_count(vtable: &GuestContractInterface, expected: u32) {
         };
         assert_eq!(
             result.code,
-            AbiErrorCode::Ok,
+            AbiErrorCode::Ok as u32,
             "fn_id {fn_id} must dispatch to Ok"
         );
     }
@@ -317,7 +345,7 @@ fn assert_function_count(vtable: &GuestContractInterface, expected: u32) {
     };
     assert_eq!(
         missing.code,
-        AbiErrorCode::FunctionNotAvailable,
+        AbiErrorCode::FunctionNotAvailable as u32,
         "fn_id {expected} must report FunctionNotAvailable"
     );
 }
@@ -405,6 +433,54 @@ fn sequential_loads_both_succeed() {
     let handle2: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(GuestContractId::from_u64(cid2), 0);
     assert!(handle2.is_ok(), "test.two must be registered");
+}
+
+// ── 9b. Multi-contract bundle ─────────────────────────────────────────────────
+
+/// Regression test: a single Lua bundle that declares two contracts must
+/// register BOTH. The previous flat `_polyplug_handlers` table with a first-wins
+/// guard silently dropped every contract after the first.
+#[test]
+fn multi_contract_bundle_registers_all_contracts() {
+    let (_dir, path) = write_temp_bundle("lua_loader_multi", two_contract_plugin_script());
+    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let runtime: Arc<Runtime> = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "lua_loader_multi");
+    loader
+        .load(&manifest, &runtime)
+        .expect("multi-contract bundle must load");
+
+    // Both contracts must be registered and resolvable.
+    let first_cid: u64 = polyplug_utils::guest_contract_id("test.first", 1);
+    let second_cid: u64 = polyplug_utils::guest_contract_id("test.second", 1);
+
+    let first_handle: GuestContractHandle = runtime
+        .registry()
+        .find(GuestContractId::from_u64(first_cid), 0)
+        .expect("test.first@1 must be registered");
+    let second_handle: GuestContractHandle = runtime
+        .registry()
+        .find(GuestContractId::from_u64(second_cid), 0)
+        .expect("test.second@1 must be registered");
+
+    // Each contract must resolve to a vtable with the correct function count:
+    // test.first has 1 function, test.second has 2.
+    let first_vtable_ptr: *const GuestContractInterface = runtime
+        .registry()
+        .resolve_guest_contract(first_handle)
+        .expect("test.first handle must resolve");
+    let second_vtable_ptr: *const GuestContractInterface = runtime
+        .registry()
+        .resolve_guest_contract(second_handle)
+        .expect("test.second handle must resolve");
+    // SAFETY: first_vtable_ptr is a 'static leaked GuestContractInterface from
+    // LuaLoader; the shared Lua VM and leaked interface outlive this test.
+    let first_vtable: &GuestContractInterface = unsafe { &*first_vtable_ptr };
+    // SAFETY: second_vtable_ptr is a 'static leaked GuestContractInterface from
+    // LuaLoader; the shared Lua VM and leaked interface outlive this test.
+    let second_vtable: &GuestContractInterface = unsafe { &*second_vtable_ptr };
+    assert_function_count(first_vtable, 1);
+    assert_function_count(second_vtable, 2);
 }
 
 // ── 10. Thread safety ─────────────────────────────────────────────────────────
@@ -513,7 +589,7 @@ fn vtable_function_dispatch_returns_abi_ok() {
     };
     assert_eq!(
         result.code,
-        AbiErrorCode::Ok,
+        AbiErrorCode::Ok as u32,
         "noop function must return Ok, got code={}",
         result.code
     );
@@ -528,6 +604,7 @@ fn make_runtime_with_hot_reload(enabled: bool) -> Arc<Runtime> {
             compatibility: Compatibility::Strict,
             hot_reload_enabled: enabled,
             on_reload: None,
+            on_reload_user_data: core::ptr::null_mut(),
         })
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
