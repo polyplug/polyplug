@@ -68,12 +68,12 @@ public sealed class HostLoggerContract {
                 case DispatchType.Native: {
                     var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[0u];
                     var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)fnPtr;
-                    err = fn_(_interface, argsPtr, outPtr);
+                    err = fn_(_instance, argsPtr, outPtr);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
-                    err = vmFn(contract->Dispatch.Vm.LoaderData, 0u, argsPtr, outPtr, IntPtr.Zero);
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
+                    err = vmFn(contract->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, IntPtr.Zero);
                     break;
                 }
                 default:
@@ -112,12 +112,12 @@ public sealed class HostLoggerContract {
                 case DispatchType.Native: {
                     var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[1u];
                     var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)fnPtr;
-                    err = fn_(_interface, argsPtr, outPtr);
+                    err = fn_(_instance, argsPtr, outPtr);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
-                    err = vmFn(contract->Dispatch.Vm.LoaderData, 1u, argsPtr, outPtr, IntPtr.Zero);
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
+                    err = vmFn(contract->Dispatch.Vm.LoaderData, _instance, 1u, argsPtr, outPtr, IntPtr.Zero);
                     break;
                 }
                 default:

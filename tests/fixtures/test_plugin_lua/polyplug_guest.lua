@@ -96,6 +96,37 @@ function M.alloc_string(s)
     return view
 end
 
+-- Allocate a return-value string from the current per-call CallArena.
+--
+-- Use this for strings RETURNED from a contract function: the bytes are served
+-- from the host's per-call arena (published by the loader via the
+-- `_polyplug_arena_alloc` bridge) and stay valid until the next call on the same
+-- caller, so the guest never frees them. When no arena is active the bridge
+-- falls back to `host->alloc`, so this behaves like `alloc_string`. For data
+-- that must outlive the call, use `alloc_string` and free it explicitly.
+function M.alloc_string_arena(s)
+    local arena_alloc = _G._polyplug_arena_alloc
+    if arena_alloc == nil then
+        return M.alloc_string(s)
+    end
+    local len = #s
+    local view = ffi.new("StringView")
+    if len == 0 then
+        view.ptr = nil
+        view.len = 0
+        return view
+    end
+    local addr = arena_alloc(len)
+    if addr == 0 then
+        error("alloc_string_arena: arena allocation failed")
+    end
+    local buf = ffi.cast("uint8_t*", ffi.cast("uintptr_t", addr))
+    ffi.copy(buf, s, len)
+    view.ptr = buf
+    view.len = len
+    return view
+end
+
 function M.ok()
     return ffi.new("AbiError", { code = 0 })
 end

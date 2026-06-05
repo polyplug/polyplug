@@ -72,21 +72,29 @@ unsafe extern "C" fn lua_destroy_instance(_host: *const HostApi, _instance: Gues
 
 // ─── Lua Dispatch Function ─────────────────────────────────────────────────────
 
+/// The Lua global holding the active per-call [`CallArena`] pointer as an integer.
+///
+/// `lua_dispatch` publishes the arena pointer here under the VM lock for the
+/// duration of one call and clears it (sets it to 0) afterwards, so the
+/// `_polyplug_arena_alloc` bridge can serve the guest's return buffers from the
+/// arena. A value of 0 means "no arena" — the bridge falls back to `host->alloc`.
+const ARENA_GLOBAL: &str = "_polyplug_arena";
+
 /// Dispatch function for Lua plugins using VM dispatch pattern.
 ///
 /// # Safety
 /// - `loader_data` must be a valid VmLoaderData wrapping LuaLoaderData
 /// - `args` and `out` must be valid pointers for the ABI call
-///
-/// The `_arena` parameter is accepted but ignored: Lua arena adoption is pending
-/// a later wave. The Lua bridge falls back to per-value host allocation today.
+/// - `arena`, when non-null, must point to a valid [`CallArena`] reset by the
+///   caller for this call. Values written by the guest into the arena (via
+///   `polyplug_guest.alloc_string_arena`) are valid until the caller's next reset.
 unsafe extern "C" fn lua_dispatch(
     loader_data: VmLoaderData,
     _instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
-    _arena: *mut CallArena,
+    arena: *mut CallArena,
 ) -> AbiError {
     // SAFETY: loader_data wraps a valid pointer to LuaLoaderData created by the loader.
     let data: &LuaLoaderData = unsafe { &*(loader_data.data as *const LuaLoaderData) };
@@ -106,7 +114,16 @@ unsafe extern "C" fn lua_dispatch(
     let args_i64: i64 = args as usize as i64;
     let out_i64: i64 = out as usize as i64;
 
+    // Publish the per-call arena pointer so the _polyplug_arena_alloc bridge can
+    // serve allocations from it. The mlua call below runs single-threaded on this
+    // VM, so the global cannot be observed concurrently. The pointer is cleared
+    // after the call so a stale arena is never reachable.
+    let arena_i64: i64 = arena as usize as i64;
+    let _ = data._vm.globals().set(ARENA_GLOBAL, arena_i64);
+
     let call_result: Result<(), mlua::Error> = lua_fn.call::<()>((args_i64, out_i64));
+
+    let _ = data._vm.globals().set(ARENA_GLOBAL, 0_i64);
 
     match call_result {
         Ok(()) => AbiError::ok(),
@@ -176,6 +193,63 @@ impl LuaLoader {
                 error: format!("Lua VM init failed: package.{field} update failed: {e}"),
             })
         })
+    }
+
+    /// Register `_polyplug_arena_alloc(size) -> integer` on the plugin VM.
+    ///
+    /// The bridge serves the guest's per-call return buffers from the active
+    /// [`CallArena`] published by `lua_dispatch` in the `_polyplug_arena` global.
+    /// When no arena is active (the global is 0), it falls back to `host->alloc`,
+    /// preserving today's per-value allocation behaviour. Returns the allocated
+    /// address as an integer (0 on failure), matching the Lua pointer convention.
+    fn register_arena_alloc(
+        lua: &Lua,
+        bundle: &str,
+        host_interface: *const HostApi,
+    ) -> Result<(), RuntimeError> {
+        // Capture the host pointer as a usize: raw pointers are not Send, but the
+        // pointee is 'static HostApi for the runtime lifetime, so reconstructing it
+        // inside the (Send) closure is sound.
+        let host_addr: usize = host_interface as usize;
+
+        let arena_alloc_fn: Function = lua
+            .create_function(move |lua_ctx: &Lua, size: u32| -> mlua::Result<i64> {
+                let arena_addr: i64 = lua_ctx.globals().get::<i64>(ARENA_GLOBAL).unwrap_or(0);
+                let arena: *mut CallArena = arena_addr as usize as *mut CallArena;
+                let ptr: *mut u8 = if arena.is_null() {
+                    let host: *const HostApi = host_addr as *const HostApi;
+                    if host.is_null() {
+                        core::ptr::null_mut()
+                    } else {
+                        // SAFETY: host points to 'static HostApi data for the runtime
+                        // lifetime; align 1 is valid for raw byte buffers.
+                        unsafe { ((*host).alloc)(host, size as usize, 1) }
+                    }
+                } else {
+                    // SAFETY: `arena` is the valid per-call CallArena published by
+                    // lua_dispatch under the VM lock; alloc bumps within it or chains
+                    // a host-allocated overflow block.
+                    unsafe { (*arena).alloc(size as usize, 1) }
+                };
+                Ok(ptr as usize as i64)
+            })
+            .map_err(|e: mlua::Error| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: bundle.to_owned(),
+                    error: format!(
+                        "Lua VM init failed: _polyplug_arena_alloc creation failed: {e}"
+                    ),
+                })
+            })?;
+
+        lua.globals()
+            .set("_polyplug_arena_alloc", arena_alloc_fn)
+            .map_err(|e: mlua::Error| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: bundle.to_owned(),
+                    error: format!("Lua VM init failed: _polyplug_arena_alloc set failed: {e}"),
+                })
+            })
     }
 
     /// Shared load/reload implementation.
@@ -269,6 +343,12 @@ impl LuaLoader {
         // Get HostApi pointer from runtime.
         // The interface already has the runtime pointer set.
         let host_interface: *const HostApi = runtime.as_context_ptr();
+
+        // Register the per-call arena allocator bridge so the guest can route its
+        // return-value buffers through the host's CallArena (zero host allocations
+        // after warmup). Must be registered before dispatch; init runs first but
+        // dispatch happens later, so registering here is sufficient.
+        Self::register_arena_alloc(&lua, &bundle_name, host_interface)?;
 
         // Push bundle_id onto the runtime's per-thread init stack for dependency
         // enforcement during init. The matching pop MUST run on every exit path

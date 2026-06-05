@@ -278,6 +278,63 @@ If your hot path is truly performance-critical, consider C++ or Lua.
 
 ---
 
+## Call Arena (zero-allocation returns for VM guests)
+
+### What it is
+
+A `CallArena` is a small per-call **bump allocator** the host hands to a VM
+dispatch call. The guest writes its variable-size return values (strings,
+arrays) into the arena's region instead of calling `host->alloc` once per value.
+The arena is a 40-byte `#[repr(C)]` struct: a primary `[base, end)` bump region
+(an inline buffer owned by the caller) plus a fallback chain of host-allocated
+overflow blocks for returns larger than the primary region.
+
+The host caller **resets** the arena at the start of each call (a single pointer
+rewind, freeing any overflow blocks in one pass). So after a warmup phase the
+common case — a small string return — is served entirely from the bump region
+with **zero host allocations**.
+
+### Why it matters
+
+Without the arena, every dispatch call that returns a string does one
+`host->alloc` + one `host->free` per value. The arena turns the steady-state
+return path into a pointer increment, removing the allocator round trip from hot
+dispatch loops. For a 10,000-iteration echo loop the integration tests assert the
+host allocator is hit **zero** times after warmup.
+
+### Lifetime rule
+
+> A view returned from an arena-backed call is valid **until the next
+> arena-backed call on the same caller.**
+
+The caller resets the arena at the start of each call, which invalidates the
+previous call's arena allocations. Guests **never free** arena memory — the
+arena owns it and reclaims it on reset. If you need a return value to outlive the
+next call, copy it out, or use the explicit `alloc`/`free` path instead of the
+arena helper.
+
+### Which paths use it
+
+| Path | Uses arena? | How |
+|---|---|---|
+| JS (QuickJS) guest returns | Yes | `polyplug.arenaAlloc` bridge → `allocStringArena` in the guest SDK |
+| Lua (LuaJIT) guest returns | Yes | `_polyplug_arena_alloc` bridge → `alloc_string_arena` in the guest SDK |
+| Rust host callers | Yes | per-caller `CallArena` field threaded into VM dispatch when a return needs it |
+| Native Rust / C++ / C# guest returns | N/A | returns are already **borrowed zero-allocation views** into guest-owned memory — nothing to allocate, so no arena is needed |
+| Python guest returns | N/A | Python guests dispatch through **`DispatchType::Native`** (ctypes function pointers); the native ABI signature carries no arena, exactly like native Rust/C++ |
+
+### Null-arena fallback
+
+The VM dispatch ABI signature is always
+`call(loader_data, instance, fn_id, args, out, arena)`. Passing a **null arena**
+means "no arena": the guest bridge (`arenaAlloc` / `_polyplug_arena_alloc`) falls
+back to per-value `host->alloc`. Host callers that cannot hold a per-caller arena
+(e.g. the Lua/Python guest-side host-contract callers) pass null and remain
+correct — just not zero-allocation. Every loader passes the arena slot, so the
+signature is uniform across all languages.
+
+---
+
 ## VM Loader Performance
 
 ### JavaScript/QuickJS Guest Plugins

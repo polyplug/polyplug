@@ -516,6 +516,12 @@ fn generate_host_caller_method(
     out.push_str("            local fn = ffi.cast(NativeDispatchFnType, fn_ptr)\n");
     out.push_str("            err = fn(self._instance, args_ptr, out_ptr)\n");
     out.push_str("        else\n");
+    // The arena is nil: a Lua host caller cannot soundly hold a per-caller
+    // CallArena (the 40-byte arena owns a borrowed primary buffer plus a host
+    // overflow chain that must be reset between calls, which has no safe owner in
+    // the LuaJIT FFI caller object). A null arena makes the guest bridge fall back
+    // to per-value host->alloc — correct, just not zero-allocation. Native Rust/C++
+    // hosts (rust.rs fn_needs_arena) carry real per-caller arenas.
     out.push_str(&format!(
         "            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, nil)\n"
     ));
@@ -1304,8 +1310,14 @@ fn generate_lua_guest_host_contract_method(
     out.push_str("        local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
     out.push_str("        err = fn(impl_ptr, args_ptr, out_ptr)\n");
     out.push_str("    elseif dispatch_type == 1 then\n");
+    // The VM dispatch ABI signature is fn(loader_data, instance, fn_id, args, out,
+    // arena). Host contracts carry no guest instance, so a null GuestContractInstance
+    // is passed in the instance slot — matching the canonical rust host-contract
+    // caller (which passes GuestContractInstance::null()). The arena is null: this
+    // caller has no per-caller arena, so the bridge falls back to host->alloc.
+    out.push_str("        local _null_instance = ffi.new(\"GuestContractInstance\")\n");
     out.push_str(&format!(
-        "        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr, nil)\n"
+        "        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, _null_instance, {fn_id}, args_ptr, out_ptr, nil)\n"
     ));
     out.push_str("    else\n");
     if has_return {

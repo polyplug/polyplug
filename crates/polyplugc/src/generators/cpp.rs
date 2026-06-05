@@ -851,6 +851,9 @@ fn generate_host_callers_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError>
     out.push_str("#include \"polyplug/error.hpp\"\n");
     out.push_str("#include \"polyplug/abi.hpp\"\n");
     out.push_str("#include \"polyplug/runtime.hpp\"\n");
+    out.push_str("#include <array>\n");
+    out.push_str("#include <cstddef>\n");
+    out.push_str("#include <memory>\n");
     out.push_str("#include <optional>\n\n");
     out.push_str("namespace polyplug_generated {\n\n");
     if let Some(ref bundle) = ir.bundle {
@@ -858,6 +861,11 @@ fn generate_host_callers_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError>
             "static constexpr uint64_t MY_BUNDLE_ID = {}ULL;\n\n",
             bundle.bundle_id
         ));
+    }
+
+    // Emit the per-caller call-arena helpers only when some contract needs one.
+    if ir.contracts.iter().any(contract_needs_arena) {
+        emit_cpp_call_arena_helpers(&mut out);
     }
 
     for contract in &ir.contracts {
@@ -1050,6 +1058,158 @@ fn generate_cpp_type(out: &mut String, ty: &ResolvedType) {
     out.push_str("};\n\n");
 }
 
+// ─── Call-arena support ────────────────────────────────────────────────────────
+
+/// Whether a function returns a variable-size value the guest writes into the
+/// call arena (a `StringView`, a `Buffer`, or any user-defined struct that may
+/// embed one). Such functions receive a per-caller `CallArena`; all others pass
+/// a null arena and the VM bridge falls back to per-value `host->alloc`.
+///
+/// Passing an arena where none is needed is harmless; passing null where one is
+/// needed only loses the optimisation. The conservative `UserDefined` case keeps
+/// the rule sound without resolving struct fields here. Mirrors `fn_needs_arena`
+/// in `rust.rs` so every generator agrees on which functions are arena-backed.
+fn fn_needs_arena(func: &ResolvedFunction) -> bool {
+    matches!(
+        &func.returns,
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
+            | Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer))
+            | Some(ResolvedTypeRef::UserDefined(_))
+    )
+}
+
+/// Whether any function on the contract needs a call arena.
+fn contract_needs_arena(contract: &ResolvedContract) -> bool {
+    contract.functions.iter().any(fn_needs_arena)
+}
+
+/// Emit the inline call-arena helpers used by per-caller arenas.
+///
+/// `CallArena` in `polyplug/abi.hpp` is a layout-only POD (no methods), so the
+/// bump/overflow allocation and reset logic is emitted here. It is a direct port
+/// of `polyplug_abi::CallArena::{alloc, reset}`; keeping the two in lockstep is
+/// required by Rule 10 (identical ABI mechanisms across generators).
+fn emit_cpp_call_arena_helpers(out: &mut String) {
+    out.push_str("/// Size of each caller's inline call-arena buffer.\n");
+    out.push_str("///\n");
+    out.push_str("/// Variable-size VM return values (strings, buffers) are bump-allocated from\n");
+    out.push_str("/// this buffer; outputs larger than it spill into host-allocated overflow\n");
+    out.push_str("/// blocks that the arena frees on the next reset.\n");
+    out.push_str("static constexpr size_t CALL_ARENA_BUF_LEN = 512;\n\n");
+
+    out.push_str("/// Minimum size of a host-allocated overflow block, including its header.\n");
+    out.push_str("static constexpr size_t POLYPLUG_OVERFLOW_BLOCK_MIN = 4096;\n");
+    out.push_str("/// Alignment used for host-allocated overflow blocks.\n");
+    out.push_str(
+        "static constexpr size_t POLYPLUG_OVERFLOW_BLOCK_ALIGN = alignof(ArenaOverflowBlock);\n\n",
+    );
+
+    out.push_str("/// Bump-allocate `size` bytes aligned to `align` within `[from, end)`.\n");
+    out.push_str("/// Returns nullptr if the request does not fit.\n");
+    out.push_str(
+        "inline uint8_t* polyplug_arena_bump(uint8_t* from, uint8_t* end, size_t size, size_t align) noexcept {\n",
+    );
+    out.push_str("    auto addr = reinterpret_cast<size_t>(from);\n");
+    out.push_str("    size_t aligned = (addr + (align - 1)) & ~(align - 1);\n");
+    out.push_str("    if (aligned < addr) { return nullptr; }  // overflow on alignment\n");
+    out.push_str("    size_t new_cur = aligned + size;\n");
+    out.push_str("    if (new_cur < aligned) { return nullptr; }  // overflow on size\n");
+    out.push_str("    if (new_cur <= reinterpret_cast<size_t>(end)) {\n");
+    out.push_str("        return reinterpret_cast<uint8_t*>(aligned);\n");
+    out.push_str("    }\n");
+    out.push_str("    return nullptr;\n");
+    out.push_str("}\n\n");
+
+    out.push_str("/// Allocate `size` bytes aligned to `align` from `arena`.\n");
+    out.push_str("///\n");
+    out.push_str(
+        "/// Serves from the primary region by bumping `cur`; on exhaustion, requests a\n",
+    );
+    out.push_str("/// fresh overflow block from the host and serves from it. Returns nullptr if\n");
+    out.push_str(
+        "/// `size == 0`, if `align` is not a power of two, or if a host allocation fails.\n",
+    );
+    out.push_str("/// The returned pointer is valid until the next polyplug_arena_reset().\n");
+    out.push_str(
+        "inline uint8_t* polyplug_arena_alloc(CallArena* arena, size_t size, size_t align) noexcept {\n",
+    );
+    out.push_str("    if (size == 0 || align == 0 || (align & (align - 1)) != 0) {\n");
+    out.push_str("        return nullptr;\n");
+    out.push_str("    }\n");
+    out.push_str(
+        "    if (uint8_t* p = polyplug_arena_bump(arena->cur, arena->end, size, align)) {\n",
+    );
+    out.push_str("        arena->cur = p + size;\n");
+    out.push_str("        return p;\n");
+    out.push_str("    }\n");
+    out.push_str("    if (arena->host == nullptr) { return nullptr; }\n");
+    out.push_str("    size_t header = sizeof(ArenaOverflowBlock);\n");
+    out.push_str("    size_t needed = header + align + size;\n");
+    out.push_str("    size_t capacity = needed > POLYPLUG_OVERFLOW_BLOCK_MIN ? needed : POLYPLUG_OVERFLOW_BLOCK_MIN;\n");
+    out.push_str(
+        "    // SAFETY: arena->host is non-null (checked above) and valid for the arena's\n",
+    );
+    out.push_str(
+        "    // lifetime. The allocator returns a block of `capacity` bytes or nullptr.\n",
+    );
+    out.push_str(
+        "    auto block_ptr = static_cast<uint8_t*>(arena->host->alloc(arena->host, capacity, POLYPLUG_OVERFLOW_BLOCK_ALIGN));\n",
+    );
+    out.push_str("    if (block_ptr == nullptr) { return nullptr; }\n");
+    out.push_str("    // SAFETY: block_ptr is aligned for ArenaOverflowBlock and owns at least\n");
+    out.push_str("    // `capacity >= header` bytes, so writing the header is sound.\n");
+    out.push_str("    auto block = reinterpret_cast<ArenaOverflowBlock*>(block_ptr);\n");
+    out.push_str("    block->next = arena->first_overflow;\n");
+    out.push_str("    block->capacity = capacity;\n");
+    out.push_str("    arena->first_overflow = block;\n");
+    out.push_str("    uint8_t* data_start = block_ptr + header;\n");
+    out.push_str("    uint8_t* block_end = block_ptr + capacity;\n");
+    out.push_str("    return polyplug_arena_bump(data_start, block_end, size, align);\n");
+    out.push_str("}\n\n");
+
+    out.push_str(
+        "/// Reset `arena`, freeing every overflow block and rewinding the primary region.\n",
+    );
+    out.push_str(
+        "/// After reset, all pointers previously returned by polyplug_arena_alloc are invalid.\n",
+    );
+    out.push_str("inline void polyplug_arena_reset(CallArena* arena) noexcept {\n");
+    out.push_str("    ArenaOverflowBlock* block = arena->first_overflow;\n");
+    out.push_str("    while (block != nullptr) {\n");
+    out.push_str(
+        "        // SAFETY: every block was allocated by polyplug_arena_alloc with a valid\n",
+    );
+    out.push_str("        // header; reading next/capacity before freeing is sound.\n");
+    out.push_str("        ArenaOverflowBlock* next = block->next;\n");
+    out.push_str("        size_t capacity = block->capacity;\n");
+    out.push_str("        if (arena->host != nullptr) {\n");
+    out.push_str(
+        "            // SAFETY: block was allocated by host->alloc with these exact args.\n",
+    );
+    out.push_str(
+        "            arena->host->free(arena->host, reinterpret_cast<uint8_t*>(block), capacity, POLYPLUG_OVERFLOW_BLOCK_ALIGN);\n",
+    );
+    out.push_str("        }\n");
+    out.push_str("        block = next;\n");
+    out.push_str("    }\n");
+    out.push_str("    arena->first_overflow = nullptr;\n");
+    out.push_str("    arena->cur = arena->base;\n");
+    out.push_str("}\n\n");
+
+    out.push_str(
+        "/// Construct a CallArena over `buf` (primary region) with `host` for overflow.\n",
+    );
+    out.push_str("inline CallArena polyplug_arena_new(uint8_t* buf, size_t len, const HostApi* host) noexcept {\n");
+    out.push_str("    CallArena arena{};\n");
+    out.push_str("    arena.cur = buf;\n");
+    out.push_str("    arena.end = buf + len;\n");
+    out.push_str("    arena.base = buf;\n");
+    out.push_str("    arena.host = host;\n");
+    out.push_str("    arena.first_overflow = nullptr;\n");
+    out.push_str("    return arena;\n");
+    out.push_str("}\n\n");
+}
+
 // ─── Per-contract class emitter (instance wrapper) ──────────────────────────────
 
 fn generate_cpp_host_contract(
@@ -1058,6 +1218,7 @@ fn generate_cpp_host_contract(
 ) -> Result<(), PolyplugcError> {
     let class_name: String = contract_name_to_class(&contract.name);
     let _contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+    let needs_arena: bool = contract_needs_arena(contract);
 
     out.push_str(&format!(
         "/// Host caller for contract `{}` (id=0x{:016X})\n",
@@ -1068,6 +1229,21 @@ fn generate_cpp_host_contract(
     out.push_str("/// - `create()`: resolves handle and calls `create_instance`\n");
     out.push_str("/// - destructor: calls `destroy_instance` to clean up\n");
     out.push_str("/// - dispatch: passes `instance_` to all method calls\n");
+    if needs_arena {
+        out.push_str("///\n");
+        out.push_str("/// # Call-arena lifetime\n");
+        out.push_str("///\n");
+        out.push_str(
+            "/// Methods returning variable-size values (`StringView`, `Buffer`, or structs\n",
+        );
+        out.push_str(
+            "/// that may embed one) are non-const and reset this caller's arena at the start\n",
+        );
+        out.push_str(
+            "/// of the call. Any view returned by such a method borrows arena memory and is\n",
+        );
+        out.push_str("/// valid only until the next arena-backed call on the same caller.\n");
+    }
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
 
     // Factory method: resolve handle + create_instance
@@ -1110,6 +1286,15 @@ fn generate_cpp_host_contract(
     // Destructor: calls destroy_instance
     out.push_str("    /// Destructor - calls `destroy_instance` to clean up.\n");
     out.push_str(&format!("    ~{}() noexcept {{\n", class_name));
+    if needs_arena {
+        out.push_str(
+            "        // Free any overflow blocks the arena still holds before destruction.\n",
+        );
+        out.push_str("        // arena_buf_ is null only on a moved-from caller.\n");
+        out.push_str("        if (arena_buf_) {\n");
+        out.push_str("            polyplug_arena_reset(&arena_);\n");
+        out.push_str("        }\n");
+    }
     out.push_str("        // Destroy instance via factory\n");
     out.push_str("        // SAFETY: instance was created by create_instance and is valid.\n");
     out.push_str("        if (instance_.data != nullptr) {\n");
@@ -1126,7 +1311,15 @@ fn generate_cpp_host_contract(
     ));
     out.push_str("        : interface_(other.interface_),\n");
     out.push_str("          instance_(other.instance_),\n");
-    out.push_str("          host_(other.host_) {\n");
+    if needs_arena {
+        // The arena's interior pointers refer into *arena_buf_, a heap block whose
+        // address is preserved by moving the unique_ptr, so the arena stays valid.
+        out.push_str("          host_(other.host_),\n");
+        out.push_str("          arena_buf_(std::move(other.arena_buf_)),\n");
+        out.push_str("          arena_(other.arena_) {\n");
+    } else {
+        out.push_str("          host_(other.host_) {\n");
+    }
     out.push_str("        other.instance_.data = nullptr;  // Prevent double-destroy.\n");
     out.push_str("    }\n");
     out.push_str(&format!(
@@ -1134,11 +1327,22 @@ fn generate_cpp_host_contract(
         class_name, class_name
     ));
     out.push_str("        if (this != &other) {\n");
+    if needs_arena {
+        out.push_str("            // Release this caller's overflow blocks before overwriting.\n");
+        out.push_str("            if (arena_buf_) {\n");
+        out.push_str("                polyplug_arena_reset(&arena_);\n");
+        out.push_str("            }\n");
+    }
     out.push_str("            // Destroy current instance first\n");
     out.push_str("            if (instance_.data != nullptr) {\n");
     out.push_str("                interface_->destroy_instance(host_, instance_);\n");
     out.push_str("            }\n");
     out.push_str("            interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;\n");
+    if needs_arena {
+        out.push_str(
+            "            arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;\n",
+        );
+    }
     out.push_str("        }\n");
     out.push_str("        return *this;\n");
     out.push_str("    }\n");
@@ -1184,12 +1388,38 @@ fn generate_cpp_host_contract(
     out.push_str("    /// Instance handle created by `create_instance`.\n");
     out.push_str("    GuestContractInstance instance_;\n");
     out.push_str("    /// Host interface pointer (needed for create/destroy_instance).\n");
-    out.push_str("    const HostApi* host_;\n\n");
-    out.push_str(&format!(
-        "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept\n",
-        class_name
-    ));
-    out.push_str("        : interface_(iface), instance_(inst), host_(host) {}\n");
+    out.push_str("    const HostApi* host_;\n");
+    if needs_arena {
+        out.push_str(
+            "    /// Stable-address backing buffer for the per-call arena. Held by unique_ptr\n",
+        );
+        out.push_str("    /// so the arena's interior pointers survive moving the caller value.\n");
+        out.push_str("    std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;\n");
+        out.push_str(
+            "    /// Per-call bump arena over `arena_buf_`, reset at each arena-backed call.\n",
+        );
+        out.push_str("    CallArena arena_;\n");
+    }
+    out.push('\n');
+    if needs_arena {
+        out.push_str(&format!(
+            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)\n",
+            class_name
+        ));
+        out.push_str("        : interface_(iface), instance_(inst), host_(host),\n");
+        out.push_str(
+            "          arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),\n",
+        );
+        out.push_str(
+            "          arena_(polyplug_arena_new(arena_buf_->data(), CALL_ARENA_BUF_LEN, host)) {}\n",
+        );
+    } else {
+        out.push_str(&format!(
+            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept\n",
+            class_name
+        ));
+        out.push_str("        : interface_(iface), instance_(inst), host_(host) {}\n");
+    }
     out.push_str("};\n\n");
     Ok(())
 }
@@ -1219,10 +1449,27 @@ fn generate_cpp_host_function(
         "    /// Call `{}` (function_id={})\n",
         func.name, func.function_id
     ));
+    let needs_arena: bool = fn_needs_arena(func);
+    if needs_arena {
+        out.push_str(
+            "    /// Returns a value borrowing this caller's arena; it stays valid until\n",
+        );
+        out.push_str("    /// the next arena-backed call on this caller.\n");
+    }
     out.push_str(&format!(
         "    {} {}({}) {{\n",
         return_type, func.name, params_str
     ));
+
+    if needs_arena {
+        out.push_str(
+            "        // Reset the arena at call start: frees the previous call's overflow\n",
+        );
+        out.push_str(
+            "        // blocks and rewinds the primary region, invalidating prior views.\n",
+        );
+        out.push_str("        polyplug_arena_reset(&arena_);\n");
+    }
 
     // Determine args_ptr expression.
     let args_ptr_code: String = build_args_ptr_code(class_name, func);
@@ -1280,9 +1527,13 @@ fn generate_cpp_host_function(
     out.push_str("                break;\n");
     out.push_str("            }\n");
     out.push_str("            case DispatchType::VirtualMachine: {\n");
+    // Arena-backed functions hand the guest this caller's per-call arena so it can
+    // write variable-size returns without a per-value host->alloc; other functions
+    // pass nullptr and the VM bridge falls back to per-value host allocation.
+    let arena_arg: &str = if needs_arena { "&arena_" } else { "nullptr" };
     out.push_str(&format!(
-        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, {}U, args_ptr, {}, nullptr);\n",
-        fn_id, out_ptr_expr
+        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, {}U, args_ptr, {}, {});\n",
+        fn_id, out_ptr_expr, arena_arg
     ));
     out.push_str("                break;\n");
     out.push_str("            }\n");

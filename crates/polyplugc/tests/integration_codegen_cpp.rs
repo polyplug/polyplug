@@ -402,3 +402,70 @@ fn test_cpp_codegen_no_legacy_vtable_naming() {
 
     println!("test_cpp_codegen_no_legacy_vtable_naming: no legacy naming found");
 }
+
+// ─── Host caller call-arena threading verification ────────────────────────────
+
+/// The host caller for a contract with a variable-size return (`StringView`)
+/// must own a per-caller `CallArena`, reset it at the start of each arena-backed
+/// call, and thread it to the VM dispatch. Functions with fixed-size returns must
+/// pass `nullptr` instead, so the VM bridge falls back to per-value `host->alloc`.
+#[test]
+fn test_cpp_codegen_host_caller_threads_arena() {
+    let root: PathBuf = workspace_root();
+    let api_toml: PathBuf = root.join("tests").join("fixtures").join("test_api.toml");
+    let out_dir: PathBuf =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_cpp_arena");
+
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+
+    generate_cpp_bindings(&api_toml, &out_dir, Side::Host);
+
+    let host_callers_file: PathBuf = out_dir.join("host").join("host_callers.hpp");
+    let content: String =
+        std::fs::read_to_string(&host_callers_file).expect("read host_callers file");
+
+    // The inline arena helpers and the per-caller buffer/member must be emitted.
+    assert!(
+        content.contains("CALL_ARENA_BUF_LEN"),
+        "host_callers.hpp must define the arena buffer length constant"
+    );
+    assert!(
+        content.contains("inline uint8_t* polyplug_arena_alloc(CallArena* arena"),
+        "host_callers.hpp must emit the inline arena alloc helper"
+    );
+    assert!(
+        content.contains("inline void polyplug_arena_reset(CallArena* arena"),
+        "host_callers.hpp must emit the inline arena reset helper"
+    );
+    assert!(
+        content.contains("std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;"),
+        "host_callers.hpp must hold a stable-address arena buffer"
+    );
+    assert!(
+        content.contains("CallArena arena_;"),
+        "host_callers.hpp must hold a per-caller CallArena member"
+    );
+
+    // The StringView-returning function (test.add::version, function_id 2) must
+    // reset and thread the arena; the fixed-size returns must pass nullptr.
+    assert!(
+        content.contains("polyplug_arena_reset(&arena_);"),
+        "an arena-backed call must reset the arena at call start"
+    );
+    assert!(
+        content.contains("args_ptr, out_ptr, &arena_);"),
+        "the variable-size return must thread the per-caller arena to vm.call"
+    );
+    assert!(
+        content.contains("args_ptr, out_ptr, nullptr);"),
+        "fixed-size returns must pass a null arena to vm.call"
+    );
+
+    // The destructor must release the arena's overflow chain before teardown.
+    assert!(
+        content.contains("if (arena_buf_) {"),
+        "the caller must guard arena reset against moved-from state"
+    );
+
+    println!("test_cpp_codegen_host_caller_threads_arena: arena threading assertions passed");
+}

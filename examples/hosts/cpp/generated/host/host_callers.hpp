@@ -5,9 +5,101 @@
 #include "polyplug/error.hpp"
 #include "polyplug/abi.hpp"
 #include "polyplug/runtime.hpp"
+#include <array>
+#include <cstddef>
+#include <memory>
 #include <optional>
 
 namespace polyplug_generated {
+
+/// Size of each caller's inline call-arena buffer.
+///
+/// Variable-size VM return values (strings, buffers) are bump-allocated from
+/// this buffer; outputs larger than it spill into host-allocated overflow
+/// blocks that the arena frees on the next reset.
+static constexpr size_t CALL_ARENA_BUF_LEN = 512;
+
+/// Minimum size of a host-allocated overflow block, including its header.
+static constexpr size_t POLYPLUG_OVERFLOW_BLOCK_MIN = 4096;
+/// Alignment used for host-allocated overflow blocks.
+static constexpr size_t POLYPLUG_OVERFLOW_BLOCK_ALIGN = alignof(ArenaOverflowBlock);
+
+/// Bump-allocate `size` bytes aligned to `align` within `[from, end)`.
+/// Returns nullptr if the request does not fit.
+inline uint8_t* polyplug_arena_bump(uint8_t* from, uint8_t* end, size_t size, size_t align) noexcept {
+    auto addr = reinterpret_cast<size_t>(from);
+    size_t aligned = (addr + (align - 1)) & ~(align - 1);
+    if (aligned < addr) { return nullptr; }  // overflow on alignment
+    size_t new_cur = aligned + size;
+    if (new_cur < aligned) { return nullptr; }  // overflow on size
+    if (new_cur <= reinterpret_cast<size_t>(end)) {
+        return reinterpret_cast<uint8_t*>(aligned);
+    }
+    return nullptr;
+}
+
+/// Allocate `size` bytes aligned to `align` from `arena`.
+///
+/// Serves from the primary region by bumping `cur`; on exhaustion, requests a
+/// fresh overflow block from the host and serves from it. Returns nullptr if
+/// `size == 0`, if `align` is not a power of two, or if a host allocation fails.
+/// The returned pointer is valid until the next polyplug_arena_reset().
+inline uint8_t* polyplug_arena_alloc(CallArena* arena, size_t size, size_t align) noexcept {
+    if (size == 0 || align == 0 || (align & (align - 1)) != 0) {
+        return nullptr;
+    }
+    if (uint8_t* p = polyplug_arena_bump(arena->cur, arena->end, size, align)) {
+        arena->cur = p + size;
+        return p;
+    }
+    if (arena->host == nullptr) { return nullptr; }
+    size_t header = sizeof(ArenaOverflowBlock);
+    size_t needed = header + align + size;
+    size_t capacity = needed > POLYPLUG_OVERFLOW_BLOCK_MIN ? needed : POLYPLUG_OVERFLOW_BLOCK_MIN;
+    // SAFETY: arena->host is non-null (checked above) and valid for the arena's
+    // lifetime. The allocator returns a block of `capacity` bytes or nullptr.
+    auto block_ptr = static_cast<uint8_t*>(arena->host->alloc(arena->host, capacity, POLYPLUG_OVERFLOW_BLOCK_ALIGN));
+    if (block_ptr == nullptr) { return nullptr; }
+    // SAFETY: block_ptr is aligned for ArenaOverflowBlock and owns at least
+    // `capacity >= header` bytes, so writing the header is sound.
+    auto block = reinterpret_cast<ArenaOverflowBlock*>(block_ptr);
+    block->next = arena->first_overflow;
+    block->capacity = capacity;
+    arena->first_overflow = block;
+    uint8_t* data_start = block_ptr + header;
+    uint8_t* block_end = block_ptr + capacity;
+    return polyplug_arena_bump(data_start, block_end, size, align);
+}
+
+/// Reset `arena`, freeing every overflow block and rewinding the primary region.
+/// After reset, all pointers previously returned by polyplug_arena_alloc are invalid.
+inline void polyplug_arena_reset(CallArena* arena) noexcept {
+    ArenaOverflowBlock* block = arena->first_overflow;
+    while (block != nullptr) {
+        // SAFETY: every block was allocated by polyplug_arena_alloc with a valid
+        // header; reading next/capacity before freeing is sound.
+        ArenaOverflowBlock* next = block->next;
+        size_t capacity = block->capacity;
+        if (arena->host != nullptr) {
+            // SAFETY: block was allocated by host->alloc with these exact args.
+            arena->host->free(arena->host, reinterpret_cast<uint8_t*>(block), capacity, POLYPLUG_OVERFLOW_BLOCK_ALIGN);
+        }
+        block = next;
+    }
+    arena->first_overflow = nullptr;
+    arena->cur = arena->base;
+}
+
+/// Construct a CallArena over `buf` (primary region) with `host` for overflow.
+inline CallArena polyplug_arena_new(uint8_t* buf, size_t len, const HostApi* host) noexcept {
+    CallArena arena{};
+    arena.cur = buf;
+    arena.end = buf + len;
+    arena.base = buf;
+    arena.host = host;
+    arena.first_overflow = nullptr;
+    return arena;
+}
 
 /// Host caller for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
 ///
@@ -15,6 +107,13 @@ namespace polyplug_generated {
 /// - `create()`: resolves handle and calls `create_instance`
 /// - destructor: calls `destroy_instance` to clean up
 /// - dispatch: passes `instance_` to all method calls
+///
+/// # Call-arena lifetime
+///
+/// Methods returning variable-size values (`StringView`, `Buffer`, or structs
+/// that may embed one) are non-const and reset this caller's arena at the start
+/// of the call. Any view returned by such a method borrows arena memory and is
+/// valid only until the next arena-backed call on the same caller.
 class PipelineDecoderContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
@@ -45,6 +144,11 @@ public:
 
     /// Destructor - calls `destroy_instance` to clean up.
     ~PipelineDecoderContract() noexcept {
+        // Free any overflow blocks the arena still holds before destruction.
+        // arena_buf_ is null only on a moved-from caller.
+        if (arena_buf_) {
+            polyplug_arena_reset(&arena_);
+        }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         if (instance_.data != nullptr) {
@@ -57,16 +161,23 @@ public:
     PipelineDecoderContract(PipelineDecoderContract&& other) noexcept
         : interface_(other.interface_),
           instance_(other.instance_),
-          host_(other.host_) {
+          host_(other.host_),
+          arena_buf_(std::move(other.arena_buf_)),
+          arena_(other.arena_) {
         other.instance_.data = nullptr;  // Prevent double-destroy.
     }
     PipelineDecoderContract& operator=(PipelineDecoderContract&& other) noexcept {
         if (this != &other) {
+            // Release this caller's overflow blocks before overwriting.
+            if (arena_buf_) {
+                polyplug_arena_reset(&arena_);
+            }
             // Destroy current instance first
             if (instance_.data != nullptr) {
                 interface_->destroy_instance(host_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+            arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
         }
         return *this;
     }
@@ -91,7 +202,12 @@ public:
     }
 
     /// Call `decode` (function_id=0)
+    /// Returns a value borrowing this caller's arena; it stays valid until
+    /// the next arena-backed call on this caller.
     StringView decode(StringView input) {
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        polyplug_arena_reset(&arena_);
         const StringView local_input = input;
         const void* args_ptr = &local_input;
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
@@ -115,7 +231,7 @@ public:
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, nullptr);
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_);
                 break;
             }
         }
@@ -130,9 +246,16 @@ private:
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
     const HostApi* host_;
+    /// Stable-address backing buffer for the per-call arena. Held by unique_ptr
+    /// so the arena's interior pointers survive moving the caller value.
+    std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;
+    /// Per-call bump arena over `arena_buf_`, reset at each arena-backed call.
+    CallArena arena_;
 
-    explicit PipelineDecoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept
-        : interface_(iface), instance_(inst), host_(host) {}
+    explicit PipelineDecoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)
+        : interface_(iface), instance_(inst), host_(host),
+          arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),
+          arena_(polyplug_arena_new(arena_buf_->data(), CALL_ARENA_BUF_LEN, host)) {}
 };
 
 /// Host caller for contract `data.Transformer` (id=0x4775991362CD68EE)
@@ -141,6 +264,13 @@ private:
 /// - `create()`: resolves handle and calls `create_instance`
 /// - destructor: calls `destroy_instance` to clean up
 /// - dispatch: passes `instance_` to all method calls
+///
+/// # Call-arena lifetime
+///
+/// Methods returning variable-size values (`StringView`, `Buffer`, or structs
+/// that may embed one) are non-const and reset this caller's arena at the start
+/// of the call. Any view returned by such a method borrows arena memory and is
+/// valid only until the next arena-backed call on the same caller.
 class DataTransformerContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
@@ -171,6 +301,11 @@ public:
 
     /// Destructor - calls `destroy_instance` to clean up.
     ~DataTransformerContract() noexcept {
+        // Free any overflow blocks the arena still holds before destruction.
+        // arena_buf_ is null only on a moved-from caller.
+        if (arena_buf_) {
+            polyplug_arena_reset(&arena_);
+        }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         if (instance_.data != nullptr) {
@@ -183,16 +318,23 @@ public:
     DataTransformerContract(DataTransformerContract&& other) noexcept
         : interface_(other.interface_),
           instance_(other.instance_),
-          host_(other.host_) {
+          host_(other.host_),
+          arena_buf_(std::move(other.arena_buf_)),
+          arena_(other.arena_) {
         other.instance_.data = nullptr;  // Prevent double-destroy.
     }
     DataTransformerContract& operator=(DataTransformerContract&& other) noexcept {
         if (this != &other) {
+            // Release this caller's overflow blocks before overwriting.
+            if (arena_buf_) {
+                polyplug_arena_reset(&arena_);
+            }
             // Destroy current instance first
             if (instance_.data != nullptr) {
                 interface_->destroy_instance(host_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+            arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
         }
         return *this;
     }
@@ -217,7 +359,12 @@ public:
     }
 
     /// Call `transform` (function_id=0)
+    /// Returns a value borrowing this caller's arena; it stays valid until
+    /// the next arena-backed call on this caller.
     StringView transform(StringView input) {
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        polyplug_arena_reset(&arena_);
         const StringView local_input = input;
         const void* args_ptr = &local_input;
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
@@ -241,7 +388,7 @@ public:
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, nullptr);
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_);
                 break;
             }
         }
@@ -256,9 +403,16 @@ private:
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
     const HostApi* host_;
+    /// Stable-address backing buffer for the per-call arena. Held by unique_ptr
+    /// so the arena's interior pointers survive moving the caller value.
+    std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;
+    /// Per-call bump arena over `arena_buf_`, reset at each arena-backed call.
+    CallArena arena_;
 
-    explicit DataTransformerContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept
-        : interface_(iface), instance_(inst), host_(host) {}
+    explicit DataTransformerContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)
+        : interface_(iface), instance_(inst), host_(host),
+          arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),
+          arena_(polyplug_arena_new(arena_buf_->data(), CALL_ARENA_BUF_LEN, host)) {}
 };
 
 /// Host caller for contract `pipeline.Encoder` (id=0xFC50F9D1D3DB629F)
@@ -267,6 +421,13 @@ private:
 /// - `create()`: resolves handle and calls `create_instance`
 /// - destructor: calls `destroy_instance` to clean up
 /// - dispatch: passes `instance_` to all method calls
+///
+/// # Call-arena lifetime
+///
+/// Methods returning variable-size values (`StringView`, `Buffer`, or structs
+/// that may embed one) are non-const and reset this caller's arena at the start
+/// of the call. Any view returned by such a method borrows arena memory and is
+/// valid only until the next arena-backed call on the same caller.
 class PipelineEncoderContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
@@ -297,6 +458,11 @@ public:
 
     /// Destructor - calls `destroy_instance` to clean up.
     ~PipelineEncoderContract() noexcept {
+        // Free any overflow blocks the arena still holds before destruction.
+        // arena_buf_ is null only on a moved-from caller.
+        if (arena_buf_) {
+            polyplug_arena_reset(&arena_);
+        }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         if (instance_.data != nullptr) {
@@ -309,16 +475,23 @@ public:
     PipelineEncoderContract(PipelineEncoderContract&& other) noexcept
         : interface_(other.interface_),
           instance_(other.instance_),
-          host_(other.host_) {
+          host_(other.host_),
+          arena_buf_(std::move(other.arena_buf_)),
+          arena_(other.arena_) {
         other.instance_.data = nullptr;  // Prevent double-destroy.
     }
     PipelineEncoderContract& operator=(PipelineEncoderContract&& other) noexcept {
         if (this != &other) {
+            // Release this caller's overflow blocks before overwriting.
+            if (arena_buf_) {
+                polyplug_arena_reset(&arena_);
+            }
             // Destroy current instance first
             if (instance_.data != nullptr) {
                 interface_->destroy_instance(host_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+            arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
         }
         return *this;
     }
@@ -343,7 +516,12 @@ public:
     }
 
     /// Call `encode` (function_id=0)
+    /// Returns a value borrowing this caller's arena; it stays valid until
+    /// the next arena-backed call on this caller.
     StringView encode(StringView input) {
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        polyplug_arena_reset(&arena_);
         const StringView local_input = input;
         const void* args_ptr = &local_input;
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
@@ -367,7 +545,7 @@ public:
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, nullptr);
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_);
                 break;
             }
         }
@@ -382,9 +560,16 @@ private:
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
     const HostApi* host_;
+    /// Stable-address backing buffer for the per-call arena. Held by unique_ptr
+    /// so the arena's interior pointers survive moving the caller value.
+    std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;
+    /// Per-call bump arena over `arena_buf_`, reset at each arena-backed call.
+    CallArena arena_;
 
-    explicit PipelineEncoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept
-        : interface_(iface), instance_(inst), host_(host) {}
+    explicit PipelineEncoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)
+        : interface_(iface), instance_(inst), host_(host),
+          arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),
+          arena_(polyplug_arena_new(arena_buf_->data(), CALL_ARENA_BUF_LEN, host)) {}
 };
 
 /// Host caller for contract `data.Reporter` (id=0x76BB4643A9F5AD68)
@@ -393,6 +578,13 @@ private:
 /// - `create()`: resolves handle and calls `create_instance`
 /// - destructor: calls `destroy_instance` to clean up
 /// - dispatch: passes `instance_` to all method calls
+///
+/// # Call-arena lifetime
+///
+/// Methods returning variable-size values (`StringView`, `Buffer`, or structs
+/// that may embed one) are non-const and reset this caller's arena at the start
+/// of the call. Any view returned by such a method borrows arena memory and is
+/// valid only until the next arena-backed call on the same caller.
 class DataReporterContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
@@ -423,6 +615,11 @@ public:
 
     /// Destructor - calls `destroy_instance` to clean up.
     ~DataReporterContract() noexcept {
+        // Free any overflow blocks the arena still holds before destruction.
+        // arena_buf_ is null only on a moved-from caller.
+        if (arena_buf_) {
+            polyplug_arena_reset(&arena_);
+        }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         if (instance_.data != nullptr) {
@@ -435,16 +632,23 @@ public:
     DataReporterContract(DataReporterContract&& other) noexcept
         : interface_(other.interface_),
           instance_(other.instance_),
-          host_(other.host_) {
+          host_(other.host_),
+          arena_buf_(std::move(other.arena_buf_)),
+          arena_(other.arena_) {
         other.instance_.data = nullptr;  // Prevent double-destroy.
     }
     DataReporterContract& operator=(DataReporterContract&& other) noexcept {
         if (this != &other) {
+            // Release this caller's overflow blocks before overwriting.
+            if (arena_buf_) {
+                polyplug_arena_reset(&arena_);
+            }
             // Destroy current instance first
             if (instance_.data != nullptr) {
                 interface_->destroy_instance(host_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+            arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
         }
         return *this;
     }
@@ -469,7 +673,12 @@ public:
     }
 
     /// Call `report` (function_id=0)
+    /// Returns a value borrowing this caller's arena; it stays valid until
+    /// the next arena-backed call on this caller.
     StringView report(StringView input) {
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        polyplug_arena_reset(&arena_);
         const StringView local_input = input;
         const void* args_ptr = &local_input;
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
@@ -493,7 +702,7 @@ public:
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, nullptr);
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_);
                 break;
             }
         }
@@ -508,9 +717,16 @@ private:
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
     const HostApi* host_;
+    /// Stable-address backing buffer for the per-call arena. Held by unique_ptr
+    /// so the arena's interior pointers survive moving the caller value.
+    std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;
+    /// Per-call bump arena over `arena_buf_`, reset at each arena-backed call.
+    CallArena arena_;
 
-    explicit DataReporterContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept
-        : interface_(iface), instance_(inst), host_(host) {}
+    explicit DataReporterContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)
+        : interface_(iface), instance_(inst), host_(host),
+          arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),
+          arena_(polyplug_arena_new(arena_buf_->data(), CALL_ARENA_BUF_LEN, host)) {}
 };
 
 /// Host caller for contract `pipeline.Validator` (id=0x45173A959EEC57C5)
@@ -519,6 +735,13 @@ private:
 /// - `create()`: resolves handle and calls `create_instance`
 /// - destructor: calls `destroy_instance` to clean up
 /// - dispatch: passes `instance_` to all method calls
+///
+/// # Call-arena lifetime
+///
+/// Methods returning variable-size values (`StringView`, `Buffer`, or structs
+/// that may embed one) are non-const and reset this caller's arena at the start
+/// of the call. Any view returned by such a method borrows arena memory and is
+/// valid only until the next arena-backed call on the same caller.
 class PipelineValidatorContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
@@ -549,6 +772,11 @@ public:
 
     /// Destructor - calls `destroy_instance` to clean up.
     ~PipelineValidatorContract() noexcept {
+        // Free any overflow blocks the arena still holds before destruction.
+        // arena_buf_ is null only on a moved-from caller.
+        if (arena_buf_) {
+            polyplug_arena_reset(&arena_);
+        }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         if (instance_.data != nullptr) {
@@ -561,16 +789,23 @@ public:
     PipelineValidatorContract(PipelineValidatorContract&& other) noexcept
         : interface_(other.interface_),
           instance_(other.instance_),
-          host_(other.host_) {
+          host_(other.host_),
+          arena_buf_(std::move(other.arena_buf_)),
+          arena_(other.arena_) {
         other.instance_.data = nullptr;  // Prevent double-destroy.
     }
     PipelineValidatorContract& operator=(PipelineValidatorContract&& other) noexcept {
         if (this != &other) {
+            // Release this caller's overflow blocks before overwriting.
+            if (arena_buf_) {
+                polyplug_arena_reset(&arena_);
+            }
             // Destroy current instance first
             if (instance_.data != nullptr) {
                 interface_->destroy_instance(host_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+            arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
         }
         return *this;
     }
@@ -595,7 +830,12 @@ public:
     }
 
     /// Call `validate` (function_id=0)
+    /// Returns a value borrowing this caller's arena; it stays valid until
+    /// the next arena-backed call on this caller.
     StringView validate(StringView input) {
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        polyplug_arena_reset(&arena_);
         const StringView local_input = input;
         const void* args_ptr = &local_input;
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
@@ -619,7 +859,7 @@ public:
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, nullptr);
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_);
                 break;
             }
         }
@@ -634,9 +874,16 @@ private:
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
     const HostApi* host_;
+    /// Stable-address backing buffer for the per-call arena. Held by unique_ptr
+    /// so the arena's interior pointers survive moving the caller value.
+    std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;
+    /// Per-call bump arena over `arena_buf_`, reset at each arena-backed call.
+    CallArena arena_;
 
-    explicit PipelineValidatorContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept
-        : interface_(iface), instance_(inst), host_(host) {}
+    explicit PipelineValidatorContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)
+        : interface_(iface), instance_(inst), host_(host),
+          arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),
+          arena_(polyplug_arena_new(arena_buf_->data(), CALL_ARENA_BUF_LEN, host)) {}
 };
 
 }  // namespace polyplug_generated

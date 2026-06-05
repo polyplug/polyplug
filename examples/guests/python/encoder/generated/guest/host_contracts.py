@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Self
-from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractInterface, HostApi, StringView
+from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, GuestContractInstance, HostContractInterface, HostApi, StringView
 
 from guest.types import LogLevel
 
@@ -45,7 +45,7 @@ class HostLoggerContract:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             err = dispatch_fn(impl_ptr, args_ptr, out_ptr)
         elif dispatch_type == DispatchType.VirtualMachine:
-            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, 0, args_ptr, out_ptr, None)
+            err = iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), 0, args_ptr, out_ptr, None)
         else:
             return
         if err.code != AbiErrorCode.Ok:
@@ -74,7 +74,7 @@ class HostLoggerContract:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             err = dispatch_fn(impl_ptr, args_ptr, out_ptr)
         elif dispatch_type == DispatchType.VirtualMachine:
-            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, 1, args_ptr, out_ptr, None)
+            err = iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), 1, args_ptr, out_ptr, None)
         else:
             return
         if err.code != AbiErrorCode.Ok:

@@ -1,6 +1,8 @@
 //! ABI — `#[repr(C)]` types, constants, and FNV-1a hashing for the polyplug ABI boundary.
 //!
-//! Type definitions are sourced from `abi.toml` in this crate's root.
+//! The `#[repr(C)]` type definitions in the submodules below are the single
+//! source of truth for the ABI; the per-language SDK type files (abi.lua,
+//! abi.py, abi.hpp, …) are generated to match them.
 
 pub mod contract_type;
 pub mod dispatch;

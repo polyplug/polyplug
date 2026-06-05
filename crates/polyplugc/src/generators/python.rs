@@ -1687,8 +1687,13 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
     );
     out.push_str("            err = dispatch_fn(impl_ptr, args_ptr, out_ptr)\n");
     out.push_str("        elif dispatch_type == DispatchType.VirtualMachine:\n");
+    // The VM dispatch ABI signature is call(loader_data, instance, fn_id, args, out,
+    // arena). Host contracts carry no guest instance, so a null GuestContractInstance
+    // is passed in the instance slot — matching the canonical rust host-contract
+    // caller (which passes GuestContractInstance::null()). The arena is None: this
+    // caller has no per-caller arena, so the bridge falls back to host->alloc.
     out.push_str(&format!(
-        "            err = iface.dispatch.vm.call(iface.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr, None)\n"
+        "            err = iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), {fn_id}, args_ptr, out_ptr, None)\n"
     ));
     out.push_str("        else:\n");
     if has_return {
@@ -1837,7 +1842,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Self\n");
-    out.push_str("from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractInterface, HostApi, StringView\n\n");
+    out.push_str("from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, GuestContractInstance, HostContractInterface, HostApi, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_guest_host_contract_type_imports(ir);
     if !type_imports.is_empty() {

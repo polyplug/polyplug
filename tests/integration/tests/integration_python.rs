@@ -201,6 +201,55 @@ fn integration_python_version_string() {
     );
 }
 
+/// Python guests dispatch through `DispatchType::Native` (ctypes CFUNCTYPE
+/// function pointers), whose ABI signature `fn(instance, args, out) -> AbiError`
+/// carries NO per-call CallArena. Unlike VM guests (Lua, JS) — which receive an
+/// arena and route variable-size returns through it for zero host allocations —
+/// a Python guest's string return is allocated via `host->alloc` (or a static
+/// buffer), exactly like native Rust/C++. This test pins that invariant: the
+/// vtable is Native (not VirtualMachine), so there is no arena path to exercise.
+/// Repeated string returns therefore stay correct across calls without any arena.
+#[test]
+fn integration_python_string_return_is_native_no_arena() {
+    skip_if_no_python!();
+    let rt: Arc<Runtime> = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
+    let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
+    // SAFETY: vtable_ptr valid for the runtime lifetime.
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    assert_eq!(
+        vtable.dispatch_type,
+        DispatchType::Native,
+        "python guests use Native dispatch — no per-call arena is delivered"
+    );
+
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
+    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+        // SAFETY: function 2 (version) takes no args; sret handled by the return type.
+        unsafe { core::mem::transmute(fn_ptr) };
+
+    // The same value must come back correctly on every call with no arena involved.
+    for i in 0..64 {
+        let mut out_view: StringView = StringView::null();
+        // SAFETY: out_view is a valid StringView slot; version reads no input.
+        let result: AbiError = unsafe {
+            dispatch_fn(
+                core::ptr::null::<()>(),
+                &mut out_view as *mut StringView as *mut (),
+            )
+        };
+        assert_eq!(
+            result.code,
+            AbiErrorCode::Ok as u32,
+            "version must return Ok (iter {i})"
+        );
+        // SAFETY: Ok return guarantees out_view points at a valid UTF-8 buffer.
+        let bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
+        let version: &str = core::str::from_utf8(bytes).expect("version must be UTF-8");
+        assert!(version.starts_with("1.0"), "version value (iter {i})");
+    }
+}
+
 #[test]
 fn integration_python_exception_returns_abi_error() {
     skip_if_no_python!();

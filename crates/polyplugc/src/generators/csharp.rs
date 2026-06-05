@@ -1326,17 +1326,19 @@ fn generate_cs_guest_host_contract_method(
         "                    var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[{fn_id}u];\n"
     ));
     out.push_str("                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)fnPtr;\n");
-    out.push_str("                    err = fn_(_interface, argsPtr, outPtr);\n");
+    out.push_str("                    err = fn_(_instance, argsPtr, outPtr);\n");
     out.push_str("                    break;\n");
     out.push_str("                }\n");
     out.push_str("                case DispatchType.VirtualMachine: {\n");
+    // Canonical VM dispatch signature: (loader_data, instance, fn_id, args, out, arena).
     out.push_str(
-        "                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;\n",
+        "                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;\n",
     );
     // A null arena (IntPtr.Zero) makes the VM bridge fall back to per-value host
-    // allocation; threading a real CallArena is deferred to a later wave.
+    // allocation. C# guests are dispatched through native function pointers, so the
+    // host-side caller has no per-call arena to publish here.
     out.push_str(&format!(
-        "                    err = vmFn(contract->Dispatch.Vm.LoaderData, {fn_id}u, argsPtr, outPtr, IntPtr.Zero);\n"
+        "                    err = vmFn(contract->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, IntPtr.Zero);\n"
     ));
     out.push_str("                    break;\n");
     out.push_str("                }\n");

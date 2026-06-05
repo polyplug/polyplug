@@ -35,6 +35,20 @@ local function impl_reset(_args_ptr, _out_ptr)
     -- no-op
 end
 
+-- echo(s: StringView) -> StringView
+-- Returns its input string back as a fresh StringView sourced from the per-call
+-- CallArena via alloc_string_arena. After warmup the arena serves from its bump
+-- region with zero host allocations; the returned view stays valid until the
+-- caller's next arena-backed call. args_ptr -> StringView input, out_ptr ->
+-- StringView output slot.
+local function impl_echo(args_ptr, out_ptr)
+    local in_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
+    local s = polyplug_guest.to_str(in_sv[0])
+    local out_view = polyplug_guest.alloc_string_arena(s)
+    local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
+    out_sv[0] = out_view
+end
+
 -- polyplug_init is called by LuaLoader with the HostApi pointer as i64.
 -- It does NOT call register_plugin directly — the LuaLoader (Rust) does that
 -- after reading _G._polyplug_handlers and creating Rust-side trampolines.
@@ -51,6 +65,7 @@ function polyplug_init(registrar_ptr, ctx_ptr)
                 [1] = impl_add_primitive, -- function_id 1: add_primitive
                 [2] = impl_version,       -- function_id 2: version
                 [3] = impl_reset,         -- function_id 3: reset
+                [4] = impl_echo,          -- function_id 4: echo (arena return)
             },
         },
     }

@@ -84,9 +84,39 @@ in allocation overhead.
 
 ### Languages that benefit most
 
-All managed languages (Python, Lua, JS) where plugin authors expect to work
-with normal strings and collections. Native languages (Rust, C++, C#)
-also benefit from the reduced allocator pressure.
+VM-dispatched managed languages (Lua, JS via QuickJS) where the guest builds a
+fresh return value (string/array) on every call and the host must reclaim it.
+Those are the only languages where the arena replaces a real per-value
+`host->alloc` round trip.
+
+**Native Rust / C++ / C# are EXCLUDED — and this is a finding, not an omission.**
+Their guest functions return values as **borrowed `StringView`/`Array` views into
+guest-owned memory that is already valid for the call** (e.g. a `'static` string,
+a field on the instance, or a buffer the host passes in). The return marshal is a
+pointer write — it performs **no allocation at all**, so there is nothing for an
+arena to replace. Threading an arena into native dispatch would also require
+changing the frozen native dispatch ABI signature (`fn(instance, args, out)`),
+which has no arena parameter. Native callers therefore pass a null arena.
+
+### Status (per-language)
+
+| Language | Guest dispatch | Return allocation today | Arena-routed? |
+|---|---|---|---|
+| JS (QuickJS) | VM | `arenaAlloc` → `CallArena`, falls back to `host->alloc` | **Yes** (`allocStringArena`) |
+| Lua (LuaJIT) | VM | `_polyplug_arena_alloc` → `CallArena`, falls back to `host->alloc` | **Yes** (`alloc_string_arena`) |
+| Rust (host caller) | Native | borrowed view, zero-alloc; real per-caller arena when a return needs one (`fn_needs_arena`) | N/A for returns (already zero-alloc) |
+| C++ (host caller) | Native/VM | borrowed view, zero-alloc | N/A for returns (already zero-alloc) |
+| C# | Native | borrowed view, zero-alloc | N/A for returns (already zero-alloc) |
+| Python | **Native** (ctypes CFUNCTYPE) | borrowed view / `host->alloc`; **no arena in the native ABI signature** | **No** — same exclusion as native Rust/C++ |
+
+Lifetime rule for arena-backed returns: a view returned from an arena-backed call
+is valid **until the next arena-backed call on the same caller** (the caller resets
+its arena at the start of each call). Guests never free arena allocations.
+
+The host (every loader) always passes the arena slot in the canonical 6-argument
+VM dispatch signature `call(loader_data, instance, fn_id, args, out, arena)`; a
+**null arena** means "no arena", and the guest bridge falls back to per-value
+`host->alloc` — so all paths remain correct whether or not an arena is supplied.
 
 ### Scope
 
