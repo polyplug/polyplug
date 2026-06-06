@@ -62,12 +62,17 @@ class PipelineDecoderContractCaller:
     - dispatch: passes `_instance` to all method calls
     """
 
-    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:
+    def __init__(self, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> None:
         """Create instance wrapper from handle and host interface.
 
         Args:
             handle: Contract handle from find_guest_contract
             host: Host interface pointer
+            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
+                Held for this caller's lifetime so the runtime cannot be
+                finalized before __del__ runs (which tears down the instance
+                and arena through that host). When None, the embedder must keep
+                the runtime alive past this caller.
 
         Raises:
             ValueError: If interface not found or create_instance failed
@@ -86,6 +91,9 @@ class PipelineDecoderContractCaller:
         # off instance data.
         self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
         self._host: ctypes.c_void_p = host
+        # Pin the runtime: refcounting then guarantees the owner outlives this
+        # caller, so __del__ tears down through a still-live host.
+        self._owner: object | None = owner
         # Per-caller call arena. create_string_buffer is C-heap memory (not the
         # managed heap), so cross-boundary arena data stays off Python's GC.
         self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
@@ -109,20 +117,28 @@ class PipelineDecoderContractCaller:
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
             _arena_reset(self._arena, self._host)
+        # Release the runtime pin now that teardown has completed.
+        self._owner = None
 
     @classmethod
-    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
+    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:
         """Factory method - creates instance or None if failed.
 
         Args:
             handle: Contract handle from find_guest_contract
             host: Host interface pointer
+            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
+                The caller keeps a reference for its lifetime so the runtime
+                cannot be finalized before __del__ runs (which calls
+                destroy_instance and arena teardown through the runtime). If
+                None, the embedder is responsible for keeping the runtime alive
+                past the caller.
 
         Returns:
             Self if interface found and instance created, None otherwise
         """
         try:
-            return cls(handle, host)
+            return cls(handle, host, owner)
         except ValueError:
             return None
 
@@ -179,12 +195,17 @@ class DataTransformerContractCaller:
     - dispatch: passes `_instance` to all method calls
     """
 
-    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:
+    def __init__(self, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> None:
         """Create instance wrapper from handle and host interface.
 
         Args:
             handle: Contract handle from find_guest_contract
             host: Host interface pointer
+            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
+                Held for this caller's lifetime so the runtime cannot be
+                finalized before __del__ runs (which tears down the instance
+                and arena through that host). When None, the embedder must keep
+                the runtime alive past this caller.
 
         Raises:
             ValueError: If interface not found or create_instance failed
@@ -203,6 +224,9 @@ class DataTransformerContractCaller:
         # off instance data.
         self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
         self._host: ctypes.c_void_p = host
+        # Pin the runtime: refcounting then guarantees the owner outlives this
+        # caller, so __del__ tears down through a still-live host.
+        self._owner: object | None = owner
         # Per-caller call arena. create_string_buffer is C-heap memory (not the
         # managed heap), so cross-boundary arena data stays off Python's GC.
         self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
@@ -226,20 +250,28 @@ class DataTransformerContractCaller:
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
             _arena_reset(self._arena, self._host)
+        # Release the runtime pin now that teardown has completed.
+        self._owner = None
 
     @classmethod
-    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
+    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:
         """Factory method - creates instance or None if failed.
 
         Args:
             handle: Contract handle from find_guest_contract
             host: Host interface pointer
+            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
+                The caller keeps a reference for its lifetime so the runtime
+                cannot be finalized before __del__ runs (which calls
+                destroy_instance and arena teardown through the runtime). If
+                None, the embedder is responsible for keeping the runtime alive
+                past the caller.
 
         Returns:
             Self if interface found and instance created, None otherwise
         """
         try:
-            return cls(handle, host)
+            return cls(handle, host, owner)
         except ValueError:
             return None
 
@@ -296,12 +328,17 @@ class PipelineEncoderContractCaller:
     - dispatch: passes `_instance` to all method calls
     """
 
-    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:
+    def __init__(self, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> None:
         """Create instance wrapper from handle and host interface.
 
         Args:
             handle: Contract handle from find_guest_contract
             host: Host interface pointer
+            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
+                Held for this caller's lifetime so the runtime cannot be
+                finalized before __del__ runs (which tears down the instance
+                and arena through that host). When None, the embedder must keep
+                the runtime alive past this caller.
 
         Raises:
             ValueError: If interface not found or create_instance failed
@@ -320,6 +357,9 @@ class PipelineEncoderContractCaller:
         # off instance data.
         self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
         self._host: ctypes.c_void_p = host
+        # Pin the runtime: refcounting then guarantees the owner outlives this
+        # caller, so __del__ tears down through a still-live host.
+        self._owner: object | None = owner
         # Per-caller call arena. create_string_buffer is C-heap memory (not the
         # managed heap), so cross-boundary arena data stays off Python's GC.
         self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
@@ -343,20 +383,28 @@ class PipelineEncoderContractCaller:
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
             _arena_reset(self._arena, self._host)
+        # Release the runtime pin now that teardown has completed.
+        self._owner = None
 
     @classmethod
-    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
+    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:
         """Factory method - creates instance or None if failed.
 
         Args:
             handle: Contract handle from find_guest_contract
             host: Host interface pointer
+            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
+                The caller keeps a reference for its lifetime so the runtime
+                cannot be finalized before __del__ runs (which calls
+                destroy_instance and arena teardown through the runtime). If
+                None, the embedder is responsible for keeping the runtime alive
+                past the caller.
 
         Returns:
             Self if interface found and instance created, None otherwise
         """
         try:
-            return cls(handle, host)
+            return cls(handle, host, owner)
         except ValueError:
             return None
 
@@ -413,12 +461,17 @@ class DataReporterContractCaller:
     - dispatch: passes `_instance` to all method calls
     """
 
-    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:
+    def __init__(self, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> None:
         """Create instance wrapper from handle and host interface.
 
         Args:
             handle: Contract handle from find_guest_contract
             host: Host interface pointer
+            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
+                Held for this caller's lifetime so the runtime cannot be
+                finalized before __del__ runs (which tears down the instance
+                and arena through that host). When None, the embedder must keep
+                the runtime alive past this caller.
 
         Raises:
             ValueError: If interface not found or create_instance failed
@@ -437,6 +490,9 @@ class DataReporterContractCaller:
         # off instance data.
         self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
         self._host: ctypes.c_void_p = host
+        # Pin the runtime: refcounting then guarantees the owner outlives this
+        # caller, so __del__ tears down through a still-live host.
+        self._owner: object | None = owner
         # Per-caller call arena. create_string_buffer is C-heap memory (not the
         # managed heap), so cross-boundary arena data stays off Python's GC.
         self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
@@ -460,20 +516,28 @@ class DataReporterContractCaller:
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
             _arena_reset(self._arena, self._host)
+        # Release the runtime pin now that teardown has completed.
+        self._owner = None
 
     @classmethod
-    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
+    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:
         """Factory method - creates instance or None if failed.
 
         Args:
             handle: Contract handle from find_guest_contract
             host: Host interface pointer
+            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
+                The caller keeps a reference for its lifetime so the runtime
+                cannot be finalized before __del__ runs (which calls
+                destroy_instance and arena teardown through the runtime). If
+                None, the embedder is responsible for keeping the runtime alive
+                past the caller.
 
         Returns:
             Self if interface found and instance created, None otherwise
         """
         try:
-            return cls(handle, host)
+            return cls(handle, host, owner)
         except ValueError:
             return None
 
@@ -530,12 +594,17 @@ class PipelineValidatorContractCaller:
     - dispatch: passes `_instance` to all method calls
     """
 
-    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:
+    def __init__(self, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> None:
         """Create instance wrapper from handle and host interface.
 
         Args:
             handle: Contract handle from find_guest_contract
             host: Host interface pointer
+            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
+                Held for this caller's lifetime so the runtime cannot be
+                finalized before __del__ runs (which tears down the instance
+                and arena through that host). When None, the embedder must keep
+                the runtime alive past this caller.
 
         Raises:
             ValueError: If interface not found or create_instance failed
@@ -554,6 +623,9 @@ class PipelineValidatorContractCaller:
         # off instance data.
         self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
         self._host: ctypes.c_void_p = host
+        # Pin the runtime: refcounting then guarantees the owner outlives this
+        # caller, so __del__ tears down through a still-live host.
+        self._owner: object | None = owner
         # Per-caller call arena. create_string_buffer is C-heap memory (not the
         # managed heap), so cross-boundary arena data stays off Python's GC.
         self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
@@ -577,20 +649,28 @@ class PipelineValidatorContractCaller:
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
             _arena_reset(self._arena, self._host)
+        # Release the runtime pin now that teardown has completed.
+        self._owner = None
 
     @classmethod
-    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
+    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:
         """Factory method - creates instance or None if failed.
 
         Args:
             handle: Contract handle from find_guest_contract
             host: Host interface pointer
+            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
+                The caller keeps a reference for its lifetime so the runtime
+                cannot be finalized before __del__ runs (which calls
+                destroy_instance and arena teardown through the runtime). If
+                None, the embedder is responsible for keeping the runtime alive
+                past the caller.
 
         Returns:
             Self if interface found and instance created, None otherwise
         """
         try:
-            return cls(handle, host)
+            return cls(handle, host, owner)
         except ValueError:
             return None
 

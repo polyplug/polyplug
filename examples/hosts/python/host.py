@@ -61,7 +61,7 @@ def make_caller(caller_cls, rt, contract_id: int):
     handle = rt.find_guest_contract(contract_id, 0)
     if handle.index == 0xFFFFFFFF:
         return None
-    return caller_cls.create(handle, rt._ensure_host())
+    return caller_cls.create(handle, rt._ensure_host(), owner=rt)
 
 
 def handle_reload(phase: ReloadPhase) -> None:

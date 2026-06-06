@@ -421,11 +421,13 @@ fn generate_host_caller_class_stub(out: &mut String, contract: &ResolvedContract
     let caller_name: String = format!("{struct_name}Caller");
 
     out.push_str(&format!("class {caller_name}:\n"));
-    out.push_str("    def __init__(self, handle: int, host: ctypes.c_void_p) -> None: ...\n");
+    out.push_str(
+        "    def __init__(self, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> None: ...\n",
+    );
     out.push_str("    def __del__(self) -> None: ...\n");
     out.push_str("    @classmethod\n");
     out.push_str(
-        "    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]: ...\n",
+        "    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]: ...\n",
     );
     out.push_str("    def is_valid(self) -> bool: ...\n");
     out.push_str("    def reset(self) -> None: ...\n");
@@ -704,11 +706,20 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     out.push_str("    \"\"\"\n\n");
 
     // Constructor: resolve handle + create_instance
-    out.push_str("    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:\n");
+    out.push_str(
+        "    def __init__(self, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> None:\n",
+    );
     out.push_str("        \"\"\"Create instance wrapper from handle and host interface.\n\n");
     out.push_str("        Args:\n");
     out.push_str("            handle: Contract handle from find_guest_contract\n");
-    out.push_str("            host: Host interface pointer\n\n");
+    out.push_str("            host: Host interface pointer\n");
+    out.push_str("            owner: Python object that owns `host` (e.g. a polyplug.Runtime).\n");
+    out.push_str("                Held for this caller's lifetime so the runtime cannot be\n");
+    out.push_str("                finalized before __del__ runs (which tears down the instance\n");
+    out.push_str(
+        "                and arena through that host). When None, the embedder must keep\n",
+    );
+    out.push_str("                the runtime alive past this caller.\n\n");
     out.push_str("        Raises:\n");
     out.push_str("            ValueError: If interface not found or create_instance failed\n");
     out.push_str("        \"\"\"\n");
@@ -726,6 +737,11 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     out.push_str("        # off instance data.\n");
     out.push_str("        self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)\n");
     out.push_str("        self._host: ctypes.c_void_p = host\n");
+    out.push_str(
+        "        # Pin the runtime: refcounting then guarantees the owner outlives this\n",
+    );
+    out.push_str("        # caller, so __del__ tears down through a still-live host.\n");
+    out.push_str("        self._owner: object | None = owner\n");
     if needs_arena {
         out.push_str(
             "        # Per-caller call arena. create_string_buffer is C-heap memory (not the\n",
@@ -763,20 +779,32 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
         out.push_str("        if getattr(self, \"_arena\", None) is not None:\n");
         out.push_str("            _arena_reset(self._arena, self._host)\n");
     }
+    out.push_str("        # Release the runtime pin now that teardown has completed.\n");
+    out.push_str("        self._owner = None\n");
     out.push('\n');
 
     // Factory method
     out.push_str("    @classmethod\n");
-    out.push_str("    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:\n");
+    out.push_str(
+        "    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:\n",
+    );
     out.push_str("        \"\"\"Factory method - creates instance or None if failed.\n\n");
     out.push_str("        Args:\n");
     out.push_str("            handle: Contract handle from find_guest_contract\n");
-    out.push_str("            host: Host interface pointer\n\n");
+    out.push_str("            host: Host interface pointer\n");
+    out.push_str("            owner: Python object that owns `host` (e.g. a polyplug.Runtime).\n");
+    out.push_str("                The caller keeps a reference for its lifetime so the runtime\n");
+    out.push_str("                cannot be finalized before __del__ runs (which calls\n");
+    out.push_str("                destroy_instance and arena teardown through the runtime). If\n");
+    out.push_str(
+        "                None, the embedder is responsible for keeping the runtime alive\n",
+    );
+    out.push_str("                past the caller.\n\n");
     out.push_str("        Returns:\n");
     out.push_str("            Self if interface found and instance created, None otherwise\n");
     out.push_str("        \"\"\"\n");
     out.push_str("        try:\n");
-    out.push_str("            return cls(handle, host)\n");
+    out.push_str("            return cls(handle, host, owner)\n");
     out.push_str("        except ValueError:\n");
     out.push_str("            return None\n\n");
 
