@@ -4,43 +4,13 @@
 
 from __future__ import annotations
 import ctypes
-from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_abi import AbiErrorCode, AbiError, DispatchType, DispatchMechanisms, NativeDispatch, HostApi, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version
-from polyplug_guest import store_host_interface, get_host_interface, _init_allocator
-
-if TYPE_CHECKING:
-    from ctypes import _Pointer as _CtypesPointer
-    ctypes.POINTER = _CtypesPointer  # type: ignore[assignment]
+from polyplug_abi import StringView, to_str
+from polyplug_guest import register_contract, alloc_string_arena
 
 POLYPLUG_ABI_VERSION: int = 1
-class _AbiError(ctypes.Structure):
-    _fields_ = [
-        ('code', ctypes.c_uint32),
-        ('_pad', ctypes.c_uint32),
-        ('message_ptr', ctypes.c_void_p),
-        ('message_len', ctypes.c_size_t),
-    ]
-
-class _GuestContractInstance(ctypes.Structure):
-    _fields_ = [
-        ('data', ctypes.c_void_p),
-        ('contract_id', ctypes.c_uint64),
-    ]
-
-_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, _GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)
-_DISPATCH_FN_TYPE: TypeAlias = Callable[[int, int], _AbiError]
-_ABI_ERROR_SIZE: int = ctypes.sizeof(_AbiError)
-
-def _wrap_sret(impl: _DISPATCH_FN_TYPE) -> Callable[[int, _GuestContractInstance, int, int], None]:
-    """Adapt an (args, out) -> _AbiError impl to the sret + instance convention."""
-    def _sret_wrapper(sret_ptr: int, instance: _GuestContractInstance, args_ptr: int, out_ptr: int) -> None:
-        _ = instance  # stateless plugins ignore the instance handle
-        err: _AbiError = impl(args_ptr, out_ptr)
-        ctypes.memmove(sret_ptr, ctypes.addressof(err), _ABI_ERROR_SIZE)
-    return _sret_wrapper
 
 class VALIDATORPipelineValidatorPlugin:
-    def validate(self, input: StringView) -> StringView:
+    def validate(self, input: str) -> str:
         raise NotImplementedError
 
 _validator_IMPL: VALIDATORPipelineValidatorPlugin | None = None
@@ -48,87 +18,41 @@ def set_validator_impl(impl: VALIDATORPipelineValidatorPlugin) -> None:
     global _validator_IMPL
     _validator_IMPL = impl
 
-VALIDATOR_PLUGIN_NAME_BYTES: bytes = b"validator"
-VALIDATOR_CONTRACT_NAME_BYTES: bytes = b"pipeline.Validator@1"
-VALIDATOR_PLUGIN_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p(VALIDATOR_PLUGIN_NAME_BYTES), ctypes.c_void_p)
-VALIDATOR_CONTRACT_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p(VALIDATOR_CONTRACT_NAME_BYTES), ctypes.c_void_p)
-VALIDATOR_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
-    name=StringView(ptr=VALIDATOR_PLUGIN_NAME_C, len=len(VALIDATOR_PLUGIN_NAME_BYTES)),
-    contract_name=StringView(ptr=VALIDATOR_CONTRACT_NAME_C, len=len(VALIDATOR_CONTRACT_NAME_BYTES)),
-    version=Version(major=1, minor=0, patch=0),
-)
-
-def validator_validate_abi(args_ptr: int, out_ptr: int) -> _AbiError:
+def validator_validate_abi(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
     impl: VALIDATORPipelineValidatorPlugin | None = _validator_IMPL
     if impl is None:
-        return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)
+        raise RuntimeError("plugin impl not set")
     if not args_ptr:
-        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)
+        raise RuntimeError("null args pointer")
     if not out_ptr:
-        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)
-    input: StringView = StringView.from_address(args_ptr)
+        raise RuntimeError("null out pointer")
+    _ = arena_ptr
+    input: str = to_str(StringView.from_address(args_ptr))
     result = impl.validate(input)
-    out_ptr_t: Any = ctypes.cast(ctypes.c_void_p(out_ptr), ctypes.POINTER(StringView))
-    out_ptr_t[0] = result
-    return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)
-
-VALIDATOR_validator_validate_abi_CFUNC = _DISPATCH_FN_CTYPE(_wrap_sret(validator_validate_abi))
-
-VALIDATOR_FNS = (ctypes.c_void_p * 1) (
-    ctypes.cast(VALIDATOR_validator_validate_abi_CFUNC, ctypes.c_void_p),
-)
-
-VALIDATOR_INTERFACE: GuestContractInterface = GuestContractInterface(
-    contract_id=0x45173A959EEC57C5,
-    contract_version=Version(major=1, minor=0, patch=0),
-    dispatch_type=DispatchType.Native,
-    dispatch=DispatchMechanisms(
-        native=NativeDispatch(
-            function_count=1,
-            functions=ctypes.cast(VALIDATOR_FNS, ctypes.c_void_p),
-        )
-    ),
-)
+    out_view: StringView = alloc_string_arena(_polyplug_arena_alloc, result)
+    ctypes.memmove(out_ptr, ctypes.addressof(out_view), ctypes.sizeof(out_view))
 
 def polyplug_abi_version() -> int:
     return 1
 
 def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
-    """Initialize plugin with host interface.
+    """Record this bundle's contracts for the polyplug_python VM loader.
+
+    Deposits `_polyplug_registrations` via register_contract; the loader reads
+    it after this returns and registers each contract itself.
 
     Args:
-        host_ptr: Pointer to HostApi
-        ctx_ptr: Pointer to BundleInitContext
+        host_ptr: HostApi pointer (unused: VM dispatch carries no host state here)
+        ctx_ptr: BundleInitContext pointer (unused)
     """
-    if host_ptr == 0:
-        return
-    if ctx_ptr == 0:
-        return
-    store_host_interface(host_ptr)
-    _init_allocator(host_ptr, ctx_ptr)
-    ctx: BundleInitContext = BundleInitContext.from_address(ctx_ptr)
-    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))
-    err_VALIDATOR: AbiError = host.contents.register_guest_contract(
-        host_ptr, ctypes.byref(VALIDATOR_DESCRIPTOR), ctypes.byref(VALIDATOR_INTERFACE)
+    _ = host_ptr
+    _ = ctx_ptr
+    register_contract(
+        globals(),
+        contract="pipeline.Validator@1",
+        functions=[
+            validator_validate_abi,
+        ],
+        plugin_name="validator",
     )
-    if err_VALIDATOR.code != AbiErrorCode.Ok:
-        raise RuntimeError("plugin registration failed")
-
-def polyplug_get_extension(name: bytes) -> int:
-    """Get a host extension by name. Returns 0 (null) if not registered.
-
-    Args:
-        name: Extension name as UTF-8 bytes.
-    Returns:
-        Opaque extension pointer as int, or 0 if not registered.
-    """
-    host_ptr: int = get_host_interface()
-    if host_ptr == 0:
-        return 0
-    hash_val: int = 2166136261
-    for byte in name:
-        hash_val ^= byte
-        hash_val = (hash_val * 16777619) & 0xFFFFFFFF
-    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))
-    return host.contents.get_extension(host_ptr, ctypes.c_uint32(hash_val))
 

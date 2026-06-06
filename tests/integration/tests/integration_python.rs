@@ -9,6 +9,7 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
 use polyplug_python::PythonConfig;
@@ -72,15 +73,44 @@ fn get_vtable(rt: &Runtime) -> *const GuestContractInterface {
         .expect("handle must be valid")
 }
 
-/// Read the function count from a Native-dispatch vtable.
-fn native_function_count(vtable: &GuestContractInterface) -> u32 {
+/// Invoke a function on a VM-dispatch vtable through `dispatch.vm.call`.
+///
+/// Python guests now register a `DispatchType::VirtualMachine` interface (the
+/// previous ctypes native-fn-ptr path is gone), so dispatch flows through the
+/// loader-provided 6-arg `call` exactly like the Lua and JS guests.
+///
+/// # Safety
+/// `fn_id` must be a valid slot declared by the fixture's `function_count`, and
+/// `args`/`out` must point to live, correctly-typed buffers for that function's
+/// ABI layout that outlive the synchronous call.
+unsafe fn call_vm_function(
+    vtable: &GuestContractInterface,
+    fn_id: u32,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
     assert_eq!(
         vtable.dispatch_type,
-        DispatchType::Native,
-        "python loader must use Native dispatch"
+        DispatchType::VirtualMachine,
+        "python loader must use VM dispatch"
     );
-    // SAFETY: dispatch_type is Native, so accessing the native union member is valid.
-    unsafe { vtable.dispatch.native.function_count }
+    // SAFETY: the dispatch_type assertion above proves the active union variant is `vm`, so reading
+    // `dispatch.vm.{call,loader_data}` is the correct field of the union. The runtime populates
+    // `vm.call` with a non-null loader-provided dispatcher and `vm.loader_data` with the matching
+    // loader context during registration; `vtable` is a live borrow held by the caller for the
+    // duration of this call, so both remain valid. A null arena selects the `host->alloc` fallback
+    // for variable-size returns. `fn_id`, `args`, and `out` are forwarded under the caller's
+    // invariants (see the call sites).
+    unsafe {
+        (vtable.dispatch.vm.call)(
+            vtable.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            fn_id,
+            args,
+            out,
+            core::ptr::null_mut(),
+        )
+    }
 }
 
 #[test]
@@ -109,20 +139,15 @@ fn integration_python_add() {
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid; the Python module stays loaded for process lifetime.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
-    assert!(
-        native_function_count(vtable) >= 1,
-        "test.add vtable must have at least 1 function"
-    );
     let args: AddArgs = AddArgs { a: 3, b: 5 };
     let mut out: u32 = 0_u32;
-    // SAFETY: fn_ptr is function 0 (add). args/out are correctly typed for the add function.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: cast to generic dispatch signature; arg types enforced by test (AddArgs matches).
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args is a valid AddArgs, out is a valid u32.
+    // SAFETY: fn_id 0 is the `add` slot declared by the fixture's `function_count`. `args` points to
+    // a live `AddArgs` (`#[repr(C)]`, matching the guest's `add` parameter layout) and `out` points
+    // to a live `u32` matching the declared return; both outlive the synchronous call.
     let result: AbiError = unsafe {
-        dispatch_fn(
+        call_vm_function(
+            vtable,
+            0,
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -143,20 +168,15 @@ fn integration_python_add_primitive() {
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid; the Python module stays loaded.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
-    assert!(
-        native_function_count(vtable) >= 2,
-        "test.add vtable must have at least 2 functions"
-    );
     let args: AddArgs = AddArgs { a: 10, b: 20 };
     let mut out: u32 = 0_u32;
-    // SAFETY: fn_ptr is function 1 (add_primitive). args/out are correctly typed.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(1) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: same dispatch signature as add; arg types enforced by test.
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args and out are valid and correctly typed.
+    // SAFETY: fn_id 1 is the `add_primitive` slot declared by the fixture. `args` points to a live
+    // `AddArgs` (`#[repr(C)]`, matching the guest's parameter layout) and `out` points to a live
+    // `u32` matching the declared return; both outlive the synchronous call.
     let result: AbiError = unsafe {
-        dispatch_fn(
+        call_vm_function(
+            vtable,
+            1,
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -177,19 +197,13 @@ fn integration_python_version_string() {
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
-    assert!(
-        native_function_count(vtable) >= 3,
-        "test.add vtable must have at least 3 functions"
-    );
     let mut out_view: StringView = StringView::null();
-    // SAFETY: fn_ptr is function 2 (version). No arg input needed; pass null.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: same dispatch signature; version takes no args (null input accepted by Python side).
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: out_view is a valid StringView allocation on the stack.
+    // SAFETY: fn_id 2 is the `version` slot. It takes no args, so a null `args` pointer is accepted
+    // by the Python side; `out` points to a live `StringView` slot for the return.
     let result: AbiError = unsafe {
-        dispatch_fn(
+        call_vm_function(
+            vtable,
+            2,
             core::ptr::null::<()>(),
             &mut out_view as *mut StringView as *mut (),
         )
@@ -201,16 +215,15 @@ fn integration_python_version_string() {
     );
 }
 
-/// Python guests dispatch through `DispatchType::Native` (ctypes CFUNCTYPE
-/// function pointers), whose ABI signature `fn(instance, args, out) -> AbiError`
-/// carries NO per-call CallArena. Unlike VM guests (Lua, JS) — which receive an
-/// arena and route variable-size returns through it for zero host allocations —
-/// a Python guest's string return is allocated via `host->alloc` (or a static
-/// buffer), exactly like native Rust/C++. This test pins that invariant: the
-/// vtable is Native (not VirtualMachine), so there is no arena path to exercise.
-/// Repeated string returns therefore stay correct across calls without any arena.
+/// Python guests now dispatch through `DispatchType::VirtualMachine` (the
+/// previous ctypes native-fn-ptr path is gone, since closure trampolines are
+/// undefined behaviour on arm64). The VM `call` signature carries an optional
+/// per-call `CallArena`; this test passes a null arena, which selects the
+/// `host->alloc` fallback for the variable-size string return. This test pins
+/// that the string return stays correct across many calls on the null-arena
+/// path — no stale buffer reuse, no aliasing between iterations.
 #[test]
-fn integration_python_string_return_is_native_no_arena() {
+fn integration_python_string_return_vm_null_arena() {
     skip_if_no_python!();
     let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("fixture must load");
@@ -219,21 +232,19 @@ fn integration_python_string_return_is_native_no_arena() {
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert_eq!(
         vtable.dispatch_type,
-        DispatchType::Native,
-        "python guests use Native dispatch — no per-call arena is delivered"
+        DispatchType::VirtualMachine,
+        "python guests use VM dispatch"
     );
 
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: function 2 (version) takes no args; sret handled by the return type.
-        unsafe { core::mem::transmute(fn_ptr) };
-
-    // The same value must come back correctly on every call with no arena involved.
+    // The same value must come back correctly on every call on the null-arena path.
     for i in 0..64 {
         let mut out_view: StringView = StringView::null();
-        // SAFETY: out_view is a valid StringView slot; version reads no input.
+        // SAFETY: fn_id 2 is the `version` slot; it reads no input, so a null `args` pointer is
+        // accepted. `out` points to a live `StringView` slot for this iteration.
         let result: AbiError = unsafe {
-            dispatch_fn(
+            call_vm_function(
+                vtable,
+                2,
                 core::ptr::null::<()>(),
                 &mut out_view as *mut StringView as *mut (),
             )
@@ -317,19 +328,13 @@ fn integration_python_utf8_roundtrip() {
     let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
-    assert!(
-        native_function_count(vtable) >= 3,
-        "test.add vtable must have at least 3 functions"
-    );
     let mut out_view: StringView = StringView::null();
-    // SAFETY: fn_ptr is function 2 (version). No arg input needed; pass null.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: same dispatch signature; version takes no args (null input accepted by Python side).
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: out_view is a valid StringView allocation on the stack.
+    // SAFETY: fn_id 2 is the `version` slot; it reads no input, so a null `args` pointer is accepted
+    // by the Python side. `out` points to a live `StringView` slot for the return.
     let result: AbiError = unsafe {
-        dispatch_fn(
+        call_vm_function(
+            vtable,
+            2,
             core::ptr::null::<()>(),
             &mut out_view as *mut StringView as *mut (),
         )

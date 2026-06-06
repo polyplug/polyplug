@@ -1,18 +1,17 @@
 // Integration tests for the polyplug_python loader's in-memory `BundleSource`
-// support (`Code` and `Bytes`).
+// support (`Code` and `Bytes`) under the VM-dispatch model.
 //
-// `Code(String)` carries the plugin's Python module source directly, with no
-// bundle directory. These tests load such a plugin through
-// `Runtime::load_bundle_from_source`, then resolve its registered contract and
-// assert the resolved interface's ABI metadata. They also verify that non-UTF-8
-// `Bytes` are rejected with a structured error. See `CODE_PLUGIN_SRC` for why a
-// live native call cannot be exercised from a pure-`ctypes` inline plugin.
+// `Code(String)` / `Bytes(Vec<u8>)` carry the plugin's Python module source
+// directly, with no bundle directory. These tests load such a plugin through
+// `Runtime::load_bundle_from_source`, resolve its registered contract, assert
+// the resolved interface is VM dispatch, and exercise a live VM call. They also
+// verify that non-UTF-8 `Bytes` are rejected with a structured error.
 //
-// The inline plugin is intentionally `ctypes`-only (standard library): in-memory
-// sources are single-file with no bundle directory, so a bundle-vendored
-// generated SDK is not importable — only modules already on the interpreter's
-// `sys.path` (the standard library) are reachable. `ctypes` is sufficient to
-// reach the ABI, which is exactly how the existing path-based fixture works too.
+// The inline plugin is `ctypes`-only (standard library): in-memory sources are
+// single-file with no bundle directory, so a bundle-vendored generated SDK is
+// not importable — only modules already on `sys.path` (the standard library) are
+// reachable. `ctypes` is sufficient to write into the `out` pointer the VM
+// dispatcher forwards as an int.
 #![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
@@ -23,143 +22,37 @@ use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime_builder::RuntimeBuilder;
+use polyplug_abi::AbiError;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractId;
+use polyplug_abi::GuestContractInstance;
+use polyplug_abi::dispatch::DispatchType;
 use polyplug_python::PythonLoader;
 use polyplug_utils::bundle_id;
 
-/// Contract id the inline plugin registers under.
-const CODE_CONTRACT_ID: u64 = 0x0BAD_F00D_1234_5678;
-
-/// A self-contained Python plugin (ctypes only) that registers a native-dispatch
-/// contract advertising one function.
-///
-/// # Dispatch limitation (why function 0 is a stub, not a live callback)
-///
-/// A native-dispatch function must have the frozen C signature
-/// `extern "C" fn(GuestContractInstance, *const, *mut) -> AbiError`, returning a
-/// 24-byte `AbiError` struct **by value**. `ctypes` cannot create a callback
-/// (Python-implemented C function) whose return type is a struct of that size —
-/// CPython raises `TypeError: invalid result type for callback function`. A real
-/// Python guest therefore reaches a working native function through a *compiled* C
-/// trampoline shipped in the bundle's generated SDK, which a single-file in-memory
-/// source has no way to provide. Consequently an inline `Code`/`Bytes` plugin can
-/// fully *register and resolve* a native contract (the source-only achievable
-/// surface, and exactly what every path-based loader test asserts) but cannot host
-/// a live native callback. The registered function-pointer slot here is a null
-/// placeholder; the test asserts on the resolved interface metadata rather than
-/// invoking the function.
-///
-/// All ctypes objects whose lifetime must outlive `polyplug_init` (the
-/// function-pointer array, the descriptor and interface structs) are stashed as
-/// attributes on the permanently-resident `ctypes` stdlib module, so they stay
-/// alive for the interpreter's lifetime regardless of how the inline module object
-/// itself is retained.
+/// A self-contained Python plugin (ctypes only) that registers one VM-dispatch
+/// contract whose function 0 writes 0x7B into the i32 at `out`.
 const CODE_PLUGIN_SRC: &str = r#"
 import ctypes
 
-class _StringView(ctypes.Structure):
-    _fields_ = [("ptr", ctypes.c_void_p), ("len", ctypes.c_size_t)]
-
-class _AbiError(ctypes.Structure):
-    _fields_ = [("code", ctypes.c_uint32), ("message", _StringView)]
-
-class _Version(ctypes.Structure):
-    _fields_ = [
-        ("major", ctypes.c_uint32),
-        ("minor", ctypes.c_uint32),
-        ("patch", ctypes.c_uint32),
-    ]
-
-class _PluginDescriptor(ctypes.Structure):
-    _fields_ = [
-        ("name",          _StringView),
-        ("contract_name", _StringView),
-        ("version_major", ctypes.c_uint32),
-        ("version_minor", ctypes.c_uint32),
-        ("version_patch", ctypes.c_uint32),
-    ]
-
-class _NativeDispatch(ctypes.Structure):
-    _fields_ = [
-        ("function_count", ctypes.c_uint32),
-        ("functions",      ctypes.c_void_p),
-    ]
-
-class _VmDispatch(ctypes.Structure):
-    _fields_ = [
-        ("call",        ctypes.c_void_p),
-        ("loader_data", ctypes.c_void_p),
-    ]
-
-class _DispatchMechanisms(ctypes.Union):
-    _fields_ = [("native", _NativeDispatch), ("vm", _VmDispatch)]
-
-class _GuestContractInterface(ctypes.Structure):
-    _fields_ = [
-        ("contract_id",      ctypes.c_uint64),
-        ("contract_version", _Version),
-        ("dispatch_type",    ctypes.c_uint32),  # 0 = Native, 1 = VM
-        ("create_instance",  ctypes.c_void_p),
-        ("destroy_instance", ctypes.c_void_p),
-        ("dispatch",         _DispatchMechanisms),
-    ]
-
-# Native dispatch advertises one function. The slot is a null placeholder: a
-# live native callback would need a 24-byte AbiError struct return, which ctypes
-# callbacks cannot express (see the Rust-side doc comment). The test asserts on
-# the resolved interface metadata, not on invoking the function.
-_FUNCS = (ctypes.c_void_p * 1)()
-_FUNCS[0] = None
-
-_NAME_BYTES     = b"code_plugin\x00"
-_CONTRACT_BYTES = b"code.contract\x00"
-
-_DESC = _PluginDescriptor()
-_DESC.name.ptr          = ctypes.cast(ctypes.c_char_p(_NAME_BYTES), ctypes.c_void_p).value
-_DESC.name.len          = len(_NAME_BYTES) - 1
-_DESC.contract_name.ptr = ctypes.cast(ctypes.c_char_p(_CONTRACT_BYTES), ctypes.c_void_p).value
-_DESC.contract_name.len = len(_CONTRACT_BYTES) - 1
-_DESC.version_major = 1
-_DESC.version_minor = 0
-_DESC.version_patch = 0
-
-_INTERFACE = _GuestContractInterface()
-_INTERFACE.contract_id            = 0x0BADF00D12345678
-_INTERFACE.contract_version.major = 1
-_INTERFACE.contract_version.minor = 0
-_INTERFACE.contract_version.patch = 0
-_INTERFACE.dispatch_type          = 0  # Native
-_INTERFACE.create_instance        = None
-_INTERFACE.destroy_instance       = None
-_INTERFACE.dispatch.native.function_count = 1
-_INTERFACE.dispatch.native.functions      = ctypes.cast(_FUNCS, ctypes.c_void_p).value
-
-# Keep every object whose pointer the host will dereference alive for the
-# interpreter's lifetime by anchoring it on the resident `ctypes` module.
-ctypes._polyplug_code_plugin_anchor = (_FUNCS, _DESC, _INTERFACE)
-
-_RegisterFn = ctypes.CFUNCTYPE(
-    _AbiError,
-    ctypes.c_void_p,
-    ctypes.c_void_p,
-    ctypes.c_void_p,
-)
-
-class _HostApi(ctypes.Structure):
-    _fields_ = [
-        ("runtime", ctypes.c_void_p),
-        ("register_guest_contract", _RegisterFn),
-    ]
+def _fn0(args_ptr, out_ptr, arena_ptr):
+    ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = 0x7B
 
 def polyplug_init(host_interface: int, _ctx: int) -> None:
-    host = _HostApi.from_address(host_interface)
-    host.register_guest_contract(
-        ctypes.c_void_p(host_interface),
-        ctypes.addressof(_DESC),
-        ctypes.addressof(_INTERFACE),
-    )
+    global _polyplug_registrations
+    _polyplug_registrations = [
+        {
+            "contract": "code.contract@1",
+            "plugin_name": "code_plugin",
+            "functions": [_fn0],
+        },
+    ]
 "#;
+
+/// Contract id the inline plugin registers under (`code.contract@1`).
+fn code_contract_id() -> u64 {
+    GuestContractId::new("code.contract", 1).id()
+}
 
 /// Build a `ManifestData` for an in-memory (sourceless) Python bundle.
 fn inline_manifest(name: &str) -> ManifestData {
@@ -167,9 +60,8 @@ fn inline_manifest(name: &str) -> ManifestData {
         id: bundle_id(name),
         name: name.to_owned(),
         runtime: "python".to_owned(),
-        // `file` is ignored by the loader for in-memory sources, but the shared
-        // `ManifestData::validate()` (run by `load_bundle_from_source` before
-        // dispatch) requires a non-empty `file`, so a placeholder is supplied.
+        // `file` is ignored for in-memory sources, but `ManifestData::validate()`
+        // (run by `load_bundle_from_source`) requires a non-empty placeholder.
         file: "<inline>".to_owned(),
         path: std::path::PathBuf::new(),
         version: String::new(),
@@ -181,14 +73,8 @@ fn inline_manifest(name: &str) -> ManifestData {
     }
 }
 
-/// A `Code`-sourced plugin loads, registers its contract, and that contract
-/// resolves to an interface carrying the correct ABI metadata.
-///
-/// "Resolve + assert correct results" is asserted at the interface level: the
-/// resolved `GuestContractInterface` must carry the contract id, version, native
-/// dispatch type, and advertised function count the inline plugin registered. A
-/// live native *call* is not asserted because a pure-`ctypes` inline plugin cannot
-/// host a native callback returning `AbiError` by value (see `CODE_PLUGIN_SRC`).
+/// A `Code`-sourced plugin loads, registers a VM-dispatch contract, and that
+/// contract dispatches a live VM call that writes into `out`.
 #[test]
 fn code_source_loads_resolves_and_dispatches() {
     let runtime: std::sync::Arc<Runtime> = RuntimeBuilder::new()
@@ -201,14 +87,12 @@ fn code_source_loads_resolves_and_dispatches() {
         runtime.load_bundle_from_source(manifest, BundleSource::Code(CODE_PLUGIN_SRC.to_owned()));
     assert!(result.is_ok(), "inline Code load failed: {result:?}");
 
-    // Resolve: the contract must be findable in the registry.
-    let contract_id: GuestContractId = GuestContractId::from_u64(CODE_CONTRACT_ID);
+    let contract_id: GuestContractId = GuestContractId::from_u64(code_contract_id());
     let handle: GuestContractHandle = runtime
         .registry()
         .find(contract_id, 0)
         .expect("contract must be registered after inline Code load");
 
-    // The interface must resolve to a non-null pointer.
     let interface_ptr: *const polyplug_abi::GuestContractInterface = runtime
         .registry()
         .resolve_guest_contract(handle)
@@ -218,34 +102,44 @@ fn code_source_loads_resolves_and_dispatches() {
         "resolved interface must be non-null"
     );
 
-    // SAFETY: `interface_ptr` is a non-null pointer to a registered, retire-not-drop
-    // GuestContractInterface owned by the runtime; reading its fields is sound.
+    // SAFETY: runtime-owned, retire-not-drop interface; reading its fields is sound.
     let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
     assert_eq!(
         interface.contract_id.id(),
-        CODE_CONTRACT_ID,
+        code_contract_id(),
         "resolved contract id must match the registered one"
     );
     assert_eq!(
-        interface.contract_version.major, 1,
-        "resolved contract major version must match"
-    );
-    assert_eq!(
         interface.dispatch_type,
-        polyplug_abi::dispatch::DispatchType::Native,
-        "inline plugin registered a native dispatch contract"
+        DispatchType::VirtualMachine,
+        "inline plugin registered a VM dispatch contract"
     );
-    // SAFETY: dispatch_type == Native guarantees the `native` union variant is the
-    // active one, so reading it is sound.
-    let native: polyplug_abi::dispatch::NativeDispatch = unsafe { interface.dispatch.native };
-    assert_eq!(
-        native.function_count, 1,
-        "inline plugin advertised exactly one native function"
+
+    // Live VM call: fn 0 writes 0x7B into out.
+    // SAFETY: vm union arm is active (dispatch_type == VirtualMachine); loader_data
+    // wraps a live PythonLoaderData; out points at a valid i32.
+    let vm: polyplug_abi::dispatch::vm_dispatch::VmDispatch = unsafe { interface.dispatch.vm };
+    let mut out_buf: i32 = 0;
+    // SAFETY: see above — out is valid, args/arena are null and ignored.
+    let err: AbiError = unsafe {
+        (vm.call)(
+            vm.loader_data,
+            GuestContractInstance::null(),
+            0,
+            core::ptr::null(),
+            &mut out_buf as *mut i32 as *mut (),
+            core::ptr::null_mut(),
+        )
+    };
+    assert!(
+        err.is_ok(),
+        "vm dispatch should return Ok, got code {}",
+        err.code
     );
+    assert_eq!(out_buf, 0x7B, "callable must have written 0x7B into out");
 }
 
-/// A `Bytes`-sourced plugin carrying valid UTF-8 source behaves identically to
-/// `Code` — it loads and registers its contract.
+/// A `Bytes`-sourced plugin carrying valid UTF-8 behaves identically to `Code`.
 #[test]
 fn bytes_source_valid_utf8_loads() {
     let runtime: std::sync::Arc<Runtime> = RuntimeBuilder::new()
@@ -259,16 +153,14 @@ fn bytes_source_valid_utf8_loads() {
         runtime.load_bundle_from_source(manifest, BundleSource::Bytes(bytes));
     assert!(result.is_ok(), "inline Bytes load failed: {result:?}");
 
-    let contract_id: GuestContractId = GuestContractId::from_u64(CODE_CONTRACT_ID);
+    let contract_id: GuestContractId = GuestContractId::from_u64(code_contract_id());
     assert!(
         runtime.registry().find(contract_id, 0).is_ok(),
         "contract must be registered after inline Bytes load"
     );
 }
 
-/// `Bytes` carrying invalid UTF-8 must fail with the unified
-/// `LoaderError::InvalidSourceEncoding` — never a stringly-typed or panicking
-/// error.
+/// `Bytes` carrying invalid UTF-8 must fail with `LoaderError::InvalidSourceEncoding`.
 #[test]
 fn bytes_source_invalid_utf8_returns_structured_error() {
     let runtime: std::sync::Arc<Runtime> = RuntimeBuilder::new()
@@ -277,7 +169,6 @@ fn bytes_source_invalid_utf8_returns_structured_error() {
         .expect("runtime build");
 
     let manifest: ManifestData = inline_manifest("bad_utf8_plugin");
-    // 0xFF is never a valid UTF-8 byte.
     let bytes: Vec<u8> = vec![0x70, 0x79, 0xFF, 0xFE, 0x00];
     let err: RuntimeError = runtime
         .load_bundle_from_source(manifest, BundleSource::Bytes(bytes))
@@ -288,12 +179,9 @@ fn bytes_source_invalid_utf8_returns_structured_error() {
             source_kind,
             bundle,
         }) => {
-            assert_eq!(loader, "python", "loader must be the Python runtime name");
-            assert_eq!(source_kind, "bytes", "source_kind must be bytes");
-            assert_eq!(
-                bundle, "bad_utf8_plugin",
-                "bundle must be the manifest bundle name"
-            );
+            assert_eq!(loader, "python");
+            assert_eq!(source_kind, "bytes");
+            assert_eq!(bundle, "bad_utf8_plugin");
         }
         other => panic!("expected LoaderError::InvalidSourceEncoding, got: {other:?}"),
     }

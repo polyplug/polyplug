@@ -441,14 +441,35 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
-    out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_abi import AbiErrorCode, AbiError, DispatchType, DispatchMechanisms, NativeDispatch, HostApi, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version\n");
-    out.push_str(
-        "from polyplug_guest import store_host_interface, get_host_interface, _init_allocator\n\n",
-    );
-    out.push_str("if TYPE_CHECKING:\n");
-    out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
-    out.push_str("    ctypes.POINTER = _CtypesPointer  # type: ignore[assignment]\n\n");
+    // `struct` is only used by the precompiled scalar (un)pack consts; emit the
+    // import only when at least one function has scalar args or a scalar return.
+    let any_struct_const: bool = ir
+        .contracts
+        .iter()
+        .any(|c: &ResolvedContract| c.functions.iter().any(fn_uses_struct_const));
+    if any_struct_const {
+        out.push_str("import struct\n");
+    }
+    let any_string_arg: bool = ir
+        .contracts
+        .iter()
+        .any(|c: &ResolvedContract| c.functions.iter().any(fn_has_stringview_arg));
+    let any_string_ret: bool = ir
+        .contracts
+        .iter()
+        .any(|c: &ResolvedContract| c.functions.iter().any(fn_returns_stringview));
+    // polyplug_abi imports: StringView (to view args) and to_str (to transcode a
+    // StringView arg to `str`) are only needed when a function takes a StringView.
+    if any_string_arg {
+        out.push_str("from polyplug_abi import StringView, to_str\n");
+    }
+    // polyplug_guest imports: register_contract is always needed; alloc_string_arena
+    // only when a function returns a StringView (allocated from the call arena).
+    if any_string_ret {
+        out.push_str("from polyplug_guest import register_contract, alloc_string_arena\n\n");
+    } else {
+        out.push_str("from polyplug_guest import register_contract\n\n");
+    }
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -456,41 +477,25 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
         out.push_str(&format!("from guest.types import {}\n\n", import_list));
     }
 
-    out.push_str("POLYPLUG_ABI_VERSION: int = 1\n");
-    out.push_str("class _AbiError(ctypes.Structure):\n");
-    out.push_str("    _fields_ = [\n");
-    out.push_str("        ('code', ctypes.c_uint32),\n");
-    out.push_str("        ('_pad', ctypes.c_uint32),\n");
-    out.push_str("        ('message_ptr', ctypes.c_void_p),\n");
-    out.push_str("        ('message_len', ctypes.c_size_t),\n");
-    out.push_str("    ]\n\n");
-    // GuestContractInstance passed by value as the first dispatch argument.
-    out.push_str("class _GuestContractInstance(ctypes.Structure):\n");
-    out.push_str("    _fields_ = [\n");
-    out.push_str("        ('data', ctypes.c_void_p),\n");
-    out.push_str("        ('contract_id', ctypes.c_uint64),\n");
-    out.push_str("    ]\n\n");
-    // Native dispatch matches the canonical ABI signature
-    //   fn(instance: GuestContractInstance, args, out) -> AbiError
-    // exactly as the rust / cpp guest generators emit. The 24-byte AbiError
-    // return uses the System V sret convention: a hidden pointer prepended before
-    // the declared parameters. ctypes callbacks cannot return a ctypes.Structure
-    // by value, so dispatch fns are declared void-return with the hidden sret
-    // pointer as an explicit leading parameter, and _wrap_sret memmoves the
-    // AbiError result into it.
-    out.push_str(
-        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, _GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)\n",
-    );
-    out.push_str("_DISPATCH_FN_TYPE: TypeAlias = Callable[[int, int], _AbiError]\n");
-    out.push_str("_ABI_ERROR_SIZE: int = ctypes.sizeof(_AbiError)\n\n");
-    out.push_str("def _wrap_sret(impl: _DISPATCH_FN_TYPE) -> Callable[[int, _GuestContractInstance, int, int], None]:\n");
-    out.push_str("    \"\"\"Adapt an (args, out) -> _AbiError impl to the sret + instance convention.\"\"\"\n");
-    out.push_str("    def _sret_wrapper(sret_ptr: int, instance: _GuestContractInstance, args_ptr: int, out_ptr: int) -> None:\n");
-    out.push_str("        _ = instance  # stateless plugins ignore the instance handle\n");
-    out.push_str("        err: _AbiError = impl(args_ptr, out_ptr)\n");
-    out.push_str("        ctypes.memmove(sret_ptr, ctypes.addressof(err), _ABI_ERROR_SIZE)\n");
-    out.push_str("    return _sret_wrapper\n\n");
+    out.push_str("POLYPLUG_ABI_VERSION: int = 1\n\n");
 
+    // VM dispatch: Python plugins are VM-dispatch plugins. polyplug_init records
+    // each contract's functions via `register_contract`, which deposits the
+    // module-level `_polyplug_registrations` list the polyplug_python loader reads
+    // after init. The loader wraps each function in a VM-dispatch trampoline and
+    // registers the contract itself, then routes every per-call invocation through
+    // the `vm.call` transport. The guest therefore never builds a
+    // GuestContractInterface, never registers native function pointers, and never
+    // returns an AbiError from a ctypes callback — the previous sret-emulating
+    // ctypes path was undefined behaviour on arm64 and is gone.
+    //
+    // Each generated `<plugin>_<fn>_abi(args_ptr, out_ptr, arena_ptr)` callable
+    // receives three raw pointers as Python ints (arena_ptr is 0 when null). It
+    // unmarshals args, invokes the user impl, marshals the return into out_ptr,
+    // and returns normally on success or raises on failure (the loader maps a
+    // raised exception to AbiErrorCode.Generic).
+
+    let mut registrations: Vec<(String, String, &ResolvedContract)> = Vec::new();
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
             for contract_impl in &plugin.implements {
@@ -501,6 +506,8 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
                 }) {
                     generate_guest_plugin_trait(&mut out, &plugin.name, contract);
                     generate_guest_plugin_interface(&mut out, &plugin.name, contract);
+                    let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
+                    registrations.push((plugin.name.clone(), plugin_lower, contract));
                 }
             }
         }
@@ -508,91 +515,90 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
         for contract in &ir.contracts {
             generate_guest_contract_trait(&mut out, contract);
             generate_guest_contract_interface(&mut out, contract);
+            let lower: String = contract.name.replace('.', "_");
+            registrations.push((contract.name.clone(), lower, contract));
         }
     }
 
     out.push_str("def polyplug_abi_version() -> int:\n");
     out.push_str("    return 1\n\n");
     out.push_str("def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n");
-    out.push_str("    \"\"\"Initialize plugin with host interface.\n");
+    out.push_str("    \"\"\"Record this bundle's contracts for the polyplug_python VM loader.\n");
     out.push('\n');
+    out.push_str(
+        "    Deposits `_polyplug_registrations` via register_contract; the loader reads\n",
+    );
+    out.push_str("    it after this returns and registers each contract itself.\n\n");
     out.push_str("    Args:\n");
-    out.push_str("        host_ptr: Pointer to HostApi\n");
-    out.push_str("        ctx_ptr: Pointer to BundleInitContext\n");
+    out.push_str(
+        "        host_ptr: HostApi pointer (unused: VM dispatch carries no host state here)\n",
+    );
+    out.push_str("        ctx_ptr: BundleInitContext pointer (unused)\n");
     out.push_str("    \"\"\"\n");
-    out.push_str("    if host_ptr == 0:\n");
-    out.push_str("        return\n");
-    out.push_str("    if ctx_ptr == 0:\n");
-    out.push_str("        return\n");
-    out.push_str("    store_host_interface(host_ptr)\n");
-    out.push_str("    _init_allocator(host_ptr, ctx_ptr)\n");
-    out.push_str("    ctx: BundleInitContext = BundleInitContext.from_address(ctx_ptr)\n");
-    out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))\n");
-
-    if let Some(bundle) = &ir.bundle {
-        for plugin in &bundle.plugins {
-            let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
-            out.push_str(&format!(
-                "    err_{plugin_upper}: AbiError = host.contents.register_guest_contract(\n"
-            ));
-            out.push_str(&format!("        host_ptr, ctypes.byref({plugin_upper}_DESCRIPTOR), ctypes.byref({plugin_upper}_INTERFACE)\n"));
-            out.push_str("    )\n");
-            out.push_str(&format!(
-                "    if err_{plugin_upper}.code != AbiErrorCode.Ok:\n"
-            ));
-            out.push_str("        raise RuntimeError(\"plugin registration failed\")\n\n");
+    out.push_str("    _ = host_ptr\n");
+    out.push_str("    _ = ctx_ptr\n");
+    for (display_name, lower, contract) in &registrations {
+        let contract_str: String = format!("{}@{}", contract.name, contract.version.major);
+        out.push_str("    register_contract(\n");
+        out.push_str("        globals(),\n");
+        out.push_str(&format!("        contract=\"{contract_str}\",\n"));
+        out.push_str("        functions=[\n");
+        for func in &contract.functions {
+            out.push_str(&format!("            {lower}_{}_abi,\n", func.name));
         }
-    } else {
-        for contract in &ir.contracts {
-            let upper: String = contract_name_to_upper_snake(&contract.name);
-            out.push_str(&format!(
-                "    err_{upper}: AbiError = host.contents.register_guest_contract(\n"
-            ));
-            out.push_str(&format!(
-                "        host_ptr, ctypes.byref({upper}_DESCRIPTOR), ctypes.byref({upper}_INTERFACE)\n"
-            ));
-            out.push_str("    )\n");
-            out.push_str(&format!("    if err_{upper}.code != AbiErrorCode.Ok:\n"));
-            out.push_str("        raise RuntimeError(\"plugin registration failed\")\n\n");
-        }
+        out.push_str("        ],\n");
+        out.push_str(&format!("        plugin_name=\"{display_name}\",\n"));
+        out.push_str("    )\n");
     }
-
-    out.push_str("def polyplug_get_extension(name: bytes) -> int:\n");
-    out.push_str("    \"\"\"Get a host extension by name. Returns 0 (null) if not registered.\n\n");
-    out.push_str("    Args:\n");
-    out.push_str("        name: Extension name as UTF-8 bytes.\n");
-    out.push_str("    Returns:\n");
-    out.push_str("        Opaque extension pointer as int, or 0 if not registered.\n");
-    out.push_str("    \"\"\"\n");
-    out.push_str("    host_ptr: int = get_host_interface()\n");
-    out.push_str("    if host_ptr == 0:\n");
-    out.push_str("        return 0\n");
-    out.push_str("    hash_val: int = 2166136261\n");
-    out.push_str("    for byte in name:\n");
-    out.push_str("        hash_val ^= byte\n");
-    out.push_str("        hash_val = (hash_val * 16777619) & 0xFFFFFFFF\n");
-    out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))\n");
-    out.push_str("    return host.contents.get_extension(host_ptr, ctypes.c_uint32(hash_val))\n\n");
+    out.push('\n');
 
     out
+}
+
+/// Whether a function returns a `StringView` (the variable-size return the guest
+/// glue allocates from the call arena via `_polyplug_arena_alloc`).
+fn fn_returns_stringview(func: &ResolvedFunction) -> bool {
+    matches!(
+        func.returns,
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
+    )
+}
+
+/// Whether a function takes a `StringView` parameter (the guest glue views it
+/// and transcodes it to `str` via `to_str`).
+fn fn_has_stringview_arg(func: &ResolvedFunction) -> bool {
+    func.params
+        .iter()
+        .any(|p: &ResolvedParam| matches!(p.ty, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)))
+}
+
+/// Whether a function emits a precompiled `struct.Struct` const (scalar args via
+/// the no-padding fast path, or a scalar return).
+fn fn_uses_struct_const(func: &ResolvedFunction) -> bool {
+    let scalar_args: bool = uses_scalar_args_struct(&func.params);
+    let scalar_ret: bool = func
+        .returns
+        .as_ref()
+        .is_some_and(|ty: &ResolvedTypeRef| scalar_struct_format_char(ty).is_some());
+    scalar_args || scalar_ret
 }
 
 fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
-    out.push_str("import ctypes\n");
-    out.push_str("from typing import Any\n");
-    out.push_str("from polyplug_abi import HostApi, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView\n\n");
+    out.push_str("from typing import Any\n\n");
 
-    let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
+    // Guest-impl traits use ergonomic `str`/`bytes` for StringView/Buffer, so the
+    // stub references only user-defined struct types (if any) from guest.types.
+    let type_imports: BTreeSet<String> = collect_python_user_struct_imports(ir);
     if !type_imports.is_empty() {
         let import_list: String = type_imports.into_iter().collect::<Vec<String>>().join(", ");
         out.push_str(&format!("from guest.types import {}\n\n", import_list));
     }
 
     out.push_str("POLYPLUG_ABI_VERSION: int\n");
-    out.push_str("_DISPATCH_FN_TYPE: Any\n\n");
+    out.push_str("_polyplug_registrations: list[dict[str, Any]]\n\n");
 
     for contract in &ir.contracts {
         let trait_name: String = contract_name_to_guest_trait(&contract.name);
@@ -988,6 +994,26 @@ fn collect_python_type_imports(ir: &ValidatedIr) -> BTreeSet<String> {
     imports
 }
 
+/// Collect only the user-defined struct type names referenced by guest-impl
+/// trait signatures. StringView/Buffer are exposed as `str`/`bytes` and scalars
+/// as builtins, so the stub never imports them from guest.types.
+fn collect_python_user_struct_imports(ir: &ValidatedIr) -> BTreeSet<String> {
+    let mut imports: BTreeSet<String> = BTreeSet::new();
+    for contract in &ir.contracts {
+        for func in &contract.functions {
+            for param in &func.params {
+                if let ResolvedTypeRef::UserDefined(name) = &param.ty {
+                    imports.insert(name.clone());
+                }
+            }
+            if let Some(ResolvedTypeRef::UserDefined(name)) = &func.returns {
+                imports.insert(name.clone());
+            }
+        }
+    }
+    imports
+}
+
 fn collect_type_refs(
     imports: &mut BTreeSet<String>,
     params: &[ResolvedParam],
@@ -1035,9 +1061,9 @@ fn generate_guest_plugin_trait(out: &mut String, plugin_name: &str, contract: &R
     out.push_str(&format!("    _{plugin_lower}_IMPL = impl\n\n"));
 }
 
-fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
-    let sig_params: String = build_python_sig_params(func, contract_struct);
-    let ret_type: String = python_return_type(&func.returns);
+fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction, _contract_struct: &str) {
+    let sig_params: String = build_python_guest_impl_sig_params(func);
+    let ret_type: String = python_guest_impl_return_type(&func.returns);
     out.push_str(&format!(
         "    def {}(self{}) -> {}:\n",
         func.name, sig_params, ret_type
@@ -1048,112 +1074,55 @@ fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction, contra
 fn generate_guest_trait_stub_method(
     out: &mut String,
     func: &ResolvedFunction,
-    contract_struct: &str,
+    _contract_struct: &str,
 ) {
-    let sig_params: String = build_python_sig_params(func, contract_struct);
-    let ret_type: String = python_return_type(&func.returns);
+    let sig_params: String = build_python_guest_impl_sig_params(func);
+    let ret_type: String = python_guest_impl_return_type(&func.returns);
     out.push_str(&format!(
         "    def {}(self{}) -> {}: ...\n",
         func.name, sig_params, ret_type
     ));
 }
 
+/// Ergonomic guest-impl Python type for a param/return: `StringView` is exposed
+/// to the plugin author as `str` and `Buffer` as `bytes` (the generated glue
+/// transcodes at the ABI boundary). Scalars and user-defined structs map to
+/// their ctypes/value types unchanged.
+fn python_guest_impl_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "str".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "bytes".to_owned(),
+        _ => python_type_name(ty),
+    }
+}
+
+/// Guest-impl method parameter list (`, name: pytype` ...), using the ergonomic
+/// `str`/`bytes` types for StringView/Buffer.
+fn build_python_guest_impl_sig_params(func: &ResolvedFunction) -> String {
+    func.params
+        .iter()
+        .map(|p: &ResolvedParam| format!(", {}: {}", p.name, python_guest_impl_type_name(&p.ty)))
+        .collect::<Vec<String>>()
+        .join("")
+}
+
+/// Guest-impl method return type, using ergonomic `str`/`bytes` for
+/// StringView/Buffer and `None` for void.
+fn python_guest_impl_return_type(returns: &Option<ResolvedTypeRef>) -> String {
+    match returns {
+        Some(ty) if !is_void_type(ty) => python_guest_impl_type_name(ty),
+        _ => "None".to_owned(),
+    }
+}
+
 fn generate_guest_contract_interface(out: &mut String, contract: &ResolvedContract) {
-    let upper: String = contract_name_to_upper_snake(&contract.name);
+    // Non-bundle path: trait stored under `_<UPPER_SNAKE>_IMPL`, callables named
+    // `<lower>_<fn>_abi` (see generate_guest_contract_trait).
     let lower: String = contract.name.replace('.', "_");
+    let upper: String = contract_name_to_upper_snake(&contract.name);
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
-    let fn_count: usize = contract.functions.len();
-    let plugin_name: String = format!("{lower}_plugin");
-    let contract_name: String = format!("{}@{}", contract.name, contract.version.major);
-    let version_major: u32 = contract.version.major;
-    let version_minor: u32 = contract.version.minor;
-    let version_patch: u32 = contract.version.patch;
-
-    out.push_str(&format!(
-        "{upper}_PLUGIN_NAME_BYTES: bytes = b\"{plugin_name}\"\n"
-    ));
-    out.push_str(&format!(
-        "{upper}_CONTRACT_NAME_BYTES: bytes = b\"{contract_name}\"\n"
-    ));
-    out.push_str(&format!(
-        "{upper}_PLUGIN_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p({upper}_PLUGIN_NAME_BYTES), ctypes.c_void_p)\n"
-    ));
-    out.push_str(&format!(
-        "{upper}_CONTRACT_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p({upper}_CONTRACT_NAME_BYTES), ctypes.c_void_p)\n"
-    ));
-    out.push_str(&format!(
-        "{upper}_DESCRIPTOR: PluginDescriptor = PluginDescriptor(\n"
-    ));
-    out.push_str(&format!(
-        "    name=StringView(ptr={upper}_PLUGIN_NAME_C, len=len({upper}_PLUGIN_NAME_BYTES)),\n"
-    ));
-    out.push_str(&format!("    contract_name=StringView(ptr={upper}_CONTRACT_NAME_C, len=len({upper}_CONTRACT_NAME_BYTES)),\n"));
-    out.push_str(&format!("    version=Version(major={version_major}, minor={version_minor}, patch={version_patch}),\n"));
-    out.push_str(")\n\n");
-
-    for func in &contract.functions {
-        let abi_name: String = format!("{lower}_{}_abi", func.name);
-        let has_return: bool = has_return_value(&func.returns);
-        let has_params: bool = !func.params.is_empty();
-        out.push_str(&format!(
-            "def {abi_name}(args_ptr: int, out_ptr: int) -> _AbiError:\n"
-        ));
-        out.push_str(&format!("    impl: {trait_name} | None = _{upper}_IMPL\n"));
-        out.push_str("    if impl is None:\n");
-        out.push_str("        return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)\n");
-        if has_params {
-            out.push_str("    if not args_ptr:\n");
-            out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
-        }
-        if has_return {
-            out.push_str("    if not out_ptr:\n");
-            out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
-        }
-        emit_guest_abi_args_unpack(out, func, &struct_name);
-        emit_guest_abi_call(out, func);
-        emit_guest_abi_return(out, func);
-        out.push('\n');
-        out.push_str(&format!(
-            "{upper}_{abi_name}_CFUNC = _DISPATCH_FN_CTYPE(_wrap_sret({abi_name}))\n\n"
-        ));
-    }
-
-    out.push_str(&format!("{upper}_FNS = (ctypes.c_void_p * {fn_count}) (\n"));
-    for func in &contract.functions {
-        let abi_name: String = format!("{lower}_{}_abi", func.name);
-        out.push_str(&format!(
-            "    ctypes.cast({upper}_{abi_name}_CFUNC, ctypes.c_void_p),\n"
-        ));
-    }
-    out.push_str(")\n\n");
-
-    // Native dispatch with no instance lifecycle: create_instance /
-    // destroy_instance are left as their default NULL function pointers (ctypes
-    // callbacks cannot return the 16-byte GuestContractInstance struct by value,
-    // so they cannot be expressed in Python). The host runtime substitutes
-    // built-in stateless stubs for null lifecycle pointers at registration time,
-    // so host callers can still safely call create_instance / destroy_instance.
-    out.push_str(&format!(
-        "{upper}_INTERFACE: GuestContractInterface = GuestContractInterface(\n"
-    ));
-    out.push_str(&format!(
-        "    contract_id=0x{:016X},\n",
-        contract.contract_id
-    ));
-    out.push_str(&format!(
-        "    contract_version=Version(major={version_major}, minor={version_minor}, patch={version_patch}),\n"
-    ));
-    out.push_str("    dispatch_type=DispatchType.Native,\n");
-    out.push_str("    dispatch=DispatchMechanisms(\n");
-    out.push_str("        native=NativeDispatch(\n");
-    out.push_str(&format!("            function_count={fn_count},\n"));
-    out.push_str(&format!(
-        "            functions=ctypes.cast({upper}_FNS, ctypes.c_void_p),\n"
-    ));
-    out.push_str("        )\n");
-    out.push_str("    ),\n");
-    out.push_str(")\n\n");
+    emit_guest_function_callables(out, contract, &lower, &upper, &trait_name, &struct_name);
 }
 
 fn generate_guest_plugin_interface(
@@ -1161,112 +1130,125 @@ fn generate_guest_plugin_interface(
     plugin_name: &str,
     contract: &ResolvedContract,
 ) {
-    let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
+    // Bundle path: trait stored under `_<plugin_lower>_IMPL`, callables named
+    // `<plugin_lower>_<fn>_abi` (see generate_guest_plugin_trait).
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
     let plugin_class: String = plugin_guest_trait_name(plugin_name, &contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
-    let fn_count: usize = contract.functions.len();
-    let contract_name: String = format!("{}@{}", contract.name, contract.version.major);
-    let version_major: u32 = contract.version.major;
-    let version_minor: u32 = contract.version.minor;
-    let version_patch: u32 = contract.version.patch;
+    emit_guest_function_callables(
+        out,
+        contract,
+        &plugin_lower,
+        &plugin_lower,
+        &plugin_class,
+        &struct_name,
+    );
+}
 
-    out.push_str(&format!(
-        "{plugin_upper}_PLUGIN_NAME_BYTES: bytes = b\"{plugin_name}\"\n"
-    ));
-    out.push_str(&format!(
-        "{plugin_upper}_CONTRACT_NAME_BYTES: bytes = b\"{contract_name}\"\n"
-    ));
-    out.push_str(&format!(
-        "{plugin_upper}_PLUGIN_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p({plugin_upper}_PLUGIN_NAME_BYTES), ctypes.c_void_p)\n"
-    ));
-    out.push_str(&format!(
-        "{plugin_upper}_CONTRACT_NAME_C: ctypes.c_void_p = ctypes.cast(ctypes.c_char_p({plugin_upper}_CONTRACT_NAME_BYTES), ctypes.c_void_p)\n"
-    ));
-    out.push_str(&format!(
-        "{plugin_upper}_DESCRIPTOR: PluginDescriptor = PluginDescriptor(\n"
-    ));
-    out.push_str(&format!(
-        "    name=StringView(ptr={plugin_upper}_PLUGIN_NAME_C, len=len({plugin_upper}_PLUGIN_NAME_BYTES)),\n"
-    ));
-    out.push_str(&format!("    contract_name=StringView(ptr={plugin_upper}_CONTRACT_NAME_C, len=len({plugin_upper}_CONTRACT_NAME_BYTES)),\n"));
-    out.push_str(&format!("    version=Version(major={version_major}, minor={version_minor}, patch={version_patch}),\n"));
-    out.push_str(")\n\n");
+/// Emit the per-function VM-dispatch callables for one contract.
+///
+/// Each callable has the loader's three-int signature
+/// `<fn_prefix>_<fn>_abi(args_ptr: int, out_ptr: int, arena_ptr: int)`: it
+/// unmarshals the args buffer, invokes the user impl stored in `_<impl_var>_IMPL`,
+/// marshals the return into `out_ptr`, and returns normally (success) or raises
+/// (failure). Per-function `struct.Struct` instances precompiled at module level
+/// give fast scalar (un)packing without per-call `ctypes` object construction.
+fn emit_guest_function_callables(
+    out: &mut String,
+    contract: &ResolvedContract,
+    fn_prefix: &str,
+    impl_var: &str,
+    impl_class: &str,
+    struct_name: &str,
+) {
+    for func in &contract.functions {
+        emit_guest_struct_consts(out, func, fn_prefix, struct_name);
+    }
 
     for func in &contract.functions {
-        let abi_name: String = format!("{plugin_lower}_{}_abi", func.name);
+        let abi_name: String = format!("{fn_prefix}_{}_abi", func.name);
         let has_return: bool = has_return_value(&func.returns);
         let has_params: bool = !func.params.is_empty();
         out.push_str(&format!(
-            "def {abi_name}(args_ptr: int, out_ptr: int) -> _AbiError:\n"
+            "def {abi_name}(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:\n"
         ));
         out.push_str(&format!(
-            "    impl: {plugin_class} | None = _{plugin_lower}_IMPL\n"
+            "    impl: {impl_class} | None = _{impl_var}_IMPL\n"
         ));
         out.push_str("    if impl is None:\n");
-        out.push_str("        return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)\n");
+        out.push_str("        raise RuntimeError(\"plugin impl not set\")\n");
         if has_params {
             out.push_str("    if not args_ptr:\n");
-            out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
+            out.push_str("        raise RuntimeError(\"null args pointer\")\n");
         }
         if has_return {
             out.push_str("    if not out_ptr:\n");
-            out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
+            out.push_str("        raise RuntimeError(\"null out pointer\")\n");
         }
-        emit_guest_abi_args_unpack(out, func, &struct_name);
+        if !has_params {
+            out.push_str("    _ = args_ptr\n");
+        }
+        out.push_str("    _ = arena_ptr\n");
+        emit_guest_abi_args_unpack(out, func, fn_prefix, struct_name);
         emit_guest_abi_call(out, func);
-        emit_guest_abi_return(out, func);
+        emit_guest_abi_return(out, func, fn_prefix);
         out.push('\n');
-        out.push_str(&format!(
-            "{plugin_upper}_{abi_name}_CFUNC = _DISPATCH_FN_CTYPE(_wrap_sret({abi_name}))\n\n"
-        ));
     }
-
-    out.push_str(&format!(
-        "{plugin_upper}_FNS = (ctypes.c_void_p * {fn_count}) (\n"
-    ));
-    for func in &contract.functions {
-        let abi_name: String = format!("{plugin_lower}_{}_abi", func.name);
-        out.push_str(&format!(
-            "    ctypes.cast({plugin_upper}_{abi_name}_CFUNC, ctypes.c_void_p),\n"
-        ));
-    }
-    out.push_str(")\n\n");
-
-    // Native dispatch with no instance lifecycle: create_instance /
-    // destroy_instance are left as their default NULL function pointers (ctypes
-    // callbacks cannot return the 16-byte GuestContractInstance struct by value,
-    // so they cannot be expressed in Python). The host runtime substitutes
-    // built-in stateless stubs for null lifecycle pointers at registration time,
-    // so host callers can still safely call create_instance / destroy_instance.
-    out.push_str(&format!(
-        "{plugin_upper}_INTERFACE: GuestContractInterface = GuestContractInterface(\n"
-    ));
-    out.push_str(&format!(
-        "    contract_id=0x{:016X},\n",
-        contract.contract_id
-    ));
-    out.push_str(&format!(
-        "    contract_version=Version(major={version_major}, minor={version_minor}, patch={version_patch}),\n"
-    ));
-    out.push_str("    dispatch_type=DispatchType.Native,\n");
-    out.push_str("    dispatch=DispatchMechanisms(\n");
-    out.push_str("        native=NativeDispatch(\n");
-    out.push_str(&format!("            function_count={fn_count},\n"));
-    out.push_str(&format!(
-        "            functions=ctypes.cast({plugin_upper}_FNS, ctypes.c_void_p),\n"
-    ));
-    out.push_str("        )\n");
-    out.push_str("    ),\n");
-    out.push_str(")\n\n");
 }
 
-fn emit_guest_abi_args_unpack(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
+/// Module-level `struct.Struct` constants for one function's scalar args and
+/// scalar return. StringView / Buffer / user-defined params are read as ctypes
+/// structures (`from_address`), not via `struct`, so they get no const here.
+fn emit_guest_struct_consts(
+    out: &mut String,
+    func: &ResolvedFunction,
+    fn_prefix: &str,
+    struct_name: &str,
+) {
+    if uses_scalar_args_struct(&func.params) {
+        let fmt: String = struct_format_for_params(&func.params);
+        out.push_str(&format!(
+            "{} = struct.Struct(\"{fmt}\")\n",
+            args_struct_const_name(fn_prefix, &func.name)
+        ));
+    }
+    if let Some(ret) = &func.returns {
+        if let Some(ch) = scalar_struct_format_char(ret) {
+            out.push_str(&format!(
+                "{} = struct.Struct(\"<{ch}\")\n",
+                ret_struct_const_name(fn_prefix, &func.name)
+            ));
+        }
+    }
+    let _ = struct_name;
+}
+
+fn emit_guest_abi_args_unpack(
+    out: &mut String,
+    func: &ResolvedFunction,
+    fn_prefix: &str,
+    contract_struct: &str,
+) {
     if func.params.is_empty() {
-        out.push_str("    _ = args_ptr\n");
         return;
     }
-    if func.params.len() == 1 {
+    // Single StringView param: view the args buffer as a StringView in place and
+    // transcode to `str` for the impl (the ergonomic guest-facing type).
+    if func.params.len() == 1
+        && matches!(
+            func.params[0].ty,
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView)
+        )
+    {
+        let name: &str = &func.params[0].name;
+        out.push_str(&format!(
+            "    {name}: str = to_str(StringView.from_address(args_ptr))\n"
+        ));
+        return;
+    }
+    // Single Buffer/user-defined param: read it as a ctypes structure viewing the
+    // args buffer in place (no copy).
+    if func.params.len() == 1 && !is_scalar_param(&func.params[0]) {
         let param: &ResolvedParam = &func.params[0];
         let ty_name: String = python_type_name(&param.ty);
         out.push_str(&format!(
@@ -1276,10 +1258,30 @@ fn emit_guest_abi_args_unpack(out: &mut String, func: &ResolvedFunction, contrac
         ));
         return;
     }
-    let pack_struct: String = arg_pack_struct_name(contract_struct, &func.name);
+    // Scalar params with no C padding (single scalar, or a homogeneous all-scalar
+    // list): precompiled struct unpack from the raw args bytes.
+    if uses_scalar_args_struct(&func.params) {
+        let const_name: String = args_struct_const_name(fn_prefix, &func.name);
+        let names: Vec<String> = func
+            .params
+            .iter()
+            .map(|p: &ResolvedParam| p.name.clone())
+            .collect();
+        let lhs: String = if names.len() == 1 {
+            format!("({},)", names[0])
+        } else {
+            names.join(", ")
+        };
+        out.push_str(&format!(
+            "    {lhs} = {const_name}.unpack(ctypes.string_at(args_ptr, {const_name}.size))\n"
+        ));
+        return;
+    }
+    // Mixed/struct-bearing multi-param: view the args buffer through the
+    // contract's arg-pack ctypes structure (laid out in ABI field order).
+    let pack: String = arg_pack_struct_name(contract_struct, &func.name);
     out.push_str(&format!(
-        "    args_val: {pack_struct} = {pack_struct}.from_address(args_ptr)\n",
-        pack_struct = pack_struct
+        "    args_val: {pack} = {pack}.from_address(args_ptr)\n"
     ));
     for param in &func.params {
         out.push_str(&format!("    {} = args_val.{}\n", param.name, param.name));
@@ -1305,25 +1307,158 @@ fn emit_guest_abi_call(out: &mut String, func: &ResolvedFunction) {
     out.push_str(&format!("{call_prefix}impl.{}({})\n", func.name, args_str));
 }
 
-fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction) {
+fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction, fn_prefix: &str) {
     if !has_return_value(&func.returns) {
+        return;
+    }
+    let returns: &ResolvedTypeRef = match &func.returns {
+        Some(ty) => ty,
+        None => return,
+    };
+    // Scalar return: fast precompiled struct pack + memmove into out_ptr.
+    if let Some(_ch) = scalar_struct_format_char(returns) {
+        let const_name: String = ret_struct_const_name(fn_prefix, &func.name);
+        out.push_str(&format!(
+            "    ctypes.memmove(out_ptr, {const_name}.pack(result), {const_name}.size)\n"
+        ));
+        return;
+    }
+    // StringView return: the impl returns a `str`. Allocate the UTF-8 bytes from
+    // the call arena via the loader-injected `_polyplug_arena_alloc` bridge
+    // (`alloc_string_arena` bumps the active arena, falling back to host->alloc
+    // when no arena is active). The bytes stay valid until the caller's next
+    // arena-backed call. Copy the resulting StringView into the caller's out slot.
+    if matches!(returns, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
         out.push_str(
-            "    return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)\n",
+            "    out_view: StringView = alloc_string_arena(_polyplug_arena_alloc, result)\n",
+        );
+        out.push_str(
+            "    ctypes.memmove(out_ptr, ctypes.addressof(out_view), ctypes.sizeof(out_view))\n",
         );
         return;
     }
-    let ret_ty: String = python_return_type(&func.returns);
-    out.push_str(&format!(
-        "    out_ptr_t: Any = ctypes.cast(ctypes.c_void_p(out_ptr), ctypes.POINTER({ret_ty}))\n"
-    ));
-    out.push_str("    out_ptr_t[0] = result\n");
-    out.push_str(
-        "    return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)\n",
-    );
+    // Buffer / user-defined return: the impl returns the matching ctypes
+    // structure; copy its bytes into the caller's out slot.
+    let _ = returns;
+    out.push_str("    ctypes.memmove(out_ptr, ctypes.addressof(result), ctypes.sizeof(result))\n");
 }
 
 fn needs_arg_pack(params: &[ResolvedParam]) -> bool {
     params.len() >= 2
+}
+
+/// Whether a param is a fixed-size scalar (primitive or enum-like Ptr) that can
+/// be read with `struct.unpack`. StringView/Buffer/user-defined structs are not
+/// scalars — they carry pointers/lengths read as ctypes structures.
+fn is_scalar_param(param: &ResolvedParam) -> bool {
+    scalar_struct_format_char(&param.ty).is_some()
+}
+
+/// Whether every param is a `struct`-packable scalar.
+fn all_params_scalar(params: &[ResolvedParam]) -> bool {
+    !params.is_empty() && params.iter().all(is_scalar_param)
+}
+
+/// Byte size of a scalar type at the ABI boundary (matches the ctypes scalar in
+/// `types.py` and the `struct` standard sizes).
+fn scalar_size(ty: &ResolvedTypeRef) -> Option<usize> {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => Some(match p {
+            PrimitiveType::U8 | PrimitiveType::I8 | PrimitiveType::Bool => 1,
+            PrimitiveType::U16 | PrimitiveType::I16 => 2,
+            PrimitiveType::U32 | PrimitiveType::I32 | PrimitiveType::F32 => 4,
+            PrimitiveType::U64 | PrimitiveType::I64 | PrimitiveType::F64 => 8,
+        }),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => Some(8),
+        _ => None,
+    }
+}
+
+/// Whether a function's args can be safely (un)packed with a `struct.Struct`
+/// using the no-padding little-endian format. This holds when there is a single
+/// scalar param, or several scalar params that are all the same size — in both
+/// cases the contiguous `struct` layout equals the C arg-pack layout (the host
+/// caller's arg-pack struct adds interior padding only between scalars of
+/// differing alignment). Mixed-size multi-scalar lists fall back to the ctypes
+/// arg-pack structure, which has the exact C layout.
+fn uses_scalar_args_struct(params: &[ResolvedParam]) -> bool {
+    if !all_params_scalar(params) {
+        return false;
+    }
+    if params.len() == 1 {
+        return true;
+    }
+    let first: usize = match scalar_size(&params[0].ty) {
+        Some(s) => s,
+        None => return false,
+    };
+    params
+        .iter()
+        .all(|p: &ResolvedParam| scalar_size(&p.ty) == Some(first))
+}
+
+/// `struct` format character for a scalar type, or `None` if the type is not a
+/// fixed-size scalar (StringView/Buffer/user-defined/void). The leading `<`
+/// (little-endian, standard sizes) is the caller's responsibility.
+///
+/// Format chars mirror the ABI scalar layouts the ctypes types in `types.py`
+/// use, so the bytes a host caller packs are the bytes this unpacks:
+///   u8→B i8→b u16→H i16→h u32→I i32→i u64→Q i64→q f32→f f64→d bool→? ptr→Q
+fn scalar_struct_format_char(ty: &ResolvedTypeRef) -> Option<char> {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => Some(match p {
+            PrimitiveType::U8 => 'B',
+            PrimitiveType::I8 => 'b',
+            PrimitiveType::U16 => 'H',
+            PrimitiveType::I16 => 'h',
+            PrimitiveType::U32 => 'I',
+            PrimitiveType::I32 => 'i',
+            PrimitiveType::U64 => 'Q',
+            PrimitiveType::I64 => 'q',
+            PrimitiveType::F32 => 'f',
+            PrimitiveType::F64 => 'd',
+            PrimitiveType::Bool => '?',
+        }),
+        // Ptr is a raw pointer-sized integer at the ABI boundary.
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => Some('Q'),
+        ResolvedTypeRef::AbiType(
+            AbiBuiltin::StringView | AbiBuiltin::Buffer | AbiBuiltin::Void,
+        ) => None,
+        ResolvedTypeRef::UserDefined(_) => None,
+    }
+}
+
+/// `struct` format string for an all-scalar param list, e.g. `<qq` for two i64.
+/// `struct` packs fields contiguously with native alignment when the format
+/// starts with `<`/`>`/`=`; the C arg-pack structs the host caller emits use the
+/// same standard scalar sizes with no interior padding for the homogeneous
+/// scalar shapes used here, so the byte layouts agree.
+fn struct_format_for_params(params: &[ResolvedParam]) -> String {
+    let mut fmt: String = String::from("<");
+    for param in params {
+        if let Some(ch) = scalar_struct_format_char(&param.ty) {
+            fmt.push(ch);
+        }
+    }
+    fmt
+}
+
+/// Module-level const name for one function's scalar-args `struct.Struct`.
+fn args_struct_const_name(fn_prefix: &str, fn_name: &str) -> String {
+    format!(
+        "_{}_{}_ARGS",
+        fn_prefix.to_uppercase(),
+        fn_name.to_uppercase()
+    )
+}
+
+/// Module-level const name for one function's scalar-return `struct.Struct`.
+fn ret_struct_const_name(fn_prefix: &str, fn_name: &str) -> String {
+    format!(
+        "_{}_{}_RET",
+        fn_prefix.to_uppercase(),
+        fn_name.to_uppercase()
+    )
 }
 
 /// Whether a function returns a variable-size value the guest writes into the

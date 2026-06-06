@@ -18,12 +18,17 @@ pub mod config;
 pub(crate) mod context;
 pub mod ffi;
 pub(crate) mod isolation;
+pub mod loader;
 pub use bridge::PythonHostBridge;
 pub use config::PythonConfig;
+pub use loader::PythonLoaderData;
 
+use core::sync::atomic::AtomicUsize;
 use std::ffi::CString;
 use std::path::Path;
 
+use pyo3::Bound;
+use pyo3::PyAny;
 use pyo3::Python;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyModule;
@@ -39,6 +44,7 @@ use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
 
 use crate::context::ensure_python_initialized;
+use crate::loader::ContractRegistration;
 
 /// Loader for Python plugin bundles (`.py` files).
 ///
@@ -90,7 +96,49 @@ fn synthetic_module_name(bundle_name: &str) -> String {
     name
 }
 
+/// Allocate the bundle-level active-arena cell and leak it for the runtime
+/// lifetime.
+///
+/// Every contract of one bundle shares this single [`AtomicUsize`] (0 == "no
+/// arena"); [`loader::python_vm_dispatch`] publishes the active [`CallArena`]
+/// pointer to it under the GIL, and the injected `_polyplug_arena_alloc` bridge
+/// reads it. It is leaked because the VM-dispatch interfaces and their
+/// `PythonLoaderData` are leaked too (retire-not-drop): a resolved dispatch
+/// pointer may run long after this load returns, so the cell must outlive it.
+///
+/// [`CallArena`]: polyplug_abi::CallArena
+fn leak_arena_cell() -> *const AtomicUsize {
+    Box::into_raw(Box::new(AtomicUsize::new(0))) as *const AtomicUsize
+}
+
 impl PythonLoader {
+    /// After `polyplug_init` has run and populated `_polyplug_registrations`,
+    /// inject the arena bridge, collect the guest's registration data, and
+    /// register every contract with the runtime via the self-passing `HostApi`.
+    ///
+    /// Registrations are read from the namespace of the module that *defines*
+    /// `polyplug_init` (the function's `__globals__`), so split-module generated
+    /// bundles — whose entry file only imports `polyplug_init` — register
+    /// correctly; `init_fn` and the entry `module` are both passed so
+    /// [`loader::collect_registrations`] can resolve that namespace (falling back
+    /// to the entry module for non-Python `polyplug_init` callables).
+    ///
+    /// Shared by the on-disk and in-memory load paths. The `arena_cell` must be a
+    /// leaked, bundle-level [`AtomicUsize`] (see [`leak_arena_cell`]).
+    fn collect_and_register(
+        py: Python<'_>,
+        init_fn: &Bound<'_, PyAny>,
+        module: &Bound<'_, PyAny>,
+        host_interface: *const HostApi,
+        arena_cell: *const AtomicUsize,
+        bundle_name: &str,
+    ) -> Result<(), RuntimeError> {
+        let registrations: Vec<ContractRegistration> =
+            loader::collect_registrations(py, init_fn, module, bundle_name)?;
+        loader::register_contracts(registrations, host_interface, arena_cell, bundle_name)?;
+        Ok(())
+    }
+
     /// Load a Python plugin from in-memory source text (`Code` / `Bytes`).
     ///
     /// This mirrors the on-disk [`BundleLoader::load`] flow — execute the module,
@@ -162,6 +210,8 @@ impl PythonLoader {
         // path-based load for the full rationale).
         let _load_guard: std::sync::MutexGuard<'_, ()> = crate::context::acquire_load_lock();
 
+        let arena_cell: *const AtomicUsize = leak_arena_cell();
+
         let result: Result<(), RuntimeError> = Python::attach(|py| {
             // Snapshot sys.modules before executing so the isolation pass can scope
             // exactly the modules this bundle introduced.
@@ -178,6 +228,10 @@ impl PythonLoader {
                         })
                     },
                 )?;
+
+            // Inject the arena bridge before init so the guest can route per-call
+            // return buffers through the host CallArena during dispatch.
+            loader::inject_arena_bridge(py, &module, arena_cell, host_interface, &bundle_name)?;
 
             // Locate and call polyplug_init(host, ctx) — self-passing pattern.
             let init_fn: pyo3::Bound<'_, pyo3::PyAny> =
@@ -208,6 +262,18 @@ impl PythonLoader {
                         error: format!("polyplug_init call failed: {}", e),
                     })
                 })?;
+
+            // Collect the guest's registration data and register every contract
+            // with VM dispatch.
+            let module_any: Bound<'_, PyAny> = module.as_any().clone();
+            Self::collect_and_register(
+                py,
+                &init_fn,
+                &module_any,
+                host_interface,
+                arena_cell,
+                &bundle_name,
+            )?;
 
             // Isolate this bundle's freshly imported modules. With no bundle
             // directory ("") no imported module is classified as in-bundle, so this
@@ -314,6 +380,8 @@ impl BundleLoader for PythonLoader {
         // otherwise interleave their sys.modules mutations and corrupt each
         // other's per-bundle isolation. Held for the whole `Python::attach`.
         let _load_guard: std::sync::MutexGuard<'_, ()> = crate::context::acquire_load_lock();
+
+        let arena_cell: *const AtomicUsize = leak_arena_cell();
 
         // Step 3: Load the Python module and call polyplug_init.
         Python::attach(|py| {
@@ -423,6 +491,26 @@ impl BundleLoader for PythonLoader {
                     })
                 })?;
 
+            // Inject the arena bridge before init so the guest can route per-call
+            // return buffers through the host CallArena during dispatch. Done after
+            // exec_module so the module namespace exists.
+            let module_for_bridge: pyo3::Bound<'_, PyModule> = module_from_spec
+                .cast::<PyModule>()
+                .map_err(|_| {
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: "module_from_spec did not yield a module object".to_owned(),
+                    })
+                })?
+                .clone();
+            loader::inject_arena_bridge(
+                py,
+                &module_for_bridge,
+                arena_cell,
+                host_interface,
+                &bundle_name,
+            )?;
+
             // Step 3c: Locate and call polyplug_init(host, ctx).
             // New signature: polyplug_init(host_interface, ctx) - self-passing pattern.
             let init_fn: pyo3::Bound<'_, pyo3::PyAny> =
@@ -457,11 +545,23 @@ impl BundleLoader for PythonLoader {
                     })
                 })?;
 
+            // Collect the guest's registration data and register every contract
+            // with VM dispatch.
+            Self::collect_and_register(
+                py,
+                &init_fn,
+                &module_from_spec,
+                host_interface,
+                arena_cell,
+                &bundle_name,
+            )?;
+
             // Isolate this bundle's freshly imported modules under a unique
             // per-bundle prefix so the next bundle imports its own generated
-            // package instead of this one's cached copy. Re-keying keeps the
-            // native dispatch CFUNCTYPE trampolines alive for the runtime's
-            // lifetime while freeing the generic module names.
+            // package instead of this one's cached copy. Re-keying keeps the module
+            // objects alive for the runtime's lifetime while freeing the generic
+            // module names. The contract callables themselves are held by each
+            // contract's `PythonLoaderData`, so they stay alive regardless.
             crate::isolation::isolate_bundle_modules(
                 py,
                 &bundle_name,

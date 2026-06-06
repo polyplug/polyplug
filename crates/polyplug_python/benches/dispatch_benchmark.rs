@@ -5,8 +5,9 @@
 //! 2. Python function call overhead
 //! 3. Native baseline for comparison
 //!
-//! NOTE: Python uses native dispatch (function pointers) rather than VM dispatch.
-//! The overhead is primarily from GIL acquisition and Python interpreter overhead.
+//! NOTE: Python uses VM dispatch (pyo3 `vm.call`) like Lua and JS. The overhead
+//! is primarily GIL acquisition plus the Python function call, which these
+//! benchmarks isolate.
 
 #![allow(clippy::expect_used)]
 

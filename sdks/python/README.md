@@ -75,10 +75,12 @@ class DecoderImpl(DECODERPipelineDecoderPlugin):
 set_decoder_impl(DecoderImpl())
 ```
 
-`to_str(view)` decodes an incoming `StringView` to a Python `str`, and
-`alloc_string(s)` allocates an outgoing `StringView` through the host allocator.
-The loader resolves the generated `polyplug_init` / `polyplug_abi_version`
-symbols directly — there is no decorator to apply.
+`to_str(view)` decodes an incoming `StringView` to a Python `str`.
+`alloc_string(host_ptr, s)` allocates an outgoing `StringView` through the host
+allocator (for data that must outlive the call), and
+`alloc_string_arena(arena_alloc, s)` allocates a per-call return `StringView`
+from the active arena. The loader resolves the generated `polyplug_init` symbol
+directly — there is no decorator to apply.
 
 ## Code Generation
 
@@ -131,14 +133,21 @@ Python wrappers over the polyplug C ABI using ctypes:
 
 ### Guest Library (`guest/`)
 
-`polyplug_guest` — bootstrap helpers for Python plugins. The contract registration
-and `polyplug_init` entry point are produced by `polyplugc` in the generated
-`contracts.py`; this library provides the runtime helpers that generated code and
-plugin authors rely on:
+`polyplug_guest` — helpers for Python plugins. Python plugins are VM-dispatch
+plugins: the guest never builds a `GuestContractInterface` or registers native
+function pointers. The loader executes the module, calls
+`polyplug_init(host_ptr: int, ctx_ptr: int) -> None`, then reads the
+`_polyplug_registrations` list the guest deposited. This library provides the
+helpers generated code and plugin authors rely on:
+- `register_contract(globals(), contract, functions, plugin_name=None)` — deposit
+  a contract's functions (ordered by `fn_id`) into the caller module's
+  `_polyplug_registrations` list. Each function is called as
+  `fn(args_ptr: int, out_ptr: int, arena_ptr: int)`; return for Ok, raise for error.
 - `to_str(view)` — decode an incoming `StringView` to a Python `str`
-- `alloc_string(s)` — allocate an outgoing `StringView` via the host allocator
-- `store_host_interface(ptr)` / `get_host_interface()` — stash the host interface
-  pointer for the allocator
+- `alloc_string(host_ptr, s)` — allocate an outgoing `StringView` via the host
+  allocator (for data that must outlive the call)
+- `alloc_string_arena(arena_alloc, s)` — allocate a per-call return `StringView`
+  from the active arena via the loader-injected `_polyplug_arena_alloc` bridge
 - Re-exported ABI types — `HostApi`, `BundleInitContext`, `StringView`,
   `AbiError`, `AbiErrorCode`, and the other types generated code imports
 

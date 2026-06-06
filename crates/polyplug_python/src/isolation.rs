@@ -27,10 +27,11 @@
 //!    the shared `sys.modules`.
 //! 3. Delete the original generic-name entries from `sys.modules`.
 //!
-//! Re-keying (rather than deleting) keeps every module object — and crucially
-//! the module-level `ctypes.CFUNCTYPE` trampolines that the registered native
-//! dispatch pointers point into — permanently alive inside the interpreter.
-//! Freeing the generic names lets the next bundle import a fresh, correct copy.
+//! Re-keying (rather than deleting) keeps every module object permanently alive
+//! inside the interpreter, and freeing the generic names lets the next bundle
+//! import a fresh, correct copy. The contract callables the VM dispatcher invokes
+//! are additionally held by each contract's `PythonLoaderData`, so they stay
+//! alive independently of `sys.modules`.
 //!
 //! This is surgical: only modules under the bundle directory are touched, never
 //! a `sys.modules.clear()` hammer, and shared interpreter state is left intact.
