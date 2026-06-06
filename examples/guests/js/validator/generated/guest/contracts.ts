@@ -18,16 +18,16 @@ export const VALIDATOR_INTERFACE = {
     contractHi: 0x45173A95,
     dispatchType: DispatchType.VirtualMachine,
     // Default create_instance stub for validator - returns null instance.
-    createInstance: function(rtCtxLo, rtCtxHi, argsLo, argsHi) {
+    createInstance: function(rtCtxLo: number, rtCtxHi: number, argsLo: number, argsHi: number): { dataLo: number; dataHi: number } {
         // Default stub returns null instance - users override for stateful plugins.
         return { dataLo: 0, dataHi: 0 };  // Null GuestContractInstance.
     },
     // Default destroy_instance stub for validator - no-op.
-    destroyInstance: function(rtCtxLo, rtCtxHi, instanceDataLo, instanceDataHi) {
+    destroyInstance: function(rtCtxLo: number, rtCtxHi: number, instanceDataLo: number, instanceDataHi: number): void {
         // Default stub is no-op - users override for cleanup before hot-reload.
     },
     fnCount: 1,
-    functions: null as unknown as number[],
+    functions: [] as ((args_ptr: number, out_ptr: number) => number)[],
     contractName: "pipeline.Validator@1",
     version: 0x00010000,
 };
@@ -38,10 +38,10 @@ export const VALIDATOR_DESCRIPTOR = {
     version: { major: 1, minor: 0, patch: 0 }
 };
 
-function validator_fn0_abi_wrapper(args_ptr, out_ptr) {
+function validator_fn0_abi_wrapper(args_ptr: number, out_ptr: number): number {
     // SAFETY: args_ptr and out_ptr are valid addresses passed as f64
     // by the loader. readU32/writeU32 accept f64 and convert to usize.
-    var polyplug = globalThis.polyplug;
+    var polyplug = (globalThis as any).polyplug;
     if (!polyplug) return 1;
     var impl = VALIDATOR_IMPL;
     if (!impl) return 1;
@@ -60,7 +60,7 @@ function validator_fn0_abi_wrapper(args_ptr, out_ptr) {
     return 0;
 }
 
-let VALIDATOR_IMPL = null;
+let VALIDATOR_IMPL: { [fn: string]: (...args: any[]) => any } | null = null;
 
 export function setValidatorImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
     VALIDATOR_IMPL = { fn0 };

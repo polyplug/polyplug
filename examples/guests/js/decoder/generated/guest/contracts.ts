@@ -18,16 +18,16 @@ export const DECODER_INTERFACE = {
     contractHi: 0xE1D7DE77,
     dispatchType: DispatchType.VirtualMachine,
     // Default create_instance stub for decoder - returns null instance.
-    createInstance: function(rtCtxLo, rtCtxHi, argsLo, argsHi) {
+    createInstance: function(rtCtxLo: number, rtCtxHi: number, argsLo: number, argsHi: number): { dataLo: number; dataHi: number } {
         // Default stub returns null instance - users override for stateful plugins.
         return { dataLo: 0, dataHi: 0 };  // Null GuestContractInstance.
     },
     // Default destroy_instance stub for decoder - no-op.
-    destroyInstance: function(rtCtxLo, rtCtxHi, instanceDataLo, instanceDataHi) {
+    destroyInstance: function(rtCtxLo: number, rtCtxHi: number, instanceDataLo: number, instanceDataHi: number): void {
         // Default stub is no-op - users override for cleanup before hot-reload.
     },
     fnCount: 1,
-    functions: null as unknown as number[],
+    functions: [] as ((args_ptr: number, out_ptr: number) => number)[],
     contractName: "pipeline.Decoder@1",
     version: 0x00010000,
 };
@@ -38,10 +38,10 @@ export const DECODER_DESCRIPTOR = {
     version: { major: 1, minor: 0, patch: 0 }
 };
 
-function decoder_fn0_abi_wrapper(args_ptr, out_ptr) {
+function decoder_fn0_abi_wrapper(args_ptr: number, out_ptr: number): number {
     // SAFETY: args_ptr and out_ptr are valid addresses passed as f64
     // by the loader. readU32/writeU32 accept f64 and convert to usize.
-    var polyplug = globalThis.polyplug;
+    var polyplug = (globalThis as any).polyplug;
     if (!polyplug) return 1;
     var impl = DECODER_IMPL;
     if (!impl) return 1;
@@ -60,7 +60,7 @@ function decoder_fn0_abi_wrapper(args_ptr, out_ptr) {
     return 0;
 }
 
-let DECODER_IMPL = null;
+let DECODER_IMPL: { [fn: string]: (...args: any[]) => any } | null = null;
 
 export function setDecoderImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
     DECODER_IMPL = { fn0 };

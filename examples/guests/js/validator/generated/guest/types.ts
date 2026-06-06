@@ -3,13 +3,13 @@
 // Runtime: js-quickjs
 
 /** Enum LogLevel */
-const LogLevel = Object.freeze({
+export const LogLevel = Object.freeze({
     Debug: 0,
     Info: 1,
     Warn: 2,
     Error: 3,
 } as const);
-type LogLevel = typeof LogLevel[keyof typeof LogLevel];
+export type LogLevel = typeof LogLevel[keyof typeof LogLevel];
 
 export type pipeline_Decoder_decode = (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number };
 export type data_Transformer_transform = (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number };

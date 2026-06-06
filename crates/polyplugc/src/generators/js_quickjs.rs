@@ -3,6 +3,7 @@
 //! THIS FILE IS PART OF polyplugc.
 //! Generates code using lo/hi u32 split for all u64/pointer values.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::CodeGenerator;
@@ -184,14 +185,14 @@ fn generate_js_quickjs_enum(out: &mut String, e: &EnumDef) {
     } else {
         out.push_str(&format!("/** Enum {} */\n", e.name));
     }
-    out.push_str(&format!("const {} = Object.freeze({{\n", e.name));
+    out.push_str(&format!("export const {} = Object.freeze({{\n", e.name));
     for variant in &e.variants {
         let subst_value: String = substitute_variant_refs_js(&e.variants, &variant.value);
         out.push_str(&format!("    {}: {},\n", variant.name, subst_value));
     }
     out.push_str("} as const);\n");
     out.push_str(&format!(
-        "type {} = typeof {}[keyof typeof {}];\n\n",
+        "export type {} = typeof {}[keyof typeof {}];\n\n",
         e.name, e.name, e.name
     ));
 }
@@ -324,7 +325,7 @@ fn render_plugin_interface_quickjs(
         "    // Default create_instance stub for {} - returns null instance.\n",
         plugin_name
     ));
-    out.push_str("    createInstance: function(rtCtxLo, rtCtxHi, argsLo, argsHi) {\n");
+    out.push_str("    createInstance: function(rtCtxLo: number, rtCtxHi: number, argsLo: number, argsHi: number): { dataLo: number; dataHi: number } {\n");
     out.push_str(
         "        // Default stub returns null instance - users override for stateful plugins.\n",
     );
@@ -335,14 +336,14 @@ fn render_plugin_interface_quickjs(
         plugin_name
     ));
     out.push_str(
-        "    destroyInstance: function(rtCtxLo, rtCtxHi, instanceDataLo, instanceDataHi) {\n",
+        "    destroyInstance: function(rtCtxLo: number, rtCtxHi: number, instanceDataLo: number, instanceDataHi: number): void {\n",
     );
     out.push_str(
         "        // Default stub is no-op - users override for cleanup before hot-reload.\n",
     );
     out.push_str("    },\n");
     out.push_str(&format!("    fnCount: {function_count},\n"));
-    out.push_str("    functions: null as unknown as number[],\n");
+    out.push_str("    functions: [] as ((args_ptr: number, out_ptr: number) => number)[],\n");
     out.push_str(&format!("    contractName: \"{contract_name_full}\",\n"));
     // Packed contract version: the loader recovers `major = version >> 16`, so the
     // major version is encoded in the high 16 bits. This threads the contract's real
@@ -388,10 +389,10 @@ fn render_plugin_interface_quickjs(
         // usize→f64→usize round-trip is exact. readU32/writeU32 also accept f64.
         out.push_str("\nfunction ");
         out.push_str(&wrapper_name);
-        out.push_str("(args_ptr, out_ptr) {\n");
+        out.push_str("(args_ptr: number, out_ptr: number): number {\n");
         out.push_str("    // SAFETY: args_ptr and out_ptr are valid addresses passed as f64\n");
         out.push_str("    // by the loader. readU32/writeU32 accept f64 and convert to usize.\n");
-        out.push_str("    var polyplug = globalThis.polyplug;\n");
+        out.push_str("    var polyplug = (globalThis as any).polyplug;\n");
         out.push_str("    if (!polyplug) return 1;\n");
         out.push_str("    var impl = ");
         out.push_str(&plugin_var);
@@ -433,7 +434,7 @@ fn render_plugin_interface_quickjs(
     // Store implementation functions
     out.push_str("\nlet ");
     out.push_str(&plugin_var);
-    out.push_str("_IMPL = null;\n");
+    out.push_str("_IMPL: { [fn: string]: (...args: any[]) => any } | null = null;\n");
 
     out.push_str(&format!("\nexport function {set_impl_name}("));
     let impl_params: Vec<String> = contract
@@ -1667,6 +1668,12 @@ fn generate_guest_host_contracts_ts(ir: &ValidatedIr) -> String {
          // Runtime: js-quickjs (guest-side callers)\n\n",
     );
 
+    let type_imports: BTreeSet<String> = collect_ts_guest_host_contract_type_imports(ir);
+    if !type_imports.is_empty() {
+        let import_list: String = type_imports.into_iter().collect::<Vec<String>>().join(", ");
+        out.push_str(&format!("import {{ {} }} from './types';\n\n", import_list));
+    }
+
     for contract in &ir.host_contracts {
         generate_ts_guest_host_contract_caller(&mut out, contract);
     }
@@ -1687,6 +1694,28 @@ fn generate_guest_host_contracts_ts(ir: &ValidatedIr) -> String {
     }
 
     out
+}
+
+/// Collect user-defined type names (enums, structs) referenced in guest-side
+/// host-contract caller signatures, so `host_contracts.ts` can import them from
+/// `./types`. Without this, a host-contract method that takes an enum parameter
+/// (e.g. `log_with_level(level: LogLevel, ...)`) references an undeclared name
+/// and fails `deno check`.
+fn collect_ts_guest_host_contract_type_imports(ir: &ValidatedIr) -> BTreeSet<String> {
+    let mut imports: BTreeSet<String> = BTreeSet::new();
+    for contract in &ir.host_contracts {
+        for func in &contract.functions {
+            for param in &func.params {
+                if let ResolvedTypeRef::UserDefined(name) = &param.ty {
+                    imports.insert(name.clone());
+                }
+            }
+            if let Some(ResolvedTypeRef::UserDefined(name)) = &func.returns {
+                imports.insert(name.clone());
+            }
+        }
+    }
+    imports
 }
 
 // ─── Host Interface Factories Generation ────────────────────────────────────────
@@ -2505,6 +2534,103 @@ mod tests {
         assert!(
             names.contains(&"guest/host_contracts.ts".to_owned()),
             "missing guest/host_contracts.ts: {names:?}"
+        );
+    }
+
+    #[test]
+    fn enum_is_exported_for_cross_module_use() {
+        // Regression: `host_contracts.ts` references enum types (e.g. `LogLevel`)
+        // declared in `types.ts`. The enum const and its type must be `export`ed
+        // or the cross-module reference fails `deno check` with TS2304.
+        let e: EnumDef = EnumDef {
+            name: "LogLevel".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![EnumVariant {
+                name: "Debug".to_owned(),
+                value: "0".to_owned(),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_js_quickjs_enum(&mut out, &e);
+        assert!(
+            out.contains("export const LogLevel = Object.freeze({"),
+            "enum const must be exported: {out}"
+        );
+        assert!(
+            out.contains("export type LogLevel = typeof LogLevel"),
+            "enum type must be exported: {out}"
+        );
+    }
+
+    #[test]
+    fn guest_host_contracts_imports_enum_param_types() {
+        // Regression: a host-contract method taking an enum parameter must import
+        // that enum from `./types`, otherwise the name is undeclared (TS2304).
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                singleton: false,
+                functions: vec![ResolvedFunction {
+                    name: "log_with_level".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "level".to_owned(),
+                        ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                    }],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let out: String = generate_guest_host_contracts_ts(&ir);
+        assert!(
+            out.contains("import { LogLevel } from './types';"),
+            "host_contracts.ts must import enum param type from ./types: {out}"
+        );
+    }
+
+    #[test]
+    fn guest_host_contracts_no_type_import_when_no_user_types() {
+        // A host contract using only ABI builtins must NOT emit a spurious import.
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                singleton: false,
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    }],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let out: String = generate_guest_host_contracts_ts(&ir);
+        assert!(
+            !out.contains("from './types'"),
+            "no type import expected for ABI-only host contract: {out}"
         );
     }
 

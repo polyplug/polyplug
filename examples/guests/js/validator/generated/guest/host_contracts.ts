@@ -2,6 +2,8 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-quickjs (guest-side callers)
 
+import { LogLevel } from './types';
+
 /**
  * Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
  */
