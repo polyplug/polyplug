@@ -379,6 +379,12 @@ mod tests {
 
     #[test]
     fn bridge_call_host_contract_not_found() {
+        // call_host_contract enters Python::attach even on the not-found path,
+        // so the interpreter must be initialized — never rely on a sibling test
+        // having done it first (test scheduling order is not guaranteed).
+        crate::context::ensure_python_initialized(&crate::config::PythonConfig::default())
+            .expect("Python init");
+
         let bridge: PythonHostBridge = PythonHostBridge::new();
 
         // SAFETY: null args/out are acceptable here — the call returns
