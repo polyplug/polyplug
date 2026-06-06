@@ -194,7 +194,7 @@ class Runtime:
     _config: Optional["RuntimeConfig"] = None
 
     def __init__(self) -> None:
-        lib_path: str = os.environ.get("POLYPLUG_LIB_PATH") or _resolve_lib_path()
+        lib_path: str = _resolve_lib_path()
         self._backend: Backend = _create_backend(lib_path)
         self.ctypes = ctypes
 

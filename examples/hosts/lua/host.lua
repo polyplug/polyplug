@@ -14,8 +14,8 @@ local abi = require('polyplug_abi')
 -- reference (GuestContractInterface, AbiError, StringView, ...) are defined.
 local callers = require('generated.host.callers')
 
--- Allow overriding the core library via POLYPLUG_LIB_PATH (verify_hosts.sh sets it).
-local lib_override = os.getenv('POLYPLUG_LIB_PATH') or os.getenv('POLYPLUG_LIB')
+-- Allow overriding the core library via POLYPLUG_LIB (verify_hosts.sh sets it).
+local lib_override = os.getenv('POLYPLUG_LIB')
 if lib_override then
     polyplug.load_lib(lib_override)
 end

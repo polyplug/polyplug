@@ -24,8 +24,8 @@ import {
 const pluginPath = Deno.env.get("POLYPLUG_PLUGIN_PATH")
   ?? "../../../examples/plugins";
 
-const libPath = Deno.env.get("POLYPLUG_LIB_PATH")
-  ?? "/mnt/data/Projects/Utils/polyplug/target/release/deps/libpolyplug.so";
+const libPath = Deno.env.get("POLYPLUG_LIB")
+  ?? new URL("../../../target/release/deps/libpolyplug.so", import.meta.url).pathname;
 
 console.error(`loading plugins from: ${pluginPath}\n`);
 

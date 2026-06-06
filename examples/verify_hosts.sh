@@ -7,8 +7,9 @@ WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 export POLYPLUG_PLUGIN_PATH="$WORKSPACE_DIR/examples/plugins"
 export LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps:${LD_LIBRARY_PATH:-}"
-export POLYPLUG_LIB_PATH="$WORKSPACE_DIR/target/release/deps/libpolyplug.so"
-export POLYPLUG_NATIVE_LIB_PATH="$WORKSPACE_DIR/target/release/deps/libpolyplug_native.so"
+export POLYPLUG_LIB="$WORKSPACE_DIR/target/release/deps/libpolyplug.so"
+# Dump a native-level Python traceback if a host or plugin interpreter crashes.
+export PYTHONFAULTHANDLER=1
 
 # Loader cdylib paths for hosts that dlopen loaders by env var (JS/Deno). Each
 # loader SDK reads POLYPLUG_<LANG>_LIB, falling back to the bare soname resolved

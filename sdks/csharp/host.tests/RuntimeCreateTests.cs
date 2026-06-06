@@ -21,13 +21,13 @@ namespace Polyplug.Host.Tests
         }
 
         /// <summary>
-        /// Resolve the polyplug core cdylib from POLYPLUG_LIB_PATH so the native
+        /// Resolve the polyplug core cdylib from POLYPLUG_LIB so the native
         /// import target resolves to the freshly built core rather than a stale
         /// copy in the test output directory.
         /// </summary>
         private static void InstallNativeLibraryResolver()
         {
-            string? corePath = Environment.GetEnvironmentVariable("POLYPLUG_LIB_PATH");
+            string? corePath = Environment.GetEnvironmentVariable("POLYPLUG_LIB");
             if (string.IsNullOrEmpty(corePath))
             {
                 return;
@@ -59,7 +59,7 @@ namespace Polyplug.Host.Tests
 
         private static bool NativeLibAvailable()
         {
-            return !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("POLYPLUG_LIB_PATH"));
+            return !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("POLYPLUG_LIB"));
         }
 
         [Fact]

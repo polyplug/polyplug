@@ -33,14 +33,14 @@ class Program
 
     /// <summary>
     /// Resolve polyplug core + loader cdylibs from the cargo target directory.
-    /// The verify_hosts.sh harness exports POLYPLUG_LIB_PATH (core) and
-    /// POLYPLUG_NATIVE_LIB_PATH (native loader); every other loader cdylib lives
+    /// The verify_hosts.sh harness exports POLYPLUG_LIB (core) and
+    /// POLYPLUG_NATIVE_LIB (native loader); every other loader cdylib lives
     /// in the same directory. Without this, the default OS loader can pick up a
     /// stale libpolyplug.so left in the assembly output directory.
     /// </summary>
     private static void InstallNativeLibraryResolver()
     {
-        string? corePath = Environment.GetEnvironmentVariable("POLYPLUG_LIB_PATH");
+        string? corePath = Environment.GetEnvironmentVariable("POLYPLUG_LIB");
         if (string.IsNullOrEmpty(corePath))
         {
             return;
