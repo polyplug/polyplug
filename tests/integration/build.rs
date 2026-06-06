@@ -84,7 +84,7 @@ fn main() {
     let cpp_so_filename: &str = if cfg!(target_os = "macos") {
         "libtest_plugin_cpp.dylib"
     } else if cfg!(target_os = "windows") {
-        "libtest_plugin_cpp.dll"
+        "test_plugin_cpp.dll"
     } else {
         "libtest_plugin_cpp.so"
     };
@@ -168,6 +168,8 @@ fn main() {
 
     let reload_v2_so_filename: &str = if cfg!(target_os = "macos") {
         "libreload_plugin_v2.dylib"
+    } else if cfg!(target_os = "windows") {
+        "reload_plugin_v2.dll"
     } else {
         "libreload_plugin_v2.so"
     };

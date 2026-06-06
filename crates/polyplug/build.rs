@@ -95,17 +95,21 @@ fn main() {
         reload_v2_so.display()
     );
 
-    // TEST_PLUGIN_CPP_SO — C++ test plugin
+    // TEST_PLUGIN_CPP_SO — C++ test plugin. The C++ fixtures follow the same
+    // platform naming as Rust cdylibs (no `lib` prefix + `.dll` on Windows),
+    // matching tests/fixtures/build_all.sh.
     let test_plugin_cpp_so: PathBuf =
-        fixtures_dir.join(format!("libtest_plugin_cpp.{}", plugin_ext));
+        fixtures_dir.join(format!("{}test_plugin_cpp.{}", plugin_prefix, plugin_ext));
     println!(
         "cargo:rustc-env=TEST_PLUGIN_CPP_SO={}",
         test_plugin_cpp_so.display()
     );
 
     // TEST_PLUGIN_CPP_THROW_SO — C++ throw test plugin
-    let test_plugin_cpp_throw_so: PathBuf =
-        fixtures_dir.join(format!("libtest_plugin_cpp_throw.{}", plugin_ext));
+    let test_plugin_cpp_throw_so: PathBuf = fixtures_dir.join(format!(
+        "{}test_plugin_cpp_throw.{}",
+        plugin_prefix, plugin_ext
+    ));
     println!(
         "cargo:rustc-env=TEST_PLUGIN_CPP_THROW_SO={}",
         test_plugin_cpp_throw_so.display()

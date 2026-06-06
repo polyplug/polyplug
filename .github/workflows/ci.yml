@@ -111,14 +111,32 @@ jobs:
       # compatibility graph, codegen emitters, error formatting) without touching
       # the `tests/` integration fixtures.
       #
-      # EXCLUDED on Windows (scoping, not test-skipping):
-      #   - native-loader integration tests in crates/polyplug/tests/ and the
-      #     `integration` crate: they `libloading::Library::new` pre-built `.so`
-      #     fixtures that are committed for Linux only. Windows needs the fixtures
-      #     rebuilt+committed as `.dll` (no `lib` prefix) plus per-platform
-      #     `[file]` manifest tables — a separate fixture-portability work item.
-      #   - VM-loader integration suites (lua/js/python/dotnet) that depend on
-      #     those same fixtures and on interpreters not provisioned in this job.
+      # EXCLUDED on Windows (scoping, not test-skipping) — each with a concrete,
+      # still-open blocker. The committed fixture manifests now carry per-platform
+      # `[file]` tables (windows.x86_64 = "<name>.dll"), and the fixture build
+      # scripts emit platform-correct names, so the loader resolution half is
+      # ready. The remaining blocker is the binaries themselves:
+      #
+      #   - native-loader suites that load *_DIR fixtures (e.g. library_lifetime,
+      #     integration_cascade_reload, stress_hot_reload): the bundle dirs ship a
+      #     COMMITTED Linux `lib<name>.so` only. There is no committed `<name>.dll`
+      #     and no CI step produces one — tests/fixtures/build_all.sh (the only
+      #     producer) is a bash script that no job runs and that needs g++/MSVC for
+      #     its C++ fixtures. Enabling these requires either committing Windows
+      #     `.dll` fixtures or adding a Windows fixture-build+install step.
+      #   - native-loader suites that load *_SO fixtures (integration_load,
+      #     integration_dispatch, integration_graph, integration_context,
+      #     integration_ffi_robustness, integration_codegen_cpp, stress_memory,
+      #     stress_error): they `libloading::Library::new(<*_SO>).expect(...)` with
+      #     no existence guard, on the gitignored fixtures-root copy that only
+      #     build_all.sh produces — so they would hard-fail, not skip.
+      #   - cross_language / VM-loader integration suites (lua/js/python/dotnet):
+      #     same missing-binary dependency for their native host/guest legs; the
+      #     C++ and C# legs additionally need g++/dotnet fixture builds wired in.
+      #
+      # We have no Windows machine; the first real verification is this CI run, so
+      # the enabled set is kept to what is known-green (workspace build + `--lib`
+      # unit tests) rather than widened to suites that cannot pass yet.
       - name: Run unit tests
         run: cargo test --workspace --lib
 

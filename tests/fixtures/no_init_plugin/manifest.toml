@@ -1,3 +1,9 @@
 bundle_name = "no_init_plugin"
 runtime     = "native"
-file        = "libno_init_plugin.so"
+
+[file]
+linux.x86_64   = "libno_init_plugin.so"
+linux.aarch64  = "libno_init_plugin.so"
+macos.x86_64   = "libno_init_plugin.dylib"
+macos.aarch64  = "libno_init_plugin.dylib"
+windows.x86_64 = "no_init_plugin.dll"

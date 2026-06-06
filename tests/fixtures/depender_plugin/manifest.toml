@@ -2,9 +2,15 @@ id                         = 9221549014155646466
 name                       = "depender_plugin"
 version                    = "1.0"
 runtime                    = "native"
-file                       = "libdepender_plugin.so"
 needs_reinit_on_dep_reload = true
 provides                   = ["depender.test"]
+
+[file]
+linux.x86_64   = "libdepender_plugin.so"
+linux.aarch64  = "libdepender_plugin.so"
+macos.x86_64   = "libdepender_plugin.dylib"
+macos.aarch64  = "libdepender_plugin.dylib"
+windows.x86_64 = "depender_plugin.dll"
 
 [function_count]
 "depender.test@1" = 1

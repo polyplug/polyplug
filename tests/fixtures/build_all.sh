@@ -92,7 +92,8 @@ for entry in "${CPP_FIXTURES[@]}"; do
     src_dir="${entry%%:*}"
     base="${entry#*:}"
     src="${SCRIPT_DIR}/${src_dir}/${base}.cpp"
-    out="${SCRIPT_DIR}/lib${base}.${LIB_EXT}"
+    lib_name="${LIB_PREFIX}${base}.${LIB_EXT}"
+    out="${SCRIPT_DIR}/${lib_name}"
 
     if [[ ! -f "${src}" ]]; then
         echo "  ERROR: expected C++ source not found: ${src}" >&2
@@ -100,7 +101,7 @@ for entry in "${CPP_FIXTURES[@]}"; do
     fi
 
     g++ -std=c++20 -fPIC -shared -O2 "${src}" -o "${out}"
-    echo "  lib${base}.${LIB_EXT} -> tests/fixtures/lib${base}.${LIB_EXT}"
+    echo "  ${lib_name} -> tests/fixtures/${lib_name}"
 done
 
 # C# fixture. Tolerated because dotnet may be unavailable, but report clearly.

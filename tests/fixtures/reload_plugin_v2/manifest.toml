@@ -2,9 +2,15 @@ id                         = 16808897324254478442
 name                       = "reload_plugin_v1"
 version                    = "2.0"
 runtime                    = "native"
-file                       = "libreload_plugin_v2.so"
 needs_reinit_on_dep_reload = false
 provides                   = ["reload.test"]
+
+[file]
+linux.x86_64   = "libreload_plugin_v2.so"
+linux.aarch64  = "libreload_plugin_v2.so"
+macos.x86_64   = "libreload_plugin_v2.dylib"
+macos.aarch64  = "libreload_plugin_v2.dylib"
+windows.x86_64 = "reload_plugin_v2.dll"
 
 [function_count]
 "reload.test@1" = 1

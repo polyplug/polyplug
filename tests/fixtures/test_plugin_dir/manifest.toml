@@ -2,8 +2,14 @@ id = 11175554700064995833
 name = "test_plugin"
 version = "1.0"
 runtime = "native"
-file = "libtest_plugin.so"
 provides = ["test.add"]
+
+[file]
+linux.x86_64   = "libtest_plugin.so"
+linux.aarch64  = "libtest_plugin.so"
+macos.x86_64   = "libtest_plugin.dylib"
+macos.aarch64  = "libtest_plugin.dylib"
+windows.x86_64 = "test_plugin.dll"
 
 [function_count]
 "test.add@1" = 1
