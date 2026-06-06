@@ -38,10 +38,12 @@ Covered languages: `rust`, `cpp`, `csharp`, `python`, `lua`, `js-quickjs`.
 
 ### e2e bar
 
-- **Compile proof (Rust reference):** `crates/polyplugc/tests/generate_e2e.rs`
-  runs `generate --lang rust`, the test writes the project shell, then `cargo
-  build` produces a cdylib — proving generated output needs zero hand edits.
-  Remaining work: equivalent `cpp`/`csharp`/`python`/`lua`/`js` build/load steps.
+- **Compile proof (all 6 languages):** `crates/polyplugc/tests/generate_e2e.rs`
+  (rust → cargo build), `generate_e2e_native.rs` (cpp → c++ -shared, csharp →
+  dotnet build), `generate_e2e_vm.rs` (python → py_compile + import, lua →
+  luajit load, js → deno check) — each runs `generate`, drops the output into a
+  minimal project the test writes, and proves it builds/loads with zero hand
+  edits.
 - **Assembly proof:** the same file asserts `validate --bundle-dir` accepts a
   correct bundle (exit 0, prints `OK: <dir>`), rejects a missing entry artifact,
   and rejects a tampered `id`.
@@ -152,3 +154,37 @@ VM dispatch signature `call(loader_data, instance, fn_id, args, out, arena)`; a
   for each language.
 - Tests: verify arena memory is valid during a call and released after;
   verify zero explicit alloc/free calls visible in generated plugin code.
+
+## Platform Support — Windows 🚧 In progress
+
+The workspace is Windows-correct at the source level and a `windows-latest` CI
+job has been added; awaiting the first real Windows CI run for confirmation.
+
+Done:
+
+- All platform-derived shared-library naming uses the real Rust cdylib
+  convention per OS (`<name>.dll` with no `lib` prefix on Windows,
+  `lib<name>.dylib` on macOS, `lib<name>.so` on Linux): `crates/polyplug/build.rs`,
+  `tests/integration/build.rs`, `tests/fixtures/build_all.sh`, and the
+  reload-plugin path helpers in `crates/polyplug/tests/stress_hot_reload.rs`.
+- `polyplug_dotnet` hostfxr auto-discovery is OS-aware (`dotnet.exe` on PATH,
+  `%ProgramFiles%\dotnet` well-known root, `hostfxr.dll`).
+- `manifest.toml` per-platform `[file]` tables already resolve the `windows`
+  key; the native loader uses `libloading` (cross-platform) and `PathBuf::join`
+  throughout.
+- `cargo check --target x86_64-pc-windows-msvc` is clean for every pure-Rust
+  crate; the only cross-check failures are vendored native C build scripts
+  (`pyo3-ffi`, `rquickjs-sys`, `tree-sitter`) that need the target's own
+  toolchain and build natively on a Windows runner.
+- CI: `windows-latest` job builds the full workspace (all six loaders) and runs
+  `cargo test --workspace --lib`.
+
+Remaining (separate fixture-portability work item):
+
+- Native-loader integration tests need their pre-built `.so` fixtures rebuilt and
+  committed as Windows `.dll` artifacts plus per-platform `[file]` manifest
+  tables, then the Windows CI job can drop the `--lib` scoping and run them.
+- Windows hot-reload note: the retire-not-drop model loads each version from a
+  distinct on-disk filename (e.g. `reload_plugin_v1` vs `_v2`), so reload never
+  overwrites a file while it is mapped — the Windows DLL file-lock that would
+  break overwrite-in-place reload does not apply.

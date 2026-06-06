@@ -303,8 +303,9 @@ impl DotnetContext {
 ///
 /// Search order:
 /// 1. `DOTNET_ROOT` environment variable
-/// 2. `PATH` entries that contain a `dotnet` binary
-/// 3. Well-known system paths: `/usr/share/dotnet`, `/usr/lib/dotnet`, `~/.dotnet`
+/// 2. `PATH` entries that contain a `dotnet` binary (`dotnet.exe` on Windows)
+/// 3. Well-known system paths (per OS: `C:\Program Files\dotnet` on Windows,
+///    `/usr/share/dotnet` / `/usr/lib/dotnet` / `~/.dotnet` on Unix)
 ///
 /// Within each candidate dotnet root, picks the highest-version `host/fxr/<ver>/libhostfxr.so`.
 fn find_hostfxr_auto() -> Option<PathBuf> {
@@ -317,9 +318,14 @@ fn find_hostfxr_auto() -> Option<PathBuf> {
     }
 
     // 2. Directories on PATH that contain a `dotnet` binary.
+    let dotnet_bin: &str = if cfg!(target_os = "windows") {
+        "dotnet.exe"
+    } else {
+        "dotnet"
+    };
     if let Some(path_val) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path_val) {
-            let candidate: PathBuf = dir.join("dotnet");
+            let candidate: PathBuf = dir.join(dotnet_bin);
             if candidate.exists() {
                 roots.push(dir);
             }
@@ -327,10 +333,22 @@ fn find_hostfxr_auto() -> Option<PathBuf> {
     }
 
     // 3. Well-known system paths.
-    roots.push(PathBuf::from("/usr/share/dotnet"));
-    roots.push(PathBuf::from("/usr/lib/dotnet"));
-    if let Some(home) = std::env::var_os("HOME") {
-        roots.push(PathBuf::from(home).join(".dotnet"));
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(program_files) = std::env::var_os("ProgramFiles") {
+            roots.push(PathBuf::from(program_files).join("dotnet"));
+        }
+        if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+            roots.push(PathBuf::from(program_files_x86).join("dotnet"));
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        roots.push(PathBuf::from("/usr/share/dotnet"));
+        roots.push(PathBuf::from("/usr/lib/dotnet"));
+        if let Some(home) = std::env::var_os("HOME") {
+            roots.push(PathBuf::from(home).join(".dotnet"));
+        }
     }
 
     // For each root, look for host/fxr/<version>/libhostfxr.so and pick the

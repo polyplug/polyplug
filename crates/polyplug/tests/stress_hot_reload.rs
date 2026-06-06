@@ -130,11 +130,25 @@ static INTERFACE_QU_B: GuestContractInterface = GuestContractInterface {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn v1_so_path() -> PathBuf {
-    PathBuf::from(RELOAD_V1_DIR).join("libreload_plugin_v1.so")
+    let filename: &str = if cfg!(target_os = "macos") {
+        "libreload_plugin_v1.dylib"
+    } else if cfg!(target_os = "windows") {
+        "reload_plugin_v1.dll"
+    } else {
+        "libreload_plugin_v1.so"
+    };
+    PathBuf::from(RELOAD_V1_DIR).join(filename)
 }
 
 fn v2_so_path() -> PathBuf {
-    PathBuf::from(RELOAD_V2_DIR).join("libreload_plugin_v2.so")
+    let filename: &str = if cfg!(target_os = "macos") {
+        "libreload_plugin_v2.dylib"
+    } else if cfg!(target_os = "windows") {
+        "reload_plugin_v2.dll"
+    } else {
+        "libreload_plugin_v2.so"
+    };
+    PathBuf::from(RELOAD_V2_DIR).join(filename)
 }
 
 fn hot_reload_config() -> polyplug::RuntimeConfig {

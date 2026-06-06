@@ -25,7 +25,9 @@ fn main() {
 
     let fixtures_dir: PathBuf = workspace_root.join("tests").join("fixtures");
 
-    // Platform-specific shared library filename
+    // Platform-specific shared library naming. Rust cdylibs are `<name>.dll` on
+    // Windows (no `lib` prefix), `lib<name>.dylib` on macOS, `lib<name>.so` on
+    // Linux — mirror that here so the emitted paths match the real artifacts.
     let plugin_ext: &str = if cfg!(target_os = "macos") {
         "dylib"
     } else if cfg!(target_os = "windows") {
@@ -33,30 +35,39 @@ fn main() {
     } else {
         "so"
     };
+    let plugin_prefix: &str = if cfg!(target_os = "windows") {
+        ""
+    } else {
+        "lib"
+    };
 
     // TEST_PLUGIN_SO — native Rust test plugin
-    let test_plugin_so: PathBuf = fixtures_dir.join(format!("libtest_plugin.{}", plugin_ext));
+    let test_plugin_so: PathBuf =
+        fixtures_dir.join(format!("{}test_plugin.{}", plugin_prefix, plugin_ext));
     println!(
         "cargo:rustc-env=TEST_PLUGIN_SO={}",
         test_plugin_so.display()
     );
 
     // MEMORY_PLUGIN_SO — memory test plugin
-    let memory_plugin_so: PathBuf = fixtures_dir.join(format!("libmemory_plugin.{}", plugin_ext));
+    let memory_plugin_so: PathBuf =
+        fixtures_dir.join(format!("{}memory_plugin.{}", plugin_prefix, plugin_ext));
     println!(
         "cargo:rustc-env=MEMORY_PLUGIN_SO={}",
         memory_plugin_so.display()
     );
 
     // ERROR_PLUGIN_SO — error test plugin
-    let error_plugin_so: PathBuf = fixtures_dir.join(format!("liberror_plugin.{}", plugin_ext));
+    let error_plugin_so: PathBuf =
+        fixtures_dir.join(format!("{}error_plugin.{}", plugin_prefix, plugin_ext));
     println!(
         "cargo:rustc-env=ERROR_PLUGIN_SO={}",
         error_plugin_so.display()
     );
 
     // NO_INIT_PLUGIN_SO — plugin without polyplug_init
-    let no_init_plugin_so: PathBuf = fixtures_dir.join(format!("libno_init_plugin.{}", plugin_ext));
+    let no_init_plugin_so: PathBuf =
+        fixtures_dir.join(format!("{}no_init_plugin.{}", plugin_prefix, plugin_ext));
     println!(
         "cargo:rustc-env=NO_INIT_PLUGIN_SO={}",
         no_init_plugin_so.display()
@@ -64,19 +75,21 @@ fn main() {
 
     // DEPENDER_PLUGIN_SO — dependency test plugin
     let depender_plugin_so: PathBuf =
-        fixtures_dir.join(format!("libdepender_plugin.{}", plugin_ext));
+        fixtures_dir.join(format!("{}depender_plugin.{}", plugin_prefix, plugin_ext));
     println!(
         "cargo:rustc-env=DEPENDER_PLUGIN_SO={}",
         depender_plugin_so.display()
     );
 
     // RELOAD_PLUGIN_V1_SO, RELOAD_PLUGIN_V2_SO — reload test plugins
-    let reload_v1_so: PathBuf = fixtures_dir.join(format!("libreload_plugin_v1.{}", plugin_ext));
+    let reload_v1_so: PathBuf =
+        fixtures_dir.join(format!("{}reload_plugin_v1.{}", plugin_prefix, plugin_ext));
     println!(
         "cargo:rustc-env=RELOAD_PLUGIN_V1_SO={}",
         reload_v1_so.display()
     );
-    let reload_v2_so: PathBuf = fixtures_dir.join(format!("libreload_plugin_v2.{}", plugin_ext));
+    let reload_v2_so: PathBuf =
+        fixtures_dir.join(format!("{}reload_plugin_v2.{}", plugin_prefix, plugin_ext));
     println!(
         "cargo:rustc-env=RELOAD_PLUGIN_V2_SO={}",
         reload_v2_so.display()

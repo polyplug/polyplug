@@ -19,10 +19,13 @@ WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 echo "Rebuilding test fixtures from ${WORKSPACE_ROOT}"
 
 # Platform-specific cdylib extension (matches crates/polyplug/build.rs).
+# Rust cdylib naming: `<name>.dll` on Windows (no `lib` prefix),
+# `lib<name>.dylib` on macOS, `lib<name>.so` on Linux. Mirror exactly what the
+# *_SO env vars in crates/polyplug/build.rs expect.
 case "$(uname -s)" in
-    Darwin) LIB_EXT="dylib" ;;
-    MINGW* | MSYS* | CYGWIN*) LIB_EXT="dll" ;;
-    *) LIB_EXT="so" ;;
+    Darwin) LIB_EXT="dylib" ; LIB_PREFIX="lib" ;;
+    MINGW* | MSYS* | CYGWIN*) LIB_EXT="dll" ; LIB_PREFIX="" ;;
+    *) LIB_EXT="so" ; LIB_PREFIX="lib" ;;
 esac
 
 RELEASE_DIR="${WORKSPACE_ROOT}/target/release"
@@ -50,7 +53,7 @@ echo "Installing Rust fixture cdylibs..."
 for entry in "${RUST_FIXTURES[@]}"; do
     pkg="${entry%%:*}"
     bundle_dir="${entry#*:}"
-    lib_name="lib${pkg}.${LIB_EXT}"
+    lib_name="${LIB_PREFIX}${pkg}.${LIB_EXT}"
     src="${RELEASE_DIR}/${lib_name}"
 
     if [[ ! -f "${src}" ]]; then

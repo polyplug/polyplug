@@ -83,6 +83,8 @@ fn main() {
     // TEST_PLUGIN_CPP_SO — C++ test plugin (built by crates/polyplug/build.rs via g++)
     let cpp_so_filename: &str = if cfg!(target_os = "macos") {
         "libtest_plugin_cpp.dylib"
+    } else if cfg!(target_os = "windows") {
+        "libtest_plugin_cpp.dll"
     } else {
         "libtest_plugin_cpp.so"
     };
@@ -150,6 +152,8 @@ fn main() {
     // RELOAD_PLUGIN_V1_SO, RELOAD_PLUGIN_V2_SO — reload test plugin shared libraries
     let reload_so_filename: &str = if cfg!(target_os = "macos") {
         "libreload_plugin_v1.dylib"
+    } else if cfg!(target_os = "windows") {
+        "reload_plugin_v1.dll"
     } else {
         "libreload_plugin_v1.so"
     };
