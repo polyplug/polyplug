@@ -468,7 +468,7 @@ tests/fixtures/*.dylib
 tests/fixtures/*.dll
 
 # Local dev native library copies
-**/_native/
+**/_native/*/
 
 # NuGet runtime folders (local dev embedding)
 **/runtimes/

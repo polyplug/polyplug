@@ -106,7 +106,7 @@ echo ""
 # Run C++ host
 echo "=== C++ Host ==="
 if [ -f "hosts/cpp/host" ]; then
-    if LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps" hosts/cpp/host 2>&1; then
+    if hosts/cpp/host 2>&1; then
         echo "✓ cpp host passed"
     else
         echo "✗ cpp host failed"
@@ -120,7 +120,7 @@ echo ""
 # Run C++ hot-reload host
 echo "=== C++ Hot-Reload Host ==="
 if [ -f "hosts/cpp/hot_reload_host" ]; then
-    if LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps" hosts/cpp/hot_reload_host 2>&1; then
+    if hosts/cpp/hot_reload_host 2>&1; then
         echo "✓ cpp hot_reload_host passed"
     else
         echo "✗ cpp hot_reload_host failed"
@@ -187,7 +187,7 @@ if command -v dotnet &> /dev/null && [ -f "hosts/csharp/Host.csproj" ]; then
 fi
 
 if [ -f "hosts/cpp/host" ]; then
-    OUTPUT=$(LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps" hosts/cpp/host 2>&1)
+    OUTPUT=$(hosts/cpp/host 2>&1)
     if echo "$OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
         echo "✓ cpp host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))
@@ -197,7 +197,7 @@ if [ -f "hosts/cpp/host" ]; then
 fi
 
 if [ -f "hosts/cpp/hot_reload_host" ]; then
-    OUTPUT=$(LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps" hosts/cpp/hot_reload_host 2>&1)
+    OUTPUT=$(hosts/cpp/hot_reload_host 2>&1)
     if echo "$OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
         echo "✓ cpp hot_reload_host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))
