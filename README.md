@@ -107,23 +107,24 @@ polyplug/
 
 ## Documentation
 
+- **Workflow** — See [`docs/WORKFLOW.md`](docs/WORKFLOW.md) for the end-to-end host-app and plugin-developer pipelines
 - **SDKs** — See `sdks/` for host and guest libraries in each language
 - **Examples** — See `examples/` for complete working examples
 - **Design Docs** — See `docs/` for architecture and design decisions
 
 ## Code Generation
 
-Use `polyplugc` to generate type-safe bindings:
+Use `polyplugc` to generate type-safe bindings and validate the result:
 
 ```bash
-# Generate Rust bindings
-polyplugc generate --bundle bundle.toml --lang rust --out src/generated
+# Host side: typed callers + registration glue from the app's API
+polyplugc generate --api api.toml --lang rust --out generated
 
-# Generate Python bindings
-polyplugc generate --bundle bundle.toml --lang python --out src/generated
+# Guest side: contract stubs + ship-ready manifest.toml
+polyplugc generate --bundle bundle.toml --lang python --out generated
 
-# Generate C# bindings
-polyplugc generate --bundle bundle.toml --lang csharp --out src/generated
+# Check an assembled bundle directory before shipping
+polyplugc validate --bundle-dir dist/my_plugin
 ```
 
 ## Repository
