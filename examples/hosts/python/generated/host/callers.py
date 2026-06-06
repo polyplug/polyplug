@@ -4,9 +4,9 @@
 
 from __future__ import annotations
 import ctypes
-from typing import Callable, Optional, TypeAlias
+from typing import Any, Callable, Optional, TypeAlias
 
-from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostApi, StringView
+from polyplug_abi import AbiErrorCode, DispatchType, GuestContractInstance, GuestContractInterface, HostApi, StringView
 
 class ContractError(Exception):
     def __init__(self, message: str, code: int = AbiErrorCode.Generic) -> None:
@@ -113,12 +113,18 @@ class PipelineDecoderContractCaller:
         interface: GuestContractInterface = iface_ptr.contents
         if 0 >= interface.dispatch.native.function_count:
             raise RuntimeError("function not available in interface")
-        functions_ptr: int = interface.dispatch.native.functions
-        fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
-        dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-        # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
-        # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)
+        err: Any
+        if interface.dispatch_type == DispatchType.Native:
+            functions_ptr: int = interface.dispatch.native.functions
+            fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
+            # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
+            # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
+            err = dispatch_fn(self._instance, args_ptr, out_ptr)
+        else:
+            # SAFETY: the union's vm variant is active per dispatch_type; args/out
+            # are valid per the ABI contract. The null arena selects the host->alloc fallback.
+            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, None)
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
@@ -205,12 +211,18 @@ class DataTransformerContractCaller:
         interface: GuestContractInterface = iface_ptr.contents
         if 0 >= interface.dispatch.native.function_count:
             raise RuntimeError("function not available in interface")
-        functions_ptr: int = interface.dispatch.native.functions
-        fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
-        dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-        # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
-        # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)
+        err: Any
+        if interface.dispatch_type == DispatchType.Native:
+            functions_ptr: int = interface.dispatch.native.functions
+            fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
+            # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
+            # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
+            err = dispatch_fn(self._instance, args_ptr, out_ptr)
+        else:
+            # SAFETY: the union's vm variant is active per dispatch_type; args/out
+            # are valid per the ABI contract. The null arena selects the host->alloc fallback.
+            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, None)
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
@@ -297,12 +309,18 @@ class PipelineEncoderContractCaller:
         interface: GuestContractInterface = iface_ptr.contents
         if 0 >= interface.dispatch.native.function_count:
             raise RuntimeError("function not available in interface")
-        functions_ptr: int = interface.dispatch.native.functions
-        fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
-        dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-        # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
-        # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)
+        err: Any
+        if interface.dispatch_type == DispatchType.Native:
+            functions_ptr: int = interface.dispatch.native.functions
+            fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
+            # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
+            # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
+            err = dispatch_fn(self._instance, args_ptr, out_ptr)
+        else:
+            # SAFETY: the union's vm variant is active per dispatch_type; args/out
+            # are valid per the ABI contract. The null arena selects the host->alloc fallback.
+            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, None)
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
@@ -389,12 +407,18 @@ class DataReporterContractCaller:
         interface: GuestContractInterface = iface_ptr.contents
         if 0 >= interface.dispatch.native.function_count:
             raise RuntimeError("function not available in interface")
-        functions_ptr: int = interface.dispatch.native.functions
-        fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
-        dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-        # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
-        # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)
+        err: Any
+        if interface.dispatch_type == DispatchType.Native:
+            functions_ptr: int = interface.dispatch.native.functions
+            fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
+            # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
+            # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
+            err = dispatch_fn(self._instance, args_ptr, out_ptr)
+        else:
+            # SAFETY: the union's vm variant is active per dispatch_type; args/out
+            # are valid per the ABI contract. The null arena selects the host->alloc fallback.
+            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, None)
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
@@ -481,12 +505,18 @@ class PipelineValidatorContractCaller:
         interface: GuestContractInterface = iface_ptr.contents
         if 0 >= interface.dispatch.native.function_count:
             raise RuntimeError("function not available in interface")
-        functions_ptr: int = interface.dispatch.native.functions
-        fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
-        dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-        # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
-        # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)
+        err: Any
+        if interface.dispatch_type == DispatchType.Native:
+            functions_ptr: int = interface.dispatch.native.functions
+            fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
+            # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
+            # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
+            err = dispatch_fn(self._instance, args_ptr, out_ptr)
+        else:
+            # SAFETY: the union's vm variant is active per dispatch_type; args/out
+            # are valid per the ABI contract. The null arena selects the host->alloc fallback.
+            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, None)
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val

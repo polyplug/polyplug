@@ -1218,8 +1218,11 @@ fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str(&format!("{} = {{}}\n", class_name));
     out.push_str(&format!("{}.__index = {}\n\n", class_name, class_name));
 
-    out.push_str(&format!("function {}:new(interface)\n", class_name));
-    out.push_str("    local obj = { _interface = interface }\n");
+    out.push_str(&format!(
+        "function {}:new(interface, instance)\n",
+        class_name
+    ));
+    out.push_str("    local obj = { _interface = interface, _instance = instance }\n");
     out.push_str("    setmetatable(obj, self)\n");
     out.push_str("    return obj\n");
     out.push_str("end\n\n");
@@ -1233,14 +1236,27 @@ fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("        return nil\n");
     out.push_str("    end\n");
     out.push_str("    local host = ffi.cast(\"HostApi*\", host_ptr)\n");
+    // Resolve the contract vtable. This is the source of dispatch metadata
+    // (dispatch_type, function_count, functions) — NOT the instance. Mirrors the
+    // canonical Rust host-contract caller (resolve_host_contract_interface +
+    // get_host_contract).
     out.push_str(&format!(
-        "    local interface_ptr = host.get_host_contract(host_ptr, 0x{:016X}ULL, min_version)\n",
+        "    local interface_ptr = host.resolve_host_contract_interface(host_ptr, 0x{:016X}ULL, min_version)\n",
         contract.contract_id
     ));
     out.push_str("    if interface_ptr == nil then\n");
     out.push_str("        return nil\n");
     out.push_str("    end\n");
-    out.push_str(&format!("    return {}:new(interface_ptr)\n", class_name));
+    // The per-instance state: native dispatch thunks receive this as their `this`
+    // (first) argument.
+    out.push_str(&format!(
+        "    local instance = host.get_host_contract(host_ptr, 0x{:016X}ULL, min_version)\n",
+        contract.contract_id
+    ));
+    out.push_str(&format!(
+        "    return {}:new(interface_ptr, instance)\n",
+        class_name
+    ));
     out.push_str("end\n\n");
 
     out.push_str(&format!("function {}:is_valid()\n", class_name));
@@ -1287,8 +1303,13 @@ fn generate_lua_guest_host_contract_method(
     }
     out.push_str("    end\n");
 
-    out.push_str("    local header = ffi.cast(\"HostContractVTable*\", self._interface).header\n");
-    out.push_str(&format!("    if {fn_id} >= header.function_count then\n"));
+    // The resolved interface is a flat `HostContractInterface` (80 bytes): there is
+    // no `HostContractVTable`/`header` wrapper in the ABI. Read dispatch metadata
+    // directly from the struct, mirroring the canonical Rust host-contract caller.
+    out.push_str("    local interface = ffi.cast(\"HostContractInterface*\", self._interface)\n");
+    out.push_str(&format!(
+        "    if {fn_id} >= interface.dispatch.native.function_count then\n"
+    ));
     if has_return {
         out.push_str("        return nil\n");
     } else {
@@ -1296,17 +1317,21 @@ fn generate_lua_guest_host_contract_method(
     }
     out.push_str("    end\n");
 
-    out.push_str("    local dispatch_type = header.dispatch_type\n");
+    out.push_str("    local dispatch_type = interface.dispatch_type\n");
 
     emit_lua_guest_host_contract_args_setup(out, func);
     emit_lua_guest_host_contract_out_setup(out, &func.returns);
 
     out.push_str("    local err\n");
     out.push_str("    if dispatch_type == 0 then\n");
+    // Native dispatch: the thunk receives the per-instance state pointer as its
+    // first argument (the `this`/impl pointer), exactly as the canonical Rust
+    // caller passes `self.instance.data`.
     out.push_str(&format!(
-        "        local fn_ptr = header.dispatch.native.functions[{fn_id}]\n"
+        "        local fn_ptr = interface.dispatch.native.functions[{fn_id}]\n"
     ));
-    out.push_str("        local impl_ptr = header.dispatch.native.impl_ptr\n");
+    out.push_str("        local impl_ptr = nil\n");
+    out.push_str("        if self._instance ~= nil then impl_ptr = self._instance.data end\n");
     out.push_str("        local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
     out.push_str("        err = fn(impl_ptr, args_ptr, out_ptr)\n");
     out.push_str("    elseif dispatch_type == 1 then\n");
@@ -1317,7 +1342,7 @@ fn generate_lua_guest_host_contract_method(
     // caller has no per-caller arena, so the bridge falls back to host->alloc.
     out.push_str("        local _null_instance = ffi.new(\"GuestContractInstance\")\n");
     out.push_str(&format!(
-        "        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, _null_instance, {fn_id}, args_ptr, out_ptr, nil)\n"
+        "        err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, {fn_id}, args_ptr, out_ptr, nil)\n"
     ));
     out.push_str("    else\n");
     if has_return {
@@ -1327,7 +1352,8 @@ fn generate_lua_guest_host_contract_method(
     }
     out.push_str("    end\n");
 
-    out.push_str("    if err ~= 0 then\n");
+    // err is a 24-byte AbiError struct returned by value; check its code field.
+    out.push_str("    if err.code ~= 0 then\n");
     if has_return {
         out.push_str("        return nil\n");
     } else {
@@ -1480,13 +1506,20 @@ fn emit_lua_guest_host_contract_out_setup(out: &mut String, returns: &Option<Res
 fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(file_header());
-    out.push_str("local ffi = require(\"ffi\")\n\n");
+    out.push_str("local ffi = require(\"ffi\")\n");
+    // Require the polyplug_abi Lua SDK so the HostContractInterface / AbiError /
+    // GuestContractInstance cdefs this module casts to are declared. Without this
+    // require the ffi.cast(\"HostContractInterface*\", ...) below would fail at load.
+    out.push_str("local polyplug_abi = require(\"polyplug_abi\")\n\n");
 
     out.push_str("local M = {}\n\n");
 
+    // Native host-contract dispatch returns an AbiError (24-byte struct) by value,
+    // taking (this, args, out) where `this` is the per-instance state pointer.
+    // This mirrors the canonical Rust host-contract caller's native fn signature.
     out.push_str("-- Cached FFI types for hot path performance\n");
     out.push_str(
-        "local DispatchFnType = ffi.typeof(\"uint32_t (*)(const void*, const void*, void*)\")\n\n",
+        "local DispatchFnType = ffi.typeof(\"AbiError (*)(const void*, const void*, void*)\")\n\n",
     );
 
     for contract in &ir.host_contracts {
@@ -2177,7 +2210,7 @@ mod tests {
             "missing __index: {out}"
         );
         assert!(
-            out.contains("function HostLoggerContract:new(interface)"),
+            out.contains("function HostLoggerContract:new(interface, instance)"),
             "missing new method: {out}"
         );
         assert!(
@@ -2191,6 +2224,40 @@ mod tests {
         assert!(
             out.contains("function HostLoggerContract:log(self, level, message)"),
             "missing log method: {out}"
+        );
+        // Defect (a): the caller must cast to the canonical flat HostContractInterface,
+        // never the nonexistent HostContractVTable, and read dispatch metadata directly.
+        assert!(
+            out.contains("ffi.cast(\"HostContractInterface*\", self._interface)"),
+            "must cast to HostContractInterface: {out}"
+        );
+        assert!(
+            !out.contains("HostContractVTable"),
+            "must not reference the nonexistent HostContractVTable: {out}"
+        );
+        assert!(
+            !out.contains(".header."),
+            "must not read through a nonexistent .header field: {out}"
+        );
+        // VM dispatch uses the canonical 6-arg call(loader_data, instance, fn_id, args,
+        // out, nil) — loader_data, not the old bridge_data field.
+        assert!(
+            out.contains("interface.dispatch.vm.call(interface.dispatch.vm.loader_data,"),
+            "must call vm.call with loader_data: {out}"
+        );
+        assert!(
+            !out.contains("bridge_data"),
+            "must use loader_data, not bridge_data: {out}"
+        );
+        // from_host resolves the interface via resolve_host_contract_interface and the
+        // instance via get_host_contract, matching the canonical Rust caller.
+        assert!(
+            out.contains("host.resolve_host_contract_interface(host_ptr,"),
+            "from_host must resolve the interface vtable: {out}"
+        );
+        assert!(
+            out.contains("host.get_host_contract(host_ptr,"),
+            "from_host must obtain the per-instance state: {out}"
         );
     }
 

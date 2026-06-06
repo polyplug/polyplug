@@ -550,6 +550,58 @@ fn test_python_host_contract_guest_generates_caller() {
 }
 
 #[test]
+fn test_python_host_caller_branches_on_dispatch_type() {
+    // Defect (b): the Python host-side caller (a Python host calling INTO a guest
+    // contract) must branch on dispatch_type. VM-dispatched guests (Lua/JS) must be
+    // called through the union's vm.call member with the canonical 6-arg signature,
+    // not mis-read as dispatch.native.
+    let tmp_dir: PathBuf =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_python_host_caller_dispatch");
+    let api_toml: PathBuf = create_test_api_with_host_contracts(&tmp_dir);
+
+    let config = GenerateConfig {
+        api_toml: api_toml.clone(),
+        lang: Lang::Python,
+        side: Side::Host,
+        out_dir: tmp_dir.clone(),
+    };
+
+    let output = generate(config).expect("polyplugc::generate failed");
+
+    for file in &output.files {
+        let file_path = tmp_dir.join(&file.path);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+        }
+        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+    }
+
+    let callers_path: PathBuf = tmp_dir.join("host").join("callers.py");
+    assert!(callers_path.exists(), "host/callers.py must exist");
+
+    let content: String = std::fs::read_to_string(&callers_path).expect("read host/callers.py");
+
+    // DispatchType must be imported and the caller must branch on it.
+    assert!(
+        content.contains("DispatchType"),
+        "host caller must import/use DispatchType"
+    );
+    assert!(
+        content.contains("if interface.dispatch_type == DispatchType.Native:"),
+        "host caller must branch on dispatch_type"
+    );
+    // VM path: 6-arg call(loader_data, instance, fn_id, args, out, None).
+    assert!(
+        content.contains(
+            "interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance,"
+        ) && content.contains(", args_ptr, out_ptr, None)"),
+        "VM dispatch must use the canonical 6-arg call with a None arena"
+    );
+
+    println!("test_python_host_caller_branches_on_dispatch_type: passed ✓");
+}
+
+#[test]
 fn test_lua_host_contract_generates_contracts_file() {
     let tmp_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_lua_host_contract");
@@ -625,6 +677,39 @@ fn test_lua_host_contract_guest_generates_caller() {
     );
     assert!(content.contains("from_host"), "must contain from_host");
     assert!(content.contains("is_valid"), "must contain is_valid");
+
+    // Defect (a): the caller must require the polyplug_abi Lua SDK so every cdef it
+    // casts to (HostContractInterface / AbiError / GuestContractInstance) is declared.
+    assert!(
+        content.contains("require(\"polyplug_abi\")"),
+        "guest host-contract caller must require polyplug_abi for its cdefs"
+    );
+    // It must cast to the canonical flat HostContractInterface, NOT the dead
+    // HostContractVTable type that is defined nowhere in the ABI.
+    assert!(
+        content.contains("ffi.cast(\"HostContractInterface*\""),
+        "must cast to the canonical HostContractInterface"
+    );
+    assert!(
+        !content.contains("HostContractVTable"),
+        "must NOT reference the nonexistent HostContractVTable type"
+    );
+    // No `.header.` indirection: the ABI struct is flat (dispatch_type / dispatch
+    // live directly on HostContractInterface).
+    assert!(
+        !content.contains(".header."),
+        "must not read through a nonexistent .header field"
+    );
+    // VM dispatch must use the canonical 6-arg call with loader_data and a nil arena.
+    assert!(
+        content.contains("interface.dispatch.vm.call(interface.dispatch.vm.loader_data,")
+            && content.contains(", args_ptr, out_ptr, nil)"),
+        "VM dispatch must use the 6-arg call(loader_data, instance, fn_id, args, out, nil)"
+    );
+    assert!(
+        !content.contains("bridge_data"),
+        "must use loader_data, not the nonexistent bridge_data field"
+    );
 
     println!("test_lua_host_contract_guest_generates_caller: passed ✓");
 }
@@ -705,6 +790,23 @@ fn test_js_quickjs_host_contract_guest_generates_caller() {
     );
     assert!(content.contains("fromHost"), "must contain fromHost");
     assert!(content.contains("isValid"), "must contain isValid");
+
+    // Defect (c): callVmDispatch must use the canonical 6-arg VM dispatch form,
+    // passing the trailing arena pointer as a (lo, hi) = (0, 0) null pair.
+    assert!(
+        content.contains("polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi,")
+            && content.contains(", argsPtr, outPtr, 0, 0);"),
+        "callVmDispatch must pass a null arena as the trailing lo/hi pair"
+    );
+    // Guard against regressing to the old 5-arg form (no arena) on the VM call.
+    assert!(
+        !content.contains(
+            "callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, 0, argsPtr, outPtr)"
+        ) && !content.contains(
+            "callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, 1, argsPtr, outPtr)"
+        ),
+        "callVmDispatch must not use the pre-arena 5-arg arity"
+    );
 
     println!("test_js_quickjs_host_contract_guest_generates_caller: passed ✓");
 }

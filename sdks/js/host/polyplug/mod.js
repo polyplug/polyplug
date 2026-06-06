@@ -417,14 +417,16 @@ export class GuestContractInterfaceView {
       if (this.#vmCallPtr === null) {
         return 8; // AbiErrorCode::InvalidPointer — null VM dispatch function.
       }
-      // call(loader_data: VmLoaderData, instance, fn_id: u32, args, out) -> AbiError.
-      // VmLoaderData is a single opaque pointer (`{ data: *mut c_void }`).
+      // call(loader_data: VmLoaderData, instance, fn_id: u32, args, out, arena) -> AbiError.
+      // VmLoaderData is a single opaque pointer (`{ data: *mut c_void }`). The trailing
+      // `arena` is a `*mut CallArena`; a null arena is the documented legacy fallback to
+      // per-value host->alloc (host callers carry no per-call arena).
       const fn = new Deno.UnsafeFnPointer(this.#vmCallPtr, {
-        parameters: ["pointer", GUEST_CONTRACT_INSTANCE_STRUCT, "u32", "pointer", "pointer"],
+        parameters: ["pointer", GUEST_CONTRACT_INSTANCE_STRUCT, "u32", "pointer", "pointer", "pointer"],
         result: ABI_ERROR_STRUCT,
       });
       const loaderData = Deno.UnsafePointer.create(this.#vmLoaderData);
-      result = fn.call(loaderData, instance, slot, argsPtr, outPtr);
+      result = fn.call(loaderData, instance, slot, argsPtr, outPtr, null);
     } else {
       const fn = this.#nativeFnPointer(slot);
       if (fn === null) {

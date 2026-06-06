@@ -3,18 +3,19 @@
 -- Re-generate with: polyplugc generate --api <api.toml> --lang lua --out <dir>
 
 local ffi = require("ffi")
+local polyplug_abi = require("polyplug_abi")
 
 local M = {}
 
 -- Cached FFI types for hot path performance
-local DispatchFnType = ffi.typeof("uint32_t (*)(const void*, const void*, void*)")
+local DispatchFnType = ffi.typeof("AbiError (*)(const void*, const void*, void*)")
 
 -- Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 HostLoggerContract = {}
 HostLoggerContract.__index = HostLoggerContract
 
-function HostLoggerContract:new(interface)
-    local obj = { _interface = interface }
+function HostLoggerContract:new(interface, instance)
+    local obj = { _interface = interface, _instance = instance }
     setmetatable(obj, self)
     return obj
 end
@@ -25,11 +26,12 @@ function HostLoggerContract.from_host(host_ptr, min_version)
         return nil
     end
     local host = ffi.cast("HostApi*", host_ptr)
-    local interface_ptr = host.get_host_contract(host_ptr, 0xF53EB5F2845853BBULL, min_version)
+    local interface_ptr = host.resolve_host_contract_interface(host_ptr, 0xF53EB5F2845853BBULL, min_version)
     if interface_ptr == nil then
         return nil
     end
-    return HostLoggerContract:new(interface_ptr)
+    local instance = host.get_host_contract(host_ptr, 0xF53EB5F2845853BBULL, min_version)
+    return HostLoggerContract:new(interface_ptr, instance)
 end
 
 function HostLoggerContract:is_valid()
@@ -40,11 +42,11 @@ function HostLoggerContract:log(self, message)
     if self._interface == nil then
         return
     end
-    local header = ffi.cast("HostContractVTable*", self._interface).header
-    if 0 >= header.function_count then
+    local interface = ffi.cast("HostContractInterface*", self._interface)
+    if 0 >= interface.dispatch.native.function_count then
         return
     end
-    local dispatch_type = header.dispatch_type
+    local dispatch_type = interface.dispatch_type
     local message_bytes = tostring(message)
     local message_view = ffi.new("StringView")
     message_view.ptr = ffi.cast("const char*", message_bytes)
@@ -53,17 +55,18 @@ function HostLoggerContract:log(self, message)
     local out_ptr = nil
     local err
     if dispatch_type == 0 then
-        local fn_ptr = header.dispatch.native.functions[0]
-        local impl_ptr = header.dispatch.native.impl_ptr
+        local fn_ptr = interface.dispatch.native.functions[0]
+        local impl_ptr = nil
+        if self._instance ~= nil then impl_ptr = self._instance.data end
         local fn = ffi.cast(DispatchFnType, fn_ptr)
         err = fn(impl_ptr, args_ptr, out_ptr)
     elseif dispatch_type == 1 then
         local _null_instance = ffi.new("GuestContractInstance")
-        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, _null_instance, 0, args_ptr, out_ptr, nil)
+        err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, 0, args_ptr, out_ptr, nil)
     else
         return
     end
-    if err ~= 0 then
+    if err.code ~= 0 then
         return
     end
 end
@@ -72,11 +75,11 @@ function HostLoggerContract:log_with_level(self, level, message)
     if self._interface == nil then
         return
     end
-    local header = ffi.cast("HostContractVTable*", self._interface).header
-    if 1 >= header.function_count then
+    local interface = ffi.cast("HostContractInterface*", self._interface)
+    if 1 >= interface.dispatch.native.function_count then
         return
     end
-    local dispatch_type = header.dispatch_type
+    local dispatch_type = interface.dispatch_type
     local args_val = {}
     args_val.level = level
     local message_bytes = tostring(message)
@@ -87,17 +90,18 @@ function HostLoggerContract:log_with_level(self, level, message)
     local out_ptr = nil
     local err
     if dispatch_type == 0 then
-        local fn_ptr = header.dispatch.native.functions[1]
-        local impl_ptr = header.dispatch.native.impl_ptr
+        local fn_ptr = interface.dispatch.native.functions[1]
+        local impl_ptr = nil
+        if self._instance ~= nil then impl_ptr = self._instance.data end
         local fn = ffi.cast(DispatchFnType, fn_ptr)
         err = fn(impl_ptr, args_ptr, out_ptr)
     elseif dispatch_type == 1 then
         local _null_instance = ffi.new("GuestContractInstance")
-        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, _null_instance, 1, args_ptr, out_ptr, nil)
+        err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, 1, args_ptr, out_ptr, nil)
     else
         return
     end
-    if err ~= 0 then
+    if err.code ~= 0 then
         return
     end
 end

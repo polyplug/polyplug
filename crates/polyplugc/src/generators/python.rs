@@ -288,8 +288,8 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
-    out.push_str("from typing import Callable, Optional, TypeAlias\n\n");
-    out.push_str("from polyplug_abi import AbiErrorCode, GuestContractInstance, GuestContractInterface, HostApi, StringView\n\n");
+    out.push_str("from typing import Any, Callable, Optional, TypeAlias\n\n");
+    out.push_str("from polyplug_abi import AbiErrorCode, DispatchType, GuestContractInstance, GuestContractInterface, HostApi, StringView\n\n");
 
     // ContractError class for host-side error handling
     out.push_str("class ContractError(Exception):\n");
@@ -742,7 +742,10 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     emit_python_host_args_setup(out, func, contract_struct);
     emit_python_host_out_setup(out, &func.returns);
 
-    // Native dispatch: read the function pointer array from the resolved interface.
+    // Branch on the resolved interface's dispatch_type. Native guests (C++/Rust/
+    // native Python) call the function pointer directly; VM guests (Lua, JS) route
+    // through the loader's vm.call trampoline with the canonical 6-arg signature.
+    // Mirrors the canonical Rust host caller's native-vs-vm branch.
     out.push_str("        # SAFETY: the interface pointer is valid for the wrapper lifetime.\n");
     out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
     out.push_str("        interface: GuestContractInterface = iface_ptr.contents\n");
@@ -750,20 +753,38 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
         "        if {fn_id} >= interface.dispatch.native.function_count:\n"
     ));
     out.push_str("            raise RuntimeError(\"function not available in interface\")\n");
-    out.push_str("        functions_ptr: int = interface.dispatch.native.functions\n");
+    out.push_str("        err: Any\n");
+    out.push_str("        if interface.dispatch_type == DispatchType.Native:\n");
+    out.push_str("            functions_ptr: int = interface.dispatch.native.functions\n");
     out.push_str(&format!(
-        "        fn_ptr: int = ctypes.cast(functions_ptr + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
+        "            fn_ptr: int = ctypes.cast(functions_ptr + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
     ));
     out.push_str(
-        "        dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
+        "            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
     );
     // Native dispatch passes the instance handle by value as the first argument,
     // matching the canonical fn(instance, args, out) -> AbiError signature.
-    out.push_str("        # SAFETY: instance is valid for the wrapper lifetime; args_ptr points\n");
     out.push_str(
-        "        # to valid args, out_ptr to a valid return-type buffer per the ABI contract.\n",
+        "            # SAFETY: instance is valid for the wrapper lifetime; args_ptr points\n",
     );
-    out.push_str("        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)\n");
+    out.push_str(
+        "            # to valid args, out_ptr to a valid return-type buffer per the ABI contract.\n",
+    );
+    out.push_str("            err = dispatch_fn(self._instance, args_ptr, out_ptr)\n");
+    out.push_str("        else:\n");
+    // VM dispatch: call through interface.dispatch.vm.call with the canonical 6-arg
+    // signature (loader_data, instance, fn_id, args, out, arena). Python host
+    // callers have no per-call arena; a null (None) arena is the documented legacy
+    // fallback to per-value host->alloc and is correct here.
+    out.push_str(
+        "            # SAFETY: the union's vm variant is active per dispatch_type; args/out\n",
+    );
+    out.push_str(
+        "            # are valid per the ABI contract. The null arena selects the host->alloc fallback.\n",
+    );
+    out.push_str(&format!(
+        "            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, None)\n"
+    ));
     out.push_str("        if err.code != AbiErrorCode.Ok:\n");
     out.push_str("            raise RuntimeError(\"polyplug call failed\")\n");
     if has_return_value(&func.returns) {

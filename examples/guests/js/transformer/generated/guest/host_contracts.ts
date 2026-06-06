@@ -64,7 +64,7 @@ export class HostLoggerContract {
             err = polyplug.callDispatchFn(fnPtr.lo, fnPtr.hi, implPtr.lo, implPtr.hi, argsPtr, outPtr);
         } else {
             // SAFETY: callVmDispatch invokes the VM dispatch with valid bridge data and args/out per ABI contract.
-            err = polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, 0, argsPtr, outPtr);
+            err = polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, 0, argsPtr, outPtr, 0, 0);
         }
         if (err.lo !== 0 || err.hi !== 0) {
             return;
@@ -109,7 +109,7 @@ export class HostLoggerContract {
             err = polyplug.callDispatchFn(fnPtr.lo, fnPtr.hi, implPtr.lo, implPtr.hi, argsPtr, outPtr);
         } else {
             // SAFETY: callVmDispatch invokes the VM dispatch with valid bridge data and args/out per ABI contract.
-            err = polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, 1, argsPtr, outPtr);
+            err = polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, 1, argsPtr, outPtr, 0, 0);
         }
         if (err.lo !== 0 || err.hi !== 0) {
             return;

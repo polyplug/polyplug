@@ -1403,8 +1403,12 @@ fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::Re
     );
     out.push_str("        } else {\n"); // DispatchType.VirtualMachine
     out.push_str("            // SAFETY: callVmDispatch invokes the VM dispatch with valid bridge data and args/out per ABI contract.\n");
+    // Canonical 6-arg VM dispatch: call(loader_data, instance, fn_id, args, out, arena).
+    // QuickJS splits 64-bit values into lo/hi u32 pairs, so the trailing arena pointer
+    // is passed as (arenaLo, arenaHi). A null arena (0, 0) is the documented legacy
+    // fallback to per-value host->alloc — QuickJS host callers carry no per-call arena.
     out.push_str(&format!(
-        "            err = polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, {fn_id}, argsPtr, outPtr);\n"
+        "            err = polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, {fn_id}, argsPtr, outPtr, 0, 0);\n"
     ));
     out.push_str("        }\n");
     out.push_str("        if (err.lo !== 0 || err.hi !== 0) {\n");
