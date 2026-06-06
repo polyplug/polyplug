@@ -76,13 +76,17 @@ jobs:
           dotnet-version: '10.0.x'
       # Required by polyplugc's generate_e2e_vm tests: deno type-checks the generated
       # QuickJS glue and luajit syntax/load-checks the generated Lua glue.
+      # NOTE: leafo/gh-actions-lua provides a `lua` binary but NOT `luajit`, which
+      # the tests spawn by name — install the real luajit package per OS instead.
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Set up LuaJIT
-        uses: leafo/gh-actions-lua@v11
-        with:
-          luaVersion: 'luajit-2.1.0-beta3'
+      - name: Install LuaJIT (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y luajit
+      - name: Install LuaJIT (macOS)
+        if: runner.os == 'macOS'
+        run: brew install luajit
       - name: Build C# SDK
         run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
       - name: Build libpolyplug.so
@@ -115,6 +119,10 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      # sdk_validator's in-crate language-validator tests shell out to the
+      # ast-grep CLI (same dependency the sdk_validator job installs on Linux).
+      - name: Install ast-grep
+        run: cargo install ast-grep --locked
       # Build the entire workspace — this is the primary Windows gate: it proves
       # every crate, including all six language loaders, compiles on Windows MSVC.
       - name: Build workspace
@@ -233,10 +241,11 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Set up LuaJIT
-        uses: leafo/gh-actions-lua@v11
-        with:
-          luaVersion: 'luajit-2.1.0-beta3'
+      # examples/verify_hosts.sh runs the lua host only when a `luajit` binary
+      # exists (leafo/gh-actions-lua provides `lua`, not `luajit`, so it was
+      # being silently skipped) — install the real package.
+      - name: Install LuaJIT
+        run: sudo apt-get update && sudo apt-get install -y luajit
       - name: Build release artifacts
         run: cargo build --release
       - name: Build examples

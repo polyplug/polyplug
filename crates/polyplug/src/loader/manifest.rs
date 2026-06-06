@@ -652,9 +652,9 @@ function_count = { "data.Test@1" = 1 }
             ManifestData::parse_from_str(toml).expect("platform file table should parse");
         if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
             assert_eq!(m.file, "libtest.so");
-        } else if cfg!(target_os = "macos") && cfg!(target_arch = "x86_64") {
-            assert_eq!(m.file, "libtest.dylib");
-        } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        } else if cfg!(target_os = "macos")
+            && (cfg!(target_arch = "x86_64") || cfg!(target_arch = "aarch64"))
+        {
             assert_eq!(m.file, "libtest.dylib");
         } else if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
             assert_eq!(m.file, "test.dll");
