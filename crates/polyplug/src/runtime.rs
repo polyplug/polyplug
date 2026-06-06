@@ -175,6 +175,42 @@ impl Runtime {
         self.registry.resolve_guest_contract(handle)
     }
 
+    /// Host-side convenience wrapper for plugin→plugin cross-dispatch.
+    ///
+    /// Routes through the same internal logic as the `call_guest_method` HostApi
+    /// callback (re-resolving the target by `instance.contract_id` on every call,
+    /// holding no registry lock across the dispatch). The target contract and
+    /// function are addressed by the `instance` handle and `fn_id`.
+    ///
+    /// # Safety
+    /// - `instance` must be a live instance produced by the target contract
+    /// - `args` / `out` must satisfy the target function's ABI argument layout
+    /// - `arena` must be null or a valid [`polyplug_abi::types::CallArena`]
+    ///   for the duration of the call
+    #[inline]
+    pub unsafe fn call_guest_method(
+        &self,
+        instance: polyplug_abi::guest::GuestContractInstance,
+        fn_id: u32,
+        args: *const core::ffi::c_void,
+        out: *mut core::ffi::c_void,
+        arena: *mut polyplug_abi::types::CallArena,
+    ) -> polyplug_abi::types::AbiError {
+        // SAFETY: host_abi is the runtime's own 'static HostApi whose `runtime`
+        // field points to this Runtime; forwarding the args is the same call the
+        // VM/native guests make.
+        unsafe {
+            host_call_guest_method(
+                self.host_abi as *const HostApi,
+                instance,
+                fn_id,
+                args,
+                out,
+                arena,
+            )
+        }
+    }
+
     /// Register a host contract interface.
     /// Returns `Err(HostContractError::DuplicateContract)` if a contract with the same ID is already registered.
     pub fn register_host_contract(
@@ -1567,6 +1603,134 @@ pub unsafe extern "C" fn host_get_error_len(this: *const HostApi) -> usize {
     runtime.last_error_len()
 }
 
+/// HostApi.call_guest_method callback — host-mediated plugin→plugin cross-dispatch.
+///
+/// Re-resolves the target contract through the registry via `instance.contract_id`
+/// on every call (never caches), so a fresh cross-call always routes to the live
+/// interface while retired interfaces keep in-flight instances valid. See the
+/// `call_guest_method` field doc on [`HostApi`] for the full contract.
+///
+/// # Safety
+/// - `this` must be a valid HostApi pointer with valid runtime field
+/// - `instance` must be an instance produced by the target contract
+/// - `args` / `out` must satisfy the target function's ABI argument layout
+/// - `arena` must be null or a valid [`CallArena`] for the duration of the call
+pub(crate) unsafe extern "C" fn host_call_guest_method(
+    this: *const HostApi,
+    instance: polyplug_abi::guest::GuestContractInstance,
+    fn_id: u32,
+    args: *const core::ffi::c_void,
+    out: *mut core::ffi::c_void,
+    arena: *mut polyplug_abi::types::CallArena,
+) -> polyplug_abi::types::AbiError {
+    if this.is_null() || instance.data.is_null() {
+        return polyplug_abi::types::AbiError {
+            code: polyplug_abi::types::AbiErrorCode::InvalidPointer as u32,
+            message: polyplug_abi::types::StringView::null(),
+        };
+    }
+
+    // SAFETY: this is a valid HostApi pointer passed by the host.
+    // (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+    let registry: &RuntimeStore = &runtime.registry;
+
+    // Re-resolve the target contract by id on EVERY call. find_guest_contract +
+    // resolve_guest_contract both drop their read guard before returning, so no
+    // registry lock is held across the guest dispatch below. The returned pointer
+    // stays valid even across a concurrent hot-reload because retired interfaces
+    // are kept alive (retire-not-drop) for the runtime lifetime.
+    let contract_id: u64 = instance.contract_id.id();
+    let handle: GuestContractHandle =
+        match registry.find_guest_contract(GuestContractId::from_u64(contract_id), 0) {
+            Ok(h) => h,
+            Err(_) => {
+                runtime.set_last_error(format!(
+                    "call_guest_method: no contract found for contract_id={contract_id}"
+                ));
+                return polyplug_abi::types::AbiError {
+                    code: polyplug_abi::types::AbiErrorCode::NotFound as u32,
+                    message: polyplug_abi::types::StringView::null(),
+                };
+            }
+        };
+    let interface_ptr: *const GuestContractInterface = match registry.resolve_guest_contract(handle)
+    {
+        Ok(ptr) if !ptr.is_null() => ptr,
+        _ => {
+            runtime.set_last_error(format!(
+                "call_guest_method: contract could not be resolved for contract_id={contract_id}"
+            ));
+            return polyplug_abi::types::AbiError {
+                code: polyplug_abi::types::AbiErrorCode::NotFound as u32,
+                message: polyplug_abi::types::StringView::null(),
+            };
+        }
+    };
+
+    // SAFETY: interface_ptr is non-null and points to a 'static (retire-not-drop)
+    // GuestContractInterface registered by the loader; reading its fields is sound.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
+
+    match interface.dispatch_type {
+        polyplug_abi::dispatch::DispatchType::Native => {
+            // SAFETY: dispatch_type == Native guarantees the `native` union variant
+            // is the active one, so reading it is sound.
+            let native: polyplug_abi::dispatch::NativeDispatch =
+                unsafe { interface.dispatch.native };
+            if fn_id >= native.function_count || native.functions.is_null() {
+                return polyplug_abi::types::AbiError {
+                    code: polyplug_abi::types::AbiErrorCode::FunctionNotAvailable as u32,
+                    message: polyplug_abi::types::StringView::null(),
+                };
+            }
+            // SAFETY: fn_id < function_count and functions is non-null, so the slot
+            // at fn_id is within the static function-pointer array.
+            let slot: *const () = unsafe { *native.functions.add(fn_id as usize) };
+            if slot.is_null() {
+                return polyplug_abi::types::AbiError {
+                    code: polyplug_abi::types::AbiErrorCode::FunctionNotAvailable as u32,
+                    message: polyplug_abi::types::StringView::null(),
+                };
+            }
+            // Native dispatch function pointers carry NO arena parameter in their
+            // ABI signature, so `arena` is intentionally unused on this path.
+            let _ = arena;
+            // SAFETY: native dispatch slots have the frozen native ABI signature
+            // `extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError`
+            // (see polyplugc rust generator); `slot` is a non-null pointer to such
+            // a function. The transmute reinterprets the type-erased `*const ()` as
+            // that concrete fn pointer, which is the established native-call form.
+            let func: unsafe extern "C" fn(
+                polyplug_abi::guest::GuestContractInstance,
+                *const (),
+                *mut (),
+            ) -> polyplug_abi::types::AbiError = unsafe { core::mem::transmute(slot) };
+            // SAFETY: args/out satisfy the target function's ABI layout per the
+            // caller's contract; instance belongs to this contract.
+            unsafe { func(instance, args.cast::<()>(), out.cast::<()>()) }
+        }
+        polyplug_abi::dispatch::DispatchType::VirtualMachine => {
+            // SAFETY: dispatch_type == VirtualMachine guarantees the `vm` union
+            // variant is the active one, so reading it is sound.
+            let vm: polyplug_abi::dispatch::VmDispatch = unsafe { interface.dispatch.vm };
+            // SAFETY: vm.call is the loader-provided VM dispatch entry point with
+            // the frozen 6-arg signature; loader_data is the matching opaque handle.
+            // args/out/arena are forwarded unchanged per the VM dispatch contract.
+            unsafe {
+                (vm.call)(
+                    vm.loader_data,
+                    instance,
+                    fn_id,
+                    args.cast::<()>(),
+                    out.cast::<()>(),
+                    arena,
+                )
+            }
+        }
+    }
+}
+
 /// HostApi.get_extension callback — returns a registered extension pointer.
 ///
 /// # Safety
@@ -1754,6 +1918,7 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
         };
 
@@ -1860,6 +2025,326 @@ mod tests {
             Ok(handle) => handle,
             Err(e) => panic!("failed to register_guest_contract contract: {e}"),
         }
+    }
+
+    // ─── call_guest_method tests ─────────────────────────────────────────────
+
+    /// Native dispatch target: writes the i32 at `args` plus one into `out`.
+    unsafe extern "C" fn native_add_one(
+        _instance: polyplug_abi::guest::GuestContractInstance,
+        args: *const (),
+        out: *mut (),
+    ) -> polyplug_abi::types::AbiError {
+        // SAFETY: the test passes a valid *const i32 / *mut i32.
+        unsafe {
+            let input: i32 = *(args as *const i32);
+            *(out as *mut i32) = input + 1;
+        }
+        polyplug_abi::types::AbiError::ok()
+    }
+
+    /// Sync wrapper for a static native function-pointer table.
+    ///
+    /// The contained pointers are `'static` function pointers, which are safe to
+    /// read from any thread; the wrapper only exists to satisfy the `Sync` bound
+    /// on `static` items.
+    struct NativeFnTable([*const (); 1]);
+    // SAFETY: the array holds only 'static fn pointers, which are immutable and
+    // safe to share across threads.
+    unsafe impl Sync for NativeFnTable {}
+
+    static NATIVE_FNS: NativeFnTable = NativeFnTable([native_add_one as *const ()]);
+
+    /// Register a native-dispatch contract whose function 0 is `native_add_one`.
+    fn register_native_caller_contract(
+        registry: &crate::runtime_store::RuntimeStore,
+        contract_id: u64,
+        bundle_id: u64,
+    ) {
+        use polyplug_abi::{
+            DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
+            NativeDispatch,
+        };
+
+        unsafe extern "C" fn stub_create(
+            _host: *const HostApi,
+            _args: *const (),
+        ) -> GuestContractInstance {
+            GuestContractInstance::null()
+        }
+        unsafe extern "C" fn stub_destroy(_host: *const HostApi, _instance: GuestContractInstance) {
+        }
+
+        let interface: &'static GuestContractInterface =
+            Box::leak(Box::new(GuestContractInterface {
+                contract_id: GuestContractId::from_u64(contract_id),
+                contract_version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                dispatch_type: DispatchType::Native,
+                create_instance: stub_create,
+                destroy_instance: stub_destroy,
+                dispatch: DispatchMechanisms {
+                    native: NativeDispatch {
+                        function_count: 1,
+                        functions: NATIVE_FNS.0.as_ptr(),
+                    },
+                },
+            }));
+        let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
+            name: polyplug_abi::StringView::from_static(b"caller"),
+            contract_name: polyplug_abi::StringView::from_static(b"caller.contract"),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+        };
+        // SAFETY: interface is leaked for the process lifetime.
+        let result: Result<GuestContractHandle, crate::error::RegistryError> = unsafe {
+            registry.register_guest_contract(
+                descriptor,
+                interface,
+                "caller.contract".to_owned(),
+                BundleId::from_u64(bundle_id),
+            )
+        };
+        if let Err(e) = result {
+            panic!("failed to register native caller contract: {e}");
+        }
+    }
+
+    fn host_with_runtime(runtime: &Arc<Runtime>) -> *const HostApi {
+        runtime.host_abi() as *const HostApi
+    }
+
+    #[test]
+    fn call_guest_method_null_this_returns_invalid_pointer() {
+        let instance: polyplug_abi::guest::GuestContractInstance =
+            polyplug_abi::guest::GuestContractInstance {
+                data: &raw const NATIVE_FNS as *mut core::ffi::c_void,
+                contract_id: GuestContractId::from_u64(1),
+            };
+        // SAFETY: host_call_guest_method tolerates a null `this`.
+        let err: polyplug_abi::types::AbiError = unsafe {
+            host_call_guest_method(
+                core::ptr::null(),
+                instance,
+                0,
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            )
+        };
+        assert_eq!(
+            err.code,
+            polyplug_abi::types::AbiErrorCode::InvalidPointer as u32
+        );
+    }
+
+    #[test]
+    fn call_guest_method_null_instance_returns_invalid_pointer() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let instance: polyplug_abi::guest::GuestContractInstance =
+            polyplug_abi::guest::GuestContractInstance::null();
+        // SAFETY: instance.data is null; the call must reject it before any deref.
+        let err: polyplug_abi::types::AbiError = unsafe {
+            host_call_guest_method(
+                host_with_runtime(&runtime),
+                instance,
+                0,
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            )
+        };
+        assert_eq!(
+            err.code,
+            polyplug_abi::types::AbiErrorCode::InvalidPointer as u32
+        );
+    }
+
+    #[test]
+    fn call_guest_method_unknown_contract_returns_not_found() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let instance: polyplug_abi::guest::GuestContractInstance =
+            polyplug_abi::guest::GuestContractInstance {
+                data: &raw const NATIVE_FNS as *mut core::ffi::c_void,
+                contract_id: GuestContractId::from_u64(0xDEAD_BEEF),
+            };
+        // SAFETY: this is valid; contract_id is unregistered so lookup fails.
+        let err: polyplug_abi::types::AbiError = unsafe {
+            host_call_guest_method(
+                host_with_runtime(&runtime),
+                instance,
+                0,
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            )
+        };
+        assert_eq!(err.code, polyplug_abi::types::AbiErrorCode::NotFound as u32);
+    }
+
+    #[test]
+    fn call_guest_method_native_happy_path() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let contract_id: u64 = 0x1234_5678_9ABC_DEF0;
+        register_native_caller_contract(&runtime.registry, contract_id, 0x1);
+
+        let instance: polyplug_abi::guest::GuestContractInstance =
+            polyplug_abi::guest::GuestContractInstance {
+                data: &raw const NATIVE_FNS as *mut core::ffi::c_void,
+                contract_id: GuestContractId::from_u64(contract_id),
+            };
+        let input: i32 = 41;
+        let mut output: i32 = 0;
+        // SAFETY: native_add_one reads *const i32 from args and writes *mut i32 to out.
+        let err: polyplug_abi::types::AbiError = unsafe {
+            host_call_guest_method(
+                host_with_runtime(&runtime),
+                instance,
+                0,
+                &raw const input as *const core::ffi::c_void,
+                &raw mut output as *mut core::ffi::c_void,
+                core::ptr::null_mut(),
+            )
+        };
+        assert!(err.is_ok(), "native dispatch should succeed");
+        assert_eq!(output, 42);
+    }
+
+    #[test]
+    fn call_guest_method_native_fn_id_out_of_range() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let contract_id: u64 = 0x0FED_CBA9_8765_4321;
+        register_native_caller_contract(&runtime.registry, contract_id, 0x2);
+
+        let instance: polyplug_abi::guest::GuestContractInstance =
+            polyplug_abi::guest::GuestContractInstance {
+                data: &raw const NATIVE_FNS as *mut core::ffi::c_void,
+                contract_id: GuestContractId::from_u64(contract_id),
+            };
+        // SAFETY: function_count is 1; fn_id 5 is out of range and must be rejected.
+        let err: polyplug_abi::types::AbiError = unsafe {
+            host_call_guest_method(
+                host_with_runtime(&runtime),
+                instance,
+                5,
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            )
+        };
+        assert_eq!(
+            err.code,
+            polyplug_abi::types::AbiErrorCode::FunctionNotAvailable as u32
+        );
+    }
+
+    /// VM dispatch fake: echoes fn_id into `out` and records the forwarded arena.
+    unsafe extern "C" fn vm_echo_call(
+        _loader_data: polyplug_abi::dispatch::VmLoaderData,
+        _instance: polyplug_abi::guest::GuestContractInstance,
+        fn_id: u32,
+        _args: *const (),
+        out: *mut (),
+        _arena: *mut polyplug_abi::types::CallArena,
+    ) -> polyplug_abi::types::AbiError {
+        // SAFETY: the test passes a valid *mut u32 for out.
+        unsafe {
+            *(out as *mut u32) = fn_id;
+        }
+        polyplug_abi::types::AbiError::ok()
+    }
+
+    fn register_vm_caller_contract(
+        registry: &crate::runtime_store::RuntimeStore,
+        contract_id: u64,
+        bundle_id: u64,
+    ) {
+        use polyplug_abi::{
+            DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
+            VmDispatch, VmLoaderData,
+        };
+
+        unsafe extern "C" fn stub_create(
+            _host: *const HostApi,
+            _args: *const (),
+        ) -> GuestContractInstance {
+            GuestContractInstance::null()
+        }
+        unsafe extern "C" fn stub_destroy(_host: *const HostApi, _instance: GuestContractInstance) {
+        }
+
+        let interface: &'static GuestContractInterface =
+            Box::leak(Box::new(GuestContractInterface {
+                contract_id: GuestContractId::from_u64(contract_id),
+                contract_version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                dispatch_type: DispatchType::VirtualMachine,
+                create_instance: stub_create,
+                destroy_instance: stub_destroy,
+                dispatch: DispatchMechanisms {
+                    vm: VmDispatch {
+                        call: vm_echo_call,
+                        loader_data: VmLoaderData::null(),
+                    },
+                },
+            }));
+        let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
+            name: polyplug_abi::StringView::from_static(b"vmcaller"),
+            contract_name: polyplug_abi::StringView::from_static(b"vmcaller.contract"),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+        };
+        // SAFETY: interface is leaked for the process lifetime.
+        let result: Result<GuestContractHandle, crate::error::RegistryError> = unsafe {
+            registry.register_guest_contract(
+                descriptor,
+                interface,
+                "vmcaller.contract".to_owned(),
+                BundleId::from_u64(bundle_id),
+            )
+        };
+        if let Err(e) = result {
+            panic!("failed to register vm caller contract: {e}");
+        }
+    }
+
+    #[test]
+    fn call_guest_method_vm_routing() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let contract_id: u64 = 0x00AA_BB00_CC00_DD00;
+        register_vm_caller_contract(&runtime.registry, contract_id, 0x3);
+
+        let instance: polyplug_abi::guest::GuestContractInstance =
+            polyplug_abi::guest::GuestContractInstance {
+                data: core::ptr::dangling_mut::<core::ffi::c_void>(),
+                contract_id: GuestContractId::from_u64(contract_id),
+            };
+        let mut output: u32 = 0;
+        // SAFETY: vm_echo_call writes the fn_id into *mut u32 out.
+        let err: polyplug_abi::types::AbiError = unsafe {
+            host_call_guest_method(
+                host_with_runtime(&runtime),
+                instance,
+                7,
+                core::ptr::null(),
+                &raw mut output as *mut core::ffi::c_void,
+                core::ptr::null_mut(),
+            )
+        };
+        assert!(err.is_ok(), "vm dispatch should succeed");
+        assert_eq!(output, 7, "vm fake should echo fn_id");
     }
 
     struct EnforceLoader {
@@ -2485,6 +2970,7 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
         };
 
@@ -2525,6 +3011,7 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
         };
 
@@ -2637,6 +3124,7 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
         };
 
@@ -2723,6 +3211,7 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
         };
 
@@ -2820,6 +3309,7 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
+            call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
         };
 

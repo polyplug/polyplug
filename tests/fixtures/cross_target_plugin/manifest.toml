@@ -1,0 +1,15 @@
+id = 7678031446269378697
+name = "cross_target_plugin"
+version = "1.0"
+runtime = "native"
+provides = ["cross.target"]
+
+[file]
+linux.x86_64   = "libcross_target_plugin.so"
+linux.aarch64  = "libcross_target_plugin.so"
+macos.x86_64   = "libcross_target_plugin.dylib"
+macos.aarch64  = "libcross_target_plugin.dylib"
+windows.x86_64 = "cross_target_plugin.dll"
+
+[function_count]
+"cross.target@1" = 1

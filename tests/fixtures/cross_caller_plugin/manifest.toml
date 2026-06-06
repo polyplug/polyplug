@@ -1,0 +1,24 @@
+id                         = 7240583466091758751
+name                       = "cross_caller_plugin"
+version                    = "1.0"
+runtime                    = "native"
+needs_reinit_on_dep_reload = false
+provides                   = ["cross.caller"]
+
+[file]
+linux.x86_64   = "libcross_caller_plugin.so"
+linux.aarch64  = "libcross_caller_plugin.so"
+macos.x86_64   = "libcross_caller_plugin.dylib"
+macos.aarch64  = "libcross_caller_plugin.dylib"
+windows.x86_64 = "cross_caller_plugin.dll"
+
+[function_count]
+"cross.caller@1" = 1
+
+[[dependency]]
+kind        = "bundle"
+contract    = "cross.target@1"
+min_version = "1.0"
+bundle      = "cross_target_plugin"
+contract_id = 8546333330095647132
+bundle_id   = 7678031446269378697

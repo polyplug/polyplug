@@ -8,7 +8,7 @@ static_assert(sizeof(VmDispatch) == 16, "VmDispatch size mismatch");
 static_assert(sizeof(VmLoaderData) == 8, "VmLoaderData size mismatch");
 static_assert(sizeof(GuestContractInstance) == 16, "GuestContractInstance size mismatch");
 static_assert(sizeof(GuestContractInterface) == 56, "GuestContractInterface size mismatch");
-static_assert(sizeof(HostApi) == 144, "HostApi size mismatch");
+static_assert(sizeof(HostApi) == 152, "HostApi size mismatch");
 static_assert(sizeof(HostContractInstance) == 8, "HostContractInstance size mismatch");
 static_assert(sizeof(HostContractInterface) == 80, "HostContractInterface size mismatch");
 static_assert(sizeof(RuntimeApi) == 96, "RuntimeApi size mismatch");

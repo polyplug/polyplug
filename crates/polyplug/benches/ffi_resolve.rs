@@ -242,6 +242,20 @@ unsafe extern "C" fn bench_get_error_len(_this: *const HostApi) -> usize {
     0
 }
 
+unsafe extern "C" fn bench_call_guest_method(
+    _this: *const HostApi,
+    _instance: polyplug_abi::GuestContractInstance,
+    _fn_id: u32,
+    _args: *const core::ffi::c_void,
+    _out: *mut core::ffi::c_void,
+    _arena: *mut polyplug_abi::CallArena,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Generic as u32,
+        message: StringView::null(),
+    }
+}
+
 unsafe extern "C" fn bench_get_extension(_this: *const HostApi, _extension_id: u32) -> *const () {
     core::ptr::null()
 }
@@ -268,6 +282,7 @@ fn build_host_interface() -> HostApi {
         register_loader: bench_register_loader,
         get_last_error: bench_get_last_error,
         get_error_len: bench_get_error_len,
+        call_guest_method: bench_call_guest_method,
         get_extension: bench_get_extension,
     }
 }

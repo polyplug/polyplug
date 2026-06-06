@@ -46,8 +46,8 @@ Deno.test("GuestContractInterface is 56 bytes", () => {
     assert(GUEST_CONTRACT_INTERFACE_SIZE === 56);
 });
 
-Deno.test("HostApi is 144 bytes", () => {
-    assert(HOST_API_SIZE === 144);
+Deno.test("HostApi is 152 bytes", () => {
+    assert(HOST_API_SIZE === 152);
 });
 
 Deno.test("HostContractInstance is 8 bytes", () => {

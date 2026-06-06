@@ -26,9 +26,10 @@ Key ABI facts (verified in `crates/polyplug_abi/src/host/host_api.rs`):
 - **FFI surface is exactly two `#[no_mangle]` exports** — `polyplug_runtime_create`
   and `polyplug_runtime_destroy` (`crates/polyplug/src/ffi.rs`). Everything else
   is reached through function-pointer fields on `HostApi`.
-- **`HostApi` is 144 bytes, align 8**: one opaque `runtime` pointer plus 17
-  function pointers (the 17th, `get_extension`, at offset 136). Layout is locked
-  by `layout_host_api` in `host_api.rs`.
+- **`HostApi` is 152 bytes, align 8**: one opaque `runtime` pointer plus 18
+  function pointers (the 17th, `call_guest_method`, at offset 136; the 18th,
+  `get_extension`, at offset 144). Layout is locked by `layout_host_api` in
+  `host_api.rs`.
 - **Plugin entry point is `polyplug_init(const HostApi*, const BundleInitContext*)`**
   (2 args). Plugins register via the self-passing pattern
   `host->register_guest_contract(host, &descriptor, &interface)`.
@@ -152,8 +153,8 @@ safety guarantees: [`../TRUST_MODEL.md`](../TRUST_MODEL.md) (Hot-Reload Safety).
 A generic, ID-based channel for optional host capabilities (tracing, debug hooks,
 custom metrics, etc.) that avoids changing the frozen `HostApi` layout.
 
-- `get_extension(extension_id: u32) -> *const ()` is the 17th `HostApi` function
-  pointer (offset 136). The ID is the 32-bit FNV-1a hash of the extension name
+- `get_extension(extension_id: u32) -> *const ()` is the 18th `HostApi` function
+  pointer (offset 144). The ID is the 32-bit FNV-1a hash of the extension name
   (`polyplug_utils::fnv1a_32`). Returns null if no extension is registered.
 - The host registers pointers by ID via `Runtime::register_extension`; plugins
   call `host->get_extension(id)` and cast the non-null result to the expected
@@ -193,7 +194,33 @@ Full tutorial and per-language examples: [`HOST_CONTRACTS.md`](./HOST_CONTRACTS.
 
 ---
 
-## 7. Runtime isolation
+## 7. Cross-dispatch (plugin → plugin)
+
+A plugin can invoke a method on another plugin's guest contract through the host,
+without holding a raw interface pointer of its own.
+
+- `call_guest_method(host, instance, fn_id, args, out, arena) -> AbiError` is the
+  17th `HostApi` function pointer (offset 136). The caller passes a
+  `GuestContractInstance` it already resolved; the host re-resolves the target
+  through the registry via `instance.contract_id` on **every** call, so a call
+  made after a reload routes to the live (swapped-in) interface while the
+  retire-not-drop guarantees keep any previously resolved pointer valid.
+- **Arena threading:** the `arena` argument is forwarded to VM dispatch (Lua, JS)
+  exactly like the per-call arena in §4 of [`../ROADMAP.md`](../ROADMAP.md); native
+  dispatch ignores it (native function pointers carry no arena slot). A **null
+  arena** means "no arena" — the guest bridge falls back to `host->alloc`.
+- **Re-entrancy guard:** a cross-call that would re-enter a VM already executing a
+  dispatch *on the same thread* returns `AbiErrorCode::ReentrantCall` (9) — nested
+  same-thread entry would deadlock or panic the VM's own lock. Concurrent dispatch
+  into the same VM from different threads is serialized by the VM's internal
+  locking; cross-VM calls (e.g. a Lua plugin calling a JS plugin) are fine.
+- **Trust:** there is **zero per-call authorization**. Trust is established once at
+  load time through declared-dependency verification — see
+  [`../TRUST_MODEL.md`](../TRUST_MODEL.md) (Cross-call dispatch).
+
+---
+
+## 8. Runtime isolation
 
 Multiple `Runtime` instances can coexist in one process, each owning its own
 `RuntimeStore`, loaded bundles, and configuration. No globals or thread-locals
@@ -215,7 +242,7 @@ its own VM. For full isolation with Python or .NET, use separate processes.
 
 ---
 
-## 8. Platform support
+## 9. Platform support
 
 | Platform | Status |
 |---|---|

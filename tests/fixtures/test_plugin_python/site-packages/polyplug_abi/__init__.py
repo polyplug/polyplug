@@ -32,6 +32,8 @@ from polyplug_abi.abi import (
     RuntimeConfig,
     DispatchType,
     DispatchMechanisms,
+    ArenaOverflowBlock,
+    CallArena,
     fnv1a_64,
     guest_contract_id,
     host_contract_id,

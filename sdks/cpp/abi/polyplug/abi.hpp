@@ -109,7 +109,7 @@ static_assert(sizeof(GuestContractInstance) == 16, "GuestContractInstance size m
 ///
 ///  Contains an opaque runtime pointer and function pointers for guest calls.
 ///  All functions use self-passing pattern (receive HostApi pointer as first parameter).
-///  `HostApi` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
+///  `HostApi` is `152 bytes` (1 opaque runtime pointer + 18 function pointer fields).
 ///
 ///  # Who provides
 ///  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -150,6 +150,7 @@ using HostApi_register_host_contract_fn = AbiError(*)(const HostApi*, const Host
 using HostApi_register_loader_fn = AbiError(*)(const HostApi*, StringView, void*);
 using HostApi_get_last_error_fn = size_t(*)(const HostApi*, uint8_t*, size_t);
 using HostApi_get_error_len_fn = size_t(*)(const HostApi*);
+using HostApi_call_guest_method_fn = AbiError(*)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
 using HostApi_get_extension_fn = const void*(*)(const HostApi*, uint32_t);
 struct HostApi {
     ///  Opaque pointer to Runtime.
@@ -356,6 +357,49 @@ struct HostApi {
     ///  # Returns
     ///  Length of last error message (0 if no error).
     HostApi_get_error_len_fn get_error_len;
+    ///  Call a method on another guest contract instance, mediated by the host.
+    ///
+    ///  This is the only cross-call path usable from a VM-sandboxed guest
+    ///  (Lua/JS/Python/.NET): rather than holding a raw `GuestContractInterface`
+    ///  pointer and dispatching directly — which a sandboxed guest cannot do — the
+    ///  guest hands the host an opaque `instance` it obtained earlier and the host
+    ///  performs the plugin→plugin dispatch on its behalf. Native guests may also
+    ///  use it, though they can dispatch directly.
+    ///
+    ///  # Lookup semantics
+    ///  The target contract is re-resolved through the registry via
+    ///  `instance.contract_id` on EVERY call — the result is never cached. This is
+    ///  deliberate: after a hot-reload, a fresh cross-call routes to the live
+    ///  interface, while any interface retired by the reload stays alive (the
+    ///  retire-not-drop model) so instances still held by in-flight callers remain
+    ///  valid. The caller therefore always reaches the current implementation
+    ///  without invalidating outstanding instances.
+    ///
+    ///  # Arena semantics
+    ///  `arena` is forwarded unchanged to VM dispatch as its variable-size return
+    ///  buffer. Native dispatch function pointers carry no arena slot in their
+    ///  signature, so `arena` is unused on the native path. A null `arena` follows
+    ///  the established convention: VM dispatch falls back to per-value
+    ///  `host->alloc` (see [`CallArena`]).
+    ///
+    ///  # Trust model
+    ///  There is zero per-call authorization. Trust is established once, at load
+    ///  time, by declared-dependency verification (a bundle may only resolve the
+    ///  contracts it declared) per `TRUST_MODEL.md`. Once a guest legitimately
+    ///  holds an `instance`, cross-calling it is unrestricted.
+    ///
+    ///  # Arguments
+    ///  - `this`: HostApi pointer (self-passing)
+    ///  - `instance`: Target guest contract instance (carries `contract_id`)
+    ///  - `fn_id`: Function index within the target contract
+    ///  - `args`: Pointer to packed arguments (ABI-specific layout)
+    ///  - `out`: Pointer to the output buffer for the return value
+    ///  - `arena`: Optional per-call [`CallArena`] for variable-size return values;
+    ///    null is allowed
+    ///
+    ///  # Returns
+    ///  AbiError::OK on success, error code on failure.
+    HostApi_call_guest_method_fn call_guest_method;
     ///  Get a registered extension by extension ID.
     ///
     ///  Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
@@ -372,7 +416,7 @@ struct HostApi {
     ///  Opaque pointer to the extension, or null if not registered.
     HostApi_get_extension_fn get_extension;
 };
-static_assert(sizeof(HostApi) == 144, "HostApi size mismatch");
+static_assert(sizeof(HostApi) == 152, "HostApi size mismatch");
 
 ///  Opaque handle to a host contract instance.
 ///
@@ -832,6 +876,11 @@ enum class AbiErrorCode : uint32_t {
     DuplicateProvider = 7,
     ///  Invalid pointer — null or invalid pointer passed to ABI function.
     InvalidPointer = 8,
+    ///  Reentrant call — a cross-call would re-enter a VM that is already
+    ///  executing a dispatch on the same VM. Same-VM nested calls are unsupported
+    ///  by the embedded interpreters (mlua, rquickjs), so the runtime rejects them
+    ///  rather than risk borrow/lock conflicts inside the VM.
+    ReentrantCall = 9,
     ///  Host contract not found — no host contract matches contract_id.
     HostContractNotFound = 100,
     ///  Host contract version mismatch — host contract version does not match.

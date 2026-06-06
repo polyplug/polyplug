@@ -218,7 +218,7 @@ mod tests {
     use core::mem::{align_of, offset_of, size_of};
 
     use super::*;
-    use crate::guest::GuestContractInterface;
+    use crate::guest::{GuestContractInstance, GuestContractInterface};
     use crate::host::{HostContractInstance, HostContractInterface};
     use crate::plugin::{GuestContractHandle, PluginDescriptor};
     use crate::types::{AbiError, Array, DependencyInfo, StringView};
@@ -336,6 +336,17 @@ mod tests {
         0
     }
 
+    unsafe extern "C" fn stub_call_guest_method(
+        _this: *const HostApi,
+        _instance: GuestContractInstance,
+        _fn_id: u32,
+        _args: *const core::ffi::c_void,
+        _out: *mut core::ffi::c_void,
+        _arena: *mut CallArena,
+    ) -> AbiError {
+        AbiError::ok()
+    }
+
     unsafe extern "C" fn stub_get_extension(_this: *const HostApi, _id: u32) -> *const () {
         core::ptr::null()
     }
@@ -359,6 +370,7 @@ mod tests {
             register_loader: stub_register_loader,
             get_last_error: stub_get_last_error,
             get_error_len: stub_get_len,
+            call_guest_method: stub_call_guest_method,
             get_extension: stub_get_extension,
         }
     }

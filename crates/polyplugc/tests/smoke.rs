@@ -332,6 +332,20 @@ unsafe extern "C" fn stub_get_error_len(_this: *const HostApi) -> usize {
     0
 }
 
+unsafe extern "C" fn stub_call_guest_method(
+    _this: *const HostApi,
+    _instance: GuestContractInstance,
+    _fn_id: u32,
+    _args: *const c_void,
+    _out: *mut c_void,
+    _arena: *mut polyplug_abi::CallArena,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: StringView::null(),
+    }
+}
+
 unsafe extern "C" fn stub_get_extension(_this: *const HostApi, _extension_id: u32) -> *const () {
     core::ptr::null()
 }
@@ -429,6 +443,7 @@ fn smoke_rust_codegen_dispatch() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
+        call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
     };
 

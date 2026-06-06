@@ -7,6 +7,9 @@
 
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::PoisonError;
+use std::thread::ThreadId;
 
 use rquickjs::Array;
 use rquickjs::Context;
@@ -80,6 +83,53 @@ pub struct JsLoaderData {
     pub _runtime: Runtime,
     pub ctx: Context,
     pub functions: Vec<Persistent<Function<'static>>>,
+    /// Thread-aware same-VM reentrancy guard for [`js_dispatch`].
+    ///
+    /// rquickjs is built with the `parallel` feature, so a `Context` is reachable
+    /// from any thread and is internally lock-guarded. Two cases must be told
+    /// apart, and a plain `AtomicBool` cannot distinguish them:
+    ///
+    /// 1. SAME-thread nested dispatch — a plugin→plugin cross-call
+    ///    (`host->call_guest_method`) that resolves back to a contract in THIS
+    ///    same Context while this thread is already mid-dispatch. That would call
+    ///    `Context::with` recursively on the same context on the same thread, which
+    ///    rquickjs panics/aborts on. This MUST be refused with `ReentrantCall`
+    ///    BEFORE `Context::with` is entered.
+    /// 2. CROSS-thread concurrent dispatch — a different thread dispatches into
+    ///    this Context while a dispatch is in flight on another thread. rquickjs
+    ///    serializes this safely by blocking on its internal lock, matching the
+    ///    HostApi contract ("safe to call from any thread; the runtime handles
+    ///    internal synchronization"). This MUST proceed and be allowed to block.
+    ///
+    /// The set of thread ids currently inside a dispatch on this Context captures
+    /// exactly that distinction: presence of the current thread's id means a
+    /// same-thread nested call (refuse); absence means a fresh caller — possibly
+    /// from another thread concurrently — which proceeds. It lives on the per-VM
+    /// `JsLoaderData`, never globally, so it is Rule-12 compliant. Contention is
+    /// trivial: the vec holds 0..N concurrent caller threads and never duplicates.
+    pub in_dispatch_threads: Mutex<Vec<ThreadId>>,
+}
+
+/// RAII guard that removes the current thread's id from
+/// [`JsLoaderData::in_dispatch_threads`] on every exit path, including panics
+/// that unwind through `js_dispatch`.
+struct JsDispatchGuard<'a> {
+    threads: &'a Mutex<Vec<ThreadId>>,
+}
+
+impl Drop for JsDispatchGuard<'_> {
+    fn drop(&mut self) {
+        let this: ThreadId = std::thread::current().id();
+        // Recover from poisoning: a panic in another dispatch may have poisoned
+        // the lock, but the data is a plain Vec<ThreadId> that cannot be left
+        // logically corrupt between lock/unlock, so reusing the inner value is
+        // sound. This is production code, so we never unwrap.
+        let mut guard: std::sync::MutexGuard<'_, Vec<ThreadId>> =
+            self.threads.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(pos) = guard.iter().position(|&id| id == this) {
+            guard.swap_remove(pos);
+        }
+    }
 }
 
 // ─── JS Dispatch Function ─────────────────────────────────────────────────────
@@ -123,6 +173,38 @@ unsafe extern "C" fn js_dispatch(
 ) -> AbiError {
     // SAFETY: loader_data wraps a valid pointer to JsLoaderData created by the loader.
     let data: &JsLoaderData = unsafe { &*(loader_data.data as *const JsLoaderData) };
+
+    // Reject ONLY same-thread nested reentrancy BEFORE entering Context::with. If
+    // this thread is already inside a dispatch on this Context (a plugin→plugin
+    // cross-call resolving back here), a nested Context::with on the same thread
+    // would abort, so refuse with ReentrantCall. A different thread dispatching
+    // concurrently is NOT reentrancy: it is allowed to proceed and rquickjs's
+    // internal lock serializes it safely. The tracking Mutex is held only around
+    // the membership check/insert below, never across Context::with.
+    let this_thread: ThreadId = std::thread::current().id();
+    {
+        // Recover from poisoning (a prior dispatch panic): the Vec<ThreadId>
+        // cannot be left logically corrupt between lock/unlock, so the inner
+        // value is reusable. Production code, so no unwrap.
+        let mut threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = data
+            .in_dispatch_threads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if threads.contains(&this_thread) {
+            // Drop the guard (unlock) before returning.
+            drop(threads);
+            return AbiError {
+                code: AbiErrorCode::ReentrantCall as u32,
+                message: StringView::null(),
+            };
+        }
+        threads.push(this_thread);
+    }
+    // From here on this thread's id is registered; the guard removes it on every
+    // exit path (early return, normal return, or panic unwind).
+    let _dispatch_guard: JsDispatchGuard<'_> = JsDispatchGuard {
+        threads: &data.in_dispatch_threads,
+    };
 
     let func_persistent: &Persistent<Function<'static>> = match data.functions.get(fn_id as usize) {
         Some(f) => f,
@@ -997,6 +1079,7 @@ impl JsLoader {
             _runtime: qjs_runtime,
             ctx,
             functions: registration_data.functions,
+            in_dispatch_threads: Mutex::new(Vec::new()),
         });
 
         let loader_data_ptr: *mut JsLoaderData = Box::into_raw(loader_data);
@@ -1089,11 +1172,322 @@ impl BundleLoader for JsLoader {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+    use core::sync::atomic::AtomicUsize;
+    use core::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::sync::Barrier;
+
     use super::*;
 
     #[test]
     fn js_quickjs_runtime_name() {
         let loader: JsLoader = JsLoader::new(JsConfig {});
         assert_eq!(loader.runtime_name(), "js-quickjs");
+    }
+
+    /// Build a leaked JsLoaderData holding the given runtime/context and the
+    /// persisted functions, returning a VmLoaderData pointing at it plus a
+    /// borrow for direct flag inspection.
+    ///
+    /// The data is intentionally leaked so the raw pointer inside VmLoaderData
+    /// stays valid for the whole test, mirroring the loader's `Box::into_raw`.
+    fn make_loader_data(
+        runtime: Runtime,
+        ctx: Context,
+        functions: Vec<Persistent<Function<'static>>>,
+    ) -> (VmLoaderData, &'static JsLoaderData) {
+        let boxed: Box<JsLoaderData> = Box::new(JsLoaderData {
+            _runtime: runtime,
+            ctx,
+            functions,
+            in_dispatch_threads: Mutex::new(Vec::new()),
+        });
+        let ptr: *mut JsLoaderData = Box::into_raw(boxed);
+        // SAFETY: ptr was just produced by Box::into_raw and is never freed in the
+        // test, so the &'static borrow is valid for the test's lifetime.
+        let data_ref: &'static JsLoaderData = unsafe { &*ptr };
+        let vm_loader_data: VmLoaderData = VmLoaderData {
+            data: ptr as *mut core::ffi::c_void,
+        };
+        (vm_loader_data, data_ref)
+    }
+
+    /// A normal (non-reentrant) JS dispatch succeeds and clears the flag.
+    #[test]
+    fn js_dispatch_normal_call_succeeds() {
+        let runtime: Runtime = Runtime::new().expect("runtime creation should succeed");
+        let ctx: Context = Context::full(&runtime).expect("context creation should succeed");
+
+        // A trivial guest function: ignores its (args, out) arguments, returns 0 (Ok).
+        let func: Persistent<Function<'static>> = ctx.with(|ctx_ref: Ctx<'_>| {
+            let f: Function<'_> = ctx_ref
+                .eval::<Function<'_>, _>("(function(a, o) { return 0; })")
+                .expect("eval should produce a function");
+            Persistent::save(&ctx_ref, f)
+        });
+
+        let (vm_loader_data, data_ref): (VmLoaderData, &'static JsLoaderData) =
+            make_loader_data(runtime, ctx, vec![func]);
+
+        let mut out_buf: i32 = 0;
+        // SAFETY: vm_loader_data wraps a live JsLoaderData; the guest function
+        // ignores the forwarded args/out pointers.
+        let err: AbiError = unsafe {
+            js_dispatch(
+                vm_loader_data,
+                GuestContractInstance::null(),
+                0,
+                core::ptr::null(),
+                &mut out_buf as *mut i32 as *mut (),
+                core::ptr::null_mut(),
+            )
+        };
+        assert!(err.is_ok(), "normal dispatch should return Ok");
+        assert!(
+            data_ref
+                .in_dispatch_threads
+                .lock()
+                .expect("tracking mutex must not be poisoned")
+                .is_empty(),
+            "thread tracking must be empty after a normal dispatch"
+        );
+    }
+
+    /// A genuine same-VM reentrant dispatch — triggered from inside a guest call
+    /// via a native `reenter` bridge — returns ReentrantCall, and the VM stays
+    /// usable for a later normal dispatch.
+    #[test]
+    fn js_dispatch_reentrant_call_is_rejected_and_vm_recovers() {
+        let runtime: Runtime = Runtime::new().expect("runtime creation should succeed");
+        let ctx: Context = Context::full(&runtime).expect("context creation should succeed");
+
+        // The loader_data pointer is shared into the native bridge via an
+        // Arc<AtomicUsize>; it is set after construction (below) and read inside.
+        let loader_data_cell: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let cell_for_fn: Arc<AtomicUsize> = Arc::clone(&loader_data_cell);
+
+        // Register a native `reenter` function that, while the outer dispatch is in
+        // flight (flag set, Context::with held), re-invokes js_dispatch on the SAME
+        // loader_data — simulating a plugin→plugin cross-call back into this VM.
+        // It returns the nested call's AbiError code as f64 so JS can observe it.
+        let func: Persistent<Function<'static>> = ctx.with(|ctx_ref: Ctx<'_>| {
+            let reenter_fn: Function<'_> = Function::new(ctx_ref.clone(), move || -> f64 {
+                let ptr_usize: usize = cell_for_fn.load(Ordering::Acquire);
+                let vm_loader_data: VmLoaderData = VmLoaderData {
+                    data: ptr_usize as *mut core::ffi::c_void,
+                };
+                // SAFETY: the cell holds the live leaked JsLoaderData pointer set up
+                // by the test before dispatch; the guest ignores the forwarded
+                // args/out pointers.
+                let nested: AbiError = unsafe {
+                    js_dispatch(
+                        vm_loader_data,
+                        GuestContractInstance::null(),
+                        0,
+                        core::ptr::null(),
+                        core::ptr::null_mut(),
+                        core::ptr::null_mut(),
+                    )
+                };
+                nested.code as f64
+            })
+            .expect("reenter function creation should succeed");
+            ctx_ref
+                .globals()
+                .set("reenter", reenter_fn)
+                .expect("reenter global set should succeed");
+
+            // The guest function calls reenter(), stashes the nested code on a global
+            // so the test can read it, and returns 0 (Ok) for the outer call.
+            let f: Function<'_> = ctx_ref
+                .eval::<Function<'_>, _>(
+                    "(function(a, o) { globalThis._nestedCode = reenter(); return 0; })",
+                )
+                .expect("eval should produce a function");
+            Persistent::save(&ctx_ref, f)
+        });
+
+        let (vm_loader_data, data_ref): (VmLoaderData, &'static JsLoaderData) =
+            make_loader_data(runtime, ctx, vec![func]);
+        loader_data_cell.store(vm_loader_data.data as usize, Ordering::Release);
+
+        // Outer dispatch: sets the flag, enters Context::with, runs the guest fn,
+        // which calls reenter() → js_dispatch on the same VM.
+        // SAFETY: vm_loader_data wraps the live leaked JsLoaderData.
+        let outer: AbiError = unsafe {
+            js_dispatch(
+                vm_loader_data,
+                GuestContractInstance::null(),
+                0,
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            )
+        };
+        assert!(outer.is_ok(), "outer dispatch should complete Ok");
+
+        // The nested dispatch must have been rejected with ReentrantCall.
+        let nested_code: f64 = data_ref.ctx.with(|ctx_ref: Ctx<'_>| {
+            ctx_ref
+                .globals()
+                .get::<&str, f64>("_nestedCode")
+                .expect("nested code global must be set by the guest fn")
+        });
+        assert_eq!(
+            nested_code as u32,
+            AbiErrorCode::ReentrantCall as u32,
+            "nested same-VM dispatch must return ReentrantCall"
+        );
+
+        // The tracking is cleared and the VM is still usable for a fresh dispatch.
+        assert!(
+            data_ref
+                .in_dispatch_threads
+                .lock()
+                .expect("tracking mutex must not be poisoned")
+                .is_empty(),
+            "thread tracking must be empty after the outer dispatch returns"
+        );
+        // SAFETY: vm_loader_data still wraps the live leaked JsLoaderData.
+        let recovered: AbiError = unsafe {
+            js_dispatch(
+                vm_loader_data,
+                GuestContractInstance::null(),
+                0,
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            )
+        };
+        assert!(
+            recovered.is_ok(),
+            "VM must remain usable after a rejected reentrant call"
+        );
+    }
+
+    /// A concurrent dispatch from ANOTHER thread into the same Context must
+    /// SUCCEED, not be rejected as reentrancy. The thread-aware guard only refuses
+    /// a same-thread nested call; a cross-thread caller proceeds and rquickjs's
+    /// internal `parallel` lock serializes the two calls.
+    ///
+    /// Choreography proves a true in-flight overlap: thread A's guest fn (running
+    /// inside `Context::with`, holding the rquickjs lock) registers thread A in the
+    /// tracking vec, then a native `block` bridge parks on a barrier. While A is
+    /// parked mid-dispatch, the main thread (a different thread) dispatches into the
+    /// SAME Context. That call passes the reentrancy check (different thread id) and
+    /// blocks on rquickjs's internal lock held by A. Releasing the barrier lets A
+    /// finish, freeing the lock so the concurrent call completes with Ok.
+    #[test]
+    fn js_dispatch_cross_thread_concurrent_call_succeeds() {
+        let runtime: Runtime = Runtime::new().expect("runtime creation should succeed");
+        let ctx: Context = Context::full(&runtime).expect("context creation should succeed");
+
+        // `entered` lets the main thread know A is mid-dispatch (lock held);
+        // `release` lets A finish only after the main thread launched its call.
+        let entered: Arc<Barrier> = Arc::new(Barrier::new(2));
+        let release: Arc<Barrier> = Arc::new(Barrier::new(2));
+        let entered_for_fn: Arc<Barrier> = Arc::clone(&entered);
+        let release_for_fn: Arc<Barrier> = Arc::clone(&release);
+
+        // Native `block` bridge: signals A is inside the dispatch, then parks until
+        // released. It runs inside Context::with, so the rquickjs lock is held.
+        let func: Persistent<Function<'static>> = ctx.with(|ctx_ref: Ctx<'_>| {
+            let block_fn: Function<'_> = Function::new(ctx_ref.clone(), move || {
+                entered_for_fn.wait();
+                release_for_fn.wait();
+            })
+            .expect("block function creation should succeed");
+            ctx_ref
+                .globals()
+                .set("block", block_fn)
+                .expect("block global set should succeed");
+
+            let f: Function<'_> = ctx_ref
+                .eval::<Function<'_>, _>("(function(a, o) { block(); return 0; })")
+                .expect("eval should produce a function");
+            Persistent::save(&ctx_ref, f)
+        });
+        // The concurrent caller dispatches THIS function (fn_id 1) — it must not
+        // touch the barriers, or it would park with no partner and deadlock.
+        let noop_func: Persistent<Function<'static>> = ctx.with(|ctx_ref: Ctx<'_>| {
+            let f: Function<'_> = ctx_ref
+                .eval::<Function<'_>, _>("(function(a, o) { return 0; })")
+                .expect("eval should produce a function");
+            Persistent::save(&ctx_ref, f)
+        });
+
+        let (vm_loader_data, data_ref): (VmLoaderData, &'static JsLoaderData) =
+            make_loader_data(runtime, ctx, vec![func, noop_func]);
+
+        // VmLoaderData is a thin pointer wrapper; move its address across the
+        // thread boundary as a usize to satisfy Send, then rebuild it inside.
+        let data_addr: usize = vm_loader_data.data as usize;
+
+        let handle: std::thread::JoinHandle<AbiError> = std::thread::spawn(move || {
+            let vm_loader_data_a: VmLoaderData = VmLoaderData {
+                data: data_addr as *mut core::ffi::c_void,
+            };
+            // SAFETY: data_addr is the live leaked JsLoaderData pointer; it
+            // outlives all threads in this test. The guest fn ignores its args.
+            unsafe {
+                js_dispatch(
+                    vm_loader_data_a,
+                    GuestContractInstance::null(),
+                    0,
+                    core::ptr::null(),
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                )
+            }
+        });
+
+        // Wait until thread A is confirmed inside its dispatch.
+        entered.wait();
+
+        // From THIS (different) thread, dispatch into the SAME Context. This must
+        // not be rejected; it blocks on rquickjs's lock until A releases it.
+        let main_handle: std::thread::JoinHandle<AbiError> = std::thread::spawn(move || {
+            let vm_loader_data_b: VmLoaderData = VmLoaderData {
+                data: data_addr as *mut core::ffi::c_void,
+            };
+            // SAFETY: same live leaked pointer as above. fn_id 1 is the no-op
+            // function — dispatching fn_id 0 here would re-enter the barrier
+            // choreography with no partner and deadlock.
+            unsafe {
+                js_dispatch(
+                    vm_loader_data_b,
+                    GuestContractInstance::null(),
+                    1,
+                    core::ptr::null(),
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                )
+            }
+        });
+
+        // Unblock thread A so it finishes and frees the lock, allowing the
+        // concurrent dispatch to complete.
+        release.wait();
+
+        let a_result: AbiError = handle.join().expect("thread A must not panic");
+        let b_result: AbiError = main_handle
+            .join()
+            .expect("concurrent thread must not panic");
+
+        assert!(a_result.is_ok(), "the initial dispatch must succeed");
+        assert!(
+            b_result.is_ok(),
+            "a concurrent cross-thread dispatch must succeed, not return ReentrantCall (got code {})",
+            b_result.code
+        );
+        assert!(
+            data_ref
+                .in_dispatch_threads
+                .lock()
+                .expect("tracking mutex must not be poisoned")
+                .is_empty(),
+            "thread tracking must be empty after both dispatches return"
+        );
     }
 }

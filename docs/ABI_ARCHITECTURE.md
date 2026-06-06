@@ -75,9 +75,10 @@ void host->free(const HostApi* host, uint8_t* ptr, size_t size, size_t align);
 
 ### All Other Operations (via HostApi fields)
 
-`polyplug_runtime_create` returns a pointer to `HostApi`, a `144`-byte
-`#[repr(C)]` struct: one opaque runtime pointer plus 17 function-pointer fields
-(the 17th being `get_extension` at offset 136). Host applications and plugins call
+`polyplug_runtime_create` returns a pointer to `HostApi`, a `152`-byte
+`#[repr(C)]` struct: one opaque runtime pointer plus 18 function-pointer fields
+(the 17th being `call_guest_method` at offset 136, the 18th being `get_extension`
+at offset 144). Host applications and plugins call
 these fields using the self-passing pattern, e.g. `host->load_bundle(host, path, path_len)`.
 The fields cover bundle lifecycle (`load_bundle`, `reload_bundle`), contract
 discovery (`find_guest_contract`, `find_all_guest_contracts`,

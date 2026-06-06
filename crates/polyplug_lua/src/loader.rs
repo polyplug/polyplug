@@ -6,6 +6,9 @@
 
 use std::ffi::OsStr;
 use std::path::Path;
+use std::sync::Mutex;
+use std::sync::PoisonError;
+use std::thread::ThreadId;
 
 use mlua::Function;
 use mlua::Lua;
@@ -48,6 +51,53 @@ const ABI_LUA_DIR: &str = env!("POLYPLUG_ABI_LUA_DIR");
 pub struct LuaLoaderData {
     pub _vm: Lua,
     pub functions: Vec<Function>,
+    /// Thread-aware same-VM reentrancy guard for [`lua_dispatch`].
+    ///
+    /// mlua is built with the `send` feature, so a single `Lua` VM is reachable
+    /// from any thread and is internally lock-guarded. Two cases must be told
+    /// apart, and a plain `AtomicBool` cannot distinguish them:
+    ///
+    /// 1. SAME-thread nested dispatch — a plugin→plugin cross-call
+    ///    (`host->call_guest_method`) that resolves back to a contract in THIS
+    ///    same VM while this thread is already mid-dispatch. Re-entering mlua from
+    ///    a nested host frame on the same thread would deadlock mlua's internal
+    ///    `send`-feature mutex (already held by this thread). This MUST be refused
+    ///    with `ReentrantCall`.
+    /// 2. CROSS-thread concurrent dispatch — a different thread dispatches into
+    ///    this VM while a dispatch is in flight on another thread. mlua serializes
+    ///    this safely by blocking on its internal lock, matching the HostApi
+    ///    contract ("safe to call from any thread; the runtime handles internal
+    ///    synchronization"). This MUST proceed and be allowed to block.
+    ///
+    /// The set of thread ids currently inside a dispatch on this VM captures
+    /// exactly that distinction: presence of the current thread's id means a
+    /// same-thread nested call (refuse); absence means a fresh caller — possibly
+    /// from another thread concurrently — which proceeds. It lives on the per-VM
+    /// `LuaLoaderData`, never globally, so it is Rule-12 compliant. Contention is
+    /// trivial: the vec holds 0..N concurrent caller threads and never duplicates.
+    pub in_dispatch_threads: Mutex<Vec<ThreadId>>,
+}
+
+/// RAII guard that removes the current thread's id from
+/// [`LuaLoaderData::in_dispatch_threads`] on every exit path, including panics
+/// that unwind through `lua_dispatch`.
+struct LuaDispatchGuard<'a> {
+    threads: &'a Mutex<Vec<ThreadId>>,
+}
+
+impl Drop for LuaDispatchGuard<'_> {
+    fn drop(&mut self) {
+        let this: ThreadId = std::thread::current().id();
+        // Recover from poisoning: a panic in another dispatch may have poisoned
+        // the lock, but the data is a plain Vec<ThreadId> that cannot be left
+        // logically corrupt between lock/unlock, so reusing the inner value is
+        // sound. This is production code, so we never unwrap.
+        let mut guard: std::sync::MutexGuard<'_, Vec<ThreadId>> =
+            self.threads.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(pos) = guard.iter().position(|&id| id == this) {
+            guard.swap_remove(pos);
+        }
+    }
 }
 
 // ─── Instance Lifecycle Stubs ──────────────────────────────────────────────────
@@ -98,6 +148,38 @@ unsafe extern "C" fn lua_dispatch(
 ) -> AbiError {
     // SAFETY: loader_data wraps a valid pointer to LuaLoaderData created by the loader.
     let data: &LuaLoaderData = unsafe { &*(loader_data.data as *const LuaLoaderData) };
+
+    // Reject ONLY same-thread nested reentrancy BEFORE touching the VM. If this
+    // thread is already inside a dispatch on this VM (a plugin→plugin cross-call
+    // resolving back here), re-entering mlua would deadlock its internal
+    // `send`-feature mutex, so refuse with ReentrantCall. A different thread
+    // dispatching concurrently is NOT reentrancy: it is allowed to proceed and
+    // mlua's internal lock serializes it safely. The tracking Mutex is held only
+    // around the membership check/insert below, never across the VM call.
+    let this_thread: ThreadId = std::thread::current().id();
+    {
+        // Recover from poisoning (a prior dispatch panic): the Vec<ThreadId>
+        // cannot be left logically corrupt between lock/unlock, so the inner
+        // value is reusable. Production code, so no unwrap.
+        let mut threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = data
+            .in_dispatch_threads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if threads.contains(&this_thread) {
+            // Drop the guard (unlock) before returning.
+            drop(threads);
+            return AbiError {
+                code: AbiErrorCode::ReentrantCall as u32,
+                message: StringView::null(),
+            };
+        }
+        threads.push(this_thread);
+    }
+    // From here on this thread's id is registered; the guard removes it on every
+    // exit path (early return, normal return, or panic unwind).
+    let _dispatch_guard: LuaDispatchGuard<'_> = LuaDispatchGuard {
+        threads: &data.in_dispatch_threads,
+    };
 
     let lua_fn: &Function = match data.functions.get(fn_id as usize) {
         Some(f) => f,
@@ -472,6 +554,7 @@ impl LuaLoader {
             let loader_data: Box<LuaLoaderData> = Box::new(LuaLoaderData {
                 _vm: lua.clone(),
                 functions: lua_functions,
+                in_dispatch_threads: Mutex::new(Vec::new()),
             });
 
             let loader_data_ptr: *mut LuaLoaderData = Box::into_raw(loader_data);
@@ -591,12 +674,287 @@ impl BundleLoader for LuaLoader {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+    use core::sync::atomic::AtomicUsize;
+    use core::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::sync::Barrier;
+
     use super::*;
 
     #[test]
     fn lua_runtime_name() {
         let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
         assert_eq!(loader.runtime_name(), "lua");
+    }
+
+    /// Build a leaked LuaLoaderData with the given Lua functions and return a
+    /// VmLoaderData pointing at it plus a borrow for direct flag inspection.
+    ///
+    /// The data is intentionally leaked so the raw pointer inside VmLoaderData
+    /// stays valid for the whole test, mirroring the loader's `Box::into_raw`.
+    fn make_loader_data(
+        vm: Lua,
+        functions: Vec<Function>,
+    ) -> (VmLoaderData, &'static LuaLoaderData) {
+        let boxed: Box<LuaLoaderData> = Box::new(LuaLoaderData {
+            _vm: vm,
+            functions,
+            in_dispatch_threads: Mutex::new(Vec::new()),
+        });
+        let ptr: *mut LuaLoaderData = Box::into_raw(boxed);
+        // SAFETY: ptr was just produced by Box::into_raw and is never freed in the
+        // test, so the &'static borrow is valid for the test's lifetime.
+        let data_ref: &'static LuaLoaderData = unsafe { &*ptr };
+        let vm_loader_data: VmLoaderData = VmLoaderData {
+            data: ptr as *mut core::ffi::c_void,
+        };
+        (vm_loader_data, data_ref)
+    }
+
+    /// A normal (non-reentrant) Lua dispatch succeeds and clears the flag.
+    #[test]
+    fn lua_dispatch_normal_call_succeeds() {
+        // SAFETY: test-only VM; no untrusted scripts are executed here.
+        let lua: Lua = unsafe { Lua::unsafe_new() };
+        // A trivial guest function that ignores its (args, out) integer pointers.
+        let noop: Function = lua
+            .create_function(|_, (_a, _o): (i64, i64)| Ok(()))
+            .expect("create_function should succeed");
+        let (vm_loader_data, data_ref): (VmLoaderData, &'static LuaLoaderData) =
+            make_loader_data(lua, vec![noop]);
+
+        let mut out_buf: i32 = 0;
+        // SAFETY: vm_loader_data wraps a live LuaLoaderData; the out pointer is a
+        // valid local i32; the guest function ignores both pointers.
+        let err: AbiError = unsafe {
+            lua_dispatch(
+                vm_loader_data,
+                GuestContractInstance::null(),
+                0,
+                core::ptr::null(),
+                &mut out_buf as *mut i32 as *mut (),
+                core::ptr::null_mut(),
+            )
+        };
+        assert!(err.is_ok(), "normal dispatch should return Ok");
+        assert!(
+            data_ref
+                .in_dispatch_threads
+                .lock()
+                .expect("tracking mutex must not be poisoned")
+                .is_empty(),
+            "thread tracking must be empty after a normal dispatch"
+        );
+    }
+
+    /// A genuine same-VM reentrant dispatch — triggered from inside a guest call —
+    /// returns ReentrantCall, and the VM stays usable for a later normal dispatch.
+    #[test]
+    fn lua_dispatch_reentrant_call_is_rejected_and_vm_recovers() {
+        // SAFETY: test-only VM; no untrusted scripts are executed here.
+        let lua: Lua = unsafe { Lua::unsafe_new() };
+
+        // The reentrant guest function re-invokes lua_dispatch on the SAME
+        // loader_data while it is itself executing (the flag is set), simulating a
+        // plugin→plugin cross-call that resolves back into this VM. It records the
+        // nested call's returned code in a global so the test can assert on it.
+        // The loader_data pointer is shared via an Arc<AtomicUsize> (Send + Sync,
+        // as mlua's `send` closures require Send); it is reconstructed inside.
+        let loader_data_cell: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let cell_for_fn: Arc<AtomicUsize> = Arc::clone(&loader_data_cell);
+
+        let reentrant_fn: Function = lua
+            .create_function(move |lua_ctx: &Lua, (_a, _o): (i64, i64)| {
+                let ptr_usize: usize = cell_for_fn.load(Ordering::Acquire);
+                let vm_loader_data: VmLoaderData = VmLoaderData {
+                    data: ptr_usize as *mut core::ffi::c_void,
+                };
+                // SAFETY: the cell holds the live leaked LuaLoaderData pointer set
+                // up by the test before dispatch; the guest function ignores the
+                // forwarded args/out pointers.
+                let nested: AbiError = unsafe {
+                    lua_dispatch(
+                        vm_loader_data,
+                        GuestContractInstance::null(),
+                        0,
+                        core::ptr::null(),
+                        core::ptr::null_mut(),
+                        core::ptr::null_mut(),
+                    )
+                };
+                lua_ctx.globals().set("_nested_code", nested.code as i64)?;
+                Ok(())
+            })
+            .expect("create_function should succeed");
+
+        let (vm_loader_data, data_ref): (VmLoaderData, &'static LuaLoaderData) =
+            make_loader_data(lua, vec![reentrant_fn]);
+        loader_data_cell.store(vm_loader_data.data as usize, Ordering::Release);
+
+        // Outer dispatch: sets the flag, runs the guest fn, which re-enters.
+        // SAFETY: vm_loader_data wraps the live leaked LuaLoaderData.
+        let outer: AbiError = unsafe {
+            lua_dispatch(
+                vm_loader_data,
+                GuestContractInstance::null(),
+                0,
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            )
+        };
+        assert!(outer.is_ok(), "outer dispatch should complete Ok");
+
+        // The nested dispatch must have been rejected with ReentrantCall.
+        let nested_code: i64 = data_ref
+            ._vm
+            .globals()
+            .get::<i64>("_nested_code")
+            .expect("nested code global must be set by the guest fn");
+        assert_eq!(
+            nested_code,
+            AbiErrorCode::ReentrantCall as i64,
+            "nested same-VM dispatch must return ReentrantCall"
+        );
+
+        // The tracking is cleared and the VM is still usable for a fresh dispatch.
+        assert!(
+            data_ref
+                .in_dispatch_threads
+                .lock()
+                .expect("tracking mutex must not be poisoned")
+                .is_empty(),
+            "thread tracking must be empty after the outer dispatch returns"
+        );
+        // SAFETY: vm_loader_data still wraps the live leaked LuaLoaderData.
+        let recovered: AbiError = unsafe {
+            lua_dispatch(
+                vm_loader_data,
+                GuestContractInstance::null(),
+                0,
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            )
+        };
+        assert!(
+            recovered.is_ok(),
+            "VM must remain usable after a rejected reentrant call"
+        );
+    }
+
+    /// A concurrent dispatch from ANOTHER thread into the same VM must SUCCEED,
+    /// not be rejected as reentrancy. The thread-aware guard only refuses a
+    /// same-thread nested call; a cross-thread caller proceeds and mlua's internal
+    /// `send` lock serializes the two calls.
+    ///
+    /// Choreography proves a true in-flight overlap: thread A's guest fn registers
+    /// thread A in the tracking vec, then blocks on a barrier. While A is parked
+    /// mid-dispatch, the main thread (a different thread) dispatches into the SAME
+    /// VM. The main call passes the reentrancy check (different thread id) and then
+    /// blocks on mlua's internal VM lock held by A. Releasing the barrier lets A
+    /// finish, freeing the lock so the main call completes with Ok.
+    #[test]
+    fn lua_dispatch_cross_thread_concurrent_call_succeeds() {
+        // SAFETY: test-only VM; no untrusted scripts are executed here.
+        let lua: Lua = unsafe { Lua::unsafe_new() };
+
+        // Two barriers shared with the guest fn: `entered` lets the main thread
+        // know A is mid-dispatch (inside the VM lock); `release` lets A finish
+        // only after the main thread has launched its concurrent dispatch.
+        let entered: Arc<Barrier> = Arc::new(Barrier::new(2));
+        let release: Arc<Barrier> = Arc::new(Barrier::new(2));
+        let entered_for_fn: Arc<Barrier> = Arc::clone(&entered);
+        let release_for_fn: Arc<Barrier> = Arc::clone(&release);
+
+        let blocking_fn: Function = lua
+            .create_function(move |_lua_ctx: &Lua, (_a, _o): (i64, i64)| {
+                // Signal that thread A is now inside the dispatch (VM lock held).
+                entered_for_fn.wait();
+                // Hold the dispatch (and the VM lock) until the main thread has
+                // begun its concurrent dispatch.
+                release_for_fn.wait();
+                Ok(())
+            })
+            .expect("create_function should succeed");
+        // The concurrent caller dispatches THIS function (fn_id 1) — it must not
+        // touch the barriers, or it would park with no partner and deadlock.
+        let noop_fn: Function = lua
+            .create_function(|_lua_ctx: &Lua, (_a, _o): (i64, i64)| Ok(()))
+            .expect("create_function should succeed");
+
+        let (vm_loader_data, data_ref): (VmLoaderData, &'static LuaLoaderData) =
+            make_loader_data(lua, vec![blocking_fn, noop_fn]);
+
+        // VmLoaderData is a thin pointer wrapper; move its address across the
+        // thread boundary as a usize to satisfy Send, then rebuild it inside.
+        let data_addr: usize = vm_loader_data.data as usize;
+
+        let handle: std::thread::JoinHandle<AbiError> = std::thread::spawn(move || {
+            let vm_loader_data_a: VmLoaderData = VmLoaderData {
+                data: data_addr as *mut core::ffi::c_void,
+            };
+            // SAFETY: data_addr is the live leaked LuaLoaderData pointer; it
+            // outlives all threads in this test. The guest fn ignores its args.
+            unsafe {
+                lua_dispatch(
+                    vm_loader_data_a,
+                    GuestContractInstance::null(),
+                    0,
+                    core::ptr::null(),
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                )
+            }
+        });
+
+        // Wait until thread A is confirmed inside its dispatch.
+        entered.wait();
+
+        // Now, from THIS (different) thread, dispatch into the SAME VM. This must
+        // not be rejected; it blocks on mlua's lock until A releases it.
+        let main_handle: std::thread::JoinHandle<AbiError> = std::thread::spawn(move || {
+            let vm_loader_data_b: VmLoaderData = VmLoaderData {
+                data: data_addr as *mut core::ffi::c_void,
+            };
+            // SAFETY: same live leaked pointer as above. fn_id 1 is the no-op
+            // function — dispatching fn_id 0 here would re-enter the barrier
+            // choreography with no partner and deadlock.
+            unsafe {
+                lua_dispatch(
+                    vm_loader_data_b,
+                    GuestContractInstance::null(),
+                    1,
+                    core::ptr::null(),
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                )
+            }
+        });
+
+        // Unblock thread A so it finishes and frees the VM lock, allowing the
+        // concurrent dispatch to complete.
+        release.wait();
+
+        let a_result: AbiError = handle.join().expect("thread A must not panic");
+        let b_result: AbiError = main_handle
+            .join()
+            .expect("concurrent thread must not panic");
+
+        assert!(a_result.is_ok(), "the initial dispatch must succeed");
+        assert!(
+            b_result.is_ok(),
+            "a concurrent cross-thread dispatch must succeed, not return ReentrantCall (got code {})",
+            b_result.code
+        );
+        assert!(
+            data_ref
+                .in_dispatch_threads
+                .lock()
+                .expect("tracking mutex must not be poisoned")
+                .is_empty(),
+            "thread tracking must be empty after both dispatches return"
+        );
     }
 
     /// Regression test for the package.path code-injection vulnerability.

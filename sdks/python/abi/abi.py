@@ -310,6 +310,7 @@ class AbiErrorCode(enum.IntEnum):
     FunctionNotAvailable = 6
     DuplicateProvider = 7
     InvalidPointer = 8
+    ReentrantCall = 9
     HostContractNotFound = 100
     HostContractVersionMismatch = 101
     HostContractCallFailed = 102
@@ -454,13 +455,14 @@ _host_api_register_host_contract_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p,
 _host_api_register_loader_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, StringView, ctypes.c_void_p)
 _host_api_get_last_error_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
 _host_api_get_error_len_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p)
+_host_api_call_guest_method_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 _host_api_get_extension_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32)
 class HostApi(ctypes.Structure):
     """ Host Interface — function table passed to guests during initialization.
     
      Contains an opaque runtime pointer and function pointers for guest calls.
      All functions use self-passing pattern (receive HostApi pointer as first parameter).
-     `HostApi` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
+     `HostApi` is `152 bytes` (1 opaque runtime pointer + 18 function pointer fields).
     
      # Who provides
      The runtime creates this struct and passes it to `polyplug_init()`.
@@ -504,11 +506,12 @@ class HostApi(ctypes.Structure):
         ("register_loader", _host_api_register_loader_t),
         ("get_last_error", _host_api_get_last_error_t),
         ("get_error_len", _host_api_get_error_len_t),
+        ("call_guest_method", _host_api_call_guest_method_t),
         ("get_extension", _host_api_get_extension_t),
     ]
 
-# Expected size: 144 bytes
-assert ctypes.sizeof(HostApi) == 144, f"HostApi expected 144 bytes, got {ctypes.sizeof(HostApi)}"
+# Expected size: 152 bytes
+assert ctypes.sizeof(HostApi) == 152, f"HostApi expected 152 bytes, got {ctypes.sizeof(HostApi)}"
 
 
 _runtime_api_load_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, StringView)

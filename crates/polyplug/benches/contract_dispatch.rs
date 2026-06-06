@@ -260,6 +260,21 @@ unsafe extern "C" fn bench_get_error_len(_this: *const HostApi) -> usize {
     0
 }
 
+/// call_guest_method stub — returns error (not used in benches).
+unsafe extern "C" fn bench_call_guest_method(
+    _this: *const HostApi,
+    _instance: polyplug_abi::GuestContractInstance,
+    _fn_id: u32,
+    _args: *const core::ffi::c_void,
+    _out: *mut core::ffi::c_void,
+    _arena: *mut polyplug_abi::CallArena,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Generic as u32,
+        message: StringView::null(),
+    }
+}
+
 /// get_extension stub — returns null (not used in benches).
 unsafe extern "C" fn bench_get_extension(_this: *const HostApi, _extension_id: u32) -> *const () {
     core::ptr::null()
@@ -320,6 +335,7 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
         register_loader: bench_register_loader,
         get_last_error: bench_get_last_error,
         get_error_len: bench_get_error_len,
+        call_guest_method: bench_call_guest_method,
         get_extension: bench_get_extension,
     };
 
@@ -544,6 +560,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
         register_loader: bench_register_loader,
         get_last_error: bench_get_last_error,
         get_error_len: bench_get_error_len,
+        call_guest_method: bench_call_guest_method,
         get_extension: bench_get_extension,
     };
 

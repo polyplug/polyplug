@@ -29,16 +29,16 @@ use core::ffi::c_void;
 use polyplug_utils::BundleId;
 
 use crate::{
-    guest::GuestContractInterface,
+    guest::{GuestContractInstance, GuestContractInterface},
     plugin::{GuestContractHandle, PluginDescriptor},
-    types::{AbiError, Array, DependencyInfo, StringView},
+    types::{AbiError, Array, CallArena, DependencyInfo, StringView},
 };
 
 /// Host Interface — function table passed to guests during initialization.
 ///
 /// Contains an opaque runtime pointer and function pointers for guest calls.
 /// All functions use self-passing pattern (receive HostApi pointer as first parameter).
-/// `HostApi` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
+/// `HostApi` is `152 bytes` (1 opaque runtime pointer + 18 function pointer fields).
 ///
 /// # Who provides
 /// The runtime creates this struct and passes it to `polyplug_init()`.
@@ -303,6 +303,56 @@ pub struct HostApi {
     /// # Returns
     /// Length of last error message (0 if no error).
     pub get_error_len: unsafe extern "C" fn(this: *const HostApi) -> usize,
+    /// Call a method on another guest contract instance, mediated by the host.
+    ///
+    /// This is the only cross-call path usable from a VM-sandboxed guest
+    /// (Lua/JS/Python/.NET): rather than holding a raw `GuestContractInterface`
+    /// pointer and dispatching directly — which a sandboxed guest cannot do — the
+    /// guest hands the host an opaque `instance` it obtained earlier and the host
+    /// performs the plugin→plugin dispatch on its behalf. Native guests may also
+    /// use it, though they can dispatch directly.
+    ///
+    /// # Lookup semantics
+    /// The target contract is re-resolved through the registry via
+    /// `instance.contract_id` on EVERY call — the result is never cached. This is
+    /// deliberate: after a hot-reload, a fresh cross-call routes to the live
+    /// interface, while any interface retired by the reload stays alive (the
+    /// retire-not-drop model) so instances still held by in-flight callers remain
+    /// valid. The caller therefore always reaches the current implementation
+    /// without invalidating outstanding instances.
+    ///
+    /// # Arena semantics
+    /// `arena` is forwarded unchanged to VM dispatch as its variable-size return
+    /// buffer. Native dispatch function pointers carry no arena slot in their
+    /// signature, so `arena` is unused on the native path. A null `arena` follows
+    /// the established convention: VM dispatch falls back to per-value
+    /// `host->alloc` (see [`CallArena`]).
+    ///
+    /// # Trust model
+    /// There is zero per-call authorization. Trust is established once, at load
+    /// time, by declared-dependency verification (a bundle may only resolve the
+    /// contracts it declared) per `TRUST_MODEL.md`. Once a guest legitimately
+    /// holds an `instance`, cross-calling it is unrestricted.
+    ///
+    /// # Arguments
+    /// - `this`: HostApi pointer (self-passing)
+    /// - `instance`: Target guest contract instance (carries `contract_id`)
+    /// - `fn_id`: Function index within the target contract
+    /// - `args`: Pointer to packed arguments (ABI-specific layout)
+    /// - `out`: Pointer to the output buffer for the return value
+    /// - `arena`: Optional per-call [`CallArena`] for variable-size return values;
+    ///   null is allowed
+    ///
+    /// # Returns
+    /// AbiError::OK on success, error code on failure.
+    pub call_guest_method: unsafe extern "C" fn(
+        this: *const HostApi,
+        instance: GuestContractInstance,
+        fn_id: u32,
+        args: *const c_void,
+        out: *mut c_void,
+        arena: *mut CallArena,
+    ) -> AbiError,
     /// Get a registered extension by extension ID.
     ///
     /// Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
@@ -339,14 +389,15 @@ mod tests {
 
     #[test]
     fn layout_host_api() {
-        // HostApi: runtime pointer (8 bytes) + 17 extern "C" fn pointers (136 bytes).
-        // Total: 144 bytes (18 pointer-sized fields)
+        // HostApi: runtime pointer (8 bytes) + 18 extern "C" fn pointers (144 bytes).
+        // Total: 152 bytes (19 pointer-sized fields)
         // Fields: runtime, register_guest_contract, alloc, free, find_guest_contract,
         //         find_all_guest_contracts, resolve_guest_contract,
         //         get_host_contract, resolve_host_contract_interface, list_bundles,
         //         get_dependencies, load_bundle, reload_bundle, register_host_contract,
-        //         register_loader, get_last_error, get_error_len, get_extension
-        assert_eq!(size_of::<HostApi>(), 144);
+        //         register_loader, get_last_error, get_error_len, call_guest_method,
+        //         get_extension
+        assert_eq!(size_of::<HostApi>(), 152);
         assert_eq!(align_of::<HostApi>(), 8);
         // Existing fields (unchanged offsets)
         assert_eq!(offset_of!(HostApi, runtime), 0);
@@ -366,7 +417,8 @@ mod tests {
         assert_eq!(offset_of!(HostApi, register_loader), 112);
         assert_eq!(offset_of!(HostApi, get_last_error), 120);
         assert_eq!(offset_of!(HostApi, get_error_len), 128);
-        assert_eq!(offset_of!(HostApi, get_extension), 136);
+        assert_eq!(offset_of!(HostApi, call_guest_method), 136);
+        assert_eq!(offset_of!(HostApi, get_extension), 144);
     }
 
     /// Verify HostApi has runtime: *mut c_void field at offset 0.

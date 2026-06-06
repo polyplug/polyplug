@@ -217,7 +217,7 @@ export const GUEST_CONTRACT_INTERFACE_SIZE: number = 56;
  * 
  *  Contains an opaque runtime pointer and function pointers for guest calls.
  *  All functions use self-passing pattern (receive HostApi pointer as first parameter).
- *  `HostApi` is `144 bytes` (1 opaque runtime pointer + 17 function pointer fields).
+ *  `HostApi` is `152 bytes` (1 opaque runtime pointer + 18 function pointer fields).
  * 
  *  # Who provides
  *  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -483,6 +483,51 @@ export interface HostApi {
      */
     get_error_len: number;
     /**
+     *  Call a method on another guest contract instance, mediated by the host.
+     * 
+     *  This is the only cross-call path usable from a VM-sandboxed guest
+     *  (Lua/JS/Python/.NET): rather than holding a raw `GuestContractInterface`
+     *  pointer and dispatching directly — which a sandboxed guest cannot do — the
+     *  guest hands the host an opaque `instance` it obtained earlier and the host
+     *  performs the plugin→plugin dispatch on its behalf. Native guests may also
+     *  use it, though they can dispatch directly.
+     * 
+     *  # Lookup semantics
+     *  The target contract is re-resolved through the registry via
+     *  `instance.contract_id` on EVERY call — the result is never cached. This is
+     *  deliberate: after a hot-reload, a fresh cross-call routes to the live
+     *  interface, while any interface retired by the reload stays alive (the
+     *  retire-not-drop model) so instances still held by in-flight callers remain
+     *  valid. The caller therefore always reaches the current implementation
+     *  without invalidating outstanding instances.
+     * 
+     *  # Arena semantics
+     *  `arena` is forwarded unchanged to VM dispatch as its variable-size return
+     *  buffer. Native dispatch function pointers carry no arena slot in their
+     *  signature, so `arena` is unused on the native path. A null `arena` follows
+     *  the established convention: VM dispatch falls back to per-value
+     *  `host->alloc` (see [`CallArena`]).
+     * 
+     *  # Trust model
+     *  There is zero per-call authorization. Trust is established once, at load
+     *  time, by declared-dependency verification (a bundle may only resolve the
+     *  contracts it declared) per `TRUST_MODEL.md`. Once a guest legitimately
+     *  holds an `instance`, cross-calling it is unrestricted.
+     * 
+     *  # Arguments
+     *  - `this`: HostApi pointer (self-passing)
+     *  - `instance`: Target guest contract instance (carries `contract_id`)
+     *  - `fn_id`: Function index within the target contract
+     *  - `args`: Pointer to packed arguments (ABI-specific layout)
+     *  - `out`: Pointer to the output buffer for the return value
+     *  - `arena`: Optional per-call [`CallArena`] for variable-size return values;
+     *    null is allowed
+     * 
+     *  # Returns
+     *  AbiError::OK on success, error code on failure.
+     */
+    call_guest_method: number;
+    /**
      *  Get a registered extension by extension ID.
      * 
      *  Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
@@ -518,8 +563,9 @@ export const HOST_API_REGISTER_HOST_CONTRACT_OFFSET: number = 104;
 export const HOST_API_REGISTER_LOADER_OFFSET: number = 112;
 export const HOST_API_GET_LAST_ERROR_OFFSET: number = 120;
 export const HOST_API_GET_ERROR_LEN_OFFSET: number = 128;
-export const HOST_API_GET_EXTENSION_OFFSET: number = 136;
-export const HOST_API_SIZE: number = 144;
+export const HOST_API_CALL_GUEST_METHOD_OFFSET: number = 136;
+export const HOST_API_GET_EXTENSION_OFFSET: number = 144;
+export const HOST_API_SIZE: number = 152;
 
 /**
  *  Opaque handle to a host contract instance.
@@ -1302,6 +1348,13 @@ export const enum AbiErrorCode {
     DuplicateProvider = 7,
     /**  Invalid pointer — null or invalid pointer passed to ABI function. */
     InvalidPointer = 8,
+    /**
+     *  Reentrant call — a cross-call would re-enter a VM that is already
+     *  executing a dispatch on the same VM. Same-VM nested calls are unsupported
+     *  by the embedded interpreters (mlua, rquickjs), so the runtime rejects them
+     *  rather than risk borrow/lock conflicts inside the VM.
+     */
+    ReentrantCall = 9,
     /**  Host contract not found — no host contract matches contract_id. */
     HostContractNotFound = 100,
     /**  Host contract version mismatch — host contract version does not match. */

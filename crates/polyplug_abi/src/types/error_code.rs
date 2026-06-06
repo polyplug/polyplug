@@ -23,6 +23,11 @@ pub enum AbiErrorCode {
     DuplicateProvider = 7,
     /// Invalid pointer — null or invalid pointer passed to ABI function.
     InvalidPointer = 8,
+    /// Reentrant call — a cross-call would re-enter a VM that is already
+    /// executing a dispatch on the same VM. Same-VM nested calls are unsupported
+    /// by the embedded interpreters (mlua, rquickjs), so the runtime rejects them
+    /// rather than risk borrow/lock conflicts inside the VM.
+    ReentrantCall = 9,
     // Host contract error codes (reserved: 100-199 host contracts)
     /// Host contract not found — no host contract matches contract_id.
     HostContractNotFound = 100,
@@ -44,6 +49,7 @@ impl core::fmt::Display for AbiErrorCode {
             AbiErrorCode::FunctionNotAvailable => write!(f, "FunctionNotAvailable"),
             AbiErrorCode::DuplicateProvider => write!(f, "DuplicateProvider"),
             AbiErrorCode::InvalidPointer => write!(f, "InvalidPointer"),
+            AbiErrorCode::ReentrantCall => write!(f, "ReentrantCall"),
             AbiErrorCode::HostContractNotFound => write!(f, "HostContractNotFound"),
             AbiErrorCode::HostContractVersionMismatch => write!(f, "HostContractVersionMismatch"),
             AbiErrorCode::HostContractCallFailed => write!(f, "HostContractCallFailed"),
@@ -58,7 +64,7 @@ impl AbiErrorCode {
     /// including values that are not declared discriminants of this frozen enum.
     /// The conversion is therefore TOTAL and SAFE.
     ///
-    /// Known runtime codes (0-8, 100-102) map to their corresponding variant.
+    /// Known runtime codes (0-9, 100-102) map to their corresponding variant.
     /// Every other value — including plugin-defined codes (256+) and any
     /// hostile/garbage value — maps to [`AbiErrorCode::Generic`], the
     /// catch-all for an unspecified failure. No `unsafe`, no transmute: an
@@ -75,6 +81,7 @@ impl AbiErrorCode {
             6 => AbiErrorCode::FunctionNotAvailable,
             7 => AbiErrorCode::DuplicateProvider,
             8 => AbiErrorCode::InvalidPointer,
+            9 => AbiErrorCode::ReentrantCall,
             100 => AbiErrorCode::HostContractNotFound,
             101 => AbiErrorCode::HostContractVersionMismatch,
             102 => AbiErrorCode::HostContractCallFailed,
@@ -97,6 +104,7 @@ mod tests {
     fn from_u32_maps_known_codes() {
         assert_eq!(AbiErrorCode::from_u32(0), AbiErrorCode::Ok);
         assert_eq!(AbiErrorCode::from_u32(8), AbiErrorCode::InvalidPointer);
+        assert_eq!(AbiErrorCode::from_u32(9), AbiErrorCode::ReentrantCall);
         assert_eq!(
             AbiErrorCode::from_u32(102),
             AbiErrorCode::HostContractCallFailed

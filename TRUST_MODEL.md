@@ -185,25 +185,57 @@ Consider an application that supports multiple audio decoders. Both `flac-bundle
 2. **`find_by_bundle`**: The host can explicitly ask for the `mp3-bundle` implementation.
 3. **`find_all_by_contract`**: The UI can enumerate all available decoders to show a selection list.
 
+### Cross-call dispatch (plugin → plugin)
+
+`HostApi::call_guest_method(host, instance, fn_id, args, out, arena)` lets one
+plugin invoke a method on another plugin's guest contract through the host. The
+caller passes a `GuestContractInstance` it already resolved; the host re-resolves
+the target through the registry via `instance.contract_id` on **every** call. This
+means a call issued after a hot-reload routes to the live (swapped-in) interface,
+while the retire-not-drop model keeps any previously resolved pointer valid.
+
+- **Arena forwarding**: the `arena` argument is passed straight to VM dispatch
+  (Lua, JS); native dispatch ignores it (native function pointers carry no arena
+  slot). A **null arena** means "no arena" and the guest bridge falls back to
+  `host->alloc`.
+- **Re-entrancy guard**: a cross-call that would re-enter a VM already executing a
+  dispatch *on the same thread* returns `AbiErrorCode::ReentrantCall` (9) — nested
+  same-thread entry would deadlock or panic the VM's own lock. Concurrent dispatch
+  into the same VM from *different* threads is serialized by the VM's internal
+  locking and proceeds normally, as do cross-VM calls (e.g. a Lua plugin calling a
+  JS plugin).
+
+**Zero per-call authorization.** `call_guest_method` performs **no** dependency
+check of its own — it is a Phase 2 hot path (see §4). Trust is established once,
+at load time, through the declared-dependency verification that runs during the
+init window: while a bundle's `polyplug_init` is in flight (`INIT_BUNDLE_ID != 0`),
+`find_guest_contract` / `find_all_guest_contracts` reject any `contract_id` the
+calling bundle did not declare in its manifest, returning a null handle. A plugin
+can therefore only obtain an instance of a contract it declared a dependency on;
+once it has cleared customs in Phase 1, cross-calling that instance is unchecked
+by design. Outside any init window (host-side lookups, `INIT_BUNDLE_ID == 0`),
+lookups are unrestricted. There is no `find_by_bundle`-style scoped enforcement on
+the cross-call path — the instance's own `contract_id` is the only routing input.
+
 ### Reference: Frozen Struct Layouts
 The following table summarizes the sizes and alignments of the core ABI types on 64-bit systems.
 
 | Type | Size (bytes) | Alignment (bytes) | Key Fields |
 |------|--------------|-------------------|------------|
-| `HostApi` | 144 | 8 | `runtime` opaque ptr + 17 function pointers |
+| `HostApi` | 152 | 8 | `runtime` opaque ptr + 18 function pointers |
 | `GuestContractInterface` | 24 | 8 | `contract_id`, `functions` ptr |
 | `GuestContractHandle` | 4 | 4 | `index` (u32, no generation) |
 | `StringView` | 16 | 8 | `ptr`, `len` |
 | `AbiError` | 24 | 8 | `code`, `message` (StringView) |
 
-`HostApi`'s 17 function pointers (offsets verified in
-`crates/polyplug_abi/src/host/host_interface.rs`): `register_guest_contract` (8), `alloc` (16),
+`HostApi`'s 18 function pointers (offsets verified in
+`crates/polyplug_abi/src/host/host_api.rs`): `register_guest_contract` (8), `alloc` (16),
 `free` (24), `find_guest_contract` (32), `find_all_guest_contracts` (40),
 `resolve_guest_contract` (48), `get_host_contract` (56),
 `resolve_host_contract_interface` (64), `list_bundles` (72), `get_dependencies` (80),
 `load_bundle` (88), `reload_bundle` (96), `register_host_contract` (104),
 `register_loader` (112), `get_last_error` (120), `get_error_len` (128),
-`get_extension` (136). There is no `call_guest_method`, `find_by_bundle`, or
+`call_guest_method` (136), `get_extension` (144). There is no `find_by_bundle` or
 `resolve_plugin` pointer in `HostApi`.
 
 ### Pointer Validity After Resolution
@@ -278,7 +310,7 @@ The core polyplug ABI **freezes at v1.0**. There is no public release yet, so th
 
 ### Frozen Surface Areas
 The following structures have the layouts and sizes that will be frozen at v1.0. At/after v1.0, any modification to these (e.g., adding a field or changing field order) is a breaking change. Sizes are verified by the layout tests in `crates/polyplug_abi`.
-- **`HostApi` (144 bytes)**: An opaque `runtime` pointer followed by 17 function pointers (full list in §5).
+- **`HostApi` (152 bytes)**: An opaque `runtime` pointer followed by 18 function pointers (full list in §5).
 - **`GuestContractInterface` (24 bytes)**: Fixed header before the function pointer array.
 - **`GuestContractHandle` (4 bytes)**: a single 4-byte `index` (no generation field).
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.

@@ -203,6 +203,21 @@ unsafe extern "C" fn noop_get_error_len(_this: *const HostApi) -> usize {
     0
 }
 
+/// No-op call_guest_method callback.
+unsafe extern "C" fn noop_call_guest_method(
+    _this: *const HostApi,
+    _instance: polyplug_abi::GuestContractInstance,
+    _fn_id: u32,
+    _args: *const core::ffi::c_void,
+    _out: *mut core::ffi::c_void,
+    _arena: *mut polyplug_abi::CallArena,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: StringView::null(),
+    }
+}
+
 /// No-op get_extension callback.
 unsafe extern "C" fn noop_get_extension(_this: *const HostApi, _extension_id: u32) -> *const () {
     core::ptr::null()
@@ -246,6 +261,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         register_loader: noop_register_loader,
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
+        call_guest_method: noop_call_guest_method,
         get_extension: noop_get_extension,
     };
 

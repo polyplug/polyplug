@@ -49,7 +49,7 @@ def test_guest_contract_interface_size():
 
 
 def test_host_api_size():
-    assert ctypes.sizeof(HostApi) == 144, f"HostApi expected 144 bytes, got {ctypes.sizeof(HostApi)}"
+    assert ctypes.sizeof(HostApi) == 152, f"HostApi expected 152 bytes, got {ctypes.sizeof(HostApi)}"
 
 
 def test_host_contract_instance_size():

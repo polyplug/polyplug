@@ -13,6 +13,9 @@ members = [
     "tests/fixtures/reload_plugin_v2",
     "tests/fixtures/depender_plugin",
     "tests/fixtures/no_init_plugin",
+    "tests/fixtures/cross_caller_plugin",
+    "tests/fixtures/cross_target_plugin",
+    "tests/fixtures/cross_target_plugin_v2",
     "tests/integration",
 
     "examples/hosts/rust",

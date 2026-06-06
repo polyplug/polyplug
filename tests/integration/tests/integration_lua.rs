@@ -435,6 +435,17 @@ unsafe extern "C" fn arena_stub_get_len(_this: *const HostApi) -> usize {
     0
 }
 
+unsafe extern "C" fn arena_stub_call_guest_method(
+    _this: *const HostApi,
+    _instance: GuestContractInstance,
+    _fn_id: u32,
+    _args: *const core::ffi::c_void,
+    _out: *mut core::ffi::c_void,
+    _arena: *mut CallArena,
+) -> AbiError {
+    AbiError::ok()
+}
+
 unsafe extern "C" fn arena_stub_get_extension(_this: *const HostApi, _id: u32) -> *const () {
     core::ptr::null()
 }
@@ -461,6 +472,7 @@ fn counting_host() -> HostApi {
         register_loader: arena_stub_register_loader,
         get_last_error: arena_stub_get_last_error,
         get_error_len: arena_stub_get_len,
+        call_guest_method: arena_stub_call_guest_method,
         get_extension: arena_stub_get_extension,
     }
 }

@@ -40,6 +40,9 @@ RUST_FIXTURES=(
     "reload_plugin_v2:reload_plugin_v2"
     "depender_plugin:depender_plugin"
     "no_init_plugin:no_init_plugin"
+    "cross_caller_plugin:cross_caller_plugin"
+    "cross_target_plugin:cross_target_plugin"
+    "cross_target_plugin_v2:cross_target_plugin_v2"
 )
 
 echo "Building Rust fixture plugins (--release)..."

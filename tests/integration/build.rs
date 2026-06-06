@@ -187,4 +187,38 @@ fn main() {
         "cargo:rustc-env=DEPENDER_PLUGIN_DIR={}",
         fixtures_dir.join("depender_plugin").display()
     );
+
+    // Cross-dispatch fixtures (plugin→plugin via HostApi::call_guest_method).
+    // CROSS_CALLER_PLUGIN_DIR    — bundle providing cross.caller@1
+    // CROSS_TARGET_PLUGIN_DIR    — bundle providing cross.target@1 (V1)
+    // CROSS_TARGET_PLUGIN_V2_DIR — paired reload bundle for cross.target@1 (V2)
+    // CROSS_TARGET_PLUGIN_V2_SO  — the V2 cdylib used by reload_bundle()
+    println!(
+        "cargo:rustc-env=CROSS_CALLER_PLUGIN_DIR={}",
+        fixtures_dir.join("cross_caller_plugin").display()
+    );
+    println!(
+        "cargo:rustc-env=CROSS_TARGET_PLUGIN_DIR={}",
+        fixtures_dir.join("cross_target_plugin").display()
+    );
+    println!(
+        "cargo:rustc-env=CROSS_TARGET_PLUGIN_V2_DIR={}",
+        fixtures_dir.join("cross_target_plugin_v2").display()
+    );
+
+    let cross_target_v2_so_filename: &str = if cfg!(target_os = "macos") {
+        "libcross_target_plugin_v2.dylib"
+    } else if cfg!(target_os = "windows") {
+        "cross_target_plugin_v2.dll"
+    } else {
+        "libcross_target_plugin_v2.so"
+    };
+    let cross_target_v2_so: PathBuf = fixtures_dir
+        .join("cross_target_plugin_v2")
+        .join(cross_target_v2_so_filename);
+    // Path is deterministic; always emit it, consumers check existence at runtime.
+    println!(
+        "cargo:rustc-env=CROSS_TARGET_PLUGIN_V2_SO={}",
+        cross_target_v2_so.display()
+    );
 }

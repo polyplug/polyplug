@@ -57,7 +57,7 @@ is the single manifest parser shared by the runtime and the CLI.
 ## Goal 2 — Extension System ✅ Done
 
 The extension system has shipped. `get_extension(extension_id: u32) → *const ()` is the
-17th function pointer on `HostApi` (offset 136; struct is 144 bytes). The host
+18th function pointer on `HostApi` (offset 144; struct is 152 bytes). The host
 registers extension pointers by ID (no versioning, no contract machinery); plugins call
 `host->get_extension(id)` and cast the result to the expected struct if non-null. It is
 designed for optional host capabilities: tracing, debug hooks, custom metrics, etc.
@@ -74,6 +74,32 @@ Delivered:
 Generic mechanism only — no built-in extensions. Lifetime contract: extension pointers are
 registered once at startup and valid for the runtime's entire lifetime; plugins read and
 cast, never free, following the "host owns ABI-crossing memory" model.
+
+---
+
+## Cross-call Dispatch (plugin → plugin) ✅ Done
+
+Host-mediated plugin→plugin cross-dispatch has shipped. `call_guest_method(host,
+instance, fn_id, args, out, arena) → AbiError` is the 17th function pointer on
+`HostApi` (offset 136; struct grew to 152 bytes, pushing `get_extension` to offset
+144). A plugin invokes a method on another plugin's guest contract through the host
+without holding a raw interface pointer of its own.
+
+Delivered:
+
+- `polyplug_abi`: `call_guest_method` fn pointer on `HostApi`; new
+  `AbiErrorCode::ReentrantCall = 9`.
+- `polyplug` crate: the host callback re-resolves the target through the registry
+  via `instance.contract_id` on every call (post-reload calls route to the live
+  interface; retire-not-drop preserved), forwards the arena to VM dispatch, and
+  guards against re-entering a VM already executing a dispatch.
+- All 6 SDK `HostApi` ABI definitions and the 6 generators carry the field.
+- `sdk_validator` checks for the field.
+
+Semantics: the arena is forwarded to VM dispatch (Lua, JS) and ignored by native
+dispatch (no arena slot); a null arena falls back to `host->alloc`. There is
+**zero per-call authorization** — trust comes from load-phase declared-dependency
+verification (see [`TRUST_MODEL.md`](./TRUST_MODEL.md) §5, Cross-call dispatch).
 
 ---
 
