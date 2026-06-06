@@ -52,8 +52,17 @@ min_version = \"1.0\"
 /// `[bundle.file]` platform table, VM runtimes need a flat `file` field.
 fn bundle_toml_for_lang(lang: Lang) -> String {
     let (runtime, file_block): (&str, &str) = match lang {
-        Lang::Rust => ("native", "[bundle.file]\nlinux.x86_64 = \"libdep.so\"\n"),
-        Lang::Cpp => ("native", "[bundle.file]\nlinux.x86_64 = \"libdep.so\"\n"),
+        // Declare every platform CI/dev machines run on — the roundtrip feeds
+        // the generated manifest back through the runtime parser, which errors
+        // when the ACTIVE platform has no [file] entry.
+        Lang::Rust => (
+            "native",
+            "[bundle.file]\nlinux.x86_64 = \"libdep.so\"\nmacos.x86_64 = \"libdep.dylib\"\nmacos.aarch64 = \"libdep.dylib\"\nwindows.x86_64 = \"dep.dll\"\n",
+        ),
+        Lang::Cpp => (
+            "native",
+            "[bundle.file]\nlinux.x86_64 = \"libdep.so\"\nmacos.x86_64 = \"libdep.dylib\"\nmacos.aarch64 = \"libdep.dylib\"\nwindows.x86_64 = \"dep.dll\"\n",
+        ),
         Lang::CSharp => ("csharp", "file = \"libdep.dll\"\n"),
         Lang::Python => ("python", "file = \"plugin.py\"\n"),
         Lang::Lua => ("lua", "file = \"plugin.lua\"\n"),
