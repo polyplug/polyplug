@@ -631,21 +631,54 @@ function_count = { "data.Test@1" = 1 }
     fn manifest_file_field_platform_table() {
         // Test that [file] table with dotted keys deserializes correctly
         // Note: TOML linux.x86_64 = "..." creates nested structure {"linux": {"x86_64": "..."}}
-        let toml = r#"
+        // Every platform CI/dev machines run on is declared so the deserializer can
+        // resolve the active platform on Linux, macOS, and Windows alike. Windows cdylib
+        // naming has no `lib` prefix (test.dll); macOS uses libtest.dylib.
+        // The `provides`/`function_count` lines deliberately follow the `[file]` header to
+        // exercise the deserializer's documented tolerance of non-platform siblings.
+        let toml: &str = r#"
 name = "test"
 bundle_name = "test"
 runtime = "native"
 [file]
 linux.x86_64 = "libtest.so"
+macos.x86_64 = "libtest.dylib"
 macos.aarch64 = "libtest.dylib"
+windows.x86_64 = "test.dll"
 provides = ["data.Test@1.0"]
 function_count = { "data.Test@1" = 1 }
 "#;
         let m: ManifestData =
             ManifestData::parse_from_str(toml).expect("platform file table should parse");
-        // On linux x86_64, should resolve to libtest.so
         if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
             assert_eq!(m.file, "libtest.so");
+        } else if cfg!(target_os = "macos") && cfg!(target_arch = "x86_64") {
+            assert_eq!(m.file, "libtest.dylib");
+        } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+            assert_eq!(m.file, "libtest.dylib");
+        } else if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
+            assert_eq!(m.file, "test.dll");
         }
+    }
+
+    #[test]
+    fn manifest_file_field_platform_missing() {
+        // A `[file]` table that declares only a platform the current machine is not running
+        // must produce a parse error on every OS. This locks down the deserializer error
+        // path (`no file entry for platform ...`) regardless of the active target triple.
+        let toml: &str = r#"
+name = "test"
+bundle_name = "test"
+runtime = "native"
+[file]
+freebsd.riscv64 = "libtest.so"
+"#;
+        let err: crate::error::LoaderError = ManifestData::parse_from_str(toml)
+            .expect_err("platform table missing the current platform must fail to parse");
+        let message: String = err.to_string();
+        assert!(
+            message.contains("no file entry for platform"),
+            "unexpected error message: {message}"
+        );
     }
 }

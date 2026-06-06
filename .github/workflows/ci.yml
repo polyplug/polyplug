@@ -74,6 +74,15 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      # Required by polyplugc's generate_e2e_vm tests: deno type-checks the generated
+      # QuickJS glue and luajit syntax/load-checks the generated Lua glue.
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Set up LuaJIT
+        uses: leafo/gh-actions-lua@v11
+        with:
+          luaVersion: 'luajit-2.1.0-beta3'
       - name: Build C# SDK
         run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
       - name: Build libpolyplug.so
