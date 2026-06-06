@@ -9,3 +9,4 @@ pub mod scanner;
 
 pub use bundle_loader::BundleLoader;
 pub use manifest::{ManifestData, ManifestDependency, RawManifestDependency, parse_manifest};
+pub use scanner::{ScanDiagnostic, ScanResult, scan_dirs};

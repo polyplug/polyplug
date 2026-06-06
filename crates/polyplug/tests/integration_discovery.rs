@@ -91,7 +91,7 @@ fn chain_loads_in_dependency_order() {
 
     // scan_dirs takes a slice of PathBufs
     let dirs: &[PathBuf] = &[tmp.path().to_path_buf()];
-    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dirs(dirs);
+    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dirs(dirs).found;
     assert_eq!(discovered.len(), 3, "expected 3 bundles");
 
     let graph: CapabilityGraph =
@@ -159,7 +159,7 @@ fn missing_dep_fails_before_load() {
     );
 
     let dirs: &[PathBuf] = &[tmp.path().to_path_buf()];
-    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dirs(dirs);
+    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dirs(dirs).found;
 
     let result: Result<CapabilityGraph, GraphError> = CapabilityGraph::from_manifests(&discovered);
     assert!(
@@ -216,7 +216,7 @@ fn cycle_detected_with_clear_error() {
     );
 
     let dirs: &[PathBuf] = &[tmp.path().to_path_buf()];
-    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dirs(dirs);
+    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dirs(dirs).found;
     assert_eq!(discovered.len(), 2);
 
     let result: Result<CapabilityGraph, GraphError> = CapabilityGraph::from_manifests(&discovered);
@@ -270,16 +270,30 @@ fn malformed_manifest_skips_bundle() {
     .expect("write bad manifest");
 
     let dirs: &[PathBuf] = &[tmp.path().to_path_buf()];
-    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dirs(dirs);
+    let scan: scanner::ScanResult = scanner::scan_dirs(dirs);
 
     assert_eq!(
-        discovered.len(),
+        scan.found.len(),
         1,
         "expected exactly 1 bundle (bundle_b skipped)"
     );
     assert_eq!(
-        discovered[0].1.name, "bundle_a",
+        scan.found[0].1.name, "bundle_a",
         "only bundle_a should be in results"
+    );
+
+    // The corrupt manifest must not be silently swallowed: it surfaces as a
+    // parse diagnostic that names the offending bundle.
+    let parse_diags: Vec<&scanner::ScanDiagnostic> = scan
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d, scanner::ScanDiagnostic::ManifestParseFailed { .. }))
+        .collect();
+    assert_eq!(parse_diags.len(), 1, "expected one parse diagnostic");
+    assert!(
+        parse_diags[0].to_string().contains("bundle_b"),
+        "diagnostic must name bundle_b: {}",
+        parse_diags[0]
     );
 }
 

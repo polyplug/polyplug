@@ -143,8 +143,20 @@ impl RuntimeBuilder {
         }
 
         // Phase 1: Scan plugin directories for bundles
-        let discovered: Vec<(PathBuf, ManifestData)> =
-            crate::loader::scanner::scan_dirs(&self.plugin_dirs);
+        let scan: crate::loader::ScanResult = crate::loader::scan_dirs(&self.plugin_dirs);
+
+        // Surface every scan failure as a warning. Scanning is best-effort: a
+        // corrupt or unreadable bundle must not hide the others, but it must be
+        // visible to the host.
+        for diagnostic in &scan.diagnostics {
+            let msg: String = format!("scan: {diagnostic}");
+            match &self.warning_cb {
+                Some(cb) => (cb.0)(&msg),
+                None => eprintln!("[polyplug] {msg}"),
+            }
+        }
+
+        let discovered: Vec<(PathBuf, ManifestData)> = scan.found;
 
         // Snapshot manifests for hot-reload cascade detection.
         let mut manifests_map: HashMap<String, crate::loader::ManifestData> = HashMap::new();
