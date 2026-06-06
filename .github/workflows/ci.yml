@@ -78,6 +78,10 @@ jobs:
         run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
       - name: Build libpolyplug.so
         run: cargo build -p polyplug
+      # The native *_SO / *_DIR integration suites load pre-built fixture
+      # cdylibs from gitignored locations that only this script produces.
+      - name: Build test fixtures
+        run: bash tests/fixtures/build_all.sh
       - name: Run tests
         run: cargo test --workspace
 
