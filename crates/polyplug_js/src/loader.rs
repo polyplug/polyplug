@@ -24,6 +24,7 @@ use polyplug::Runtime as PolyplugRuntime;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -908,31 +909,45 @@ impl JsLoader {
         JsLoader { _config: config }
     }
 
-    /// Shared load/reload implementation.
+    /// Read the plugin's JS source from the on-disk bundle directory.
     ///
-    /// Both `load` and `reload` produce identical behaviour; `reload` only adds a
-    /// hot-reload-enabled guard before delegating here.
-    fn load_inner(
-        &self,
-        manifest: &ManifestData,
-        runtime: &PolyplugRuntime,
-    ) -> Result<(), RuntimeError> {
-        let bundle_id: u64 = manifest.id;
-
+    /// Used by the [`BundleSource::Path`] flow. The file is resolved from the
+    /// manifest's `file` field, defaulting to `bundle.js`.
+    fn read_path_source(manifest: &ManifestData) -> Result<String, RuntimeError> {
         let bundle_path: PathBuf = if !manifest.file.is_empty() {
             manifest.path.join(&manifest.file)
         } else {
             manifest.path.join("bundle.js")
         };
-        let bundle_js: String =
-            std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
-                RuntimeError::Loader(LoaderError::ManifestParse {
-                    path: bundle_path.display().to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
+        std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
+            RuntimeError::Loader(LoaderError::ManifestParse {
+                path: bundle_path.display().to_string(),
+                reason: e.to_string(),
+            })
+        })
+    }
 
-        let bundle_dir: &Path = &manifest.path;
+    /// Shared load/reload implementation.
+    ///
+    /// Both `load` and `reload` produce identical behaviour; `reload` only adds a
+    /// hot-reload-enabled guard before delegating here.
+    ///
+    /// `bundle_js` is the plugin's JS source text — read from disk for
+    /// [`BundleSource::Path`], or supplied directly for [`BundleSource::Code`] /
+    /// [`BundleSource::Bytes`]. `bundle_dir` is the on-disk bundle directory for
+    /// path sources, or `None` for in-memory sources, which are single-file and
+    /// self-contained (JS bundles are always one flat `bundle.js`, so there is no
+    /// bundle directory to provision and no sibling files to resolve). When `None`,
+    /// `globalThis.bundlePath` and `BundleInitContext.bundle_path` are an empty
+    /// string, matching the "no bundle directory for non-path sources" contract.
+    fn load_inner(
+        &self,
+        manifest: &ManifestData,
+        bundle_js: &str,
+        bundle_dir: Option<&Path>,
+        runtime: &PolyplugRuntime,
+    ) -> Result<(), RuntimeError> {
+        let bundle_id: u64 = manifest.id;
 
         let qjs_runtime: Runtime = Runtime::new().map_err(|e: rquickjs::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
@@ -957,7 +972,12 @@ impl JsLoader {
         // (success and error) so the stack never leaks an entry.
         runtime.push_init_bundle_id(bundle_id);
 
-        let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
+        // In-memory sources (Code/Bytes) carry no bundle directory, so bundlePath
+        // and BundleInitContext.bundle_path are empty for them.
+        let bundle_dir_str: String = match bundle_dir {
+            Some(dir) => dir.to_string_lossy().into_owned(),
+            None => String::new(),
+        };
 
         let registration_slot: Rc<RefCell<Option<JsRegistrationData>>> =
             Rc::new(RefCell::new(None));
@@ -1008,7 +1028,7 @@ impl JsLoader {
                 })?;
 
             ctx_ref
-                .eval::<Value<'_>, _>(bundle_js.as_str())
+                .eval::<Value<'_>, _>(bundle_js)
                 .map_err(|e: rquickjs::Error| {
                     RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: manifest.name.clone(),
@@ -1154,8 +1174,37 @@ impl BundleLoader for JsLoader {
         "js-quickjs"
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &PolyplugRuntime) -> Result<(), RuntimeError> {
-        self.load_inner(manifest, runtime)
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        source: &BundleSource,
+        runtime: &PolyplugRuntime,
+    ) -> Result<(), RuntimeError> {
+        match source {
+            // On-disk source: read bundle.js from the bundle directory and eval it,
+            // provisioning bundlePath/bundle_path from that directory.
+            BundleSource::Path(_) => {
+                let bundle_js: String = JsLoader::read_path_source(manifest)?;
+                self.load_inner(manifest, &bundle_js, Some(&manifest.path), runtime)
+            }
+            // In-memory JS source text: eval it directly in the bundle's fresh
+            // QuickJS Context, exactly as the Path flow evals the entry file's
+            // contents. There is no bundle directory — JS bundles are always one
+            // flat, self-contained bundle.js, so this is a natural fit.
+            BundleSource::Code(code) => self.load_inner(manifest, code, None, runtime),
+            // Raw bytes: validate UTF-8, then take the same path as Code. JS source
+            // must be valid UTF-8 text; invalid bytes are a structured error.
+            BundleSource::Bytes(bytes) => {
+                let code: &str = core::str::from_utf8(bytes).map_err(|_| {
+                    RuntimeError::Loader(LoaderError::InvalidSourceEncoding {
+                        loader: "js-quickjs",
+                        source_kind: source.kind(),
+                        bundle: manifest.name.clone(),
+                    })
+                })?;
+                self.load_inner(manifest, code, None, runtime)
+            }
+        }
     }
 
     fn reload(
@@ -1166,7 +1215,9 @@ impl BundleLoader for JsLoader {
         if !runtime.config().hot_reload_enabled {
             return Err(RuntimeError::HotReloadDisabled);
         }
-        self.load_inner(manifest, runtime)
+        // reload is path-based (the watcher only tracks on-disk bundles).
+        let bundle_js: String = JsLoader::read_path_source(manifest)?;
+        self.load_inner(manifest, &bundle_js, Some(&manifest.path), runtime)
     }
 }
 

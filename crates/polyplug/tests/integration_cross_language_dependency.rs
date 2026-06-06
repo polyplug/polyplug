@@ -55,7 +55,12 @@ impl BundleLoader for RustProviderLoader {
         "rust-provider"
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        _source: &polyplug::loader::BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
         let interface: &'static GuestContractInterface =
             Box::leak(Box::new(GuestContractInterface {
                 contract_id: GuestContractId::from_u64(self.contract_id),
@@ -115,7 +120,12 @@ impl BundleLoader for LuaDependerLoader {
         "lua-depender"
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        _source: &polyplug::loader::BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
         let host: &'static HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 

@@ -34,6 +34,163 @@ impl DotnetLoader {
     pub fn new(config: DotnetConfig) -> DotnetLoader {
         DotnetLoader { config }
     }
+
+    /// Pre-load a dependency assembly from raw bytes into the shared CLR default load
+    /// context, so a subsequently byte-loaded ([`BundleSource::Bytes`]) plugin that is not
+    /// self-contained can resolve its references in memory.
+    ///
+    /// [`BundleSource::Bytes`] is single-file by contract, so a self-contained plugin never
+    /// needs this. It exists for hosts that deliver a plugin plus its managed dependencies
+    /// entirely in memory. Call it once per dependency *before* loading the dependent plugin.
+    ///
+    /// `config` selects/initializes the process-wide CLR (once-per-process; see the .NET
+    /// runtime-isolation limitation in `CLAUDE.md`).
+    ///
+    /// # Memory ownership (CLAUDE.md Rule 8)
+    ///
+    /// `dep_bytes` is borrowed only for the duration of the managed bridge call; the bridge
+    /// copies it into managed storage before returning.
+    ///
+    /// [`BundleSource::Bytes`]: polyplug::loader::BundleSource::Bytes
+    pub fn preload_dependency_from_bytes(&self, dep_bytes: &[u8]) -> Result<(), RuntimeError> {
+        // Dependencies have no bundle directory; the CLR probing path is irrelevant here, so
+        // an empty path is passed for the (already-initialized) context lookup.
+        let context: Arc<DotnetContext> =
+            Arc::clone(CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, Path::new("")))?);
+        context.preload_dependency_bytes(dep_bytes)
+    }
+
+    /// Build the `[UnmanagedCallersOnly]` `PolyplugInit` symbol names for a given assembly
+    /// simple name. The plugin entry type is `{name}.Plugin` in assembly `{name}`, so the
+    /// assembly-qualified type name is `"{name}.Plugin, {name}"`.
+    fn init_symbol_names(asm_name: &str) -> Result<(PdCString, PdCString), RuntimeError> {
+        let type_name_str: String = format!("{asm_name}.Plugin, {asm_name}");
+        let type_name_pdc: PdCString =
+            PdCString::from_os_str(OsStr::new(&type_name_str)).map_err(|_| {
+                RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                    bundle: asm_name.to_owned(),
+                })
+            })?;
+        let method_name_pdc: PdCString = PdCString::from_os_str(OsStr::new("PolyplugInit"))
+            .map_err(|_| {
+                RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                    bundle: asm_name.to_owned(),
+                })
+            })?;
+        Ok((type_name_pdc, method_name_pdc))
+    }
+
+    /// Resolve the managed `PolyplugInit` function for an on-disk assembly
+    /// ([`BundleSource::Path`]).
+    ///
+    /// The assembly simple name (and thus the entry type name) is derived from the file
+    /// stem of the resolved assembly path, matching the historical convention.
+    ///
+    /// [`BundleSource::Path`]: polyplug::loader::BundleSource::Path
+    fn resolve_init_from_path(
+        &self,
+        manifest: &polyplug::loader::ManifestData,
+        bundle_dir: &Path,
+    ) -> Result<(InitFn, String), RuntimeError> {
+        let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
+            manifest.path.join(&manifest.file)
+        } else {
+            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
+                bundle: manifest.name.clone(),
+            }));
+        };
+
+        if !bundle_path.exists() {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "assembly not found at path '{}'",
+                    bundle_path.to_string_lossy()
+                ),
+            }));
+        }
+
+        let tfm: String = crate::version::read_target_framework(&bundle_path)?;
+        check_version_compatibility(&tfm, &self.config.min_framework)?;
+
+        let abs_path: std::path::PathBuf = bundle_path.canonicalize().map_err(|_| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "assembly canonicalize failed for path '{}'",
+                    bundle_path.to_string_lossy()
+                ),
+            })
+        })?;
+
+        let context: Arc<DotnetContext> =
+            Arc::clone(CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir))?);
+
+        let stem: std::borrow::Cow<'_, str> =
+            abs_path.file_stem().unwrap_or_default().to_string_lossy();
+        let bundle_name: String = stem.into_owned();
+        let (type_name_pdc, method_name_pdc): (PdCString, PdCString) =
+            Self::init_symbol_names(&bundle_name)?;
+
+        let managed_init: netcorehost::hostfxr::ManagedFunction<InitFn> =
+            context.get_init_fn(abs_path, type_name_pdc.as_ref(), method_name_pdc.as_ref())?;
+        // `ManagedFunction<InitFn>` derefs to the inner `InitFn`; the CLR keeps the assembly
+        // (and thus this pointer) alive for the process lifetime.
+        Ok((*managed_init, bundle_name))
+    }
+
+    /// Resolve the managed `PolyplugInit` function for an in-memory assembly
+    /// ([`BundleSource::Bytes`]) via the managed byte-load bridge.
+    ///
+    /// # Type-resolution convention
+    ///
+    /// Byte-loaded assemblies have no file stem, so the assembly simple name is derived from
+    /// the file stem of the manifest's declared `file` field (e.g. `"CsharpPlugin.dll"` →
+    /// `"CsharpPlugin"`). The entry type is then `{name}.Plugin` — identical to the `Path`
+    /// convention, but sourced from manifest data rather than the on-disk path.
+    /// `manifest.file` is required for byte sources for exactly this reason.
+    ///
+    /// # Memory ownership (CLAUDE.md Rule 8)
+    ///
+    /// `bytes` is borrowed only for the duration of the managed bridge call inside
+    /// [`DotnetContext::get_init_fn_from_bytes`]; the bridge copies it into managed storage
+    /// during that call, so no host-allocated buffer outlives the load.
+    ///
+    /// [`BundleSource::Bytes`]: polyplug::loader::BundleSource::Bytes
+    fn resolve_init_from_bytes(
+        &self,
+        manifest: &polyplug::loader::ManifestData,
+        bundle_dir: &Path,
+        bytes: &[u8],
+    ) -> Result<(InitFn, String), RuntimeError> {
+        if manifest.file.is_empty() {
+            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
+                bundle: manifest.name.clone(),
+            }));
+        }
+        let bundle_name: String = Path::new(&manifest.file)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        if bundle_name.is_empty() {
+            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
+                bundle: manifest.name.clone(),
+            }));
+        }
+
+        let tfm: String = crate::version::target_framework_from_bytes(bytes, &bundle_name)?;
+        check_version_compatibility(&tfm, &self.config.min_framework)?;
+
+        let context: Arc<DotnetContext> =
+            Arc::clone(CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir))?);
+
+        // The bridge resolves `{name}.Plugin` directly from the byte-loaded Assembly object.
+        let simple_type_name: String = format!("{bundle_name}.Plugin");
+        let init_fn: InitFn =
+            context.get_init_fn_from_bytes(&bundle_name, bytes, &simple_type_name)?;
+        Ok((init_fn, bundle_name))
+    }
 }
 
 pub(crate) fn check_version_compatibility(
@@ -115,68 +272,32 @@ impl BundleLoader for DotnetLoader {
     fn load(
         &self,
         manifest: &polyplug::loader::ManifestData,
+        source: &polyplug::loader::BundleSource,
         runtime: &Runtime,
     ) -> Result<(), RuntimeError> {
-        let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
-            manifest.path.join(&manifest.file)
-        } else {
-            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
-                bundle: manifest.name.clone(),
-            }));
-        };
-
-        if !bundle_path.exists() {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!(
-                    "assembly not found at path '{}'",
-                    bundle_path.to_string_lossy()
-                ),
-            }));
-        }
-
-        let tfm: String = crate::version::read_target_framework(&bundle_path)?;
-        check_version_compatibility(&tfm, &self.config.min_framework)?;
-
-        let abs_path: std::path::PathBuf = bundle_path.canonicalize().map_err(|_| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!(
-                    "assembly canonicalize failed for path '{}'",
-                    bundle_path.to_string_lossy()
-                ),
-            })
-        })?;
-
+        // `Code` is unsupported: C#/.NET is a compiled language, so there is no source-text
+        // load path. Raw assembly bytes are the in-memory equivalent and are handled by the
+        // `Bytes` arm below. `Path` and `Bytes` are the two real .NET load paths.
         let bundle_dir: &Path = &manifest.path;
         let bundle_id: u64 = manifest.id;
 
-        let context: Arc<DotnetContext> =
-            Arc::clone(CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir))?);
-
-        let stem: std::borrow::Cow<'_, str> =
-            abs_path.file_stem().unwrap_or_default().to_string_lossy();
-        let bundle_name: String = stem.into_owned();
-        let type_name_str: String = format!("{bundle_name}.Plugin, {bundle_name}");
-
-        let type_name_pdc: PdCString =
-            PdCString::from_os_str(OsStr::new(&type_name_str)).map_err(|_| {
-                RuntimeError::Loader(LoaderError::InitSymbolMissing {
-                    bundle: bundle_name.clone(),
-                })
-            })?;
-        let method_name_pdc: PdCString = PdCString::from_os_str(OsStr::new("PolyplugInit"))
-            .map_err(|_| {
-                RuntimeError::Loader(LoaderError::InitSymbolMissing {
-                    bundle: bundle_name.clone(),
-                })
-            })?;
-
-        let managed_init: netcorehost::hostfxr::ManagedFunction<InitFn> = context.get_init_fn(
-            abs_path.clone(),
-            type_name_pdc.as_ref(),
-            method_name_pdc.as_ref(),
-        )?;
+        // The init function and the assembly simple name are resolved per source kind, then
+        // the shared init-invocation tail below drives the managed `PolyplugInit`.
+        let (managed_init, bundle_name): (InitFn, String) = match source {
+            polyplug::loader::BundleSource::Code(_) => {
+                return Err(RuntimeError::Loader(LoaderError::UnsupportedBundleSource {
+                    loader: "dotnet",
+                    source_kind: source.kind(),
+                    bundle: manifest.name.clone(),
+                }));
+            }
+            polyplug::loader::BundleSource::Path(_) => {
+                self.resolve_init_from_path(manifest, bundle_dir)?
+            }
+            polyplug::loader::BundleSource::Bytes(bytes) => {
+                self.resolve_init_from_bytes(manifest, bundle_dir, bytes)?
+            }
+        };
 
         // BundleInitContext.bundle_path is borrowed only for the duration of the
         // managed_init call below, so a local String kept alive across that call
@@ -202,7 +323,7 @@ impl BundleLoader for DotnetLoader {
         // SAFETY: managed_init is a valid fn ptr from CLR. host_interface and ctx are non-null and valid.
         // InitFn signature: (host, ctx) -> u32
         // The HostApi pointer is passed directly (self-passing pattern).
-        let result: u32 = unsafe { (*managed_init)(host_interface, &ctx) };
+        let result: u32 = unsafe { managed_init(host_interface, &ctx) };
 
         // Pop bundle_id from the init stack after init completes (always, including
         // the error path) so the stack does not leak an entry.

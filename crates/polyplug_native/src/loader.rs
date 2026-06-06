@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use polyplug::Runtime;
 use polyplug::error::{LoaderError, RuntimeError};
-use polyplug::loader::{BundleLoader, ManifestData};
+use polyplug::loader::{BundleLoader, BundleSource, ManifestData};
 use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::plugin::BundleInitContext;
@@ -52,7 +52,25 @@ impl BundleLoader for NativeLoader {
         "native"
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        source: &BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
+        // The native loader supports on-disk bundles only: there is no clean,
+        // portable in-memory dlopen on Windows/macOS, so Code/Bytes are rejected.
+        match source {
+            BundleSource::Path(_) => {}
+            BundleSource::Code(_) | BundleSource::Bytes(_) => {
+                return Err(RuntimeError::Loader(LoaderError::UnsupportedBundleSource {
+                    loader: "native",
+                    source_kind: source.kind(),
+                    bundle: manifest.name.clone(),
+                }));
+            }
+        }
+
         if manifest.id == 0 {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),

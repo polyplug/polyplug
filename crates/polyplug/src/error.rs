@@ -110,6 +110,25 @@ pub enum LoaderError {
     ManifestMissingFile { bundle: String },
 
     #[error(
+        "loader `{loader}` does not support bundle source kind `{source_kind}` (bundle `{bundle}`)"
+    )]
+    UnsupportedBundleSource {
+        loader: &'static str,
+        source_kind: &'static str,
+        bundle: String,
+    },
+
+    #[error(
+        "loader `{loader}` received non-UTF-8 source bytes for bundle `{bundle}`: \
+         {source_kind} sources must be valid UTF-8 text"
+    )]
+    InvalidSourceEncoding {
+        loader: &'static str,
+        source_kind: &'static str,
+        bundle: String,
+    },
+
+    #[error(
         "bundle \"{bundle}\" tampered with bundle_id: expected={expected:#x}, found={found:#x}"
     )]
     BundleTampered {

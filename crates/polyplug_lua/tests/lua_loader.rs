@@ -147,7 +147,11 @@ fn load_script(path: &Path, name: &str) -> Result<(), RuntimeError> {
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(path, name);
-    loader.load(&manifest, &runtime)
+    loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    )
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -283,7 +287,11 @@ fn vtable_is_registered_after_load() {
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_vtable");
     loader
-        .load(&manifest, &runtime)
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
         .expect("valid bundle must load");
 
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
@@ -360,7 +368,11 @@ fn vtable_function_count_matches_script() {
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_two_fn");
     loader
-        .load(&manifest, &runtime)
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
         .expect("two-function bundle must load");
 
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.two", 1);
@@ -385,7 +397,11 @@ fn vtable_contract_id_matches_computed_hash() {
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_cid");
     loader
-        .load(&manifest, &runtime)
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
         .expect("valid bundle must load");
 
     let expected_cid: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
@@ -418,10 +434,18 @@ fn sequential_loads_both_succeed() {
     let manifest1: ManifestData = make_manifest(&path1, "lua_loader_seq1");
     let manifest2: ManifestData = make_manifest(&path2, "lua_loader_seq2");
     loader
-        .load(&manifest1, &runtime)
+        .load(
+            &manifest1,
+            &polyplug::loader::BundleSource::Path(manifest1.path.clone()),
+            &runtime,
+        )
         .expect("first sequential load must succeed");
     loader
-        .load(&manifest2, &runtime)
+        .load(
+            &manifest2,
+            &polyplug::loader::BundleSource::Path(manifest2.path.clone()),
+            &runtime,
+        )
         .expect("second sequential load must succeed");
 
     // Both contracts must be visible.
@@ -449,7 +473,11 @@ fn multi_contract_bundle_registers_all_contracts() {
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_multi");
     loader
-        .load(&manifest, &runtime)
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
         .expect("multi-contract bundle must load");
 
     // Both contracts must be registered and resolvable.
@@ -528,7 +556,11 @@ fn concurrent_loaders_do_not_race() {
                     needs_reinit_on_dep_reload: false,
                     bundle_dependencies: Vec::new(),
                 };
-                loader.load(&manifest, &runtime)
+                loader.load(
+                    &manifest,
+                    &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+                    &runtime,
+                )
             })
         })
         .collect::<Vec<std::thread::JoinHandle<Result<(), RuntimeError>>>>();
@@ -556,7 +588,11 @@ fn vtable_function_dispatch_returns_abi_ok() {
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_dispatch");
     loader
-        .load(&manifest, &runtime)
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
         .expect("valid bundle must load");
 
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
@@ -629,6 +665,182 @@ fn lua_reload_disabled_returns_error() {
         "reload with hot_reload_enabled=false must return HotReloadDisabled, got: {:?}",
         result
     );
+}
+
+// ── 13. BundleSource::Code / Bytes — in-memory source loading ────────────────
+
+/// Absolute path to the on-disk Lua fixture bundle directory.
+fn lua_fixture_dir() -> PathBuf {
+    // CARGO_MANIFEST_DIR = crates/polyplug_lua; the fixture lives at the workspace
+    // root under tests/fixtures/test_plugin_lua.
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/ parent must exist")
+        .parent()
+        .expect("workspace root must exist")
+        .join("tests")
+        .join("fixtures")
+        .join("test_plugin_lua")
+}
+
+/// Build a ManifestData for the `test.add@1` fixture contract. `path` is the
+/// bundle directory used for Path loading; in-memory sources ignore it for
+/// package.path provisioning but still carry it as a stable identifier.
+fn fixture_manifest(path: &Path) -> ManifestData {
+    let name: &str = "test_plugin_lua";
+    ManifestData {
+        id: polyplug_utils::bundle_id(name),
+        name: name.to_owned(),
+        runtime: "lua".to_owned(),
+        file: "test_plugin.lua".to_owned(),
+        path: path.to_path_buf(),
+        version: "1.0.0".to_owned(),
+        // Leave `provides` empty so manifest validation skips the per-contract
+        // function-count check; the loader registers test.add@1 from the script's
+        // _polyplug_handlers regardless. This mirrors the other tests' manifests.
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+        bundle_dependencies: Vec::new(),
+    }
+}
+
+/// Dispatch `add(a, b) -> u32` (fn_id 0) on the `test.add@1` contract registered
+/// in `runtime`, returning the u32 result.
+fn dispatch_add(runtime: &Runtime, a: u32, b: u32) -> u32 {
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
+    let handle: GuestContractHandle = runtime
+        .registry()
+        .find(GuestContractId::from_u64(contract_id), 0)
+        .expect("test.add@1 must be registered");
+    let vtable_ptr: *const GuestContractInterface = runtime
+        .registry()
+        .resolve_guest_contract(handle)
+        .expect("handle must resolve to a vtable");
+    // SAFETY: vtable_ptr is a 'static leaked GuestContractInterface from LuaLoader;
+    // the shared Lua VM and leaked interface outlive this call.
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+
+    // The fixture's impl_add reads two u32 from args and writes one u32 to out.
+    let args: [u32; 2] = [a, b];
+    let mut out: u32 = 0;
+    // SAFETY: dispatch.vm.call is a valid function pointer; args points at two
+    // contiguous u32 and out at one u32, matching what impl_add reads/writes.
+    let result: AbiError = unsafe {
+        (vtable.dispatch.vm.call)(
+            vtable.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            0,
+            args.as_ptr() as *const (),
+            &mut out as *mut u32 as *mut (),
+            core::ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        result.code,
+        AbiErrorCode::Ok as u32,
+        "add dispatch must return Ok, got code={}",
+        result.code
+    );
+    out
+}
+
+/// Loading the fixture's Lua source through `BundleSource::Code` must register and
+/// dispatch the `test.add@1` contract identically to Path loading.
+///
+/// The fixture only `require`s loader-provisioned SDK modules (`ffi`,
+/// `polyplug_guest`, `polyplug_abi`) — never a bundle-dir-vendored sibling — so a
+/// Code-sourced load (which has no bundle directory) can satisfy every require.
+#[test]
+fn code_source_loads_and_dispatches_like_path() {
+    let fixture_dir: PathBuf = lua_fixture_dir();
+    let entry: PathBuf = fixture_dir.join("test_plugin.lua");
+    let source_text: String =
+        std::fs::read_to_string(&entry).expect("fixture test_plugin.lua must be readable");
+
+    // Path-loaded baseline in its own runtime.
+    let path_runtime: Arc<Runtime> = make_runtime();
+    path_runtime
+        .load_bundle_from_source(
+            fixture_manifest(&fixture_dir),
+            polyplug::loader::BundleSource::Path(fixture_dir.clone()),
+        )
+        .expect("path-sourced fixture load must succeed");
+    let path_result: u32 = dispatch_add(&path_runtime, 7, 35);
+
+    // Code-loaded equivalent in a separate runtime: no bundle directory at all.
+    let code_runtime: Arc<Runtime> = make_runtime();
+    code_runtime
+        .load_bundle_from_source(
+            fixture_manifest(&fixture_dir),
+            polyplug::loader::BundleSource::Code(source_text),
+        )
+        .expect("code-sourced fixture load must succeed");
+    let code_result: u32 = dispatch_add(&code_runtime, 7, 35);
+
+    assert_eq!(
+        code_result, 42,
+        "code-sourced add(7, 35) must compute 42, got {code_result}"
+    );
+    assert_eq!(
+        code_result, path_result,
+        "code-sourced dispatch must match path-sourced dispatch"
+    );
+}
+
+/// `BundleSource::Bytes` carrying valid UTF-8 Lua source must load via the same
+/// path as `Code` and dispatch identically.
+#[test]
+fn bytes_source_with_valid_utf8_loads_and_dispatches() {
+    let fixture_dir: PathBuf = lua_fixture_dir();
+    let entry: PathBuf = fixture_dir.join("test_plugin.lua");
+    let source_bytes: Vec<u8> =
+        std::fs::read(&entry).expect("fixture test_plugin.lua must be readable");
+
+    let runtime: Arc<Runtime> = make_runtime();
+    runtime
+        .load_bundle_from_source(
+            fixture_manifest(&fixture_dir),
+            polyplug::loader::BundleSource::Bytes(source_bytes),
+        )
+        .expect("bytes-sourced fixture load must succeed");
+
+    let result: u32 = dispatch_add(&runtime, 20, 22);
+    assert_eq!(result, 42, "bytes-sourced add(20, 22) must compute 42");
+}
+
+/// `BundleSource::Bytes` carrying invalid UTF-8 must fail with the unified
+/// `LoaderError::InvalidSourceEncoding` — never a panic and never a string-only
+/// error.
+#[test]
+fn bytes_source_with_invalid_utf8_returns_structured_error() {
+    let fixture_dir: PathBuf = lua_fixture_dir();
+    // 0xFF is never a valid UTF-8 byte.
+    let invalid: Vec<u8> = vec![0x66, 0x6e, 0xFF, 0xFE, 0x00];
+
+    let runtime: Arc<Runtime> = make_runtime();
+    let result: Result<(), RuntimeError> = runtime.load_bundle_from_source(
+        fixture_manifest(&fixture_dir),
+        polyplug::loader::BundleSource::Bytes(invalid),
+    );
+    assert!(result.is_err(), "invalid UTF-8 bytes must produce Err");
+    let err: RuntimeError = result.expect_err("expected Err for invalid UTF-8 bytes");
+    match err {
+        RuntimeError::Loader(LoaderError::InvalidSourceEncoding {
+            loader,
+            source_kind,
+            bundle,
+        }) => {
+            assert_eq!(loader, "lua", "loader must be the Lua runtime name");
+            assert_eq!(source_kind, "bytes", "source_kind must be bytes");
+            assert_eq!(
+                bundle, "test_plugin_lua",
+                "bundle must be the manifest bundle name"
+            );
+        }
+        other => panic!("expected LoaderError::InvalidSourceEncoding, got: {other:?}"),
+    }
 }
 
 /// With hot-reload enabled, reloading a loaded bundle must succeed and the

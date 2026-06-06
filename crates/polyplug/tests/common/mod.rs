@@ -188,7 +188,12 @@ impl BundleLoader for TestNativeLoader {
         "native"
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        _source: &polyplug::loader::BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
         self.load_library(manifest, runtime)
     }
 

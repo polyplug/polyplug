@@ -5,7 +5,6 @@
 //! and between polyplug Runtime instances.
 
 use std::ffi::OsStr;
-use std::path::Path;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::thread::ThreadId;
@@ -20,6 +19,7 @@ use polyplug::Runtime;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -334,32 +334,108 @@ impl LuaLoader {
             })
     }
 
+    /// Resolve a [`BundleSource`] into the Lua source text plus the contextual
+    /// information the shared load path needs.
+    ///
+    /// Returns `(source_text, chunk_name, bundle_dir)`:
+    /// - `source_text` — the Lua source to execute in the fresh VM.
+    /// - `chunk_name` — the name Lua reports in tracebacks / error messages; for
+    ///   on-disk bundles this is the entry file name, for in-memory sources it is
+    ///   derived from the manifest bundle name.
+    /// - `bundle_dir` — `Some(dir)` for [`BundleSource::Path`] (used to prepend the
+    ///   bundle directory to `package.path`/`cpath`), or `None` for in-memory
+    ///   sources which have no bundle directory.
+    ///
+    /// # Single-file limitation for in-memory sources
+    ///
+    /// [`BundleSource::Code`] and [`BundleSource::Bytes`] carry no bundle directory,
+    /// so a bundle-relative `require` of a sibling file vendored next to the entry
+    /// (e.g. a bundle-local module) cannot be satisfied. The loader-owned SDK
+    /// modules (`polyplug_guest`, `polyplug_abi`) still resolve, because they come
+    /// from the compile-time `GUEST_LUA_DIR` / `ABI_LUA_DIR`, not the bundle dir.
+    fn resolve_source(
+        manifest: &ManifestData,
+        source: &BundleSource,
+    ) -> Result<(String, String, Option<String>), RuntimeError> {
+        match source {
+            BundleSource::Path(_) => {
+                let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
+                    manifest.path.join(&manifest.file)
+                } else {
+                    return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
+                        bundle: manifest.name.clone(),
+                    }));
+                };
+
+                if !bundle_path.exists() {
+                    return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!(
+                            "Lua script load failed at {}: file does not exist",
+                            bundle_path.display()
+                        ),
+                    }));
+                }
+
+                let source_text: String =
+                    std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
+                        RuntimeError::Loader(LoaderError::InitFailed {
+                            bundle: manifest.name.clone(),
+                            error: format!(
+                                "Lua script load failed at {}: {}",
+                                bundle_path.display(),
+                                e
+                            ),
+                        })
+                    })?;
+
+                let chunk_name: String = bundle_path
+                    .file_name()
+                    .map(|n: &OsStr| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| bundle_path.display().to_string());
+
+                let bundle_dir_str: String = manifest.path.to_string_lossy().into_owned();
+                Ok((source_text, chunk_name, Some(bundle_dir_str)))
+            }
+            BundleSource::Code(code) => Ok((code.clone(), manifest.name.clone(), None)),
+            BundleSource::Bytes(bytes) => {
+                let source_text: String =
+                    String::from_utf8(bytes.clone()).map_err(|_: std::string::FromUtf8Error| {
+                        RuntimeError::Loader(LoaderError::InvalidSourceEncoding {
+                            loader: "lua",
+                            source_kind: source.kind(),
+                            bundle: manifest.name.clone(),
+                        })
+                    })?;
+                Ok((source_text, manifest.name.clone(), None))
+            }
+        }
+    }
+
     /// Shared load/reload implementation.
     ///
     /// Both `load` and `reload` produce identical behaviour; `reload` only adds a
-    /// hot-reload-enabled guard before delegating here.
-    fn load_inner(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
-        let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
-            manifest.path.join(&manifest.file)
-        } else {
-            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
-                bundle: manifest.name.clone(),
-            }));
-        };
-
-        if !bundle_path.exists() {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!(
-                    "Lua script load failed at {}: file does not exist",
-                    bundle_path.display()
-                ),
-            }));
-        }
+    /// hot-reload-enabled guard before delegating here. The [`BundleSource`]
+    /// selects where the Lua source text comes from — an on-disk entry file
+    /// ([`BundleSource::Path`]) or in-memory source text
+    /// ([`BundleSource::Code`] / [`BundleSource::Bytes`]).
+    fn load_inner(
+        &self,
+        manifest: &ManifestData,
+        source: &BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
+        let (source_text, chunk_name, bundle_dir): (String, String, Option<String>) =
+            Self::resolve_source(manifest, source)?;
 
         let bundle_id: u64 = manifest.id;
-        let bundle_dir: &Path = &manifest.path;
-        let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
+
+        // For in-memory sources there is no bundle directory; the loader passes the
+        // manifest path through to the guest as the bundle path so init still gets a
+        // stable identifier, but it is NOT prepended to package.path.
+        let bundle_dir_str: String = bundle_dir
+            .clone()
+            .unwrap_or_else(|| manifest.path.to_string_lossy().into_owned());
 
         // Create a new Lua VM for this bundle (per-bundle isolation).
         // mlua 0.10: Lua::unsafe_new() enables the FFI module required by LuaJIT plugins.
@@ -368,45 +444,48 @@ impl LuaLoader {
         let lua: Lua = unsafe { Lua::unsafe_new() };
 
         // Configure package.path so require("polyplug_guest") and
-        // require("polyplug_abi") resolve, plus the bundle's own directory; and
-        // package.cpath for native modules. All entries are built in Rust and
-        // pushed through the mlua API — never interpolated into Lua source — so a
-        // path containing quotes or newlines cannot inject code.
+        // require("polyplug_abi") resolve; for on-disk bundles also add the bundle's
+        // own directory, and package.cpath for native modules. All entries are built
+        // in Rust and pushed through the mlua API — never interpolated into Lua
+        // source — so a path containing quotes or newlines cannot inject code.
+        //
+        // In-memory sources (Code/Bytes) skip the bundle-dir entries: they carry no
+        // bundle directory, so only the loader-owned SDK module dirs are provisioned.
         let guest_dir_fwd: String = GUEST_LUA_DIR.replace('\\', "/");
         let abi_dir_fwd: String = ABI_LUA_DIR.replace('\\', "/");
-        let bundle_dir_fwd: String = bundle_dir_str.replace('\\', "/");
         let cpath_ext: &str = if cfg!(windows) { "dll" } else { "so" };
 
-        let path_entries: String = format!(
-            "{bundle_dir_fwd}/?.lua;{bundle_dir_fwd}/?.init.lua;{guest_dir_fwd}/?.lua;{abi_dir_fwd}/?.lua"
-        );
+        let path_entries: String = match &bundle_dir {
+            Some(dir) => {
+                let bundle_dir_fwd: String = dir.replace('\\', "/");
+                format!(
+                    "{bundle_dir_fwd}/?.lua;{bundle_dir_fwd}/?.init.lua;{guest_dir_fwd}/?.lua;{abi_dir_fwd}/?.lua"
+                )
+            }
+            None => format!("{guest_dir_fwd}/?.lua;{abi_dir_fwd}/?.lua"),
+        };
         Self::prepend_package_field(&lua, &manifest.name, "path", &path_entries)?;
 
-        let cpath_entries: String = format!("{bundle_dir_fwd}/?.{cpath_ext}");
-        Self::prepend_package_field(&lua, &manifest.name, "cpath", &cpath_entries)?;
+        if let Some(dir) = &bundle_dir {
+            let bundle_dir_fwd: String = dir.replace('\\', "/");
+            let cpath_entries: String = format!("{bundle_dir_fwd}/?.{cpath_ext}");
+            Self::prepend_package_field(&lua, &manifest.name, "cpath", &cpath_entries)?;
+        }
 
-        // Read the plugin script source.
-        let source: String =
-            std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
+        // Execute the script. This defines polyplug_init in the global environment.
+        // The chunk name is shown in Lua tracebacks/error messages.
+        lua.load(&source_text)
+            .set_name(&chunk_name)
+            .exec()
+            .map_err(|e: mlua::Error| {
                 RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
-                    error: format!("Lua script load failed at {}: {}", bundle_path.display(), e),
+                    error: format!("Lua script load failed for {}: {}", chunk_name, e),
                 })
             })?;
 
-        // Execute the script. This defines polyplug_init in the global environment.
-        lua.load(&source).exec().map_err(|e: mlua::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!("Lua script load failed at {}: {}", bundle_path.display(), e),
-            })
-        })?;
-
         // Derive bundle name for error messages.
-        let bundle_name: String = bundle_path
-            .file_name()
-            .map(|n: &OsStr| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| bundle_path.display().to_string());
+        let bundle_name: String = chunk_name;
 
         // Retrieve polyplug_init global function.
         let init_fn: Function =
@@ -659,15 +738,30 @@ impl BundleLoader for LuaLoader {
         "lua"
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
-        self.load_inner(manifest, runtime)
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        source: &BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
+        // The Lua loader serves every BundleSource: Path reads the on-disk entry
+        // file, Code evaluates in-memory source text, and Bytes is UTF-8 source
+        // text. All three converge on the same compile/init/register path.
+        self.load_inner(manifest, source, runtime)
     }
 
     fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
         if !runtime.config().hot_reload_enabled {
             return Err(RuntimeError::HotReloadDisabled);
         }
-        self.load_inner(manifest, runtime)
+        // reload re-reads the on-disk entry file (only path-backed bundles can be
+        // hot-reloaded — there is no on-disk artifact to re-read for in-memory
+        // sources, and reload is gated on hot_reload_enabled above).
+        self.load_inner(
+            manifest,
+            &BundleSource::Path(manifest.path.clone()),
+            runtime,
+        )
     }
 }
 

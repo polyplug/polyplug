@@ -9,8 +9,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
@@ -211,7 +213,11 @@ fn load_valid_bundle_registers_vtable() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     // Verify the plugin was registered by querying the registry.
@@ -270,7 +276,11 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     // Verify the plugin was registered.
@@ -327,7 +337,11 @@ file = "bundle.js"
         needs_reinit_on_dep_reload: false,
         bundle_dependencies: Vec::new(),
     };
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(
         result.is_ok(),
         "load from directory path must succeed: {result:?}"
@@ -352,7 +366,11 @@ fn load_syntax_error_returns_error() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(result.is_err(), "syntax error bundle must return Err");
 
     // The error must be a JsRuntimePanic mentioning the eval failure.
@@ -377,7 +395,11 @@ fn load_runtime_error_returns_error() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(result.is_err(), "runtime error bundle must return Err");
 
     let err_str: String = result
@@ -401,7 +423,11 @@ fn load_bundle_without_polyplug_init_returns_error() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(
         result.is_err(),
         "bundle without polyplug_init must return Err"
@@ -442,7 +468,11 @@ fn load_nonexistent_file_returns_error() {
         needs_reinit_on_dep_reload: false,
         bundle_dependencies: Vec::new(),
     };
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(result.is_err(), "non-existent file must return Err");
 }
 
@@ -494,7 +524,11 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(
         result.is_ok(),
         "bundle reading bundlePath must succeed: {result:?}"
@@ -552,7 +586,11 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(
         result.is_ok(),
         "all polyplug methods must be present: {result:?}"
@@ -572,7 +610,13 @@ fn vtable_contract_id_roundtrip() {
     let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    loader.load(&manifest, &runtime).expect("load must succeed");
+    loader
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
+        .expect("load must succeed");
 
     // Verify the plugin was registered with the correct contract_id.
     let handle: GuestContractHandle = runtime
@@ -630,7 +674,13 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    loader.load(&manifest, &runtime).expect("load must succeed");
+    loader
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
+        .expect("load must succeed");
 
     // Verify the plugin was registered and get its vtable.
     let handle: GuestContractHandle = runtime
@@ -706,7 +756,11 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(
         result.is_ok(),
         "bundle with alloc+free must succeed: {result:?}"
@@ -741,7 +795,11 @@ fn concurrent_loads_do_not_panic() {
                 let loader: JsLoader = JsLoader::new(JsConfig {});
 
                 let manifest: ManifestData = make_manifest(&path, "test.bundle");
-                if let Err(e) = loader.load(&manifest, &runtime) {
+                if let Err(e) = loader.load(
+                    &manifest,
+                    &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+                    &runtime,
+                ) {
                     let mut guard: std::sync::MutexGuard<'_, Vec<String>> =
                         errors_clone.lock().unwrap_or_else(|e| e.into_inner());
                     guard.push(format!("thread {i}: {e}"));
@@ -784,7 +842,11 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
 
     let manifest_a: ManifestData = make_manifest(&path_a, "test.bundle.a");
     loader_a
-        .load(&manifest_a, &runtime_a)
+        .load(
+            &manifest_a,
+            &polyplug::loader::BundleSource::Path(manifest_a.path.clone()),
+            &runtime_a,
+        )
         .expect("load runtime_a must succeed");
 
     // Verify plugin A is registered in runtime_a
@@ -807,7 +869,11 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
 
     let manifest_b: ManifestData = make_manifest(&path_b, "test.bundle.b");
     loader_b
-        .load(&manifest_b, &runtime_b)
+        .load(
+            &manifest_b,
+            &polyplug::loader::BundleSource::Path(manifest_b.path.clone()),
+            &runtime_b,
+        )
         .expect("load runtime_b must succeed");
 
     // Verify plugin B is registered in runtime_b
@@ -872,7 +938,11 @@ fn sequential_loads_of_different_contracts_all_succeed() {
         let (_dir, path) = write_temp_bundle(&bundle);
 
         let manifest: ManifestData = make_manifest(&path, "test.bundle");
-        let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+        let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        );
         assert!(
             result.is_ok(),
             "sequential load {i} must succeed: {result:?}"
@@ -897,7 +967,11 @@ fn dispatch_vm_call_works_correctly() {
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     let handle: GuestContractHandle = runtime
@@ -989,7 +1063,11 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(result.is_ok(), "Empty string test must succeed: {result:?}");
 }
 
@@ -1054,4 +1132,147 @@ fn js_reload_reinitializes_contracts() {
     // SAFETY: vtable_ptr is a valid pointer returned by resolve.
     let vtable_ref: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
+}
+
+// ── BundleSource::Code / Bytes ──────────────────────────────────────────────────
+
+/// Absolute path to the shared JS fixture's `bundle.js` at the workspace root.
+fn fixture_bundle_js_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/test_plugin_js/bundle.js")
+}
+
+/// Build a ManifestData matching the shared `test_plugin_js` fixture, with the
+/// given on-disk bundle directory (empty for in-memory sources).
+fn fixture_manifest(bundle_dir: std::path::PathBuf) -> ManifestData {
+    let mut function_count: HashMap<String, u32> = HashMap::new();
+    function_count.insert("test.add@1".to_owned(), 5);
+    ManifestData {
+        id: polyplug_utils::bundle_id("test_bundle"),
+        name: "test_bundle".to_owned(),
+        runtime: "js-quickjs".to_owned(),
+        file: "bundle.js".to_owned(),
+        path: bundle_dir,
+        version: "1.0.0".to_owned(),
+        provides: vec!["test.add@1".to_owned()],
+        function_count,
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+        bundle_dependencies: Vec::new(),
+    }
+}
+
+/// Dispatch the fixture's `add` function (fn_id 0) with two i32 args, returning
+/// the i32 written to the out buffer.
+fn dispatch_add(runtime: &Runtime, contract_id: u64, a: i32, b: i32) -> i32 {
+    use polyplug_abi::AbiError;
+    use polyplug_abi::AbiErrorCode;
+
+    let handle: GuestContractHandle = runtime
+        .registry()
+        .find(GuestContractId::from_u64(contract_id), 0)
+        .expect("plugin must be registered");
+    let vtable_ptr: *const GuestContractInterface = runtime
+        .registry()
+        .resolve_guest_contract(handle)
+        .expect("resolve must succeed");
+    // SAFETY: vtable_ptr is a valid pointer returned by resolve.
+    let vtable_ref: &GuestContractInterface = unsafe { &*vtable_ptr };
+    assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
+
+    // The fixture's `add` reads two i32 from argsPtr / argsPtr+4 and writes the
+    // sum to outPtr. Lay out a packed [a, b] args buffer and a single-i32 out.
+    let args: [i32; 2] = [a, b];
+    let mut out: i32 = 0;
+    // SAFETY: dispatch.vm.call is js_dispatch; args points at two valid i32 and
+    // out at one valid i32, matching what the guest reads/writes.
+    let result: AbiError = unsafe {
+        (vtable_ref.dispatch.vm.call)(
+            vtable_ref.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            0,
+            args.as_ptr() as *const (),
+            &mut out as *mut i32 as *mut (),
+            core::ptr::null_mut(),
+        )
+    };
+    assert_eq!(result.code, AbiErrorCode::Ok as u32, "add must dispatch Ok");
+    out
+}
+
+/// Loading the fixture via `BundleSource::Code` (in-memory source text) registers
+/// the same contract and dispatches to the same result as path-based loading.
+#[test]
+fn load_code_source_has_parity_with_path() {
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
+
+    // Path-loaded reference: load the on-disk fixture directory and dispatch add.
+    let fixture_dir: std::path::PathBuf = fixture_bundle_js_path()
+        .parent()
+        .expect("fixture must have a parent directory")
+        .to_path_buf();
+    let runtime_path: Arc<Runtime> = make_runtime();
+    runtime_path
+        .load_bundle(&fixture_dir)
+        .expect("path load of fixture must succeed");
+    let path_result: i32 = dispatch_add(&runtime_path, contract_id, 2, 3);
+    assert_eq!(path_result, 5, "path-loaded add(2,3) must be 5");
+
+    // Code-loaded: read the same source to a String and load it via Code.
+    let source: String =
+        std::fs::read_to_string(fixture_bundle_js_path()).expect("read fixture bundle.js");
+    let runtime_code: Arc<Runtime> = make_runtime();
+    let manifest: ManifestData = fixture_manifest(std::path::PathBuf::new());
+    runtime_code
+        .load_bundle_from_source(manifest, BundleSource::Code(source))
+        .expect("code load of fixture must succeed");
+    let code_result: i32 = dispatch_add(&runtime_code, contract_id, 2, 3);
+
+    assert_eq!(
+        code_result, path_result,
+        "Code-loaded dispatch must match path-loaded dispatch"
+    );
+}
+
+/// Loading the fixture via `BundleSource::Bytes` (valid UTF-8) takes the same path
+/// as Code and registers the same contract.
+#[test]
+fn load_bytes_source_valid_utf8_succeeds() {
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
+
+    let source: Vec<u8> = std::fs::read(fixture_bundle_js_path()).expect("read fixture bundle.js");
+    let runtime: Arc<Runtime> = make_runtime();
+    let manifest: ManifestData = fixture_manifest(std::path::PathBuf::new());
+    runtime
+        .load_bundle_from_source(manifest, BundleSource::Bytes(source))
+        .expect("bytes load of fixture must succeed");
+
+    let result: i32 = dispatch_add(&runtime, contract_id, 7, 4);
+    assert_eq!(result, 11, "bytes-loaded add(7,4) must be 11");
+}
+
+/// `BundleSource::Bytes` carrying invalid UTF-8 yields a structured
+/// `LoaderError::InvalidSourceEncoding`, never a string error or a panic.
+#[test]
+fn load_bytes_source_invalid_utf8_returns_structured_error() {
+    let runtime: Arc<Runtime> = make_runtime();
+    let loader: JsLoader = make_loader();
+
+    // 0xFF is never valid in a UTF-8 sequence.
+    let invalid: Vec<u8> = vec![0xFF, 0xFE, 0x00, 0x01];
+    let manifest: ManifestData = fixture_manifest(std::path::PathBuf::new());
+    let result: Result<(), RuntimeError> =
+        loader.load(&manifest, &BundleSource::Bytes(invalid), &runtime);
+
+    assert!(
+        matches!(
+            result,
+            Err(RuntimeError::Loader(LoaderError::InvalidSourceEncoding {
+                loader: "js-quickjs",
+                source_kind: "bytes",
+                ..
+            }))
+        ),
+        "invalid UTF-8 bytes must yield InvalidSourceEncoding: {result:?}"
+    );
 }

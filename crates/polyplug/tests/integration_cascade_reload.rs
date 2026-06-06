@@ -102,7 +102,12 @@ impl BundleLoader for CascadeLoader {
         self.runtime_name
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        _source: &polyplug::loader::BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
         self.register(manifest, runtime);
         Ok(())
     }

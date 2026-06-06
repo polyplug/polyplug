@@ -498,6 +498,32 @@ impl Runtime {
         )
     }
 
+    /// Load a single plugin bundle from a non-path [`BundleSource`].
+    ///
+    /// The caller supplies an already-parsed [`ManifestData`] because in-memory
+    /// sources ([`BundleSource::Code`] / [`BundleSource::Bytes`]) have no bundle
+    /// directory to scan. Path-based loading should use [`Runtime::load_bundle`] /
+    /// `load_bundle_with`, which construct a [`BundleSource::Path`] internally.
+    ///
+    /// [`BundleSource`]: crate::loader::BundleSource
+    /// [`BundleSource::Code`]: crate::loader::BundleSource::Code
+    /// [`BundleSource::Bytes`]: crate::loader::BundleSource::Bytes
+    /// [`BundleSource::Path`]: crate::loader::BundleSource::Path
+    pub fn load_bundle_from_source(
+        &self,
+        manifest: ManifestData,
+        source: crate::loader::BundleSource,
+    ) -> Result<(), RuntimeError> {
+        self.load_manifest_with_source(
+            manifest,
+            source,
+            LoadOptions {
+                compatibility: Compatibility::default(),
+                ignore_function_count_mismatch: false,
+            },
+        )
+    }
+
     /// Load a single plugin bundle explicitly with options.
     pub(crate) fn load_bundle_with(
         &self,
@@ -513,6 +539,21 @@ impl Runtime {
 
         let manifest: ManifestData = crate::loader::parse_manifest(bundle_dir)
             .map_err(|e: LoaderError| RuntimeError::Loader(e))?;
+        let source: crate::loader::BundleSource =
+            crate::loader::BundleSource::Path(manifest.path.clone());
+        self.load_manifest_with_source(manifest, source, opts)
+    }
+
+    /// Shared load path: validate the manifest, dispatch to the matching loader with
+    /// the given [`BundleSource`], and record bundle metadata on success.
+    ///
+    /// [`BundleSource`]: crate::loader::BundleSource
+    fn load_manifest_with_source(
+        &self,
+        manifest: ManifestData,
+        source: crate::loader::BundleSource,
+        opts: LoadOptions,
+    ) -> Result<(), RuntimeError> {
         // Full manifest validation (required fields, id == FNV1a-64(name), well-formed
         // provides/bundle_dependencies version specs). Folds in the former inline
         // id == 0 check.
@@ -559,7 +600,7 @@ impl Runtime {
         let runtime_name: &str = &manifest.runtime;
         let loader: &dyn BundleLoader = self.loader_for(runtime_name).ok_or_else(|| {
             RuntimeError::Loader(LoaderError::NoLoaderForRuntime {
-                bundle: path.display().to_string(),
+                bundle: manifest.name.clone(),
                 runtime_name: runtime_name.to_owned(),
             })
         })?;
@@ -583,7 +624,7 @@ impl Runtime {
             return Err(RuntimeError::Registry(e));
         }
 
-        let result: Result<(), RuntimeError> = loader.load(&manifest, self);
+        let result: Result<(), RuntimeError> = loader.load(&manifest, &source, self);
         if result.is_ok() {
             let bundle_name: String = manifest.name.clone();
 
@@ -2360,6 +2401,7 @@ mod tests {
         fn load(
             &self,
             _manifest: &ManifestData,
+            _source: &crate::loader::BundleSource,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             Err(RuntimeError::UndeclaredDependency {
@@ -2389,6 +2431,7 @@ mod tests {
         fn load(
             &self,
             _manifest: &ManifestData,
+            _source: &crate::loader::BundleSource,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             let mut guard: std::sync::MutexGuard<'_, Option<bool>> = match self.observed_init.lock()
@@ -2419,6 +2462,7 @@ mod tests {
         fn load(
             &self,
             _manifest: &ManifestData,
+            _source: &crate::loader::BundleSource,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             panic!("intentional panic in PanicLoader");
@@ -2451,6 +2495,7 @@ mod tests {
         fn load(
             &self,
             _manifest: &ManifestData,
+            _source: &crate::loader::BundleSource,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             let state: std::sync::MutexGuard<'_, ReentrantState> = match self.state.lock() {
@@ -2515,6 +2560,7 @@ mod tests {
         fn load(
             &self,
             _manifest: &ManifestData,
+            _source: &crate::loader::BundleSource,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             let mut state: std::sync::MutexGuard<'_, LazyState> = match self.state.lock() {

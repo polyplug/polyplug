@@ -55,6 +55,36 @@ fn library_handle_outlives_load_call() {
     // Reaching here without SIGBUS or panic confirms clean cleanup.
 }
 
+/// Verify `Runtime::load_bundle_from_source` loads a native bundle end-to-end from a
+/// caller-supplied manifest plus a `BundleSource::Path`.
+///
+/// Skipped under Miri: Miri does not support dlopen.
+#[test]
+#[cfg(not(miri))]
+fn load_bundle_from_source_path_loads_native_bundle() {
+    let plugin_dir: &std::path::Path = std::path::Path::new(TEST_PLUGIN_DIR);
+    let mut manifest: ManifestData =
+        parse_manifest(plugin_dir).expect("parse_manifest for test_plugin_dir");
+    manifest.id = bundle_id(&manifest.name);
+
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .loader(TestNativeLoader::new())
+        .build()
+        .expect("runtime build should succeed");
+
+    // parse_manifest sets manifest.path to the bundle directory; the Path source
+    // carries the same directory, so loading proceeds exactly as the path-based path.
+    let source: polyplug::loader::BundleSource =
+        polyplug::loader::BundleSource::Path(manifest.path.clone());
+
+    runtime
+        .load_bundle_from_source(manifest, source)
+        .expect("load_bundle_from_source must succeed for test_plugin");
+
+    drop(runtime);
+    // Reaching here without SIGBUS or panic confirms a clean end-to-end load.
+}
+
 /// Miri-compatible structural assertion.
 ///
 /// Under Miri, dlopen is not supported so the above test is excluded.

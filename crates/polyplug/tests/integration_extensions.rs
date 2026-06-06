@@ -87,7 +87,12 @@ impl BundleLoader for ExtensionPluginLoader {
         "ext-plugin"
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        _source: &polyplug::loader::BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
         let host: &'static HostApi = runtime.host_abi();
 
         // Recover the extension by id (fnv1a_32 of its name), exactly as a real

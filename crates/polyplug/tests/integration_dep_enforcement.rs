@@ -53,7 +53,12 @@ impl BundleLoader for ProbeLoader {
         "probe-enforce"
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        _source: &polyplug::loader::BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
         let host_abi: &'static HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 

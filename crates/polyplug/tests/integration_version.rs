@@ -26,6 +26,7 @@ impl BundleLoader for NoopLoader {
     fn load(
         &self,
         _manifest: &ManifestData,
+        _source: &polyplug::loader::BundleSource,
         _runtime: &Runtime,
     ) -> Result<(), polyplug::error::RuntimeError> {
         Ok(())

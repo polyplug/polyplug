@@ -1,4 +1,8 @@
-use crate::{error::RuntimeError, loader::manifest::ManifestData, runtime::Runtime};
+use crate::{
+    error::RuntimeError,
+    loader::{bundle_source::BundleSource, manifest::ManifestData},
+    runtime::Runtime,
+};
 
 /// Trait implemented by all bundle loaders (native, python, lua, js, .net).
 ///
@@ -12,14 +16,27 @@ pub trait BundleLoader: Send + Sync {
 
     /// Load a bundle for the first time.
     ///
-    /// The manifest contains all metadata needed to load the bundle:
-    /// - `manifest.path` - the bundle directory
-    /// - `manifest.file` - the plugin file (relative to bundle directory)
+    /// The manifest carries the bundle metadata:
+    /// - `manifest.file` - the plugin file (relative to the bundle directory)
     /// - `manifest.id` - the bundle ID
     ///
+    /// `source` selects where the executable artifact comes from:
+    /// - [`BundleSource::Path`] - an on-disk bundle directory (path-based loading).
+    ///   `manifest.path` holds the same directory and remains the resolution root.
+    /// - [`BundleSource::Code`] / [`BundleSource::Bytes`] - in-memory sources with no
+    ///   bundle directory. The native loader rejects these; VM loaders reject them
+    ///   until they gain real in-memory support.
+    ///
     /// # Errors
-    /// Returns `Err(RuntimeError::...)` on any failure.
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError>;
+    /// Returns `Err(RuntimeError::...)` on any failure, including
+    /// `RuntimeError::Loader(LoaderError::UnsupportedBundleSource { .. })` when the
+    /// loader does not support the given source kind.
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        source: &BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError>;
 
     /// Reload a bundle - MANDATORY for all loaders.
     ///

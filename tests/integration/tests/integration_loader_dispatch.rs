@@ -28,7 +28,12 @@ impl BundleLoader for StubLoader {
         self.name
     }
 
-    fn load(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn load(
+        &self,
+        _manifest: &ManifestData,
+        _source: &polyplug::loader::BundleSource,
+        _runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
         Ok(())
     }
 
@@ -151,7 +156,11 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
         bundle_dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &rt,
+    );
     match result {
         // .NET loader returns InitFailed for assembly not found or CLR init failures
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
@@ -187,7 +196,11 @@ fn python_loader_loads_nonexistent_file_errors() {
         bundle_dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &rt,
+    );
     match result {
         // Python loader returns InitFailed for import errors (file not found or not accessible).
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
@@ -223,7 +236,11 @@ fn lua_loader_returns_error_for_missing_file() {
         bundle_dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &rt,
+    );
     match result {
         // Lua loader returns InitFailed for script load failures (file not found).
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {

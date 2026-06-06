@@ -49,7 +49,11 @@ fn test_loader_rejects_missing_file() {
 
     let manifest = make_manifest("missing_plugin", "nonexistent.so");
 
-    let result = loader.load(&manifest, &runtime);
+    let result = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(result.is_err());
 }
 
@@ -72,8 +76,62 @@ fn test_loader_rejects_empty_file() {
         dependencies: vec![],
     };
 
-    let result = loader.load(&manifest, &runtime);
+    let result = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(result.is_err());
+}
+
+#[test]
+fn test_loader_rejects_code_source() {
+    let loader = NativeLoader::new(NativeConfig::default());
+    let runtime = make_runtime();
+
+    let manifest = make_manifest("code_plugin", "plugin.so");
+    let source = polyplug::loader::BundleSource::Code("return {}".to_owned());
+
+    let result = loader.load(&manifest, &source, &runtime);
+    match result {
+        Err(polyplug::error::RuntimeError::Loader(
+            polyplug::error::LoaderError::UnsupportedBundleSource {
+                loader,
+                source_kind,
+                bundle,
+            },
+        )) => {
+            assert_eq!(loader, "native");
+            assert_eq!(source_kind, "code");
+            assert_eq!(bundle, "code_plugin");
+        }
+        other => panic!("expected UnsupportedBundleSource, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_loader_rejects_bytes_source() {
+    let loader = NativeLoader::new(NativeConfig::default());
+    let runtime = make_runtime();
+
+    let manifest = make_manifest("bytes_plugin", "plugin.so");
+    let source = polyplug::loader::BundleSource::Bytes(vec![0u8, 1, 2, 3]);
+
+    let result = loader.load(&manifest, &source, &runtime);
+    match result {
+        Err(polyplug::error::RuntimeError::Loader(
+            polyplug::error::LoaderError::UnsupportedBundleSource {
+                loader,
+                source_kind,
+                bundle,
+            },
+        )) => {
+            assert_eq!(loader, "native");
+            assert_eq!(source_kind, "bytes");
+            assert_eq!(bundle, "bytes_plugin");
+        }
+        other => panic!("expected UnsupportedBundleSource, got {other:?}"),
+    }
 }
 
 #[test]
@@ -95,7 +153,11 @@ fn test_loader_rejects_zero_id() {
         dependencies: vec![],
     };
 
-    let result = loader.load(&manifest, &runtime);
+    let result = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(result.is_err());
 }
 

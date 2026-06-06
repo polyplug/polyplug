@@ -42,28 +42,43 @@ const IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR: usize = 14;
 /// Marker byte pattern for the TargetFrameworkAttribute TFM string in CLI metadata.
 const TFM_MARKER: &[u8] = b".NETCoreApp,Version=v";
 
-/// Read the TargetFramework string from a .NET assembly DLL using pelite.
+/// Read the TargetFramework string from a .NET assembly DLL on disk using pelite.
 ///
 /// Returns the long-form TFM, e.g. `".NETCoreApp,Version=v10.0"`.
 /// Returns `Ok(String::new())` for non-.NET DLLs or if no TFM attribute is found.
 pub fn read_target_framework(dll_path: &Path) -> Result<String, RuntimeError> {
-    // Step 1: Read file bytes.
+    // Read file bytes, then delegate to the shared byte-slice parser so that path-based
+    // and byte-based ([`BundleSource::Bytes`]) loading run identical TFM detection logic.
     let bytes: Vec<u8> = std::fs::read(dll_path).map_err(|_| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: dll_path.to_string_lossy().into_owned(),
             error: "assembly not found or unreadable".to_owned(),
         })
     })?;
+    let label: String = dll_path.to_string_lossy().into_owned();
+    target_framework_from_bytes(&bytes, &label)
+}
 
-    // Step 2: Parse PE file — auto-detects PE32 vs PE32+.
-    let pe: PeFile<'_> = PeFile::from_bytes(&bytes).map_err(|_| {
+/// Read the TargetFramework string from raw .NET assembly bytes using pelite.
+///
+/// This is the byte-slice counterpart of [`read_target_framework`], used for
+/// [`BundleSource::Bytes`] loading where the assembly never touches disk. `label` is
+/// a human-readable identifier (e.g. the bundle name) used only in error messages.
+///
+/// Returns the long-form TFM, e.g. `".NETCoreApp,Version=v10.0"`.
+/// Returns `Ok(String::new())` for non-.NET DLLs or if no TFM attribute is found.
+///
+/// [`BundleSource::Bytes`]: polyplug::loader::BundleSource::Bytes
+pub fn target_framework_from_bytes(bytes: &[u8], label: &str) -> Result<String, RuntimeError> {
+    // Step 1: Parse PE file — auto-detects PE32 vs PE32+.
+    let pe: PeFile<'_> = PeFile::from_bytes(bytes).map_err(|_| {
         RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: dll_path.to_string_lossy().into_owned(),
+            bundle: label.to_owned(),
             error: "invalid PE format".to_owned(),
         })
     })?;
 
-    // Step 3: Get COM descriptor data directory (index 14).
+    // Step 2: Get COM descriptor data directory (index 14).
     let data_dirs: &[IMAGE_DATA_DIRECTORY] = pe.data_directory();
     if data_dirs.len() <= IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR {
         // No COM descriptor entry — not a .NET assembly.
@@ -75,25 +90,25 @@ pub fn read_target_framework(dll_path: &Path) -> Result<String, RuntimeError> {
         return Ok(String::new());
     }
 
-    // Step 4: Read COR20 header at the COM descriptor RVA.
+    // Step 3: Read COR20 header at the COM descriptor RVA.
     let cor20: &ImageCor20Header = pe.derva(com_dir.VirtualAddress).map_err(|_| {
         RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: dll_path.to_string_lossy().into_owned(),
+            bundle: label.to_owned(),
             error: "COR20 header not found or invalid".to_owned(),
         })
     })?;
 
-    // Step 5: Get CLI metadata section as a byte slice.
+    // Step 4: Get CLI metadata section as a byte slice.
     let metadata_slice: &[u8] = pe
         .derva_slice(cor20.metadata_rva, cor20.metadata_size as usize)
         .map_err(|_| {
             RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: dll_path.to_string_lossy().into_owned(),
+                bundle: label.to_owned(),
                 error: "CLI metadata section not found or invalid".to_owned(),
             })
         })?;
 
-    // Step 6: Scan for TFM marker in metadata bytes.
+    // Step 5: Scan for TFM marker in metadata bytes.
     // TargetFrameworkAttribute stores the TFM as a UTF-8 string in the #Blob heap.
     // The string ".NETCoreApp,Version=v" appears verbatim, consistent with the
     // existing sniff_target_framework implementation.

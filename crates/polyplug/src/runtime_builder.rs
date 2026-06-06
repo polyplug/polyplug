@@ -239,8 +239,10 @@ impl RuntimeBuilder {
                         })
                     })?;
 
+                let source: crate::loader::BundleSource =
+                    crate::loader::BundleSource::Path(manifest.path.clone());
                 loader
-                    .load(manifest, &runtime)
+                    .load(manifest, &source, &runtime)
                     .map_err(|e: RuntimeError| match e {
                         RuntimeError::Loader(le) => RuntimeError::Loader(le),
                         other => RuntimeError::Loader(LoaderError::InitFailed {

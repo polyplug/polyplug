@@ -228,7 +228,11 @@ fn load_nonexistent_assembly_returns_init_failed() {
     let runtime: Arc<Runtime> = test_runtime();
     let path: PathBuf = PathBuf::from("/does/not/exist/Plugin.dll");
     let manifest: ManifestData = make_manifest(&path, "nonexistent");
-    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     match result {
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
@@ -246,7 +250,11 @@ fn load_invalid_pe_file_returns_init_failed() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(tmp.path(), "invalid_pe");
-    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     match result {
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
@@ -269,7 +277,11 @@ fn load_with_invalid_hostfxr_path_and_missing_dll_returns_init_failed() {
     let runtime: Arc<Runtime> = test_runtime();
     let path: PathBuf = PathBuf::from("/no/such/Plugin.dll");
     let manifest: ManifestData = make_manifest(&path, "missing_dll");
-    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(
         matches!(
             result,
@@ -297,7 +309,11 @@ fn load_dll_net10_against_net6_requirement_returns_init_failed() {
     let loader: DotnetLoader = DotnetLoader::new(cfg);
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     match result {
         Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
             assert!(
@@ -319,7 +335,11 @@ fn load_dll_with_matching_version_passes_tfm_check() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(
         !matches!(
             result,
@@ -347,7 +367,11 @@ fn load_with_bad_hostfxr_path_and_valid_dll_is_rejected() {
     let loader: DotnetLoader = DotnetLoader::new(cfg);
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     // CLR_CONTEXT is a process-wide OnceCell (see "Known Limitations" in CLAUDE.md):
     // the CLR is initialized exactly once per process by whichever load runs first.
     // This load can therefore fail at one of two stages, both of which are correct
@@ -397,12 +421,230 @@ fn full_clr_init_reaches_init_symbol_check() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
     assert!(
         !matches!(
             result,
             Err(RuntimeError::Loader(LoaderError::InitFailed { .. }))
         ),
         "must pass TFM and file checks for existing net10.0 DLL, got: {result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BundleSource::Bytes — in-memory assembly loading
+// ---------------------------------------------------------------------------
+
+/// Args layout for the `test.add` contract's `add` function: two u32s.
+#[repr(C)]
+struct AddArgs {
+    a: u32,
+    b: u32,
+}
+
+/// Path to the built `CsharpPlugin.dll` test fixture (Debug build).
+///
+/// The fixture lives at `<workspace>/tests/fixtures/csharp_plugin`. It is built by the
+/// integration test build script (`crates/polyplug/build.rs`), not by this crate, so tests
+/// that depend on it soft-skip when the DLL is absent.
+fn csharp_fixture_dll_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p: &Path| p.parent())
+        .map(|root: &Path| {
+            root.join("tests")
+                .join("fixtures")
+                .join("csharp_plugin")
+                .join("bin")
+                .join("Debug")
+                .join("net10.0")
+                .join("CsharpPlugin.dll")
+        })
+        .expect("CARGO_MANIFEST_DIR resolution failed")
+}
+
+/// Build a manifest for the C# `test.add` fixture, matching `manifest.toml`. The
+/// `id` MUST equal `bundle_id(name)` for `Runtime::load_bundle_from_source` validation.
+fn make_csharp_fixture_manifest(dir: &Path) -> ManifestData {
+    let name: &str = "csharp_test_adder";
+    let mut function_count: HashMap<String, u32> = HashMap::new();
+    function_count.insert("test.add@1".to_owned(), 4);
+    ManifestData {
+        id: polyplug_utils::bundle_id(name),
+        name: name.to_owned(),
+        runtime: "dotnet".to_owned(),
+        file: "CsharpPlugin.dll".to_owned(),
+        path: dir.to_path_buf(),
+        version: "1.0.0".to_owned(),
+        provides: vec!["test.add@1".to_owned()],
+        function_count,
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+        bundle_dependencies: Vec::new(),
+    }
+}
+
+/// `Code` is unsupported by the .NET loader (compiled language): it must yield a
+/// structured `UnsupportedBundleSource` error rather than attempting any load.
+#[test]
+fn code_source_returns_unsupported_bundle_source() {
+    let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
+    let runtime: Arc<Runtime> = test_runtime();
+    let manifest: ManifestData = make_manifest(Path::new("/tmp/x/Plugin.dll"), "csharp_code_x");
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Code(String::from("// not loadable: .NET is compiled")),
+        &runtime,
+    );
+    match result {
+        Err(RuntimeError::Loader(LoaderError::UnsupportedBundleSource {
+            loader: l,
+            source_kind,
+            bundle,
+        })) => {
+            assert_eq!(l, "dotnet");
+            assert_eq!(source_kind, "code");
+            assert_eq!(bundle, "csharp_code_x");
+        }
+        other => panic!("expected UnsupportedBundleSource for Code, got {other:?}"),
+    }
+}
+
+/// `Bytes` with non-PE content must fail PE parsing before any CLR interaction.
+#[test]
+fn bytes_source_invalid_pe_returns_init_failed() {
+    let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
+    let runtime: Arc<Runtime> = test_runtime();
+    let manifest: ManifestData =
+        make_manifest(Path::new("/tmp/x/CsharpPlugin.dll"), "csharp_bytes_bad");
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Bytes(b"not a PE file".to_vec()),
+        &runtime,
+    );
+    match result {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { error, .. })) => {
+            assert!(
+                error.contains("PE") || error.contains("assembly"),
+                "error: {error}"
+            );
+        }
+        other => panic!("expected InitFailed for invalid PE bytes, got {other:?}"),
+    }
+}
+
+/// `Bytes` missing `manifest.file` cannot derive the assembly simple name → structured error.
+#[test]
+fn bytes_source_missing_manifest_file_returns_manifest_missing_file() {
+    let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
+    let runtime: Arc<Runtime> = test_runtime();
+    let mut manifest: ManifestData = make_manifest(Path::new("/tmp/x/x.dll"), "csharp_no_file");
+    manifest.file = String::new();
+    let result: Result<(), RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Bytes(vec![0u8; 16]),
+        &runtime,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(RuntimeError::Loader(
+                LoaderError::ManifestMissingFile { .. }
+            ))
+        ),
+        "expected ManifestMissingFile, got {result:?}"
+    );
+}
+
+/// Full Bytes integration: load the built C# fixture from raw bytes through
+/// `Runtime::load_bundle_from_source`, then resolve `test.add@1` and dispatch
+/// `add(3, 5)`, asserting parity with the Path-loaded result (== 8).
+///
+/// Soft-skips when the fixture DLL is not built (it is produced by the integration
+/// test build script, not by this crate's build).
+#[test]
+fn bytes_source_loads_fixture_and_dispatches() {
+    let dll: PathBuf = csharp_fixture_dll_path();
+    if !dll.exists() {
+        eprintln!("skipping: CsharpPlugin.dll fixture not built at {dll:?}");
+        return;
+    }
+    let bytes: Vec<u8> = std::fs::read(&dll).expect("failed to read fixture dll");
+    let bundle_dir: &Path = dll.parent().expect("fixture dll must have a parent dir");
+
+    // The fixture is NOT self-contained: CsharpPlugin.dll references Polyplug.Abi. Pre-load
+    // that dependency from bytes into the shared CLR default load context so the in-memory
+    // plugin can resolve it. CLR_CONTEXT is process-global, so this standalone loader and
+    // the runtime's loader (built below) share the same context + byte bridge.
+    let abi_dll: PathBuf = bundle_dir.join("Polyplug.Abi.dll");
+    if !abi_dll.exists() {
+        eprintln!("skipping: Polyplug.Abi.dll dependency not built next to fixture");
+        return;
+    }
+    let abi_bytes: Vec<u8> = std::fs::read(&abi_dll).expect("failed to read Polyplug.Abi.dll");
+    let preloader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
+    preloader
+        .preload_dependency_from_bytes(&abi_bytes)
+        .expect("preload Polyplug.Abi dependency from bytes");
+
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
+        .loader(DotnetLoader::new(DotnetConfig::default()))
+        .build()
+        .expect("failed to build runtime with dotnet loader");
+
+    let manifest: ManifestData = make_csharp_fixture_manifest(bundle_dir);
+    let load_result: Result<(), RuntimeError> =
+        runtime.load_bundle_from_source(manifest, polyplug::loader::BundleSource::Bytes(bytes));
+    assert!(
+        load_result.is_ok(),
+        "load_bundle_from_source(Bytes) failed: {:?}",
+        load_result.err()
+    );
+
+    // Resolve test.add@1 and dispatch add(3, 5) == 8 (native dispatch parity with Path).
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
+    let handle: polyplug_abi::GuestContractHandle = runtime
+        .find_guest_contract(contract_id, 0)
+        .expect("test.add must be registered after byte-source load");
+    let interface_ptr: *const polyplug_abi::GuestContractInterface = runtime
+        .resolve_guest_contract(handle)
+        .expect("handle must resolve to an interface");
+    assert!(!interface_ptr.is_null(), "interface must be non-null");
+
+    // SAFETY: interface_ptr is valid; the CLR keeps the byte-loaded assembly alive for the
+    // process lifetime. The C# fixture uses native dispatch (function pointer table).
+    let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
+    assert_eq!(
+        interface.dispatch_type,
+        polyplug_abi::DispatchType::Native,
+        "C# fixture must use native dispatch"
+    );
+
+    let args: AddArgs = AddArgs { a: 3, b: 5 };
+    let mut out: u32 = 0;
+    // SAFETY: functions[0] is the `add` wrapper for the test.add contract.
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
+    // SAFETY: fn_ptr is the add wrapper; its ABI is the generic native dispatch signature.
+    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> polyplug_abi::AbiError =
+        unsafe { core::mem::transmute(fn_ptr) };
+    // SAFETY: args and out point to valid, correctly-typed storage for AddArgs/u32.
+    let result: polyplug_abi::AbiError = unsafe {
+        dispatch_fn(
+            core::ptr::addr_of!(args) as *const (),
+            core::ptr::addr_of_mut!(out) as *mut (),
+        )
+    };
+    assert_eq!(
+        result.code,
+        polyplug_abi::AbiErrorCode::Ok as u32,
+        "add must return AbiErrorCode::Ok"
+    );
+    assert_eq!(
+        out, 8,
+        "add(3, 5) must equal 8 (Bytes-source dispatch parity)"
     );
 }

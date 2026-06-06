@@ -34,6 +34,26 @@ pub(crate) type InitFn = unsafe extern "system" fn(
     *const polyplug_abi::BundleInitContext,
 ) -> u32;
 
+/// Embedded bytes of the managed byte-load bridge assembly, staged by `build.rs` into
+/// `OUT_DIR/byte_bridge.dll`. When the .NET SDK is unavailable at build time the staged file
+/// is empty and [`BYTE_BRIDGE_AVAILABLE`] is `false`, so `Bytes` loads are rejected cleanly.
+pub(crate) const BYTE_BRIDGE_DLL: &[u8] = include_bytes!(env!("POLYPLUG_DOTNET_BYTE_BRIDGE_DLL"));
+
+/// Whether [`BYTE_BRIDGE_DLL`] holds a real assembly (`"1"`) or an empty placeholder (`"0"`).
+pub(crate) const BYTE_BRIDGE_AVAILABLE: bool = matches!(
+    env!("POLYPLUG_DOTNET_BYTE_BRIDGE_AVAILABLE").as_bytes(),
+    b"1"
+);
+
+/// Signature of the bridge's `PolyplugByteBridgeLoadAndGetInit` entry point:
+/// `(asm_ptr, asm_len, type_name_ptr, type_name_len) -> init_fn_ptr (null on failure)`.
+pub(crate) type BridgeLoadAndGetInitFn =
+    unsafe extern "system" fn(*const u8, i32, *const u8, i32) -> *const core::ffi::c_void;
+
+/// Signature of the bridge's `PolyplugByteBridgePreloadDependency` entry point:
+/// `(asm_ptr, asm_len) -> u32 (0 on success)`.
+pub(crate) type BridgePreloadDependencyFn = unsafe extern "system" fn(*const u8, i32) -> u32;
+
 /// DotnetContext holds the live CLR runtime and per-assembly loader cache.
 /// Created exactly once per process via CLR_CONTEXT.
 pub(crate) struct DotnetContext {
@@ -46,7 +66,30 @@ pub(crate) struct DotnetContext {
     /// the inner `Arc<Mutex<AssemblyDelegateLoader>>` allows the loader to be cloned
     /// out of the map and used without holding the outer lock.
     loader_cache: Mutex<HashMap<PathBuf, Arc<Mutex<AssemblyDelegateLoader>>>>,
+    /// Lazily-resolved managed byte-load bridge entry points. The embedded bridge assembly
+    /// is staged to a temp file and loaded once; its `[UnmanagedCallersOnly]` entry points
+    /// are resolved through the path-based delegate loader (which works for on-disk
+    /// assemblies) and cached here for the process lifetime.
+    bridge: OnceCell<ByteBridge>,
 }
+
+/// Resolved entry points of the managed byte-load bridge, plus the temp file the bridge
+/// assembly was staged to (kept alive so the CLR's on-disk copy is never removed while the
+/// process runs — the retire-not-drop discipline the rest of the loader follows).
+struct ByteBridge {
+    load_and_get_init: BridgeLoadAndGetInitFn,
+    preload_dependency: BridgePreloadDependencyFn,
+    /// Owns the directory holding the staged bridge dll; kept alive for the process lifetime
+    /// so the CLR's loaded image is never removed (retire-not-drop). Never read after init.
+    _staged_dir: tempfile::TempDir,
+}
+
+// SAFETY: `ByteBridge` holds two `extern "system"` function pointers into the CLR (which is
+// process-global and lives for the whole run) and a `NamedTempFile` (already Send + Sync).
+// Raw fn pointers are `Send`/`Sync`; the pointed-to CLR code is callable from any thread.
+unsafe impl Send for ByteBridge {}
+// SAFETY: see the `Send` impl above — the contained pointers are immutable after init.
+unsafe impl Sync for ByteBridge {}
 
 /// Global CLR context — initialized exactly once per process.
 pub(crate) static CLR_CONTEXT: OnceCell<Arc<DotnetContext>> = OnceCell::new();
@@ -179,6 +222,7 @@ pub(crate) fn init_context(
     Ok(Arc::new(DotnetContext {
         _context: Mutex::new(context),
         loader_cache: Mutex::new(HashMap::new()),
+        bridge: OnceCell::new(),
     }))
 }
 
@@ -296,6 +340,189 @@ impl DotnetContext {
                 })
             })
     }
+
+    /// Resolve (once) and return the managed byte-load bridge entry points.
+    ///
+    /// The embedded bridge assembly ([`BYTE_BRIDGE_DLL`]) is staged to a temp file and
+    /// loaded through the path-based delegate loader — which, unlike the path-less delegate,
+    /// resolves `[UnmanagedCallersOnly]` methods from on-disk assemblies reliably. The
+    /// bridge is self-contained (no dependencies), so it loads from any temp path.
+    fn bridge(&self) -> Result<&ByteBridge, RuntimeError> {
+        if !BYTE_BRIDGE_AVAILABLE || BYTE_BRIDGE_DLL.is_empty() {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: "<byte-bridge>".to_owned(),
+                error: "byte-load bridge unavailable: rebuild polyplug_dotnet with the .NET SDK installed".to_owned(),
+            }));
+        }
+        self.bridge.get_or_try_init(|| self.init_bridge())
+    }
+
+    /// Stage the embedded bridge assembly to a temp file and resolve its entry points.
+    fn init_bridge(&self) -> Result<ByteBridge, RuntimeError> {
+        // hostfxr keys delegate loaders by assembly filename, and the bridge resolves its own
+        // type by the assembly simple name, so the staged file must be named after the bridge
+        // assembly: `Polyplug.Loaders.DotnetByteBridge.dll`.
+        let dir: tempfile::TempDir = tempfile::Builder::new()
+            .prefix("polyplug-dotnet-bridge")
+            .tempdir()
+            .map_err(|e: std::io::Error| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: "<byte-bridge>".to_owned(),
+                    error: format!("byte-bridge stage failed: {e}"),
+                })
+            })?;
+        let dll_path: PathBuf = dir.path().join("Polyplug.Loaders.DotnetByteBridge.dll");
+        std::fs::write(&dll_path, BYTE_BRIDGE_DLL).map_err(|e: std::io::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: "<byte-bridge>".to_owned(),
+                error: format!("byte-bridge write failed: {e}"),
+            })
+        })?;
+
+        let asm_pdc: PdCString = PdCString::from_os_str(dll_path.as_os_str()).map_err(|_| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: "<byte-bridge>".to_owned(),
+                error: "byte-bridge path contains embedded nul byte".to_owned(),
+            })
+        })?;
+
+        let loader: AssemblyDelegateLoader = {
+            let ctx: std::sync::MutexGuard<'_, HostfxrContext<InitializedForRuntimeConfig>> =
+                self._context.lock().map_err(|_| {
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: "<byte-bridge>".to_owned(),
+                        error: "CLR context mutex poisoned (bridge)".to_owned(),
+                    })
+                })?;
+            ctx.get_delegate_loader_for_assembly(asm_pdc).map_err(|e| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: "<byte-bridge>".to_owned(),
+                    error: format!("byte-bridge loader init failed: {e}"),
+                })
+            })?
+            // _context lock dropped here.
+        };
+
+        // hostfxr's get_function_with_unmanaged_callers_only resolves by the managed method
+        // name, not the `[UnmanagedCallersOnly(EntryPoint = ...)]` export name.
+        let type_pdc: PdCString = bridge_pdc(
+            "Polyplug.Loaders.DotnetByteBridge.ByteBridge, Polyplug.Loaders.DotnetByteBridge",
+        )?;
+        let load_method_pdc: PdCString = bridge_pdc("LoadAndGetInit")?;
+        let preload_method_pdc: PdCString = bridge_pdc("PreloadDependency")?;
+
+        let load_and_get_init: BridgeLoadAndGetInitFn = {
+            let f: ManagedFunction<BridgeLoadAndGetInitFn> = loader
+                .get_function_with_unmanaged_callers_only::<BridgeLoadAndGetInitFn>(
+                    type_pdc.as_ref(),
+                    load_method_pdc.as_ref(),
+                )
+                .map_err(|e| {
+                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                        bundle: format!("<byte-bridge>: LoadAndGetInit error={e}"),
+                    })
+                })?;
+            *f
+        };
+        let preload_dependency: BridgePreloadDependencyFn = {
+            let f: ManagedFunction<BridgePreloadDependencyFn> = loader
+                .get_function_with_unmanaged_callers_only::<BridgePreloadDependencyFn>(
+                    type_pdc.as_ref(),
+                    preload_method_pdc.as_ref(),
+                )
+                .map_err(|e| {
+                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                        bundle: format!("<byte-bridge>: PreloadDependency error={e}"),
+                    })
+                })?;
+            *f
+        };
+
+        Ok(ByteBridge {
+            load_and_get_init,
+            preload_dependency,
+            _staged_dir: dir,
+        })
+    }
+
+    /// Pre-load a dependency assembly from raw bytes into the default load context via the
+    /// managed bridge, so a non-self-contained byte-loaded plugin can resolve its references.
+    ///
+    /// # Memory ownership (CLAUDE.md Rule 8)
+    ///
+    /// `dep_bytes` is borrowed only for the duration of the managed call; the bridge copies
+    /// the buffer into managed storage before returning.
+    pub(crate) fn preload_dependency_bytes(&self, dep_bytes: &[u8]) -> Result<(), RuntimeError> {
+        let bridge: &ByteBridge = self.bridge()?;
+        // SAFETY: `preload_dependency` is a valid CLR fn ptr resolved in `init_bridge`.
+        // `dep_bytes` is a valid, correctly-sized buffer; the bridge copies it during the call.
+        let code: u32 =
+            unsafe { (bridge.preload_dependency)(dep_bytes.as_ptr(), dep_bytes.len() as i32) };
+        if code != 0 {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: "<byte-bridge-dependency>".to_owned(),
+                error: format!("bridge PreloadDependency returned {code}"),
+            }));
+        }
+        Ok(())
+    }
+
+    /// Get the `[UnmanagedCallersOnly]` `PolyplugInit` function for a plugin assembly
+    /// supplied as raw bytes, via the managed byte-load bridge.
+    ///
+    /// The bridge loads `asm_bytes` into the default `AssemblyLoadContext` with
+    /// `LoadFromStream` and resolves `simple_type_name` (e.g. `"CsharpPlugin.Plugin"`)
+    /// directly from the returned `Assembly` object — avoiding hostfxr's name-rebinding path
+    /// that cannot find a stream-loaded assembly. `asm_name` is used only in diagnostics.
+    ///
+    /// # Memory ownership (CLAUDE.md Rule 8)
+    ///
+    /// `asm_bytes` is borrowed only for the duration of the managed call; the bridge copies
+    /// the buffer into managed storage before returning, so the caller may drop it after.
+    pub(crate) fn get_init_fn_from_bytes(
+        &self,
+        asm_name: &str,
+        asm_bytes: &[u8],
+        simple_type_name: &str,
+    ) -> Result<InitFn, RuntimeError> {
+        let bridge: &ByteBridge = self.bridge()?;
+        let type_name_bytes: &[u8] = simple_type_name.as_bytes();
+        // SAFETY: `load_and_get_init` is a valid CLR fn ptr resolved in `init_bridge`.
+        // Both buffers are valid and correctly sized; the bridge copies them during the call
+        // and returns either a valid native fn ptr or null.
+        let raw: *const core::ffi::c_void = unsafe {
+            (bridge.load_and_get_init)(
+                asm_bytes.as_ptr(),
+                asm_bytes.len() as i32,
+                type_name_bytes.as_ptr(),
+                type_name_bytes.len() as i32,
+            )
+        };
+        if raw.is_null() {
+            return Err(RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                bundle: format!(
+                    "{asm_name}: byte-bridge could not resolve {simple_type_name}.PolyplugInit"
+                ),
+            }));
+        }
+        // SAFETY: a non-null return is the native entry of the guest's `[UnmanagedCallersOnly]`
+        // PolyplugInit, whose ABI matches `InitFn` (host, ctx) -> u32. Transmuting a raw fn
+        // pointer of identical ABI is sound; the CLR keeps the method alive for the run.
+        let init_fn: InitFn =
+            unsafe { core::mem::transmute::<*const core::ffi::c_void, InitFn>(raw) };
+        Ok(init_fn)
+    }
+}
+
+/// Build a `PdCString` for a bridge type/method name, mapping nul-byte errors to a
+/// structured loader error.
+fn bridge_pdc(s: &str) -> Result<PdCString, RuntimeError> {
+    PdCString::from_os_str(std::ffi::OsStr::new(s)).map_err(|_| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: "<byte-bridge>".to_owned(),
+            error: format!("bridge name contains embedded nul byte: {s}"),
+        })
+    })
 }
 
 /// Scan well-known locations to find `libhostfxr.so` / `hostfxr.dll` without using

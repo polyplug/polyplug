@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Self-contained managed bridge for BundleSource::Bytes loading in the .NET loader.
+
+    The native loader (crates/polyplug_dotnet) cannot resolve a guest's
+    `[UnmanagedCallersOnly] PolyplugInit` entry point from a *stream-loaded* assembly
+    using hostfxr's `hdt_get_function_pointer`, because that delegate resolves the type
+    via `Type.GetType(assemblyQualifiedName)`, which re-binds the assembly by name and
+    fails for an assembly that only exists in memory (FILE_NOT_FOUND).
+
+    This bridge does the byte-array load on the managed side via
+    `AssemblyLoadContext.Default.LoadFromStream` and resolves the entry method *from the
+    returned Assembly object* (no name re-binding), returning the native UCO function
+    pointer to the native loader.
+
+    It has NO project references on purpose: it must load from a throwaway temp path with
+    no sibling dependencies. Keep it dependency-free.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Polyplug.Loaders.DotnetByteBridge</AssemblyName>
+    <RootNamespace>Polyplug.Loaders.DotnetByteBridge</RootNamespace>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PublishAot>false</PublishAot>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+</Project>

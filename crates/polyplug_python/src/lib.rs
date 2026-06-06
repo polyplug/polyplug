@@ -21,6 +21,7 @@ pub(crate) mod isolation;
 pub use bridge::PythonHostBridge;
 pub use config::PythonConfig;
 
+use std::ffi::CString;
 use std::path::Path;
 
 use pyo3::Python;
@@ -30,6 +31,7 @@ use pyo3::types::PyModule;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug_abi::BundleInitContext;
@@ -59,12 +61,205 @@ impl Default for PythonLoader {
     }
 }
 
+/// Derive a valid Python module identifier from a bundle name.
+///
+/// The bundle name is free-form (it may contain dots, dashes, or other
+/// characters that are illegal in a Python module name), so every non
+/// `[A-Za-z0-9_]` character is replaced with `_` and a leading digit is
+/// prefixed with `_`. The result is used as the synthetic module name for an
+/// in-memory (`Code`/`Bytes`) load, where there is no file path to derive a
+/// module name from.
+fn synthetic_module_name(bundle_name: &str) -> String {
+    let mut name: String = String::with_capacity(bundle_name.len() + 1);
+    for ch in bundle_name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            name.push(ch);
+        } else {
+            name.push('_');
+        }
+    }
+    if name.is_empty() {
+        name.push_str("polyplug_inline_bundle");
+    } else if name
+        .chars()
+        .next()
+        .is_some_and(|c: char| c.is_ascii_digit())
+    {
+        name.insert(0, '_');
+    }
+    name
+}
+
+impl PythonLoader {
+    /// Load a Python plugin from in-memory source text (`Code` / `Bytes`).
+    ///
+    /// This mirrors the on-disk [`BundleLoader::load`] flow — execute the module,
+    /// locate `polyplug_init`, call it with the self-passing `HostApi` pointer and
+    /// the `BundleInitContext`, then isolate the bundle's freshly imported modules
+    /// — but with two differences dictated by the absence of a bundle directory:
+    ///
+    /// - **No `sys.path` / `site-packages` provisioning.** In-memory sources are
+    ///   single-file only (see [`BundleSource`]); there is no directory to make
+    ///   importable. A plugin loaded this way may only `import` modules already
+    ///   reachable on the interpreter's `sys.path` (the standard library and any
+    ///   process-level site-packages) — for example `ctypes`, which is all a
+    ///   self-contained guest needs to reach the ABI. It cannot `import` a
+    ///   bundle-vendored generated SDK package.
+    /// - **The module is compiled from source text** via `PyModule::from_code`
+    ///   under a synthetic module name derived from `manifest.name`, instead of
+    ///   being imported from a `.py` file.
+    ///
+    /// The module-isolation pass runs with an empty bundle directory: with no
+    /// directory, no freshly imported module can be classified as "under the
+    /// bundle", so the pass is a deliberate no-op here. That is correct for a
+    /// single-file source — it imports no bundle-local package tree to isolate.
+    ///
+    /// [`BundleSource`]: polyplug::loader::BundleSource
+    fn load_from_source_text(
+        &self,
+        manifest: &ManifestData,
+        code: &str,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
+        ensure_python_initialized(&self.config)?;
+
+        let bundle_name: String = synthetic_module_name(&manifest.name);
+        let bundle_id: u64 = manifest.id;
+
+        let code_c: CString = CString::new(code).map_err(|e: std::ffi::NulError| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.clone(),
+                error: format!("Python source contained an interior nul byte: {}", e),
+            })
+        })?;
+        let file_name_c: CString =
+            CString::new(format!("{}.py", bundle_name)).map_err(|e: std::ffi::NulError| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!("synthetic file name contained an interior nul byte: {}", e),
+                })
+            })?;
+        let module_name_c: CString =
+            CString::new(bundle_name.as_str()).map_err(|e: std::ffi::NulError| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!(
+                        "synthetic module name contained an interior nul byte: {}",
+                        e
+                    ),
+                })
+            })?;
+
+        // Self-passing pattern: the interface already carries the runtime pointer.
+        let host_interface: *const HostApi = runtime.as_context_ptr();
+
+        // Per-thread init stack for dependency enforcement during init
+        // (instance-owned; Rule 12 — no thread-locals).
+        runtime.push_init_bundle_id(bundle_id);
+
+        // Serialize the snapshot→exec→isolate critical section against other
+        // concurrent Python loads sharing this process's interpreter (see the
+        // path-based load for the full rationale).
+        let _load_guard: std::sync::MutexGuard<'_, ()> = crate::context::acquire_load_lock();
+
+        let result: Result<(), RuntimeError> = Python::attach(|py| {
+            // Snapshot sys.modules before executing so the isolation pass can scope
+            // exactly the modules this bundle introduced.
+            let modules_before: std::collections::HashSet<String> =
+                crate::isolation::snapshot_loaded_modules(py, &bundle_name)?;
+
+            // Compile and execute the source text as a module.
+            let module: pyo3::Bound<'_, PyModule> =
+                PyModule::from_code(py, &code_c, &file_name_c, &module_name_c).map_err(
+                    |e: pyo3::PyErr| {
+                        RuntimeError::Loader(LoaderError::InitFailed {
+                            bundle: bundle_name.clone(),
+                            error: format!("inline module compile/exec failed: {}", e),
+                        })
+                    },
+                )?;
+
+            // Locate and call polyplug_init(host, ctx) — self-passing pattern.
+            let init_fn: pyo3::Bound<'_, pyo3::PyAny> =
+                module.getattr("polyplug_init").map_err(|_| {
+                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                        bundle: bundle_name.clone(),
+                    })
+                })?;
+
+            // The bundle path is empty for in-memory sources (no bundle directory).
+            // NOTE: Intentionally leaked; bundle_path_static outlives this call.
+            let bundle_path_static: &'static str = Box::leak(String::new().into_boxed_str());
+            let ctx: BundleInitContext = BundleInitContext {
+                bundle_id,
+                bundle_path: StringView {
+                    ptr: bundle_path_static.as_ptr(),
+                    len: bundle_path_static.len(),
+                },
+            };
+
+            let host_interface_i64: i64 = host_interface as usize as i64;
+            let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
+            init_fn
+                .call((host_interface_i64, ctx_ptr), None)
+                .map_err(|e: pyo3::PyErr| {
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!("polyplug_init call failed: {}", e),
+                    })
+                })?;
+
+            // Isolate this bundle's freshly imported modules. With no bundle
+            // directory ("") no imported module is classified as in-bundle, so this
+            // is a no-op for single-file inline sources — by design.
+            crate::isolation::isolate_bundle_modules(
+                py,
+                &bundle_name,
+                bundle_id,
+                "",
+                &modules_before,
+            )?;
+
+            Ok::<(), RuntimeError>(())
+        });
+
+        runtime.pop_init_bundle_id();
+        result
+    }
+}
+
 impl BundleLoader for PythonLoader {
     fn runtime_name(&self) -> &'static str {
         "python"
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        source: &BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), RuntimeError> {
+        // `Code` and `Bytes` carry the plugin's Python module source text directly,
+        // with no bundle directory. `Bytes` is validated as UTF-8 first; both then
+        // flow through the same in-memory exec path. `Path` keeps the original
+        // on-disk import flow byte-for-byte.
+        match source {
+            BundleSource::Path(_) => {}
+            BundleSource::Code(code) => {
+                return self.load_from_source_text(manifest, code, runtime);
+            }
+            BundleSource::Bytes(bytes) => {
+                let code: &str = core::str::from_utf8(bytes).map_err(|_| {
+                    RuntimeError::Loader(LoaderError::InvalidSourceEncoding {
+                        loader: "python",
+                        source_kind: source.kind(),
+                        bundle: manifest.name.clone(),
+                    })
+                })?;
+                return self.load_from_source_text(manifest, code, runtime);
+            }
+        }
+
         let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
             manifest.path.join(&manifest.file)
         } else {
