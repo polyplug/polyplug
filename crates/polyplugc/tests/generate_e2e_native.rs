@@ -172,7 +172,13 @@ fn cpp_generated_glue_compiles() {
 #[test]
 fn csharp_generated_glue_compiles() {
     let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
-    let project_dir: PathBuf = tmp.path().join("plugin");
+    // Canonicalize: on macOS the tempdir lives under the /var/folders →
+    // /private/var/folders symlink, and MSBuild's ProjectReference path
+    // relativization mixes the resolved and unresolved forms (MSB3202,
+    // "../../../..//Users/..." misses by one level). Canonicalizing makes
+    // every path the test writes agree with what dotnet resolves.
+    let tmp_root: PathBuf = tmp.path().canonicalize().expect("canonicalize tempdir");
+    let project_dir: PathBuf = tmp_root.join("plugin");
     let gen_dir: PathBuf = project_dir.join("generated");
     std::fs::create_dir_all(&project_dir).expect("create project dir");
 

@@ -223,7 +223,13 @@ fn stress_concurrent_swaps_with_resolvers() {
         let resolve_counter: Arc<AtomicUsize> = Arc::clone(&resolve_count);
         let resolver_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             ready_clone.wait();
-            while !stop_clone.load(Ordering::Relaxed) {
+            // Each resolver guarantees at least one successful resolve before
+            // honoring `stop` — on a loaded runner the swap loop can finish and
+            // set `stop` before this thread is ever scheduled, and a plain
+            // `while !stop` loop would then exit with zero resolves and fail
+            // the test's "must observe at least one resolve" assertion.
+            let mut local_resolves: usize = 0_usize;
+            loop {
                 let handle_result: Result<GuestContractHandle, RegistryError> = reg_clone
                     .find_guest_contract(GuestContractId::from_u64(SWAP_CONTRACT_ID), 0_u32);
                 if let Ok(found) = handle_result {
@@ -237,7 +243,11 @@ fn stress_concurrent_swaps_with_resolvers() {
                             "version must be V1 or V2"
                         );
                         resolve_counter.fetch_add(1_usize, Ordering::Relaxed);
+                        local_resolves += 1_usize;
                     }
+                }
+                if stop_clone.load(Ordering::Relaxed) && local_resolves >= 1_usize {
+                    break;
                 }
             }
         });
