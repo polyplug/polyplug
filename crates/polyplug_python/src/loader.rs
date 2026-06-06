@@ -66,7 +66,21 @@
 //! # Arena bridge
 //!
 //! The loader injects a module-level callable **`_polyplug_arena_alloc(size)
-//! -> int`** into the plugin module's namespace before `polyplug_init` runs.
+//! -> int`** before `polyplug_init` runs — into the namespace of the module that
+//! *defines* `polyplug_init` (its `__globals__`) AND the entry module. This is
+//! the same single rule that governs registrations collection: the guest's ABI
+//! functions that call `_polyplug_arena_alloc` live in the module defining
+//! `polyplug_init`, so the bridge must be reachable from that module's globals.
+//! In the split-module generated layout the entry file only
+//! `from … import polyplug_init`, so its own namespace is not where the ABI
+//! functions resolve names — `__globals__` is. The dual injection is
+//! belt-and-braces: in the single-file hand-written layout the two targets are
+//! the same dict; if `polyplug_init` is not a plain Python function (no
+//! `__globals__`, e.g. a C callable), only the entry-module injection applies —
+//! the same fallback as registrations collection. Because the bridge reads its
+//! `__globals__` at *call* time, injection must happen after `polyplug_init` is
+//! located but before it (and any dispatch) runs.
+//!
 //! During a dispatch call the loader publishes the active [`CallArena`] pointer
 //! on the per-bundle [`PythonLoaderData`]; `_polyplug_arena_alloc` serves the
 //! guest's per-call return buffers from that arena, falling back to
@@ -95,7 +109,6 @@ use pyo3::types::PyDict;
 use pyo3::types::PyDictMethods;
 use pyo3::types::PyList;
 use pyo3::types::PyListMethods;
-use pyo3::types::PyModule;
 
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
@@ -564,26 +577,26 @@ pub(crate) fn register_contracts(
     Ok(registered)
 }
 
-/// Build the `_polyplug_arena_alloc(size) -> int` bridge bound to one contract's
-/// [`PythonLoaderData`], and inject it into the plugin module's namespace.
+/// Build the `_polyplug_arena_alloc(size) -> int` bridge callable bound to the
+/// bundle-level active-arena cell.
 ///
 /// The bridge serves the guest's per-call return buffers from the active
-/// [`CallArena`] published by [`python_vm_dispatch`] on `loader_data`. When no
+/// [`CallArena`] published by [`python_vm_dispatch`] on `arena_cell`. When no
 /// arena is active (the published pointer is 0) it falls back to `host->alloc`,
 /// preserving per-value allocation behaviour. Returns the allocated address as a
 /// Python `int` (0 on failure).
 ///
-/// One bridge is injected per bundle module, reading the single bundle-level
-/// `arena_cell` that every contract's [`python_vm_dispatch`] publishes to. Only
-/// one dispatch runs at a time under the GIL, so the cell always reflects the
-/// contract currently mid-call.
-pub(crate) fn inject_arena_bridge(
-    py: Python<'_>,
-    module: &Bound<'_, PyModule>,
+/// One bridge is built per bundle, reading the single bundle-level `arena_cell`
+/// that every contract's [`python_vm_dispatch`] publishes to. Only one dispatch
+/// runs at a time under the GIL, so the cell always reflects the contract
+/// currently mid-call. The caller injects the returned callable into the relevant
+/// module namespaces via [`inject_arena_bridge`].
+fn build_arena_bridge<'py>(
+    py: Python<'py>,
     arena_cell: *const AtomicUsize,
     host_interface: *const HostApi,
     bundle_name: &str,
-) -> Result<(), RuntimeError> {
+) -> Result<Bound<'py, PyAny>, RuntimeError> {
     let arena_cell_addr: usize = arena_cell as usize;
     let host_addr: usize = host_interface as usize;
 
@@ -611,7 +624,7 @@ pub(crate) fn inject_arena_bridge(
         ptr as usize as i64
     };
 
-    let bridge: Bound<'_, PyAny> = pyo3::types::PyCFunction::new_closure(
+    pyo3::types::PyCFunction::new_closure(
         py,
         None,
         None,
@@ -622,22 +635,82 @@ pub(crate) fn inject_arena_bridge(
             Ok(closure(size))
         },
     )
+    .map(|f: Bound<'_, pyo3::types::PyCFunction>| f.into_any())
     .map_err(|e: pyo3::PyErr| {
         RuntimeError::Loader(LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("failed to create `{}` bridge: {}", ARENA_ALLOC_ATTR, e),
         })
-    })?
-    .into_any();
+    })
+}
 
+/// Build the arena bridge and inject it into BOTH the entry module's namespace
+/// and the namespace of the module that *defines* `polyplug_init` (its
+/// `__globals__` dict).
+///
+/// This is the same single rule that governs registrations collection (see
+/// [`resolve_registrations`]): the ABI functions that call
+/// `_polyplug_arena_alloc` live in the module that *defines* `polyplug_init`, so
+/// the bridge must be reachable from that module's globals. In the split-module
+/// generated layout the entry file only `from … import polyplug_init`, so its own
+/// namespace is not where the ABI functions resolve names — `__globals__` is.
+///
+/// Injecting into both namespaces is belt-and-braces: in the single-file
+/// hand-written layout the entry module *is* the module defining `polyplug_init`,
+/// so both targets are the same dict and the second `setitem` is harmless; in the
+/// split-module layout the entry-module injection is harmless and the
+/// `__globals__` injection is the one that makes dispatch resolve the bridge.
+///
+/// `__globals__` is a plain `dict`, so the bridge is set by *item* assignment, not
+/// attribute assignment. If `init_fn` is not a plain Python function (no
+/// `__globals__`, e.g. a C callable), only the entry-module injection applies —
+/// the same fallback as registrations collection.
+///
+/// Must be called *after* `polyplug_init` is located (so its `__globals__` is the
+/// real defining namespace) but *before* it is invoked (so the bridge is present
+/// when the guest's ABI functions are first reachable).
+pub(crate) fn inject_arena_bridge(
+    py: Python<'_>,
+    module: &Bound<'_, PyAny>,
+    init_fn: &Bound<'_, PyAny>,
+    arena_cell: *const AtomicUsize,
+    host_interface: *const HostApi,
+    bundle_name: &str,
+) -> Result<(), RuntimeError> {
+    let bridge: Bound<'_, PyAny> = build_arena_bridge(py, arena_cell, host_interface, bundle_name)?;
+
+    // Inject into the entry module's namespace (covers single-file plugins, where
+    // the entry module is also the module defining polyplug_init).
     module
-        .setattr(ARENA_ALLOC_ATTR, bridge)
+        .setattr(ARENA_ALLOC_ATTR, &bridge)
         .map_err(|e: pyo3::PyErr| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("failed to inject `{}`: {}", ARENA_ALLOC_ATTR, e),
             })
-        })
+        })?;
+
+    // Inject into the namespace of the module that defines polyplug_init (its
+    // __globals__), where the guest's ABI functions resolve the bridge. This is
+    // the load-bearing injection for the split-module generated layout. Falls back
+    // to nothing extra when init_fn has no __globals__ (non-plain callable): the
+    // entry-module injection above already covers that case.
+    if let Ok(globals) = init_fn.getattr("__globals__")
+        && let Ok(dict) = globals.cast_into::<PyDict>()
+    {
+        dict.set_item(ARENA_ALLOC_ATTR, &bridge)
+            .map_err(|e: pyo3::PyErr| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: bundle_name.to_owned(),
+                    error: format!(
+                        "failed to inject `{}` into polyplug_init.__globals__: {}",
+                        ARENA_ALLOC_ATTR, e
+                    ),
+                })
+            })?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

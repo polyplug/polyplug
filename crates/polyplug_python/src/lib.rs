@@ -229,17 +229,30 @@ impl PythonLoader {
                     },
                 )?;
 
-            // Inject the arena bridge before init so the guest can route per-call
-            // return buffers through the host CallArena during dispatch.
-            loader::inject_arena_bridge(py, &module, arena_cell, host_interface, &bundle_name)?;
-
-            // Locate and call polyplug_init(host, ctx) — self-passing pattern.
+            // Locate polyplug_init(host, ctx) — self-passing pattern.
             let init_fn: pyo3::Bound<'_, pyo3::PyAny> =
                 module.getattr("polyplug_init").map_err(|_| {
                     RuntimeError::Loader(LoaderError::InitSymbolMissing {
                         bundle: bundle_name.clone(),
                     })
                 })?;
+
+            // Inject the arena bridge before calling init so the guest can route
+            // per-call return buffers through the host CallArena during dispatch.
+            // Injected into the namespace of the module that *defines*
+            // polyplug_init (its __globals__) as well as the entry module, so
+            // split-module generated bundles resolve `_polyplug_arena_alloc` from
+            // the contracts module where their ABI functions are defined. Must run
+            // after init_fn is located (its __globals__ is the real namespace).
+            let module_any_bridge: Bound<'_, PyAny> = module.as_any().clone();
+            loader::inject_arena_bridge(
+                py,
+                &module_any_bridge,
+                &init_fn,
+                arena_cell,
+                host_interface,
+                &bundle_name,
+            )?;
 
             // The bundle path is empty for in-memory sources (no bundle directory).
             // NOTE: Intentionally leaked; bundle_path_static outlives this call.
@@ -491,27 +504,7 @@ impl BundleLoader for PythonLoader {
                     })
                 })?;
 
-            // Inject the arena bridge before init so the guest can route per-call
-            // return buffers through the host CallArena during dispatch. Done after
-            // exec_module so the module namespace exists.
-            let module_for_bridge: pyo3::Bound<'_, PyModule> = module_from_spec
-                .cast::<PyModule>()
-                .map_err(|_| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: "module_from_spec did not yield a module object".to_owned(),
-                    })
-                })?
-                .clone();
-            loader::inject_arena_bridge(
-                py,
-                &module_for_bridge,
-                arena_cell,
-                host_interface,
-                &bundle_name,
-            )?;
-
-            // Step 3c: Locate and call polyplug_init(host, ctx).
+            // Step 3c: Locate polyplug_init(host, ctx).
             // New signature: polyplug_init(host_interface, ctx) - self-passing pattern.
             let init_fn: pyo3::Bound<'_, pyo3::PyAny> =
                 module_from_spec.getattr("polyplug_init").map_err(|_| {
@@ -519,6 +512,22 @@ impl BundleLoader for PythonLoader {
                         bundle: bundle_name.clone(),
                     })
                 })?;
+
+            // Inject the arena bridge before calling init so the guest can route
+            // per-call return buffers through the host CallArena during dispatch.
+            // Done after exec_module (so the namespace exists) and after init_fn is
+            // located (so its __globals__ is the real defining namespace). Injected
+            // into both the entry module and polyplug_init.__globals__ so
+            // split-module generated bundles resolve `_polyplug_arena_alloc` from
+            // the contracts module where their ABI functions are defined.
+            loader::inject_arena_bridge(
+                py,
+                &module_from_spec,
+                &init_fn,
+                arena_cell,
+                host_interface,
+                &bundle_name,
+            )?;
 
             // NOTE: Intentionally leaked; bundle_path_static outlives this call.
             let bundle_path_static: &'static str =

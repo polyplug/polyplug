@@ -713,10 +713,19 @@ def polyplug_init(_host_interface: int, ctx_addr: int) -> None:
 /// module — load + register + dispatch must all work.
 #[test]
 fn test_split_module_registrations_via_init_globals() {
+    // The helper's callable calls `_polyplug_arena_alloc(16)` during dispatch.
+    // The bridge must resolve from the helper module's globals (where the ABI
+    // functions are defined), not only from the entry module — this locks the
+    // injection point at polyplug_init.__globals__. The dispatch passes a null
+    // arena, so the bridge takes the host-alloc fallback and must return a
+    // nonzero address; the callable writes that address (truthiness) into `out`.
     let helper_src: &str = r#"
 import ctypes
 
 def _fn0(args_ptr, out_ptr, arena_ptr):
+    buf = _polyplug_arena_alloc(16)
+    if buf == 0:
+        raise RuntimeError("_polyplug_arena_alloc returned 0")
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = 0x2A
 
 def polyplug_init(host_interface: int, ctx: int) -> None:
