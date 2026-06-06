@@ -621,6 +621,24 @@ Place the compiled library alongside its `manifest.toml` in your bundle director
 
 ---
 
+## Bundle layout
+
+Assemble the bundle directory yourself:
+
+```
+dist/my-plugin/
+├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
+└── libmy_plugin.so        # the cdylib you compiled (.dylib on macOS, .dll on Windows; runtime = "native")
+```
+
+Validate the assembled directory before shipping:
+
+```bash
+polyplugc validate --bundle-dir dist/my-plugin/
+```
+
+---
+
 ## Error Handling
 
 **Never use `.unwrap()` in plugin code.** Return `AbiError` with a non-zero code instead.

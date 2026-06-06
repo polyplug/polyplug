@@ -7,25 +7,48 @@ never unilaterally (see CLAUDE.md Rule 7).
 
 ---
 
-## Goal 1 — Complete `polyplugc pack`
+## Goal 1 — `generate` output is immediately compilable + `validate --bundle-dir`
 
-`polyplugc pack --bundle api.toml --lang <lang> --out ./my-plugin/` must
-produce a fully wired, immediately compilable plugin project in one command.
-The user's only job is filling in business logic.
+There is **no `pack` command**. `polyplugc` does two things: `generate` and
+`validate`. Users build the generated glue with their own toolchains and
+assemble the bundle directory themselves; `validate --bundle-dir` then checks
+the assembled result against the runtime loader's own rules.
 
-A complete output contains three things:
+The goal has two halves:
 
-1. **Generated contract glue** — same output as `polyplugc generate` for that
-   language (guest-side type stubs, dispatch shims, `manifest.toml`).
-2. **Project files** — `Cargo.toml` / `CMakeLists.txt` / `.csproj` /
-   `pyproject.toml` / etc., with real paths and no TODO placeholders.
-3. **`manifest.toml`** — bundle manifest ready to ship with the plugin.
+1. **`generate` output compiles with zero hand edits.**
+   `polyplugc generate --bundle bundle.toml --lang <lang> --out <dir>` emits the
+   guest-side contract glue (type stubs, dispatch shims, `guest/` modules) **and**
+   a ship-ready `manifest.toml` with the precomputed `bundle_id`. Dropping that
+   glue into a minimal project (a `Cargo.toml` cdylib + `src/lib.rs` that includes
+   the generated `guest/mod.rs`, or the language equivalent) and building it must
+   succeed without editing any generated file.
+
+2. **`validate --bundle-dir <dir>` catches assembly mistakes.**
+   After the user compiles and assembles `dist/<name>/` (manifest + entry
+   artifact), `validate --bundle-dir` drives the runtime loader's own manifest
+   machinery (`polyplug::loader::parse_manifest` + `ManifestData::validate`) so the
+   CLI accepts exactly what the runtime would. It verifies: the manifest parses;
+   `id == fnv1a_64(name)` (tamper check); the per-platform `[file]` entry resolves
+   and the artifact exists in the dir; the artifact extension matches the declared
+   `runtime` (native → `.so`/`.dylib`/`.dll`, lua → `.lua`, python → `.py`,
+   js-quickjs → `.js`, dotnet → `.dll`); and `version` parses.
 
 Covered languages: `rust`, `cpp`, `csharp`, `python`, `lua`, `js-quickjs`.
 
-Code truth: `crates/polyplugc/src/` — `pack.rs`, `generators/` (one per
-language), the existing `generate` command path as the reference for glue
-generation and manifest emission.
+### e2e bar
+
+- **Compile proof (Rust reference):** `crates/polyplugc/tests/generate_e2e.rs`
+  runs `generate --lang rust`, the test writes the project shell, then `cargo
+  build` produces a cdylib — proving generated output needs zero hand edits.
+  Remaining work: equivalent `cpp`/`csharp`/`python`/`lua`/`js` build/load steps.
+- **Assembly proof:** the same file asserts `validate --bundle-dir` accepts a
+  correct bundle (exit 0, prints `OK: <dir>`), rejects a missing entry artifact,
+  and rejects a tampered `id`.
+
+Code truth: `crates/polyplugc/src/` — `validate.rs`, `generators/` (one per
+language), the `generate` command path; `crates/polyplug/src/loader/manifest.rs`
+is the single manifest parser shared by the runtime and the CLI.
 
 ---
 

@@ -12,7 +12,7 @@ pub enum PolyplugcError {
     #[error("unsupported type `{type_name}` for language `{lang}`")]
     UnsupportedType { type_name: String, lang: String },
 
-    #[error("unsupported language `{lang}` for pack command")]
+    #[error("unsupported language/runtime `{lang}`")]
     UnsupportedLanguage { lang: String },
 
     #[error("failed to write generated file `{path}`: {source}")]

@@ -92,6 +92,24 @@ polyplugc generate --api api.toml --lang python --out ./generated
 polyplugc generate --bundle bundle.toml --lang python --out ./src/generated
 ```
 
+## Bundle layout
+
+Assemble the bundle directory yourself — the entry module plus any required modules:
+
+```
+dist/my-plugin/
+├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
+├── plugin.py              # the entry module (runtime = "python")
+└── guest/                 # generated helper modules imported by plugin.py
+```
+
+The Python loader adds the bundle dir to `sys.path`, so in-bundle imports resolve.
+Validate before shipping:
+
+```bash
+polyplugc validate --bundle-dir dist/my-plugin/
+```
+
 ## Components
 
 ### ABI (`polyplug_abi/`)

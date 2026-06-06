@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Deserializer;
+use serde::de::MapAccess;
+use serde::de::Visitor;
 
 use polyplug_abi::types::Version;
 use polyplug_utils::{BundleId, GuestContractId};
@@ -43,9 +45,6 @@ fn deserialize_file_field<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: Deserializer<'de>,
 {
-    use serde::de::MapAccess;
-    use serde::de::Visitor;
-
     struct FileFieldVisitor;
 
     impl<'de> Visitor<'de> for FileFieldVisitor {

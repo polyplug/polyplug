@@ -1,10 +1,9 @@
 pub mod generators;
 pub mod ir;
-pub mod pack;
 pub mod parser;
+pub mod validate;
 
 use std::fs;
-use std::path::PathBuf;
 
 use crate::ir::ValidatedIr;
 use generators::{CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles};
@@ -51,34 +50,6 @@ pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError
     Ok(GenerateOutput {
         files: public_files,
     })
-}
-
-#[derive(Debug, Clone)]
-pub struct PackConfig {
-    pub api: Option<PathBuf>,
-    pub bundle: Option<PathBuf>,
-    pub lang: String,
-    pub out: PathBuf,
-}
-
-pub fn pack(config: PackConfig) -> Result<(), PolyplugcError> {
-    let manifest =
-        config
-            .api
-            .or(config.bundle)
-            .ok_or_else(|| PolyplugcError::ValidationFailed {
-                message: "Must specify --api or --bundle".to_owned(),
-            })?;
-
-    let lang_enum: Lang = parse_lang(&config.lang)?;
-
-    let ir: ValidatedIr = if manifest.ends_with("bundle.toml") {
-        parser::parse_bundle_with_api(&manifest)?
-    } else {
-        parser::parse_api(&manifest)?
-    };
-
-    pack::run(&ir, &config.out, lang_enum.as_str())
 }
 
 pub fn parse_lang(lang: &str) -> Result<Lang, PolyplugcError> {

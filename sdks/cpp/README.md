@@ -80,6 +80,22 @@ polyplugc generate --api api.toml --lang cpp --out ./generated
 polyplugc generate --bundle bundle.toml --lang cpp --out ./src/generated
 ```
 
+## Bundle layout
+
+After building, assemble the bundle directory yourself:
+
+```
+dist/my-plugin/
+├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
+└── libmy_plugin.so        # the cdylib you compiled (.dylib on macOS, .dll on Windows)
+```
+
+Validate the assembled directory before shipping:
+
+```bash
+polyplugc validate --bundle-dir dist/my-plugin/
+```
+
 ## Components
 
 ### ABI (`abi/`)

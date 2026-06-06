@@ -75,6 +75,22 @@ polyplugc generate --api api.toml --lang js --out ./generated
 polyplugc generate --bundle bundle.toml --lang js --out ./src/generated
 ```
 
+## Bundle layout
+
+After bundling, assemble the bundle directory yourself:
+
+```
+dist/my-plugin/
+├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
+└── bundle.js              # the entry script the QuickJS loader evaluates (runtime = "js-quickjs")
+```
+
+Validate the assembled directory before shipping:
+
+```bash
+polyplugc validate --bundle-dir dist/my-plugin/
+```
+
 ## Components
 
 ### ABI (`abi/`)

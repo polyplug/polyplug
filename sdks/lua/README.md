@@ -69,6 +69,24 @@ polyplugc generate --api api.toml --lang lua --out ./generated
 polyplugc generate --bundle bundle.toml --lang lua --out ./src/generated
 ```
 
+## Bundle layout
+
+Assemble the bundle directory yourself — the entry file plus any required modules:
+
+```
+dist/my-plugin/
+├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
+├── init.lua               # the entry module (runtime = "lua")
+└── guest/                 # generated helper modules required by init.lua
+```
+
+The Lua loader adds the bundle dir to `package.path`, so `require("guest.contracts")`
+and other in-bundle modules resolve. Validate before shipping:
+
+```bash
+polyplugc validate --bundle-dir dist/my-plugin/
+```
+
 ## Components
 
 ### ABI (`abi/`)

@@ -1,12 +1,12 @@
 //! CLI argument validation tests for `polyplugc`.
 //!
 //! Tests cover:
-//!   - Missing `--api` / `--bundle` flag in `generate`, `validate`, and `pack` subcommands
+//!   - Missing `--api` / `--bundle` flag in `generate` and `validate` subcommands
 //!   - Unknown / unsupported `--lang` value
 //!   - Valid language aliases (`cpp`, `c++`, `csharp`, `c#`, `python`, `py`)
-//!   - Conflicting flags (`--api` + `--bundle` together)
-//!   - Non-existent paths for `--api` / `--bundle`
-//!   - Missing required `--out` flag in `generate` and `pack`
+//!   - Conflicting flags (`--api` + `--bundle`, `--api` + `--bundle-dir`)
+//!   - Non-existent paths for `--api` / `--bundle` / `--bundle-dir`
+//!   - Missing required `--out` flag in `generate`
 
 #![allow(clippy::expect_used)]
 
@@ -276,7 +276,7 @@ fn generate_missing_out_fails() {
 #[test]
 fn validate_missing_api_and_bundle_fails() {
     let output: Output = run_polyplugc(&["validate"]);
-    assert_failure_contains(&output, "Must specify --api or --bundle");
+    assert_failure_contains(&output, "Must specify --api, --bundle, or --bundle-dir");
 }
 
 // ─── validate: conflicting flags ──────────────────────────────────────────────
@@ -323,80 +323,38 @@ fn validate_valid_api_toml_succeeds() {
     assert!(stdout.contains("OK"), "expected OK in stdout: {stdout}");
 }
 
-// ─── pack: missing --api / --bundle ───────────────────────────────────────────
+// ─── validate: --bundle-dir conflicts with --api / --bundle ───────────────────
 
 #[test]
-fn pack_missing_api_and_bundle_fails() {
-    let out_dir: PathBuf =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("cli_val_pack_missing_manifest");
-    let output: Output = run_polyplugc(&[
-        "pack",
-        "--lang",
-        "rust",
-        "--out",
-        out_dir.to_str().expect("out_dir utf8"),
-    ]);
-    assert_failure_contains(&output, "Must specify --api or --bundle");
-}
-
-// ─── pack: invalid --lang ─────────────────────────────────────────────────────
-
-#[test]
-fn pack_invalid_lang_fails() {
-    let out_dir: PathBuf =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("cli_val_pack_invalid_lang");
+fn validate_bundle_dir_conflicts_with_api() {
     let api_toml: PathBuf = test_api_toml();
     let output: Output = run_polyplugc(&[
-        "pack",
+        "validate",
         "--api",
         api_toml.to_str().expect("api_toml utf8"),
-        "--lang",
-        "fortran",
-        "--out",
-        out_dir.to_str().expect("out_dir utf8"),
-    ]);
-    assert_failure_contains(&output, "Unknown language");
-}
-
-// ─── pack: missing --out ──────────────────────────────────────────────────────
-
-#[test]
-fn pack_missing_out_fails() {
-    let api_toml: PathBuf = test_api_toml();
-    let output: Output = run_polyplugc(&[
-        "pack",
-        "--api",
-        api_toml.to_str().expect("api_toml utf8"),
-        "--lang",
-        "rust",
-        // no --out
+        "--bundle-dir",
+        "/tmp/some-dir",
     ]);
     assert!(
         !output.status.success(),
-        "expected failure when --out is omitted\nstdout: {}\nstderr: {}",
+        "--api and --bundle-dir must conflict\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
 }
 
-// ─── pack: non-existent path ──────────────────────────────────────────────────
+// ─── validate: --bundle-dir on a non-existent dir fails ───────────────────────
 
 #[test]
-fn pack_nonexistent_api_path_fails() {
-    let out_dir: PathBuf =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("cli_val_pack_nonexistent_api");
+fn validate_bundle_dir_nonexistent_fails() {
     let output: Output = run_polyplugc(&[
-        "pack",
-        "--api",
-        "/nonexistent/path/to/api.toml",
-        "--lang",
-        "rust",
-        "--out",
-        out_dir.to_str().expect("out_dir utf8"),
+        "validate",
+        "--bundle-dir",
+        "/nonexistent/path/to/bundle-dir",
     ]);
     assert!(
         !output.status.success(),
-        "expected failure for non-existent --api path\nstdout: {}\nstderr: {}",
+        "validate --bundle-dir on a missing dir must fail\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );

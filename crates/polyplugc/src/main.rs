@@ -5,7 +5,7 @@ use clap::Parser;
 use clap::Subcommand;
 
 use polyplug_codegen::{GenerateConfig, GenerateOutput, PolyplugcError, Side};
-use polyplugc::{PackConfig, generate, pack, parse_lang, parser};
+use polyplugc::{generate, parse_lang, parser, validate};
 
 /// polyplugc — code generator for the polyplug plugin runtime.
 #[derive(Debug, Parser)]
@@ -40,31 +40,20 @@ enum Command {
         out: PathBuf,
     },
 
-    /// Validate an api.toml or bundle.toml without generating code.
+    /// Validate an api.toml / bundle.toml, or an assembled bundle directory.
     Validate {
         /// Path to api.toml to validate.
-        #[arg(long, conflicts_with = "bundle")]
+        #[arg(long, conflicts_with_all = ["bundle", "bundle_dir"])]
         api: Option<PathBuf>,
 
         /// Path to bundle.toml to validate.
-        #[arg(long, conflicts_with = "api")]
+        #[arg(long, conflicts_with_all = ["api", "bundle_dir"])]
         bundle: Option<PathBuf>,
-    },
 
-    /// Generates scaffold metadata for packaging (no build execution)
-    Pack {
-        /// Path to the api.toml file
-        #[arg(short, long)]
-        api: Option<PathBuf>,
-        /// Path to the bundle.toml file
-        #[arg(short, long)]
-        bundle: Option<PathBuf>,
-        /// Target language (rust, cpp, csharp, python, lua, js-quickjs)
-        #[arg(short, long)]
-        lang: String,
-        /// Output directory for scaffold files
-        #[arg(short, long, required = true)]
-        out: PathBuf,
+        /// Path to an assembled bundle directory (manifest.toml + entry artifact)
+        /// to validate against the runtime loader's own manifest machinery.
+        #[arg(long, conflicts_with_all = ["api", "bundle"])]
+        bundle_dir: Option<PathBuf>,
     },
 }
 
@@ -105,34 +94,29 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
             write_files(&output, &out)?;
         }
 
-        Command::Validate { api, bundle } => {
-            let manifest: PathBuf =
-                api.or(bundle)
-                    .ok_or_else(|| PolyplugcError::ValidationFailed {
-                        message: "Must specify --api or --bundle".to_owned(),
-                    })?;
-
-            // Just parse to validate.
-            if manifest.ends_with("bundle.toml") {
-                parser::parse_bundle_with_api(&manifest)?;
-            } else {
-                parser::parse_api(&manifest)?;
-            }
-            println!("OK: {}", manifest.display());
-        }
-
-        Command::Pack {
+        Command::Validate {
             api,
             bundle,
-            lang,
-            out,
+            bundle_dir,
         } => {
-            pack(PackConfig {
-                api,
-                bundle,
-                lang,
-                out,
-            })?;
+            if let Some(dir) = bundle_dir {
+                validate::validate_bundle_dir(&dir)?;
+                println!("OK: {}", dir.display());
+            } else {
+                let manifest: PathBuf =
+                    api.or(bundle)
+                        .ok_or_else(|| PolyplugcError::ValidationFailed {
+                            message: "Must specify --api, --bundle, or --bundle-dir".to_owned(),
+                        })?;
+
+                // Just parse to validate.
+                if manifest.ends_with("bundle.toml") {
+                    parser::parse_bundle_with_api(&manifest)?;
+                } else {
+                    parser::parse_api(&manifest)?;
+                }
+                println!("OK: {}", manifest.display());
+            }
         }
     }
     Ok(())
