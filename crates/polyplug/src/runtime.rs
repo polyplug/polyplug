@@ -565,15 +565,17 @@ impl Runtime {
             // Convert runtime string to RuntimeLanguage
             let runtime_lang: RuntimeLanguage = runtime_language_from_str(&manifest.runtime);
 
-            // Register bundle metadata in RuntimeStore
-            let _ = self.registry.register_bundle_metadata(
+            // Register bundle metadata in RuntimeStore. A failure here means the
+            // bundle loaded but its metadata could not be recorded, leaving the
+            // store inconsistent — propagate it instead of silently discarding.
+            self.registry.register_bundle_metadata(
                 bundle_id,
                 manifest.name.clone(),
                 bundle_version,
                 runtime_lang,
                 manifest.path.clone(),
                 bundle_deps,
-            );
+            )?;
 
             // Real function_count validation: now that the bundle is loaded and its
             // interfaces registered, compare the manifest's declared function counts
