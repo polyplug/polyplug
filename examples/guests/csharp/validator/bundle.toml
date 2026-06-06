@@ -2,7 +2,7 @@
 name = "csharp_validator"
 version = "1.0.0"
 api = "../../../api.toml"
-runtime = "csharp"
+runtime = "dotnet"
 file = "validator.dll"
 
 [[plugin]]

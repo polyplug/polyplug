@@ -2,7 +2,7 @@
 name = "csharp_decoder"
 version = "1.0.0"
 api = "../../../api.toml"
-runtime = "csharp"
+runtime = "dotnet"
 file = "decoder.dll"
 
 [[plugin]]

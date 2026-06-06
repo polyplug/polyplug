@@ -61,7 +61,7 @@ public static class EncoderInterfaces {
             ENCODER_INTERFACE = new GuestContractInterface {
                 ContractId = ENCODER_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
-                DispatchType = DispatchType.VirtualMachine,
+                DispatchType = DispatchType.Native,
                 CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&ENCODER_CreateInstanceStub,
                 DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&ENCODER_DestroyInstanceStub,
                 Dispatch = new DispatchMechanisms {

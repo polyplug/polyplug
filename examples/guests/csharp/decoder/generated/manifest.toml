@@ -2,7 +2,7 @@
 name = "csharp_decoder"
 id = 13722946622342065977
 version = "1.0.0"
-runtime = "csharp"
+runtime = "dotnet"
 provides = ["pipeline.Decoder@1"]
 function_count = { "pipeline.Decoder@1" = 1 }
 needs_reinit_on_dep_reload = false

@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
-use super::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
@@ -84,6 +83,116 @@ fn generate_cs_enum(e: &EnumDef) -> String {
 /// Returns true if the function needs an arg-pack struct (2+ parameters).
 fn needs_arg_pack(params: &[crate::ir::ResolvedParam]) -> bool {
     params.len() >= 2
+}
+
+/// Whether a function returns a variable-size value the guest writes into the
+/// call arena (a `StringView`, a `Buffer`, or any user-defined struct that may
+/// embed one). Mirrors `fn_needs_arena` in `rust.rs` / `cpp.rs` so every
+/// generator agrees on which functions are arena-backed.
+fn fn_needs_arena(func: &ResolvedFunction) -> bool {
+    matches!(
+        &func.returns,
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
+            | Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer))
+            | Some(ResolvedTypeRef::UserDefined(_))
+    )
+}
+
+/// Whether any function on the contract needs a call arena.
+fn contract_needs_arena(contract: &ResolvedContract) -> bool {
+    contract.functions.iter().any(fn_needs_arena)
+}
+
+/// Derive the C# namespace the generated `Plugin` class must live in so the
+/// dotnet loader can resolve `{assembly}.Plugin, {assembly}`.
+///
+/// `{assembly}` is the .dll file stem. The bundle file is `transformer.dll`
+/// (`Single`) or a per-platform map of `.dll` paths (`PlatformMap`) — every entry
+/// shares the same assembly name, so the first stem is authoritative. Returns
+/// `None` when no `.dll` file is declared (nothing to namespace).
+fn cs_assembly_namespace(file: &polyplug_codegen::ResolvedBundleFile) -> Option<String> {
+    let raw_path: &str = match file {
+        polyplug_codegen::ResolvedBundleFile::Single(path) => path.as_str(),
+        polyplug_codegen::ResolvedBundleFile::PlatformMap(map) => {
+            map.values().next().map(String::as_str)?
+        }
+    };
+    // Take the file stem: drop any directory prefix and the trailing extension.
+    let file_name: &str = raw_path.rsplit(['/', '\\']).next().unwrap_or(raw_path);
+    let stem: &str = file_name
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(file_name);
+    if stem.is_empty() {
+        return None;
+    }
+    Some(stem.to_owned())
+}
+
+/// Emit the inline call-arena helpers used by per-caller arenas.
+///
+/// `CallArena` in `Polyplug.Abi` is a layout-only POD (no methods), so the
+/// overflow-freeing reset and the construction logic are emitted here. They are a
+/// direct port of `polyplug_abi::CallArena::{new, reset}`; keeping the two in
+/// lockstep is required by Rule 10 (identical ABI mechanisms across generators).
+/// The host caller never bump-allocates itself — the VM bridge does, through the
+/// arena it is handed — so only `New` and `Reset` are emitted here.
+fn emit_cs_call_arena_helpers(out: &mut String) {
+    out.push_str(
+        "/// <summary>Inline call-arena helpers (port of polyplug_abi::CallArena).</summary>\n",
+    );
+    out.push_str("internal static unsafe class CallArenaOps {\n");
+    out.push_str("    /// <summary>Size of each caller's inline call-arena buffer.</summary>\n");
+    out.push_str("    ///\n");
+    out.push_str(
+        "    /// Variable-size VM return values (strings, buffers) are bump-allocated from\n",
+    );
+    out.push_str(
+        "    /// this buffer; outputs larger than it spill into host-allocated overflow\n",
+    );
+    out.push_str("    /// blocks that the arena frees on the next reset.\n");
+    out.push_str("    public const nuint CALL_ARENA_BUF_LEN = 512;\n");
+    out.push_str(
+        "    /// <summary>Alignment used to free host-allocated overflow blocks.</summary>\n",
+    );
+    out.push_str("    public static readonly nuint OVERFLOW_BLOCK_ALIGN = (nuint)IntPtr.Size;\n\n");
+
+    out.push_str(
+        "    /// <summary>Construct a CallArena over `buf` (primary region) with `host` for overflow.</summary>\n",
+    );
+    out.push_str("    public static CallArena New(byte* buf, nuint len, IntPtr host) {\n");
+    out.push_str("        return new CallArena {\n");
+    out.push_str("            Cur = (IntPtr)buf,\n");
+    out.push_str("            End = (IntPtr)(buf + len),\n");
+    out.push_str("            Base = (IntPtr)buf,\n");
+    out.push_str("            Host = host,\n");
+    out.push_str("            FirstOverflow = IntPtr.Zero,\n");
+    out.push_str("        };\n");
+    out.push_str("    }\n\n");
+
+    out.push_str(
+        "    /// <summary>Reset `arena`: free every overflow block and rewind the primary region.</summary>\n",
+    );
+    out.push_str(
+        "    /// After reset, all pointers previously returned by arena allocations are invalid.\n",
+    );
+    out.push_str("    public static void Reset(CallArena* arena) {\n");
+    out.push_str("        IntPtr block = arena->FirstOverflow;\n");
+    out.push_str("        while (block != IntPtr.Zero) {\n");
+    out.push_str("            var hdr = (ArenaOverflowBlock*)block;\n");
+    out.push_str("            IntPtr next = hdr->Next;\n");
+    out.push_str("            nuint capacity = hdr->Capacity;\n");
+    out.push_str("            if (arena->Host != IntPtr.Zero) {\n");
+    out.push_str("                var hostApi = (HostApi*)arena->Host;\n");
+    out.push_str("                var freeFn = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, nuint, nuint, void>)hostApi->Free;\n");
+    out.push_str("                freeFn(arena->Host, block, capacity, OVERFLOW_BLOCK_ALIGN);\n");
+    out.push_str("            }\n");
+    out.push_str("            block = next;\n");
+    out.push_str("        }\n");
+    out.push_str("        arena->FirstOverflow = IntPtr.Zero;\n");
+    out.push_str("        arena->Cur = arena->Base;\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
 }
 
 /// Emit a C# arg-pack struct for a function with 2+ primitive parameters.
@@ -282,12 +391,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_cs_guest_plugin_interface(
-                        &mut out,
-                        &plugin.name,
-                        contract,
-                        is_native_runtime(&bundle.runtime),
-                    );
+                    generate_cs_guest_plugin_interface(&mut out, &plugin.name, contract);
                 }
             }
         }
@@ -419,7 +523,6 @@ fn generate_cs_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
-    is_native: bool,
 ) {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
@@ -547,14 +650,15 @@ fn generate_cs_guest_plugin_interface(
     out.push_str(&format!(
         "                ContractVersion = new Polyplug.Abi.Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"
     ));
-    let dispatch_type_str: &str = if is_native {
-        "DispatchType.Native"
-    } else {
-        "DispatchType.VirtualMachine"
-    };
-    out.push_str(&format!(
-        "                DispatchType = {dispatch_type_str},\n"
-    ));
+    // C# guests are always NATIVE dispatch: the interface stores real
+    // [UnmanagedCallersOnly] function pointers in `dispatch.native.functions`, and
+    // the dotnet loader invokes them directly. The bundle `runtime` label
+    // ("dotnet") is not a VM dispatch mechanism — tagging the interface
+    // VirtualMachine would make a host caller read the (inactive) `dispatch.vm`
+    // union variant and crash. This mirrors the Python guest generator, which also
+    // always emits Native (see CLAUDE.md: "C# and Python GUESTS are
+    // native-dispatch").
+    out.push_str("                DispatchType = DispatchType.Native,\n");
     out.push_str(&format!(
         "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstanceStub,\n",
         upper = plugin_upper
@@ -688,6 +792,20 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("using System.Runtime.InteropServices;\n");
     out.push_str("using Polyplug.Guest;\n");
     out.push_str("using Polyplug.Abi;\n\n");
+
+    // The dotnet loader resolves the entry point as the managed type
+    // `{assembly}.Plugin, {assembly}`, where `{assembly}` is the .dll file stem
+    // (see polyplug_dotnet::DotnetLoader::load). Emit a matching namespace so the
+    // `Plugin` class is reachable at that fully-qualified name. Without it the
+    // class lives in the global namespace and the loader fails with
+    // `InitSymbolMissing` ("incompatible signature").
+    let assembly_namespace: Option<String> = ir
+        .bundle
+        .as_ref()
+        .and_then(|b: &crate::ir::ResolvedBundle| cs_assembly_namespace(&b.file));
+    if let Some(ns) = &assembly_namespace {
+        out.push_str(&format!("namespace {ns};\n\n"));
+    }
 
     out.push_str("public static class Plugin {\n");
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = \"polyplug_init\")]\n");
@@ -876,10 +994,16 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
     out.push_str("using System.Runtime.InteropServices;\n\n");
     out.push_str("namespace Polyplug.Generated;\n\n");
 
+    // Emit the inline call-arena helpers once if any contract needs an arena.
+    if ir.contracts.iter().any(contract_needs_arena) {
+        emit_cs_call_arena_helpers(&mut out);
+    }
+
     for contract in &ir.contracts {
         let class_name: String = contract_name_to_cs_class(&contract.name);
         let caller_name: String = format!("{class_name}Caller");
         let fn_count: usize = contract.functions.len();
+        let needs_arena: bool = contract_needs_arena(contract);
 
         let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
         out.push_str(&format!("public static class {class_name}Constants {{\n"));
@@ -902,17 +1026,49 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("    private readonly GuestContractInterface* _interface;\n");
         out.push_str("    private GuestContractInstance _instance;\n");
         out.push_str("    private readonly HostApi* _host;\n");
-        out.push_str("    private bool _disposed;\n\n");
+        out.push_str("    private bool _disposed;\n");
+        if needs_arena {
+            out.push_str(
+                "    /// <summary>Unmanaged backing buffer for the per-call arena. C-heap\n",
+            );
+            out.push_str(
+                "    /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>\n",
+            );
+            out.push_str("    private readonly byte* _arenaBuf;\n");
+            out.push_str(
+                "    /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>\n",
+            );
+            out.push_str("    private CallArena _arena;\n");
+        }
+        out.push('\n');
 
         // Private constructor
-        out.push_str(&format!(
-            "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {{\n"
-        ));
-        out.push_str("        _interface = iface;\n");
-        out.push_str("        _instance = inst;\n");
-        out.push_str("        _host = host;\n");
-        out.push_str("        _disposed = false;\n");
-        out.push_str("    }\n\n");
+        if needs_arena {
+            out.push_str(&format!(
+                "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {{\n"
+            ));
+            out.push_str("        _interface = iface;\n");
+            out.push_str("        _instance = inst;\n");
+            out.push_str("        _host = host;\n");
+            out.push_str("        _disposed = false;\n");
+            out.push_str(
+                "        // C-heap allocation: cross-boundary arena data must not live on the managed heap.\n",
+            );
+            out.push_str(
+                "        _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);\n",
+            );
+            out.push_str("        _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);\n");
+            out.push_str("    }\n\n");
+        } else {
+            out.push_str(&format!(
+                "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {{\n"
+            ));
+            out.push_str("        _interface = iface;\n");
+            out.push_str("        _instance = inst;\n");
+            out.push_str("        _host = host;\n");
+            out.push_str("        _disposed = false;\n");
+            out.push_str("    }\n\n");
+        }
 
         // create_instance / destroy_instance are IntPtr fn pointers in the ABI struct.
         // Cast them to the canonical native dispatch signature before calling.
@@ -971,6 +1127,15 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("        if (!_disposed) {\n");
         out.push_str(&format!("            {destroy_cast}(_host, _instance);\n"));
         out.push_str("            _instance.Data = nint.Zero;\n");
+        if needs_arena {
+            out.push_str(
+                "            // Free any overflow blocks the arena still holds, then the C-heap buffer.\n",
+            );
+            out.push_str("            fixed (CallArena* arenaPtr = &_arena) {\n");
+            out.push_str("                CallArenaOps.Reset(arenaPtr);\n");
+            out.push_str("            }\n");
+            out.push_str("            NativeMemory.Free(_arenaBuf);\n");
+        }
         out.push_str("            _disposed = true;\n");
         out.push_str("        }\n");
         out.push_str("    }\n\n");
@@ -1012,6 +1177,13 @@ fn generate_host_fn_caller(
         }
     };
 
+    let needs_arena: bool = fn_needs_arena(func);
+    if needs_arena {
+        out.push_str(
+            "    /// <summary>Returns a value borrowing this caller's arena; it stays valid\n",
+        );
+        out.push_str("    /// until the next arena-backed call on this caller.</summary>\n");
+    }
     out.push_str(&format!(
         "    public {ret} {method_name}({params_sig}) {{\n"
     ));
@@ -1025,7 +1197,21 @@ fn generate_host_fn_caller(
     ));
     out.push_str("        }\n\n");
 
+    if needs_arena {
+        out.push_str(
+            "        // Reset the arena at call start: frees the previous call's overflow\n",
+        );
+        out.push_str(
+            "        // blocks and rewinds the primary region, invalidating prior views.\n",
+        );
+        out.push_str("        fixed (CallArena* arenaResetPtr = &_arena) {\n");
+        out.push_str("            CallArenaOps.Reset(arenaResetPtr);\n");
+        out.push_str("        }\n");
+    }
+
     out.push_str("        {\n");
+    // Function-id bounds check against the native dispatch table. FunctionCount
+    // overlays the same offset for both dispatch variants in the union.
     out.push_str(&format!(
         "            if ({fn_id}u >= _interface->Dispatch.Native.FunctionCount) {{\n"
     ));
@@ -1033,12 +1219,6 @@ fn generate_host_fn_caller(
         "                throw new InvalidOperationException(\"function not available\");\n",
     );
     out.push_str("            }\n");
-    out.push_str("            nint funcsArray = _interface->Dispatch.Native.Functions;\n");
-    out.push_str(&format!(
-        "            nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
-    ));
-    // Instance-based dispatch: AbiError dispatch(GuestContractInstance instance, void* args, void* out)
-    out.push_str("            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;\n");
 
     if func.params.is_empty() {
         out.push_str("            nint argsPtr = nint.Zero;\n");
@@ -1074,8 +1254,46 @@ fn generate_host_fn_caller(
         out.push_str("            nint outPtr = nint.Zero;\n");
     }
 
-    // Dispatch with instance as first argument
-    out.push_str("            AbiError err = dispatch(_instance, argsPtr, outPtr);\n");
+    // Branch on the resolved interface's dispatch type. Native guests (C++/Rust/
+    // C#) call the function pointer directly; VM guests (Lua, JS) route through the
+    // loader's vm.call trampoline with the canonical 6-arg signature. Mirrors the
+    // canonical Rust/C++ host caller's native-vs-vm branch (Rule 10).
+    out.push_str("            AbiError err;\n");
+    out.push_str("            switch (_interface->DispatchType) {\n");
+    out.push_str("                case DispatchType.Native: {\n");
+    out.push_str("                    nint funcsArray = _interface->Dispatch.Native.Functions;\n");
+    out.push_str(&format!(
+        "                    nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
+    ));
+    out.push_str("                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;\n");
+    out.push_str("                    err = dispatch(_instance, argsPtr, outPtr);\n");
+    out.push_str("                    break;\n");
+    out.push_str("                }\n");
+    out.push_str("                case DispatchType.VirtualMachine: {\n");
+    // Canonical VM dispatch signature: (loader_data, instance, fn_id, args, out, arena).
+    out.push_str("                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;\n");
+    if needs_arena {
+        // Arena-backed functions hand the guest this caller's per-call arena so it
+        // can write variable-size returns without per-value host->alloc.
+        out.push_str("                    fixed (CallArena* arenaPtr = &_arena) {\n");
+        out.push_str(&format!(
+            "                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr);\n"
+        ));
+        out.push_str("                    }\n");
+    } else {
+        // No variable-size output: a null arena makes the VM bridge fall back to
+        // per-value host allocation.
+        out.push_str(&format!(
+            "                    err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null);\n"
+        ));
+    }
+    out.push_str("                    break;\n");
+    out.push_str("                }\n");
+    out.push_str("                default:\n");
+    out.push_str(
+        "                    throw new InvalidOperationException(\"unknown dispatch type\");\n",
+    );
+    out.push_str("            }\n");
     out.push_str("            if (err.Code != (uint)AbiErrorCode.Ok) {\n");
     out.push_str("                throw new InvalidOperationException($\"plugin call failed: code={err.Code}\");\n");
     out.push_str("            }\n");

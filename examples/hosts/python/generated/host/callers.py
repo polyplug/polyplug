@@ -6,7 +6,28 @@ from __future__ import annotations
 import ctypes
 from typing import Any, Callable, Optional, TypeAlias
 
-from polyplug_abi import AbiErrorCode, DispatchType, GuestContractInstance, GuestContractInterface, HostApi, StringView
+from polyplug_abi import AbiErrorCode, ArenaOverflowBlock, CallArena, DispatchType, GuestContractInstance, GuestContractInterface, HostApi, StringView
+
+# Size of each caller's inline call-arena buffer.
+CALL_ARENA_BUF_LEN: int = 512
+_OVERFLOW_BLOCK_ALIGN: int = ctypes.sizeof(ctypes.c_void_p)
+
+def _arena_reset(arena: CallArena, host: ctypes.c_void_p) -> None:
+    """Free every overflow block and rewind the primary region.
+
+    After reset, all pointers previously returned by arena allocations are invalid.
+    """
+    block: int = arena.first_overflow or 0
+    host_api: Any = ctypes.cast(host, ctypes.POINTER(HostApi))
+    while block:
+        hdr: ArenaOverflowBlock = ArenaOverflowBlock.from_address(block)
+        next_block: int = hdr.next or 0
+        capacity: int = hdr.capacity
+        if arena.host:
+            host_api.contents.free(host, block, capacity, _OVERFLOW_BLOCK_ALIGN)
+        block = next_block
+    arena.first_overflow = None
+    arena.cur = arena.base
 
 class ContractError(Exception):
     def __init__(self, message: str, code: int = AbiErrorCode.Generic) -> None:
@@ -65,6 +86,17 @@ class PipelineDecoderContractCaller:
         # off instance data.
         self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
         self._host: ctypes.c_void_p = host
+        # Per-caller call arena. create_string_buffer is C-heap memory (not the
+        # managed heap), so cross-boundary arena data stays off Python's GC.
+        self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
+        buf_addr: int = ctypes.cast(self._arena_buf, ctypes.c_void_p).value or 0
+        self._arena: CallArena = CallArena(
+            cur=buf_addr,
+            end=buf_addr + CALL_ARENA_BUF_LEN,
+            base=buf_addr,
+            host=ctypes.cast(host, ctypes.c_void_p).value or 0,
+            first_overflow=None,
+        )
 
     def __del__(self) -> None:
         """Destroy instance via destroy_instance factory."""
@@ -74,6 +106,9 @@ class PipelineDecoderContractCaller:
             iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
             iface_ptr.contents.destroy_instance(self._host, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
+        # Free any overflow blocks the arena still holds before teardown.
+        if getattr(self, "_arena", None) is not None:
+            _arena_reset(self._arena, self._host)
 
     @classmethod
     def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
@@ -105,6 +140,11 @@ class PipelineDecoderContractCaller:
         return self.is_valid()
 
     def decode(self, input: StringView) -> StringView:
+        # Returns a value borrowing this caller's arena; it stays valid until
+        # the next arena-backed call on this caller.
+        # Reset the arena at call start: frees the previous call's overflow
+        # blocks and rewinds the primary region, invalidating prior views.
+        _arena_reset(self._arena, self._host)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
@@ -123,8 +163,8 @@ class PipelineDecoderContractCaller:
             err = dispatch_fn(self._instance, args_ptr, out_ptr)
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
-            # are valid per the ABI contract. The null arena selects the host->alloc fallback.
-            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, None)
+            # are valid per the ABI contract. The arena was reset at call start.
+            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
@@ -163,6 +203,17 @@ class DataTransformerContractCaller:
         # off instance data.
         self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
         self._host: ctypes.c_void_p = host
+        # Per-caller call arena. create_string_buffer is C-heap memory (not the
+        # managed heap), so cross-boundary arena data stays off Python's GC.
+        self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
+        buf_addr: int = ctypes.cast(self._arena_buf, ctypes.c_void_p).value or 0
+        self._arena: CallArena = CallArena(
+            cur=buf_addr,
+            end=buf_addr + CALL_ARENA_BUF_LEN,
+            base=buf_addr,
+            host=ctypes.cast(host, ctypes.c_void_p).value or 0,
+            first_overflow=None,
+        )
 
     def __del__(self) -> None:
         """Destroy instance via destroy_instance factory."""
@@ -172,6 +223,9 @@ class DataTransformerContractCaller:
             iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
             iface_ptr.contents.destroy_instance(self._host, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
+        # Free any overflow blocks the arena still holds before teardown.
+        if getattr(self, "_arena", None) is not None:
+            _arena_reset(self._arena, self._host)
 
     @classmethod
     def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
@@ -203,6 +257,11 @@ class DataTransformerContractCaller:
         return self.is_valid()
 
     def transform(self, input: StringView) -> StringView:
+        # Returns a value borrowing this caller's arena; it stays valid until
+        # the next arena-backed call on this caller.
+        # Reset the arena at call start: frees the previous call's overflow
+        # blocks and rewinds the primary region, invalidating prior views.
+        _arena_reset(self._arena, self._host)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
@@ -221,8 +280,8 @@ class DataTransformerContractCaller:
             err = dispatch_fn(self._instance, args_ptr, out_ptr)
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
-            # are valid per the ABI contract. The null arena selects the host->alloc fallback.
-            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, None)
+            # are valid per the ABI contract. The arena was reset at call start.
+            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
@@ -261,6 +320,17 @@ class PipelineEncoderContractCaller:
         # off instance data.
         self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
         self._host: ctypes.c_void_p = host
+        # Per-caller call arena. create_string_buffer is C-heap memory (not the
+        # managed heap), so cross-boundary arena data stays off Python's GC.
+        self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
+        buf_addr: int = ctypes.cast(self._arena_buf, ctypes.c_void_p).value or 0
+        self._arena: CallArena = CallArena(
+            cur=buf_addr,
+            end=buf_addr + CALL_ARENA_BUF_LEN,
+            base=buf_addr,
+            host=ctypes.cast(host, ctypes.c_void_p).value or 0,
+            first_overflow=None,
+        )
 
     def __del__(self) -> None:
         """Destroy instance via destroy_instance factory."""
@@ -270,6 +340,9 @@ class PipelineEncoderContractCaller:
             iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
             iface_ptr.contents.destroy_instance(self._host, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
+        # Free any overflow blocks the arena still holds before teardown.
+        if getattr(self, "_arena", None) is not None:
+            _arena_reset(self._arena, self._host)
 
     @classmethod
     def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
@@ -301,6 +374,11 @@ class PipelineEncoderContractCaller:
         return self.is_valid()
 
     def encode(self, input: StringView) -> StringView:
+        # Returns a value borrowing this caller's arena; it stays valid until
+        # the next arena-backed call on this caller.
+        # Reset the arena at call start: frees the previous call's overflow
+        # blocks and rewinds the primary region, invalidating prior views.
+        _arena_reset(self._arena, self._host)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
@@ -319,8 +397,8 @@ class PipelineEncoderContractCaller:
             err = dispatch_fn(self._instance, args_ptr, out_ptr)
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
-            # are valid per the ABI contract. The null arena selects the host->alloc fallback.
-            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, None)
+            # are valid per the ABI contract. The arena was reset at call start.
+            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
@@ -359,6 +437,17 @@ class DataReporterContractCaller:
         # off instance data.
         self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
         self._host: ctypes.c_void_p = host
+        # Per-caller call arena. create_string_buffer is C-heap memory (not the
+        # managed heap), so cross-boundary arena data stays off Python's GC.
+        self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
+        buf_addr: int = ctypes.cast(self._arena_buf, ctypes.c_void_p).value or 0
+        self._arena: CallArena = CallArena(
+            cur=buf_addr,
+            end=buf_addr + CALL_ARENA_BUF_LEN,
+            base=buf_addr,
+            host=ctypes.cast(host, ctypes.c_void_p).value or 0,
+            first_overflow=None,
+        )
 
     def __del__(self) -> None:
         """Destroy instance via destroy_instance factory."""
@@ -368,6 +457,9 @@ class DataReporterContractCaller:
             iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
             iface_ptr.contents.destroy_instance(self._host, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
+        # Free any overflow blocks the arena still holds before teardown.
+        if getattr(self, "_arena", None) is not None:
+            _arena_reset(self._arena, self._host)
 
     @classmethod
     def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
@@ -399,6 +491,11 @@ class DataReporterContractCaller:
         return self.is_valid()
 
     def report(self, input: StringView) -> StringView:
+        # Returns a value borrowing this caller's arena; it stays valid until
+        # the next arena-backed call on this caller.
+        # Reset the arena at call start: frees the previous call's overflow
+        # blocks and rewinds the primary region, invalidating prior views.
+        _arena_reset(self._arena, self._host)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
@@ -417,8 +514,8 @@ class DataReporterContractCaller:
             err = dispatch_fn(self._instance, args_ptr, out_ptr)
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
-            # are valid per the ABI contract. The null arena selects the host->alloc fallback.
-            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, None)
+            # are valid per the ABI contract. The arena was reset at call start.
+            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
@@ -457,6 +554,17 @@ class PipelineValidatorContractCaller:
         # off instance data.
         self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
         self._host: ctypes.c_void_p = host
+        # Per-caller call arena. create_string_buffer is C-heap memory (not the
+        # managed heap), so cross-boundary arena data stays off Python's GC.
+        self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
+        buf_addr: int = ctypes.cast(self._arena_buf, ctypes.c_void_p).value or 0
+        self._arena: CallArena = CallArena(
+            cur=buf_addr,
+            end=buf_addr + CALL_ARENA_BUF_LEN,
+            base=buf_addr,
+            host=ctypes.cast(host, ctypes.c_void_p).value or 0,
+            first_overflow=None,
+        )
 
     def __del__(self) -> None:
         """Destroy instance via destroy_instance factory."""
@@ -466,6 +574,9 @@ class PipelineValidatorContractCaller:
             iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
             iface_ptr.contents.destroy_instance(self._host, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
+        # Free any overflow blocks the arena still holds before teardown.
+        if getattr(self, "_arena", None) is not None:
+            _arena_reset(self._arena, self._host)
 
     @classmethod
     def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
@@ -497,6 +608,11 @@ class PipelineValidatorContractCaller:
         return self.is_valid()
 
     def validate(self, input: StringView) -> StringView:
+        # Returns a value borrowing this caller's arena; it stays valid until
+        # the next arena-backed call on this caller.
+        # Reset the arena at call start: frees the previous call's overflow
+        # blocks and rewinds the primary region, invalidating prior views.
+        _arena_reset(self._arena, self._host)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
@@ -515,8 +631,8 @@ class PipelineValidatorContractCaller:
             err = dispatch_fn(self._instance, args_ptr, out_ptr)
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
-            # are valid per the ABI contract. The null arena selects the host->alloc fallback.
-            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, None)
+            # are valid per the ABI contract. The arena was reset at call start.
+            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val

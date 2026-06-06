@@ -289,7 +289,44 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, Optional, TypeAlias\n\n");
-    out.push_str("from polyplug_abi import AbiErrorCode, DispatchType, GuestContractInstance, GuestContractInterface, HostApi, StringView\n\n");
+    let any_arena: bool = ir.contracts.iter().any(contract_needs_arena);
+    if any_arena {
+        out.push_str("from polyplug_abi import AbiErrorCode, ArenaOverflowBlock, CallArena, DispatchType, GuestContractInstance, GuestContractInterface, HostApi, StringView\n\n");
+    } else {
+        out.push_str("from polyplug_abi import AbiErrorCode, DispatchType, GuestContractInstance, GuestContractInterface, HostApi, StringView\n\n");
+    }
+
+    if any_arena {
+        // Inline call-arena reset helper. CallArena in polyplug_abi is a
+        // layout-only ctypes.Structure (no methods), so the overflow-freeing reset
+        // is emitted here. It is a direct port of polyplug_abi::CallArena::reset;
+        // keeping the two in lockstep is required by Rule 10 (identical ABI
+        // mechanisms across generators). The host caller never bump-allocates
+        // itself — the VM bridge does, through the arena it is handed — so only
+        // construction (inline in __init__) and reset are needed here.
+        out.push_str("# Size of each caller's inline call-arena buffer.\n");
+        out.push_str("CALL_ARENA_BUF_LEN: int = 512\n");
+        out.push_str("_OVERFLOW_BLOCK_ALIGN: int = ctypes.sizeof(ctypes.c_void_p)\n\n");
+        out.push_str("def _arena_reset(arena: CallArena, host: ctypes.c_void_p) -> None:\n");
+        out.push_str("    \"\"\"Free every overflow block and rewind the primary region.\n\n");
+        out.push_str(
+            "    After reset, all pointers previously returned by arena allocations are invalid.\n",
+        );
+        out.push_str("    \"\"\"\n");
+        out.push_str("    block: int = arena.first_overflow or 0\n");
+        out.push_str("    host_api: Any = ctypes.cast(host, ctypes.POINTER(HostApi))\n");
+        out.push_str("    while block:\n");
+        out.push_str("        hdr: ArenaOverflowBlock = ArenaOverflowBlock.from_address(block)\n");
+        out.push_str("        next_block: int = hdr.next or 0\n");
+        out.push_str("        capacity: int = hdr.capacity\n");
+        out.push_str("        if arena.host:\n");
+        out.push_str(
+            "            host_api.contents.free(host, block, capacity, _OVERFLOW_BLOCK_ALIGN)\n",
+        );
+        out.push_str("        block = next_block\n");
+        out.push_str("    arena.first_overflow = None\n");
+        out.push_str("    arena.cur = arena.base\n\n");
+    }
 
     // ContractError class for host-side error handling
     out.push_str("class ContractError(Exception):\n");
@@ -647,6 +684,7 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     let caller_name: String = format!("{struct_name}Caller");
     let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
     let _contract_id_const: String = format!("{}_CONTRACT_ID", contract_upper);
+    let needs_arena: bool = contract_needs_arena(contract);
 
     out.push_str(&format!("class {caller_name}:\n"));
     out.push_str(&format!(
@@ -681,7 +719,29 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     out.push_str("        # dispatch token. Validity is keyed off the interface pointer, never\n");
     out.push_str("        # off instance data.\n");
     out.push_str("        self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)\n");
-    out.push_str("        self._host: ctypes.c_void_p = host\n\n");
+    out.push_str("        self._host: ctypes.c_void_p = host\n");
+    if needs_arena {
+        out.push_str(
+            "        # Per-caller call arena. create_string_buffer is C-heap memory (not the\n",
+        );
+        out.push_str(
+            "        # managed heap), so cross-boundary arena data stays off Python's GC.\n",
+        );
+        out.push_str(
+            "        self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)\n",
+        );
+        out.push_str(
+            "        buf_addr: int = ctypes.cast(self._arena_buf, ctypes.c_void_p).value or 0\n",
+        );
+        out.push_str("        self._arena: CallArena = CallArena(\n");
+        out.push_str("            cur=buf_addr,\n");
+        out.push_str("            end=buf_addr + CALL_ARENA_BUF_LEN,\n");
+        out.push_str("            base=buf_addr,\n");
+        out.push_str("            host=ctypes.cast(host, ctypes.c_void_p).value or 0,\n");
+        out.push_str("            first_overflow=None,\n");
+        out.push_str("        )\n");
+    }
+    out.push('\n');
 
     // __del__ destructor: calls destroy_instance
     out.push_str("    def __del__(self) -> None:\n");
@@ -691,7 +751,13 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     out.push_str("        if getattr(self, \"_interface\", None):\n");
     out.push_str("            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
     out.push_str("            iface_ptr.contents.destroy_instance(self._host, self._instance)\n");
-    out.push_str("            self._interface = None  # Prevent reuse after cleanup.\n\n");
+    out.push_str("            self._interface = None  # Prevent reuse after cleanup.\n");
+    if needs_arena {
+        out.push_str("        # Free any overflow blocks the arena still holds before teardown.\n");
+        out.push_str("        if getattr(self, \"_arena\", None) is not None:\n");
+        out.push_str("            _arena_reset(self._arena, self._host)\n");
+    }
+    out.push('\n');
 
     // Factory method
     out.push_str("    @classmethod\n");
@@ -733,12 +799,26 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
 
 fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
     let fn_id: u32 = func.function_id;
+    let needs_arena: bool = fn_needs_arena(func);
     let sig_params: String = build_python_sig_params(func, contract_struct);
     let ret_type: String = python_return_type(&func.returns);
     out.push_str(&format!(
         "    def {}(self{}) -> {}:\n",
         func.name, sig_params, ret_type
     ));
+    if needs_arena {
+        out.push_str(
+            "        # Returns a value borrowing this caller's arena; it stays valid until\n",
+        );
+        out.push_str("        # the next arena-backed call on this caller.\n");
+        out.push_str(
+            "        # Reset the arena at call start: frees the previous call's overflow\n",
+        );
+        out.push_str(
+            "        # blocks and rewinds the primary region, invalidating prior views.\n",
+        );
+        out.push_str("        _arena_reset(self._arena, self._host)\n");
+    }
     emit_python_host_args_setup(out, func, contract_struct);
     emit_python_host_out_setup(out, &func.returns);
 
@@ -773,18 +853,29 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     out.push_str("            err = dispatch_fn(self._instance, args_ptr, out_ptr)\n");
     out.push_str("        else:\n");
     // VM dispatch: call through interface.dispatch.vm.call with the canonical 6-arg
-    // signature (loader_data, instance, fn_id, args, out, arena). Python host
-    // callers have no per-call arena; a null (None) arena is the documented legacy
-    // fallback to per-value host->alloc and is correct here.
+    // signature (loader_data, instance, fn_id, args, out, arena). Arena-backed
+    // functions hand the guest this caller's per-call arena so it can write
+    // variable-size returns without per-value host->alloc; other functions pass a
+    // null (None) arena, which selects the host->alloc fallback. Mirrors the
+    // rust.rs / cpp.rs native-vs-vm branch (Rule 10).
     out.push_str(
         "            # SAFETY: the union's vm variant is active per dispatch_type; args/out\n",
     );
-    out.push_str(
-        "            # are valid per the ABI contract. The null arena selects the host->alloc fallback.\n",
-    );
-    out.push_str(&format!(
-        "            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, None)\n"
-    ));
+    if needs_arena {
+        out.push_str(
+            "            # are valid per the ABI contract. The arena was reset at call start.\n",
+        );
+        out.push_str(&format!(
+            "            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, ctypes.byref(self._arena))\n"
+        ));
+    } else {
+        out.push_str(
+            "            # are valid per the ABI contract. The null arena selects the host->alloc fallback.\n",
+        );
+        out.push_str(&format!(
+            "            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, None)\n"
+        ));
+    }
     out.push_str("        if err.code != AbiErrorCode.Ok:\n");
     out.push_str("            raise RuntimeError(\"polyplug call failed\")\n");
     if has_return_value(&func.returns) {
@@ -1233,6 +1324,24 @@ fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction) {
 
 fn needs_arg_pack(params: &[ResolvedParam]) -> bool {
     params.len() >= 2
+}
+
+/// Whether a function returns a variable-size value the guest writes into the
+/// call arena (a `StringView`, a `Buffer`, or any user-defined struct that may
+/// embed one). Mirrors `fn_needs_arena` in `rust.rs` / `cpp.rs` so every
+/// generator agrees on which functions are arena-backed.
+fn fn_needs_arena(func: &ResolvedFunction) -> bool {
+    matches!(
+        &func.returns,
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
+            | Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer))
+            | Some(ResolvedTypeRef::UserDefined(_))
+    )
+}
+
+/// Whether any function on the contract needs a call arena.
+fn contract_needs_arena(contract: &ResolvedContract) -> bool {
+    contract.functions.iter().any(fn_needs_arena)
 }
 
 fn python_type_name(ty: &ResolvedTypeRef) -> String {

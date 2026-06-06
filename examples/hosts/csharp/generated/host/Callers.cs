@@ -9,6 +9,48 @@ using System.Runtime.InteropServices;
 
 namespace Polyplug.Generated;
 
+/// <summary>Inline call-arena helpers (port of polyplug_abi::CallArena).</summary>
+internal static unsafe class CallArenaOps {
+    /// <summary>Size of each caller's inline call-arena buffer.</summary>
+    ///
+    /// Variable-size VM return values (strings, buffers) are bump-allocated from
+    /// this buffer; outputs larger than it spill into host-allocated overflow
+    /// blocks that the arena frees on the next reset.
+    public const nuint CALL_ARENA_BUF_LEN = 512;
+    /// <summary>Alignment used to free host-allocated overflow blocks.</summary>
+    public static readonly nuint OVERFLOW_BLOCK_ALIGN = (nuint)IntPtr.Size;
+
+    /// <summary>Construct a CallArena over `buf` (primary region) with `host` for overflow.</summary>
+    public static CallArena New(byte* buf, nuint len, IntPtr host) {
+        return new CallArena {
+            Cur = (IntPtr)buf,
+            End = (IntPtr)(buf + len),
+            Base = (IntPtr)buf,
+            Host = host,
+            FirstOverflow = IntPtr.Zero,
+        };
+    }
+
+    /// <summary>Reset `arena`: free every overflow block and rewind the primary region.</summary>
+    /// After reset, all pointers previously returned by arena allocations are invalid.
+    public static void Reset(CallArena* arena) {
+        IntPtr block = arena->FirstOverflow;
+        while (block != IntPtr.Zero) {
+            var hdr = (ArenaOverflowBlock*)block;
+            IntPtr next = hdr->Next;
+            nuint capacity = hdr->Capacity;
+            if (arena->Host != IntPtr.Zero) {
+                var hostApi = (HostApi*)arena->Host;
+                var freeFn = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, nuint, nuint, void>)hostApi->Free;
+                freeFn(arena->Host, block, capacity, OVERFLOW_BLOCK_ALIGN);
+            }
+            block = next;
+        }
+        arena->FirstOverflow = IntPtr.Zero;
+        arena->Cur = arena->Base;
+    }
+}
+
 public static class PipelineDecoderContractConstants {
     public const ulong PIPELINE_DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7UL;
     public const uint PIPELINE_DECODER_FUNCTION_COUNT = 1u;
@@ -23,12 +65,20 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
     private GuestContractInstance _instance;
     private readonly HostApi* _host;
     private bool _disposed;
+    /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
+    /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
+    private readonly byte* _arenaBuf;
+    /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
+    private CallArena _arena;
 
     private PipelineDecoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
+        // C-heap allocation: cross-boundary arena data must not live on the managed heap.
+        _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
+        _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);
     }
 
     /// <summary>Factory method - resolves contract and creates instance.</summary>
@@ -59,27 +109,54 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
+            // Free any overflow blocks the arena still holds, then the C-heap buffer.
+            fixed (CallArena* arenaPtr = &_arena) {
+                CallArenaOps.Reset(arenaPtr);
+            }
+            NativeMemory.Free(_arenaBuf);
             _disposed = true;
         }
     }
 
+    /// <summary>Returns a value borrowing this caller's arena; it stays valid
+    /// until the next arena-backed call on this caller.</summary>
     public Polyplug.Abi.StringView Decode(Polyplug.Abi.StringView input) {
         if (_disposed) {
             throw new ObjectDisposedException(nameof(PipelineDecoderContractCaller));
         }
 
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        fixed (CallArena* arenaResetPtr = &_arena) {
+            CallArenaOps.Reset(arenaResetPtr);
+        }
         {
             if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
-            nint funcsArray = _interface->Dispatch.Native.Functions;
-            nint funcPtr = ((nint*)funcsArray)[0];
-            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err = dispatch(_instance, argsPtr, outPtr);
+            AbiError err;
+            switch (_interface->DispatchType) {
+                case DispatchType.Native: {
+                    nint funcsArray = _interface->Dispatch.Native.Functions;
+                    nint funcPtr = ((nint*)funcsArray)[0];
+                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
+                    err = dispatch(_instance, argsPtr, outPtr);
+                    break;
+                }
+                case DispatchType.VirtualMachine: {
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;
+                    fixed (CallArena* arenaPtr = &_arena) {
+                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr);
+                    }
+                    break;
+                }
+                default:
+                    throw new InvalidOperationException("unknown dispatch type");
+            }
             if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
@@ -103,12 +180,20 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
     private GuestContractInstance _instance;
     private readonly HostApi* _host;
     private bool _disposed;
+    /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
+    /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
+    private readonly byte* _arenaBuf;
+    /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
+    private CallArena _arena;
 
     private DataTransformerContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
+        // C-heap allocation: cross-boundary arena data must not live on the managed heap.
+        _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
+        _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);
     }
 
     /// <summary>Factory method - resolves contract and creates instance.</summary>
@@ -139,27 +224,54 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
+            // Free any overflow blocks the arena still holds, then the C-heap buffer.
+            fixed (CallArena* arenaPtr = &_arena) {
+                CallArenaOps.Reset(arenaPtr);
+            }
+            NativeMemory.Free(_arenaBuf);
             _disposed = true;
         }
     }
 
+    /// <summary>Returns a value borrowing this caller's arena; it stays valid
+    /// until the next arena-backed call on this caller.</summary>
     public Polyplug.Abi.StringView Transform(Polyplug.Abi.StringView input) {
         if (_disposed) {
             throw new ObjectDisposedException(nameof(DataTransformerContractCaller));
         }
 
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        fixed (CallArena* arenaResetPtr = &_arena) {
+            CallArenaOps.Reset(arenaResetPtr);
+        }
         {
             if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
-            nint funcsArray = _interface->Dispatch.Native.Functions;
-            nint funcPtr = ((nint*)funcsArray)[0];
-            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err = dispatch(_instance, argsPtr, outPtr);
+            AbiError err;
+            switch (_interface->DispatchType) {
+                case DispatchType.Native: {
+                    nint funcsArray = _interface->Dispatch.Native.Functions;
+                    nint funcPtr = ((nint*)funcsArray)[0];
+                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
+                    err = dispatch(_instance, argsPtr, outPtr);
+                    break;
+                }
+                case DispatchType.VirtualMachine: {
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;
+                    fixed (CallArena* arenaPtr = &_arena) {
+                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr);
+                    }
+                    break;
+                }
+                default:
+                    throw new InvalidOperationException("unknown dispatch type");
+            }
             if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
@@ -183,12 +295,20 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
     private GuestContractInstance _instance;
     private readonly HostApi* _host;
     private bool _disposed;
+    /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
+    /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
+    private readonly byte* _arenaBuf;
+    /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
+    private CallArena _arena;
 
     private PipelineEncoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
+        // C-heap allocation: cross-boundary arena data must not live on the managed heap.
+        _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
+        _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);
     }
 
     /// <summary>Factory method - resolves contract and creates instance.</summary>
@@ -219,27 +339,54 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
+            // Free any overflow blocks the arena still holds, then the C-heap buffer.
+            fixed (CallArena* arenaPtr = &_arena) {
+                CallArenaOps.Reset(arenaPtr);
+            }
+            NativeMemory.Free(_arenaBuf);
             _disposed = true;
         }
     }
 
+    /// <summary>Returns a value borrowing this caller's arena; it stays valid
+    /// until the next arena-backed call on this caller.</summary>
     public Polyplug.Abi.StringView Encode(Polyplug.Abi.StringView input) {
         if (_disposed) {
             throw new ObjectDisposedException(nameof(PipelineEncoderContractCaller));
         }
 
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        fixed (CallArena* arenaResetPtr = &_arena) {
+            CallArenaOps.Reset(arenaResetPtr);
+        }
         {
             if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
-            nint funcsArray = _interface->Dispatch.Native.Functions;
-            nint funcPtr = ((nint*)funcsArray)[0];
-            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err = dispatch(_instance, argsPtr, outPtr);
+            AbiError err;
+            switch (_interface->DispatchType) {
+                case DispatchType.Native: {
+                    nint funcsArray = _interface->Dispatch.Native.Functions;
+                    nint funcPtr = ((nint*)funcsArray)[0];
+                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
+                    err = dispatch(_instance, argsPtr, outPtr);
+                    break;
+                }
+                case DispatchType.VirtualMachine: {
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;
+                    fixed (CallArena* arenaPtr = &_arena) {
+                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr);
+                    }
+                    break;
+                }
+                default:
+                    throw new InvalidOperationException("unknown dispatch type");
+            }
             if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
@@ -263,12 +410,20 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
     private GuestContractInstance _instance;
     private readonly HostApi* _host;
     private bool _disposed;
+    /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
+    /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
+    private readonly byte* _arenaBuf;
+    /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
+    private CallArena _arena;
 
     private DataReporterContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
+        // C-heap allocation: cross-boundary arena data must not live on the managed heap.
+        _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
+        _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);
     }
 
     /// <summary>Factory method - resolves contract and creates instance.</summary>
@@ -299,27 +454,54 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
+            // Free any overflow blocks the arena still holds, then the C-heap buffer.
+            fixed (CallArena* arenaPtr = &_arena) {
+                CallArenaOps.Reset(arenaPtr);
+            }
+            NativeMemory.Free(_arenaBuf);
             _disposed = true;
         }
     }
 
+    /// <summary>Returns a value borrowing this caller's arena; it stays valid
+    /// until the next arena-backed call on this caller.</summary>
     public Polyplug.Abi.StringView Report(Polyplug.Abi.StringView input) {
         if (_disposed) {
             throw new ObjectDisposedException(nameof(DataReporterContractCaller));
         }
 
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        fixed (CallArena* arenaResetPtr = &_arena) {
+            CallArenaOps.Reset(arenaResetPtr);
+        }
         {
             if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
-            nint funcsArray = _interface->Dispatch.Native.Functions;
-            nint funcPtr = ((nint*)funcsArray)[0];
-            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err = dispatch(_instance, argsPtr, outPtr);
+            AbiError err;
+            switch (_interface->DispatchType) {
+                case DispatchType.Native: {
+                    nint funcsArray = _interface->Dispatch.Native.Functions;
+                    nint funcPtr = ((nint*)funcsArray)[0];
+                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
+                    err = dispatch(_instance, argsPtr, outPtr);
+                    break;
+                }
+                case DispatchType.VirtualMachine: {
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;
+                    fixed (CallArena* arenaPtr = &_arena) {
+                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr);
+                    }
+                    break;
+                }
+                default:
+                    throw new InvalidOperationException("unknown dispatch type");
+            }
             if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
@@ -343,12 +525,20 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
     private GuestContractInstance _instance;
     private readonly HostApi* _host;
     private bool _disposed;
+    /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
+    /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
+    private readonly byte* _arenaBuf;
+    /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
+    private CallArena _arena;
 
     private PipelineValidatorContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
+        // C-heap allocation: cross-boundary arena data must not live on the managed heap.
+        _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
+        _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);
     }
 
     /// <summary>Factory method - resolves contract and creates instance.</summary>
@@ -379,27 +569,54 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
+            // Free any overflow blocks the arena still holds, then the C-heap buffer.
+            fixed (CallArena* arenaPtr = &_arena) {
+                CallArenaOps.Reset(arenaPtr);
+            }
+            NativeMemory.Free(_arenaBuf);
             _disposed = true;
         }
     }
 
+    /// <summary>Returns a value borrowing this caller's arena; it stays valid
+    /// until the next arena-backed call on this caller.</summary>
     public Polyplug.Abi.StringView Validate(Polyplug.Abi.StringView input) {
         if (_disposed) {
             throw new ObjectDisposedException(nameof(PipelineValidatorContractCaller));
         }
 
+        // Reset the arena at call start: frees the previous call's overflow
+        // blocks and rewinds the primary region, invalidating prior views.
+        fixed (CallArena* arenaResetPtr = &_arena) {
+            CallArenaOps.Reset(arenaResetPtr);
+        }
         {
             if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
-            nint funcsArray = _interface->Dispatch.Native.Functions;
-            nint funcPtr = ((nint*)funcsArray)[0];
-            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err = dispatch(_instance, argsPtr, outPtr);
+            AbiError err;
+            switch (_interface->DispatchType) {
+                case DispatchType.Native: {
+                    nint funcsArray = _interface->Dispatch.Native.Functions;
+                    nint funcPtr = ((nint*)funcsArray)[0];
+                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
+                    err = dispatch(_instance, argsPtr, outPtr);
+                    break;
+                }
+                case DispatchType.VirtualMachine: {
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;
+                    fixed (CallArena* arenaPtr = &_arena) {
+                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr);
+                    }
+                    break;
+                }
+                default:
+                    throw new InvalidOperationException("unknown dispatch type");
+            }
             if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }

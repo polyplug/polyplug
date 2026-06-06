@@ -1235,13 +1235,18 @@ fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("    if host_ptr == nil then\n");
     out.push_str("        return nil\n");
     out.push_str("    end\n");
-    out.push_str("    local host = ffi.cast(\"HostApi*\", host_ptr)\n");
+    // `host_ptr` arrives from polyplug_guest.get_host_interface() as a plain Lua
+    // number (the host pointer the loader stored at init). Cast through uintptr_t
+    // first, exactly like the host-side caller path: a direct ffi.cast("HostApi*",
+    // number) yields a pointer LuaJIT then rejects as the first FFI argument
+    // ("bad argument #1"). Pass the typed `host` cdata to every HostApi call.
+    out.push_str("    local host = ffi.cast(\"HostApi*\", ffi.cast(\"uintptr_t\", host_ptr))\n");
     // Resolve the contract vtable. This is the source of dispatch metadata
     // (dispatch_type, function_count, functions) — NOT the instance. Mirrors the
     // canonical Rust host-contract caller (resolve_host_contract_interface +
     // get_host_contract).
     out.push_str(&format!(
-        "    local interface_ptr = host.resolve_host_contract_interface(host_ptr, 0x{:016X}ULL, min_version)\n",
+        "    local interface_ptr = host.resolve_host_contract_interface(host, 0x{:016X}ULL, min_version)\n",
         contract.contract_id
     ));
     out.push_str("    if interface_ptr == nil then\n");
@@ -1250,7 +1255,7 @@ fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &Resolved
     // The per-instance state: native dispatch thunks receive this as their `this`
     // (first) argument.
     out.push_str(&format!(
-        "    local instance = host.get_host_contract(host_ptr, 0x{:016X}ULL, min_version)\n",
+        "    local instance = host.get_host_contract(host, 0x{:016X}ULL, min_version)\n",
         contract.contract_id
     ));
     out.push_str(&format!(
@@ -1279,16 +1284,17 @@ fn generate_lua_guest_host_contract_method(
     let fn_id: u32 = func.function_id;
     let has_return: bool = func.returns.is_some();
 
-    let params_str: String = if func.params.is_empty() {
-        "self".to_owned()
-    } else {
-        let params: Vec<String> = func
-            .params
-            .iter()
-            .map(|p: &ResolvedParam| p.name.clone())
-            .collect();
-        format!("self, {}", params.join(", "))
-    };
+    // Colon-method syntax (`Class:method`) already binds an implicit `self`, so the
+    // parameter list must NOT re-declare it. Emitting `:method(self, ...)` shifts
+    // every real argument by one (the caller's first arg lands in the redundant
+    // `self` slot and the last real parameter becomes nil) — the bug that silently
+    // dropped the message a guest passed to host.logger:log().
+    let params_str: String = func
+        .params
+        .iter()
+        .map(|p: &ResolvedParam| p.name.clone())
+        .collect::<Vec<String>>()
+        .join(", ");
 
     out.push_str(&format!(
         "function {}:{}({})\n",
@@ -2222,8 +2228,8 @@ mod tests {
             "missing is_valid: {out}"
         );
         assert!(
-            out.contains("function HostLoggerContract:log(self, level, message)"),
-            "missing log method: {out}"
+            out.contains("function HostLoggerContract:log(level, message)"),
+            "missing log method (colon syntax binds self implicitly — no explicit self param): {out}"
         );
         // Defect (a): the caller must cast to the canonical flat HostContractInterface,
         // never the nonexistent HostContractVTable, and read dispatch metadata directly.
@@ -2252,12 +2258,19 @@ mod tests {
         // from_host resolves the interface via resolve_host_contract_interface and the
         // instance via get_host_contract, matching the canonical Rust caller.
         assert!(
-            out.contains("host.resolve_host_contract_interface(host_ptr,"),
+            out.contains("host.resolve_host_contract_interface(host,"),
             "from_host must resolve the interface vtable: {out}"
         );
         assert!(
-            out.contains("host.get_host_contract(host_ptr,"),
+            out.contains("host.get_host_contract(host,"),
             "from_host must obtain the per-instance state: {out}"
+        );
+        // host_ptr (a plain Lua number) must be cast through uintptr_t before use,
+        // matching the host-caller path; a direct ffi.cast("HostApi*", number) is
+        // rejected by LuaJIT as the first FFI argument.
+        assert!(
+            out.contains("ffi.cast(\"HostApi*\", ffi.cast(\"uintptr_t\", host_ptr))"),
+            "from_host must cast host_ptr through uintptr_t: {out}"
         );
     }
 
@@ -2289,8 +2302,8 @@ mod tests {
             "missing class table: {out}"
         );
         assert!(
-            out.contains("function HostFsReaderContract:read(self, path)"),
-            "missing read method: {out}"
+            out.contains("function HostFsReaderContract:read(path)"),
+            "missing read method (colon syntax binds self implicitly — no explicit self param): {out}"
         );
         assert!(
             out.contains("return out_val"),

@@ -6,6 +6,8 @@ using System.Runtime.InteropServices;
 using Polyplug.Guest;
 using Polyplug.Abi;
 
+namespace encoder;
+
 public static class Plugin {
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "polyplug_init")]
     public static AbiErrorCode PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {

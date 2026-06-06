@@ -25,12 +25,12 @@ function HostLoggerContract.from_host(host_ptr, min_version)
     if host_ptr == nil then
         return nil
     end
-    local host = ffi.cast("HostApi*", host_ptr)
-    local interface_ptr = host.resolve_host_contract_interface(host_ptr, 0xF53EB5F2845853BBULL, min_version)
+    local host = ffi.cast("HostApi*", ffi.cast("uintptr_t", host_ptr))
+    local interface_ptr = host.resolve_host_contract_interface(host, 0xF53EB5F2845853BBULL, min_version)
     if interface_ptr == nil then
         return nil
     end
-    local instance = host.get_host_contract(host_ptr, 0xF53EB5F2845853BBULL, min_version)
+    local instance = host.get_host_contract(host, 0xF53EB5F2845853BBULL, min_version)
     return HostLoggerContract:new(interface_ptr, instance)
 end
 
@@ -38,7 +38,7 @@ function HostLoggerContract:is_valid()
     return self._interface ~= nil
 end
 
-function HostLoggerContract:log(self, message)
+function HostLoggerContract:log(message)
     if self._interface == nil then
         return
     end
@@ -71,7 +71,7 @@ function HostLoggerContract:log(self, message)
     end
 end
 
-function HostLoggerContract:log_with_level(self, level, message)
+function HostLoggerContract:log_with_level(level, message)
     if self._interface == nil then
         return
     end

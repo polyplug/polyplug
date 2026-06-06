@@ -590,12 +590,20 @@ fn test_python_host_caller_branches_on_dispatch_type() {
         content.contains("if interface.dispatch_type == DispatchType.Native:"),
         "host caller must branch on dispatch_type"
     );
-    // VM path: 6-arg call(loader_data, instance, fn_id, args, out, None).
+    // VM path: 6-arg call(loader_data, instance, fn_id, args, out, arena). The
+    // test contract's `do_work` returns a StringView (arena-backed), so the host
+    // caller resets and hands the guest this caller's per-call arena. Scalar-only
+    // functions would instead pass None (the host->alloc fallback) — see
+    // arena_parity.rs for the scalar-vs-arena split.
     assert!(
         content.contains(
             "interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance,"
-        ) && content.contains(", args_ptr, out_ptr, None)"),
-        "VM dispatch must use the canonical 6-arg call with a None arena"
+        ),
+        "VM dispatch must use the canonical 6-arg call shape"
+    );
+    assert!(
+        content.contains(", args_ptr, out_ptr, ctypes.byref(self._arena))"),
+        "arena-backed VM dispatch must hand the guest the per-call arena"
     );
 
     println!("test_python_host_caller_branches_on_dispatch_type: passed ✓");
