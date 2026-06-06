@@ -115,8 +115,15 @@ fn rust_generated_glue_compiles() {
 
     // src/lib.rs includes the generated glue verbatim and provides the minimal
     // plugin entry points. This is the only hand-written file.
+    // polyplug_user_init is the plugin author's mandatory entry point — the
+    // generated polyplug_init declares it extern and calls it. Linux ld defers
+    // unresolved cdylib symbols to load time, but macOS ld64 requires them at
+    // link time, so the stub must exist for the build to succeed everywhere.
     let lib_rs: &str = "#[path = \"../gen/guest/mod.rs\"]\n\
          mod generated;\n\
+         \n\
+         #[unsafe(no_mangle)]\n\
+         pub extern \"C\" fn polyplug_user_init() {}\n\
          \n\
          #[unsafe(no_mangle)]\n\
          pub extern \"C\" fn polyplug_abi_version() -> u32 {\n\
