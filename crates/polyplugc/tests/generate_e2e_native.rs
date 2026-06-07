@@ -54,6 +54,25 @@ fn run_polyplugc(args: &[&std::ffi::OsStr]) -> std::process::Output {
         .expect("failed to spawn polyplugc binary")
 }
 
+/// Canonicalize for toolchain consumption: resolves the macOS /var -> /private/var
+/// symlink, then strips Windows' verbatim prefix (\\?\ / \\?\UNC\) which MSBuild
+/// cannot import (MSB4019, `$(MSBuildProjectExtensionsPath)` evaluates to `\\%3f\…`).
+fn canonicalize_for_toolchain(path: &Path) -> PathBuf {
+    let canonical: PathBuf = path.canonicalize().expect("canonicalize tempdir");
+    if cfg!(windows) {
+        let s: String = canonical.to_string_lossy().into_owned();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{rest}"))
+        } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+            PathBuf::from(rest)
+        } else {
+            canonical
+        }
+    } else {
+        canonical
+    }
+}
+
 /// Generate the guest glue for the decoder fixture into `out_dir` for `lang`.
 fn generate_into(out_dir: &Path, lang: &str) {
     let output: std::process::Output = run_polyplugc(&[
@@ -176,8 +195,9 @@ fn csharp_generated_glue_compiles() {
     // /private/var/folders symlink, and MSBuild's ProjectReference path
     // relativization mixes the resolved and unresolved forms (MSB3202,
     // "../../../..//Users/..." misses by one level). Canonicalizing makes
-    // every path the test writes agree with what dotnet resolves.
-    let tmp_root: PathBuf = tmp.path().canonicalize().expect("canonicalize tempdir");
+    // every path the test writes agree with what dotnet resolves. On Windows
+    // the helper also strips the verbatim prefix MSBuild cannot import.
+    let tmp_root: PathBuf = canonicalize_for_toolchain(tmp.path());
     let project_dir: PathBuf = tmp_root.join("plugin");
     let gen_dir: PathBuf = project_dir.join("generated");
     std::fs::create_dir_all(&project_dir).expect("create project dir");

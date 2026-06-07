@@ -130,6 +130,8 @@ jobs:
       # every crate, including all six language loaders, compiles on Windows MSVC.
       - name: Build workspace
         run: cargo build --workspace
+      - name: Build C# SDK
+        run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
       # Produce the native/C++/C# test fixture binaries (<name>.dll on Windows —
       # the script is MINGW-aware and Git Bash provides the shell; MinGW g++ and
       # dotnet are on the image/job).
@@ -151,7 +153,11 @@ jobs:
           msvcbuild.bat
       - name: Add LuaJIT to PATH
         shell: bash
-        run: echo "$RUNNER_TEMP/LuaJIT/src" >> "$GITHUB_PATH"
+        run: |
+          echo "$RUNNER_TEMP/LuaJIT/src" >> "$GITHUB_PATH"
+          # Source-built LuaJIT has no install prefix; point require("jit.*")
+          # (used by `luajit -b`) at the source tree. Trailing ';;' keeps defaults.
+          echo "LUA_PATH=$RUNNER_TEMP/LuaJIT/src/?.lua;;" >> "$GITHUB_ENV"
       # Full suite: unit tests + integration/e2e tests against the fixtures built
       # above. Toolchains the polyplugc e2e tests spawn (c++, dotnet, python3,
       # deno, luajit) are provided by the image and the setup steps.

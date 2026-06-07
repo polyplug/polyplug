@@ -96,7 +96,9 @@ polyplug_guest = {{ path = "{}" }}
 
 [workspace]
 "#,
-        guest_lib_path.display()
+        // Backslashes are invalid TOML escape sequences; forward slashes are valid
+        // path separators on every platform (including Windows).
+        guest_lib_path.to_string_lossy().replace('\\', "/")
     );
     let cargo_toml_path: PathBuf = crate_dir.join("Cargo.toml");
     std::fs::write(&cargo_toml_path, content).expect("failed to write plugin Cargo.toml");
