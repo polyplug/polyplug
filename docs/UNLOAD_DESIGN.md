@@ -12,9 +12,9 @@ The mechanism is **generation-counted handles**: `GuestContractHandle` grows a
 **invalidate-then-reclaim** protocol defines exactly when an old generation's
 memory may be freed without dangling any pointer or in-flight call.
 
-This is a **design document only**. No code is written here. It gates
-implementation; the owner reviews before any code lands. Every claim about current
-behavior is cited to `file:line` and was verified against the working tree.
+**Status (2026-06):** Phase 1 (generation-counted `GuestContractHandle`: 8 bytes, `{ index: u32, generation: u32 }`, `StaleHandle` now produced by `resolve_guest_contract`) and Phase 2 (invalidate-only `unload_bundle` on `HostApi` at offset 152; `RuntimeApi` retired entirely; dependent-refusal and cascade unload) have shipped. The "Current State" section below therefore describes history rather than the present for those items. Phases 3 (VM true reclaim) and 4 (native opt-in Reclaim) and the `UnloadMode`/`ReloadPhase::Unloading` ABI bits remain future work.
+
+This is a **design document only** for the remaining phases. The shipped portions serve as implementation record. Every claim about current behavior is cited to `file:line` and was verified against the working tree at design time.
 
 This document deliberately mirrors the tone and structure of
 [`HOT_RELOAD_DESIGN.md`](./HOT_RELOAD_DESIGN.md).

@@ -57,7 +57,7 @@ is the single manifest parser shared by the runtime and the CLI.
 ## Goal 2 — Extension System ✅ Done
 
 The extension system has shipped. `get_extension(extension_id: u32) → *const ()` is the
-18th function pointer on `HostApi` (offset 144; struct is 152 bytes). The host
+18th function pointer on `HostApi` (offset 144; struct is 160 bytes with 19 function pointers). The host
 registers extension pointers by ID (no versioning, no contract machinery); plugins call
 `host->get_extension(id)` and cast the result to the expected struct if non-null. It is
 designed for optional host capabilities: tracing, debug hooks, custom metrics, etc.
@@ -81,9 +81,10 @@ cast, never free, following the "host owns ABI-crossing memory" model.
 
 Host-mediated plugin→plugin cross-dispatch has shipped. `call_guest_method(host,
 instance, fn_id, args, out, arena) → AbiError` is the 17th function pointer on
-`HostApi` (offset 136; struct grew to 152 bytes, pushing `get_extension` to offset
-144). A plugin invokes a method on another plugin's guest contract through the host
-without holding a raw interface pointer of its own.
+`HostApi` (offset 136; struct is 160 bytes with 19 function pointers; `get_extension`
+is at offset 144, `unload_bundle` at offset 152). A plugin invokes a method on another
+plugin's guest contract through the host without holding a raw interface pointer of its
+own.
 
 Delivered:
 

@@ -26,10 +26,10 @@ Key ABI facts (verified in `crates/polyplug_abi/src/host/host_api.rs`):
 - **FFI surface is exactly two `#[no_mangle]` exports** — `polyplug_runtime_create`
   and `polyplug_runtime_destroy` (`crates/polyplug/src/ffi.rs`). Everything else
   is reached through function-pointer fields on `HostApi`.
-- **`HostApi` is 152 bytes, align 8**: one opaque `runtime` pointer plus 18
+- **`HostApi` is 160 bytes, align 8**: one opaque `runtime` pointer plus 19
   function pointers (the 17th, `call_guest_method`, at offset 136; the 18th,
-  `get_extension`, at offset 144). Layout is locked by `layout_host_api` in
-  `host_api.rs`.
+  `get_extension`, at offset 144; the 19th, `unload_bundle`, at offset 152).
+  Layout is locked by `layout_host_api` in `host_api.rs`.
 - **Plugin entry point is `polyplug_init(const HostApi*, const BundleInitContext*)`**
   (2 args). Plugins register via the self-passing pattern
   `host->register_guest_contract(host, &descriptor, &interface)`.
@@ -148,13 +148,37 @@ safety guarantees: [`../TRUST_MODEL.md`](../TRUST_MODEL.md) (Hot-Reload Safety).
 
 ---
 
-## 5. Extension system (Goal 2)
+## 5. Unload (invalidate-only)
+
+`HostApi.unload_bundle(this, bundle_id)` is the 19th `HostApi` function pointer
+(offset 152). It invalidates a bundle at runtime without reloading it.
+
+- **Invalidate semantics:** unload bumps the slot generation for every contract the
+  bundle registered. All previously minted `GuestContractHandle`s for those slots
+  return `AbiErrorCode::StaleHandle` (5) on the next `resolve_guest_contract` call.
+  The bundle is removed from all registry indices; `find_guest_contract` and
+  `list_bundles` no longer return it.
+- **Retire-not-drop:** the interface `Arc` is moved to retire storage rather than
+  freed, so any raw `*const GuestContractInterface` pointer resolved *before* the
+  unload stays valid for the runtime's lifetime (same guarantee as hot-reload).
+- **Dependency refusal:** `Runtime::unload_bundle(bundle_id)` returns
+  `RuntimeError::DependencyInUse` if any still-loaded bundle declared a dependency on
+  a contract this bundle provides. Use `Runtime::unload_bundle_cascade(bundle_id)` to
+  unload dependents first.
+- **True reclaim is future work:** this is invalidate-only unload. `dlclose` for native
+  bundles and VM teardown (Lua, JS, Python, .NET) are not performed today. Memory from
+  retired interfaces accumulates exactly as it does after hot-reloads. See
+  [`UNLOAD_DESIGN.md`](./UNLOAD_DESIGN.md) for the phased plan.
+
+---
+
+## 6. Extension system (Goal 2)
 
 A generic, ID-based channel for optional host capabilities (tracing, debug hooks,
 custom metrics, etc.) that avoids changing the frozen `HostApi` layout.
 
 - `get_extension(extension_id: u32) -> *const ()` is the 18th `HostApi` function
-  pointer (offset 144). The ID is the 32-bit FNV-1a hash of the extension name
+  pointer (offset 144; `unload_bundle` is the 19th at offset 152). The ID is the 32-bit FNV-1a hash of the extension name
   (`polyplug_utils::fnv1a_32`). Returns null if no extension is registered.
 - The host registers pointers by ID via `Runtime::register_extension`; plugins
   call `host->get_extension(id)` and cast the non-null result to the expected
@@ -168,7 +192,7 @@ See [`../ROADMAP.md`](../ROADMAP.md) (Goal 2).
 
 ---
 
-## 6. Host contracts
+## 7. Host contracts
 
 Host contracts provide **bidirectional** communication: plugins call back into
 host-provided services (logging, metrics, config, etc.).
@@ -194,7 +218,7 @@ Full tutorial and per-language examples: [`HOST_CONTRACTS.md`](./HOST_CONTRACTS.
 
 ---
 
-## 7. Cross-dispatch (plugin → plugin)
+## 8. Cross-dispatch (plugin → plugin)
 
 A plugin can invoke a method on another plugin's guest contract through the host,
 without holding a raw interface pointer of its own.
@@ -220,7 +244,7 @@ without holding a raw interface pointer of its own.
 
 ---
 
-## 8. Runtime isolation
+## 9. Runtime isolation
 
 Multiple `Runtime` instances can coexist in one process, each owning its own
 `RuntimeStore`, loaded bundles, and configuration. No globals or thread-locals
@@ -242,7 +266,7 @@ its own VM. For full isolation with Python or .NET, use separate processes.
 
 ---
 
-## 9. Platform support
+## 10. Platform support
 
 | Platform | Status |
 |---|---|
@@ -271,7 +295,7 @@ Windows status (honest, per [`../ROADMAP.md`](../ROADMAP.md) Platform Support):
 
 ---
 
-## 9. Trust model
+## 11. Trust model
 
 polyplug is a software-architecture enforcement tool, not a security sandbox:
 host fully trusted (bundle ID 0), plugins semi-trusted (restricted at init to
@@ -285,7 +309,7 @@ isolation for untrusted code). Full detail: [`../TRUST_MODEL.md`](../TRUST_MODEL
 
 ---
 
-## 10. Performance posture
+## 12. Performance posture
 
 - **Native path is near-zero overhead:** the hot path is one guard load, one
   pointer dereference, and one indirect call (~2 ns for a trivial native

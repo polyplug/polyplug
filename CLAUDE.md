@@ -44,7 +44,7 @@ void* polyplug_runtime_create(const void* config);   // returns HostApi pointer
 void  polyplug_runtime_destroy(void* host);
 ```
 
-All other operations go through **`HostApi` struct fields** (function pointers). `HostApi` is `152 bytes` (1 opaque runtime pointer + 18 function pointer fields, the 17th being `call_guest_method` at offset 136 and the 18th being `get_extension` at offset 144), `align = 8`. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostApi` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.
+All other operations go through **`HostApi` struct fields** (function pointers). `HostApi` is `160 bytes` (1 opaque runtime pointer + 19 function pointer fields, the 17th being `call_guest_method` at offset 136, the 18th being `get_extension` at offset 144, and the 19th being `unload_bundle` at offset 152), `align = 8`. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostApi` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.
 
 ### `polyplug_init` — the plugin entry point
 

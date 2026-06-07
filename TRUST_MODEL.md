@@ -176,7 +176,7 @@ Polyplug allows multiple bundles to implement the same contract, enabling a rich
 ### Implementation Integrity
 - **DuplicateProvider Rule**: The same `bundle_id` cannot register the same `contract_id` twice. This prevents internal ambiguity within a single bundle.
 - **Cross-Bundle Multi-impl**: Different bundles *can* implement the same contract. The registry tracks these in a `Vec<u32>` of slot indices per contract ID.
-- **Handle Validation**: A `GuestContractHandle` is a bare slot index (`{ index: u32 }`) with no generation counter. `resolve_guest_contract` validates the handle by bounds-checking the index and confirming the slot still holds an interface; an out-of-bounds index or an empty slot returns `RegistryError::InvalidHandle`. After a hot-reload swap the same handle remains valid and resolves to the interface now occupying that slot (under the retire-not-drop model, the previously resolved raw pointer also remains valid and continues to serve the old version). The `AbiErrorCode::StaleHandle` variant exists in the ABI but is not produced by the current resolution path.
+- **Handle Validation**: A `GuestContractHandle` is `{ index: u32, generation: u32 }` (8 bytes, align 4). `resolve_guest_contract` bounds-checks the index, confirms the slot still holds an interface, and then compares the handle's `generation` to the slot's current generation — returning `AbiErrorCode::StaleHandle` (5) on mismatch. An out-of-bounds index or an empty slot returns `RegistryError::InvalidHandle`. The slot generation is bumped when a bundle is unloaded, so any handle minted before the unload resolves to `StaleHandle` afterwards. Use-after-unload is therefore actively caught by the generation check. After a hot-reload swap (which does not bump the generation) the same handle remains valid and resolves to the interface now occupying that slot (under the retire-not-drop model, the previously resolved raw pointer also remains valid and continues to serve the old version). The null handle is `{ index: u32::MAX, generation: 0 }`.
 
 ### Multi-impl Scenario
 Consider an application that supports multiple audio decoders. Both `flac-bundle` and `mp3-bundle` might register the same `audio.Decoder` contract.
@@ -222,26 +222,27 @@ The following table summarizes the sizes and alignments of the core ABI types on
 
 | Type | Size (bytes) | Alignment (bytes) | Key Fields |
 |------|--------------|-------------------|------------|
-| `HostApi` | 152 | 8 | `runtime` opaque ptr + 18 function pointers |
+| `HostApi` | 160 | 8 | `runtime` opaque ptr + 19 function pointers |
 | `GuestContractInterface` | 24 | 8 | `contract_id`, `functions` ptr |
-| `GuestContractHandle` | 4 | 4 | `index` (u32, no generation) |
+| `GuestContractHandle` | 8 | 4 | `index: u32`, `generation: u32` |
 | `StringView` | 16 | 8 | `ptr`, `len` |
 | `AbiError` | 24 | 8 | `code`, `message` (StringView) |
 
-`HostApi`'s 18 function pointers (offsets verified in
+`HostApi`'s 19 function pointers (offsets verified in
 `crates/polyplug_abi/src/host/host_api.rs`): `register_guest_contract` (8), `alloc` (16),
 `free` (24), `find_guest_contract` (32), `find_all_guest_contracts` (40),
 `resolve_guest_contract` (48), `get_host_contract` (56),
 `resolve_host_contract_interface` (64), `list_bundles` (72), `get_dependencies` (80),
 `load_bundle` (88), `reload_bundle` (96), `register_host_contract` (104),
 `register_loader` (112), `get_last_error` (120), `get_error_len` (128),
-`call_guest_method` (136), `get_extension` (144). There is no `find_by_bundle` or
-`resolve_plugin` pointer in `HostApi`.
+`call_guest_method` (136), `get_extension` (144), `unload_bundle` (152). There is no
+`find_by_bundle` or `resolve_plugin` pointer in `HostApi`.
 
 ### Pointer Validity After Resolution
 The C ABI deals in raw handles and pointers: `find_guest_contract` returns a
-`GuestContractHandle` (a slot index) and `resolve_guest_contract` turns it into a
-`*const GuestContractInterface` borrowed from the slot's `Arc<GuestContractInterface>`.
+`GuestContractHandle` (a slot index plus generation stamp) and `resolve_guest_contract`
+validates the generation then turns it into a `*const GuestContractInterface` borrowed
+from the slot's `Arc<GuestContractInterface>`.
 
 There is no `PluginGuard`/`VTableSlot` RAII guard in the runtime. Pointer validity is
 guaranteed instead by the retire-not-drop model: the runtime never frees a superseded
@@ -260,7 +261,7 @@ The polyplug trust model is a **Software Architecture Enforcement Tool**, not a 
 |-----------------|--------|-------------|
 | Undeclared Dependencies | **YES** | Caught during initialization lookup. |
 | Version Mismatches | **YES** | Rejected by `find_guest_contract` if version < `min_version`. |
-| Use-after-Unload | **YES** | Caught by generational index checks in `GuestContractHandle`. |
+| Use-after-Unload | **YES** | Caught by generation check in `resolve_guest_contract`: unload bumps the slot generation and any stale handle returns `AbiErrorCode::StaleHandle` (5). |
 | Malformed / corrupted binaries | **YES** | Invalid UTF-8, truncated, wrong magic, missing `init` — all return clean errors. |
 | Null pointer inputs to C facade | **YES** | All `polyplug_rt_*` functions null-check every pointer at entry. |
 | Double-free of host memory (debug) | **YES** | `TrackingAllocator` panics on double-free in `cfg(debug_assertions)`. ASan in CI. |
@@ -310,9 +311,9 @@ The core polyplug ABI **freezes at v1.0**. There is no public release yet, so th
 
 ### Frozen Surface Areas
 The following structures have the layouts and sizes that will be frozen at v1.0. At/after v1.0, any modification to these (e.g., adding a field or changing field order) is a breaking change. Sizes are verified by the layout tests in `crates/polyplug_abi`.
-- **`HostApi` (152 bytes)**: An opaque `runtime` pointer followed by 18 function pointers (full list in §5).
+- **`HostApi` (160 bytes)**: An opaque `runtime` pointer followed by 19 function pointers (full list in §5).
 - **`GuestContractInterface` (24 bytes)**: Fixed header before the function pointer array.
-- **`GuestContractHandle` (4 bytes)**: a single 4-byte `index` (no generation field).
+- **`GuestContractHandle` (8 bytes)**: `index: u32` (offset 0) and `generation: u32` (offset 4), align 4.
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
 
 ### Extensibility via host contracts and extensions
@@ -360,14 +361,28 @@ raw pointer handed out before the reload stays valid for the lifetime of the run
   process-level single-initialization constraints of their interpreters/CLR; Lua and JS are
   disabled in this version).
 
-> **Note:** There is no generation counter, no `ArcSwap`, no `PluginGuard`/`VTableSlot`
+> **Note:** `GuestContractHandle` carries a generation counter (bumped on unload; verified
+> by `resolve_guest_contract`), but there is no `ArcSwap`, no `PluginGuard`/`VTableSlot`
 > quiescence spin, no `QuiescenceTimeout`, and no cascade-depth cap in the current code. An
 > earlier ref-counted reclamation design that used those mechanisms was removed in favor of
-> the retire-not-drop model described above.
+> the retire-not-drop model described above. True resource reclaim (`dlclose` / VM teardown)
+> is future work; the current unload is invalidate-only (handles go stale, retire storage keeps
+> pointers valid).
 
 ## 8. Future Work
 
 The trust model continues to evolve as polyplug expands its reach into more dynamic environments.
+
+### Invalidate-only Unload ✅ done
+
+`HostApi.unload_bundle(this, bundle_id)` (19th pointer, offset 152) is live.
+`Runtime::unload_bundle(bundle_id)` refuses if any still-loaded bundle declared a
+dependency on a contract this bundle provides (`RuntimeError::DependencyInUse`);
+`Runtime::unload_bundle_cascade(bundle_id)` unloads dependents first. Unload bumps the
+slot generation (all stale handles return `AbiErrorCode::StaleHandle`), removes the bundle
+from all registry indices, and retires (does not drop) the interface `Arc` — so any raw
+pointer resolved before the unload stays valid (retire-not-drop). True resource reclaim
+(`dlclose` / VM teardown) is future work; see `docs/UNLOAD_DESIGN.md`.
 
 ### Hot-Reload ✅ done
 Hot-reload is implemented for native bundles using the retire-not-drop model: superseded

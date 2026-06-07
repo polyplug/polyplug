@@ -294,6 +294,7 @@ PipelineDecoder decoder(rt);  // Throws on error? Inconsistent with C++ patterns
 
 ## See Also
 
+- [UNLOAD_DESIGN.md](./UNLOAD_DESIGN.md) — True unload design (generation-counted handles, invalidate-only Phase 1+2 shipped; Reclaim Phases 3-4 are future work)
 - [PERFORMANCE.md](./PERFORMANCE.md) — Hot-reload safety architecture and overhead
 - [ABI_ARCHITECTURE.md](./ABI_ARCHITECTURE.md) — ABI layer design
 - [SDK Examples](../examples/) — Working code for all languages
