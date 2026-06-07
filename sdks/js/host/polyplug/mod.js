@@ -35,6 +35,7 @@ import {
   HOST_API_GET_DEPENDENCIES_OFFSET,
   HOST_API_LOAD_BUNDLE_OFFSET,
   HOST_API_RELOAD_BUNDLE_OFFSET,
+  HOST_API_UNLOAD_BUNDLE_OFFSET,
   HOST_API_REGISTER_HOST_CONTRACT_OFFSET,
   HOST_API_REGISTER_LOADER_OFFSET,
   HOST_API_GET_LAST_ERROR_OFFSET,
@@ -132,7 +133,7 @@ const SYMBOLS = {
   polyplug_runtime_destroy: { parameters: ["pointer"], result: "void" },
 };
 
-// HostApi struct offsets imported from auto-generated abi.ts (152 bytes, 18 function pointer fields)
+// HostApi struct offsets imported from auto-generated abi.ts (160 bytes, 19 function pointer fields)
 const HOST_API_OFFSETS = {
   runtime: HOST_API_RUNTIME_OFFSET,
   register_guest_contract: HOST_API_REGISTER_GUEST_CONTRACT_OFFSET,
@@ -147,6 +148,7 @@ const HOST_API_OFFSETS = {
   get_dependencies: HOST_API_GET_DEPENDENCIES_OFFSET,
   load_bundle: HOST_API_LOAD_BUNDLE_OFFSET,
   reload_bundle: HOST_API_RELOAD_BUNDLE_OFFSET,
+  unload_bundle: HOST_API_UNLOAD_BUNDLE_OFFSET,
   register_host_contract: HOST_API_REGISTER_HOST_CONTRACT_OFFSET,
   register_loader: HOST_API_REGISTER_LOADER_OFFSET,
   get_last_error: HOST_API_GET_LAST_ERROR_OFFSET,
@@ -607,6 +609,26 @@ export class Runtime {
     const code = new DataView(result.buffer, result.byteOffset, result.byteLength).getUint32(0, true);
     if (code !== 0) {
       throw new Error(`reloadBundle failed: ${this.lastError()}`);
+    }
+  }
+
+  /**
+   * Unload a plugin bundle by bundle ID.
+   * Calls through HostApi.unload_bundle field.
+   * @param {bigint} bundleId - Bundle identifier
+   */
+  unloadBundle(bundleId) {
+    // HostApi.unload_bundle returns AbiError (24-byte struct), not u32.
+    const result = callHostMethod(
+      this.#host,
+      HOST_API_OFFSETS.unload_bundle,
+      ["pointer", "u64"],
+      { struct: ["u32", "u32", "pointer", "usize"] },
+      [this.#host, bundleId]
+    );
+    const code = new DataView(result.buffer, result.byteOffset, result.byteLength).getUint32(0, true);
+    if (code !== 0) {
+      throw new Error(`unloadBundle failed: ${this.lastError()}`);
     }
   }
 

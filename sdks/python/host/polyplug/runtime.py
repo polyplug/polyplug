@@ -220,6 +220,7 @@ class Runtime:
         # both duplicate the signature and risk drift from the canonical type.
         self._load_bundle_fn = self._host_struct.load_bundle
         self._reload_bundle_fn = self._host_struct.reload_bundle
+        self._unload_bundle_fn = self._host_struct.unload_bundle
         self._find_guest_contract_fn = self._host_struct.find_guest_contract
         self._find_all_fn = self._host_struct.find_all_guest_contracts
         self._resolve_fn = self._host_struct.resolve_guest_contract
@@ -347,6 +348,12 @@ class Runtime:
         buf = (ctypes.c_uint8 * len(path_bytes))(*path_bytes)
         err: AbiError = self._reload_bundle_fn(host, buf, len(path_bytes))
         self._check_error(err.code, "reload_bundle")
+
+    def unload_bundle(self, bundle_id: int) -> None:
+        """Unload a plugin bundle by bundle ID."""
+        host: int = self._ensure_host()
+        err: AbiError = self._unload_bundle_fn(host, bundle_id)
+        self._check_error(err.code, "unload_bundle")
 
     def find_guest_contract(self, contract_id: int, min_version: int) -> GuestContractHandle:
         """Find a guest contract by contract_id and minimum version.

@@ -20,6 +20,7 @@ public sealed class Runtime
     // Cached function pointer delegates (18-03)
     private LoadBundleDelegate? _loadBundleFn;
     private ReloadBundleDelegate? _reloadBundleFn;
+    private UnloadBundleDelegate? _unloadBundleFn;
     private FindGuestContractDelegate? _findGuestContractFn;
     private FindAllGuestContractsDelegate? _findAllFn;
     private ResolveGuestContractDelegate? _resolveFn;
@@ -36,6 +37,9 @@ public sealed class Runtime
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate AbiError ReloadBundleDelegate(nint host, nint path, nuint pathLen);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate AbiError UnloadBundleDelegate(nint host, ulong bundleId);
 
     // GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes,
     // align 4). It crosses the C ABI by value as the 8-byte struct — its
@@ -217,6 +221,7 @@ public sealed class Runtime
     {
         _loadBundleFn = Marshal.GetDelegateForFunctionPointer<LoadBundleDelegate>(_hostStruct.LoadBundle);
         _reloadBundleFn = Marshal.GetDelegateForFunctionPointer<ReloadBundleDelegate>(_hostStruct.ReloadBundle);
+        _unloadBundleFn = Marshal.GetDelegateForFunctionPointer<UnloadBundleDelegate>(_hostStruct.UnloadBundle);
         _findGuestContractFn = Marshal.GetDelegateForFunctionPointer<FindGuestContractDelegate>(_hostStruct.FindGuestContract);
         _findAllFn = Marshal.GetDelegateForFunctionPointer<FindAllGuestContractsDelegate>(_hostStruct.FindAllGuestContracts);
         _resolveFn = Marshal.GetDelegateForFunctionPointer<ResolveGuestContractDelegate>(_hostStruct.ResolveGuestContract);
@@ -309,6 +314,13 @@ public sealed class Runtime
             AbiError result = _reloadBundleFn!(_host, ptr, len);
             CheckAbiError(result, "Failed to reload bundle.");
         });
+    }
+
+    public void UnloadBundle(ulong bundleId)
+    {
+        EnsureHost();
+        AbiError result = _unloadBundleFn!(_host, bundleId);
+        CheckAbiError(result, "Failed to unload bundle.");
     }
 
     /// <summary>

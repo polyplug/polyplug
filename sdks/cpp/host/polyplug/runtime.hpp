@@ -181,6 +181,17 @@ public:
         }
     }
 
+    /// Unload a plugin bundle by bundle ID.
+    /// Calls through HostApi.unload_bundle field.
+    void unload_bundle(uint64_t bundle_id) {
+        ensure_host();
+        auto func = reinterpret_cast<AbiError(*)(const HostApi*, uint64_t)>(host_->unload_bundle);
+        AbiError result = func(host_, bundle_id);
+        if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
+            throw std::runtime_error("unload_bundle failed: " + get_last_error());
+        }
+    }
+
     /// Find a guest contract by contract_id and minimum version.
     /// Calls through HostApi.find_guest_contract field.
     /// Returns GuestContractHandle (8 bytes: u32 index + u32 generation), or invalid_handle() if not found.

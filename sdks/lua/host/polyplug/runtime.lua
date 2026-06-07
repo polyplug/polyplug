@@ -194,6 +194,19 @@ function M.Runtime:reload_bundle(path)
     end
 end
 
+--- Unload a plugin bundle by bundle ID.
+-- Calls through HostApi.unload_bundle field.
+-- @param bundle_id number  Bundle identifier (uint64).
+function M.Runtime:unload_bundle(bundle_id)
+    -- Cast function pointer and call with self-passing pattern.
+    -- HostApi.unload_bundle returns AbiError (24-byte struct), not uint32_t.
+    local fn = ffi.cast("AbiError(*)(const HostApi*, uint64_t)", self._host_struct.unload_bundle)
+    local err = fn(self._host, bundle_id)
+    if err.code ~= ffi.C.AbiErrorCode_Ok then
+        error("unload_bundle failed: " .. M.last_error(self._host, self._lib))
+    end
+end
+
 --- Find guest contract by contract_id and minimum version.
 -- Calls through HostApi.find_guest_contract field.
 -- @param contract_id number  Contract identifier hash.
