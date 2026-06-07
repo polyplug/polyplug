@@ -155,8 +155,11 @@ jobs:
       # Full suite: unit tests + integration/e2e tests against the fixtures built
       # above. Toolchains the polyplugc e2e tests spawn (c++, dotnet, python3,
       # deno, luajit) are provided by the image and the setup steps.
+      # --no-fail-fast: default fail-fast stops after the first binary fails,
+      # hiding every subsequent test binary's failures; on Windows-only iteration
+      # we want every failure surfaced in a single run.
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
   external-toolchains:
     name: External ${{ matrix.toolchain }}

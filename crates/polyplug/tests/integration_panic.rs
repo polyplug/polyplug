@@ -241,7 +241,9 @@ fn test_panic_returns_abi_error_panic() {
          name = \"panic_plugin\"\n\
          version = \"1.0.0\"\n\
          implements = [\"test.panic@1.0\"]\n",
-        api_toml.display()
+        // Backslashes are invalid TOML escape sequences; forward slashes are valid
+        // path separators on every platform (including Windows).
+        api_toml.to_string_lossy().replace('\\', "/")
     );
     let bundle_toml_path: PathBuf = tmp_dir.join("bundle.toml");
     std::fs::write(&bundle_toml_path, bundle_toml_content).expect("write bundle.toml");
@@ -280,7 +282,9 @@ fn test_panic_returns_abi_error_panic() {
          \n\
          [dependencies]\n\
          polyplug_guest = {{ path = \"{}\" }}\n",
-        guest_lib_path.display()
+        // Backslashes are invalid TOML escape sequences; forward slashes are valid
+        // path separators on every platform (including Windows).
+        guest_lib_path.to_string_lossy().replace('\\', "/")
     );
     std::fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml_content).expect("write Cargo.toml");
 

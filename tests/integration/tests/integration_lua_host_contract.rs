@@ -151,7 +151,9 @@ fn build_lua_bundle(tmp: &Path) -> PathBuf {
          name = \"transformer\"\n\
          version = \"1.0.0\"\n\
          implements = [\"data.Transformer@1.0\"]\n",
-        api = api_path.to_string_lossy(),
+        // Backslashes are invalid TOML escape sequences; forward slashes are valid
+        // path separators on every platform (including Windows).
+        api = api_path.to_string_lossy().replace('\\', "/"),
     );
     let bundle_toml_path: PathBuf = bundle_dir.join("bundle.toml");
     std::fs::write(&bundle_toml_path, bundle_toml).expect("write bundle.toml");
