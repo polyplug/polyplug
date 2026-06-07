@@ -122,18 +122,6 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      # LuaJIT ships no prebuilt binaries on any platform; msvcbuild.bat is the
-      # official Windows build (generate_e2e_vm.rs spawns `luajit`).
-      - uses: ilammy/msvc-dev-cmd@v1
-      - name: Build LuaJIT
-        shell: cmd
-        run: |
-          git clone --depth 1 https://github.com/LuaJIT/LuaJIT.git %RUNNER_TEMP%\LuaJIT
-          cd /d %RUNNER_TEMP%\LuaJIT\src
-          msvcbuild.bat
-      - name: Add LuaJIT to PATH
-        shell: bash
-        run: echo "$RUNNER_TEMP/LuaJIT/src" >> "$GITHUB_PATH"
       # sdk_validator's in-crate language-validator tests shell out to the
       # ast-grep CLI (same dependency the sdk_validator job installs on Linux).
       - name: Install ast-grep
@@ -148,6 +136,22 @@ jobs:
       - name: Build test fixtures
         shell: bash
         run: bash tests/fixtures/build_all.sh
+      # MSVC env activation must come AFTER the bash-shell cargo steps: with the
+      # MSVC env set, rustc takes `link.exe` from PATH, and Git Bash's GNU
+      # coreutils /usr/bin/link shadows it. (LuaJIT's msvcbuild.bat needs the env;
+      # the final pwsh test step is unaffected.)
+      # LuaJIT ships no prebuilt binaries on any platform; msvcbuild.bat is the
+      # official Windows build (generate_e2e_vm.rs spawns `luajit`).
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build LuaJIT
+        shell: cmd
+        run: |
+          git clone --depth 1 https://github.com/LuaJIT/LuaJIT.git %RUNNER_TEMP%\LuaJIT
+          cd /d %RUNNER_TEMP%\LuaJIT\src
+          msvcbuild.bat
+      - name: Add LuaJIT to PATH
+        shell: bash
+        run: echo "$RUNNER_TEMP/LuaJIT/src" >> "$GITHUB_PATH"
       # Full suite: unit tests + integration/e2e tests against the fixtures built
       # above. Toolchains the polyplugc e2e tests spawn (c++, dotnet, python3,
       # deno, luajit) are provided by the image and the setup steps.
