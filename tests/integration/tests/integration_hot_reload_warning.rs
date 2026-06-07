@@ -29,7 +29,14 @@ const RELOAD_V2_DIR: &str = env!("RELOAD_PLUGIN_V2_DIR");
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn v2_so_path() -> PathBuf {
-    PathBuf::from(RELOAD_V2_DIR).join("libreload_plugin_v2.so")
+    let filename: &str = if cfg!(target_os = "macos") {
+        "libreload_plugin_v2.dylib"
+    } else if cfg!(target_os = "windows") {
+        "reload_plugin_v2.dll"
+    } else {
+        "libreload_plugin_v2.so"
+    };
+    PathBuf::from(RELOAD_V2_DIR).join(filename)
 }
 
 fn hot_reload_config() -> polyplug::RuntimeConfig {

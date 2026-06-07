@@ -99,7 +99,7 @@ jobs:
         run: cargo test --workspace
 
   windows:
-    name: Windows (build + unit tests)
+    name: Windows (build + tests)
     needs: [fmt, clippy, sdk_validator]
     runs-on: windows-latest
     steps:
@@ -119,6 +119,21 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      # LuaJIT ships no prebuilt binaries on any platform; msvcbuild.bat is the
+      # official Windows build (generate_e2e_vm.rs spawns `luajit`).
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build LuaJIT
+        shell: cmd
+        run: |
+          git clone --depth 1 https://github.com/LuaJIT/LuaJIT.git %RUNNER_TEMP%\LuaJIT
+          cd /d %RUNNER_TEMP%\LuaJIT\src
+          msvcbuild.bat
+      - name: Add LuaJIT to PATH
+        shell: bash
+        run: echo "$RUNNER_TEMP/LuaJIT/src" >> "$GITHUB_PATH"
       # sdk_validator's in-crate language-validator tests shell out to the
       # ast-grep CLI (same dependency the sdk_validator job installs on Linux).
       - name: Install ast-grep
@@ -127,39 +142,17 @@ jobs:
       # every crate, including all six language loaders, compiles on Windows MSVC.
       - name: Build workspace
         run: cargo build --workspace
-      # Run library unit tests across the workspace. `--lib` runs each crate's
-      # in-crate `#[cfg(test)]` suites (manifest per-platform `[file]` resolution,
-      # compatibility graph, codegen emitters, error formatting) without touching
-      # the `tests/` integration fixtures.
-      #
-      # EXCLUDED on Windows (scoping, not test-skipping) — each with a concrete,
-      # still-open blocker. The committed fixture manifests now carry per-platform
-      # `[file]` tables (windows.x86_64 = "<name>.dll"), and the fixture build
-      # scripts emit platform-correct names, so the loader resolution half is
-      # ready. The remaining blocker is the binaries themselves:
-      #
-      #   - native-loader suites that load *_DIR fixtures (e.g. library_lifetime,
-      #     integration_cascade_reload, stress_hot_reload): the bundle dirs ship a
-      #     COMMITTED Linux `lib<name>.so` only. There is no committed `<name>.dll`
-      #     and no CI step produces one — tests/fixtures/build_all.sh (the only
-      #     producer) is a bash script that no job runs and that needs g++/MSVC for
-      #     its C++ fixtures. Enabling these requires either committing Windows
-      #     `.dll` fixtures or adding a Windows fixture-build+install step.
-      #   - native-loader suites that load *_SO fixtures (integration_load,
-      #     integration_dispatch, integration_graph, integration_context,
-      #     integration_ffi_robustness, integration_codegen_cpp, stress_memory,
-      #     stress_error): they `libloading::Library::new(<*_SO>).expect(...)` with
-      #     no existence guard, on the gitignored fixtures-root copy that only
-      #     build_all.sh produces — so they would hard-fail, not skip.
-      #   - cross_language / VM-loader integration suites (lua/js/python/dotnet):
-      #     same missing-binary dependency for their native host/guest legs; the
-      #     C++ and C# legs additionally need g++/dotnet fixture builds wired in.
-      #
-      # We have no Windows machine; the first real verification is this CI run, so
-      # the enabled set is kept to what is known-green (workspace build + `--lib`
-      # unit tests) rather than widened to suites that cannot pass yet.
-      - name: Run unit tests
-        run: cargo test --workspace --lib
+      # Produce the native/C++/C# test fixture binaries (<name>.dll on Windows —
+      # the script is MINGW-aware and Git Bash provides the shell; MinGW g++ and
+      # dotnet are on the image/job).
+      - name: Build test fixtures
+        shell: bash
+        run: bash tests/fixtures/build_all.sh
+      # Full suite: unit tests + integration/e2e tests against the fixtures built
+      # above. Toolchains the polyplugc e2e tests spawn (c++, dotnet, python3,
+      # deno, luajit) are provided by the image and the setup steps.
+      - name: Run tests
+        run: cargo test --workspace
 
   external-toolchains:
     name: External ${{ matrix.toolchain }}

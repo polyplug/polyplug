@@ -13,6 +13,17 @@ use polyplug_abi::GuestContractInterface;
 use polyplug_abi::runtime::ReloadPhaseType;
 use polyplug_native::NativeLoader;
 
+fn v2_so_path() -> PathBuf {
+    let filename: &str = if cfg!(target_os = "macos") {
+        "libreload_plugin_v2.dylib"
+    } else if cfg!(target_os = "windows") {
+        "reload_plugin_v2.dll"
+    } else {
+        "libreload_plugin_v2.so"
+    };
+    PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join(filename)
+}
+
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::GuestContractHandle = rt.find_guest_contract(contract_id, 0).ok()?;
     let vtable: *const GuestContractInterface = rt.resolve_guest_contract(handle).ok()?;
@@ -62,8 +73,7 @@ fn test_preparing_fires_before_vtable_swap() {
 
     phases.lock().unwrap_or_else(|e| e.into_inner()).clear();
 
-    let v2_path: PathBuf =
-        PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so");
+    let v2_path: PathBuf = v2_so_path();
     rt.reload_bundle(v2_path.as_path()).expect("reload v2");
 
     let captured_phases: Vec<ReloadPhase> =
@@ -122,8 +132,7 @@ fn test_reloaded_fires_after_vtable_swap() {
 
     let contract_id: u64 = polyplug_utils::guest_contract_id("reload.test", 1);
 
-    let v2_path: PathBuf =
-        PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so");
+    let v2_path: PathBuf = v2_so_path();
     rt.reload_bundle(v2_path.as_path()).expect("reload v2");
 
     let version_fn_v2: extern "C" fn() -> u32 =
@@ -302,8 +311,7 @@ fn test_notification_order_on_successful_reload() {
 
     phases.lock().unwrap_or_else(|e| e.into_inner()).clear();
 
-    let v2_path: PathBuf =
-        PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so");
+    let v2_path: PathBuf = v2_so_path();
     rt.reload_bundle(v2_path.as_path()).expect("reload v2");
 
     let captured_phases: Vec<ReloadPhase> =
@@ -370,8 +378,7 @@ fn test_callback_receives_correct_bundle_id() {
 
     let expected_bundle_id: u64 = polyplug_utils::bundle_id("reload_plugin_v1");
 
-    let v2_path: PathBuf =
-        PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so");
+    let v2_path: PathBuf = v2_so_path();
     rt.reload_bundle(v2_path.as_path()).expect("reload v2");
 
     let captured_ids: Vec<u64> = bundle_ids.lock().unwrap_or_else(|e| e.into_inner()).clone();
