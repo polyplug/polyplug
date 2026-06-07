@@ -135,7 +135,7 @@ in allocation overhead.
 
 ### Languages that benefit most
 
-VM-dispatched managed languages (Lua, JS via QuickJS) where the guest builds a
+VM-dispatched managed languages (Lua, JS via QuickJS, Python) where the guest builds a
 fresh return value (string/array) on every call and the host must reclaim it.
 Those are the only languages where the arena replaces a real per-value
 `host->alloc` round trip.
@@ -158,7 +158,7 @@ which has no arena parameter. Native callers therefore pass a null arena.
 | Rust (host caller) | Native | borrowed view, zero-alloc; real per-caller arena when a return needs one (`fn_needs_arena`) | N/A for returns (already zero-alloc) |
 | C++ (host caller) | Native/VM | borrowed view, zero-alloc | N/A for returns (already zero-alloc) |
 | C# | Native | borrowed view, zero-alloc | N/A for returns (already zero-alloc) |
-| Python | **Native** (ctypes CFUNCTYPE) | borrowed view / `host->alloc`; **no arena in the native ABI signature** | **No** — same exclusion as native Rust/C++ |
+| Python | VM (native ctypes dispatch removed in `fd8cc4ea` — its sret emulation was UB on arm64) | `_polyplug_arena_alloc` → `CallArena`, falls back to `host->alloc` | **Yes** (`_polyplug_arena_alloc`) |
 
 Lifetime rule for arena-backed returns: a view returned from an arena-backed call
 is valid **until the next arena-backed call on the same caller** (the caller resets
@@ -181,10 +181,11 @@ VM dispatch signature `call(loader_data, instance, fn_id, args, out, arena)`; a
 - Tests: verify arena memory is valid during a call and released after;
   verify zero explicit alloc/free calls visible in generated plugin code.
 
-## Platform Support — Windows 🚧 In progress
+## Platform Support — Windows ✅ Done
 
-The workspace is Windows-correct at the source level and a `windows-latest` CI
-job has been added; awaiting the first real Windows CI run for confirmation.
+The full workspace test suite runs and passes on `windows-latest` (CI job
+"Windows (build + tests)" runs `cargo test --workspace --no-fail-fast`, not just
+`--lib`). Full suite green on windows-latest as of 2026-06-07.
 
 Done:
 
@@ -198,19 +199,31 @@ Done:
 - `manifest.toml` per-platform `[file]` tables already resolve the `windows`
   key; the native loader uses `libloading` (cross-platform) and `PathBuf::join`
   throughout.
-- `cargo check --target x86_64-pc-windows-msvc` is clean for every pure-Rust
-  crate; the only cross-check failures are vendored native C build scripts
-  (`pyo3-ffi`, `rquickjs-sys`, `tree-sitter`) that need the target's own
-  toolchain and build natively on a Windows runner.
+- All six loaders (including the vendored native C build scripts `pyo3-ffi`,
+  `rquickjs-sys`, `tree-sitter`) build **and** test natively on the Windows
+  runner using the target's own MSVC toolchain.
+- Test fixtures are not committed artifacts: `tests/fixtures/build_all.sh` is
+  MINGW-aware and builds the `.dll` fixtures on the runner (Git Bash shell),
+  same as Linux/macOS; reload-fixture integration tests use platform-aware
+  `.dll`/`.dylib`/`.so` path helpers, so no per-platform `[file]` manifest
+  tables were needed for those test fixtures.
 - CI: `windows-latest` job builds the full workspace (all six loaders) and runs
-  `cargo test --workspace --lib`.
-
-Remaining (separate fixture-portability work item):
-
-- Native-loader integration tests need their pre-built `.so` fixtures rebuilt and
-  committed as Windows `.dll` artifacts plus per-platform `[file]` manifest
-  tables, then the Windows CI job can drop the `--lib` scoping and run them.
+  the full suite `cargo test --workspace`.
 - Windows hot-reload note: the retire-not-drop model loads each version from a
   distinct on-disk filename (e.g. `reload_plugin_v1` vs `_v2`), so reload never
   overwrites a file while it is mapped — the Windows DLL file-lock that would
   break overwrite-in-place reload does not apply.
+
+Windows-specific notes (non-obvious constraints — do not regress):
+
+- MSVC env activation is ordered **after** all bash-shell cargo steps — Git
+  Bash's GNU `/usr/bin/link` shadows MSVC `link.exe` once the MSVC env is set.
+- Fabricated-TOML tests normalize embedded absolute paths to forward slashes
+  (backslashes are invalid TOML escapes); paths handed to MSBuild strip the
+  `\\?\` verbatim prefix left by `canonicalize()`.
+- LuaJIT is built from source via the official `msvcbuild.bat` (no prebuilt
+  binaries exist) with `LUA_PATH` pointed at the source tree for `luajit -b`.
+- `crates/polyplug_dotnet/src/context.rs` uses `into_temp_path()` to close the
+  runtimeconfig.json write handle before `hostfxr_initialize_for_runtime_config`
+  reads it — Windows mandatory file sharing otherwise fails the read with
+  `ERROR_SHARING_VIOLATION`.
