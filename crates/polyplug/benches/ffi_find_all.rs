@@ -289,6 +289,10 @@ unsafe extern "C" fn bench_get_extension(_this: *const HostApi, _extension_id: u
     core::ptr::null()
 }
 
+unsafe extern "C" fn bench_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
+    AbiError::ok()
+}
+
 // ─── Setup helper ────────────────────────────────────────────────────────────
 
 /// Build a HostApi backed by the thread-local BENCH_REGISTRY.
@@ -313,6 +317,7 @@ fn build_host_interface() -> HostApi {
         get_error_len: bench_get_error_len,
         call_guest_method: bench_call_guest_method,
         get_extension: bench_get_extension,
+        unload_bundle: bench_unload_bundle,
     }
 }
 

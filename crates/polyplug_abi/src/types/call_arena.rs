@@ -351,6 +351,10 @@ mod tests {
         core::ptr::null()
     }
 
+    unsafe extern "C" fn stub_unload(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
+        AbiError::ok()
+    }
+
     fn test_host() -> HostApi {
         HostApi {
             runtime: core::ptr::null_mut(),
@@ -372,6 +376,7 @@ mod tests {
             get_error_len: stub_get_len,
             call_guest_method: stub_call_guest_method,
             get_extension: stub_get_extension,
+            unload_bundle: stub_unload,
         }
     }
 

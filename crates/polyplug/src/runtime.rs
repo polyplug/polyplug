@@ -14,6 +14,7 @@
 
 use core::str::FromStr;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -522,6 +523,108 @@ impl Runtime {
                 ignore_function_count_mismatch: false,
             },
         )
+    }
+
+    /// Unload a bundle: invalidate its handles and remove it from the registry.
+    ///
+    /// This is retire/invalidate-only unload. The bundle's slots have their generation
+    /// bumped and their active interface `Arc` moved to retire storage, then the bundle
+    /// is removed from the registry indices. The underlying dylib mapping or VM state is
+    /// **NOT** freed — that is a future Reclaim mode. Because interfaces are retired
+    /// rather than dropped, any raw `GuestContractInterface` pointer resolved before the
+    /// unload stays valid; only future resolves of old handles fail with `StaleHandle`.
+    ///
+    /// # Errors
+    /// - `BundleNotFound`: the bundle is not currently loaded.
+    /// - `DependencyInUse`: a still-loaded bundle declared a dependency on a contract
+    ///   this bundle provides. Use [`Runtime::unload_bundle_cascade`] to unload the
+    ///   dependents first.
+    pub fn unload_bundle(&self, bundle_id: BundleId) -> Result<(), RuntimeError> {
+        let descriptor: crate::runtime_store::BundleDescriptor = self
+            .registry
+            .get_bundle_descriptor(bundle_id)
+            .ok_or_else(|| RuntimeError::BundleNotFound {
+                bundle_name: format!("{:#x}", bundle_id.id()),
+                contract_name: String::new(),
+            })?;
+
+        // Refuse-by-default (design D4): a still-loaded bundle that declared a
+        // dependency on a contract this bundle provides would have its trust assumption
+        // broken by an unload, so reject unless the caller cascades explicitly.
+        let exported: HashSet<GuestContractId> = self
+            .registry
+            .bundle_exported_contracts(bundle_id)
+            .into_iter()
+            .collect();
+        let mut dependents: Vec<String> = self
+            .registry
+            .bundles_depending_on_any(&exported)
+            .into_iter()
+            .filter(|dep: &BundleId| *dep != bundle_id)
+            .filter_map(|dep: BundleId| {
+                self.registry
+                    .get_bundle_descriptor(dep)
+                    .map(|d: crate::runtime_store::BundleDescriptor| d.name)
+            })
+            .collect();
+        if !dependents.is_empty() {
+            dependents.sort();
+            return Err(RuntimeError::DependencyInUse {
+                provider: descriptor.name,
+                dependents,
+            });
+        }
+
+        self.registry.invalidate_bundle(bundle_id)?;
+        Ok(())
+    }
+
+    /// Unload a bundle and every bundle that depends on it, dependents first.
+    ///
+    /// Recursively unloads bundles that declared a dependency on a contract the target
+    /// provides before unloading the target itself, so no `DependencyInUse` refusal is
+    /// hit. A `visited` set breaks dependency cycles. Like [`Runtime::unload_bundle`],
+    /// this is retire/invalidate-only.
+    pub fn unload_bundle_cascade(&self, bundle_id: BundleId) -> Result<(), RuntimeError> {
+        let mut visited: HashSet<BundleId> = HashSet::new();
+        self.unload_bundle_cascade_with_visited(bundle_id, &mut visited)
+    }
+
+    /// Cascade-unload `bundle_id`, tracking already-unloaded bundles in `visited` to
+    /// break dependency cycles.
+    fn unload_bundle_cascade_with_visited(
+        &self,
+        bundle_id: BundleId,
+        visited: &mut HashSet<BundleId>,
+    ) -> Result<(), RuntimeError> {
+        if !visited.insert(bundle_id) {
+            return Ok(());
+        }
+
+        if self.registry.get_bundle_descriptor(bundle_id).is_none() {
+            return Err(RuntimeError::BundleNotFound {
+                bundle_name: format!("{:#x}", bundle_id.id()),
+                contract_name: String::new(),
+            });
+        }
+
+        let exported: HashSet<GuestContractId> = self
+            .registry
+            .bundle_exported_contracts(bundle_id)
+            .into_iter()
+            .collect();
+        let dependents: Vec<BundleId> = self
+            .registry
+            .bundles_depending_on_any(&exported)
+            .into_iter()
+            .filter(|dep: &BundleId| *dep != bundle_id)
+            .collect();
+        for dep in dependents {
+            self.unload_bundle_cascade_with_visited(dep, visited)?;
+        }
+
+        self.registry.invalidate_bundle(bundle_id)?;
+        Ok(())
     }
 
     /// Load a single plugin bundle explicitly with options.
@@ -1509,6 +1612,40 @@ pub unsafe extern "C" fn host_reload_bundle(
     }
 }
 
+/// HostApi.unload_bundle callback — invalidates a bundle and removes it from the registry.
+///
+/// Performs retire/invalidate-only unload: the bundle's handles go stale and it is
+/// removed from the registry, but the underlying dylib/VM is not freed.
+///
+/// # Safety
+/// - `this` must be a valid HostApi pointer with a valid runtime field.
+pub unsafe extern "C" fn host_unload_bundle(
+    this: *const HostApi,
+    bundle_id: BundleId,
+) -> polyplug_abi::AbiError {
+    use polyplug_abi::{AbiError, AbiErrorCode, StringView};
+
+    if this.is_null() {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::from_static(b"null HostApi in unload_bundle"),
+        };
+    }
+    // SAFETY: this is a valid HostApi pointer. (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+
+    match runtime.unload_bundle(bundle_id) {
+        Ok(()) => AbiError::ok(),
+        Err(e) => {
+            runtime.set_last_error(e.to_string());
+            AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            }
+        }
+    }
+}
+
 /// HostApi.register_host_contract callback — registers a host contract interface.
 ///
 /// Host applications register their contracts for plugins to consume.
@@ -1961,6 +2098,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
+            unload_bundle: host_unload_bundle,
         };
 
         // SAFETY: host_interface is valid with runtime pointer; init bundle_id is set
@@ -3018,6 +3156,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
+            unload_bundle: host_unload_bundle,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -3059,6 +3198,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
+            unload_bundle: host_unload_bundle,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -3172,6 +3312,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
+            unload_bundle: host_unload_bundle,
         };
 
         // First call - creates instance
@@ -3259,6 +3400,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
+            unload_bundle: host_unload_bundle,
         };
 
         // First call - creates instance (counter becomes 101)
@@ -3357,6 +3499,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             get_extension: host_get_extension,
+            unload_bundle: host_unload_bundle,
         };
 
         // Call singleton twice - should get same instance
@@ -3445,6 +3588,91 @@ mod tests {
         assert_ne!(
             id_logger, id_tracer,
             "different extension names must not collide"
+        );
+    }
+
+    #[test]
+    fn unload_refuses_provider_with_dependent_then_cascade_succeeds() {
+        let runtime: Arc<Runtime> = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        let provider_contract_id: u64 = 0x0BAD_F00D_0000_00A1;
+        let provider_bundle_id: BundleId = BundleId::from_u64(0xA);
+        let dependent_bundle_id: BundleId = BundleId::from_u64(0xB);
+
+        // Bundle A provides a contract; bundle B declares a dependency on it.
+        register_native_caller_contract(&runtime.registry, provider_contract_id, 0xA);
+        register_native_caller_contract(&runtime.registry, 0x0BAD_F00D_0000_00B2, 0xB);
+
+        runtime
+            .registry
+            .register_bundle_metadata(
+                provider_bundle_id,
+                "bundle_a".to_owned(),
+                Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                RuntimeLanguage::Rust,
+                PathBuf::new(),
+                Vec::new(),
+            )
+            .expect("provider metadata registration should succeed");
+        runtime
+            .registry
+            .register_bundle_metadata(
+                dependent_bundle_id,
+                "bundle_b".to_owned(),
+                Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                RuntimeLanguage::Rust,
+                PathBuf::new(),
+                Vec::new(),
+            )
+            .expect("dependent metadata registration should succeed");
+        runtime
+            .registry
+            .declare_bundle_dependencies(
+                dependent_bundle_id,
+                vec![GuestContractId::from_u64(provider_contract_id)],
+            )
+            .expect("dependency declaration should succeed");
+
+        // Unloading the provider must be refused while the dependent is loaded.
+        match runtime.unload_bundle(provider_bundle_id) {
+            Err(RuntimeError::DependencyInUse {
+                provider,
+                dependents,
+            }) => {
+                assert_eq!(provider, "bundle_a");
+                assert_eq!(dependents, vec!["bundle_b".to_owned()]);
+            }
+            other => panic!("expected DependencyInUse refusal, got {other:?}"),
+        }
+
+        // Cascade unload removes the dependent first, then the provider.
+        runtime
+            .unload_bundle_cascade(provider_bundle_id)
+            .expect("cascade unload should succeed");
+
+        assert!(
+            runtime
+                .registry
+                .get_bundle_descriptor(provider_bundle_id)
+                .is_none(),
+            "provider bundle must be gone after cascade unload"
+        );
+        assert!(
+            runtime
+                .registry
+                .get_bundle_descriptor(dependent_bundle_id)
+                .is_none(),
+            "dependent bundle must be gone after cascade unload"
         );
     }
 }

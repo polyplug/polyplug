@@ -10,7 +10,6 @@ import {
     HOST_API_SIZE,
     HOST_CONTRACT_INSTANCE_SIZE,
     HOST_CONTRACT_INTERFACE_SIZE,
-    RUNTIME_API_SIZE,
     GUEST_CONTRACT_HANDLE_SIZE,
     BUNDLE_INIT_CONTEXT_SIZE,
     PLUGIN_DESCRIPTOR_SIZE,
@@ -46,8 +45,8 @@ Deno.test("GuestContractInterface is 56 bytes", () => {
     assert(GUEST_CONTRACT_INTERFACE_SIZE === 56);
 });
 
-Deno.test("HostApi is 152 bytes", () => {
-    assert(HOST_API_SIZE === 152);
+Deno.test("HostApi is 160 bytes", () => {
+    assert(HOST_API_SIZE === 160);
 });
 
 Deno.test("HostContractInstance is 8 bytes", () => {
@@ -56,10 +55,6 @@ Deno.test("HostContractInstance is 8 bytes", () => {
 
 Deno.test("HostContractInterface is 80 bytes", () => {
     assert(HOST_CONTRACT_INTERFACE_SIZE === 80);
-});
-
-Deno.test("RuntimeApi is 96 bytes", () => {
-    assert(RUNTIME_API_SIZE === 96);
 });
 
 Deno.test("GuestContractHandle is 8 bytes", () => {

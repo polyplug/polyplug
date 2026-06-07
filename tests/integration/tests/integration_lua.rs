@@ -450,6 +450,13 @@ unsafe extern "C" fn arena_stub_get_extension(_this: *const HostApi, _id: u32) -
     core::ptr::null()
 }
 
+unsafe extern "C" fn arena_stub_unload_bundle(
+    _this: *const HostApi,
+    _bundle_id: BundleId,
+) -> AbiError {
+    AbiError::ok()
+}
+
 /// Build a HostApi whose allocator counts calls — only `alloc`/`free` are ever
 /// exercised by the arena; the remaining fields are non-null stubs so the struct
 /// is a valid HostApi.
@@ -474,6 +481,7 @@ fn counting_host() -> HostApi {
         get_error_len: arena_stub_get_len,
         call_guest_method: arena_stub_call_guest_method,
         get_extension: arena_stub_get_extension,
+        unload_bundle: arena_stub_unload_bundle,
     }
 }
 

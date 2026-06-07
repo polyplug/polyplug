@@ -12,7 +12,6 @@ from abi import (
     HostApi,
     HostContractInstance,
     HostContractInterface,
-    RuntimeApi,
     GuestContractHandle,
     BundleInitContext,
     PluginDescriptor,
@@ -49,7 +48,7 @@ def test_guest_contract_interface_size():
 
 
 def test_host_api_size():
-    assert ctypes.sizeof(HostApi) == 152, f"HostApi expected 152 bytes, got {ctypes.sizeof(HostApi)}"
+    assert ctypes.sizeof(HostApi) == 160, f"HostApi expected 160 bytes, got {ctypes.sizeof(HostApi)}"
 
 
 def test_host_contract_instance_size():
@@ -58,10 +57,6 @@ def test_host_contract_instance_size():
 
 def test_host_contract_interface_size():
     assert ctypes.sizeof(HostContractInterface) == 80, f"HostContractInterface expected 80 bytes, got {ctypes.sizeof(HostContractInterface)}"
-
-
-def test_runtime_api_size():
-    assert ctypes.sizeof(RuntimeApi) == 96, f"RuntimeApi expected 96 bytes, got {ctypes.sizeof(RuntimeApi)}"
 
 
 def test_guest_contract_handle_size():

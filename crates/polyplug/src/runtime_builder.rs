@@ -127,6 +127,7 @@ impl RuntimeBuilder {
             get_error_len: crate::runtime::host_get_error_len,
             call_guest_method: crate::runtime::host_call_guest_method,
             get_extension: crate::runtime::host_get_extension,
+            unload_bundle: crate::runtime::host_unload_bundle,
         }));
 
         let mut loader_map: HashMap<String, Box<dyn BundleLoader>> = HashMap::new();

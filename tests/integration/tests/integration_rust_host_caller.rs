@@ -322,6 +322,13 @@ unsafe extern "C" fn caller_stub_get_extension(_this: *const HostApi, _id: u32) 
     core::ptr::null()
 }
 
+unsafe extern "C" fn caller_stub_unload_bundle(
+    _this: *const HostApi,
+    _bundle_id: BundleId,
+) -> AbiError {
+    AbiError::ok()
+}
+
 fn counting_host() -> HostApi {
     HostApi {
         runtime: core::ptr::null_mut(),
@@ -343,6 +350,7 @@ fn counting_host() -> HostApi {
         get_error_len: caller_stub_get_len,
         call_guest_method: caller_stub_call_guest_method,
         get_extension: caller_stub_get_extension,
+        unload_bundle: caller_stub_unload_bundle,
     }
 }
 

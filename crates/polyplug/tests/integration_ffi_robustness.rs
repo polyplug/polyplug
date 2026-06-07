@@ -223,6 +223,10 @@ unsafe extern "C" fn noop_get_extension(_this: *const HostApi, _extension_id: u3
     core::ptr::null()
 }
 
+unsafe extern "C" fn noop_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
+    AbiError::ok()
+}
+
 fn load_memory_plugin() -> libloading::Library {
     // SAFETY: MEMORY_PLUGIN_SO is a compiled cdylib built by build.rs.
     unsafe { libloading::Library::new(MEMORY_PLUGIN_SO).expect("failed to load memory_plugin .so") }
@@ -263,6 +267,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         get_extension: noop_get_extension,
+        unload_bundle: noop_unload_bundle,
     };
 
     let ctx: BundleInitContext = BundleInitContext {

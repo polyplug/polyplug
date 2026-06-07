@@ -203,6 +203,13 @@ unsafe extern "C" fn noop_get_extension(_this: *const HostApi, _extension_id: u3
     core::ptr::null()
 }
 
+unsafe extern "C" fn noop_unload_bundle(
+    _this: *const HostApi,
+    _bundle_id: polyplug_utils::BundleId,
+) -> AbiError {
+    AbiError::ok()
+}
+
 // ─── Test ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -426,6 +433,7 @@ fn test_panic_returns_abi_error_panic() {
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         get_extension: noop_get_extension,
+        unload_bundle: noop_unload_bundle,
     };
 
     let ctx: BundleInitContext = BundleInitContext {

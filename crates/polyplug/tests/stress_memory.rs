@@ -215,6 +215,10 @@ unsafe extern "C" fn stub_get_extension(_this: *const HostApi, _extension_id: u3
     core::ptr::null()
 }
 
+unsafe extern "C" fn stub_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
+    AbiError::ok()
+}
+
 /// Stub alloc callback.
 unsafe extern "C" fn stub_alloc(_this: *const HostApi, size: usize, align: usize) -> *mut u8 {
     polyplug_host_alloc(size, align)
@@ -340,6 +344,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -734,6 +739,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
 
     let args: AllocArgs = AllocArgs {

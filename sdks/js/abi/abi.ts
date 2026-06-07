@@ -217,7 +217,7 @@ export const GUEST_CONTRACT_INTERFACE_SIZE: number = 56;
  * 
  *  Contains an opaque runtime pointer and function pointers for guest calls.
  *  All functions use self-passing pattern (receive HostApi pointer as first parameter).
- *  `HostApi` is `152 bytes` (1 opaque runtime pointer + 18 function pointer fields).
+ *  `HostApi` is `160 bytes` (1 opaque runtime pointer + 19 function pointer fields).
  * 
  *  # Who provides
  *  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -544,6 +544,33 @@ export interface HostApi {
      *  Opaque pointer to the extension, or null if not registered.
      */
     get_extension: number;
+    /**
+     *  Unload a guest bundle, invalidating its handles and removing it from the registry.
+     * 
+     *  Today this performs **retire/invalidate-only** unload: the bundle's slots have
+     *  their generation bumped and their active interface `Arc` moved to retire storage,
+     *  then the bundle is removed from the registry indices. The underlying dylib mapping
+     *  or VM state is **NOT** freed — that is a future Reclaim mode. Because the interface
+     *  is retired rather than dropped, any raw `GuestContractInterface` pointer already
+     *  resolved before the unload stays valid.
+     * 
+     *  After unload, every handle that was minted for this bundle resolves to
+     *  `AbiErrorCode::StaleHandle`, and `find_guest_contract` / `find_all_guest_contracts`
+     *  no longer return it.
+     * 
+     *  # Obtaining the bundle_id
+     *  The host obtains the `bundle_id` either from `list_bundles`, or by hashing the
+     *  bundle name via `BundleId::new(name)`.
+     * 
+     *  # Arguments
+     *  - `this`: HostApi pointer (self-passing)
+     *  - `bundle_id`: Identifier of the bundle to unload
+     * 
+     *  # Returns
+     *  `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
+     *  or a still-loaded bundle declared a dependency on a contract this bundle provides).
+     */
+    unload_bundle: number;
 }
 
 export const HOST_API_RUNTIME_OFFSET: number = 0;
@@ -565,7 +592,8 @@ export const HOST_API_GET_LAST_ERROR_OFFSET: number = 120;
 export const HOST_API_GET_ERROR_LEN_OFFSET: number = 128;
 export const HOST_API_CALL_GUEST_METHOD_OFFSET: number = 136;
 export const HOST_API_GET_EXTENSION_OFFSET: number = 144;
-export const HOST_API_SIZE: number = 152;
+export const HOST_API_UNLOAD_BUNDLE_OFFSET: number = 152;
+export const HOST_API_SIZE: number = 160;
 
 /**
  *  Opaque handle to a host contract instance.
@@ -707,217 +735,6 @@ export const HOST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET: number = 48;
 export const HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET: number = 56;
 export const HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET: number = 64;
 export const HOST_CONTRACT_INTERFACE_SIZE: number = 80;
-
-/**
- *  Runtime Interface — function table returned to host from polyplug_runtime_create().
- * 
- *  Contains an opaque runtime pointer and function pointers for host calls.
- *  All functions take `*const RuntimeApi` as first parameter.
- * 
- *  # Who provides
- *  The runtime creates this struct and returns it from `polyplug_runtime_create()`.
- *  The struct is heap-allocated and owned by the host.
- * 
- *  # Who calls
- *  Host application code calls these functions to interact with the runtime.
- *  SDK-generated wrappers handle the self-passing pattern automatically.
- * 
- *  # Ownership
- *  The struct is allocated by `polyplug_runtime_create()`. The host owns
- *  the pointer and must call `destroy()` to free the runtime and interface.
- * 
- *  # Lifetime
- *  Lives until `destroy()` is called. After destroy, the pointer is invalid.
- * 
- *  # Thread Safety
- *  All functions are safe to call from any thread. The runtime uses
- *  internal synchronization for shared state.
- * 
- *  # Self-passing pattern
- *  Each function receives the interface pointer as its first parameter,
- *  allowing hosts to call: `rt->load_bundle(rt, path)`
- *  SDKs hide this pattern: `rt.load_bundle(path)`
- */
-export interface RuntimeApi {
-    /**
-     *  Opaque pointer to Runtime.
-     * 
-     *  Set during interface creation. Provides access to runtime state.
-     * 
-     *  # Ownership
-     *  Owned by the runtime. Host must call `destroy()` to free.
-     */
-    runtime: bigint;
-    /**
-     *  Load a plugin bundle from the given path.
-     * 
-     *  Loads the bundle and initializes all its guest contracts.
-     *  Dependencies are resolved in topological order.
-     * 
-     *  # Arguments
-     *  - `this`: RuntimeApi pointer (self-passing)
-     *  - `path`: UTF-8 path to the bundle directory or manifest file (not null-terminated)
-     * 
-     *  # Returns
-     *  AbiError::OK on success, error code on failure.
-     *  Use `get_last_error()` for detailed error message.
-     */
-    load_bundle: number;
-    /**
-     *  Reload a bundle (hot-reload).
-     * 
-     *  Triggers hot-reload of the specified bundle. The runtime will:
-     *  1. Call pre-reload callbacks to notify hosts
-     *  2. Wait for all instances to be destroyed
-     *  3. Unload the old bundle
-     *  4. Load the new bundle
-     *  5. Call post-reload callbacks
-     * 
-     *  # Arguments
-     *  - `this`: RuntimeApi pointer (self-passing)
-     *  - `bundle_id`: ID of the bundle to reload
-     * 
-     *  # Returns
-     *  AbiError::OK on success, error code on failure.
-     */
-    reload_bundle: number;
-    /**
-     *  Unload a bundle.
-     * 
-     *  Removes the bundle and all its guest contracts from the registry.
-     *  Host must destroy all instances before unloading.
-     * 
-     *  # Arguments
-     *  - `this`: RuntimeApi pointer (self-passing)
-     *  - `bundle_id`: ID of the bundle to unload
-     * 
-     *  # Returns
-     *  AbiError::OK on success, error code on failure.
-     */
-    unload_bundle: number;
-    /**
-     *  Find a guest contract by contract_id and minimum version.
-     * 
-     *  Returns a GuestContractHandle that can be resolved to an interface.
-     *  Returns null handle if no matching contract found.
-     * 
-     *  # Arguments
-     *  - `this`: RuntimeApi pointer (self-passing)
-     *  - `contract_id`: Contract identifier hash
-     *  - `min_version`: Minimum version required
-     * 
-     *  # Returns
-     *  GuestContractHandle for the first matching contract, or null handle.
-     */
-    find_guest_contract: number;
-    /**
-     *  Find all guest contracts matching contract_id and minimum version.
-     * 
-     *  Returns an Array of GuestContractHandle. Caller must free via host->free.
-     *  Use when multiple implementations of the same contract may exist.
-     * 
-     *  # Arguments
-     *  - `this`: RuntimeApi pointer (self-passing)
-     *  - `contract_id`: Contract identifier hash
-     *  - `min_version`: Minimum version required
-     * 
-     *  # Returns
-     *  Array of GuestContractHandle. Caller owns and must free.
-     */
-    find_all_by_contract: number;
-    /**
-     *  Resolve a GuestContractHandle to a GuestContractInterface pointer.
-     * 
-     *  Returns null if the handle is invalid or contract was unloaded.
-     * 
-     *  # Arguments
-     *  - `this`: RuntimeApi pointer (self-passing)
-     *  - `handle`: GuestContractHandle from find_guest_contract
-     * 
-     *  # Returns
-     *  Pointer to GuestContractInterface, or null if invalid/stale.
-     */
-    resolve_guest_contract: number;
-    /**
-     *  Get a host contract instance by contract_id and minimum version.
-     * 
-     *  For singleton host contracts, returns the same instance every time.
-     *  For multi-instance host contracts, returns a new instance each time.
-     * 
-     *  # Arguments
-     *  - `this`: RuntimeApi pointer (self-passing)
-     *  - `contract_id`: Host contract identifier hash
-     *  - `min_version`: Minimum version required
-     * 
-     *  # Returns
-     *  HostContractInstance for the contract.
-     */
-    get_host_contract: number;
-    /**
-     *  Get the last error message.
-     * 
-     *  Returns detailed error message for the most recent failed operation.
-     *  Message is valid until the next operation is performed.
-     * 
-     *  # Arguments
-     *  - `this`: RuntimeApi pointer (self-passing)
-     * 
-     *  # Returns
-     *  StringView containing the error message, or empty string if no error.
-     */
-    get_last_error: number;
-    /**
-     *  List all loaded bundles.
-     * 
-     *  Returns an Array of BundleId. Caller must free via host->free.
-     *  Bundle IDs are stable for the lifetime of the runtime.
-     * 
-     *  # Arguments
-     *  - `this`: RuntimeApi pointer (self-passing)
-     * 
-     *  # Returns
-     *  Array of BundleId. Caller owns and must free.
-     */
-    list_bundles: number;
-    /**
-     *  Get dependencies (returns empty array for host context).
-     * 
-     *  Hosts have no bundle dependencies, so this returns an empty array.
-     *  Guests use HostApi::get_dependencies for their actual deps.
-     * 
-     *  # Arguments
-     *  - `this`: RuntimeApi pointer (self-passing)
-     * 
-     *  # Returns
-     *  Empty Array of DependencyInfo. Caller owns and must free.
-     */
-    get_dependencies: number;
-    /**
-     *  Destroy the runtime and free this interface.
-     * 
-     *  # Arguments
-     *  - `this`: RuntimeApi pointer (self-passing)
-     * 
-     *  # Safety
-     *  After calling destroy, the pointer is invalid and must not be used.
-     *  All instances must be destroyed before calling this.
-     */
-    destroy: number;
-}
-
-export const RUNTIME_API_RUNTIME_OFFSET: number = 0;
-export const RUNTIME_API_LOAD_BUNDLE_OFFSET: number = 8;
-export const RUNTIME_API_RELOAD_BUNDLE_OFFSET: number = 16;
-export const RUNTIME_API_UNLOAD_BUNDLE_OFFSET: number = 24;
-export const RUNTIME_API_FIND_GUEST_CONTRACT_OFFSET: number = 32;
-export const RUNTIME_API_FIND_ALL_BY_CONTRACT_OFFSET: number = 40;
-export const RUNTIME_API_RESOLVE_GUEST_CONTRACT_OFFSET: number = 48;
-export const RUNTIME_API_GET_HOST_CONTRACT_OFFSET: number = 56;
-export const RUNTIME_API_GET_LAST_ERROR_OFFSET: number = 64;
-export const RUNTIME_API_LIST_BUNDLES_OFFSET: number = 72;
-export const RUNTIME_API_GET_DEPENDENCIES_OFFSET: number = 80;
-export const RUNTIME_API_DESTROY_OFFSET: number = 88;
-export const RUNTIME_API_SIZE: number = 96;
 
 /**
  *  Opaque handle to a registered guest contract.

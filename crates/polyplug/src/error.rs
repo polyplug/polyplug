@@ -47,6 +47,14 @@ pub enum RuntimeError {
 
     #[error("hot-reload is disabled in runtime config")]
     HotReloadDisabled,
+
+    #[error(
+        "cannot unload bundle `{provider}`: still-loaded bundles declared a dependency on it: {dependents:?}"
+    )]
+    DependencyInUse {
+        provider: String,
+        dependents: Vec<String>,
+    },
 }
 
 /// Errors from the bundle loading phase.

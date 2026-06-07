@@ -280,6 +280,11 @@ unsafe extern "C" fn bench_get_extension(_this: *const HostApi, _extension_id: u
     core::ptr::null()
 }
 
+/// unload_bundle stub — returns ok (not used in benches).
+unsafe extern "C" fn bench_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
+    AbiError::ok()
+}
+
 /// Alloc wrapper that ignores this (uses global allocator).
 ///
 /// # Safety
@@ -337,6 +342,7 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
         get_error_len: bench_get_error_len,
         call_guest_method: bench_call_guest_method,
         get_extension: bench_get_extension,
+        unload_bundle: bench_unload_bundle,
     };
 
     let plugin_ctx: polyplug_abi::BundleInitContext = polyplug_abi::BundleInitContext {
@@ -562,6 +568,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
         get_error_len: bench_get_error_len,
         call_guest_method: bench_call_guest_method,
         get_extension: bench_get_extension,
+        unload_bundle: bench_unload_bundle,
     };
 
     // Input StringView pointing to a static byte string — no allocation needed.

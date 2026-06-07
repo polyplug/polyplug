@@ -356,6 +356,10 @@ unsafe extern "C" fn stub_get_extension(_this: *const HostApi, _extension_id: u3
     core::ptr::null()
 }
 
+unsafe extern "C" fn stub_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
+    AbiError::ok()
+}
+
 // ─── Test ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -445,6 +449,7 @@ fn test_rust_codegen_compile_and_run() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
 
     // SAFETY: init_fn is valid; host_abi lives for the duration of the call.

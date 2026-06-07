@@ -717,11 +717,13 @@ impl RuntimeStore {
     ///
     /// Returns Err(InvalidHandle) if:
     /// - handle.index is out of bounds
-    /// - the slot has no interface
+    /// - the slot is live at the handle's generation but currently holds no interface
     ///
-    /// Returns Err(StaleHandle) if the slot is live but its generation no longer
-    /// matches the handle's generation — the slot was retired (and possibly reused
-    /// by a later registration) after this handle was minted.
+    /// Returns Err(StaleHandle) if the handle's generation no longer matches the
+    /// slot's generation — the slot was retired by an unload (and possibly reused by
+    /// a later registration) after this handle was minted. The generation is checked
+    /// before the interface presence so a handle whose bundle was unloaded resolves
+    /// to StaleHandle even though the slot was vacated.
     pub fn resolve_guest_contract(
         &self,
         handle: GuestContractHandle,
@@ -740,15 +742,13 @@ impl RuntimeStore {
         }
 
         let slot: &PluginSlot = &data.slots[slot_idx];
+        if handle.generation != slot.generation {
+            return Err(RegistryError::StaleHandle {
+                index: handle.index,
+            });
+        }
         match slot.interface {
-            Some(ref interface) => {
-                if handle.generation != slot.generation {
-                    return Err(RegistryError::StaleHandle {
-                        index: handle.index,
-                    });
-                }
-                Ok(interface.as_ref() as *const GuestContractInterface)
-            }
+            Some(ref interface) => Ok(interface.as_ref() as *const GuestContractInterface),
             None => Err(RegistryError::InvalidHandle {
                 index: handle.index,
             }),
@@ -1201,59 +1201,78 @@ impl RuntimeStore {
         Ok(())
     }
 
-    /// Remove bundle metadata from all index structures.
+    /// Invalidate a bundle: retire its interfaces, bump generations, and remove it
+    /// from every index structure.
     ///
-    /// Removes the bundle_id from `bundle_data`, `bundle_name_index`, and
-    /// `bundle_declared_deps`. Also unloads all plugin slots belonging to this
-    /// bundle by clearing their entries and interfaces, and removing stale
-    /// indices from `guest_contract_index`.
+    /// This is the invalidate-only unload primitive (retire-not-drop). For each slot
+    /// owned by the bundle it:
+    /// - bumps `slot.generation` (so every handle minted against the old generation now
+    ///   resolves to [`RegistryError::StaleHandle`]);
+    /// - **retires** the slot's interface `Arc` into `retired_interfaces` rather than
+    ///   dropping it, so any raw `*const GuestContractInterface` already handed out by
+    ///   `resolve_guest_contract` stays valid for the lifetime of the runtime;
+    /// - clears the slot `entry` and removes the slot index from `guest_contract_index`.
     ///
-    /// Returns the number of plugin slots that were unloaded.
-    pub fn remove_bundle_metadata(&self, bundle_id: BundleId) -> Result<u32, RegistryError> {
+    /// It then removes the bundle from `bundle_data`, `bundle_name_index`, and
+    /// `bundle_declared_deps`, so `find_*` and `list_bundles` no longer observe it.
+    ///
+    /// The combination of retire-not-drop and the generation bump is what makes unload
+    /// sound: old raw pointers remain dereferenceable (the memory is never freed here),
+    /// while every old handle is recognised as stale on its next resolve.
+    ///
+    /// Returns the number of slots that were invalidated.
+    pub fn invalidate_bundle(&self, bundle_id: BundleId) -> Result<u32, RegistryError> {
         let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
 
-        // Collect slot indices and bundle name before removing
-        let (slot_indices, bundle_name) = match data.bundle_data.get(&bundle_id) {
+        // Collect slot indices and bundle name before mutating.
+        let (slot_indices, bundle_name): (Vec<u32>, String) = match data.bundle_data.get(&bundle_id)
+        {
             Some(bd) => (bd.plugin_slots.clone(), bd.descriptor.name.clone()),
             None => return Ok(0),
         };
 
-        // Clear each plugin slot and remove from guest_contract_index
         for slot_idx in &slot_indices {
-            let slot_idx_usize = *slot_idx as usize;
+            let slot_idx_usize: usize = *slot_idx as usize;
             if slot_idx_usize >= data.slots.len() {
                 continue;
             }
 
-            // Read contract_id before clearing the slot
-            let contract_id = data.slots[slot_idx_usize]
+            // Read contract_id before clearing the slot.
+            let contract_id: Option<GuestContractId> = data.slots[slot_idx_usize]
                 .interface
                 .as_ref()
-                .map(|arc| arc.contract_id);
+                .map(|arc: &Arc<GuestContractInterface>| arc.contract_id);
 
-            // Remove slot index from guest_contract_index
-            if let Some(cid) = contract_id {
-                if let Some(indices) = data.guest_contract_index.get_mut(&cid) {
-                    indices.retain(|&idx| idx != *slot_idx);
-                    if indices.is_empty() {
-                        data.guest_contract_index.remove(&cid);
-                    }
+            // Remove slot index from guest_contract_index, dropping now-empty keys.
+            if let Some(cid) = contract_id
+                && let Some(indices) = data.guest_contract_index.get_mut(&cid)
+            {
+                indices.retain(|&idx| idx != *slot_idx);
+                if indices.is_empty() {
+                    data.guest_contract_index.remove(&cid);
                 }
             }
 
-            // Clear the slot
+            // Bump generation so old handles go stale, retire (never drop) the
+            // interface so raw pointers stay valid, and vacate the slot entry.
+            data.slots[slot_idx_usize].generation =
+                data.slots[slot_idx_usize].generation.wrapping_add(1);
+            let retired: Option<Arc<GuestContractInterface>> =
+                data.slots[slot_idx_usize].interface.take();
+            if let Some(arc) = retired {
+                data.retired_interfaces.push(arc);
+            }
             data.slots[slot_idx_usize].entry = None;
-            data.slots[slot_idx_usize].interface = None;
         }
 
-        // Remove from bundle_data
+        // Remove from bundle_data.
         data.bundle_data.remove(&bundle_id);
 
-        // Remove from bundle_name_index
+        // Remove from bundle_name_index, dropping the now-empty name key.
         if let Some(ids) = data.bundle_name_index.get_mut(&bundle_name) {
             ids.retain(|id| *id != bundle_id);
             if ids.is_empty() {
@@ -1261,7 +1280,7 @@ impl RuntimeStore {
             }
         }
 
-        // Remove from bundle_declared_deps
+        // Remove from bundle_declared_deps.
         data.bundle_declared_deps.remove(&bundle_id);
 
         Ok(slot_indices.len() as u32)
@@ -1847,6 +1866,105 @@ mod tests {
         assert!(
             registry.find(contract_id, 0).is_err(),
             "find must fail for a dropped contract"
+        );
+    }
+
+    #[test]
+    fn resolve_after_unload_returns_stale_handle() {
+        let registry: RuntimeStore = RuntimeStore::new();
+        let descriptor: PluginDescriptor = make_descriptor("unload_plugin", "image.decode");
+        let interface: GuestContractInterface = mock_interface(0x0BAD_F00D_0000_0001);
+        let bundle_id: BundleId = BundleId::from_u64(0x11);
+
+        // SAFETY: interface is a valid local GuestContractInterface for this test.
+        let handle: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                descriptor,
+                &interface,
+                "image.decode".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("registration should succeed");
+
+        registry
+            .invalidate_bundle(bundle_id)
+            .expect("invalidate should succeed");
+
+        let result: Result<*const GuestContractInterface, RegistryError> =
+            registry.resolve_guest_contract(handle);
+        assert!(
+            matches!(result, Err(RegistryError::StaleHandle { .. })),
+            "handle minted before unload must resolve to StaleHandle, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn find_stops_returning_after_unload() {
+        let registry: RuntimeStore = RuntimeStore::new();
+        let descriptor: PluginDescriptor = make_descriptor("unload_plugin", "audio.decode");
+        let interface: GuestContractInterface = mock_interface(0x0BAD_F00D_0000_0002);
+        let bundle_id: BundleId = BundleId::from_u64(0x12);
+        let contract_id: GuestContractId = GuestContractId::from_u64(0x0BAD_F00D_0000_0002);
+
+        // SAFETY: interface is a valid local GuestContractInterface for this test.
+        unsafe {
+            registry.register_guest_contract(
+                descriptor,
+                &interface,
+                "audio.decode".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("registration should succeed");
+
+        registry
+            .invalidate_bundle(bundle_id)
+            .expect("invalidate should succeed");
+
+        let result: Result<GuestContractHandle, RegistryError> = registry.find(contract_id, 0);
+        assert!(
+            matches!(result, Err(RegistryError::PluginNotFound { .. })),
+            "find must report PluginNotFound after unload, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn unload_retires_interface_keeping_pointer_valid() {
+        let registry: RuntimeStore = RuntimeStore::new();
+        let descriptor: PluginDescriptor = make_descriptor("unload_plugin", "render.frame");
+        let raw_contract_id: u64 = 0x0BAD_F00D_0000_0003;
+        let interface: GuestContractInterface = mock_interface(raw_contract_id);
+        let bundle_id: BundleId = BundleId::from_u64(0x13);
+
+        // SAFETY: interface is a valid local GuestContractInterface for this test.
+        let handle: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                descriptor,
+                &interface,
+                "render.frame".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("registration should succeed");
+
+        // Resolve a raw pointer BEFORE unload. Retire-not-drop guarantees it stays
+        // valid afterwards because the interface Arc is moved to retire storage.
+        let resolved: *const GuestContractInterface = registry
+            .resolve_guest_contract(handle)
+            .expect("resolve before unload should succeed");
+
+        registry
+            .invalidate_bundle(bundle_id)
+            .expect("invalidate should succeed");
+
+        // SAFETY: `resolved` was obtained before unload; invalidate retires (does not
+        // drop) the interface Arc, so the memory remains valid for this read.
+        let observed_id: GuestContractId = unsafe { (*resolved).contract_id };
+        assert_eq!(
+            observed_id,
+            GuestContractId::from_u64(raw_contract_id),
+            "retired interface must still be readable through the pre-unload pointer"
         );
     }
 }

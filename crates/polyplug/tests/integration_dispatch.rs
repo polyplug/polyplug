@@ -224,6 +224,10 @@ unsafe extern "C" fn noop_get_extension(_this: *const HostApi, _extension_id: u3
     core::ptr::null()
 }
 
+unsafe extern "C" fn noop_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
+    AbiError::ok()
+}
+
 std::thread_local! {
     static DISPATCH_REGISTRY: core::cell::RefCell<RuntimeStore> =
         core::cell::RefCell::new(RuntimeStore::new());
@@ -281,6 +285,7 @@ fn test_dispatch_add_function() {
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         get_extension: noop_get_extension,
+        unload_bundle: noop_unload_bundle,
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -396,6 +401,7 @@ fn test_dispatch_add_with_zero() {
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         get_extension: noop_get_extension,
+        unload_bundle: noop_unload_bundle,
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -487,6 +493,7 @@ fn test_dispatch_add_wrapping_overflow() {
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         get_extension: noop_get_extension,
+        unload_bundle: noop_unload_bundle,
     };
 
     let ctx: BundleInitContext = BundleInitContext {

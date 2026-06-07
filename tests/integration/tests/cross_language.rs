@@ -251,6 +251,10 @@ unsafe extern "C" fn stub_get_extension(_this: *const HostApi, _extension_id: u3
     core::ptr::null()
 }
 
+unsafe extern "C" fn stub_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
+    AbiError::ok()
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Retrieve interface for `test.add@1` from a Runtime instance.
@@ -355,6 +359,7 @@ fn test_rust_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -447,6 +452,7 @@ fn test_cpp_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -539,6 +545,7 @@ fn test_csharp_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -631,6 +638,7 @@ fn test_python_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -723,6 +731,7 @@ fn test_lua_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -815,6 +824,7 @@ fn test_js_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -913,6 +923,7 @@ fn test_rust_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1005,6 +1016,7 @@ fn test_cpp_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1097,6 +1109,7 @@ fn test_csharp_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1189,6 +1202,7 @@ fn test_python_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1281,6 +1295,7 @@ fn test_lua_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1373,6 +1388,7 @@ fn test_js_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         get_extension: stub_get_extension,
+        unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),

@@ -267,6 +267,10 @@ unsafe extern "C" fn noop_get_extension(_this: *const HostApi, _extension_id: u3
     core::ptr::null()
 }
 
+unsafe extern "C" fn noop_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
+    AbiError::ok()
+}
+
 // --- Registry callback -------------------------------------------------------
 
 /// A register_guest_contract callback that stores interface entries into the thread-local ERROR_REGISTRY.
@@ -347,6 +351,7 @@ fn make_host_interface() -> HostApi {
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         get_extension: noop_get_extension,
+        unload_bundle: noop_unload_bundle,
     }
 }
 
@@ -577,6 +582,7 @@ fn stress_error_chain_b_errors_a_propagates() {
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         get_extension: noop_get_extension,
+        unload_bundle: noop_unload_bundle,
     };
 
     // error.test contract_id is FNV-1a("error.test@1").
