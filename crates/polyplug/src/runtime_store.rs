@@ -148,6 +148,13 @@ pub(crate) struct PluginSlot {
     /// Interface pointer — direct Arc storage without wrapper.
     /// The callback-based hot-reload model ensures hosts destroy instances before swap.
     pub interface: Option<Arc<GuestContractInterface>>,
+    /// Monotonic generation counter for stale-handle detection.
+    ///
+    /// Stamped into every [`GuestContractHandle`] minted against this slot. Server-side
+    /// state only — never part of the ABI. The unload feature bumps this whenever the
+    /// slot is retired so a handle minted against an earlier generation is recognised as
+    /// stale even after the index is recycled by a later registration. Starts at 0.
+    pub generation: u32,
 }
 
 /// Internal data protected by a single RwLock.
@@ -310,6 +317,7 @@ impl RuntimeStore {
                 data.slots.push(PluginSlot {
                     entry: None,
                     interface: None,
+                    generation: 0,
                 });
                 new_idx
             });
@@ -321,6 +329,7 @@ impl RuntimeStore {
         };
 
         let slot: &mut PluginSlot = &mut data.slots[slot_idx as usize];
+        let slot_generation: u32 = slot.generation;
         slot.entry = Some(PluginEntry {
             descriptor: owned_descriptor,
             contract_name,
@@ -419,7 +428,10 @@ impl RuntimeStore {
             .plugin_slots
             .push(slot_idx);
 
-        Ok(GuestContractHandle { index: slot_idx })
+        Ok(GuestContractHandle {
+            index: slot_idx,
+            generation: slot_generation,
+        })
     }
 
     /// Declare dependency contract_ids for a bundle.
@@ -494,7 +506,10 @@ impl RuntimeStore {
                 // The pointer is written once at registration and never mutated.
                 let version: u32 = interface.contract_version.major;
                 if version >= min_version {
-                    return Ok(GuestContractHandle { index: slot_idx });
+                    return Ok(GuestContractHandle {
+                        index: slot_idx,
+                        generation: slot.generation,
+                    });
                 }
             }
         }
@@ -540,7 +555,10 @@ impl RuntimeStore {
                     && interface.contract_id == contract_id
                     && interface.contract_version.major >= min_version
                 {
-                    return Ok(GuestContractHandle { index: slot_idx });
+                    return Ok(GuestContractHandle {
+                        index: slot_idx,
+                        generation: slot.generation,
+                    });
                 }
             }
         }
@@ -584,7 +602,10 @@ impl RuntimeStore {
                 // Read-only access after registration.
                 let version: u32 = interface.contract_version.major;
                 if version >= min_version {
-                    out[write_count] = GuestContractHandle { index: slot_idx };
+                    out[write_count] = GuestContractHandle {
+                        index: slot_idx,
+                        generation: slot.generation,
+                    };
                     write_count += 1usize;
                 }
             }
@@ -597,7 +618,8 @@ impl RuntimeStore {
     ///
     /// This is an optimized version of `find_all_guest_contracts` that avoids
     /// intermediate allocation by packing handles directly during iteration.
-    /// Each handle is packed as: `index as u64`.
+    /// Each handle is packed as: `(generation as u64) << 32 | index as u64`,
+    /// matching [`GuestContractHandle::pack`].
     ///
     /// Returns the number of packed handles written to `out`.
     pub fn find_all_guest_contracts_packed(
@@ -633,8 +655,8 @@ impl RuntimeStore {
                 // Read-only access after registration.
                 let version: u32 = interface.contract_version.major;
                 if version >= min_version {
-                    // Pack handle directly: just the index
-                    out[write_count] = slot_idx as u64;
+                    // Pack handle directly: generation in the high 32 bits, index low.
+                    out[write_count] = ((slot.generation as u64) << 32) | (slot_idx as u64);
                     write_count += 1usize;
                 }
             }
@@ -696,6 +718,10 @@ impl RuntimeStore {
     /// Returns Err(InvalidHandle) if:
     /// - handle.index is out of bounds
     /// - the slot has no interface
+    ///
+    /// Returns Err(StaleHandle) if the slot is live but its generation no longer
+    /// matches the handle's generation — the slot was retired (and possibly reused
+    /// by a later registration) after this handle was minted.
     pub fn resolve_guest_contract(
         &self,
         handle: GuestContractHandle,
@@ -715,7 +741,14 @@ impl RuntimeStore {
 
         let slot: &PluginSlot = &data.slots[slot_idx];
         match slot.interface {
-            Some(ref interface) => Ok(interface.as_ref() as *const GuestContractInterface),
+            Some(ref interface) => {
+                if handle.generation != slot.generation {
+                    return Err(RegistryError::StaleHandle {
+                        index: handle.index,
+                    });
+                }
+                Ok(interface.as_ref() as *const GuestContractInterface)
+            }
             None => Err(RegistryError::InvalidHandle {
                 index: handle.index,
             }),
@@ -1421,7 +1454,10 @@ mod tests {
         .expect("registration should succeed");
 
         // Use a handle with out-of-bounds index
-        let invalid: GuestContractHandle = GuestContractHandle { index: 999 };
+        let invalid: GuestContractHandle = GuestContractHandle {
+            index: 999,
+            generation: 0,
+        };
         let result: Result<*const GuestContractInterface, RegistryError> =
             registry.resolve_guest_contract(invalid);
         assert!(

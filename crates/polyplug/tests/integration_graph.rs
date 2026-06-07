@@ -427,7 +427,10 @@ fn test_invalid_handle_detected() {
     });
 
     // Construct an invalid handle with an out-of-bounds index.
-    let invalid: GuestContractHandle = GuestContractHandle { index: 999 };
+    let invalid: GuestContractHandle = GuestContractHandle {
+        index: 999,
+        generation: 0,
+    };
 
     let result: Result<*const GuestContractInterface, _> =
         GRAPH_REGISTRY.with(|cell| cell.borrow().resolve_guest_contract(invalid));

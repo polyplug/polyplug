@@ -230,11 +230,11 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("    InvalidPointer = 8,\n");
     out.push_str("}\n\n");
 
-    // Null/not-found sentinel for find_guest_contract. GuestContractHandle is
-    // `#[repr(C)] { index: u32 }`; the null handle is index == u32::MAX. This
-    // matches polyplug.runtime.NULL_HANDLE; emitted locally so callers.lua has no
-    // dependency on the runtime module beyond the `runtime` arg passed to factories.
-    out.push_str("local NULL_HANDLE = 0xFFFFFFFF\n\n");
+    // GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes).
+    // The handle is opaque to generated code: it is passed straight to
+    // resolve_guest_contract, which returns nil for an out-of-bounds, empty, or stale
+    // handle. Generated callers therefore never inspect the handle's fields directly,
+    // matching the Rust generator's resolve-then-check flow.
 
     // Contract ID constants
     out.push_str("-- Contract ID constants\n");
@@ -444,11 +444,8 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) 
     out.push_str(&format!(
         "    local handle = runtime:find_guest_contract({contract_id_const}, 0)\n"
     ));
-    out.push_str("    -- find_guest_contract returns a u32 handle; the null/not-found sentinel\n");
-    out.push_str("    -- is index == u32::MAX (NULL_HANDLE), never nil.\n");
-    out.push_str("    if handle == NULL_HANDLE then\n");
-    out.push_str("        return nil\n");
-    out.push_str("    end\n");
+    out.push_str("    -- The handle is opaque: pass it straight to resolve_guest_contract,\n");
+    out.push_str("    -- which returns nil for an out-of-bounds, empty, or stale handle.\n");
     out.push_str("    local interface = runtime:resolve_guest_contract(handle)\n");
     out.push_str("    if interface == nil then\n");
     out.push_str("        return nil\n");

@@ -36,7 +36,7 @@ namespace Polyplug.Abi.Tests
         public void RuntimeApiIs96Bytes() => Assert.Equal(96, Marshal.SizeOf<RuntimeApi>());
 
         [Fact]
-        public void GuestContractHandleIs4Bytes() => Assert.Equal(4, Marshal.SizeOf<GuestContractHandle>());
+        public void GuestContractHandleIs8Bytes() => Assert.Equal(8, Marshal.SizeOf<GuestContractHandle>());
 
         [Fact]
         public void BundleInitContextIs24Bytes() => Assert.Equal(24, Marshal.SizeOf<BundleInitContext>());

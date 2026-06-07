@@ -614,15 +614,19 @@ static_assert(sizeof(RuntimeApi) == 96, "RuntimeApi size mismatch");
 
 ///  Opaque handle to a registered guest contract.
 ///
-///  The handle is just an index into the registry array.
-///  Out-of-bounds indices return InvalidHandle error.
+///  The handle pairs the slot `index` with the `generation` the slot held when the
+///  handle was minted. `resolve_guest_contract` rejects a handle whose `generation`
+///  no longer matches the slot's current generation (the slot was retired and the
+///  index possibly reused), returning `StaleHandle`. Out-of-bounds or empty-slot
+///  indices return InvalidHandle.
 ///
 ///  # Naming
 ///  Named `GuestContractHandle` for consistency with `GuestContractInterface`
 ///  and `GuestContractInstance`.
 ///
 ///  # Layout
-///  - `index`: Slot index in the registry (u32)
+///  - `index`: Slot index in the registry (u32, offset 0)
+///  - `generation`: Slot generation the handle was minted against (u32, offset 4)
 ///
 ///  # Safety
 ///  Handles become stale after unload. Call `resolve_guest_contract` to validate.
@@ -630,8 +634,10 @@ static_assert(sizeof(RuntimeApi) == 96, "RuntimeApi size mismatch");
 struct GuestContractHandle {
     ///  Slot in the registry array.
     uint32_t index;
+    ///  Generation the slot held when this handle was minted.
+    uint32_t generation;
 };
-static_assert(sizeof(GuestContractHandle) == 4, "GuestContractHandle size mismatch");
+static_assert(sizeof(GuestContractHandle) == 8, "GuestContractHandle size mismatch");
 
 ///  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
 ///

@@ -210,6 +210,7 @@ fn bench_registry_resolve_stale(c: &mut Criterion) {
     // Create a stale handle - use an index that doesn't exist
     let stale_handle: GuestContractHandle = GuestContractHandle {
         index: u32::MAX - 1,
+        generation: 0,
     };
 
     let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =

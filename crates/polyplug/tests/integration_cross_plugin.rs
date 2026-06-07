@@ -230,7 +230,10 @@ mod tests {
         let registry: RuntimeStore = RuntimeStore::new();
 
         // Construct a handle with an out-of-bounds index.
-        let invalid: GuestContractHandle = GuestContractHandle { index: 999 };
+        let invalid: GuestContractHandle = GuestContractHandle {
+            index: 999,
+            generation: 0,
+        };
 
         let result = registry.resolve_guest_contract(invalid);
         assert!(

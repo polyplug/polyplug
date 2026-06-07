@@ -93,15 +93,19 @@ assert ctypes.sizeof(HostContractInstance) == 8, f"HostContractInstance expected
 class GuestContractHandle(ctypes.Structure):
     """ Opaque handle to a registered guest contract.
     
-     The handle is just an index into the registry array.
-     Out-of-bounds indices return InvalidHandle error.
+     The handle pairs the slot `index` with the `generation` the slot held when the
+     handle was minted. `resolve_guest_contract` rejects a handle whose `generation`
+     no longer matches the slot's current generation (the slot was retired and the
+     index possibly reused), returning `StaleHandle`. Out-of-bounds or empty-slot
+     indices return InvalidHandle.
     
      # Naming
      Named `GuestContractHandle` for consistency with `GuestContractInterface`
      and `GuestContractInstance`.
     
      # Layout
-     - `index`: Slot index in the registry (u32)
+     - `index`: Slot index in the registry (u32, offset 0)
+     - `generation`: Slot generation the handle was minted against (u32, offset 4)
     
      # Safety
      Handles become stale after unload. Call `resolve_guest_contract` to validate.
@@ -109,10 +113,11 @@ class GuestContractHandle(ctypes.Structure):
     """
     _fields_ = [
         ("index", ctypes.c_uint32),
+        ("generation", ctypes.c_uint32),
     ]
 
-# Expected size: 4 bytes
-assert ctypes.sizeof(GuestContractHandle) == 4, f"GuestContractHandle expected 4 bytes, got {ctypes.sizeof(GuestContractHandle)}"
+# Expected size: 8 bytes
+assert ctypes.sizeof(GuestContractHandle) == 8, f"GuestContractHandle expected 8 bytes, got {ctypes.sizeof(GuestContractHandle)}"
 
 
 class Array(ctypes.Structure):

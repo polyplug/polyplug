@@ -189,7 +189,10 @@ fn resolve_vacant_slot_returns_invalid_handle() {
     };
 
     // Test 1: Handle with index beyond slots length
-    let out_of_bounds_handle: GuestContractHandle = GuestContractHandle { index: 9999_u32 };
+    let out_of_bounds_handle: GuestContractHandle = GuestContractHandle {
+        index: 9999_u32,
+        generation: 0,
+    };
     let result: Result<*const GuestContractInterface, RegistryError> =
         registry.resolve_guest_contract(out_of_bounds_handle);
     assert!(
@@ -198,7 +201,10 @@ fn resolve_vacant_slot_returns_invalid_handle() {
     );
 
     // Test 2: Handle pointing to slot that was never used (index 1 when only slot 0 exists)
-    let unused_slot_handle: GuestContractHandle = GuestContractHandle { index: 1_u32 };
+    let unused_slot_handle: GuestContractHandle = GuestContractHandle {
+        index: 1_u32,
+        generation: 0,
+    };
     let result_unused: Result<*const GuestContractInterface, RegistryError> =
         registry.resolve_guest_contract(unused_slot_handle);
     assert!(
@@ -485,7 +491,10 @@ fn find_by_contract_multiple_implementations_returns_first() {
         "should resolve to first implementation's interface"
     );
 
-    let mut all_handles: [GuestContractHandle; 4] = [GuestContractHandle { index: 0_u32 }; 4];
+    let mut all_handles: [GuestContractHandle; 4] = [GuestContractHandle {
+        index: 0_u32,
+        generation: 0,
+    }; 4];
     let count: usize = registry.find_all_guest_contracts(
         GuestContractId::from_u64(MULTI_CONTRACT_ID),
         0_u32,

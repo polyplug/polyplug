@@ -12,7 +12,7 @@ static_assert(sizeof(HostApi) == 152, "HostApi size mismatch");
 static_assert(sizeof(HostContractInstance) == 8, "HostContractInstance size mismatch");
 static_assert(sizeof(HostContractInterface) == 80, "HostContractInterface size mismatch");
 static_assert(sizeof(RuntimeApi) == 96, "RuntimeApi size mismatch");
-static_assert(sizeof(GuestContractHandle) == 4, "GuestContractHandle size mismatch");
+static_assert(sizeof(GuestContractHandle) == 8, "GuestContractHandle size mismatch");
 static_assert(sizeof(BundleInitContext) == 24, "BundleInitContext size mismatch");
 static_assert(sizeof(PluginDescriptor) == 48, "PluginDescriptor size mismatch");
 static_assert(sizeof(ReloadPhase) == 48, "ReloadPhase size mismatch");

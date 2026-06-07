@@ -682,7 +682,7 @@ const KNOWN_SIZES: &[(&str, usize)] = &[
     ("HostContractInterface", 80),
     ("HostContractInstance", 8),
     ("RuntimeApi", 96),
-    ("GuestContractHandle", 4),
+    ("GuestContractHandle", 8),
     ("PluginDescriptor", 48),
     ("BundleInitContext", 24),
     ("RuntimeConfig", 24),
@@ -1965,8 +1965,8 @@ mod tests {
         );
         assert_eq!(
             abi_types.structs[1].size_hint,
-            Some(4),
-            "GuestContractHandle should be 4 bytes"
+            Some(8),
+            "GuestContractHandle should be 8 bytes"
         );
         assert_eq!(
             abi_types.structs[2].size_hint, None,

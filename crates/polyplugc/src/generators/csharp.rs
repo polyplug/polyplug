@@ -1085,9 +1085,10 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str(&format!(
             "        var handle = rt.FindGuestContract({class_name}Constants.{contract_upper}_CONTRACT_ID, 0);\n"
         ));
-        // GuestContractHandle is `#[repr(C)] { index: u32 }`; FindGuestContract returns a
-        // uint and the null handle sentinel is index == u32::MAX (0xFFFFFFFF).
-        out.push_str("        if (handle == uint.MaxValue) { return null; }\n");
+        // GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes).
+        // The handle is opaque to generated code: pass it straight to ResolveGuestContract
+        // and treat a null interface (out-of-bounds, empty, or stale handle) as not-found,
+        // matching the Rust generator. No handle-value inspection here.
         out.push_str("        var host = (HostApi*)rt.HostHandle;\n");
         out.push_str(
             "        var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);\n",

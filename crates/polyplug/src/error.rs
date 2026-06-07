@@ -154,6 +154,9 @@ pub enum RegistryError {
     #[error("invalid plugin handle: index={index} is out of bounds")]
     InvalidHandle { index: u32 },
 
+    #[error("stale plugin handle: index={index} refers to a retired or recycled slot")]
+    StaleHandle { index: u32 },
+
     #[error("no plugin found for contract_id=0x{contract_id:016X} with min_version={min_version}")]
     PluginNotFound { contract_id: u64, min_version: u32 },
 

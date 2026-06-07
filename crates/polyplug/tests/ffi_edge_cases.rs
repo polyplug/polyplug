@@ -95,6 +95,7 @@ fn test_resolve_plugin_stale_handle() {
     // Create an invalid handle by using an out-of-bounds index
     let invalid_handle: GuestContractHandle = GuestContractHandle {
         index: 999_999_999_u32,
+        generation: 0,
     };
 
     // SAFETY: host is valid; invalid_handle is a deliberately invalid handle.

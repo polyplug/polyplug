@@ -922,15 +922,19 @@ export const RUNTIME_API_SIZE: number = 96;
 /**
  *  Opaque handle to a registered guest contract.
  * 
- *  The handle is just an index into the registry array.
- *  Out-of-bounds indices return InvalidHandle error.
+ *  The handle pairs the slot `index` with the `generation` the slot held when the
+ *  handle was minted. `resolve_guest_contract` rejects a handle whose `generation`
+ *  no longer matches the slot's current generation (the slot was retired and the
+ *  index possibly reused), returning `StaleHandle`. Out-of-bounds or empty-slot
+ *  indices return InvalidHandle.
  * 
  *  # Naming
  *  Named `GuestContractHandle` for consistency with `GuestContractInterface`
  *  and `GuestContractInstance`.
  * 
  *  # Layout
- *  - `index`: Slot index in the registry (u32)
+ *  - `index`: Slot index in the registry (u32, offset 0)
+ *  - `generation`: Slot generation the handle was minted against (u32, offset 4)
  * 
  *  # Safety
  *  Handles become stale after unload. Call `resolve_guest_contract` to validate.
@@ -939,10 +943,13 @@ export const RUNTIME_API_SIZE: number = 96;
 export interface GuestContractHandle {
     /**  Slot in the registry array. */
     index: number;
+    /**  Generation the slot held when this handle was minted. */
+    generation: number;
 }
 
 export const GUEST_CONTRACT_HANDLE_INDEX_OFFSET: number = 0;
-export const GUEST_CONTRACT_HANDLE_SIZE: number = 4;
+export const GUEST_CONTRACT_HANDLE_GENERATION_OFFSET: number = 4;
+export const GUEST_CONTRACT_HANDLE_SIZE: number = 8;
 
 /**
  *  Context passed to every guest `polyplug_init()` function.

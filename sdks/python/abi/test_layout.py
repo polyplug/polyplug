@@ -65,7 +65,7 @@ def test_runtime_api_size():
 
 
 def test_guest_contract_handle_size():
-    assert ctypes.sizeof(GuestContractHandle) == 4, f"GuestContractHandle expected 4 bytes, got {ctypes.sizeof(GuestContractHandle)}"
+    assert ctypes.sizeof(GuestContractHandle) == 8, f"GuestContractHandle expected 8 bytes, got {ctypes.sizeof(GuestContractHandle)}"
 
 
 def test_bundle_init_context_size():

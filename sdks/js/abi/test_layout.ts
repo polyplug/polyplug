@@ -62,8 +62,8 @@ Deno.test("RuntimeApi is 96 bytes", () => {
     assert(RUNTIME_API_SIZE === 96);
 });
 
-Deno.test("GuestContractHandle is 4 bytes", () => {
-    assert(GUEST_CONTRACT_HANDLE_SIZE === 4);
+Deno.test("GuestContractHandle is 8 bytes", () => {
+    assert(GUEST_CONTRACT_HANDLE_SIZE === 8);
 });
 
 Deno.test("BundleInitContext is 24 bytes", () => {

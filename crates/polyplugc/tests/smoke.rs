@@ -235,7 +235,10 @@ unsafe extern "C" fn stub_find_guest_contract(
     _contract_id: u64,
     _min_version: u32,
 ) -> GuestContractHandle {
-    GuestContractHandle { index: u32::MAX }
+    GuestContractHandle {
+        index: u32::MAX,
+        generation: 0,
+    }
 }
 
 unsafe extern "C" fn stub_find_all_guest_contracts(

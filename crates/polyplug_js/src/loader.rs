@@ -266,7 +266,10 @@ fn pack_handle(h: GuestContractHandle) -> Option<u64> {
     if h.is_null() {
         None
     } else {
-        Some(h.index as u64)
+        // Carry the full handle identity (generation in the high 32 bits, index in
+        // the low 32) so a JS-held token round-trips back to the exact slot+generation
+        // and stale handles are detected on resolve. Mirrors GuestContractHandle::pack.
+        Some(h.pack())
     }
 }
 
@@ -441,8 +444,11 @@ fn register_host_functions<'js>(
     let resolve_guest_contract_fn: Function<'js> = Function::new(
         ctx.clone(),
         |ctx: Ctx<'js>, packed: u64| -> Option<u64> {
+            // Unpack the full handle identity: index in the low 32 bits, generation
+            // in the high 32 (matches pack_handle / GuestContractHandle::pack).
             let index: u32 = packed as u32;
-            let handle: GuestContractHandle = GuestContractHandle { index };
+            let generation: u32 = (packed >> 32) as u32;
+            let handle: GuestContractHandle = GuestContractHandle { index, generation };
             let hvt: *const HostApi = get_host_interface_from_globals(&ctx)?;
             // SAFETY: hvt points to 'static HostApi data.
             let vtable_ptr: *const GuestContractInterface =

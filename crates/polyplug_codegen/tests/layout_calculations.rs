@@ -139,13 +139,13 @@ fn layout_abierror_fields_and_size() {
     );
 }
 
-/// GuestContractHandle: size=4, align=4, index@0 (opaque handle)
+/// GuestContractHandle: size=8, align=4, index@0, generation@4 (generation-counted handle)
 #[test]
 fn layout_plugin_handle_fields_and_size() {
     assert_eq!(
         size_of::<GuestContractHandle>(),
-        4,
-        "GuestContractHandle size must be 4 bytes (opaque index handle)"
+        8,
+        "GuestContractHandle size must be 8 bytes (index + generation)"
     );
     assert_eq!(
         align_of::<GuestContractHandle>(),
@@ -156,6 +156,11 @@ fn layout_plugin_handle_fields_and_size() {
         offset_of!(GuestContractHandle, index),
         0,
         "GuestContractHandle.index must be at offset 0"
+    );
+    assert_eq!(
+        offset_of!(GuestContractHandle, generation),
+        4,
+        "GuestContractHandle.generation must be at offset 4"
     );
 }
 
@@ -974,12 +979,12 @@ struct AllAbiTypesStruct {
     sv: StringView,              // 16 bytes @ 0
     buf: Buffer,                 // 24 bytes @ 16
     err: AbiError,               // 24 bytes @ 40
-    handle: GuestContractHandle, // 4 bytes @ 64
+    handle: GuestContractHandle, // 8 bytes @ 64
 }
 
 #[test]
 fn layout_all_abi_types_struct() {
-    // sv(16) + buf(24) + err(24) + handle(4) = 68 bytes, aligned to 8 = 72 bytes
+    // sv(16) + buf(24) + err(24) + handle(8) = 72 bytes, aligned to 8 = 72 bytes
     assert_eq!(
         size_of::<AllAbiTypesStruct>(),
         72,
