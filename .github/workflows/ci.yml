@@ -164,6 +164,20 @@ jobs:
       # --no-fail-fast: default fail-fast stops after the first binary fails,
       # hiding every subsequent test binary's failures; on Windows-only iteration
       # we want every failure surfaced in a single run.
+      # TEMPORARY DIAGNOSTIC (remove after the hostpolicy failure is understood):
+      # COREHOST_TRACE makes hostfxr/hostpolicy explain init decisions in detail.
+      - name: CLR init diagnostic (temporary)
+        continue-on-error: true
+        env:
+          COREHOST_TRACE: "1"
+          COREHOST_TRACE_VERBOSITY: "3"
+        shell: bash
+        run: |
+          echo "DOTNET_ROOT=${DOTNET_ROOT:-<unset>}"
+          which dotnet
+          dotnet --list-runtimes
+          ls "/c/Program Files/dotnet/host/fxr" 2>/dev/null || true
+          cargo test -p polyplug_dotnet --test dotnet_loader full_clr_init_reaches_init_symbol_check -- --nocapture
       - name: Run tests
         run: cargo test --workspace --no-fail-fast
 
