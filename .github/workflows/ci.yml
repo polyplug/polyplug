@@ -138,20 +138,6 @@ jobs:
       - name: Build test fixtures
         shell: bash
         run: bash tests/fixtures/build_all.sh
-      # TEMPORARY DIAGNOSTIC (remove after the hostpolicy failure is understood):
-      # COREHOST_TRACE makes hostfxr/hostpolicy explain init decisions in detail.
-      # Must run BEFORE MSVC activation — it compiles the test binary, and bash
-      # cargo steps under the MSVC env hit the link.exe shadowing below.
-      - name: CLR init diagnostic (temporary)
-        continue-on-error: true
-        env:
-          COREHOST_TRACE: "1"
-          COREHOST_TRACE_VERBOSITY: "3"
-        shell: bash
-        run: |
-          echo "DOTNET_ROOT=${DOTNET_ROOT:-<unset>}"
-          which dotnet
-          cargo test -p polyplug_dotnet --test dotnet_loader full_clr_init_reaches_init_symbol_check -- --nocapture
       # MSVC env activation must come AFTER the bash-shell cargo steps: with the
       # MSVC env set, rustc takes `link.exe` from PATH, and Git Bash's GNU
       # coreutils /usr/bin/link shadows it. (LuaJIT's msvcbuild.bat needs the env;

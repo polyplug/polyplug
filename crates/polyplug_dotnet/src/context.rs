@@ -154,11 +154,14 @@ pub(crate) fn init_context(
         })
     })?;
 
-    // Capture path before consuming `tmp`.
-    let temp_path: PathBuf = tmp.path().to_path_buf();
-    // Keep tmp alive so the file remains on disk until hostfxr has read it.
-    // We will explicitly delete it after CLR init rather than using mem::forget.
-    let _tmp_guard: tempfile::NamedTempFile = tmp;
+    // Close the write handle before hostfxr reads the file, but keep the file on disk.
+    // On Windows, hostfxr opens the runtimeconfig with CreateFileW(GENERIC_READ,
+    // FILE_SHARE_READ); a still-open write handle is not covered by that share mode, so
+    // CreateFileW returns ERROR_SHARING_VIOLATION (32), which hostfxr reports as an
+    // invalid runtimeconfig.json. into_temp_path() closes the handle while retaining the
+    // file (TempPath deletes it on drop/close).
+    let tmp_path_guard: tempfile::TempPath = tmp.into_temp_path();
+    let temp_path: PathBuf = tmp_path_guard.to_path_buf();
 
     // Step 3: Convert path to PdCString.
     let pdcpath: PdCString = PdCString::from_os_str(temp_path.as_os_str()).map_err(|_| {
@@ -216,8 +219,7 @@ pub(crate) fn init_context(
 
     // Step 6: Explicitly delete the temp file now that hostfxr has read it synchronously.
     // Intentionally ignore the error — best-effort cleanup only.
-    let _: Result<(), std::io::Error> = std::fs::remove_file(&temp_path);
-    // _tmp_guard would also attempt deletion on drop, but the file is already gone — that's fine.
+    let _: Result<(), std::io::Error> = tmp_path_guard.close();
 
     Ok(Arc::new(DotnetContext {
         _context: Mutex::new(context),
