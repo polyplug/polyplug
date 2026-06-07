@@ -31,6 +31,80 @@ field added after the freeze is impossible.
 
 ---
 
+## Memory Model — Why Arena and Unload Are Orthogonal
+
+The recurring question "should the arena be instance-scoped and freed on unload?"
+conflates two independent memory regimes. Every byte polyplug touches belongs to one
+of five classes:
+
+| Class | What | Allocated by | Freed by | Reclaimed when | Leaks? |
+|---|---|---|---|---|---|
+| A — Args | host→guest call inputs | host (stack/buffer) | host | call returns | no |
+| B — Returns | guest→host outputs (string/array) | native: none (borrowed view); VM: call arena or `host->alloc` fallback | arena reset / host | next call (arena) | no |
+| C — Instance data | per-instance state | native: guest's own allocator (`Box`/`new`); VM: inside the VM | native: `destroy_instance`; VM: VM drop | instance destroyed | only if host skips `destroy_instance` |
+| D — Interface vtables | registered `GuestContractInterface` | runtime (`Arc`) | runtime | never (retire-not-drop) | yes — monotonic per reload |
+| E — Dylib mappings | native code pages | `dlopen` | OS | never (retire-not-drop) | yes — dominant leak |
+
+The **call arena lives entirely in class B**. The **unload problem lives entirely in
+classes D + E**. They never compose, because you cannot bump-allocate a code mapping
+or a registered vtable. Therefore no arena of any scope — call-scoped, instance-scoped,
+or runtime-scoped — addresses unload.
+
+This is not a design opinion; it follows from verified facts about the code:
+
+- Instance create and destroy are **direct vtable calls the runtime never mediates**.
+  The generated host callers in `crates/polyplugc/src/generators/rust.rs:1378` and
+  `crates/polyplugc/src/generators/cpp.rs:1277` emit the `create_instance` /
+  `destroy_instance` calls directly through the resolved `GuestContractInterface`
+  pointer. There is no runtime interception point.
+- `HostApi` has **no `create_instance` or `destroy_instance` field**
+  (`crates/polyplug_abi/src/host/host_api.rs`). Those vtable slots belong to
+  `GuestContractInterface`, not to the host table. The runtime cannot intercept
+  them without a redesign of the ABI.
+- The runtime holds **no live-instance counter**. `RuntimeStoreData` in
+  `crates/polyplug/src/runtime_store.rs` carries `slots`, `retired_interfaces`,
+  index maps, and `bundle_declared_deps` — no field tracks how many instances any
+  bundle has outstanding.
+- Native instance data uses **the guest's own allocator** (`Box` / `new` / `malloc`
+  inside the guest dylib), not `host->alloc`. It is entirely outside the runtime's
+  bookkeeping.
+- VM instance data lives **inside the VM** and dies when the VM is dropped. It is
+  class C, not class B.
+
+### Rejected: instance-scoped arena
+
+Adding a second arena lifetime (one per instance, freed when the instance is
+destroyed) has been evaluated on three axes and rejected on all three.
+
+**Performance.** Instance data is allocated once at `create_instance`, not once per
+call — it was never on the hot path. An instance-scoped arena captures no hot-path
+win. Worse, the generated bridge would have to branch at dispatch time on which-arena
+/ which-lifetime to use (class B call-return data vs hypothetical class C instance
+data). That branch is on the hot path, introducing a cost that violates the
+zero-overhead pillar the design stands on.
+
+**Unload.** Even if instance memory were routed through a runtime-owned arena so the
+runtime could `free` it en masse on `dlclose`, it would only reclaim raw bytes. The
+guest's destructor — file handles, socket teardown, GPU buffer release, any non-POD
+cleanup — lives in code inside the unmapped dylib and can **never run** after
+`dlclose`. The result is silent resource leakage of every non-POD instance, which is
+strictly worse than the honest "destroy instances first" contract the ABI doc already
+states (`GuestContractInstance` doc: *"must be destroyed via `destroy_instance` before
+the bundle is unloaded"*). An instance-scoped arena trades visible instance bytes for
+invisible non-memory resource leaks.
+
+**Safety / visibility.** The one genuine benefit of routing instance allocation
+through the runtime — making the runtime *aware* that an instance is live — is
+achievable with a cheap per-bundle reference counter, without forcing anyone's
+allocator. Even full instance visibility does not fix the dominant residual risk of
+native unload: an **in-flight native dispatch call** executing code in the doomed
+dylib, because dispatch is a raw pointer call the runtime never sees by design (§§3-4
+of this document). The counter approach is examined as D11.
+
+**Conclusion.** Instance-scoped arena is a settled rejection, not an open option.
+
+---
+
 ## Current State — Verified Against Code
 
 ### Retire-not-drop reclamation
@@ -155,6 +229,20 @@ or adopt it as the unload home. Recommendation in §6 / Decision Points.
 ---
 
 ## Core Concepts
+
+#### Call-arena reset policy (perf, independent of unload)
+
+Today `CallArena::reset` (`crates/polyplug_abi/src/types/call_arena.rs`) frees every
+overflow block on each call; for workloads that consistently exceed the inline buffer
+this reintroduces one alloc + free per call. The standard arena discipline is
+**retain-and-rewind**: keep overflow blocks allocated, rewind the bump pointer to the
+start of the first block, and free only on `Drop`. The validity contract is identical
+("all arena memory valid until the next reset"), so the guest-facing class-B guarantee
+is unchanged. This is a pure class-B performance change tracked separately from
+unload; it is pending verification that the guest-facing arena contract does not depend
+on the struct's internal layout (the `CallArena` type is not currently `#[repr(C)]`
+and not in the frozen ABI surface, so the change is self-contained). Nothing in the
+unload phases depends on this optimization; it can ship independently at any time.
 
 ### 1. Generation-counted handles
 
@@ -581,6 +669,21 @@ impl Runtime {
   **Recommendation:** approve the phase order; each phase is independently shippable.
 - **D10 — ABI break timing.** The 8-byte handle is a hard break and **must** land
   pre-1.0. **Recommendation:** approve the handle change now, before the v1.0 freeze.
+- **D11 — Instance-liveness gating (optional, native-only).** If the runtime should
+  *refuse* a native `Reclaim` unload while instances are live — rather than relying
+  solely on the `Arc::strong_count` heuristic — implement a per-bundle live-instance
+  counter as an **extension via `get_extension` (offset 144)**, not as a core-ABI
+  change and not as an arena. Host SDK caller wrappers (generated by `polyplugc`)
+  would bump the counter at `create_instance` and decrement at `destroy_instance`;
+  these are the teardown path, never the dispatch hot path, so the zero-overhead
+  pillar is untouched. The counter lives behind `get_extension`, keeping the 152-byte
+  `HostApi` unchanged and the approach strictly opt-in — consistent with CLAUDE.md §7
+  ("new functionality goes through the extension system"). **Honest caveat:** a
+  live-instance counter *detects* that instances remain; it does not make
+  destructor-less reclaim safe, because the destructors live in the dylib being
+  closed. The "destroy instances first" host contract remains mandatory; the counter
+  only allows the runtime to enforce it rather than assume it.
+  **Recommendation:** build D11 in Phase 4 alongside native Reclaim, not before.
 
 ---
 
