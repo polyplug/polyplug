@@ -183,7 +183,7 @@ public:
 
     /// Find a guest contract by contract_id and minimum version.
     /// Calls through HostApi.find_guest_contract field.
-    /// Returns GuestContractHandle (4 bytes: single u32 index), or invalid_handle() if not found.
+    /// Returns GuestContractHandle (8 bytes: u32 index + u32 generation), or invalid_handle() if not found.
     GuestContractHandle find_guest_contract(uint64_t contract_id, uint32_t min_version) const {
         ensure_host();
         auto func = reinterpret_cast<GuestContractHandle(*)(const HostApi*, uint64_t, uint32_t)>(host_->find_guest_contract);
@@ -192,7 +192,8 @@ public:
 
     /// Find all guest contracts matching contract_id.
     /// Calls through HostApi.find_all_guest_contracts field.
-    /// Returns vector of GuestContractHandle (ABI Array with 3 fields: items, len, align).
+    /// Returns vector of GuestContractHandle (8 bytes each: u32 index + u32 generation).
+    /// The ABI Array (items, len, align) is freed via host->free after copying into the vector.
     std::vector<GuestContractHandle> find_all_guest_contracts(uint64_t contract_id, uint32_t min_version, size_t cap = 64) const {
         ensure_host();
         Array arr = host_->find_all_guest_contracts(host_, contract_id, min_version);

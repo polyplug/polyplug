@@ -11,8 +11,6 @@ local AbiErrorCode = {
     InvalidPointer = 8,
 }
 
-local NULL_HANDLE = 0xFFFFFFFF
-
 -- Contract ID constants
 local PIPELINE_DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7ULL
 local DATA_TRANSFORMER_CONTRACT_ID = 0x4775991362CD68EEULL
@@ -91,11 +89,8 @@ local PipelineDecoderContract_mt = {
 -- Factory function for PipelineDecoderContract (instance wrapper)
 function M.PipelineDecoderContract_create(runtime, host)
     local handle = runtime:find_guest_contract(PIPELINE_DECODER_CONTRACT_ID, 0)
-    -- find_guest_contract returns a u32 handle; the null/not-found sentinel
-    -- is index == u32::MAX (NULL_HANDLE), never nil.
-    if handle == NULL_HANDLE then
-        return nil
-    end
+    -- The handle is opaque: pass it straight to resolve_guest_contract,
+    -- which returns nil for an out-of-bounds, empty, or stale handle.
     local interface = runtime:resolve_guest_contract(handle)
     if interface == nil then
         return nil
@@ -174,11 +169,8 @@ local DataTransformerContract_mt = {
 -- Factory function for DataTransformerContract (instance wrapper)
 function M.DataTransformerContract_create(runtime, host)
     local handle = runtime:find_guest_contract(DATA_TRANSFORMER_CONTRACT_ID, 0)
-    -- find_guest_contract returns a u32 handle; the null/not-found sentinel
-    -- is index == u32::MAX (NULL_HANDLE), never nil.
-    if handle == NULL_HANDLE then
-        return nil
-    end
+    -- The handle is opaque: pass it straight to resolve_guest_contract,
+    -- which returns nil for an out-of-bounds, empty, or stale handle.
     local interface = runtime:resolve_guest_contract(handle)
     if interface == nil then
         return nil
@@ -257,11 +249,8 @@ local PipelineEncoderContract_mt = {
 -- Factory function for PipelineEncoderContract (instance wrapper)
 function M.PipelineEncoderContract_create(runtime, host)
     local handle = runtime:find_guest_contract(PIPELINE_ENCODER_CONTRACT_ID, 0)
-    -- find_guest_contract returns a u32 handle; the null/not-found sentinel
-    -- is index == u32::MAX (NULL_HANDLE), never nil.
-    if handle == NULL_HANDLE then
-        return nil
-    end
+    -- The handle is opaque: pass it straight to resolve_guest_contract,
+    -- which returns nil for an out-of-bounds, empty, or stale handle.
     local interface = runtime:resolve_guest_contract(handle)
     if interface == nil then
         return nil
@@ -340,11 +329,8 @@ local DataReporterContract_mt = {
 -- Factory function for DataReporterContract (instance wrapper)
 function M.DataReporterContract_create(runtime, host)
     local handle = runtime:find_guest_contract(DATA_REPORTER_CONTRACT_ID, 0)
-    -- find_guest_contract returns a u32 handle; the null/not-found sentinel
-    -- is index == u32::MAX (NULL_HANDLE), never nil.
-    if handle == NULL_HANDLE then
-        return nil
-    end
+    -- The handle is opaque: pass it straight to resolve_guest_contract,
+    -- which returns nil for an out-of-bounds, empty, or stale handle.
     local interface = runtime:resolve_guest_contract(handle)
     if interface == nil then
         return nil
@@ -423,11 +409,8 @@ local PipelineValidatorContract_mt = {
 -- Factory function for PipelineValidatorContract (instance wrapper)
 function M.PipelineValidatorContract_create(runtime, host)
     local handle = runtime:find_guest_contract(PIPELINE_VALIDATOR_CONTRACT_ID, 0)
-    -- find_guest_contract returns a u32 handle; the null/not-found sentinel
-    -- is index == u32::MAX (NULL_HANDLE), never nil.
-    if handle == NULL_HANDLE then
-        return nil
-    end
+    -- The handle is opaque: pass it straight to resolve_guest_contract,
+    -- which returns nil for an out-of-bounds, empty, or stale handle.
     local interface = runtime:resolve_guest_contract(handle)
     if interface == nil then
         return nil

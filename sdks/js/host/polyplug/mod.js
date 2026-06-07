@@ -54,15 +54,36 @@ import {
   VM_DISPATCH_LOADER_DATA_OFFSET,
 } from "../../abi/abi.ts";
 
+// Import the GuestContractHandle layout constants so the by-value struct passing
+// and the array element stride stay locked to the generated ABI definition.
+import {
+  GUEST_CONTRACT_HANDLE_INDEX_OFFSET,
+  GUEST_CONTRACT_HANDLE_GENERATION_OFFSET,
+  GUEST_CONTRACT_HANDLE_SIZE,
+} from "../../abi/abi.ts";
+
 // DispatchType discriminants (match polyplug_abi::DispatchType #[repr(u32)]).
 const DISPATCH_TYPE_NATIVE = 0;
 const DISPATCH_TYPE_VIRTUAL_MACHINE = 1;
+
+// AbiErrorCode values (match polyplug_abi::AbiErrorCode #[repr(u32)]). The ABI
+// definition in abi.ts is a TypeScript `const enum`, which is erased at compile
+// time and therefore not importable as a runtime value into this `.js` module;
+// the values are mirrored here so generated/host code can use the named form
+// (AbiErrorCode.Ok) instead of magic numbers.
+const AbiErrorCode = Object.freeze({
+  Ok: 0,
+  InvalidPointer: 8,
+});
 
 // AbiError is returned by value from dispatch as a 24-byte struct
 // { code: u32, _pad: u32, message: StringView{ ptr, len } }; code is the first u32.
 const ABI_ERROR_STRUCT = { struct: ["u32", "u32", "pointer", "usize"] };
 // GuestContractInstance crosses the ABI by value as { data: ptr, contract_id: u64 }.
 const GUEST_CONTRACT_INSTANCE_STRUCT = { struct: ["pointer", "u64"] };
+// GuestContractHandle crosses the ABI by value as { index: u32, generation: u32 }
+// (8 bytes, align 4). Deno FFI passes it as a two-field u32 struct.
+const GUEST_CONTRACT_HANDLE_STRUCT = { struct: ["u32", "u32"] };
 
 export {
   getPlatformIdentifier,
@@ -72,14 +93,25 @@ export {
 } from "./native-loader.ts";
 
 /**
- * Null/invalid GuestContractHandle sentinel.
+ * The `index` value of a null/invalid GuestContractHandle.
  *
- * GuestContractHandle is `#[repr(C)] { index: u32 }` (4 bytes). The null handle
- * is `index == u32::MAX`. A single-field 4-byte repr(C) struct crosses the C ABI
- * as a `u32`, so the handle is a plain JS number, not a bigint.
+ * GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes,
+ * align 4). The null handle has `index == u32::MAX`; the generation is irrelevant
+ * for the null sentinel. Null checks test the `index` field only.
  * @type {number}
  */
-export const NULL_HANDLE = 0xFFFFFFFF;
+const NULL_HANDLE_INDEX = 0xFFFFFFFF;
+
+/**
+ * Null/invalid GuestContractHandle sentinel.
+ *
+ * GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes,
+ * align 4) and crosses the C ABI by value as a two-field u32 struct. The host
+ * binding represents a resolved handle as `{ index, generation }`; the null
+ * sentinel is `{ index: u32::MAX, generation: 0 }`.
+ * @type {{ index: number, generation: number }}
+ */
+export const NULL_HANDLE = Object.freeze({ index: NULL_HANDLE_INDEX, generation: 0 });
 
 // Compatibility modes matching polyplug_abi::Compatibility (#[repr(u32)])
 export const COMPATIBILITY_STRICT = 0;
@@ -415,7 +447,7 @@ export class GuestContractInterfaceView {
     let result;
     if (this.#dispatchType === DISPATCH_TYPE_VIRTUAL_MACHINE) {
       if (this.#vmCallPtr === null) {
-        return 8; // AbiErrorCode::InvalidPointer — null VM dispatch function.
+        return AbiErrorCode.InvalidPointer; // null VM dispatch function.
       }
       // call(loader_data: VmLoaderData, instance, fn_id: u32, args, out, arena) -> AbiError.
       // VmLoaderData is a single opaque pointer (`{ data: *mut c_void }`). The trailing
@@ -430,7 +462,7 @@ export class GuestContractInterfaceView {
     } else {
       const fn = this.#nativeFnPointer(slot);
       if (fn === null) {
-        return 8; // AbiErrorCode::InvalidPointer — null native function slot.
+        return AbiErrorCode.InvalidPointer; // null native function slot.
       }
       // functions[slot](instance, args, out) -> AbiError.
       result = fn.call(instance, argsPtr, outPtr);
@@ -582,21 +614,29 @@ export class Runtime {
    * Find guest contract by contract ID.
    * Calls through HostApi.find_guest_contract field.
    *
-   * Returns a GuestContractHandle, which is `#[repr(C)] { index: u32 }` and
-   * crosses the C ABI as a `u32`. The result is therefore a JS number;
-   * NULL_HANDLE (u32::MAX) signals "no matching contract".
+   * Returns a GuestContractHandle, which is `#[repr(C)] { index: u32,
+   * generation: u32 }` (8 bytes, align 4) and crosses the C ABI by value as a
+   * two-field u32 struct. The result is a `{ index, generation }` object;
+   * a null result (index == u32::MAX) signals "no matching contract".
    * @param {bigint} contractId - Contract identifier
    * @param {number} [minVersion=0] - Minimum version
-   * @returns {number} Guest contract handle index (u32)
+   * @returns {{ index: number, generation: number }} Guest contract handle
    */
   findGuestContract(contractId, minVersion = 0) {
-    return callHostMethod(
+    // find_guest_contract returns GuestContractHandle by value as an 8-byte
+    // struct. Deno FFI returns by-value structs as a Uint8Array buffer.
+    const result = callHostMethod(
       this.#host,
       HOST_API_OFFSETS.find_guest_contract,
       ["pointer", "u64", "u32"],
-      "u32",
+      GUEST_CONTRACT_HANDLE_STRUCT,
       [this.#host, contractId, minVersion]
     );
+    const dv = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    return {
+      index: dv.getUint32(GUEST_CONTRACT_HANDLE_INDEX_OFFSET, true),
+      generation: dv.getUint32(GUEST_CONTRACT_HANDLE_GENERATION_OFFSET, true),
+    };
   }
 
   /**
@@ -605,7 +645,7 @@ export class Runtime {
    * @param {bigint} contractId - Contract identifier
    * @param {number} [minVersion=0] - Minimum version
    * @param {number} [cap=64] - Buffer capacity
-   * @returns {number[]} Array of guest contract handle indices (u32 each)
+   * @returns {{ index: number, generation: number }[]} Array of guest contract handles
    */
   findAllGuestContracts(contractId, minVersion = 0, cap = 64) {
     // find_all_guest_contracts returns `Array<GuestContractHandle>` by value as a
@@ -630,25 +670,30 @@ export class Runtime {
       return [];
     }
 
-    // Read handles from array. GuestContractHandle is `#[repr(C)] { index: u32 }`
-    // (4 bytes), so elements have a 4-byte stride and are read as u32.
+    // Read handles from array. GuestContractHandle is
+    // `#[repr(C)] { index: u32, generation: u32 }` (8 bytes, align 4), so
+    // elements have an 8-byte stride; each is read as a { index, generation }.
     const handles = [];
     const arrView = new Deno.UnsafePointerView(arrPtr);
     for (let i = 0; i < Math.min(arrLen, cap); i++) {
-      handles.push(arrView.getUint32(i * 4));
+      const base = i * GUEST_CONTRACT_HANDLE_SIZE;
+      handles.push({
+        index: arrView.getUint32(base + GUEST_CONTRACT_HANDLE_INDEX_OFFSET),
+        generation: arrView.getUint32(base + GUEST_CONTRACT_HANDLE_GENERATION_OFFSET),
+      });
     }
 
     // Free the array via HostApi.free.
-    // GuestContractHandle is `#[repr(C)] { index: u32 }` (4 bytes, align 4),
-    // so the allocation size is `arrLen * 4` and alignment is 4 — matching the
-    // 4-byte stride used above when reading the handles.
+    // GuestContractHandle is 8 bytes, align 4, so the allocation size is
+    // `arrLen * GUEST_CONTRACT_HANDLE_SIZE` and alignment is 4 — matching the
+    // 8-byte stride used above when reading the handles.
     if (arrLen > 0) {
       callHostMethod(
         this.#host,
         HOST_API_OFFSETS.free,
         ["pointer", "pointer", "usize", "usize"],
         "void",
-        [this.#host, arrPtr, BigInt(arrLen * 4), BigInt(4)]
+        [this.#host, arrPtr, BigInt(arrLen * GUEST_CONTRACT_HANDLE_SIZE), BigInt(4)]
       );
     }
 
@@ -659,21 +704,28 @@ export class Runtime {
    * Resolve a guest contract handle to a raw interface pointer.
    * Calls through HostApi.resolve_guest_contract field.
    *
-   * The handle is a GuestContractHandle (`#[repr(C)] { index: u32 }`) passed by
-   * value, which crosses the C ABI as a `u32`.
-   * @param {number} handle - Guest contract handle index (u32)
-   * @returns {Deno.PointerValue} Resolve handle pointer
+   * The handle is a GuestContractHandle (`#[repr(C)] { index: u32,
+   * generation: u32 }`, 8 bytes) passed by value as a two-field u32 struct.
+   * The null check tests the `index` field.
+   * @param {{ index: number, generation: number }} handle - Guest contract handle
+   * @returns {Deno.PointerValue} Resolved interface pointer (null if invalid/stale)
    */
   resolveGuestContract(handle) {
-    if (handle === NULL_HANDLE) {
+    if (handle === null || handle.index === NULL_HANDLE_INDEX) {
       return null;
     }
+    // Build the 8-byte GuestContractHandle { index, generation } and pass it by
+    // value, matching the C ABI struct layout.
+    const handleBuf = new Uint8Array(GUEST_CONTRACT_HANDLE_SIZE);
+    const handleDv = new DataView(handleBuf.buffer);
+    handleDv.setUint32(GUEST_CONTRACT_HANDLE_INDEX_OFFSET, handle.index, true);
+    handleDv.setUint32(GUEST_CONTRACT_HANDLE_GENERATION_OFFSET, handle.generation, true);
     return callHostMethod(
       this.#host,
       HOST_API_OFFSETS.resolve_guest_contract,
-      ["pointer", "u32"],
+      ["pointer", GUEST_CONTRACT_HANDLE_STRUCT],
       "pointer",
-      [this.#host, handle]
+      [this.#host, handleBuf]
     );
   }
 
@@ -684,7 +736,7 @@ export class Runtime {
    * that decodes the `#[repr(C)] GuestContractInterface` fields and exposes the
    * lifecycle function pointers, dispatch type, function count, and a per-slot
    * dispatch entry. Returns null when the handle does not resolve.
-   * @param {number} handle - Guest contract handle index (u32)
+   * @param {{ index: number, generation: number }} handle - Guest contract handle
    * @returns {GuestContractInterfaceView | null}
    */
   resolveGuestContractInterface(handle) {

@@ -55,7 +55,7 @@ from generated.host.callers import (
 def make_caller(caller_cls, rt, contract_id: int):
     """Resolve a contract handle and build a caller, or None if unavailable.
 
-    find_guest_contract returns a GuestContractHandle struct (single u32 index);
+    find_guest_contract returns a GuestContractHandle struct (index: u32, generation: u32);
     the null/invalid handle has index == 0xFFFFFFFF.
     """
     handle = rt.find_guest_contract(contract_id, 0)

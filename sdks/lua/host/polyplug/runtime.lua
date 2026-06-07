@@ -23,8 +23,9 @@ local bit = require("bit")
 local FNV_OFFSET = 0xcbf29ce484222325ULL
 local FNV_PRIME = 0x00000100000001B3ULL
 
--- GuestContractHandle is `#[repr(C)] { index: u32 }`; the null handle is index == u32::MAX.
-M.NULL_HANDLE = 0xFFFFFFFF
+-- GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes); the null
+-- handle is index == u32::MAX. Null checks test the `.index` field of the returned cdata.
+M.NULL_HANDLE_INDEX = 0xFFFFFFFF
 M.AbiErrorCode = abi.AbiErrorCode
 
 M.bundle_id = abi.bundle_id
@@ -197,11 +198,13 @@ end
 -- Calls through HostApi.find_guest_contract field.
 -- @param contract_id number  Contract identifier hash.
 -- @param min_version number  Minimum version required.
--- @return number             Packed handle, or NULL_HANDLE if not found.
+-- @return cdata              GuestContractHandle cdata (index + generation); a null
+--                           handle has `.index == M.NULL_HANDLE_INDEX`.
 function M.Runtime:find_guest_contract(contract_id, min_version)
     -- Cast function pointer and call with self-passing pattern.
-    -- GuestContractHandle is `#[repr(C)] { index: u32 }` and crosses the C ABI as a uint32_t.
-    local fn = ffi.cast("uint32_t(*)(const HostApi*, uint64_t, uint32_t)", self._host_struct.find_guest_contract)
+    -- GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes) and
+    -- crosses the C ABI as the struct by value, returned by value here.
+    local fn = ffi.cast("GuestContractHandle(*)(const HostApi*, uint64_t, uint32_t)", self._host_struct.find_guest_contract)
     return fn(self._host, contract_id, min_version)
 end
 
@@ -210,22 +213,24 @@ end
 -- @param contract_id number  Contract identifier hash.
 -- @param min_version number  Minimum version required.
 -- @param cap number          Maximum results to return (default 64).
--- @return table              Array of packed handles.
+-- @return table              Array of GuestContractHandle cdata (index + generation).
 function M.Runtime:find_all_guest_contracts(contract_id, min_version, cap)
     cap = cap or 64
     -- Cast function pointer and call with self-passing pattern.
     -- Returns Array<GuestContractHandle> struct with ptr and len. GuestContractHandle
-    -- is `#[repr(C)] { index: u32 }` = 4 bytes, so the element type is uint32_t.
-    local fn = ffi.cast("struct { uint32_t* ptr; size_t len; }(*)(const HostApi*, uint64_t, uint32_t)", self._host_struct.find_all_guest_contracts)
+    -- is `#[repr(C)] { index: u32, generation: u32 }` = 8 bytes, so the element type is
+    -- GuestContractHandle and the array stride is 8 bytes.
+    local fn = ffi.cast("struct { GuestContractHandle* ptr; size_t len; }(*)(const HostApi*, uint64_t, uint32_t)", self._host_struct.find_all_guest_contracts)
     local arr = fn(self._host, contract_id, min_version)
     local result = {}
     for i = 0, math.min(arr.len, cap) - 1 do
         table.insert(result, arr.ptr[i])
     end
-    -- Free the array via HostApi.free (size = len * 4, align = 4).
+    -- Free the array via HostApi.free (size = len * sizeof(GuestContractHandle), align = 4).
     if arr.ptr ~= nil and arr.len > 0 then
+        local elem_size = ffi.sizeof("GuestContractHandle")
         local free_fn = ffi.cast("void(*)(const HostApi*, void*, size_t, size_t)", self._host_struct.free)
-        free_fn(self._host, arr.ptr, arr.len * 4, 4)
+        free_fn(self._host, arr.ptr, arr.len * elem_size, ffi.alignof("GuestContractHandle"))
     end
     return result
 end
@@ -234,16 +239,17 @@ end
 -- Calls through HostApi.resolve_guest_contract field. The returned cdata
 -- exposes the full struct (dispatch_type, create_instance, destroy_instance,
 -- dispatch) so callers can create instances and dispatch functions.
--- @param handle number  GuestContractHandle index (u32) from find_guest_contract.
+-- @param handle cdata  GuestContractHandle cdata (index + generation) from find_guest_contract.
 -- @return cdata                const GuestContractInterface* pointer, or nil if invalid.
 function M.Runtime:resolve_guest_contract(handle)
     -- Null handle sentinel is index == u32::MAX (0xFFFFFFFF).
-    if handle == M.NULL_HANDLE then
+    if handle == nil or handle.index == M.NULL_HANDLE_INDEX then
         return nil, "null handle"
     end
     -- Cast function pointer and call with self-passing pattern.
-    -- GuestContractHandle is `#[repr(C)] { index: u32 }` and crosses the C ABI as a uint32_t.
-    local fn = ffi.cast("const GuestContractInterface*(*)(const HostApi*, uint32_t)", self._host_struct.resolve_guest_contract)
+    -- GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes) and
+    -- crosses the C ABI as the struct passed by value.
+    local fn = ffi.cast("const GuestContractInterface*(*)(const HostApi*, GuestContractHandle)", self._host_struct.resolve_guest_contract)
     local interface = fn(self._host, handle)
     if interface == nil then
         return nil, M.last_error(self._host, self._lib)

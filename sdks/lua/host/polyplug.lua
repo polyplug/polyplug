@@ -60,7 +60,7 @@ local function auto_load_native_lib()
     return M.load_lib(lib_name)
 end
 
-M.NULL_HANDLE = runtime.NULL_HANDLE
+M.NULL_HANDLE_INDEX = runtime.NULL_HANDLE_INDEX
 M.AbiErrorCode = abi.AbiErrorCode
 
 M.bundle_id = abi.bundle_id

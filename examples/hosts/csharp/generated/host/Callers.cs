@@ -84,7 +84,6 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
     /// <summary>Factory method - resolves contract and creates instance.</summary>
     public static PipelineDecoderContractCaller? Create(Runtime rt) {
         var handle = rt.FindGuestContract(PipelineDecoderContractConstants.PIPELINE_DECODER_CONTRACT_ID, 0);
-        if (handle == uint.MaxValue) { return null; }
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
@@ -199,7 +198,6 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
     /// <summary>Factory method - resolves contract and creates instance.</summary>
     public static DataTransformerContractCaller? Create(Runtime rt) {
         var handle = rt.FindGuestContract(DataTransformerContractConstants.DATA_TRANSFORMER_CONTRACT_ID, 0);
-        if (handle == uint.MaxValue) { return null; }
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
@@ -314,7 +312,6 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
     /// <summary>Factory method - resolves contract and creates instance.</summary>
     public static PipelineEncoderContractCaller? Create(Runtime rt) {
         var handle = rt.FindGuestContract(PipelineEncoderContractConstants.PIPELINE_ENCODER_CONTRACT_ID, 0);
-        if (handle == uint.MaxValue) { return null; }
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
@@ -429,7 +426,6 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
     /// <summary>Factory method - resolves contract and creates instance.</summary>
     public static DataReporterContractCaller? Create(Runtime rt) {
         var handle = rt.FindGuestContract(DataReporterContractConstants.DATA_REPORTER_CONTRACT_ID, 0);
-        if (handle == uint.MaxValue) { return null; }
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
@@ -544,7 +540,6 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
     /// <summary>Factory method - resolves contract and creates instance.</summary>
     public static PipelineValidatorContractCaller? Create(Runtime rt) {
         var handle = rt.FindGuestContract(PipelineValidatorContractConstants.PIPELINE_VALIDATOR_CONTRACT_ID, 0);
-        if (handle == uint.MaxValue) { return null; }
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }

@@ -24,6 +24,7 @@ from polyplug_abi import (
     Compatibility,
     DispatchMechanisms,
     DispatchType,
+    GuestContractHandle,
     GuestContractInstance,
     GuestContractInterface,
     HostContractInterface,
@@ -54,8 +55,9 @@ COMPATIBILITY_YOLO: int = Compatibility.Yolo
 
 # DispatchType enum values for host contracts
 DISPATCH_TYPE_VIRTUAL_MACHINE: int = DispatchType.VirtualMachine
-# GuestContractHandle is `#[repr(C)] { index: u32 }`; the null handle is index == u32::MAX.
-_NULL_HANDLE: int = (1 << 32) - 1
+# GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes, align 4).
+# The null handle sentinel has index == u32::MAX (0xFFFFFFFF) and generation == 0.
+_NULL_HANDLE_INDEX: int = (1 << 32) - 1
 
 _BACKEND: str = "ctypes"
 _cffi_available: bool = False
@@ -346,12 +348,16 @@ class Runtime:
         err: AbiError = self._reload_bundle_fn(host, buf, len(path_bytes))
         self._check_error(err.code, "reload_bundle")
 
-    def find_guest_contract(self, contract_id: int, min_version: int) -> int:
-        """Find a guest contract by contract_id and minimum version."""
+    def find_guest_contract(self, contract_id: int, min_version: int) -> GuestContractHandle:
+        """Find a guest contract by contract_id and minimum version.
+
+        Returns a GuestContractHandle struct (index: u32, generation: u32).
+        The null/not-found sentinel has index == 0xFFFFFFFF.
+        """
         host: int = self._ensure_host()
         return self._find_guest_contract_fn(host, contract_id, min_version)
 
-    def find_all_by_contract(self, contract_id: int, min_version: int) -> list[int]:
+    def find_all_by_contract(self, contract_id: int, min_version: int) -> list[GuestContractHandle]:
         """Find all guest contracts matching contract_id."""
         host: int = self._ensure_host()
         # `find_all_guest_contracts` returns an `Array` struct BY VALUE
@@ -367,12 +373,12 @@ class Runtime:
         if array_len == 0 or array_data == 0:
             return []
 
-        # GuestContractHandle is `#[repr(C)] { index: u32 }` = 4 bytes, so the
-        # array has a 4-byte element stride and each element is read as a u32 index.
-        element_size: int = ctypes.sizeof(ctypes.c_uint32)
-        handles: list[int] = []
+        # GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` = 8 bytes,
+        # so the array has an 8-byte element stride and each element is read as a full struct.
+        element_size: int = ctypes.sizeof(GuestContractHandle)
+        handles: list[GuestContractHandle] = []
         for i in range(array_len):
-            handle: int = ctypes.c_uint32.from_address(array_data + i * element_size).value
+            handle: GuestContractHandle = GuestContractHandle.from_address(array_data + i * element_size)
             handles.append(handle)
 
         # Free the array via host->free using the same size/align the runtime
@@ -381,10 +387,10 @@ class Runtime:
 
         return handles
 
-    def resolve_guest_contract(self, handle: int) -> int:
+    def resolve_guest_contract(self, handle: GuestContractHandle) -> int:
         """Resolve a guest contract handle to a GuestContractInterface pointer."""
-        # Null handle sentinel is index == u32::MAX (0xFFFFFFFF).
-        if handle == _NULL_HANDLE:
+        # Null handle sentinel has index == u32::MAX (0xFFFFFFFF).
+        if handle.index == _NULL_HANDLE_INDEX:
             raise RuntimeError("null plugin handle")
         host: int = self._ensure_host()
         return self._resolve_fn(host, handle)

@@ -37,17 +37,19 @@ public sealed class Runtime
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate AbiError ReloadBundleDelegate(nint host, nint path, nuint pathLen);
 
-    // GuestContractHandle is `#[repr(C)] { index: u32 }` (4 bytes). A single-field
-    // 4-byte repr(C) struct crosses the C ABI as a `uint`, so the handle is marshaled
-    // as `uint`, not `ulong`. The null handle is `index == u32::MAX` (0xFFFFFFFF).
+    // GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes,
+    // align 4). It crosses the C ABI by value as the 8-byte struct — its
+    // [StructLayout(LayoutKind.Sequential, Size = 8)] in the generated ABI lays out
+    // Index@0, Generation@4. The null handle is `{ index: u32::MAX, generation: 0 }`,
+    // detected by `Index == uint.MaxValue` (0xFFFFFFFF).
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate uint FindGuestContractDelegate(nint host, ulong contractId, uint minVersion);
+    private delegate GuestContractHandle FindGuestContractDelegate(nint host, ulong contractId, uint minVersion);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate Polyplug.Abi.Array FindAllGuestContractsDelegate(nint host, ulong contractId, uint minVersion);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate nint ResolveGuestContractDelegate(nint host, uint handle);
+    private delegate nint ResolveGuestContractDelegate(nint host, GuestContractHandle handle);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate nuint GetLastErrorDelegate(nint host, nint buf, nuint bufLen);
@@ -344,13 +346,13 @@ public sealed class Runtime
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public uint FindGuestContract(ulong contractId, uint minVersion)
+    public GuestContractHandle FindGuestContract(ulong contractId, uint minVersion)
     {
         EnsureHost();
         return _findGuestContractFn!(_host, contractId, minVersion);
     }
 
-    public uint[] FindAllByContract(ulong contractId, uint minVersion)
+    public GuestContractHandle[] FindAllByContract(ulong contractId, uint minVersion)
     {
         EnsureHost();
 
@@ -363,26 +365,29 @@ public sealed class Runtime
             return [];
         }
 
-        // Each GuestContractHandle is `#[repr(C)] { index: u32 }` = 4 bytes, so the
-        // array has a 4-byte element stride and each element is read as a uint.
+        // Each GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }`
+        // = 8 bytes, so the array element stride is sizeof(GuestContractHandle) and
+        // each element is marshaled as the full struct.
         int count = checked((int)array.Len.ToUInt64());
-        uint[] handles = new uint[count];
+        int stride = Marshal.SizeOf<GuestContractHandle>();
+        GuestContractHandle[] handles = new GuestContractHandle[count];
         for (int i = 0; i < count; i++)
         {
-            handles[i] = (uint)Marshal.ReadInt32(array.Items + i * 4);
+            handles[i] = Marshal.PtrToStructure<GuestContractHandle>(array.Items + i * stride);
         }
 
-        _freeFn!(_host, array.Items, (nuint)(count * 4), array.Align);
+        _freeFn!(_host, array.Items, (nuint)(count * stride), array.Align);
 
         return handles;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public nint ResolveGuestContract(uint handle)
+    public nint ResolveGuestContract(GuestContractHandle handle)
     {
         EnsureHost();
-        // Null handle sentinel is index == u32::MAX (0xFFFFFFFF).
-        if (handle == uint.MaxValue)
+        // Null handle sentinel is { index: u32::MAX, generation: 0 }; the index
+        // alone identifies the null handle.
+        if (handle.Index == uint.MaxValue)
         {
             return nint.Zero;
         }
