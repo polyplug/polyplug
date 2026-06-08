@@ -4,6 +4,7 @@
 //! Each bundle gets its own Lua VM for complete isolation between bundles
 //! and between polyplug Runtime instances.
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::sync::Mutex;
 use std::sync::PoisonError;
@@ -34,6 +35,7 @@ use polyplug_abi::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
 use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 use polyplug_abi::types::Version;
+use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
 
 /// The path to the sdks/lua/guest/ directory, set at compile time by build.rs.
@@ -76,6 +78,28 @@ pub struct LuaLoaderData {
     /// `LuaLoaderData`, never globally, so it is Rule-12 compliant. Contention is
     /// trivial: the vec holds 0..N concurrent caller threads and never duplicates.
     pub in_dispatch_threads: Mutex<Vec<ThreadId>>,
+}
+
+/// Owning handle to a bundle's [`LuaLoaderData`] with a stable heap address.
+///
+/// The dispatch `bridge_data` stores `self.as_ptr()`; that address must stay valid
+/// for as long as the bundle is loaded, so the `LuaLoaderData` lives behind a `Box`
+/// (a bare `Vec<LuaLoaderData>` would move its elements on reallocation and dangle
+/// every `bridge_data`). This newtype makes the required indirection explicit and
+/// keeps the owned collections as `Vec<LuaVm>` rather than `Vec<Box<..>>`.
+struct LuaVm(Box<LuaLoaderData>);
+
+impl LuaVm {
+    /// The stable heap address of the wrapped [`LuaLoaderData`], used as the dispatch
+    /// `bridge_data`. Stable across moves of the `LuaVm`/`Box` while owned.
+    fn as_ptr(&self) -> *const LuaLoaderData {
+        &*self.0 as *const LuaLoaderData
+    }
+
+    /// Borrow the wrapped [`LuaLoaderData`] (e.g. to inspect `in_dispatch_threads`).
+    fn data(&self) -> &LuaLoaderData {
+        &self.0
+    }
 }
 
 /// RAII guard that removes the current thread's id from
@@ -226,12 +250,32 @@ unsafe extern "C" fn lua_dispatch(
 pub struct LuaLoader {
     /// Configuration for this loader instance.
     pub config: LuaConfig,
+    /// Per-bundle VM state owned by the loader, keyed by [`BundleId`].
+    ///
+    /// Each registered contract contributes one [`LuaLoaderData`] (which holds a
+    /// clone of the bundle's `Lua` VM handle). The boxes are owned here instead of
+    /// leaked via `Box::into_raw`, so [`LuaLoader::unload`] can drop them and truly
+    /// reclaim the VM. The VM dispatch `bridge_data` points at the boxed
+    /// `LuaLoaderData`'s stable heap address; the box is never moved out of the map
+    /// while owned, so the pointer stays valid for as long as the bundle is loaded —
+    /// exactly the guarantee the old leak provided. Reload appends rather than
+    /// replaces so a superseded VM stays alive for any in-flight dispatch.
+    live: Mutex<HashMap<BundleId, Vec<LuaVm>>>,
+    /// VM state that could not be dropped at unload because a dispatch was still in
+    /// flight on the VM (non-quiescent). Held for the loader's lifetime so the raw
+    /// `bridge_data` pointer the in-flight dispatch still dereferences stays valid —
+    /// dropping it would be a use-after-free. This is the deferred-reclaim fallback.
+    retired: Mutex<Vec<LuaVm>>,
 }
 
 impl LuaLoader {
     /// Create a new `LuaLoader` with the given configuration.
     pub fn new(config: LuaConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            live: Mutex::new(HashMap::new()),
+            retired: Mutex::new(Vec::new()),
+        }
     }
 
     /// Prepend `entries` to a Lua `package` field (`path` or `cpath`) through the
@@ -567,6 +611,12 @@ impl LuaLoader {
         // across all contracts in this bundle: each per-contract LuaLoaderData holds
         // its own clone of the `Lua` handle, which ref-counts the underlying VM so it
         // stays alive for the process lifetime (Lua plugins are never unloaded).
+        // Per-bundle VM state collected during this load. Each contract's box is
+        // owned here (not leaked); ownership is moved into the loader's `live` map
+        // after all contracts register successfully. The dispatch `bridge_data`
+        // points at each box's stable heap address, captured below.
+        let mut bundle_vm_state: Vec<LuaVm> = Vec::new();
+
         let mut registered: u32 = 0_u32;
         for pair in handlers.pairs::<String, Table>() {
             let (contract_name_str, entry): (String, Table) = pair.map_err(|e: mlua::Error| {
@@ -630,13 +680,17 @@ impl LuaLoader {
 
             // Create LuaLoaderData with a clone of the Lua VM handle and the
             // contract's functions. Cloning `Lua` shares the same underlying VM.
-            let loader_data: Box<LuaLoaderData> = Box::new(LuaLoaderData {
+            let loader_data: LuaVm = LuaVm(Box::new(LuaLoaderData {
                 _vm: lua.clone(),
                 functions: lua_functions,
                 in_dispatch_threads: Mutex::new(Vec::new()),
-            });
+            }));
 
-            let loader_data_ptr: *mut LuaLoaderData = Box::into_raw(loader_data);
+            // The box's heap address is stable across later moves of the `LuaVm`/`Box`
+            // (moving them moves the pointer, not the allocation), so it stays valid
+            // once the box is owned by the loader's `live` map below.
+            let loader_data_ptr: *const LuaLoaderData = loader_data.as_ptr();
+            bundle_vm_state.push(loader_data);
 
             // Build GuestContractInterface with VM dispatch.
             let plugin_interface: GuestContractInterface = GuestContractInterface {
@@ -653,20 +707,25 @@ impl LuaLoader {
                     vm: VmDispatch {
                         call: lua_dispatch,
                         loader_data: VmLoaderData {
-                            data: loader_data_ptr as *mut core::ffi::c_void,
+                            data: loader_data_ptr as *mut LuaLoaderData as *mut core::ffi::c_void,
                         },
                     },
                 },
             };
 
-            // Leak the interface so it has 'static lifetime.
-            // SAFETY: GuestContractInterface is leaked intentionally — the loader data must be 'static.
-            // The interface is valid for the process lifetime (Lua plugins are never unloaded).
+            // The interface is passed to register_guest_contract, which COPIES every
+            // field into the registry's own `Arc<GuestContractInterface>` during the
+            // synchronous call (the copy's `dispatch.vm.bridge_data` still points at
+            // our owned `LuaLoaderData` box). The registry never retains this pointer,
+            // so a stack value valid for the call is sufficient — no leak, which keeps
+            // a load→unload→load loop bounded.
+            let interface_for_reg: GuestContractInterface = plugin_interface;
             let static_interface: *const GuestContractInterface =
-                Box::into_raw(Box::new(plugin_interface));
+                &interface_for_reg as *const GuestContractInterface;
 
-            // Build static string slices for PluginDescriptor.
-            // We leak String → &'static str so StringView ptrs remain valid indefinitely.
+            // Build the PluginDescriptor strings. register_guest_contract copies the
+            // borrowed StringViews into owned Strings during the call, so stack-owned
+            // strings valid for the call suffice — no leak (keeps the loop bounded).
             //
             // The descriptor's human-readable `contract_name` must be the canonical
             // `"<name>@<major>"` form so it matches what every other language registers
@@ -676,18 +735,15 @@ impl LuaLoader {
             // diverge from the other loaders and trip the registry's collision check.
             let contract_display_name: String =
                 format!("{}@{}", contract_name_str, contract_version);
-            let plugin_name_leaked: &'static str = Box::leak(plugin_name_str.into_boxed_str());
-            let contract_name_leaked: &'static str =
-                Box::leak(contract_display_name.into_boxed_str());
 
             let descriptor: PluginDescriptor = PluginDescriptor {
                 name: StringView {
-                    ptr: plugin_name_leaked.as_ptr(),
-                    len: plugin_name_leaked.len(),
+                    ptr: plugin_name_str.as_ptr(),
+                    len: plugin_name_str.len(),
                 },
                 contract_name: StringView {
-                    ptr: contract_name_leaked.as_ptr(),
-                    len: contract_name_leaked.len(),
+                    ptr: contract_display_name.as_ptr(),
+                    len: contract_display_name.len(),
                 },
                 version: Version {
                     major: contract_version,
@@ -700,7 +756,7 @@ impl LuaLoader {
             // SAFETY: `host_interface` is a valid HostApi pointer for this call.
             // `descriptor` is stack-allocated and valid for this call (register_guest_contract must copy
             // any data it needs to retain — the contract is that descriptor is borrowed for the call only).
-            // `static_interface` is a leaked Box — valid for 'static lifetime.
+            // `static_interface` is a stack value; the registry copies it during the call.
             let reg_result: AbiError = unsafe {
                 ((*host_interface).register_guest_contract)(
                     host_interface,
@@ -710,6 +766,11 @@ impl LuaLoader {
             };
 
             if !reg_result.is_ok() {
+                // A contract earlier in this loop may already be registered with the
+                // registry pointing at its box in `bundle_vm_state`. Retire those
+                // boxes (keep them alive for the loader's lifetime) rather than
+                // dropping them here, which would dangle the registry's bridge_data.
+                self.retire_vm_state(bundle_vm_state);
                 return Err(RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: bundle_name,
                     error: format!(
@@ -729,7 +790,44 @@ impl LuaLoader {
             }));
         }
 
+        // Take ownership of this bundle's VM state. Reload appends to any existing
+        // entry instead of replacing it, so a superseded VM stays alive for an
+        // in-flight dispatch (retire-not-drop across reload).
+        let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
+            self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        live.entry(BundleId::from_u64(bundle_id))
+            .or_default()
+            .append(&mut bundle_vm_state);
+
         Ok(())
+    }
+
+    /// Move per-bundle VM state into the loader's `retired` list, keeping it alive
+    /// for the loader's lifetime. Used when a box must not be dropped because the
+    /// registry (or an in-flight dispatch) still references its heap address.
+    fn retire_vm_state(&self, mut state: Vec<LuaVm>) {
+        if state.is_empty() {
+            return;
+        }
+        let mut retired: std::sync::MutexGuard<'_, Vec<LuaVm>> =
+            self.retired.lock().unwrap_or_else(PoisonError::into_inner);
+        retired.append(&mut state);
+    }
+
+    /// Number of live VM-state entries currently owned for `bundle_id`.
+    #[cfg(test)]
+    fn live_vm_count(&self, bundle_id: BundleId) -> usize {
+        let live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
+            self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        live.get(&bundle_id).map(Vec::len).unwrap_or(0)
+    }
+
+    /// Number of VM-state entries retired (deferred reclaim) by this loader.
+    #[cfg(test)]
+    fn retired_vm_count(&self) -> usize {
+        let retired: std::sync::MutexGuard<'_, Vec<LuaVm>> =
+            self.retired.lock().unwrap_or_else(PoisonError::into_inner);
+        retired.len()
     }
 }
 
@@ -763,6 +861,70 @@ impl BundleLoader for LuaLoader {
             runtime,
         )
     }
+
+    /// Reclaim the bundle's Lua VM at a quiescence point.
+    ///
+    /// Called by the runtime AFTER `invalidate_bundle` has removed the bundle from
+    /// the registry, so no dispatch can *resolve* this contract anew.
+    ///
+    /// # Host-coordination contract (best-effort quiescence)
+    /// `call_guest_method` deliberately releases the registry lock between resolving
+    /// an interface and the moment this VM registers the call in
+    /// `in_dispatch_threads` (runtime.rs — no lock is held across guest dispatch, for
+    /// concurrency/reentrancy). A call that resolved *just before* `invalidate_bundle`
+    /// is therefore not guaranteed to be visible in `in_dispatch_threads` here. So,
+    /// exactly like hot-reload, the host MUST NOT call a bundle's contracts
+    /// concurrently with unloading it (see [`crate`]'s `Runtime::unload_bundle` doc and
+    /// the trusted-same-process model in TRUST_MODEL.md). `in_dispatch_threads` is a
+    /// best-effort defense-in-depth, not a complete guarantee.
+    ///
+    /// For each `LuaLoaderData` owned by the bundle:
+    /// - if its `in_dispatch_threads` is EMPTY (the expected case when the host has
+    ///   honored the contract), the box is dropped here, dropping its `Lua` VM handle
+    ///   — true reclaim;
+    /// - if it is NON-EMPTY (a dispatch is visibly in flight on another thread),
+    ///   dropping the box would free the VM out from under that dispatch (a UAF), so
+    ///   the box is moved into the loader-owned `retired` list instead and a single
+    ///   line is logged. Reclaim is deferred; the VM stays alive for the loader's
+    ///   lifetime.
+    ///
+    /// Spin-waiting is deliberately NOT used: a same-thread re-entrant unload would
+    /// deadlock against its own in-flight dispatch.
+    fn unload(&self, bundle_id: BundleId, _runtime: &Runtime) -> Result<(), RuntimeError> {
+        let state: Vec<LuaVm> = {
+            let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
+                self.live.lock().unwrap_or_else(PoisonError::into_inner);
+            match live.remove(&bundle_id) {
+                Some(v) => v,
+                None => return Ok(()),
+            }
+        };
+
+        for data in state {
+            let in_flight: bool = {
+                let threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = data
+                    .data()
+                    .in_dispatch_threads
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                !threads.is_empty()
+            };
+
+            if in_flight {
+                eprintln!(
+                    "[polyplug_lua] unload of bundle {:#x} deferred: a dispatch is in flight on this VM; retiring its state to avoid a use-after-free",
+                    bundle_id.id()
+                );
+                self.retire_vm_state(vec![data]);
+            } else {
+                // Quiescent: dropping `data` drops the cloned `Lua` handle. The VM is
+                // freed once the last clone for this bundle is dropped — true reclaim.
+                drop(data);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -779,6 +941,179 @@ mod tests {
     fn lua_runtime_name() {
         let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
         assert_eq!(loader.runtime_name(), "lua");
+    }
+
+    /// A minimal valid Lua plugin registering the `test.unload@1` contract.
+    fn unload_plugin_script() -> &'static [u8] {
+        br#"
+local function impl_noop(_a, _o) end
+function polyplug_init(_host, _ctx)
+    _G._polyplug_handlers = {
+        ["test.unload"] = {
+            contract_version = 1,
+            plugin_name      = "test-unload",
+            functions        = { [0] = impl_noop },
+        },
+    }
+end
+"#
+    }
+
+    /// Write a temp bundle directory with manifest.toml + bundle.lua and return the
+    /// dir (kept alive) plus a ManifestData for it.
+    fn write_unload_bundle(name: &str) -> (tempfile::TempDir, ManifestData) {
+        let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("bundle.lua"), unload_plugin_script())
+            .expect("write bundle.lua");
+        let manifest: ManifestData = ManifestData {
+            id: polyplug_utils::bundle_id(name),
+            name: name.to_owned(),
+            runtime: "lua".to_owned(),
+            file: "bundle.lua".to_owned(),
+            path: dir.path().to_path_buf(),
+            version: String::new(),
+            provides: Vec::new(),
+            function_count: std::collections::HashMap::new(),
+            dependencies: Vec::new(),
+            needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
+        };
+        (dir, manifest)
+    }
+
+    /// A quiescent unload (no in-flight dispatch) drops the bundle's VM state from
+    /// the loader's owned map — true reclaim — and does not retire anything.
+    #[test]
+    fn unload_quiescent_reclaims_vm_state() {
+        let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+        let runtime: std::sync::Arc<polyplug::Runtime> = polyplug::runtime::RuntimeBuilder::new()
+            .loader(LuaLoader::new(LuaConfig::default()))
+            .build()
+            .expect("runtime build must succeed");
+        let (_dir, manifest): (tempfile::TempDir, ManifestData) =
+            write_unload_bundle("lua_unload_quiescent");
+        let bundle_id: BundleId = BundleId::from_u64(manifest.id);
+
+        loader
+            .load(
+                &manifest,
+                &BundleSource::Path(manifest.path.clone()),
+                &runtime,
+            )
+            .expect("load must succeed");
+        assert_eq!(
+            loader.live_vm_count(bundle_id),
+            1,
+            "one contract's VM state must be owned after load"
+        );
+
+        loader
+            .unload(bundle_id, &runtime)
+            .expect("unload must succeed");
+        assert_eq!(
+            loader.live_vm_count(bundle_id),
+            0,
+            "quiescent unload must drop the bundle's VM state (true reclaim)"
+        );
+        assert_eq!(
+            loader.retired_vm_count(),
+            0,
+            "quiescent unload must NOT retire any state"
+        );
+    }
+
+    /// A load→unload→load loop on the same bundle must not grow the loader's live
+    /// map unboundedly: reclaim keeps memory bounded at one entry.
+    #[test]
+    fn unload_load_loop_is_bounded() {
+        let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+        let runtime: std::sync::Arc<polyplug::Runtime> = polyplug::runtime::RuntimeBuilder::new()
+            .loader(LuaLoader::new(LuaConfig::default()))
+            .build()
+            .expect("runtime build must succeed");
+        let (_dir, manifest): (tempfile::TempDir, ManifestData) =
+            write_unload_bundle("lua_unload_loop");
+        let bundle_id: BundleId = BundleId::from_u64(manifest.id);
+
+        for _ in 0..5 {
+            loader
+                .load(
+                    &manifest,
+                    &BundleSource::Path(manifest.path.clone()),
+                    &runtime,
+                )
+                .expect("load must succeed");
+            assert_eq!(
+                loader.live_vm_count(bundle_id),
+                1,
+                "live map must hold exactly one entry per load"
+            );
+            loader
+                .unload(bundle_id, &runtime)
+                .expect("unload must succeed");
+            assert_eq!(
+                loader.live_vm_count(bundle_id),
+                0,
+                "unload must reclaim the entry each iteration"
+            );
+        }
+        assert_eq!(
+            loader.retired_vm_count(),
+            0,
+            "no iteration should have deferred reclaim"
+        );
+    }
+
+    /// When a dispatch is in flight (the bundle's `in_dispatch_threads` is marked
+    /// non-empty), unload must DEFER reclaim: the state is moved to the retired list
+    /// (kept alive, no UAF) rather than dropped.
+    #[test]
+    fn unload_non_quiescent_defers_reclaim() {
+        let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+        let runtime: std::sync::Arc<polyplug::Runtime> = polyplug::runtime::RuntimeBuilder::new()
+            .loader(LuaLoader::new(LuaConfig::default()))
+            .build()
+            .expect("runtime build must succeed");
+        let (_dir, manifest): (tempfile::TempDir, ManifestData) =
+            write_unload_bundle("lua_unload_deferred");
+        let bundle_id: BundleId = BundleId::from_u64(manifest.id);
+
+        loader
+            .load(
+                &manifest,
+                &BundleSource::Path(manifest.path.clone()),
+                &runtime,
+            )
+            .expect("load must succeed");
+
+        // Simulate an in-flight dispatch by registering a fake thread id in the
+        // bundle's tracking vec. This is exactly the state the dispatch guard would
+        // leave while a call is mid-flight on another thread.
+        {
+            let live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
+                loader.live.lock().unwrap_or_else(PoisonError::into_inner);
+            let state: &Vec<LuaVm> = live.get(&bundle_id).expect("bundle must be live");
+            let mut threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = state[0]
+                .data()
+                .in_dispatch_threads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            threads.push(std::thread::current().id());
+        }
+
+        loader
+            .unload(bundle_id, &runtime)
+            .expect("unload must succeed even when non-quiescent");
+        assert_eq!(
+            loader.live_vm_count(bundle_id),
+            0,
+            "unload must remove the bundle from the live map"
+        );
+        assert_eq!(
+            loader.retired_vm_count(),
+            1,
+            "non-quiescent unload must RETIRE the state (deferred reclaim), not drop it"
+        );
     }
 
     /// Build a leaked LuaLoaderData with the given Lua functions and return a

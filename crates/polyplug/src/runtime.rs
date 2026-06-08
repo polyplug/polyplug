@@ -525,14 +525,32 @@ impl Runtime {
         )
     }
 
-    /// Unload a bundle: invalidate its handles and remove it from the registry.
+    /// Unload a bundle: invalidate its handles, remove it from the registry, and
+    /// reclaim its per-loader resources where the loader supports it.
     ///
-    /// This is retire/invalidate-only unload. The bundle's slots have their generation
+    /// First the registry is invalidated: the bundle's slots have their generation
     /// bumped and their active interface `Arc` moved to retire storage, then the bundle
-    /// is removed from the registry indices. The underlying dylib mapping or VM state is
-    /// **NOT** freed — that is a future Reclaim mode. Because interfaces are retired
-    /// rather than dropped, any raw `GuestContractInterface` pointer resolved before the
-    /// unload stays valid; only future resolves of old handles fail with `StaleHandle`.
+    /// is removed from the registry indices. Because interfaces are *retired* rather
+    /// than dropped, any raw `GuestContractInterface` pointer resolved before the unload
+    /// stays valid; only future resolves of old handles fail with `StaleHandle`.
+    ///
+    /// Then the matching loader's reclaim hook runs:
+    /// - **VM loaders (Lua, JS):** the bundle's VM is *freed* (true reclaim) once it is
+    ///   quiescent — see the host-coordination contract below.
+    /// - **Native / Python / .NET loaders:** invalidate-only today (retire-not-drop);
+    ///   the dylib / interpreter state is kept mapped. Opt-in native `dlclose` reclaim
+    ///   is future work.
+    ///
+    /// # Host-coordination contract
+    /// Unload is a host-coordinated operation, exactly like hot-reload: the host MUST
+    /// NOT call a bundle's contracts concurrently with unloading it. `call_guest_method`
+    /// resolves an interface and then dispatches WITHOUT holding the registry lock (for
+    /// concurrency/reentrancy), so a call racing an unload from another thread is the
+    /// host's responsibility to prevent — the same trusted-same-process posture
+    /// `TRUST_MODEL.md` and the reload `Preparing` callback already assume. VM loaders
+    /// additionally defer reclaim (retire instead of free) if a dispatch is *visibly*
+    /// in flight, as best-effort defense-in-depth, but this is not a substitute for the
+    /// contract.
     ///
     /// # Errors
     /// - `BundleNotFound`: the bundle is not currently loaded.
@@ -575,8 +593,54 @@ impl Runtime {
             });
         }
 
+        // Capture the loader runtime-name BEFORE invalidate: invalidate removes the
+        // bundle metadata, after which the runtime string is no longer recoverable.
+        let runtime_name: Option<String> = self.bundle_loader_name(&descriptor.name);
+
         self.registry.invalidate_bundle(bundle_id)?;
+
+        // Invalidate-then-reclaim: now that the bundle is gone from the registry
+        // indices, no new dispatch can reach it. Ask the loader to free its
+        // per-bundle resources at a quiescence point (no-op for non-VM loaders).
+        self.reclaim_via_loader(bundle_id, runtime_name.as_deref())?;
         Ok(())
+    }
+
+    /// Look up the loader runtime-name string for a loaded bundle by name.
+    ///
+    /// The original `manifest.runtime` string (e.g. `"lua"`, `"js-quickjs"`) is the
+    /// key the load path used to resolve the loader, and the only value that maps
+    /// back to a `BundleLoader::runtime_name()`. It is read from `bundle_manifests`,
+    /// which must be consulted BEFORE `invalidate_bundle` removes the bundle.
+    fn bundle_loader_name(&self, bundle_name: &str) -> Option<String> {
+        let manifests: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> =
+            self.bundle_manifests.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        manifests
+            .get(bundle_name)
+            .map(|m: &ManifestData| m.runtime.clone())
+    }
+
+    /// Invoke the loader's `unload` reclaim hook for `bundle_id`.
+    ///
+    /// `runtime_name` is the loader key captured before invalidate. A missing name
+    /// or missing loader is not an error: a bundle with no recoverable loader simply
+    /// has nothing to reclaim (the invalidate already retired its interfaces).
+    fn reclaim_via_loader(
+        &self,
+        bundle_id: BundleId,
+        runtime_name: Option<&str>,
+    ) -> Result<(), RuntimeError> {
+        let name: &str = match runtime_name {
+            Some(n) => n,
+            None => return Ok(()),
+        };
+        match self.loader_for(name) {
+            Some(loader) => loader.unload(bundle_id, self),
+            None => Ok(()),
+        }
     }
 
     /// Unload a bundle and every bundle that depends on it, dependents first.
@@ -623,7 +687,19 @@ impl Runtime {
             self.unload_bundle_cascade_with_visited(dep, visited)?;
         }
 
+        // Capture the loader runtime-name before invalidate removes the metadata,
+        // then reclaim the loader's per-bundle state after invalidate (see
+        // [`Runtime::unload_bundle`]).
+        let bundle_name: String = self
+            .registry
+            .get_bundle_descriptor(bundle_id)
+            .map(|d: crate::runtime_store::BundleDescriptor| d.name)
+            .unwrap_or_default();
+        let runtime_name: Option<String> = self.bundle_loader_name(&bundle_name);
+
         self.registry.invalidate_bundle(bundle_id)?;
+
+        self.reclaim_via_loader(bundle_id, runtime_name.as_deref())?;
         Ok(())
     }
 

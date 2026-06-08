@@ -1,3 +1,5 @@
+use polyplug_utils::BundleId;
+
 use crate::{
     error::RuntimeError,
     loader::{bundle_source::BundleSource, manifest::ManifestData},
@@ -56,4 +58,27 @@ pub trait BundleLoader: Send + Sync {
     /// # Errors
     /// Returns `Err(RuntimeError::...)` on any failure.
     fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError>;
+
+    /// Reclaim a bundle's loader-owned resources after it has been invalidated.
+    ///
+    /// The runtime calls this from [`Runtime::unload_bundle`] *after*
+    /// `RuntimeStore::invalidate_bundle` has removed the bundle from the registry
+    /// indices and bumped its slots' generations. By that point no *new* dispatch
+    /// can resolve to this bundle, so the loader only has to account for dispatches
+    /// already in flight.
+    ///
+    /// The default implementation is a no-op: invalidate-only loaders (native,
+    /// python, dotnet) follow the retire-not-drop model and never tear down their
+    /// per-bundle state, so previously resolved raw pointers stay valid for the
+    /// runtime's lifetime. They must NOT override this hook.
+    ///
+    /// VM loaders (lua, js) override it to free the bundle's VM at a quiescence
+    /// point: if no thread is mid-dispatch on the VM the VM state is dropped (true
+    /// reclaim); otherwise it is retired (kept alive) to avoid a use-after-free.
+    ///
+    /// # Errors
+    /// Returns `Err(RuntimeError::...)` if reclamation fails.
+    fn unload(&self, _bundle_id: BundleId, _runtime: &Runtime) -> Result<(), RuntimeError> {
+        Ok(())
+    }
 }

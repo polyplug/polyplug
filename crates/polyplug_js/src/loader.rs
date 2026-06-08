@@ -5,6 +5,7 @@
 //! between bundles and between polyplug Runtime instances.
 //! Uses VM dispatch to call JS functions through the QuickJS API.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -41,6 +42,7 @@ use polyplug_abi::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
 use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 use polyplug_abi::types::Version;
+use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
 
 use crate::config::JsConfig;
@@ -80,10 +82,18 @@ unsafe impl<'js> JsLifetime<'js> for JsRegistrationData {
 /// Each bundle gets its own QuickJS Runtime and Context, ensuring complete
 /// isolation between bundles and between polyplug Runtime instances.
 /// The Context is cached for fast dispatch without per-call creation overhead.
+///
+/// # Field drop order
+/// Rust drops fields in declaration order, and QuickJS's `JS_FreeRuntime` asserts
+/// that every JS object (the `Persistent<Function>`s) and the `Context` are already
+/// freed when the `Runtime` is dropped. `functions` and `ctx` are therefore declared
+/// BEFORE `_runtime` so they drop first; reordering them would re-introduce a
+/// `JS_FreeRuntime: Assertion 'list_empty(&rt->gc_obj_list)' failed` abort when a
+/// bundle's VM is reclaimed on unload.
 pub struct JsLoaderData {
-    pub _runtime: Runtime,
-    pub ctx: Context,
     pub functions: Vec<Persistent<Function<'static>>>,
+    pub ctx: Context,
+    pub _runtime: Runtime,
     /// Thread-aware same-VM reentrancy guard for [`js_dispatch`].
     ///
     /// rquickjs is built with the `parallel` feature, so a `Context` is reachable
@@ -109,6 +119,45 @@ pub struct JsLoaderData {
     /// `JsLoaderData`, never globally, so it is Rule-12 compliant. Contention is
     /// trivial: the vec holds 0..N concurrent caller threads and never duplicates.
     pub in_dispatch_threads: Mutex<Vec<ThreadId>>,
+}
+
+/// Owning, thread-shareable handle to a bundle's [`JsLoaderData`].
+///
+/// `JsLoaderData` is `!Send`/`!Sync` because `Persistent<Function>` carries a raw
+/// `*mut JSRuntime`. The previous design laundered this by leaking the box behind a
+/// raw `*mut c_void` inside `VmLoaderData`; this newtype instead owns the box so it
+/// can be dropped on unload, while restoring `Send + Sync` so the loader's `live` /
+/// `retired` collections (and therefore `JsLoader`) stay `Send + Sync`.
+///
+/// The pointer stored in the dispatch `bridge_data` is `self.0`'s stable heap
+/// address; it is dereferenced only inside `js_dispatch`, which enters
+/// `Context::with`. rquickjs is built with the `parallel` feature, so every VM
+/// access serializes on the runtime's internal lock — exactly the invariant the
+/// cross-thread dispatch path already relies on.
+struct SendVm(Box<JsLoaderData>);
+
+// SAFETY: every access to the wrapped JsLoaderData's VM goes through `Context::with`
+// (in js_dispatch) or the bundle's own `in_dispatch_threads` Mutex (in unload).
+// rquickjs's `parallel` feature serializes all VM operations on the runtime's
+// internal lock, so moving ownership of the box between threads and sharing `&SendVm`
+// across threads never produces concurrent unsynchronized VM access. This is the same
+// soundness the existing cross-thread `js_dispatch` path depends on.
+unsafe impl Send for SendVm {}
+// SAFETY: see the Send impl — VM access is serialized by rquickjs's internal lock and
+// the per-bundle in_dispatch_threads Mutex, so shared references are sound.
+unsafe impl Sync for SendVm {}
+
+impl SendVm {
+    /// The stable heap address of the wrapped [`JsLoaderData`], used as the dispatch
+    /// `bridge_data`. Stable across moves of the `SendVm`/`Box` while owned.
+    fn as_ptr(&self) -> *const JsLoaderData {
+        &*self.0 as *const JsLoaderData
+    }
+
+    /// Borrow the wrapped [`JsLoaderData`] (e.g. to inspect `in_dispatch_threads`).
+    fn data(&self) -> &JsLoaderData {
+        &self.0
+    }
 }
 
 /// RAII guard that removes the current thread's id from
@@ -908,11 +957,31 @@ fn register_host_functions<'js>(
 /// QuickJS in-process JS plugin loader.
 pub struct JsLoader {
     _config: JsConfig,
+    /// Per-bundle VM state owned by the loader, keyed by [`BundleId`].
+    ///
+    /// Each loaded bundle contributes one [`JsLoaderData`] (holding its own QuickJS
+    /// `Runtime` and `Context`). The boxes are owned here instead of leaked via
+    /// `Box::into_raw`, so [`JsLoader::unload`] can drop them and truly reclaim the
+    /// VM. The VM dispatch `bridge_data` points at the boxed `JsLoaderData`'s stable
+    /// heap address; the box is never moved out of the map while owned, so the
+    /// pointer stays valid for as long as the bundle is loaded — exactly the
+    /// guarantee the old leak provided. Reload appends rather than replaces so a
+    /// superseded VM stays alive for any in-flight dispatch.
+    live: Mutex<HashMap<BundleId, Vec<SendVm>>>,
+    /// VM state that could not be dropped at unload because a dispatch was still in
+    /// flight on the VM (non-quiescent). Held for the loader's lifetime so the raw
+    /// `bridge_data` pointer the in-flight dispatch still dereferences stays valid —
+    /// dropping it would be a use-after-free. This is the deferred-reclaim fallback.
+    retired: Mutex<Vec<SendVm>>,
 }
 
 impl JsLoader {
     pub fn new(config: JsConfig) -> JsLoader {
-        JsLoader { _config: config }
+        JsLoader {
+            _config: config,
+            live: Mutex::new(HashMap::new()),
+            retired: Mutex::new(Vec::new()),
+        }
     }
 
     /// Read the plugin's JS source from the on-disk bundle directory.
@@ -1101,14 +1170,17 @@ impl JsLoader {
                 })
             })?;
 
-        let loader_data: Box<JsLoaderData> = Box::new(JsLoaderData {
+        let loader_data: SendVm = SendVm(Box::new(JsLoaderData {
             _runtime: qjs_runtime,
             ctx,
             functions: registration_data.functions,
             in_dispatch_threads: Mutex::new(Vec::new()),
-        });
+        }));
 
-        let loader_data_ptr: *mut JsLoaderData = Box::into_raw(loader_data);
+        // The box's heap address is stable across later moves of the `SendVm`/`Box`
+        // (moving them moves the pointer, not the allocation), so it stays valid
+        // once the box is owned by the loader's `live` map below.
+        let loader_data_ptr: *const JsLoaderData = loader_data.as_ptr();
 
         let contract_id: GuestContractId = GuestContractId::from_u64(registration_data.contract_id);
         let major_version: u32 = registration_data.contract_version >> 16;
@@ -1127,22 +1199,29 @@ impl JsLoader {
                 vm: VmDispatch {
                     call: js_dispatch,
                     loader_data: VmLoaderData {
-                        data: loader_data_ptr as *mut core::ffi::c_void,
+                        data: loader_data_ptr as *mut JsLoaderData as *mut core::ffi::c_void,
                     },
                 },
             },
         };
 
+        // register_guest_contract COPIES every field into the registry's own
+        // `Arc<GuestContractInterface>` during the synchronous call (the copy's
+        // `dispatch.vm.bridge_data` still points at our owned `JsLoaderData` box).
+        // The registry never retains this pointer, so a stack value valid for the
+        // call is sufficient — no leak, which keeps a load→unload→load loop bounded.
+        let interface_for_reg: GuestContractInterface = plugin_interface;
         let static_interface: *const GuestContractInterface =
-            Box::into_raw(Box::new(plugin_interface));
+            &interface_for_reg as *const GuestContractInterface;
 
-        let contract_name_leaked: &'static str =
-            Box::leak(registration_data.contract_name.into_boxed_str());
+        // The contract name's StringView is copied into an owned String by the
+        // registry during the call, so a stack-owned String suffices — no leak.
+        let contract_name_owned: String = registration_data.contract_name;
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"js-quickjs-plugin"),
             contract_name: StringView {
-                ptr: contract_name_leaked.as_ptr(),
-                len: contract_name_leaked.len(),
+                ptr: contract_name_owned.as_ptr(),
+                len: contract_name_owned.len(),
             },
             version: Version {
                 major: major_version,
@@ -1162,6 +1241,10 @@ impl JsLoader {
         };
 
         if !abi_result.is_ok() {
+            // The registry copy made during register_guest_contract may already point
+            // at this box's heap address; retire it (keep it alive) rather than
+            // dropping it here, which would dangle the registry's bridge_data.
+            self.retire_vm_state(vec![loader_data]);
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: format!(
@@ -1171,7 +1254,44 @@ impl JsLoader {
             }));
         }
 
+        // Take ownership of this bundle's VM state. Reload appends to any existing
+        // entry instead of replacing it, so a superseded VM stays alive for an
+        // in-flight dispatch (retire-not-drop across reload).
+        let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
+            self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        live.entry(BundleId::from_u64(bundle_id))
+            .or_default()
+            .push(loader_data);
+
         Ok(())
+    }
+
+    /// Move per-bundle VM state into the loader's `retired` list, keeping it alive
+    /// for the loader's lifetime. Used when a box must not be dropped because the
+    /// registry (or an in-flight dispatch) still references its heap address.
+    fn retire_vm_state(&self, mut state: Vec<SendVm>) {
+        if state.is_empty() {
+            return;
+        }
+        let mut retired: std::sync::MutexGuard<'_, Vec<SendVm>> =
+            self.retired.lock().unwrap_or_else(PoisonError::into_inner);
+        retired.append(&mut state);
+    }
+
+    /// Number of live VM-state entries currently owned for `bundle_id`.
+    #[cfg(test)]
+    fn live_vm_count(&self, bundle_id: BundleId) -> usize {
+        let live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
+            self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        live.get(&bundle_id).map(Vec::len).unwrap_or(0)
+    }
+
+    /// Number of VM-state entries retired (deferred reclaim) by this loader.
+    #[cfg(test)]
+    fn retired_vm_count(&self) -> usize {
+        let retired: std::sync::MutexGuard<'_, Vec<SendVm>> =
+            self.retired.lock().unwrap_or_else(PoisonError::into_inner);
+        retired.len()
     }
 }
 
@@ -1225,6 +1345,70 @@ impl BundleLoader for JsLoader {
         let bundle_js: String = JsLoader::read_path_source(manifest)?;
         self.load_inner(manifest, &bundle_js, Some(&manifest.path), runtime)
     }
+
+    /// Reclaim the bundle's QuickJS VM at a quiescence point.
+    ///
+    /// Called by the runtime AFTER `invalidate_bundle` has removed the bundle from
+    /// the registry, so no dispatch can *resolve* this contract anew.
+    ///
+    /// # Host-coordination contract (best-effort quiescence)
+    /// `call_guest_method` deliberately releases the registry lock between resolving
+    /// an interface and the moment this VM registers the call in
+    /// `in_dispatch_threads` (runtime.rs — no lock is held across guest dispatch, for
+    /// concurrency/reentrancy). A call that resolved *just before* `invalidate_bundle`
+    /// is therefore not guaranteed to be visible in `in_dispatch_threads` here. So,
+    /// exactly like hot-reload, the host MUST NOT call a bundle's contracts
+    /// concurrently with unloading it (see `Runtime::unload_bundle` and the
+    /// trusted-same-process model in TRUST_MODEL.md). `in_dispatch_threads` is a
+    /// best-effort defense-in-depth, not a complete guarantee.
+    ///
+    /// For each `JsLoaderData` owned by the bundle:
+    /// - if its `in_dispatch_threads` is EMPTY (the expected case when the host has
+    ///   honored the contract), the box is dropped here, dropping its QuickJS
+    ///   `Context` and `Runtime` — true reclaim;
+    /// - if it is NON-EMPTY (a dispatch is visibly in flight on another thread),
+    ///   dropping the box would free the VM out from under that dispatch (a UAF), so
+    ///   the box is moved into the loader-owned `retired` list instead and a single
+    ///   line is logged. Reclaim is deferred; the VM stays alive for the loader's
+    ///   lifetime.
+    ///
+    /// Spin-waiting is deliberately NOT used: a same-thread re-entrant unload would
+    /// deadlock against its own in-flight dispatch.
+    fn unload(&self, bundle_id: BundleId, _runtime: &PolyplugRuntime) -> Result<(), RuntimeError> {
+        let state: Vec<SendVm> = {
+            let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
+                self.live.lock().unwrap_or_else(PoisonError::into_inner);
+            match live.remove(&bundle_id) {
+                Some(v) => v,
+                None => return Ok(()),
+            }
+        };
+
+        for data in state {
+            let in_flight: bool = {
+                let threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = data
+                    .data()
+                    .in_dispatch_threads
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                !threads.is_empty()
+            };
+
+            if in_flight {
+                eprintln!(
+                    "[polyplug_js] unload of bundle {:#x} deferred: a dispatch is in flight on this VM; retiring its state to avoid a use-after-free",
+                    bundle_id.id()
+                );
+                self.retire_vm_state(vec![data]);
+            } else {
+                // Quiescent: dropping `data` drops the QuickJS Context and Runtime —
+                // true reclaim.
+                drop(data);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1241,6 +1425,181 @@ mod tests {
     fn js_quickjs_runtime_name() {
         let loader: JsLoader = JsLoader::new(JsConfig {});
         assert_eq!(loader.runtime_name(), "js-quickjs");
+    }
+
+    /// Minimal JS bundle registering one contract with a single no-op function.
+    fn unload_bundle_js(contract_id: u64, contract_name: &str) -> String {
+        let contract_lo: u32 = contract_id as u32;
+        let contract_hi: u32 = (contract_id >> 32) as u32;
+        format!(
+            r#"
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
+    var vtable = {{ functions: [ function(args, out) {{ return 0; }} ] }};
+    polyplug.registerVtable({contract_lo}, {contract_hi}, vtable, 1, "{contract_name}", 0x00010000);
+}}
+"#
+        )
+    }
+
+    /// Build a temp JS bundle directory + ManifestData for the `test.unload@1`
+    /// contract and return both (dir kept alive).
+    fn write_unload_bundle(name: &str) -> (tempfile::TempDir, ManifestData) {
+        let contract_id: u64 = polyplug_utils::guest_contract_id("test.unload", 1);
+        let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("bundle.js"),
+            unload_bundle_js(contract_id, "test.unload@1"),
+        )
+        .expect("write bundle.js");
+        let manifest: ManifestData = ManifestData {
+            id: polyplug_utils::bundle_id(name),
+            name: name.to_owned(),
+            runtime: "js-quickjs".to_owned(),
+            file: "bundle.js".to_owned(),
+            path: dir.path().to_path_buf(),
+            version: String::new(),
+            provides: Vec::new(),
+            function_count: HashMap::new(),
+            dependencies: Vec::new(),
+            needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
+        };
+        (dir, manifest)
+    }
+
+    /// A quiescent unload (no in-flight dispatch) drops the bundle's VM state from
+    /// the loader's owned map — true reclaim — and does not retire anything.
+    #[test]
+    fn unload_quiescent_reclaims_vm_state() {
+        let loader: JsLoader = JsLoader::new(JsConfig {});
+        let runtime: Arc<PolyplugRuntime> = polyplug::runtime::RuntimeBuilder::new()
+            .loader(JsLoader::new(JsConfig {}))
+            .build()
+            .expect("runtime build must succeed");
+        let (_dir, manifest): (tempfile::TempDir, ManifestData) =
+            write_unload_bundle("js_unload_quiescent");
+        let bundle_id: BundleId = BundleId::from_u64(manifest.id);
+
+        loader
+            .load(
+                &manifest,
+                &BundleSource::Path(manifest.path.clone()),
+                &runtime,
+            )
+            .expect("load must succeed");
+        assert_eq!(
+            loader.live_vm_count(bundle_id),
+            1,
+            "the bundle's VM state must be owned after load"
+        );
+
+        loader
+            .unload(bundle_id, &runtime)
+            .expect("unload must succeed");
+        assert_eq!(
+            loader.live_vm_count(bundle_id),
+            0,
+            "quiescent unload must drop the bundle's VM state (true reclaim)"
+        );
+        assert_eq!(
+            loader.retired_vm_count(),
+            0,
+            "quiescent unload must NOT retire any state"
+        );
+    }
+
+    /// A load→unload→load loop on the same bundle must not grow the loader's live
+    /// map unboundedly: reclaim keeps memory bounded at one entry.
+    #[test]
+    fn unload_load_loop_is_bounded() {
+        let loader: JsLoader = JsLoader::new(JsConfig {});
+        let runtime: Arc<PolyplugRuntime> = polyplug::runtime::RuntimeBuilder::new()
+            .loader(JsLoader::new(JsConfig {}))
+            .build()
+            .expect("runtime build must succeed");
+        let (_dir, manifest): (tempfile::TempDir, ManifestData) =
+            write_unload_bundle("js_unload_loop");
+        let bundle_id: BundleId = BundleId::from_u64(manifest.id);
+
+        for _ in 0..5 {
+            loader
+                .load(
+                    &manifest,
+                    &BundleSource::Path(manifest.path.clone()),
+                    &runtime,
+                )
+                .expect("load must succeed");
+            assert_eq!(
+                loader.live_vm_count(bundle_id),
+                1,
+                "live map must hold exactly one entry per load"
+            );
+            loader
+                .unload(bundle_id, &runtime)
+                .expect("unload must succeed");
+            assert_eq!(
+                loader.live_vm_count(bundle_id),
+                0,
+                "unload must reclaim the entry each iteration"
+            );
+        }
+        assert_eq!(
+            loader.retired_vm_count(),
+            0,
+            "no iteration should have deferred reclaim"
+        );
+    }
+
+    /// When a dispatch is in flight (the bundle's `in_dispatch_threads` is marked
+    /// non-empty), unload must DEFER reclaim: the state is moved to the retired list
+    /// (kept alive, no UAF) rather than dropped.
+    #[test]
+    fn unload_non_quiescent_defers_reclaim() {
+        let loader: JsLoader = JsLoader::new(JsConfig {});
+        let runtime: Arc<PolyplugRuntime> = polyplug::runtime::RuntimeBuilder::new()
+            .loader(JsLoader::new(JsConfig {}))
+            .build()
+            .expect("runtime build must succeed");
+        let (_dir, manifest): (tempfile::TempDir, ManifestData) =
+            write_unload_bundle("js_unload_deferred");
+        let bundle_id: BundleId = BundleId::from_u64(manifest.id);
+
+        loader
+            .load(
+                &manifest,
+                &BundleSource::Path(manifest.path.clone()),
+                &runtime,
+            )
+            .expect("load must succeed");
+
+        // Simulate an in-flight dispatch by registering a fake thread id in the
+        // bundle's tracking vec — exactly the state the dispatch guard leaves while
+        // a call is mid-flight on another thread.
+        {
+            let live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
+                loader.live.lock().unwrap_or_else(PoisonError::into_inner);
+            let state: &Vec<SendVm> = live.get(&bundle_id).expect("bundle must be live");
+            let mut threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = state[0]
+                .data()
+                .in_dispatch_threads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            threads.push(std::thread::current().id());
+        }
+
+        loader
+            .unload(bundle_id, &runtime)
+            .expect("unload must succeed even when non-quiescent");
+        assert_eq!(
+            loader.live_vm_count(bundle_id),
+            0,
+            "unload must remove the bundle from the live map"
+        );
+        assert_eq!(
+            loader.retired_vm_count(),
+            1,
+            "non-quiescent unload must RETIRE the state (deferred reclaim), not drop it"
+        );
     }
 
     /// Build a leaked JsLoaderData holding the given runtime/context and the
