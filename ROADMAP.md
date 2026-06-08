@@ -29,7 +29,7 @@ _Last updated: 2026-06-08._
 | **Published SDK packages (crates.io / PyPI / NuGet / npm / luarocks)** | ⏸ Deferred (owner: not publishing yet) |
 | **Quickstart + example gallery** | ◐ Partial (examples exist, no guided path) |
 | **CI cost / caching** | ✅ Done (`rust-cache` on every job; cross-lang jobs main-only) |
-| **Benchmark regression gate in CI** | ❌ Not started |
+| **Benchmark regression gate in CI** | ✅ Done (nightly, core hot-path benches, >1.5x gross-regression gate) |
 | Deferred: arena retain-and-rewind, D11 counter, .NET ALC | ⏸ See Deferred |
 
 ---
@@ -94,10 +94,15 @@ Held until the owner decides to publish. Kept here so it isn't lost.
 - **C1. CI cost reduction. ✅ Mostly done.** `Swatinem/rust-cache@v2` is already
   on every CI job and cross-language jobs run main-only. Remaining ideas if
   pressure persists: smarter matrix triggers, job consolidation.
-- **C2. Benchmark regression gate.** _Still open._ Performance is the #1 stated
-  priority, yet nothing fails CI on a regression. Benches already exist
-  (`criterion` in 5 crates); wire them into a nightly threshold check.
-  _CI cost: medium — nightly._
+- **C2. Benchmark regression gate. ✅ Done.** A nightly `benches` job runs the
+  five pure-Rust `polyplug` hot-path benches (contract_dispatch, ffi_resolve,
+  ffi_find_all, registry_resolve, registry_find — no interpreter noise), caches
+  `target/criterion` across runs for a rolling baseline, and fails on any
+  benchmark that regresses >1.5x vs the previous run (`ci/check_bench_regression.py`).
+  The 1.5x threshold is generous enough that shared-runner noise never trips it;
+  building+running the benches is itself a gate against bench bitrot. _Follow-up:
+  extend to the four VM-dispatch benches (need the external-toolchain setup the
+  Examples/External jobs already provision)._
 - **C3. Reference tracing extension.** _Still open._ The extension system was
   built for tracing/metrics but ships zero built-in extensions. A reference
   tracing extension would prove the mechanism end-to-end and give adopters
