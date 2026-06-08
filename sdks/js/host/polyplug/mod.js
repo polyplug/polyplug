@@ -655,8 +655,15 @@ export class Runtime {
       [this.#host, contractId, minVersion]
     );
     const dv = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const index = dv.getUint32(GUEST_CONTRACT_HANDLE_INDEX_OFFSET, true);
+    // A not-found result is the null sentinel (index == u32::MAX). Return the
+    // canonical frozen NULL_HANDLE so callers can compare against it by identity
+    // (`handle === NULL_HANDLE`) as well as by value.
+    if (index === NULL_HANDLE_INDEX) {
+      return NULL_HANDLE;
+    }
     return {
-      index: dv.getUint32(GUEST_CONTRACT_HANDLE_INDEX_OFFSET, true),
+      index,
       generation: dv.getUint32(GUEST_CONTRACT_HANDLE_GENERATION_OFFSET, true),
     };
   }
