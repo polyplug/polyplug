@@ -36,10 +36,18 @@ use polyplug_abi::AbiErrorCode;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractId;
 use polyplug_abi::GuestContractInstance;
+use polyplug_abi::RuntimeConfig;
+use polyplug_abi::UnloadMode;
 use polyplug_abi::dispatch::DispatchType;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
+use polyplug_utils::BundleId;
 use polyplug_utils::bundle_id;
+use pyo3::Python;
+use pyo3::types::PyAnyMethods;
+use pyo3::types::PyDict;
+use pyo3::types::PyDictMethods;
+use pyo3::types::PyModule;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -771,4 +779,141 @@ from _splitmod_helper import polyplug_init
     };
     assert_eq!(err.code, AbiErrorCode::Ok as u32, "dispatch should succeed");
     assert_eq!(out_buf, 0x2A, "callable should write 0x2A into out");
+}
+
+// ─── Unload: sys.modules purge under UnloadMode::Reclaim ─────────────────────────
+
+/// Count `sys.modules` keys that are re-keyed bundle modules (prefix
+/// `__polyplug_bundle_`) AND reference `helper_substr` (the bundle's sibling
+/// module name), holding the GIL via `Python::attach` to mirror the crate.
+fn count_bundle_modules(helper_substr: &str) -> usize {
+    Python::attach(|py: Python<'_>| -> usize {
+        let sys_mod: pyo3::Bound<'_, PyModule> = PyModule::import(py, "sys").expect("sys import");
+        let modules: pyo3::Bound<'_, pyo3::PyAny> =
+            sys_mod.getattr("modules").expect("sys.modules");
+        let dict: pyo3::Bound<'_, PyDict> =
+            modules.cast_into::<PyDict>().expect("sys.modules dict");
+        let mut count: usize = 0;
+        for (key, _value) in dict.iter() {
+            let key_str: String = match key.extract::<String>() {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if key_str.starts_with("__polyplug_bundle_") && key_str.contains(helper_substr) {
+                count += 1;
+            }
+        }
+        count
+    })
+}
+
+/// Write a split-module bundle (entry imports a sibling helper that physically
+/// lives under the bundle dir) so the isolation pass actually re-keys at least one
+/// in-bundle module into `sys.modules`. Returns the temp dir and entry path.
+fn write_split_bundle(name: &str, helper_module: &str, contract: &str) -> (TempDir, PathBuf) {
+    let helper_src: String = format!(
+        r#"
+def _fn0(args_ptr, out_ptr, arena_ptr):
+    pass
+
+def polyplug_init(host_interface: int, ctx: int) -> None:
+    global _polyplug_registrations
+    _polyplug_registrations = [
+        {{
+            "contract": "{contract}",
+            "plugin_name": "{name}_plugin",
+            "functions": [_fn0],
+        }},
+    ]
+"#
+    );
+    let entry_src: String = format!("from {helper_module} import polyplug_init\n");
+
+    let dir: TempDir = TempDir::new().expect("tempdir");
+    fs::write(dir.path().join(format!("{helper_module}.py")), helper_src).expect("write helper");
+    let entry_path: PathBuf = dir.path().join("bundle.py");
+    fs::write(&entry_path, entry_src).expect("write entry");
+    (dir, entry_path)
+}
+
+/// Under `UnloadMode::Reclaim`, unloading a bundle purges its re-keyed
+/// `sys.modules` entries so a later load re-imports fresh source.
+#[test]
+fn unload_reclaim_purges_bundle_modules_from_sys_modules() {
+    let bundle_name: &str = "reclaim_purge";
+    let helper_module: &str = "_reclaim_purge_helper";
+    let (_dir, path) = write_split_bundle(bundle_name, helper_module, "reclaimpurge@1");
+
+    let loader: PythonLoader = PythonLoader::default();
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
+        .loader(PythonLoader::default())
+        .config(RuntimeConfig {
+            unload_mode: UnloadMode::Reclaim,
+            ..RuntimeConfig::default()
+        })
+        .build()
+        .expect("runtime build must succeed");
+    let manifest: ManifestData = make_manifest(&path, bundle_name);
+
+    loader
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
+        .expect("load must succeed");
+
+    let before: usize = count_bundle_modules(helper_module);
+    assert!(
+        before > 0,
+        "bundle's helper module must be re-keyed into sys.modules after load"
+    );
+
+    loader
+        .unload(BundleId::from_u64(bundle_id(bundle_name)), &runtime, true)
+        .expect("unload must succeed");
+
+    let after: usize = count_bundle_modules(helper_module);
+    assert_eq!(
+        after, 0,
+        "Reclaim unload must purge the bundle's re-keyed sys.modules entries"
+    );
+}
+
+/// Under `UnloadMode::Retire` (default), unloading a bundle keeps its re-keyed
+/// `sys.modules` entries mapped (retire-not-drop).
+#[test]
+fn unload_retire_keeps_bundle_modules_in_sys_modules() {
+    let bundle_name: &str = "retire_keep";
+    let helper_module: &str = "_retire_keep_helper";
+    let (_dir, path) = write_split_bundle(bundle_name, helper_module, "retirekeep@1");
+
+    let loader: PythonLoader = PythonLoader::default();
+    // Default config => UnloadMode::Retire.
+    let runtime: Arc<Runtime> = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, bundle_name);
+
+    loader
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
+        .expect("load must succeed");
+
+    let before: usize = count_bundle_modules(helper_module);
+    assert!(
+        before > 0,
+        "bundle's helper module must be re-keyed into sys.modules after load"
+    );
+
+    loader
+        .unload(BundleId::from_u64(bundle_id(bundle_name)), &runtime, true)
+        .expect("unload must succeed");
+
+    let after: usize = count_bundle_modules(helper_module);
+    assert_eq!(
+        after, before,
+        "Retire unload must keep the bundle's re-keyed sys.modules entries"
+    );
 }

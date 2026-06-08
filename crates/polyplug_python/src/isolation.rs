@@ -186,7 +186,7 @@ pub(crate) fn isolate_bundle_modules(
     bundle_id: u64,
     bundle_dir: &str,
     before: &HashSet<String>,
-) -> Result<(), RuntimeError> {
+) -> Result<String, RuntimeError> {
     let helper_code: CString =
         CString::new(ISOLATION_HELPER_PY).map_err(|e: std::ffi::NulError| {
             RuntimeError::Loader(LoaderError::InitFailed {
@@ -253,7 +253,9 @@ pub(crate) fn isolate_bundle_modules(
         let _ = dict.del_item("polyplug_python_isolation");
     }
 
-    Ok(())
+    // Return the prefix the bundle's modules were re-keyed under so the loader can
+    // track it and purge those `sys.modules` entries on `UnloadMode::Reclaim`.
+    Ok(prefix)
 }
 
 #[cfg(test)]

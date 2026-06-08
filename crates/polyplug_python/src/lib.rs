@@ -24,13 +24,18 @@ pub use config::PythonConfig;
 pub use loader::PythonLoaderData;
 
 use core::sync::atomic::AtomicUsize;
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::path::Path;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 
 use pyo3::Bound;
 use pyo3::PyAny;
 use pyo3::Python;
 use pyo3::types::PyAnyMethods;
+use pyo3::types::PyDict;
+use pyo3::types::PyDictMethods;
 use pyo3::types::PyModule;
 
 use polyplug::error::LoaderError;
@@ -42,6 +47,8 @@ use polyplug::runtime::Runtime;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
+use polyplug_abi::UnloadMode;
+use polyplug_utils::BundleId;
 
 use crate::context::ensure_python_initialized;
 use crate::loader::ContractRegistration;
@@ -52,12 +59,37 @@ use crate::loader::ContractRegistration;
 /// exactly once per process via a `std::sync::OnceLock`.
 pub struct PythonLoader {
     config: PythonConfig,
+    /// Per-bundle list of the `sys.modules` re-key prefixes produced by each load
+    /// of that bundle (see [`isolation::isolate_bundle_modules`]).
+    ///
+    /// A bundle may be loaded more than once (reload re-runs `load`), each load
+    /// minting a fresh prefix via the process-global nonce, so the prefixes
+    /// accumulate in a `Vec`. On `UnloadMode::Reclaim` the loader drains this entry
+    /// and purges every matching `sys.modules` key so a later load re-imports the
+    /// fresh source instead of a cached module.
+    module_prefixes: Mutex<HashMap<BundleId, Vec<String>>>,
 }
 
 impl PythonLoader {
     /// Create a new `PythonLoader` with the given configuration.
     pub fn new(config: PythonConfig) -> PythonLoader {
-        PythonLoader { config }
+        PythonLoader {
+            config,
+            module_prefixes: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Record the `sys.modules` re-key `prefix` minted for `bundle_id` during a
+    /// successful load, so [`PythonLoader::unload`] can purge those entries under
+    /// `UnloadMode::Reclaim`.
+    fn track_module_prefix(&self, bundle_id: u64, prefix: String) {
+        let mut map: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<String>>> = self
+            .module_prefixes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        map.entry(BundleId::from_u64(bundle_id))
+            .or_default()
+            .push(prefix);
     }
 }
 
@@ -212,7 +244,7 @@ impl PythonLoader {
 
         let arena_cell: *const AtomicUsize = leak_arena_cell();
 
-        let result: Result<(), RuntimeError> = Python::attach(|py| {
+        let result: Result<String, RuntimeError> = Python::attach(|py| {
             // Snapshot sys.modules before executing so the isolation pass can scope
             // exactly the modules this bundle introduced.
             let modules_before: std::collections::HashSet<String> =
@@ -290,8 +322,10 @@ impl PythonLoader {
 
             // Isolate this bundle's freshly imported modules. With no bundle
             // directory ("") no imported module is classified as in-bundle, so this
-            // is a no-op for single-file inline sources — by design.
-            crate::isolation::isolate_bundle_modules(
+            // is a no-op for single-file inline sources — by design. The returned
+            // prefix is still tracked for `UnloadMode::Reclaim` symmetry, even
+            // though no `sys.modules` entry carries it for inline sources.
+            let prefix: String = crate::isolation::isolate_bundle_modules(
                 py,
                 &bundle_name,
                 bundle_id,
@@ -299,11 +333,13 @@ impl PythonLoader {
                 &modules_before,
             )?;
 
-            Ok::<(), RuntimeError>(())
+            Ok::<String, RuntimeError>(prefix)
         });
 
         runtime.pop_init_bundle_id();
-        result
+        let prefix: String = result?;
+        self.track_module_prefix(bundle_id, prefix);
+        Ok(())
     }
 }
 
@@ -397,7 +433,7 @@ impl BundleLoader for PythonLoader {
         let arena_cell: *const AtomicUsize = leak_arena_cell();
 
         // Step 3: Load the Python module and call polyplug_init.
-        Python::attach(|py| {
+        let prefix: String = Python::attach(|py| {
             // Step 3a: Prepend bundle directory (and site-packages) to sys.path.
             let sys_mod: pyo3::Bound<'_, PyModule> =
                 PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| {
@@ -571,7 +607,7 @@ impl BundleLoader for PythonLoader {
             // objects alive for the runtime's lifetime while freeing the generic
             // module names. The contract callables themselves are held by each
             // contract's `PythonLoaderData`, so they stay alive regardless.
-            crate::isolation::isolate_bundle_modules(
+            let prefix: String = crate::isolation::isolate_bundle_modules(
                 py,
                 &bundle_name,
                 bundle_id,
@@ -579,11 +615,15 @@ impl BundleLoader for PythonLoader {
                 &modules_before,
             )?;
 
-            Ok::<(), RuntimeError>(())
+            Ok::<String, RuntimeError>(prefix)
         })?;
 
         // Pop bundle_id from the runtime's per-thread init stack after init completes.
         runtime.pop_init_bundle_id();
+
+        // Record the re-key prefix so `unload` under `UnloadMode::Reclaim` can purge
+        // this bundle's `sys.modules` entries and force a fresh re-import next load.
+        self.track_module_prefix(bundle_id, prefix);
 
         Ok(())
     }
@@ -595,4 +635,96 @@ impl BundleLoader for PythonLoader {
     ) -> Result<(), polyplug::error::RuntimeError> {
         Err(polyplug::error::RuntimeError::HotReloadDisabled)
     }
+
+    // `reclaim_safe` is ignored, like the Lua and JS VM loaders. Unlike native
+    // `dlclose`, purging `sys.modules` is memory-safe regardless of any in-flight
+    // call: CPython refcounts/GC keep every still-referenced module object alive,
+    // so deleting a `sys.modules` entry only drops the import cache, never the
+    // object a running dispatch is using. Python may therefore purge under
+    // `Reclaim` without consulting the runtime's Arc-based quiescence hint.
+    fn unload(
+        &self,
+        bundle_id: BundleId,
+        runtime: &Runtime,
+        _reclaim_safe: bool,
+    ) -> Result<(), RuntimeError> {
+        let mode: UnloadMode = runtime.config().unload_mode;
+
+        // Retire (default): keep the bundle's modules mapped under their re-key
+        // prefix — current retire-not-drop behaviour. The tracking entry is left in
+        // place; it is harmless and a later Reclaim of the same id is not expected.
+        if mode == UnloadMode::Retire {
+            return Ok(());
+        }
+
+        // Reclaim: drain this bundle's prefixes and delete every matching
+        // `sys.modules` key so a subsequent load re-imports fresh source.
+        let prefixes: Vec<String> = {
+            let mut map: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<String>>> = self
+                .module_prefixes
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            match map.remove(&bundle_id) {
+                Some(p) => p,
+                None => return Ok(()),
+            }
+        };
+
+        for prefix in prefixes {
+            purge_prefix_from_sys_modules(&prefix)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Delete every `sys.modules` entry whose key equals `prefix` or begins with
+/// `prefix + "."` (the re-keyed module tree for one bundle load).
+///
+/// Holds the GIL via [`Python::attach`] (matching the crate's pyo3 usage). Keys
+/// are collected first, then deleted, so the dict is never mutated mid-iteration;
+/// an individual missing key is ignored (the entry may already be gone). A hard
+/// interpreter error reaching `sys.modules` is mapped to a proper
+/// [`RuntimeError`].
+fn purge_prefix_from_sys_modules(prefix: &str) -> Result<(), RuntimeError> {
+    let dotted: String = format!("{}.", prefix);
+
+    Python::attach(|py: Python<'_>| -> Result<(), RuntimeError> {
+        let sys_mod: Bound<'_, PyModule> =
+            PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: "python".to_owned(),
+                    error: format!("Python sys import failed during unload purge: {}", e),
+                })
+            })?;
+        let modules: Bound<'_, PyAny> = sys_mod.getattr("modules").map_err(|e: pyo3::PyErr| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: "python".to_owned(),
+                error: format!("sys.modules access failed during unload purge: {}", e),
+            })
+        })?;
+        let dict: Bound<'_, PyDict> = modules.cast_into::<PyDict>().map_err(|_| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: "python".to_owned(),
+                error: "sys.modules is not a dict during unload purge".to_owned(),
+            })
+        })?;
+
+        let mut to_delete: Vec<Bound<'_, PyAny>> = Vec::new();
+        for (key, _value) in dict.iter() {
+            let key_str: String = match key.extract::<String>() {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if key_str == prefix || key_str.starts_with(&dotted) {
+                to_delete.push(key);
+            }
+        }
+        for key in to_delete {
+            // A concurrently-removed key is fine; the goal is absence, not the act.
+            let _ = dict.del_item(&key);
+        }
+
+        Ok(())
+    })
 }
