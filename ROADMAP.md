@@ -1,263 +1,308 @@
 # polyplug Roadmap
 
-Three goals, in order of dependency. Each is an independently executable
-orchestrated session. The ABI freezes at v1.0 and the project is still pre-1.0,
-so these goals may touch `HostApi` — but only with explicit owner approval,
-never unilaterally (see CLAUDE.md Rule 7).
+This is the living tracker: **what shipped**, **what's coming**, **what we
+deferred (and why)**, and **what needs an owner decision**. The ABI freezes at
+v1.0 and the project is still pre-1.0, so any item touching `HostApi` /
+`RuntimeConfig` / dispatch shape must land *before* the freeze — that window is
+the reason "Harden" items are ranked first below.
+
+_Last updated: 2026-06-08._
 
 ---
 
-## Goal 1 — `generate` output is immediately compilable + `validate --bundle-dir`
+## Status at a glance
 
-There is **no `pack` command**. `polyplugc` does two things: `generate` and
-`validate`. Users build the generated glue with their own toolchains and
-assemble the bundle directory themselves; `validate --bundle-dir` then checks
-the assembled result against the runtime loader's own rules.
-
-The goal has two halves:
-
-1. **`generate` output compiles with zero hand edits.**
-   `polyplugc generate --bundle bundle.toml --lang <lang> --out <dir>` emits the
-   guest-side contract glue (type stubs, dispatch shims, `guest/` modules) **and**
-   a ship-ready `manifest.toml` with the precomputed `bundle_id`. Dropping that
-   glue into a minimal project (a `Cargo.toml` cdylib + `src/lib.rs` that includes
-   the generated `guest/mod.rs`, or the language equivalent) and building it must
-   succeed without editing any generated file.
-
-2. **`validate --bundle-dir <dir>` catches assembly mistakes.**
-   After the user compiles and assembles `dist/<name>/` (manifest + entry
-   artifact), `validate --bundle-dir` drives the runtime loader's own manifest
-   machinery (`polyplug::loader::parse_manifest` + `ManifestData::validate`) so the
-   CLI accepts exactly what the runtime would. It verifies: the manifest parses;
-   `id == fnv1a_64(name)` (tamper check); the per-platform `[file]` entry resolves
-   and the artifact exists in the dir; the artifact extension matches the declared
-   `runtime` (native → `.so`/`.dylib`/`.dll`, lua → `.lua`, python → `.py`,
-   js-quickjs → `.js`, dotnet → `.dll`); and `version` parses.
-
-Covered languages: `rust`, `cpp`, `csharp`, `python`, `lua`, `js-quickjs`.
-
-### e2e bar
-
-- **Compile proof (all 6 languages):** `crates/polyplugc/tests/generate_e2e.rs`
-  (rust → cargo build), `generate_e2e_native.rs` (cpp → c++ -shared, csharp →
-  dotnet build), `generate_e2e_vm.rs` (python → py_compile + import, lua →
-  luajit load, js → deno check) — each runs `generate`, drops the output into a
-  minimal project the test writes, and proves it builds/loads with zero hand
-  edits.
-- **Assembly proof:** the same file asserts `validate --bundle-dir` accepts a
-  correct bundle (exit 0, prints `OK: <dir>`), rejects a missing entry artifact,
-  and rejects a tampered `id`.
-
-Code truth: `crates/polyplugc/src/` — `validate.rs`, `generators/` (one per
-language), the `generate` command path; `crates/polyplug/src/loader/manifest.rs`
-is the single manifest parser shared by the runtime and the CLI.
+| Area | Status |
+|---|---|
+| Goal 1 — `generate` compiles clean + `validate --bundle-dir` | ✅ Done |
+| Goal 2 — Extension system (`get_extension`) | ✅ Done |
+| Cross-call dispatch (plugin → plugin) | ✅ Done |
+| Goal 3 — Call arena for VM dispatch | ✅ Done (perf refinement deferred) |
+| Platform support — Windows | ✅ Done |
+| Unload — invalidate + opt-in reclaim | ✅ Done |
+| FFI panic safety (`catch_unwind` at boundary) | ✅ Done |
+| **Fuzzing the ABI boundary** | ✅ Done (3 targets + nightly smoke) |
+| **Miri + ASAN in CI** | ✅ Done (nightly) |
+| **TSAN for the resolve→dispatch race** | ⏸ Deferred (needs a concurrent unload stress test) |
+| **Supply-chain gate (cargo-deny)** | ✅ Done (nightly) |
+| **Cross-language differential parity tests** | ◐ Partial (per-lang, not differential) |
+| **Published SDK packages (crates.io / PyPI / NuGet / npm / luarocks)** | ⏸ Deferred (owner: not publishing yet) |
+| **Quickstart + example gallery** | ◐ Partial (examples exist, no guided path) |
+| **CI cost / caching** | ✅ Done (`rust-cache` on every job; cross-lang jobs main-only) |
+| **Benchmark regression gate in CI** | ❌ Not started |
+| Deferred: arena retain-and-rewind, D11 counter, .NET ALC | ⏸ See Deferred |
 
 ---
+
+## Coming up — candidate work (prioritized)
+
+Three lanes. The order reflects the pre-1.0 freeze: correctness of the ABI shape
+is irreversible after 1.0, adoption enables the battle-testing that validates the
+shape, and perf/ops are continuous. Each item notes CI-minute cost because the
+owner is currently budget-constrained.
+
+### Lane A — Harden for the 1.0 freeze (correctness is forever)
+
+- **A1. Fuzz the ABI boundary. ✅ Done.** `cargo-fuzz` targets over the
+  untrusted-input surfaces — manifest TOML parser, contract `.toml` parser
+  (`parse_api_str`/`parse_bundle_str`), and `Version` parsing — in `fuzz/`, with
+  a 60s/target nightly smoke run. See _Hardening_ in the shipped section.
+- **A2. Miri + ASAN. ✅ Done.** Nightly Miri on the pure-logic crates
+  (`polyplug_abi`, `polyplug_utils`) and ASAN (leak-detection off, because
+  retire-not-drop intentionally retains) on the core `--lib` tests. Fixed two
+  findings: arena pointer provenance + a leak-clean tracking test.
+- **A3. Cross-language differential parity.** _Still open._ Today each language
+  has its own codegen test. Add one harness that runs the *same* contract through
+  all 6 loaders and asserts byte-identical results — locks the "all generators
+  produce identical ABI mechanics" invariant (CLAUDE.md §10) against drift.
+  _CI cost: medium (reuses the existing Examples-job toolchains)._
+- **A4. TSAN for the resolve→dispatch race.** _Still open, paired with a test._
+  TSAN is the right tool for the documented resolve→dispatch window, but the
+  payoff needs a concurrent cross-thread unload stress test that doesn't exist
+  yet. Build the stress test, then add a TSAN nightly job over it.
+- **A5. Finalize the resolve→dispatch UAF window for 1.0.** Currently Option A
+  (host-coordinated, best-effort `in_dispatch_threads` defense). Decide whether
+  that is the permanent 1.0 contract or whether Option B (per-dispatch
+  weak-upgrade) is warranted. _Owner decision — see below._
+
+### Lane B — Adoption / DX ⏸ Deferred (owner: not publishing yet)
+
+Held until the owner decides to publish. Kept here so it isn't lost.
+
+- **B1. Publish SDK packages.** No SDK is installable today (`pip install`,
+  `dotnet add package`, `npm i polyplug`, `luarocks install`, crates.io). The
+  single biggest blocker to anyone outside the repo authoring a plugin.
+  `release.yml` is the starting point. _Outward-facing — owner sign-off on
+  names/registries + a decision to publish pre-1.0._
+- **B2. Quickstart + example gallery.** A guided "write your first plugin in
+  language X in 10 minutes" path plus a small gallery of reference plugins.
+- **B3. polyplugc diagnostics.** Improve contract-parse/validate error messages
+  (spans, suggestions). _Not scaffolding_ — owner ruled out `polyplugc new`.
+
+### Lane C — Performance & ops (continuous)
+
+- **C1. CI cost reduction. ✅ Mostly done.** `Swatinem/rust-cache@v2` is already
+  on every CI job and cross-language jobs run main-only. Remaining ideas if
+  pressure persists: smarter matrix triggers, job consolidation.
+- **C2. Benchmark regression gate.** _Still open._ Performance is the #1 stated
+  priority, yet nothing fails CI on a regression. Benches already exist
+  (`criterion` in 5 crates); wire them into a nightly threshold check.
+  _CI cost: medium — nightly._
+- **C3. Reference tracing extension.** _Still open._ The extension system was
+  built for tracing/metrics but ships zero built-in extensions. A reference
+  tracing extension would prove the mechanism end-to-end and give adopters
+  observability. _CI cost: low._
+
+### Future / bigger bets ("what else would help")
+
+Larger, mostly architectural — each needs an explicit owner decision before
+scoping:
+
+- **Sandboxed / untrusted plugin tier.** The trust model is "trusted same
+  process." A sandboxed guest target (WASM, or seccomp/process isolation) would
+  let hosts load *untrusted* plugins — a natural fit for a "universal plugin
+  runtime" and a significant market expansion.
+- **Per-call resource limits / timeouts.** Wall-clock + memory caps per guest
+  call, so a misbehaving plugin can't hang or exhaust the host.
+- **Bundle signing / verification.** `TRUST_MODEL.md` covers identity; add
+  cryptographic signing so a host can verify a bundle's origin before loading.
+- **Published API-docs site.** `rustdoc` + the `docs/` tree as a browsable site
+  (pairs with Lane B adoption).
+
+---
+
+## Deferred (with unblock condition)
+
+| Item | Why deferred | Unblock when |
+|---|---|---|
+| **Call-arena retain-and-rewind (perf)** | Changing the arena's free-on-`reset()` contract to a teardown/`Drop` model ripples into the C++ and other generated host callers, validated only in the CI Examples job. Niche win (only consistently-overflowing VM calls). | CI-minute budget refreshes; bundle with another generator/ABI change to amortize the CI run. |
+| **D11 native live-instance counter** | The host owns the instance lifecycle (`create_instance`/`destroy_instance` are direct guest-vtable calls the runtime never mediates), so a runtime-side counter via `get_extension` either duplicates host knowledge or needs auto-increment code in every native host-caller generator (CI-only validation). | A concrete need for runtime-visible live-instance counts surfaces (e.g. a reclaim-safety policy that requires it). |
+| **.NET collectible ALC** | True managed unload needs a larger `polyplug_dotnet` loader rework (collectible `AssemblyLoadContext`). | Native + Python reclaim battle-tested first; demand for .NET hot-unload confirmed. |
+
+---
+
+## Decisions needed from owner
+
+- **A4 — resolve→dispatch UAF window:** keep Option A (host-coordinated,
+  best-effort) as the permanent 1.0 contract, or invest in Option B
+  (per-dispatch weak-upgrade, race-free, tiny per-load control-block leak)?
+- **B1 — publishing:** which registries, what package names/namespaces, and is
+  publishing pre-1.0 (for battle-testing) desired now or held until 1.0?
+- **Lane priority:** which lane do we fund next given the CI-minute constraint?
+
+---
+---
+
+# Shipped (reference)
+
+Detailed records of completed work. Kept for the non-obvious constraints and
+delivered-surface lists.
+
+## Goal 1 — `generate` compiles clean + `validate --bundle-dir` ✅ Done
+
+`polyplugc` does two things: `generate` and `validate` (there is **no `pack`
+command** — owner ruling). Users build the generated glue with their own
+toolchains and assemble the bundle directory themselves.
+
+1. **`generate` output compiles with zero hand edits** for all 6 languages
+   (`rust`, `cpp`, `csharp`, `python`, `lua`, `js-quickjs`): emits guest-side
+   contract glue + a ship-ready `manifest.toml` with precomputed `bundle_id`.
+2. **`validate --bundle-dir <dir>`** drives the runtime loader's own manifest
+   machinery (`polyplug::loader::parse_manifest` + `ManifestData::validate`) so
+   the CLI accepts exactly what the runtime would: manifest parses;
+   `id == fnv1a_64(name)` (tamper check); per-platform `[file]` entry resolves
+   and the artifact exists; extension matches declared `runtime`; `version`
+   parses.
+
+e2e proof: `crates/polyplugc/tests/generate_e2e.rs` (rust → cargo build),
+`generate_e2e_native.rs` (cpp → c++ -shared, csharp → dotnet build),
+`generate_e2e_vm.rs` (python → py_compile + import, lua → luajit load, js →
+deno check), `cli_validation.rs` (validate accepts correct, rejects missing
+artifact + tampered id).
 
 ## Goal 2 — Extension System ✅ Done
 
-The extension system has shipped. `get_extension(extension_id: u32) → *const ()` is the
-18th function pointer on `HostApi` (offset 144; struct is 160 bytes with 19 function pointers). The host
-registers extension pointers by ID (no versioning, no contract machinery); plugins call
-`host->get_extension(id)` and cast the result to the expected struct if non-null. It is
-designed for optional host capabilities: tracing, debug hooks, custom metrics, etc.
+`get_extension(extension_id: u32) → *const ()` is the 18th function pointer on
+`HostApi` (offset 144; struct is 160 bytes / 19 function pointers). The host
+registers extension pointers by ID; plugins call `host->get_extension(id)` and
+cast if non-null. Generic mechanism only — no built-in extensions. Pointers are
+registered once at startup and valid for the runtime's lifetime (host owns
+ABI-crossing memory).
 
-Delivered:
-
-- `polyplug_abi`: `get_extension` fn pointer on `HostApi`.
-- `polyplug_utils`: `fnv1a_32(name: &[u8]) → u32` alongside `fnv1a_64`.
-- `polyplug` crate: `Runtime.extensions` map, `Runtime::register_extension`, and
-  `host_get_extension` wired to the `get_extension` field.
-- All 6 SDK `HostApi` ABI definitions and the 6 generators carry the field.
-- `sdk_validator` checks for the field.
-
-Generic mechanism only — no built-in extensions. Lifetime contract: extension pointers are
-registered once at startup and valid for the runtime's entire lifetime; plugins read and
-cast, never free, following the "host owns ABI-crossing memory" model.
-
----
+Delivered: `get_extension` on `HostApi`; `polyplug_utils::fnv1a_32`;
+`Runtime.extensions` + `register_extension` + `host_get_extension`; all 6 SDK
+ABIs + 6 generators carry the field; `sdk_validator` checks it.
 
 ## Cross-call Dispatch (plugin → plugin) ✅ Done
 
-Host-mediated plugin→plugin cross-dispatch has shipped. `call_guest_method(host,
-instance, fn_id, args, out, arena) → AbiError` is the 17th function pointer on
-`HostApi` (offset 136; struct is 160 bytes with 19 function pointers; `get_extension`
-is at offset 144, `unload_bundle` at offset 152). A plugin invokes a method on another
-plugin's guest contract through the host without holding a raw interface pointer of its
-own.
+`call_guest_method(host, instance, fn_id, args, out, arena) → AbiError` is the
+17th function pointer on `HostApi` (offset 136). A plugin invokes a method on
+another plugin's guest contract through the host without holding a raw interface
+pointer.
 
-Delivered:
+Delivered: `call_guest_method` on `HostApi`; `AbiErrorCode::ReentrantCall = 9`;
+host callback re-resolves the target through the registry via
+`instance.contract_id` every call (post-reload calls route to the live
+interface; retire-not-drop preserved), forwards the arena to VM dispatch, guards
+re-entering a VM already dispatching; all 6 SDK ABIs + generators + validator.
+**Zero per-call authorization** — trust comes from load-phase declared-dependency
+verification (`TRUST_MODEL.md` §5).
 
-- `polyplug_abi`: `call_guest_method` fn pointer on `HostApi`; new
-  `AbiErrorCode::ReentrantCall = 9`.
-- `polyplug` crate: the host callback re-resolves the target through the registry
-  via `instance.contract_id` on every call (post-reload calls route to the live
-  interface; retire-not-drop preserved), forwards the arena to VM dispatch, and
-  guards against re-entering a VM already executing a dispatch.
-- All 6 SDK `HostApi` ABI definitions and the 6 generators carry the field.
-- `sdk_validator` checks for the field.
+## Goal 3 — Call Arena for VM Dispatch ✅ Done
 
-Semantics: the arena is forwarded to VM dispatch (Lua, JS) and ignored by native
-dispatch (no arena slot); a null arena falls back to `host->alloc`. There is
-**zero per-call authorization** — trust comes from load-phase declared-dependency
-verification (see [`TRUST_MODEL.md`](./TRUST_MODEL.md) §5, Cross-call dispatch).
+Per-call bump allocator replaces per-value `host->alloc`/`free` in VM dispatch.
+Zero API change for plugin authors — hidden inside generated code.
 
----
+| Language | Guest dispatch | Arena-routed? |
+|---|---|---|
+| JS (QuickJS) | VM | **Yes** (`allocStringArena`) |
+| Lua (LuaJIT) | VM | **Yes** (`alloc_string_arena`) |
+| Python | VM (ctypes sret dispatch removed in `fd8cc4ea` — arm64 UB) | **Yes** (`_polyplug_arena_alloc`) |
+| Rust (host caller) | Native | N/A — returns are borrowed views, zero-alloc |
+| C++ (host caller) | Native/VM | N/A — borrowed views, zero-alloc |
+| C# | Native | N/A — borrowed views, zero-alloc |
 
-## Goal 3 — Call Arena for Dispatch
+**Native Rust/C++/C# are excluded by design, not omission:** their guest
+functions return borrowed `StringView`/`Array` views into guest-owned memory
+already valid for the call — the return marshal is a pointer write with no
+allocation, so there is nothing for an arena to replace. Native callers pass a
+null arena.
 
-Replace per-allocation `host->alloc` / `host->free` in dispatch calls with
-a per-call bump allocator (arena). Zero API change for plugin authors —
-entirely hidden inside generated code.
-
-### Why
-
-Current model: every dispatch call that returns a string or array does one
-`host->alloc` (malloc) + one `host->free` per value. With complex return
-types this means multiple round-trips through the allocator per call.
-
-Arena model: one bump allocator per call. Allocation is `pos += size` (a
-pointer increment). Free is a single pointer reset at call end. For calls
-with multiple string/array outputs, this is an order-of-magnitude improvement
-in allocation overhead.
-
-### Design
-
-- A `CallArena` is a small bump allocator created at the start of each
-  dispatch call. For small calls it lives on the stack; for large ones it
-  falls back to a single heap allocation.
-- The arena pointer flows through the generated dispatch shim — it is a
-  hidden implementation detail, not a new API surface.
-- Plugin authors are completely unaware: in Python they `return "hello"`, in
-  Lua they `return str`, in JS they `return str` — the generated marshal
-  code allocates from the arena. No alloc or free function is ever visible
-  in plugin code.
-- After the call returns, the host frees the entire arena in one operation.
-
-### Languages that benefit most
-
-VM-dispatched managed languages (Lua, JS via QuickJS, Python) where the guest builds a
-fresh return value (string/array) on every call and the host must reclaim it.
-Those are the only languages where the arena replaces a real per-value
-`host->alloc` round trip.
-
-**Native Rust / C++ / C# are EXCLUDED — and this is a finding, not an omission.**
-Their guest functions return values as **borrowed `StringView`/`Array` views into
-guest-owned memory that is already valid for the call** (e.g. a `'static` string,
-a field on the instance, or a buffer the host passes in). The return marshal is a
-pointer write — it performs **no allocation at all**, so there is nothing for an
-arena to replace. Threading an arena into native dispatch would also require
-changing the frozen native dispatch ABI signature (`fn(instance, args, out)`),
-which has no arena parameter. Native callers therefore pass a null arena.
-
-### Status (per-language)
-
-| Language | Guest dispatch | Return allocation today | Arena-routed? |
-|---|---|---|---|
-| JS (QuickJS) | VM | `arenaAlloc` → `CallArena`, falls back to `host->alloc` | **Yes** (`allocStringArena`) |
-| Lua (LuaJIT) | VM | `_polyplug_arena_alloc` → `CallArena`, falls back to `host->alloc` | **Yes** (`alloc_string_arena`) |
-| Rust (host caller) | Native | borrowed view, zero-alloc; real per-caller arena when a return needs one (`fn_needs_arena`) | N/A for returns (already zero-alloc) |
-| C++ (host caller) | Native/VM | borrowed view, zero-alloc | N/A for returns (already zero-alloc) |
-| C# | Native | borrowed view, zero-alloc | N/A for returns (already zero-alloc) |
-| Python | VM (native ctypes dispatch removed in `fd8cc4ea` — its sret emulation was UB on arm64) | `_polyplug_arena_alloc` → `CallArena`, falls back to `host->alloc` | **Yes** (`_polyplug_arena_alloc`) |
-
-Lifetime rule for arena-backed returns: a view returned from an arena-backed call
-is valid **until the next arena-backed call on the same caller** (the caller resets
-its arena at the start of each call). Guests never free arena allocations.
-
-The host (every loader) always passes the arena slot in the canonical 6-argument
-VM dispatch signature `call(loader_data, instance, fn_id, args, out, arena)`; a
-**null arena** means "no arena", and the guest bridge falls back to per-value
-`host->alloc` — so all paths remain correct whether or not an arena is supplied.
-
-### Scope
-
-- `polyplug_abi`: introduce `CallArena` type; update dispatch shim signature
-  to thread the arena through (generated code only, no ABI-visible change to
-  plugin authors).
-- All 6 generators in `crates/polyplug_codegen/src/languages/` — update
-  marshal/unmarshal code to allocate from the arena.
-- All 6 language SDK guest helpers (`sdks/`) — update `polyplug_guest.*`
-  for each language.
-- Tests: verify arena memory is valid during a call and released after;
-  verify zero explicit alloc/free calls visible in generated plugin code.
+Lifetime rule: an arena-backed return is valid until the next arena-backed call
+on the same caller. The host always passes the arena slot in the canonical
+6-arg VM dispatch signature `call(loader_data, instance, fn_id, args, out,
+arena)`; a null arena means "no arena" and the guest bridge falls back to
+per-value `host->alloc`.
 
 ## Platform Support — Windows ✅ Done
 
-The full workspace test suite runs and passes on `windows-latest` (CI job
-"Windows (build + tests)" runs `cargo test --workspace --no-fail-fast`, not just
-`--lib`). Full suite green on windows-latest as of 2026-06-07.
+Full workspace test suite passes on `windows-latest` (`cargo test --workspace
+--no-fail-fast`). Green as of 2026-06-07.
 
-Done:
+Non-obvious constraints (do not regress):
 
-- All platform-derived shared-library naming uses the real Rust cdylib
-  convention per OS (`<name>.dll` with no `lib` prefix on Windows,
-  `lib<name>.dylib` on macOS, `lib<name>.so` on Linux): `crates/polyplug/build.rs`,
-  `tests/integration/build.rs`, `tests/fixtures/build_all.sh`, and the
-  reload-plugin path helpers in `crates/polyplug/tests/stress_hot_reload.rs`.
-- `polyplug_dotnet` hostfxr auto-discovery is OS-aware (`dotnet.exe` on PATH,
-  `%ProgramFiles%\dotnet` well-known root, `hostfxr.dll`).
-- `manifest.toml` per-platform `[file]` tables already resolve the `windows`
-  key; the native loader uses `libloading` (cross-platform) and `PathBuf::join`
-  throughout.
-- All six loaders (including the vendored native C build scripts `pyo3-ffi`,
-  `rquickjs-sys`, `tree-sitter`) build **and** test natively on the Windows
-  runner using the target's own MSVC toolchain.
-- Test fixtures are not committed artifacts: `tests/fixtures/build_all.sh` is
-  MINGW-aware and builds the `.dll` fixtures on the runner (Git Bash shell),
-  same as Linux/macOS; reload-fixture integration tests use platform-aware
-  `.dll`/`.dylib`/`.so` path helpers, so no per-platform `[file]` manifest
-  tables were needed for those test fixtures.
-- CI: `windows-latest` job builds the full workspace (all six loaders) and runs
-  the full suite `cargo test --workspace`.
-- Windows hot-reload note: the retire-not-drop model loads each version from a
-  distinct on-disk filename (e.g. `reload_plugin_v1` vs `_v2`), so reload never
-  overwrites a file while it is mapped — the Windows DLL file-lock that would
-  break overwrite-in-place reload does not apply.
-
-Windows-specific notes (non-obvious constraints — do not regress):
-
+- All shared-library naming uses the real Rust cdylib convention per OS
+  (`<name>.dll` no `lib` prefix on Windows, `lib<name>.dylib` macOS,
+  `lib<name>.so` Linux).
+- `polyplug_dotnet` hostfxr auto-discovery is OS-aware.
 - MSVC env activation is ordered **after** all bash-shell cargo steps — Git
-  Bash's GNU `/usr/bin/link` shadows MSVC `link.exe` once the MSVC env is set.
-- Fabricated-TOML tests normalize embedded absolute paths to forward slashes
-  (backslashes are invalid TOML escapes); paths handed to MSBuild strip the
-  `\\?\` verbatim prefix left by `canonicalize()`.
-- LuaJIT is built from source via the official `msvcbuild.bat` (no prebuilt
-  binaries exist) with `LUA_PATH` pointed at the source tree for `luajit -b`.
-- `crates/polyplug_dotnet/src/context.rs` uses `into_temp_path()` to close the
-  runtimeconfig.json write handle before `hostfxr_initialize_for_runtime_config`
-  reads it — Windows mandatory file sharing otherwise fails the read with
-  `ERROR_SHARING_VIOLATION`.
+  Bash's GNU `/usr/bin/link` shadows MSVC `link.exe` once MSVC env is set.
+- Fabricated-TOML tests normalize embedded absolute paths to forward slashes;
+  MSBuild paths strip the `\\?\` verbatim prefix from `canonicalize()`.
+- LuaJIT built from source via `msvcbuild.bat` (no prebuilt binaries).
+- `polyplug_dotnet/src/context.rs` uses `into_temp_path()` to close the
+  runtimeconfig.json write handle before hostfxr reads it — Windows mandatory
+  file sharing otherwise fails with `ERROR_SHARING_VIOLATION`.
+- Windows hot-reload: retire-not-drop loads each version from a distinct on-disk
+  filename, so reload never overwrites a mapped file.
 
 ## Unload — invalidate + opt-in reclaim ✅ Done
 
 `HostApi.unload_bundle` (offset 152) invalidates a bundle (generation bump →
 `StaleHandle`, registry-index removal, dependent-refusal/cascade) and fires a
-`ReloadPhaseType::Unloading` callback before invalidation. Reclaim of loader-owned
-resources is opt-in via `RuntimeConfig.unload_mode` (`UnloadMode { Retire (default),
-Reclaim }`; `RuntimeConfig` is 32 bytes, `unload_mode` at offset 4). Full model:
-[`docs/UNLOAD_DESIGN.md`](./docs/UNLOAD_DESIGN.md), trust posture: [`TRUST_MODEL.md`](./TRUST_MODEL.md).
+`ReloadPhaseType::Unloading` callback before invalidation. Reclaim of
+loader-owned resources is opt-in via `RuntimeConfig.unload_mode`
+(`UnloadMode { Retire (default), Reclaim }`; `RuntimeConfig` is 32 bytes,
+`unload_mode` at offset 4). Full model: `docs/UNLOAD_DESIGN.md`; trust posture:
+`TRUST_MODEL.md`.
 
 Delivered:
 
-- **Native opt-in reclaim:** under `UnloadMode::Reclaim` the native loader `dlclose`s
-  the dylib (releases OS resources + the on-disk file lock, notably the Windows DLL
+- **Native opt-in reclaim:** under `Reclaim` the native loader `dlclose`s the
+  dylib (releases OS resources + the on-disk file lock, notably the Windows DLL
   lock, so a developer can rebuild and reload). Host-attested + best-effort
-  `reclaim_safe` (`Arc::strong_count`) net.
+  `reclaim_safe` (`Arc::strong_count`) net — native dispatch is structurally
+  blind to in-flight raw calls, so reclaim is the host's attestation, by design.
 - **Python reclaim:** under `Reclaim` the loader purges the bundle's re-keyed
-  `sys.modules` entries so a reload re-imports fresh source. Memory-safe regardless of
-  in-flight calls.
-- **Lua/JS VM reclaim:** drop the VM if quiescent (`in_dispatch_threads` empty), else
-  defer; these loaders govern reclaim by their own quiescence tracking.
+  `sys.modules` entries so a reload re-imports fresh source. Memory-safe
+  regardless of in-flight calls (CPython refcount/GC).
+- **Lua/JS VM reclaim:** drop the VM if quiescent (`in_dispatch_threads` empty),
+  else defer; these loaders govern reclaim by their own quiescence tracking.
+- **Reload reuses the unload teardown atom:** `RuntimeStoreData::retire_slot`
+  is the single canonical teardown (bump generation + retire-not-drop interface
+  + clear entry); both `invalidate_bundle` (unload) and `apply_reload_swap`'s
+  dropped-contract branch route through it. Hot-reload continuity preserved —
+  the surviving-contract in-place swap does not bump generation, so resolved
+  handles stay valid.
 
-Remaining / deferred (unload area):
+## FFI panic safety ✅ Done
 
-- **Call-arena retain-and-rewind (perf)** — deferred: changing the arena's
-  free-on-`reset()` contract to a teardown/`Drop` model ripples into the C++ and other
-  generated host callers (CI-only exercised), so it is a separate dedicated effort.
-- **D11 native live-instance counter** — deferred: the host owns the instance
-  lifecycle (`create_instance` / `destroy_instance` are direct guest-vtable calls the
-  runtime never mediates), so a runtime-side counter via `get_extension` would either
-  duplicate host knowledge or require auto-increment code in every native host-caller
-  generator (CI-only validation). Not added pre-freeze without an explicit decision.
-- **.NET collectible ALC** for true managed unload — deferred (larger loader rework).
+Guest panics/exceptions are caught at the FFI boundary (`catch_unwind` in
+`crates/polyplug/src/ffi.rs` and the loaders) and converted to `AbiError`
+instead of unwinding across the C ABI (undefined behavior). Covered by
+`crates/polyplug/tests/integration_panic.rs`.
+
+## Hardening — fuzz, Miri, ASAN, supply-chain ✅ Done
+
+Nightly-only memory-safety and supply-chain checks (`.github/workflows/
+nightly.yml`, `schedule` + `workflow_dispatch` — never on push/PR, so zero
+per-PR Action minutes).
+
+- **Fuzzing (`fuzz/`):** three `cargo-fuzz` targets over the untrusted-input
+  parsers — `fuzz_manifest` (`parse_manifest` + `validate`), `fuzz_contract`
+  (`parse_api_str` + `parse_bundle_str`), `fuzz_version` (`Version: FromStr`).
+  The nightly job builds all three and smoke-runs each 60s; a crash artifact
+  fails the job. (`fuzz/` is a detached cargo-fuzz workspace, the conventional
+  layout, so it stays out of the production build graph.)
+- **Miri:** nightly UB detection on `polyplug_abi` + `polyplug_utils` (the
+  crates with no `dlopen`/FFI execution, which Miri can't interpret).
+- **ASAN:** nightly use-after-free / overflow / double-free detection on the
+  core `--lib` tests. Leak detection is **off** by design — retire-not-drop
+  intentionally retains superseded interfaces/libraries for the runtime
+  lifetime, which LSAN would report as leaks.
+- **Supply-chain (`deny.toml`):** `cargo-deny` checks advisories (deny yanked +
+  known CVEs), licenses (permissive allow-list; first-party workspace crates are
+  `publish = false` + skipped), and sources (crates.io only).
+
+Findings fixed while standing this up:
+
+- **Arena pointer provenance:** `CallArena::bump` derived the aligned pointer
+  via an integer→pointer cast, which Miri can't track. Now derived from the
+  source pointer via `wrapping_add(offset)` — same address, provenance preserved,
+  no behavior/layout change.
+- **Security advisory:** bumped `rustls-webpki` 0.103.9 → 0.103.13 to clear
+  RUSTSEC-2026-0104 (a panic reachable in CRL parsing; transitive via the .NET
+  hostfxr downloader).
+- **Leak-clean test:** the intentional-leak test that proves `assert_no_leaks`
+  panics now catches the panic and frees, so it stays clean under Miri's leak
+  checker (keeping leak detection on for everything else).
