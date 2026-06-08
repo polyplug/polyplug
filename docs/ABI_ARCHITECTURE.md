@@ -62,6 +62,15 @@ const HostApi* polyplug_runtime_create(const void* config);
 void polyplug_runtime_destroy(const HostApi* host);
 ```
 
+`config` points at a `RuntimeConfig` (`#[repr(C)]`, **32 bytes, align 8**):
+`compatibility: Compatibility` (u32, offset 0), `unload_mode: UnloadMode` (u32,
+offset 4), `hot_reload_enabled: bool` (offset 8), `on_reload` callback (offset 16),
+and `on_reload_user_data` (offset 24). `UnloadMode { Retire = 0 (default), Reclaim = 1 }`
+selects whether `unload_bundle` frees loader-owned resources (e.g. native `dlclose`)
+or keeps them mapped (retire-not-drop). The `on_reload` callback receives a
+`ReloadPhase` whose `ReloadPhaseType` is one of `Preparing = 0`, `Reloaded = 1`,
+`Failed = 2`, or `Unloading = 3` (fired before a bundle is invalidated on unload).
+
 ### Cross-Boundary Allocator (via HostApi fields)
 ```c
 // Allocate memory that crosses the plugin/host boundary.

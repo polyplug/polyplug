@@ -228,3 +228,36 @@ Windows-specific notes (non-obvious constraints — do not regress):
   runtimeconfig.json write handle before `hostfxr_initialize_for_runtime_config`
   reads it — Windows mandatory file sharing otherwise fails the read with
   `ERROR_SHARING_VIOLATION`.
+
+## Unload — invalidate + opt-in reclaim ✅ Done
+
+`HostApi.unload_bundle` (offset 152) invalidates a bundle (generation bump →
+`StaleHandle`, registry-index removal, dependent-refusal/cascade) and fires a
+`ReloadPhaseType::Unloading` callback before invalidation. Reclaim of loader-owned
+resources is opt-in via `RuntimeConfig.unload_mode` (`UnloadMode { Retire (default),
+Reclaim }`; `RuntimeConfig` is 32 bytes, `unload_mode` at offset 4). Full model:
+[`docs/UNLOAD_DESIGN.md`](./docs/UNLOAD_DESIGN.md), trust posture: [`TRUST_MODEL.md`](./TRUST_MODEL.md).
+
+Delivered:
+
+- **Native opt-in reclaim:** under `UnloadMode::Reclaim` the native loader `dlclose`s
+  the dylib (releases OS resources + the on-disk file lock, notably the Windows DLL
+  lock, so a developer can rebuild and reload). Host-attested + best-effort
+  `reclaim_safe` (`Arc::strong_count`) net.
+- **Python reclaim:** under `Reclaim` the loader purges the bundle's re-keyed
+  `sys.modules` entries so a reload re-imports fresh source. Memory-safe regardless of
+  in-flight calls.
+- **Lua/JS VM reclaim:** drop the VM if quiescent (`in_dispatch_threads` empty), else
+  defer; these loaders govern reclaim by their own quiescence tracking.
+
+Remaining / deferred (unload area):
+
+- **Call-arena retain-and-rewind (perf)** — deferred: changing the arena's
+  free-on-`reset()` contract to a teardown/`Drop` model ripples into the C++ and other
+  generated host callers (CI-only exercised), so it is a separate dedicated effort.
+- **D11 native live-instance counter** — deferred: the host owns the instance
+  lifecycle (`create_instance` / `destroy_instance` are direct guest-vtable calls the
+  runtime never mediates), so a runtime-side counter via `get_extension` would either
+  duplicate host knowledge or require auto-increment code in every native host-caller
+  generator (CI-only validation). Not added pre-freeze without an explicit decision.
+- **.NET collectible ALC** for true managed unload — deferred (larger loader rework).

@@ -365,24 +365,54 @@ raw pointer handed out before the reload stays valid for the lifetime of the run
 > by `resolve_guest_contract`), but there is no `ArcSwap`, no `PluginGuard`/`VTableSlot`
 > quiescence spin, no `QuiescenceTimeout`, and no cascade-depth cap in the current code. An
 > earlier ref-counted reclamation design that used those mechanisms was removed in favor of
-> the retire-not-drop model described above. True resource reclaim (`dlclose` / VM teardown)
-> is future work; the current unload is invalidate-only (handles go stale, retire storage keeps
-> pointers valid).
+> the retire-not-drop model described above. Hot-reload remains retire-not-drop. **Unload**
+> defaults to retire-not-drop (`UnloadMode::Retire`) but can opt into true resource reclaim
+> (`UnloadMode::Reclaim` — native `dlclose`, Python `sys.modules` purge, Lua/JS VM drop);
+> see the Unload Reclaim Trust Model below.
 
 ## 8. Future Work
 
 The trust model continues to evolve as polyplug expands its reach into more dynamic environments.
 
-### Invalidate-only Unload ✅ done
+### Unload ✅ done
 
 `HostApi.unload_bundle(this, bundle_id)` (19th pointer, offset 152) is live.
 `Runtime::unload_bundle(bundle_id)` refuses if any still-loaded bundle declared a
 dependency on a contract this bundle provides (`RuntimeError::DependencyInUse`);
 `Runtime::unload_bundle_cascade(bundle_id)` unloads dependents first. Unload bumps the
 slot generation (all stale handles return `AbiErrorCode::StaleHandle`), removes the bundle
-from all registry indices, and retires (does not drop) the interface `Arc` — so any raw
-pointer resolved before the unload stays valid (retire-not-drop). True resource reclaim
-(`dlclose` / VM teardown) is future work; see `docs/UNLOAD_DESIGN.md`.
+from all registry indices, retires the interface `Arc`, and fires the `on_reload` callback
+with `ReloadPhaseType::Unloading` (3) before invalidation so the host can quiesce. See
+`docs/UNLOAD_DESIGN.md`.
+
+#### Unload Reclaim Trust Model
+
+The invalidation above is unconditional and fully safe. Whether loader-owned resources are
+*freed* is governed by `RuntimeConfig.unload_mode` (`UnloadMode { Retire (default),
+Reclaim }`):
+
+- **`Retire` (default):** the library/VM stays mapped after unload — any raw pointer
+  resolved before the unload stays valid for the runtime's lifetime (retire-not-drop). No
+  new trust assumptions.
+- **`Reclaim` (opt-in) is host-coordinated**, exactly like hot-reload: the host must not
+  call a bundle concurrently with unloading it (trusted-same-process model). The runtime's
+  quiescence/leak checks are best-effort defense-in-depth, not a complete guarantee.
+  - **Native (`dlclose`) is host-attested.** Native dispatch is raw function pointers into
+    the library, so the runtime is **structurally blind** to in-flight native calls and
+    cannot verify safety. Selecting `Reclaim` is the host's attestation that no thread is
+    calling, or holds a pointer into, the bundle. A best-effort `Arc::strong_count` net
+    (`reclaim_safe`) defers to retire when an `Arc` holder remains, but it cannot see raw
+    in-flight calls. If the host's attestation is wrong, it is a host bug — the same posture
+    as hot-reload's `Preparing` contract.
+  - **VM reclaim (Lua/JS) is best-effort, not a guarantee.** The loaders drop a VM only
+    when `in_dispatch_threads` is observed empty. But `host_call_guest_method` releases the
+    registry lock *before* the VM registers the call in `in_dispatch_threads`, leaving a
+    resolve→dispatch window where a call racing a cross-thread unload could free a VM under
+    it. So VM unload relies on the same host-coordination contract; `in_dispatch_threads` is
+    defense-in-depth.
+  - **Python reclaim is memory-safe regardless of in-flight calls** — it only purges the
+    bundle's re-keyed `sys.modules` entries (the import cache); CPython refcounts/GC keep
+    any referenced objects alive.
 
 ### Hot-Reload ✅ done
 Hot-reload is implemented for native bundles using the retire-not-drop model: superseded

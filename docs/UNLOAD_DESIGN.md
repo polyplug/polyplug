@@ -12,9 +12,17 @@ The mechanism is **generation-counted handles**: `GuestContractHandle` grows a
 **invalidate-then-reclaim** protocol defines exactly when an old generation's
 memory may be freed without dangling any pointer or in-flight call.
 
-**Status (2026-06):** Phase 1 (generation-counted `GuestContractHandle`: 8 bytes, `{ index: u32, generation: u32 }`, `StaleHandle` now produced by `resolve_guest_contract`) and Phase 2 (invalidate-only `unload_bundle` on `HostApi` at offset 152; `RuntimeApi` retired entirely; dependent-refusal and cascade unload) have shipped. The "Current State" section below therefore describes history rather than the present for those items. Phases 3 (VM true reclaim) and 4 (native opt-in Reclaim) and the `UnloadMode`/`ReloadPhase::Unloading` ABI bits remain future work.
+**Status (2026-06):** Phases 1–4 have shipped.
+- **Phase 1** — generation-counted `GuestContractHandle`: 8 bytes, `{ index: u32, generation: u32 }`, `StaleHandle` now produced by `resolve_guest_contract`.
+- **Phase 2** — invalidate-only `unload_bundle` on `HostApi` at offset 152; `RuntimeApi` retired entirely; dependent-refusal and cascade unload.
+- **Phase 3** — VM true reclaim: Lua/JS loaders drop a quiescent VM on unload; Python purges the bundle's re-keyed `sys.modules` entries.
+- **Phase 4** — native opt-in Reclaim: under `UnloadMode::Reclaim` the native loader `dlclose`s the dylib on unload.
 
-This is a **design document only** for the remaining phases. The shipped portions serve as implementation record. Every claim about current behavior is cited to `file:line` and was verified against the working tree at design time.
+The supporting ABI bits — the `UnloadMode { Retire, Reclaim }` enum, `RuntimeConfig.unload_mode` (offset 4; `RuntimeConfig` grew 24→32 bytes), and `ReloadPhaseType::Unloading = 3` with the `ReloadPhase::unloading()` constructor — have also shipped. The unload flow fires a `ReloadPhase::Unloading` callback before invalidate so the host can quiesce.
+
+The "Current State" section below therefore describes history rather than the present for the shipped items. The two items that remain future work are the call-arena **retain-and-rewind** optimization (Phase 1 of §"Core Concepts", a perf change independent of unload — see Deferred Work below) and the **D11 native live-instance counter** (see Decision Points). Phase 5 (.NET collectible ALC) also remains deferred.
+
+This is an **implementation record**; the design rationale below is retained for context. Every claim about current behavior is cited to `file:line` and was verified against the working tree at design time.
 
 This document deliberately mirrors the tone and structure of
 [`HOT_RELOAD_DESIGN.md`](./HOT_RELOAD_DESIGN.md).
@@ -357,13 +365,18 @@ Split by resource type and by what the runtime can actually observe:
    win (handles go stale, the registry shrinks, `find` stops returning the bundle).
 
 3. **Actually free at a safe point, per resource class:**
-   - **VM bundles (Lua, JS):** free is **fully reclaimable**. The VM is owned solely by
-     its loader; once the slot is invalidated and `in_dispatch_threads` is observed
-     empty (the runtime *can* check this — it is the same vec the re-entrancy guard
-     uses), no thread is inside the VM. Drop the VM, the interface `Arc`, and any
-     in-memory `BundleSource::Code`. No raw native pointers were ever exposed for VM
-     dispatch (dispatch goes through `call_guest_method` → loader → VM). **VM unload is
-     true unload, today, safely.**
+   - **VM bundles (Lua, JS):** free is reclaimable **under host coordination**. The VM
+     is owned solely by its loader; once the slot is invalidated and
+     `in_dispatch_threads` is observed empty, the loader drops the VM, the interface
+     `Arc`, and any in-memory `BundleSource::Code`; otherwise it retires (defers). No
+     raw native pointers were ever exposed for VM dispatch (dispatch goes through
+     `call_guest_method` → loader → VM). **Caveat (see §7 Correction):** the
+     `in_dispatch_threads` check is **best-effort, not a guarantee** — there is a
+     resolve→dispatch window where `host_call_guest_method` has released the registry
+     lock but the VM has not yet registered the call, so a call racing a cross-thread
+     unload could free a VM under it. VM unload is therefore **host-coordinated** (the
+     host must not call a bundle concurrently with unloading it), with
+     `in_dispatch_threads` as defense-in-depth.
    - **Native bundles:** the host may hold cached raw interface/function pointers the
      runtime cannot see. The runtime **cannot prove quiescence** for these without
      Option A's per-call tax. Therefore native `dlclose` is gated on an **explicit host
@@ -478,13 +491,15 @@ Enumerate the paths (the task requires each shown sound):
   `invalidate_bundle` removes the slot from the index, a re-resolve **fails cleanly**
   (`NotFound`/`StaleHandle`) — it cannot route to a freed interface. Sound by
   construction; this is the unload-friendly pattern the task calls out.
-- **VM dispatch holding `loader_data`.** Reclaim of a VM bundle waits until
-  `in_dispatch_threads` is empty (the vec at
+- **VM dispatch holding `loader_data`.** Reclaim of a VM bundle defers (retires)
+  unless `in_dispatch_threads` is observed empty (the vec at
   `crates/polyplug_js/src/loader.rs:111` / `crates/polyplug_lua/src/loader.rs:78`).
-  While any thread is mid-dispatch, the loader is not dropped. The existing tests
-  already prove the vec is emptied on dispatch return and that cross-thread dispatch is
-  serialized by the VM lock — so "empty vec under the loader lock" is a real quiescence
-  signal for VMs.
+  While any thread is *visibly* mid-dispatch, the loader is not dropped. **This is
+  best-effort, not a guarantee** (see §7 Correction): `host_call_guest_method` releases
+  the registry lock before the VM registers the call in `in_dispatch_threads`, so a
+  resolve→dispatch window remains where a racing cross-thread unload is not yet
+  observable. VM unload is therefore host-coordinated; `in_dispatch_threads` is
+  defense-in-depth, not a complete proof of quiescence.
 - **Unload-during-call from the same thread (re-entrant unload).** A guest cannot call
   `unload_bundle` re-entrantly into its own VM without tripping the existing
   `ReentrantCall = 9` guard. Host-initiated unload from another thread serializes on
@@ -577,12 +592,25 @@ impl Runtime {
 
 ### 7. VM vs native asymmetry — honest per-loader verdicts
 
+**Correction (honest safety model).** An earlier revision of this table called VM
+reclaim "fully safe via quiescence." That was an **overstatement**. There is an
+inherent **resolve→dispatch window**: `host_call_guest_method` releases the registry
+lock *before* the VM registers the call in `in_dispatch_threads`, so a call racing a
+cross-thread unload could free a VM out from under it. Therefore **unload (VM and
+native alike) is HOST-COORDINATED, exactly like hot-reload**: the host must not call a
+bundle concurrently with unloading it (the trusted-same-process model). The
+`in_dispatch_threads` check is **best-effort defense-in-depth** — it retires
+(drop-deferred) instead of dropping when a dispatch is *visibly* in flight — **not a
+complete guarantee**. Native reclaim follows the same host-coordinated model, plus the
+structural-blindness caveat below (native dispatch is a raw fn pointer the runtime
+never sees, so it cannot even attempt the in-flight check).
+
 | Loader | True reclaim feasible? | Mechanism / verdict |
 |---|---|---|
-| **Native (cdylib)** | Yes, but host-attested | Invalidate always; `dlclose` only in opt-in Reclaim mode after callback + leak check. Runtime cannot prove native quiescence. |
-| **Lua** | **Yes, safe** | Per-VM, runtime mediates dispatch, `in_dispatch_threads` gives quiescence. Drop the `Lua` VM + `Arc`. (Reload already disabled; unload is independent.) |
-| **JS (QuickJS)** | **Yes, safe** | Same as Lua via `in_dispatch_threads` (`js/loader.rs:111`). Drop the `Context`/`Runtime` + `Arc`. |
-| **Python** | **Partial — invalidate yes, true free no** | CPython is single-init per process (`PYTHON_INIT: OnceLock<()>`, `polyplug_python/src/context.rs:16`). The interpreter can't be torn down. Best achievable: invalidate handles + **purge the bundle's `sys.modules` entries** using the existing per-bundle `isolation.rs` snapshot/diff machinery (`polyplug_python/src/isolation.rs`) to reclaim Python-level module objects. Honest verdict: **module purge, not interpreter unload.** |
+| **Native (cdylib)** | Yes, host-attested | Invalidate always; `dlclose` only in opt-in Reclaim mode after the `Unloading` callback + leak check. Native dispatch is zero-overhead (raw fn pointers into the library), so the runtime is **structurally blind** to in-flight native calls and cannot verify safety. Selecting Reclaim is the host's **attestation** that no thread is calling / holds a pointer into the bundle. A best-effort `Arc::strong_count` net (`reclaim_safe`) defers to retire when an `Arc` holder remains, but cannot see raw in-flight calls. |
+| **Lua** | Yes, host-coordinated | Per-VM, runtime mediates dispatch. Drops the `Lua` VM + `Arc` when `in_dispatch_threads` is observed empty; retires (defers) otherwise. Best-effort, not a guarantee (resolve→dispatch window). The Lua loader governs reclaim by its own `in_dispatch_threads` quiescence and ignores `UnloadMode`/`reclaim_safe`. (Reload already disabled; unload is independent.) |
+| **JS (QuickJS)** | Yes, host-coordinated | Same as Lua via `in_dispatch_threads` (`js/loader.rs:111`). Drops the `Context`/`Runtime` + `Arc` when quiescent. Governs reclaim by its own `in_dispatch_threads` and ignores `UnloadMode`/`reclaim_safe`. |
+| **Python** | **Partial — invalidate yes, true free no** | CPython is single-init per process (`PYTHON_INIT: OnceLock<()>`). The interpreter can't be torn down. Shipped behaviour: under `UnloadMode::Reclaim` the loader **purges the bundle's re-keyed `sys.modules` entries** so a reload re-imports fresh source; under `Retire` it keeps them. Memory-safe regardless of in-flight calls — CPython refcounts/GC keep referenced objects alive, so purging only drops the import cache. Honest verdict: **module purge, not interpreter unload.** |
 | **.NET / C#** | **Partial — requires collectible ALC, not built today** | CLR is single-init (`CLR_CONTEXT: OnceCell`, `polyplug_dotnet/src/context.rs`). .NET *does* support unload via **collectible `AssemblyLoadContext` + `AssemblyLoadContext.Unload()`** — but only if each bundle is loaded into its own collectible ALC, and unload is *cooperative* (GC reclaims after all references drop, no hard guarantee of timing). The current loader uses a per-assembly delegate-loader cache on a shared context, **not** per-bundle collectible ALCs. Honest verdict: **true .NET unload is a larger loader rework (one collectible ALC per bundle); for this design, .NET gets invalidate-only**, with collectible-ALC reclaim deferred to future work. Note C#-guest bundles register **native fn ptrs** (like native bundles), so even with ALC unload, the host-cached-pointer caveat applies. |
 
 ### 8. Migration & compatibility
@@ -611,31 +639,48 @@ impl Runtime {
 | Dependent-bundle orphaning | Medium | Refuse-by-default; explicit cascade opt-in |
 | .NET/Python "unload" overpromised | Medium | Honest verdicts above; ship invalidate-only for both |
 
-**Phases (each independently shippable):**
+**Phases (each independently shippable):** Phases 1–4 have **SHIPPED**; Phase 5 is deferred.
 
-1. **Phase 1 — Generation field + StaleHandle (ABI).** Add `generation` to handle,
+1. **Phase 1 — Generation field + StaleHandle (ABI). [SHIPPED]** Add `generation` to handle,
    slot generation, resolve check, `RegistryError::StaleHandle` → `AbiErrorCode::StaleHandle`.
    Update all 5 SDK ABIs + layout tests + validator + generator. *No unload yet — this
    alone makes the documented generation/StaleHandle contract true and is the only ABI
    break.* Tests: layout tests; a resolve-after-bump returns StaleHandle.
-2. **Phase 2 — Invalidate-only `unload_bundle` (Retire mode).** Add
+2. **Phase 2 — Invalidate-only `unload_bundle` (Retire mode). [SHIPPED]** Add
    `RuntimeStore::invalidate_bundle`, `Runtime::unload_bundle`, dependent-refusal,
    unload phase callback. No freeing. Wire/resolve the `HostApi` vs `RuntimeApi` D0
    question here. Tests: extend `stress_hot_reload.rs` / `concurrent_reload.rs` with
    unload; assert handles go stale, `find` stops returning, retire storage still keeps
    old pointers valid (no UAF), ASan clean.
-3. **Phase 3 — VM true reclaim.** Free Lua/JS VMs at the `in_dispatch_threads`-empty
-   safe point; Python `sys.modules` purge via `isolation.rs`. Tests: load→unload→reload
-   loop asserts bounded memory (no monotonic growth) for VM bundles; in-flight cross-VM
-   call during unload stays sound.
-4. **Phase 4 — Native opt-in Reclaim.** `UnloadMode::Reclaim`, `unload_bundle_forced`,
-   per-bundle `NativeLoader::retired`, `dlclose`/`FreeLibrary`. Tests: dedicated
-   `stress_unload_native.rs` under **ASan** (MIRI N/A for FFI) doing
-   load→use→unload(reclaim)→load in a loop; Windows test asserting the old DLL file is
-   deletable post-reclaim; a negative test that a live wrapper causes refusal (not UAF)
-   unless `force`.
+3. **Phase 3 — VM true reclaim. [SHIPPED]** Free Lua/JS VMs at the
+   `in_dispatch_threads`-empty safe point (best-effort, host-coordinated — see §7
+   Correction); Python `sys.modules` purge under `UnloadMode::Reclaim`. Tests:
+   load→unload→reload loop asserts bounded memory (no monotonic growth) for VM bundles.
+4. **Phase 4 — Native opt-in Reclaim. [SHIPPED]** `UnloadMode::Reclaim`, per-bundle
+   `NativeLoader::retired`, `dlclose`/`FreeLibrary` gated on the best-effort
+   `reclaim_safe` (`Arc::strong_count`) net + the `Unloading` callback. Tests in
+   `crates/polyplug_native/src/loader.rs`: Reclaim-mode unload `dlclose`s a quiescent
+   bundle; `reclaim_safe=false` retires (defers) instead; the on-disk DLL becomes
+   removable after Reclaim-mode unload (Windows file-lock release).
 5. **Phase 5 (future, not gated by this doc) — .NET collectible ALC** per-bundle for
-   true managed unload.
+   true managed unload. **[DEFERRED]** — C# guests register native fn ptrs, so even
+   with ALC unload the host-cached-pointer caveat applies.
+
+### Deferred Work
+
+Two unload-area items remain deliberately deferred (recorded here, not abandoned):
+
+- **Call-arena retain-and-rewind (perf).** Deferred: it changes the arena's
+  free-on-`reset()` contract to a teardown/`Drop` model that ripples into the C++ and
+  other generated host callers (only exercised in CI), so it is a separate dedicated
+  effort. Nothing in the unload phases depends on it; it can ship independently at any
+  time. Tracked as the "Call-arena reset policy" note in §"Core Concepts".
+- **D11 — native live-instance counter.** Deferred. The host owns the instance
+  lifecycle: `create_instance` / `destroy_instance` are direct guest-vtable calls the
+  runtime never mediates. A runtime-side counter via `get_extension` would therefore
+  either duplicate knowledge the host already has, or require auto-increment code
+  emitted into every native host-caller generator (CI-only validation). Not added
+  pre-freeze without an explicit owner decision. See Decision Point D11.
 
 ---
 

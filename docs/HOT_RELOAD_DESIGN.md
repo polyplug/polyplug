@@ -82,6 +82,7 @@ pub enum ReloadPhaseType {
     Preparing = 0,  // BEFORE interface swap — host must destroy instances
     Reloaded  = 1,  // AFTER interface swap — host can create new instances
     Failed    = 2,  // reload aborted — old interface kept, no swap occurred
+    Unloading = 3,  // BEFORE a bundle is invalidated on unload — host must quiesce
 }
 
 /// FFI-safe reload phase for hot-reload callbacks.
@@ -117,18 +118,22 @@ pub struct RuntimeConfig {
     /// Version compatibility policy for loaded bundles. (offset 0)
     pub compatibility: Compatibility,
 
-    /// Whether hot-reload is enabled. Default: false (offset 4)
+    /// How a bundle's loader-owned resources are reclaimed on unload. (offset 4)
+    /// `UnloadMode { Retire (default), Reclaim }`. See UNLOAD_DESIGN.md.
+    pub unload_mode: UnloadMode,
+
+    /// Whether hot-reload is enabled. Default: false (offset 8)
     pub hot_reload_enabled: bool,
 
-    /// Optional FFI callback invoked for each reload phase. (offset 8)
+    /// Optional FFI callback invoked for each reload phase. (offset 16)
     /// The first argument is the opaque `on_reload_user_data` pointer.
     pub on_reload: Option<unsafe extern "C" fn(*mut core::ffi::c_void, ReloadPhase)>,
 
-    /// Opaque user-data pointer forwarded to `on_reload` as its first argument. (offset 16)
+    /// Opaque user-data pointer forwarded to `on_reload` as its first argument. (offset 24)
     /// Owned by the host; the runtime only forwards it, never reads or frees it.
     pub on_reload_user_data: *mut core::ffi::c_void,
 }
-// sizeof(RuntimeConfig) == 24, align 8 on 64-bit.
+// sizeof(RuntimeConfig) == 32, align 8 on 64-bit.
 ```
 
 #### Why `hot_reload_enabled` Defaults to `false`
@@ -153,10 +158,11 @@ rt.reload_bundle(path)?;  // Returns Err(RuntimeError::HotReloadDisabled)
 
 ```rust
 use polyplug::RuntimeConfig;
-use polyplug_abi::runtime::{Compatibility, ReloadPhaseType};
+use polyplug_abi::runtime::{Compatibility, ReloadPhaseType, UnloadMode};
 
 let config = RuntimeConfig {
     compatibility: Compatibility::Strict,
+    unload_mode: UnloadMode::Retire,  // default; Reclaim opts into dlclose/VM drop on unload
     hot_reload_enabled: true,  // REQUIRED for reload_bundle()
     on_reload: None,
     on_reload_user_data: core::ptr::null_mut(),
@@ -173,6 +179,10 @@ let rt = Runtime::builder()
         }
         ReloadPhaseType::Failed => {
             eprintln!("ERROR: Reload failed for bundle {:?}", phase.bundle_id);
+        }
+        ReloadPhaseType::Unloading => {
+            // Fired before unload_bundle invalidates the bundle: quiesce / drop
+            // all caller wrappers and instances for phase.bundle_id here.
         }
     })
     .build()?;
@@ -294,7 +304,7 @@ PipelineDecoder decoder(rt);  // Throws on error? Inconsistent with C++ patterns
 
 ## See Also
 
-- [UNLOAD_DESIGN.md](./UNLOAD_DESIGN.md) — True unload design (generation-counted handles, invalidate-only Phase 1+2 shipped; Reclaim Phases 3-4 are future work)
+- [UNLOAD_DESIGN.md](./UNLOAD_DESIGN.md) — True unload design (generation-counted handles; Phases 1–4 shipped: invalidate-only unload, VM reclaim, native opt-in `dlclose` reclaim + Python `sys.modules` purge under `UnloadMode::Reclaim`; arena retain-and-rewind and D11 deferred)
 - [PERFORMANCE.md](./PERFORMANCE.md) — Hot-reload safety architecture and overhead
 - [ABI_ARCHITECTURE.md](./ABI_ARCHITECTURE.md) — ABI layer design
 - [SDK Examples](../examples/) — Working code for all languages

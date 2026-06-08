@@ -24,8 +24,9 @@ use std::thread::ThreadId;
 
 use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
 use polyplug_abi::{
-    GuestContractHandle, GuestContractInterface, HostApi, HostContractInstance,
-    HostContractInterface, PluginDescriptor, RuntimeLanguage, types::Version,
+    AbiError, AbiErrorCode, Array, DependencyInfo, GuestContractHandle, GuestContractInterface,
+    HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, RuntimeLanguage,
+    StringView, types::Version,
 };
 use polyplug_utils::{BundleId, GuestContractId, fnv1a_32};
 
@@ -1307,8 +1308,6 @@ pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
     contract_id: u64,
     min_version: u32,
 ) -> polyplug_abi::Array<GuestContractHandle> {
-    use polyplug_abi::Array;
-
     if this.is_null() {
         return Array::empty();
     }
@@ -1517,9 +1516,6 @@ pub(crate) unsafe extern "C" fn host_resolve_host_contract_interface(
 pub(crate) unsafe extern "C" fn host_list_bundles(
     this: *const HostApi,
 ) -> polyplug_abi::Array<polyplug_utils::BundleId> {
-    use polyplug_abi::Array;
-    use polyplug_utils::BundleId;
-
     if this.is_null() {
         return Array::empty();
     }
@@ -1566,8 +1562,6 @@ pub(crate) unsafe extern "C" fn host_list_bundles(
 pub(crate) unsafe extern "C" fn host_get_dependencies(
     this: *const HostApi,
 ) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
-    use polyplug_abi::{Array, DependencyInfo};
-
     if this.is_null() {
         return Array::empty();
     }
@@ -1639,8 +1633,6 @@ pub unsafe extern "C" fn host_load_bundle(
     path: *const u8,
     path_len: usize,
 ) -> polyplug_abi::AbiError {
-    use polyplug_abi::{AbiError, AbiErrorCode, StringView};
-
     if this.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer as u32,
@@ -1695,8 +1687,6 @@ pub unsafe extern "C" fn host_reload_bundle(
     path: *const u8,
     path_len: usize,
 ) -> polyplug_abi::AbiError {
-    use polyplug_abi::{AbiError, AbiErrorCode, StringView};
-
     if this.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer as u32,
@@ -1750,8 +1740,6 @@ pub unsafe extern "C" fn host_unload_bundle(
     this: *const HostApi,
     bundle_id: BundleId,
 ) -> polyplug_abi::AbiError {
-    use polyplug_abi::{AbiError, AbiErrorCode, StringView};
-
     if this.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer as u32,
@@ -1784,8 +1772,6 @@ pub(crate) unsafe extern "C" fn host_register_host_contract(
     this: *const HostApi,
     interface: *const polyplug_abi::HostContractInterface,
 ) -> polyplug_abi::AbiError {
-    use polyplug_abi::{AbiError, AbiErrorCode, StringView};
-
     if this.is_null() || interface.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer as u32,
@@ -1826,8 +1812,6 @@ pub(crate) unsafe extern "C" fn host_register_loader(
     _runtime_name: polyplug_abi::StringView,
     loader_ptr: *mut core::ffi::c_void,
 ) -> polyplug_abi::AbiError {
-    use polyplug_abi::{AbiError, AbiErrorCode, StringView};
-
     if this.is_null() || loader_ptr.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer as u32,

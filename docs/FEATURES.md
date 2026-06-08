@@ -165,10 +165,32 @@ safety guarantees: [`../TRUST_MODEL.md`](../TRUST_MODEL.md) (Hot-Reload Safety).
   `RuntimeError::DependencyInUse` if any still-loaded bundle declared a dependency on
   a contract this bundle provides. Use `Runtime::unload_bundle_cascade(bundle_id)` to
   unload dependents first.
-- **True reclaim is future work:** this is invalidate-only unload. `dlclose` for native
-  bundles and VM teardown (Lua, JS, Python, .NET) are not performed today. Memory from
-  retired interfaces accumulates exactly as it does after hot-reloads. See
-  [`UNLOAD_DESIGN.md`](./UNLOAD_DESIGN.md) for the phased plan.
+- **Unloading callback:** before invalidation the runtime fires the `on_reload`
+  callback with `ReloadPhaseType::Unloading` (3) so the host can quiesce.
+- **Unload modes (`RuntimeConfig.unload_mode`, default `Retire`):** invalidation above
+  happens in every mode; what changes is whether loader-owned resources are freed.
+  - **`UnloadMode::Retire` (default):** loader keeps the library/VM mapped after
+    unload (retire-not-drop). Fully safe regardless of in-flight calls. Memory from
+    retired interfaces accumulates exactly as after a hot-reload.
+  - **`UnloadMode::Reclaim` (opt-in, host-coordinated):** the loader frees its
+    bundle resources on unload, per language:
+    - **Native (cdylib):** `dlclose`s the dylib (drops the `libloading::Library`),
+      releasing OS resources and the on-disk file lock (notably the Windows DLL lock)
+      so a developer can rebuild and reload. **Host-attested:** native dispatch is
+      raw fn pointers, so the runtime is structurally blind to in-flight native calls;
+      selecting Reclaim asserts no thread is calling / holds a pointer into the bundle.
+      A best-effort `Arc::strong_count` net (`reclaim_safe`) defers to retire when an
+      `Arc` holder remains.
+    - **Python:** purges the bundle's re-keyed `sys.modules` entries so a reload
+      re-imports fresh source. Memory-safe regardless of in-flight calls — CPython
+      refcounts/GC keep referenced objects alive; purging only drops the import cache.
+    - **Lua / JS (QuickJS):** drop the VM if quiescent (`in_dispatch_threads` empty),
+      else defer. These loaders govern reclaim by their own quiescence tracking and
+      ignore `unload_mode`/`reclaim_safe`.
+- **Host-coordinated, not auto-safe:** Reclaim (VM and native alike) relies on the
+  trusted-same-process contract — the host must not call a bundle concurrently with
+  unloading it. The quiescence/leak checks are best-effort defense-in-depth, not a
+  complete guarantee. See [`UNLOAD_DESIGN.md`](./UNLOAD_DESIGN.md) for the full model.
 
 ---
 
