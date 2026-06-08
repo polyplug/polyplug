@@ -210,6 +210,67 @@ impl RuntimeStoreData {
             reloading_bundles: HashSet::new(),
         }
     }
+
+    /// Tear down a single published slot — the one canonical teardown atom.
+    ///
+    /// This is the SOURCE OF TRUTH for retiring a slot. Both `invalidate_bundle`
+    /// (unload) and the dropped-contract branch of `apply_reload_swap` (when the
+    /// reloaded version no longer provides a contract the old version had) route
+    /// through here so the teardown semantics stay identical (DRY).
+    ///
+    /// For the slot at `slot_idx` it:
+    /// - bumps `slot.generation` (so every handle minted against the old generation
+    ///   now resolves to [`RegistryError::StaleHandle`]);
+    /// - **retires** the slot's interface `Arc` into `retired_interfaces` rather than
+    ///   dropping it (retire-not-drop), so any raw `*const GuestContractInterface`
+    ///   already handed out by `resolve_guest_contract` stays valid for the runtime
+    ///   lifetime;
+    /// - clears the slot `entry`;
+    /// - removes the slot index from `guest_contract_index` for its contract_id,
+    ///   dropping the now-empty key.
+    ///
+    /// It deliberately does NOT touch `bundle_data` — bundle-level bookkeeping is the
+    /// caller's responsibility because it differs per caller (unload removes the whole
+    /// bundle entry, reload removes a single slot index). An out-of-bounds `slot_idx`
+    /// is a no-op.
+    ///
+    /// Note: reload's surviving-contract path performs an in-place interface swap
+    /// instead of calling this helper — that path keeps the slot live (same
+    /// generation) so a handle stays resolvable to the new interface. Routing it
+    /// through `retire_slot` would break that continuity guarantee.
+    fn retire_slot(&mut self, slot_idx: u32) {
+        let slot_idx_usize: usize = slot_idx as usize;
+        if slot_idx_usize >= self.slots.len() {
+            return;
+        }
+
+        // Read contract_id before clearing the slot.
+        let contract_id: Option<GuestContractId> = self.slots[slot_idx_usize]
+            .interface
+            .as_ref()
+            .map(|arc: &Arc<GuestContractInterface>| arc.contract_id);
+
+        // Remove the slot index from guest_contract_index, dropping now-empty keys.
+        if let Some(cid) = contract_id
+            && let Some(indices) = self.guest_contract_index.get_mut(&cid)
+        {
+            indices.retain(|&idx| idx != slot_idx);
+            if indices.is_empty() {
+                self.guest_contract_index.remove(&cid);
+            }
+        }
+
+        // Bump generation so old handles go stale, retire (never drop) the interface
+        // so raw pointers stay valid, and vacate the slot entry.
+        self.slots[slot_idx_usize].generation =
+            self.slots[slot_idx_usize].generation.wrapping_add(1);
+        let retired: Option<Arc<GuestContractInterface>> =
+            self.slots[slot_idx_usize].interface.take();
+        if let Some(arc) = retired {
+            self.retired_interfaces.push(arc);
+        }
+        self.slots[slot_idx_usize].entry = None;
+    }
 }
 
 /// Thread-safe plugin registry.
@@ -941,19 +1002,12 @@ impl RuntimeStore {
                 Some(idx) => idx,
                 None => {
                     // Retire-not-drop: the new bundle version no longer provides this
-                    // contract. Do NOT fail the whole reload. Retire the old interface
-                    // (keep it alive for in-flight readers) and remove the old slot from
-                    // the find index so the dropped contract is no longer resolvable.
-                    if let Some(old_interface) = data.slots[old_idx as usize].interface.take() {
-                        data.retired_interfaces.push(old_interface);
-                    }
-                    data.slots[old_idx as usize].entry = None;
-                    if let Some(indices) = data.guest_contract_index.get_mut(&old_contract_id) {
-                        indices.retain(|&idx| idx != old_idx);
-                        if indices.is_empty() {
-                            data.guest_contract_index.remove(&old_contract_id);
-                        }
-                    }
+                    // contract. Do NOT fail the whole reload. Route through the canonical
+                    // teardown atom so the dropped contract is retired with identical
+                    // unload semantics — generation bumped (old handles go stale),
+                    // interface retired (in-flight raw pointers stay valid), and the slot
+                    // removed from the find index so the contract is no longer resolvable.
+                    data.retire_slot(old_idx);
                     if let Some(bd) = data.bundle_data.get_mut(&bundle_id) {
                         bd.plugin_slots.retain(|&idx| idx != old_idx);
                     }
@@ -1204,8 +1258,8 @@ impl RuntimeStore {
     /// Invalidate a bundle: retire its interfaces, bump generations, and remove it
     /// from every index structure.
     ///
-    /// This is the invalidate-only unload primitive (retire-not-drop). For each slot
-    /// owned by the bundle it:
+    /// This is the invalidate-only unload primitive (retire-not-drop). Each owned slot
+    /// is torn down via the canonical [`RuntimeStoreData::retire_slot`] helper, which:
     /// - bumps `slot.generation` (so every handle minted against the old generation now
     ///   resolves to [`RegistryError::StaleHandle`]);
     /// - **retires** the slot's interface `Arc` into `retired_interfaces` rather than
@@ -1235,38 +1289,10 @@ impl RuntimeStore {
             None => return Ok(0),
         };
 
+        // Tear down each slot via the canonical teardown atom. Bundle-level metadata
+        // is removed in bulk below (no per-slot plugin_slots edit needed here).
         for slot_idx in &slot_indices {
-            let slot_idx_usize: usize = *slot_idx as usize;
-            if slot_idx_usize >= data.slots.len() {
-                continue;
-            }
-
-            // Read contract_id before clearing the slot.
-            let contract_id: Option<GuestContractId> = data.slots[slot_idx_usize]
-                .interface
-                .as_ref()
-                .map(|arc: &Arc<GuestContractInterface>| arc.contract_id);
-
-            // Remove slot index from guest_contract_index, dropping now-empty keys.
-            if let Some(cid) = contract_id
-                && let Some(indices) = data.guest_contract_index.get_mut(&cid)
-            {
-                indices.retain(|&idx| idx != *slot_idx);
-                if indices.is_empty() {
-                    data.guest_contract_index.remove(&cid);
-                }
-            }
-
-            // Bump generation so old handles go stale, retire (never drop) the
-            // interface so raw pointers stay valid, and vacate the slot entry.
-            data.slots[slot_idx_usize].generation =
-                data.slots[slot_idx_usize].generation.wrapping_add(1);
-            let retired: Option<Arc<GuestContractInterface>> =
-                data.slots[slot_idx_usize].interface.take();
-            if let Some(arc) = retired {
-                data.retired_interfaces.push(arc);
-            }
-            data.slots[slot_idx_usize].entry = None;
+            data.retire_slot(*slot_idx);
         }
 
         // Remove from bundle_data.
