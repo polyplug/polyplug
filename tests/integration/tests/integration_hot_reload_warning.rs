@@ -134,6 +134,7 @@ fn test_warning_timing_after_preparing_before_reloaded() {
                     ReloadPhaseType::Preparing => "Preparing",
                     ReloadPhaseType::Reloaded => "Reloaded",
                     ReloadPhaseType::Failed => "Failed",
+                    ReloadPhaseType::Unloading => "Unloading",
                 };
                 events.lock().unwrap().push(format!("PHASE: {}", label));
             }

@@ -206,16 +206,18 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_with_config() {
-        use polyplug_abi::runtime::Compatibility;
+        use polyplug_abi::runtime::{Compatibility, UnloadMode};
 
         let config1: RuntimeConfig = RuntimeConfig {
             compatibility: Compatibility::Strict,
+            unload_mode: UnloadMode::Retire,
             hot_reload_enabled: true,
             on_reload: None,
             on_reload_user_data: core::ptr::null_mut(),
         };
         let config2: RuntimeConfig = RuntimeConfig {
             compatibility: Compatibility::Relaxed,
+            unload_mode: UnloadMode::Retire,
             hot_reload_enabled: false,
             on_reload: None,
             on_reload_user_data: core::ptr::null_mut(),

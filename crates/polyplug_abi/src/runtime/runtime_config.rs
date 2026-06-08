@@ -2,6 +2,7 @@
 
 use crate::runtime::Compatibility;
 use crate::runtime::ReloadPhase;
+use crate::runtime::UnloadMode;
 
 /// Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
 ///
@@ -13,6 +14,8 @@ use crate::runtime::ReloadPhase;
 pub struct RuntimeConfig {
     /// Compatibility mode for version resolution.
     pub compatibility: Compatibility,
+    /// How a bundle's loader-owned resources are reclaimed on unload.
+    pub unload_mode: UnloadMode,
     /// Whether hot-reload is enabled.
     pub hot_reload_enabled: bool,
     /// Optional hot-reload callback, or null for no callback.
@@ -38,6 +41,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             compatibility: Compatibility::Strict,
+            unload_mode: UnloadMode::Retire,
             hot_reload_enabled: false,
             on_reload: None,
             on_reload_user_data: core::ptr::null_mut(),
@@ -51,27 +55,31 @@ mod tests {
 
     use super::RuntimeConfig;
     use crate::runtime::Compatibility;
+    use crate::runtime::UnloadMode;
 
     #[test]
     fn layout_runtime_config() {
         // compatibility: 4 bytes (u32) at 0x00
-        // hot_reload_enabled: 1 byte (bool) at 0x04
-        // padding: 3 bytes (0x05-0x07)
-        // on_reload: 8 bytes (fn pointer) at 0x08
-        // on_reload_user_data: 8 bytes (pointer) at 0x10
-        // Total: 24 bytes, alignment 8
-        assert_eq!(size_of::<RuntimeConfig>(), 24);
+        // unload_mode: 4 bytes (u32) at 0x04
+        // hot_reload_enabled: 1 byte (bool) at 0x08
+        // padding: 7 bytes (0x09-0x0F)
+        // on_reload: 8 bytes (fn pointer) at 0x10
+        // on_reload_user_data: 8 bytes (pointer) at 0x18
+        // Total: 32 bytes, alignment 8
+        assert_eq!(size_of::<RuntimeConfig>(), 32);
         assert_eq!(align_of::<RuntimeConfig>(), 8);
         assert_eq!(offset_of!(RuntimeConfig, compatibility), 0x0);
-        assert_eq!(offset_of!(RuntimeConfig, hot_reload_enabled), 0x4);
-        assert_eq!(offset_of!(RuntimeConfig, on_reload), 0x8);
-        assert_eq!(offset_of!(RuntimeConfig, on_reload_user_data), 0x10);
+        assert_eq!(offset_of!(RuntimeConfig, unload_mode), 0x4);
+        assert_eq!(offset_of!(RuntimeConfig, hot_reload_enabled), 0x8);
+        assert_eq!(offset_of!(RuntimeConfig, on_reload), 0x10);
+        assert_eq!(offset_of!(RuntimeConfig, on_reload_user_data), 0x18);
     }
 
     #[test]
     fn default_runtime_config() {
         let config = RuntimeConfig::default();
         assert_eq!(config.compatibility, Compatibility::Strict);
+        assert_eq!(config.unload_mode, UnloadMode::Retire);
         assert!(!config.hot_reload_enabled);
         assert!(config.on_reload.is_none());
         assert!(config.on_reload_user_data.is_null());

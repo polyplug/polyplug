@@ -288,6 +288,13 @@ class ReloadPhaseType(enum.IntEnum):
     Preparing = 0
     Reloaded = 1
     Failed = 2
+    Unloading = 3
+
+
+class UnloadMode(enum.IntEnum):
+    """ How a bundle's loader-owned resources are handled when it is unloaded."""
+    Retire = 0
+    Reclaim = 1
 
 
 class RuntimeLanguage(enum.IntEnum):
@@ -394,13 +401,14 @@ class RuntimeConfig(ctypes.Structure):
     """
     _fields_ = [
         ("compatibility", ctypes.c_uint32),
+        ("unload_mode", ctypes.c_uint32),
         ("hot_reload_enabled", ctypes.c_bool),
         ("on_reload", _runtime_config_on_reload_t),
         ("on_reload_user_data", ctypes.c_void_p),
     ]
 
-# Expected size: 24 bytes
-assert ctypes.sizeof(RuntimeConfig) == 24, f"RuntimeConfig expected 24 bytes, got {ctypes.sizeof(RuntimeConfig)}"
+# Expected size: 32 bytes
+assert ctypes.sizeof(RuntimeConfig) == 32, f"RuntimeConfig expected 32 bytes, got {ctypes.sizeof(RuntimeConfig)}"
 
 
 class AbiError(ctypes.Structure):

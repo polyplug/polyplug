@@ -154,6 +154,7 @@ fn v2_so_path() -> PathBuf {
 fn hot_reload_config() -> polyplug::RuntimeConfig {
     polyplug::RuntimeConfig {
         compatibility: polyplug::Compatibility::Strict,
+        unload_mode: polyplug::UnloadMode::Retire,
         hot_reload_enabled: true,
         on_reload: None,
         on_reload_user_data: core::ptr::null_mut(),

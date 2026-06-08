@@ -845,6 +845,8 @@ export const RELOAD_PHASE_SIZE: number = 48;
 export interface RuntimeConfig {
     /**  Compatibility mode for version resolution. */
     compatibility: Compatibility;
+    /**  How a bundle's loader-owned resources are reclaimed on unload. */
+    unload_mode: UnloadMode;
     /**  Whether hot-reload is enabled. */
     hot_reload_enabled: boolean;
     /**
@@ -865,10 +867,11 @@ export interface RuntimeConfig {
 }
 
 export const RUNTIME_CONFIG_COMPATIBILITY_OFFSET: number = 0;
-export const RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET: number = 4;
-export const RUNTIME_CONFIG_ON_RELOAD_OFFSET: number = 8;
-export const RUNTIME_CONFIG_ON_RELOAD_USER_DATA_OFFSET: number = 16;
-export const RUNTIME_CONFIG_SIZE: number = 24;
+export const RUNTIME_CONFIG_UNLOAD_MODE_OFFSET: number = 4;
+export const RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET: number = 8;
+export const RUNTIME_CONFIG_ON_RELOAD_OFFSET: number = 16;
+export const RUNTIME_CONFIG_ON_RELOAD_USER_DATA_OFFSET: number = 24;
+export const RUNTIME_CONFIG_SIZE: number = 32;
 
 /**
  *  ABI error — returned by value from all ABI calls.
@@ -1135,6 +1138,25 @@ export const enum ReloadPhaseType {
     Reloaded = 1,
     /**  Bundle reload failed. */
     Failed = 2,
+    /**  Bundle is being unloaded. */
+    Unloading = 3,
+}
+
+/**  How a bundle's loader-owned resources are handled when it is unloaded. */
+export const enum UnloadMode {
+    /**
+     *  Retire-not-drop: the loader keeps the bundle's library/VM mapped for the
+     *  runtime's lifetime after unload. Any raw function pointer already resolved
+     *  from the bundle stays valid. This is the default, fully-safe behaviour.
+     */
+    Retire = 0,
+    /**
+     *  Reclaim: the loader frees the bundle's library/VM at unload (e.g. native
+     *  `dlclose`), releasing OS resources and the on-disk file lock so a developer
+     *  can rebuild and reload the bundle. Host-coordinated: the host must guarantee
+     *  no thread is calling, or holds a pointer into, the bundle when it is unloaded.
+     */
+    Reclaim = 1,
 }
 
 /**  Runtime type identifier — identifies the language/runtime hosting plugins. */

@@ -31,6 +31,7 @@ ffi.cdef[[
     typedef enum DispatchType DispatchType;
     typedef enum Compatibility Compatibility;
     typedef enum ReloadPhaseType ReloadPhaseType;
+    typedef enum UnloadMode UnloadMode;
     typedef enum RuntimeLanguage RuntimeLanguage;
     typedef enum AbiErrorCode AbiErrorCode;
     typedef enum ParseVersionError ParseVersionError;
@@ -659,7 +660,22 @@ ffi.cdef[[
         ReloadPhaseType_Reloaded = 1,
         //  Bundle reload failed.
         ReloadPhaseType_Failed = 2,
+        //  Bundle is being unloaded.
+        ReloadPhaseType_Unloading = 3,
     } ReloadPhaseType;
+
+    //  How a bundle's loader-owned resources are handled when it is unloaded.
+    typedef enum UnloadMode {
+        //  Retire-not-drop: the loader keeps the bundle's library/VM mapped for the
+        //  runtime's lifetime after unload. Any raw function pointer already resolved
+        //  from the bundle stays valid. This is the default, fully-safe behaviour.
+        UnloadMode_Retire = 0,
+        //  Reclaim: the loader frees the bundle's library/VM at unload (e.g. native
+        //  `dlclose`), releasing OS resources and the on-disk file lock so a developer
+        //  can rebuild and reload the bundle. Host-coordinated: the host must guarantee
+        //  no thread is calling, or holds a pointer into, the bundle when it is unloaded.
+        UnloadMode_Reclaim = 1,
+    } UnloadMode;
 
     //  Runtime type identifier — identifies the language/runtime hosting plugins.
     typedef enum RuntimeLanguage {
@@ -796,6 +812,8 @@ ffi.cdef[[
     typedef struct RuntimeConfig {
         //  Compatibility mode for version resolution.
         Compatibility compatibility;
+        //  How a bundle's loader-owned resources are reclaimed on unload.
+        UnloadMode unload_mode;
         //  Whether hot-reload is enabled.
         uint8_t hot_reload_enabled;
         //  Optional hot-reload callback, or null for no callback.
@@ -810,7 +828,7 @@ ffi.cdef[[
         //  writes, or frees the pointee — it only forwards the pointer.
         void* on_reload_user_data;
     } RuntimeConfig;
-    // Expected size: 24 bytes
+    // Expected size: 32 bytes
 
     //  ABI error — returned by value from all ABI calls.
     // 

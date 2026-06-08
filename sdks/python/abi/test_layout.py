@@ -76,7 +76,7 @@ def test_reload_phase_size():
 
 
 def test_runtime_config_size():
-    assert ctypes.sizeof(RuntimeConfig) == 24, f"RuntimeConfig expected 24 bytes, got {ctypes.sizeof(RuntimeConfig)}"
+    assert ctypes.sizeof(RuntimeConfig) == 32, f"RuntimeConfig expected 32 bytes, got {ctypes.sizeof(RuntimeConfig)}"
 
 
 def test_abi_error_size():

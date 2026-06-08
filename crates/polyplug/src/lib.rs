@@ -11,7 +11,7 @@ pub mod runtime_builder;
 pub mod runtime_store;
 
 pub use polyplug_abi::runtime::ReloadPhase;
-pub use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
+pub use polyplug_abi::runtime::{Compatibility, RuntimeConfig, UnloadMode};
 pub use reload::ReloadEvent;
 
 // Re-export Runtime for loader crates

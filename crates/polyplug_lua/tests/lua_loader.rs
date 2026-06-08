@@ -641,6 +641,7 @@ fn make_runtime_with_hot_reload(enabled: bool) -> Arc<Runtime> {
     RuntimeBuilder::new()
         .config(RuntimeConfig {
             compatibility: Compatibility::Strict,
+            unload_mode: polyplug_abi::runtime::UnloadMode::Retire,
             hot_reload_enabled: enabled,
             on_reload: None,
             on_reload_user_data: core::ptr::null_mut(),

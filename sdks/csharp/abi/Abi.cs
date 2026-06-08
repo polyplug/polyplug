@@ -711,11 +711,13 @@ public struct ReloadPhase
 ///  # OWNERSHIP
 ///  Borrowed for the duration of the runtime build only.
 ///  The runtime copies any data it needs to retain.
-[StructLayout(LayoutKind.Sequential, Size = 24)]
+[StructLayout(LayoutKind.Sequential, Size = 32)]
 public struct RuntimeConfig
 {
     ///  Compatibility mode for version resolution.
     public Compatibility Compatibility;
+    ///  How a bundle's loader-owned resources are reclaimed on unload.
+    public UnloadMode UnloadMode;
     ///  Whether hot-reload is enabled.
     public bool HotReloadEnabled;
     ///  Optional hot-reload callback, or null for no callback.
@@ -731,7 +733,7 @@ public struct RuntimeConfig
     public IntPtr OnReloadUserData;
 }
 
-/// Expected size: 24 bytes
+/// Expected size: 32 bytes
 
 ///  ABI error — returned by value from all ABI calls.
 ///
@@ -965,6 +967,22 @@ public enum ReloadPhaseType : uint
     Reloaded = 1,
     ///  Bundle reload failed.
     Failed = 2,
+    ///  Bundle is being unloaded.
+    Unloading = 3,
+}
+
+///  How a bundle's loader-owned resources are handled when it is unloaded.
+public enum UnloadMode : uint
+{
+    ///  Retire-not-drop: the loader keeps the bundle's library/VM mapped for the
+    ///  runtime's lifetime after unload. Any raw function pointer already resolved
+    ///  from the bundle stays valid. This is the default, fully-safe behaviour.
+    Retire = 0,
+    ///  Reclaim: the loader frees the bundle's library/VM at unload (e.g. native
+    ///  `dlclose`), releasing OS resources and the on-disk file lock so a developer
+    ///  can rebuild and reload the bundle. Host-coordinated: the host must guarantee
+    ///  no thread is calling, or holds a pointer into, the bundle when it is unloaded.
+    Reclaim = 1,
 }
 
 ///  Runtime type identifier — identifies the language/runtime hosting plugins.

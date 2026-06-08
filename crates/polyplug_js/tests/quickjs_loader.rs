@@ -113,6 +113,7 @@ fn make_runtime_hot_reload() -> Arc<Runtime> {
         .loader(make_loader())
         .config(RuntimeConfig {
             compatibility: Compatibility::Strict,
+            unload_mode: polyplug_abi::UnloadMode::Retire,
             hot_reload_enabled: true,
             on_reload: None,
             on_reload_user_data: core::ptr::null_mut(),

@@ -55,6 +55,7 @@ fn run() -> Result<(), String> {
 
     let config = RuntimeConfig {
         compatibility: polyplug_abi::Compatibility::Strict,
+        unload_mode: polyplug_abi::UnloadMode::Retire,
         hot_reload_enabled: true,
         on_reload: None,
         on_reload_user_data: core::ptr::null_mut(),
@@ -77,6 +78,9 @@ fn run() -> Result<(), String> {
                     }
                     ReloadPhaseType::Failed => {
                         eprintln!("[HOT-RELOAD] Failed: (id=0x{:016X})", phase.bundle_id);
+                    }
+                    ReloadPhaseType::Unloading => {
+                        eprintln!("[HOT-RELOAD] Unloading: (id=0x{:016X})", phase.bundle_id);
                     }
                 }
             })

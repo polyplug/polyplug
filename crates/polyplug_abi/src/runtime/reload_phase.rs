@@ -13,6 +13,8 @@ pub enum ReloadPhaseType {
     Reloaded = 1,
     /// Bundle reload failed.
     Failed = 2,
+    /// Bundle is being unloaded.
+    Unloading = 3,
 }
 
 /// FFI-safe reload phase for hot-reload callbacks.
@@ -66,6 +68,16 @@ impl ReloadPhase {
             reason,
         }
     }
+
+    /// Create Unloading phase.
+    pub fn unloading(bundle_id: BundleId, bundle_name: StringView) -> Self {
+        Self {
+            phase_type: ReloadPhaseType::Unloading,
+            bundle_id,
+            bundle_name,
+            reason: StringView::null(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -96,6 +108,7 @@ mod tests {
         assert_eq!(ReloadPhaseType::Preparing as u32, 0);
         assert_eq!(ReloadPhaseType::Reloaded as u32, 1);
         assert_eq!(ReloadPhaseType::Failed as u32, 2);
+        assert_eq!(ReloadPhaseType::Unloading as u32, 3);
     }
 
     #[test]
@@ -117,6 +130,18 @@ mod tests {
         let phase = ReloadPhase::reloaded(bundle_id, bundle_name);
 
         assert_eq!(phase.phase_type, ReloadPhaseType::Reloaded);
+        assert_eq!(phase.bundle_id, bundle_id);
+        assert!(phase.reason.ptr.is_null());
+        assert_eq!(phase.reason.len, 0);
+    }
+
+    #[test]
+    fn unloading_constructor() {
+        let bundle_id = BundleId::new("test-bundle");
+        let bundle_name = StringView::from_static(b"test_bundle");
+        let phase = ReloadPhase::unloading(bundle_id, bundle_name);
+
+        assert_eq!(phase.phase_type, ReloadPhaseType::Unloading);
         assert_eq!(phase.bundle_id, bundle_id);
         assert!(phase.reason.ptr.is_null());
         assert_eq!(phase.reason.len, 0);
