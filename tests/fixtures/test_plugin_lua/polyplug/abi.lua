@@ -14,7 +14,6 @@ ffi.cdef[[
     typedef struct HostApi HostApi;
     typedef struct HostContractInstance HostContractInstance;
     typedef struct HostContractInterface HostContractInterface;
-    typedef struct RuntimeApi RuntimeApi;
     typedef struct GuestContractHandle GuestContractHandle;
     typedef struct BundleInitContext BundleInitContext;
     typedef struct PluginDescriptor PluginDescriptor;
@@ -119,11 +118,12 @@ ffi.cdef[[
     typedef size_t (*HostApi_get_error_len_fn)(const HostApi*);
     typedef AbiError (*HostApi_call_guest_method_fn)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
     typedef const void* (*HostApi_get_extension_fn)(const HostApi*, uint32_t);
+    typedef AbiError (*HostApi_unload_bundle_fn)(const HostApi*, uint64_t);
     //  Host Interface — function table passed to guests during initialization.
     // 
     //  Contains an opaque runtime pointer and function pointers for guest calls.
     //  All functions use self-passing pattern (receive HostApi pointer as first parameter).
-    //  `HostApi` is `152 bytes` (1 opaque runtime pointer + 18 function pointer fields).
+    //  `HostApi` is `160 bytes` (1 opaque runtime pointer + 19 function pointer fields).
     // 
     //  # Who provides
     //  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -411,8 +411,33 @@ ffi.cdef[[
         //  # Returns
         //  Opaque pointer to the extension, or null if not registered.
         HostApi_get_extension_fn get_extension;
+        //  Unload a guest bundle, invalidating its handles and removing it from the registry.
+        // 
+        //  Today this performs **retire/invalidate-only** unload: the bundle's slots have
+        //  their generation bumped and their active interface `Arc` moved to retire storage,
+        //  then the bundle is removed from the registry indices. The underlying dylib mapping
+        //  or VM state is **NOT** freed — that is a future Reclaim mode. Because the interface
+        //  is retired rather than dropped, any raw `GuestContractInterface` pointer already
+        //  resolved before the unload stays valid.
+        // 
+        //  After unload, every handle that was minted for this bundle resolves to
+        //  `AbiErrorCode::StaleHandle`, and `find_guest_contract` / `find_all_guest_contracts`
+        //  no longer return it.
+        // 
+        //  # Obtaining the bundle_id
+        //  The host obtains the `bundle_id` either from `list_bundles`, or by hashing the
+        //  bundle name via `BundleId::new(name)`.
+        // 
+        //  # Arguments
+        //  - `this`: HostApi pointer (self-passing)
+        //  - `bundle_id`: Identifier of the bundle to unload
+        // 
+        //  # Returns
+        //  `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
+        //  or a still-loaded bundle declared a dependency on a contract this bundle provides).
+        HostApi_unload_bundle_fn unload_bundle;
     } HostApi;
-    // Expected size: 152 bytes
+    // Expected size: 160 bytes
 
     //  Opaque handle to a host contract instance.
     // 
@@ -425,200 +450,21 @@ ffi.cdef[[
     } HostContractInstance;
     // Expected size: 8 bytes
 
-    typedef AbiError (*RuntimeApi_load_bundle_fn)(const RuntimeApi*, StringView);
-    typedef AbiError (*RuntimeApi_reload_bundle_fn)(const RuntimeApi*, uint64_t);
-    typedef AbiError (*RuntimeApi_unload_bundle_fn)(const RuntimeApi*, uint64_t);
-    typedef GuestContractHandle (*RuntimeApi_find_guest_contract_fn)(const RuntimeApi*, uint64_t, uint32_t);
-    typedef void* (*RuntimeApi_find_all_by_contract_fn)(const RuntimeApi*, uint64_t, uint32_t);
-    typedef const GuestContractInterface* (*RuntimeApi_resolve_guest_contract_fn)(const RuntimeApi*, GuestContractHandle);
-    typedef HostContractInstance (*RuntimeApi_get_host_contract_fn)(const RuntimeApi*, uint64_t, uint32_t);
-    typedef StringView (*RuntimeApi_get_last_error_fn)(const RuntimeApi*);
-    typedef void* (*RuntimeApi_list_bundles_fn)(const RuntimeApi*);
-    typedef void* (*RuntimeApi_get_dependencies_fn)(const RuntimeApi*);
-    typedef void (*RuntimeApi_destroy_fn)(const RuntimeApi*);
-    //  Runtime Interface — function table returned to host from polyplug_runtime_create().
-    // 
-    //  Contains an opaque runtime pointer and function pointers for host calls.
-    //  All functions take `*const RuntimeApi` as first parameter.
-    // 
-    //  # Who provides
-    //  The runtime creates this struct and returns it from `polyplug_runtime_create()`.
-    //  The struct is heap-allocated and owned by the host.
-    // 
-    //  # Who calls
-    //  Host application code calls these functions to interact with the runtime.
-    //  SDK-generated wrappers handle the self-passing pattern automatically.
-    // 
-    //  # Ownership
-    //  The struct is allocated by `polyplug_runtime_create()`. The host owns
-    //  the pointer and must call `destroy()` to free the runtime and interface.
-    // 
-    //  # Lifetime
-    //  Lives until `destroy()` is called. After destroy, the pointer is invalid.
-    // 
-    //  # Thread Safety
-    //  All functions are safe to call from any thread. The runtime uses
-    //  internal synchronization for shared state.
-    // 
-    //  # Self-passing pattern
-    //  Each function receives the interface pointer as its first parameter,
-    //  allowing hosts to call: `rt->load_bundle(rt, path)`
-    //  SDKs hide this pattern: `rt.load_bundle(path)`
-    typedef struct RuntimeApi {
-        //  Opaque pointer to Runtime.
-        // 
-        //  Set during interface creation. Provides access to runtime state.
-        // 
-        //  # Ownership
-        //  Owned by the runtime. Host must call `destroy()` to free.
-        void* runtime;
-        //  Load a plugin bundle from the given path.
-        // 
-        //  Loads the bundle and initializes all its guest contracts.
-        //  Dependencies are resolved in topological order.
-        // 
-        //  # Arguments
-        //  - `this`: RuntimeApi pointer (self-passing)
-        //  - `path`: UTF-8 path to the bundle directory or manifest file (not null-terminated)
-        // 
-        //  # Returns
-        //  AbiError::OK on success, error code on failure.
-        //  Use `get_last_error()` for detailed error message.
-        RuntimeApi_load_bundle_fn load_bundle;
-        //  Reload a bundle (hot-reload).
-        // 
-        //  Triggers hot-reload of the specified bundle. The runtime will:
-        //  1. Call pre-reload callbacks to notify hosts
-        //  2. Wait for all instances to be destroyed
-        //  3. Unload the old bundle
-        //  4. Load the new bundle
-        //  5. Call post-reload callbacks
-        // 
-        //  # Arguments
-        //  - `this`: RuntimeApi pointer (self-passing)
-        //  - `bundle_id`: ID of the bundle to reload
-        // 
-        //  # Returns
-        //  AbiError::OK on success, error code on failure.
-        RuntimeApi_reload_bundle_fn reload_bundle;
-        //  Unload a bundle.
-        // 
-        //  Removes the bundle and all its guest contracts from the registry.
-        //  Host must destroy all instances before unloading.
-        // 
-        //  # Arguments
-        //  - `this`: RuntimeApi pointer (self-passing)
-        //  - `bundle_id`: ID of the bundle to unload
-        // 
-        //  # Returns
-        //  AbiError::OK on success, error code on failure.
-        RuntimeApi_unload_bundle_fn unload_bundle;
-        //  Find a guest contract by contract_id and minimum version.
-        // 
-        //  Returns a GuestContractHandle that can be resolved to an interface.
-        //  Returns null handle if no matching contract found.
-        // 
-        //  # Arguments
-        //  - `this`: RuntimeApi pointer (self-passing)
-        //  - `contract_id`: Contract identifier hash
-        //  - `min_version`: Minimum version required
-        // 
-        //  # Returns
-        //  GuestContractHandle for the first matching contract, or null handle.
-        RuntimeApi_find_guest_contract_fn find_guest_contract;
-        //  Find all guest contracts matching contract_id and minimum version.
-        // 
-        //  Returns an Array of GuestContractHandle. Caller must free via host->free.
-        //  Use when multiple implementations of the same contract may exist.
-        // 
-        //  # Arguments
-        //  - `this`: RuntimeApi pointer (self-passing)
-        //  - `contract_id`: Contract identifier hash
-        //  - `min_version`: Minimum version required
-        // 
-        //  # Returns
-        //  Array of GuestContractHandle. Caller owns and must free.
-        RuntimeApi_find_all_by_contract_fn find_all_by_contract;
-        //  Resolve a GuestContractHandle to a GuestContractInterface pointer.
-        // 
-        //  Returns null if the handle is invalid or contract was unloaded.
-        // 
-        //  # Arguments
-        //  - `this`: RuntimeApi pointer (self-passing)
-        //  - `handle`: GuestContractHandle from find_guest_contract
-        // 
-        //  # Returns
-        //  Pointer to GuestContractInterface, or null if invalid/stale.
-        RuntimeApi_resolve_guest_contract_fn resolve_guest_contract;
-        //  Get a host contract instance by contract_id and minimum version.
-        // 
-        //  For singleton host contracts, returns the same instance every time.
-        //  For multi-instance host contracts, returns a new instance each time.
-        // 
-        //  # Arguments
-        //  - `this`: RuntimeApi pointer (self-passing)
-        //  - `contract_id`: Host contract identifier hash
-        //  - `min_version`: Minimum version required
-        // 
-        //  # Returns
-        //  HostContractInstance for the contract.
-        RuntimeApi_get_host_contract_fn get_host_contract;
-        //  Get the last error message.
-        // 
-        //  Returns detailed error message for the most recent failed operation.
-        //  Message is valid until the next operation is performed.
-        // 
-        //  # Arguments
-        //  - `this`: RuntimeApi pointer (self-passing)
-        // 
-        //  # Returns
-        //  StringView containing the error message, or empty string if no error.
-        RuntimeApi_get_last_error_fn get_last_error;
-        //  List all loaded bundles.
-        // 
-        //  Returns an Array of BundleId. Caller must free via host->free.
-        //  Bundle IDs are stable for the lifetime of the runtime.
-        // 
-        //  # Arguments
-        //  - `this`: RuntimeApi pointer (self-passing)
-        // 
-        //  # Returns
-        //  Array of BundleId. Caller owns and must free.
-        RuntimeApi_list_bundles_fn list_bundles;
-        //  Get dependencies (returns empty array for host context).
-        // 
-        //  Hosts have no bundle dependencies, so this returns an empty array.
-        //  Guests use HostApi::get_dependencies for their actual deps.
-        // 
-        //  # Arguments
-        //  - `this`: RuntimeApi pointer (self-passing)
-        // 
-        //  # Returns
-        //  Empty Array of DependencyInfo. Caller owns and must free.
-        RuntimeApi_get_dependencies_fn get_dependencies;
-        //  Destroy the runtime and free this interface.
-        // 
-        //  # Arguments
-        //  - `this`: RuntimeApi pointer (self-passing)
-        // 
-        //  # Safety
-        //  After calling destroy, the pointer is invalid and must not be used.
-        //  All instances must be destroyed before calling this.
-        RuntimeApi_destroy_fn destroy;
-    } RuntimeApi;
-    // Expected size: 96 bytes
-
     //  Opaque handle to a registered guest contract.
     // 
-    //  The handle is just an index into the registry array.
-    //  Out-of-bounds indices return InvalidHandle error.
+    //  The handle pairs the slot `index` with the `generation` the slot held when the
+    //  handle was minted. `resolve_guest_contract` rejects a handle whose `generation`
+    //  no longer matches the slot's current generation (the slot was retired and the
+    //  index possibly reused), returning `StaleHandle`. Out-of-bounds or empty-slot
+    //  indices return InvalidHandle.
     // 
     //  # Naming
     //  Named `GuestContractHandle` for consistency with `GuestContractInterface`
     //  and `GuestContractInstance`.
     // 
     //  # Layout
-    //  - `index`: Slot index in the registry (u32)
+    //  - `index`: Slot index in the registry (u32, offset 0)
+    //  - `generation`: Slot generation the handle was minted against (u32, offset 4)
     // 
     //  # Safety
     //  Handles become stale after unload. Call `resolve_guest_contract` to validate.
@@ -626,8 +472,10 @@ ffi.cdef[[
     typedef struct GuestContractHandle {
         //  Slot in the registry array.
         uint32_t index;
+        //  Generation the slot held when this handle was minted.
+        uint32_t generation;
     } GuestContractHandle;
-    // Expected size: 4 bytes
+    // Expected size: 8 bytes
 
     //  FFI-safe array with caller-frees ownership model.
     // 
