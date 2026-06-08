@@ -537,9 +537,12 @@ impl Runtime {
     /// Then the matching loader's reclaim hook runs:
     /// - **VM loaders (Lua, JS):** the bundle's VM is *freed* (true reclaim) once it is
     ///   quiescent — see the host-coordination contract below.
-    /// - **Native / Python / .NET loaders:** invalidate-only today (retire-not-drop);
-    ///   the dylib / interpreter state is kept mapped. Opt-in native `dlclose` reclaim
-    ///   is future work.
+    /// - **Native loader:** under `UnloadMode::Reclaim` it `dlclose`s the dylib (drops
+    ///   the `libloading::Library`), releasing OS resources and the on-disk file lock;
+    ///   under `UnloadMode::Retire` (default) it keeps the dylib mapped (retire-not-drop).
+    ///   Native `dlclose` is host-attested — see [`crate::loader::BundleLoader::unload`].
+    /// - **Python / .NET loaders:** invalidate-only (retire-not-drop); the interpreter /
+    ///   CLR state is kept mapped.
     ///
     /// # Host-coordination contract
     /// Unload is a host-coordinated operation, exactly like hot-reload: the host MUST
@@ -597,13 +600,47 @@ impl Runtime {
         // bundle metadata, after which the runtime string is no longer recoverable.
         let runtime_name: Option<String> = self.bundle_loader_name(&descriptor.name);
 
-        self.registry.invalidate_bundle(bundle_id)?;
+        // Fire the Unloading callback BEFORE invalidate so the host can quiesce its
+        // own callers (the same window the reload Preparing phase gives it). The name
+        // is owned by `descriptor`, which outlives this synchronous call.
+        self.fire_unloading(bundle_id, &descriptor.name);
+
+        let (_count, retired_arcs): (u32, Vec<Arc<GuestContractInterface>>) =
+            self.registry.invalidate_bundle(bundle_id)?;
+
+        // Reclaim-safety hint: after invalidate, each underlying interface allocation
+        // has exactly 2 strong refs — one owned by the registry's `retired_interfaces`
+        // vec, one owned by this local `retired_arcs` vec. `> 2` means some other path
+        // (e.g. a future instance counter) still holds the Arc, so true reclaim is
+        // deferred. Raw in-flight native calls are NOT counted (the runtime is
+        // structurally blind to them); `UnloadMode::Reclaim`'s host attestation covers
+        // that case. `retired_arcs` must stay alive until after this computation.
+        let reclaim_safe: bool = retired_arcs
+            .iter()
+            .all(|a: &Arc<GuestContractInterface>| Arc::strong_count(a) <= 2);
 
         // Invalidate-then-reclaim: now that the bundle is gone from the registry
         // indices, no new dispatch can reach it. Ask the loader to free its
         // per-bundle resources at a quiescence point (no-op for non-VM loaders).
-        self.reclaim_via_loader(bundle_id, runtime_name.as_deref())?;
+        self.reclaim_via_loader(bundle_id, runtime_name.as_deref(), reclaim_safe)?;
         Ok(())
+    }
+
+    /// Fire the `on_reload_cb` with a `ReloadPhase::unloading` notification, if a
+    /// callback is registered. Called before invalidate so the host can quiesce its
+    /// own callers ahead of reclamation. The `StringView` is constructed inline from
+    /// the caller-owned `bundle_name`, which outlives this synchronous invocation.
+    fn fire_unloading(&self, bundle_id: BundleId, bundle_name: &str) {
+        if let Some(cb) = self.on_reload_cb() {
+            let name_view: polyplug_abi::types::StringView = polyplug_abi::types::StringView {
+                ptr: bundle_name.as_ptr(),
+                len: bundle_name.len(),
+            };
+            (cb.0)(
+                self.config().on_reload_user_data,
+                polyplug_abi::runtime::ReloadPhase::unloading(bundle_id, name_view),
+            );
+        }
     }
 
     /// Look up the loader runtime-name string for a loaded bundle by name.
@@ -628,17 +665,22 @@ impl Runtime {
     /// `runtime_name` is the loader key captured before invalidate. A missing name
     /// or missing loader is not an error: a bundle with no recoverable loader simply
     /// has nothing to reclaim (the invalidate already retired its interfaces).
+    ///
+    /// `reclaim_safe` is the runtime's best-effort hint (derived from the retired
+    /// interfaces' `Arc::strong_count`) forwarded to the loader's `unload` hook. See
+    /// [`crate::loader::BundleLoader::unload`] for its precise meaning and limits.
     fn reclaim_via_loader(
         &self,
         bundle_id: BundleId,
         runtime_name: Option<&str>,
+        reclaim_safe: bool,
     ) -> Result<(), RuntimeError> {
         let name: &str = match runtime_name {
             Some(n) => n,
             None => return Ok(()),
         };
         match self.loader_for(name) {
-            Some(loader) => loader.unload(bundle_id, self),
+            Some(loader) => loader.unload(bundle_id, self, reclaim_safe),
             None => Ok(()),
         }
     }
@@ -697,9 +739,18 @@ impl Runtime {
             .unwrap_or_default();
         let runtime_name: Option<String> = self.bundle_loader_name(&bundle_name);
 
-        self.registry.invalidate_bundle(bundle_id)?;
+        // Fire Unloading before invalidate so the host can quiesce (mirrors unload_bundle).
+        self.fire_unloading(bundle_id, &bundle_name);
 
-        self.reclaim_via_loader(bundle_id, runtime_name.as_deref())?;
+        let (_count, retired_arcs): (u32, Vec<Arc<GuestContractInterface>>) =
+            self.registry.invalidate_bundle(bundle_id)?;
+
+        // See unload_bundle for the strong_count <= 2 baseline reasoning.
+        let reclaim_safe: bool = retired_arcs
+            .iter()
+            .all(|a: &Arc<GuestContractInterface>| Arc::strong_count(a) <= 2);
+
+        self.reclaim_via_loader(bundle_id, runtime_name.as_deref(), reclaim_safe)?;
         Ok(())
     }
 

@@ -9,6 +9,7 @@ use polyplug::error::{LoaderError, RuntimeError};
 use polyplug::loader::{BundleLoader, BundleSource, ManifestData};
 use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::UnloadMode;
 use polyplug_abi::plugin::BundleInitContext;
 use polyplug_abi::types::AbiError;
 use polyplug_abi::types::AbiErrorCode;
@@ -382,5 +383,317 @@ impl BundleLoader for NativeLoader {
             .insert(bundle_id, new_library);
 
         Ok(())
+    }
+
+    /// Reclaim the bundle's `libloading::Library` according to the runtime's
+    /// [`UnloadMode`].
+    ///
+    /// # Safety model — host-attested, NOT runtime-verified
+    /// Native dispatch is zero-overhead by design: once the host resolves a contract,
+    /// it calls a RAW function pointer that points directly into this library's code
+    /// pages. The runtime never mediates those calls and keeps NO native-call counter,
+    /// so it is *structurally blind* to whether a thread is executing inside the
+    /// library right now. `dlclose` (dropping the `Library`) while such a call is in
+    /// flight unmaps the code pages out from under it — a use-after-free (SIGSEGV).
+    ///
+    /// Consequently `UnloadMode::Reclaim` for a native bundle is an explicit HOST
+    /// ATTESTATION: by selecting it the host guarantees that no thread is calling — or
+    /// holds a raw pointer into — this bundle at unload time. This is the same
+    /// trusted-same-process contract that hot-reload's `Preparing` phase relies on, and
+    /// it is the documented price of zero-overhead native dispatch — not a bug.
+    ///
+    /// `reclaim_safe` is a best-effort secondary net computed by the runtime from the
+    /// retired interfaces' `Arc::strong_count`. It catches *Arc-holding* paths (e.g. a
+    /// future instance counter) and defers reclaim when one is found. It CANNOT see raw
+    /// in-flight native calls — only the host attestation above covers those. When the
+    /// hint says "unsafe", this loader retires the library instead of dropping it.
+    ///
+    /// Under `UnloadMode::Retire` (the default) the library is always kept mapped
+    /// (retire-not-drop), exactly as before this hook existed, so previously resolved
+    /// raw function pointers remain valid for the loader's lifetime.
+    fn unload(
+        &self,
+        bundle_id: BundleId,
+        runtime: &Runtime,
+        reclaim_safe: bool,
+    ) -> Result<(), RuntimeError> {
+        let mode: UnloadMode = runtime.config().unload_mode;
+
+        // Remove the live handle; nothing to do if this bundle isn't loaded by us.
+        let library: libloading::Library = match self
+            .libraries
+            .lock()
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
+            .remove(&bundle_id)
+        {
+            Some(lib) => lib,
+            None => return Ok(()),
+        };
+
+        match mode {
+            UnloadMode::Retire => {
+                // Keep the library mapped (retire-not-drop) — the current default.
+                // Any raw function pointer already resolved into its code pages stays
+                // valid for the loader's lifetime.
+                self.retired
+                    .lock()
+                    .unwrap_or_else(|e| {
+                        eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+                        e.into_inner()
+                    })
+                    .push(library);
+            }
+            UnloadMode::Reclaim => {
+                if reclaim_safe {
+                    // dlclose: dropping the Library unmaps its code pages and releases
+                    // the on-disk file lock (on Windows) so the developer can rebuild
+                    // and reload the bundle.
+                    //
+                    // SAFETY (host-attested): this is sound ONLY because the host
+                    // selected `UnloadMode::Reclaim`, attesting that no thread is
+                    // calling — or holds a raw pointer into — this bundle. The runtime
+                    // cannot verify that for native dispatch (it is structurally blind
+                    // to in-flight raw calls); `reclaim_safe` only rules out Arc-holding
+                    // paths. See the impl-level doc comment for the full safety model.
+                    drop(library);
+                } else {
+                    // Best-effort defer: an Arc holder still references this bundle's
+                    // interface. Retire instead of risking a use-after-free.
+                    eprintln!(
+                        "[polyplug_native] reclaim of bundle {:#x} deferred: an interface still has an extra holder; retiring its library to avoid a use-after-free",
+                        bundle_id.id()
+                    );
+                    self.retired
+                        .lock()
+                        .unwrap_or_else(|e| {
+                            eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+                            e.into_inner()
+                        })
+                        .push(library);
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+impl NativeLoader {
+    /// Number of live (currently loaded) library handles. Test-only accessor.
+    pub(crate) fn live_library_count(&self) -> usize {
+        self.libraries
+            .lock()
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
+            .len()
+    }
+
+    /// Number of retired (kept-mapped) library handles. Test-only accessor.
+    pub(crate) fn retired_library_count(&self) -> usize {
+        self.retired
+            .lock()
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
+            .len()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod unload_tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    use polyplug::Runtime;
+    use polyplug::loader::{BundleLoader, BundleSource, ManifestData, parse_manifest};
+    use polyplug_abi::UnloadMode;
+    use polyplug_abi::runtime::RuntimeConfig;
+    use polyplug_utils::BundleId;
+
+    use crate::config::NativeConfig;
+    use crate::loader::NativeLoader;
+
+    /// Locate the pre-built `test_plugin` bundle directory.
+    ///
+    /// The fixture is produced by `tests/fixtures/build_all.sh` and lives at
+    /// `<workspace>/tests/fixtures/test_plugin_dir`. `CARGO_MANIFEST_DIR` for this
+    /// crate is `<workspace>/crates/polyplug_native`, so the fixture is two levels up.
+    fn test_plugin_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("tests")
+            .join("fixtures")
+            .join("test_plugin_dir")
+    }
+
+    /// Build a `Runtime` with the given `unload_mode`. No loader is registered: the
+    /// test drives a directly-constructed `NativeLoader`, using the runtime only for
+    /// `host_abi()` / `config().unload_mode`.
+    fn runtime_with_mode(mode: UnloadMode) -> Arc<Runtime> {
+        Runtime::builder()
+            .config(RuntimeConfig {
+                unload_mode: mode,
+                ..Default::default()
+            })
+            .build()
+            .expect("runtime build should succeed")
+    }
+
+    /// Load the `test_plugin` fixture through a freshly-constructed `NativeLoader`.
+    /// Returns the loader and the bundle id so the test can drive `unload` directly.
+    fn load_test_plugin(runtime: &Runtime) -> (NativeLoader, BundleId) {
+        let dir: PathBuf = test_plugin_dir();
+        let manifest: ManifestData =
+            parse_manifest(&dir).expect("parse_manifest for test_plugin_dir");
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+        let source: BundleSource = BundleSource::Path(manifest.path.clone());
+        let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
+        loader
+            .load(&manifest, &source, runtime)
+            .expect("native load of test_plugin should succeed");
+        (loader, bundle_id)
+    }
+
+    /// Under `UnloadMode::Retire`, unload keeps the library mapped (retire-not-drop).
+    #[test]
+    #[cfg(not(miri))]
+    fn retire_mode_keeps_library_mapped() {
+        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Retire);
+        let (loader, bundle_id): (NativeLoader, BundleId) = load_test_plugin(&runtime);
+        assert_eq!(loader.live_library_count(), 1);
+        assert_eq!(loader.retired_library_count(), 0);
+
+        // reclaim_safe is irrelevant under Retire; pass true to prove it is ignored.
+        loader
+            .unload(bundle_id, &runtime, true)
+            .expect("unload should succeed");
+
+        assert_eq!(loader.live_library_count(), 0, "live handle removed");
+        assert_eq!(
+            loader.retired_library_count(),
+            1,
+            "Retire mode must keep the library mapped"
+        );
+    }
+
+    /// Under `UnloadMode::Reclaim` with a quiescent (reclaim_safe) bundle, unload
+    /// DROPS the library (dlclose) rather than retiring it.
+    #[test]
+    #[cfg(not(miri))]
+    fn reclaim_mode_drops_quiescent_library() {
+        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Reclaim);
+        let (loader, bundle_id): (NativeLoader, BundleId) = load_test_plugin(&runtime);
+        assert_eq!(loader.live_library_count(), 1);
+
+        loader
+            .unload(bundle_id, &runtime, true)
+            .expect("unload should succeed");
+
+        assert_eq!(loader.live_library_count(), 0, "live handle removed");
+        assert_eq!(
+            loader.retired_library_count(),
+            0,
+            "Reclaim mode with a safe bundle must dlclose (drop) the library"
+        );
+    }
+
+    /// Directly exercise the loader decision under `UnloadMode::Reclaim`:
+    /// `reclaim_safe = false` defers (retires) the library to avoid a use-after-free.
+    #[test]
+    #[cfg(not(miri))]
+    fn reclaim_mode_defers_when_not_safe() {
+        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Reclaim);
+        let (loader, bundle_id): (NativeLoader, BundleId) = load_test_plugin(&runtime);
+
+        loader
+            .unload(bundle_id, &runtime, false)
+            .expect("unload should succeed");
+
+        assert_eq!(loader.live_library_count(), 0, "live handle removed");
+        assert_eq!(
+            loader.retired_library_count(),
+            1,
+            "reclaim_safe=false must retire (defer) instead of dropping"
+        );
+    }
+
+    /// On Windows, a mapped DLL holds an exclusive file lock, so `remove_file`
+    /// fails with `ERROR_SHARING_VIOLATION` while the DLL is loaded. After an unload
+    /// under `UnloadMode::Reclaim` (dlclose), the lock is released and removal
+    /// succeeds. This proves real OS-resource reclaim.
+    ///
+    /// Linux/macOS unlink a mapped file happily, so the assertion proves nothing
+    /// there — the test is gated to Windows only.
+    ///
+    /// Windows gotcha: a held `NamedTempFile` write handle itself keeps the file
+    /// locked, so the manifest and DLL copy are written and their handles closed
+    /// (plain `std::fs::write`) BEFORE the loader opens the DLL.
+    #[test]
+    #[cfg(windows)]
+    fn reclaim_releases_windows_file_lock() {
+        let src_dir: PathBuf = test_plugin_dir();
+        let src_manifest: ManifestData =
+            parse_manifest(&src_dir).expect("parse_manifest for test_plugin_dir");
+        let dll_name: String = src_manifest.file.clone();
+        let src_dll: PathBuf = src_dir.join(&dll_name);
+
+        // Unique temp dir for an isolated copy of the bundle.
+        let temp_dir: PathBuf = std::env::temp_dir().join(format!(
+            "polyplug_native_reclaim_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create temp bundle dir");
+
+        // Copy the DLL into the temp dir; the write handle is closed by std::fs::copy.
+        let dest_dll: PathBuf = temp_dir.join(&dll_name);
+        std::fs::copy(&src_dll, &dest_dll).expect("copy fixture dll");
+
+        // Write a minimal manifest pointing at the copied DLL. std::fs::write closes
+        // its handle before returning, so no write handle keeps the dir/file locked.
+        let manifest_toml: String = format!(
+            "id = {}\nname = \"{}\"\nversion = \"{}\"\nruntime = \"native\"\nprovides = [\"test.add\"]\n\n[file]\nwindows.x86_64 = \"{}\"\n\n[function_count]\n\"test.add@1\" = 1\n",
+            src_manifest.id, src_manifest.name, src_manifest.version, dll_name
+        );
+        std::fs::write(temp_dir.join("manifest.toml"), manifest_toml).expect("write temp manifest");
+
+        let manifest: ManifestData =
+            parse_manifest(&temp_dir).expect("parse_manifest for temp bundle");
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+        let source: BundleSource = BundleSource::Path(manifest.path.clone());
+
+        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Reclaim);
+        let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
+        loader
+            .load(&manifest, &source, &runtime)
+            .expect("native load of copied bundle should succeed");
+
+        // While loaded, the DLL is mapped and locked: removal must fail.
+        assert!(
+            std::fs::remove_file(&dest_dll).is_err(),
+            "a mapped DLL must be locked on Windows"
+        );
+
+        loader
+            .unload(bundle_id, &runtime, true)
+            .expect("unload should succeed");
+
+        // After dlclose the lock is released — removal must now succeed.
+        std::fs::remove_file(&dest_dll)
+            .expect("DLL must be removable after Reclaim-mode unload (dlclose)");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

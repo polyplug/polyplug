@@ -890,7 +890,15 @@ impl BundleLoader for LuaLoader {
     ///
     /// Spin-waiting is deliberately NOT used: a same-thread re-entrant unload would
     /// deadlock against its own in-flight dispatch.
-    fn unload(&self, bundle_id: BundleId, _runtime: &Runtime) -> Result<(), RuntimeError> {
+    // `_reclaim_safe` is ignored: VM dispatch is mediated and quiescence-tracked via
+    // `in_dispatch_threads`, so this loader makes its own reclaim-vs-retire decision
+    // independent of the runtime's Arc-based hint (unlike zero-overhead native dispatch).
+    fn unload(
+        &self,
+        bundle_id: BundleId,
+        _runtime: &Runtime,
+        _reclaim_safe: bool,
+    ) -> Result<(), RuntimeError> {
         let state: Vec<LuaVm> = {
             let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
                 self.live.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1008,7 +1016,7 @@ end
         );
 
         loader
-            .unload(bundle_id, &runtime)
+            .unload(bundle_id, &runtime, true)
             .expect("unload must succeed");
         assert_eq!(
             loader.live_vm_count(bundle_id),
@@ -1049,7 +1057,7 @@ end
                 "live map must hold exactly one entry per load"
             );
             loader
-                .unload(bundle_id, &runtime)
+                .unload(bundle_id, &runtime, true)
                 .expect("unload must succeed");
             assert_eq!(
                 loader.live_vm_count(bundle_id),
@@ -1102,7 +1110,7 @@ end
         }
 
         loader
-            .unload(bundle_id, &runtime)
+            .unload(bundle_id, &runtime, true)
             .expect("unload must succeed even when non-quiescent");
         assert_eq!(
             loader.live_vm_count(bundle_id),

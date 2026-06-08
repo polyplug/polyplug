@@ -238,10 +238,16 @@ impl RuntimeStoreData {
     /// instead of calling this helper — that path keeps the slot live (same
     /// generation) so a handle stays resolvable to the new interface. Routing it
     /// through `retire_slot` would break that continuity guarantee.
-    fn retire_slot(&mut self, slot_idx: u32) {
+    ///
+    /// Returns `Some(Arc::clone(&retired))` — an extra reference to the interface
+    /// `Arc` that was just retired — so callers (notably `invalidate_bundle`) can
+    /// inspect its `Arc::strong_count` to decide whether the underlying library can
+    /// be safely reclaimed. Returns `None` when the slot was out of bounds or already
+    /// held no interface.
+    fn retire_slot(&mut self, slot_idx: u32) -> Option<Arc<GuestContractInterface>> {
         let slot_idx_usize: usize = slot_idx as usize;
         if slot_idx_usize >= self.slots.len() {
-            return;
+            return None;
         }
 
         // Read contract_id before clearing the slot.
@@ -266,10 +272,17 @@ impl RuntimeStoreData {
             self.slots[slot_idx_usize].generation.wrapping_add(1);
         let retired: Option<Arc<GuestContractInterface>> =
             self.slots[slot_idx_usize].interface.take();
-        if let Some(arc) = retired {
-            self.retired_interfaces.push(arc);
-        }
         self.slots[slot_idx_usize].entry = None;
+        match retired {
+            Some(arc) => {
+                // Hand the caller an extra reference (for strong_count inspection)
+                // while the original is held alive in `retired_interfaces`.
+                let returned: Arc<GuestContractInterface> = Arc::clone(&arc);
+                self.retired_interfaces.push(arc);
+                Some(returned)
+            }
+            None => None,
+        }
     }
 }
 
@@ -1007,7 +1020,9 @@ impl RuntimeStore {
                     // unload semantics — generation bumped (old handles go stale),
                     // interface retired (in-flight raw pointers stay valid), and the slot
                     // removed from the find index so the contract is no longer resolvable.
-                    data.retire_slot(old_idx);
+                    // The returned extra Arc reference is irrelevant to reload (only
+                    // unload's reclaim decision inspects it), so it is discarded.
+                    let _discarded: Option<Arc<GuestContractInterface>> = data.retire_slot(old_idx);
                     if let Some(bd) = data.bundle_data.get_mut(&bundle_id) {
                         bd.plugin_slots.retain(|&idx| idx != old_idx);
                     }
@@ -1274,8 +1289,15 @@ impl RuntimeStore {
     /// sound: old raw pointers remain dereferenceable (the memory is never freed here),
     /// while every old handle is recognised as stale on its next resolve.
     ///
-    /// Returns the number of slots that were invalidated.
-    pub fn invalidate_bundle(&self, bundle_id: BundleId) -> Result<u32, RegistryError> {
+    /// Returns `(count, retired_arcs)` where `count` is the number of slots that were
+    /// invalidated and `retired_arcs` holds one extra `Arc<GuestContractInterface>`
+    /// reference per retired interface. The runtime inspects `Arc::strong_count` on
+    /// these to decide whether a loader may reclaim (e.g. `dlclose`) the bundle's
+    /// backing library or must defer (retire) it — see [`crate::runtime::Runtime::unload_bundle`].
+    pub fn invalidate_bundle(
+        &self,
+        bundle_id: BundleId,
+    ) -> Result<(u32, Vec<Arc<GuestContractInterface>>), RegistryError> {
         let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
@@ -1286,13 +1308,18 @@ impl RuntimeStore {
         let (slot_indices, bundle_name): (Vec<u32>, String) = match data.bundle_data.get(&bundle_id)
         {
             Some(bd) => (bd.plugin_slots.clone(), bd.descriptor.name.clone()),
-            None => return Ok(0),
+            None => return Ok((0, Vec::new())),
         };
 
-        // Tear down each slot via the canonical teardown atom. Bundle-level metadata
-        // is removed in bulk below (no per-slot plugin_slots edit needed here).
+        // Tear down each slot via the canonical teardown atom, collecting each retired
+        // interface's extra Arc reference so the runtime can inspect strong_count.
+        // Bundle-level metadata is removed in bulk below (no per-slot plugin_slots
+        // edit needed here).
+        let mut retired_arcs: Vec<Arc<GuestContractInterface>> = Vec::new();
         for slot_idx in &slot_indices {
-            data.retire_slot(*slot_idx);
+            if let Some(arc) = data.retire_slot(*slot_idx) {
+                retired_arcs.push(arc);
+            }
         }
 
         // Remove from bundle_data.
@@ -1309,7 +1336,7 @@ impl RuntimeStore {
         // Remove from bundle_declared_deps.
         data.bundle_declared_deps.remove(&bundle_id);
 
-        Ok(slot_indices.len() as u32)
+        Ok((slot_indices.len() as u32, retired_arcs))
     }
 
     /// List all loaded bundle IDs.
