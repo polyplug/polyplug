@@ -86,3 +86,22 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
       - run: cargo deny check
+
+  tsan:
+    name: ThreadSanitizer (registry races)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      # TSAN over the concurrent registry stress tests (pure Rust, no dlopen) —
+      # exercises the resolve<->invalidate (resolve->dispatch) race for data races.
+      - name: cargo test (TSAN)
+        run: >
+          cargo +nightly test -Zbuild-std
+          -p polyplug --test stress_concurrent_registry
+          --target x86_64-unknown-linux-gnu
+        env:
+          RUSTFLAGS: -Zsanitizer=thread

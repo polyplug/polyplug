@@ -23,7 +23,7 @@ _Last updated: 2026-06-08._
 | FFI panic safety (`catch_unwind` at boundary) | ✅ Done |
 | **Fuzzing the ABI boundary** | ✅ Done (3 targets + nightly smoke) |
 | **Miri + ASAN in CI** | ✅ Done (nightly) |
-| **TSAN for the resolve→dispatch race** | ⏸ Deferred (needs a concurrent unload stress test) |
+| **TSAN for the resolve→dispatch race** | ✅ Done (nightly, concurrent unload stress test) |
 | **Supply-chain gate (cargo-deny)** | ✅ Done (nightly) |
 | **Cross-language differential parity tests** | ◐ Partial (per-lang, not differential) |
 | **Published SDK packages (crates.io / PyPI / NuGet / npm / luarocks)** | ⏸ Deferred (owner: not publishing yet) |
@@ -56,10 +56,12 @@ owner is currently budget-constrained.
   all 6 loaders and asserts byte-identical results — locks the "all generators
   produce identical ABI mechanics" invariant (CLAUDE.md §10) against drift.
   _CI cost: medium (reuses the existing Examples-job toolchains)._
-- **A4. TSAN for the resolve→dispatch race.** _Still open, paired with a test._
-  TSAN is the right tool for the documented resolve→dispatch window, but the
-  payoff needs a concurrent cross-thread unload stress test that doesn't exist
-  yet. Build the stress test, then add a TSAN nightly job over it.
+- **A4. TSAN for the resolve→dispatch race. ✅ Done.** Added
+  `stress_concurrent_unload_with_resolvers` (resolver threads `find`+`resolve`+
+  read while one thread invalidates+re-registers), proving the retire-not-drop
+  guarantee (resolve concurrent with unload → valid pointer or clean
+  `StaleHandle`, never a use-after-free). A nightly TSAN job runs it under
+  `-Zsanitizer=thread` — clean, no data races in the registry locking.
 - **A5. Finalize the resolve→dispatch UAF window for 1.0.** Currently Option A
   (host-coordinated, best-effort `in_dispatch_threads` defense). Decide whether
   that is the permanent 1.0 contract or whether Option B (per-dispatch
@@ -290,6 +292,11 @@ per-PR Action minutes).
   core `--lib` tests. Leak detection is **off** by design — retire-not-drop
   intentionally retains superseded interfaces/libraries for the runtime
   lifetime, which LSAN would report as leaks.
+- **TSAN:** nightly `-Zsanitizer=thread` over `stress_concurrent_registry`
+  (pure Rust, no `dlopen`), including `stress_concurrent_unload_with_resolvers`
+  which exercises the resolve↔invalidate (resolve→dispatch) race. Confirms the
+  registry's `RwLock` access is data-race-free and the retire-not-drop pointer
+  guarantee holds under concurrent unload.
 - **Supply-chain (`deny.toml`):** `cargo-deny` checks advisories (deny yanked +
   known CVEs), licenses (permissive allow-list; first-party workspace crates are
   `publish = false` + skipped), and sources (crates.io only).
