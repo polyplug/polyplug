@@ -242,7 +242,7 @@ export function onReload(callback) {
 /**
  * Set runtime configuration for subsequently created runtimes.
  * Must be called BEFORE creating a Runtime instance.
- * RuntimeConfig is 24 bytes (compatibility, hot_reload_enabled, on_reload, on_reload_user_data).
+ * RuntimeConfig is 32 bytes (compatibility, unload_mode, hot_reload_enabled, on_reload, on_reload_user_data).
  * @param {Object} config - Configuration options
  * @param {boolean} [config.hotReloadEnabled=false] - Whether hot-reload is enabled
  * @param {number} [config.compatibility=0] - Compatibility mode (COMPATIBILITY_STRICT=0, RELAXED=1, YOLO=2)
@@ -881,7 +881,7 @@ export function openPolyplug(soPath) {
 /**
  * Create new runtime instance.
  * Uses HostApi-based API: polyplug_runtime_create returns HostApi*.
- * RuntimeConfig is 24 bytes (compatibility, hot_reload_enabled, on_reload, on_reload_user_data).
+ * RuntimeConfig is 32 bytes (compatibility, unload_mode, hot_reload_enabled, on_reload, on_reload_user_data).
  * @param {Deno.DynamicLibrary} lib - Dynamic library
  * @returns {Runtime}
  */
@@ -889,8 +889,9 @@ export function runtimeNew(lib) {
   let host;
 
   if (_pendingConfig || _pendingReloadCallback) {
-    // RuntimeConfig is 24 bytes: compatibility(u32) @ 0 + hot_reload_enabled(bool/u8) @ 4
-    // + padding + on_reload(fn ptr) @ 8 + on_reload_user_data(ptr) @ 16.
+    // RuntimeConfig is 32 bytes: compatibility(u32) @ 0 + unload_mode(u32) @ 4
+    // + hot_reload_enabled(bool/u8) @ 8 + padding + on_reload(fn ptr) @ 16
+    // + on_reload_user_data(ptr) @ 24. Offsets/size come from abi.ts constants.
     const configBuf = new Uint8Array(RUNTIME_CONFIG_SIZE);
     const configView = new DataView(configBuf.buffer);
 
@@ -930,7 +931,7 @@ export function runtimeNew(lib) {
           callback(phase);
         }
       );
-      // on_reload lives at offset 8 inside the RuntimeConfig (fn pointer, 8 bytes).
+      // on_reload lives at offset 16 inside the RuntimeConfig (fn pointer, 8 bytes).
       // on_reload_user_data is left null: the JS closure already captures the callback.
       configView.setBigUint64(RUNTIME_CONFIG_ON_RELOAD_OFFSET, Deno.UnsafePointer.value(_ffiReloadCallback.pointer), true);
     }
