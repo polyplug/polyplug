@@ -25,7 +25,7 @@ _Last updated: 2026-06-08._
 | **Miri + ASAN in CI** | ✅ Done (nightly) |
 | **TSAN for the resolve→dispatch race** | ✅ Done (nightly, concurrent unload stress test) |
 | **Supply-chain gate (cargo-deny)** | ✅ Done (nightly) |
-| **Cross-language differential parity tests** | ◐ Partial (per-lang, not differential) |
+| **Cross-language differential parity tests** | ✅ Done (`examples/hosts/parity`, 6 langs × 5 contracts byte-identical) |
 | **Published SDK packages (crates.io / PyPI / NuGet / npm / luarocks)** | ⏸ Deferred (owner: not publishing yet) |
 | **Quickstart + example gallery** | ◐ Partial (examples exist, no guided path) |
 | **CI cost / caching** | ✅ Done (`rust-cache` on every job; cross-lang jobs main-only) |
@@ -51,11 +51,19 @@ owner is currently budget-constrained.
   (`polyplug_abi`, `polyplug_utils`) and ASAN (leak-detection off, because
   retire-not-drop intentionally retains) on the core `--lib` tests. Fixed two
   findings: arena pointer provenance + a leak-clean tracking test.
-- **A3. Cross-language differential parity.** _Still open._ Today each language
-  has its own codegen test. Add one harness that runs the *same* contract through
-  all 6 loaders and asserts byte-identical results — locks the "all generators
-  produce identical ABI mechanics" invariant (CLAUDE.md §10) against drift.
-  _CI cost: medium (reuses the existing Examples-job toolchains)._
+- **A3. Cross-language differential parity. ✅ Done.** `examples/hosts/parity`
+  loads each of the 6 guest languages' implementations of the 5 rich pipeline
+  contracts and asserts every language returns byte-identical, golden output —
+  locking the "all generators produce identical ABI mechanics" invariant
+  (CLAUDE.md §10) against drift. Complements `cross_language.rs` (which only
+  checks `add(3,5)==8`) by exercising `StringView` marshaling, the host-allocator
+  return path, and host-contract callbacks. Wired into `verify_hosts.sh` (CI
+  Examples job). Caught a real bug on first run: three hand-written Lua example
+  guests double-converted a `StringView` into the SDK helpers and silently
+  returned `INVALID:*` — fixed to native Lua string ops.
+  _Follow-up (low pri): the Lua SDK helpers `to_str`/`split`/`strip_prefix`
+  silently return `""` on plain-string input; consider hardening in the
+  generator so misuse fails loudly rather than silently._
 - **A4. TSAN for the resolve→dispatch race. ✅ Done.** Added
   `stress_concurrent_unload_with_resolvers` (resolver threads `find`+`resolve`+
   read while one thread invalidates+re-registers), proving the retire-not-drop
