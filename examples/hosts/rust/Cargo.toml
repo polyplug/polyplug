@@ -2,6 +2,8 @@
 name = "pipeline_host"
 version = "1.0.0"
 edition = "2024"
+license.workspace = true
+publish = false
 
 [[bin]]
 name = "pipeline_host"

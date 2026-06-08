@@ -155,13 +155,24 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn assert_no_leaks_panics_on_mismatch() {
         let tracker: TrackingAllocator = TrackingAllocator::new();
         let alloc: unsafe extern "C" fn(usize, usize) -> *mut u8 = tracker.alloc_fn();
-        // Allocate but do NOT free
-        // SAFETY: size=64, align=1 is a valid layout. We intentionally leak for the panic test.
-        let _ptr: *mut u8 = unsafe { alloc(64, 1) };
-        tracker.assert_no_leaks(); // should panic
+        let free: unsafe extern "C" fn(*mut u8, usize, usize) = tracker.free_fn();
+        // SAFETY: size=64, align=1 is a valid layout.
+        let ptr: *mut u8 = unsafe { alloc(64, 1) };
+        // With an allocation still outstanding, assert_no_leaks must panic. Catch
+        // the panic (rather than #[should_panic]) so the allocation can be freed
+        // afterwards — keeping the test leak-clean under Miri's leak checker while
+        // still proving the mismatch is detected.
+        let outcome: std::thread::Result<()> =
+            std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| tracker.assert_no_leaks()));
+        assert!(
+            outcome.is_err(),
+            "assert_no_leaks must panic while an allocation is outstanding"
+        );
+        // SAFETY: ptr was just allocated with size=64, align=1 via tracking_alloc.
+        unsafe { free(ptr, 64, 1) };
+        tracker.assert_no_leaks();
     }
 }

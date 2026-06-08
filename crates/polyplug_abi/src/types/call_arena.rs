@@ -120,10 +120,15 @@ impl CallArena {
     /// Returns the aligned start pointer if `size` bytes fit, else `None`.
     fn bump(from: *mut u8, end: *mut u8, size: usize, align: usize) -> Option<*mut u8> {
         let addr: usize = from as usize;
-        let aligned: usize = addr.checked_add(align - 1)? & !(align - 1);
-        let new_cur: usize = aligned.checked_add(size)?;
+        let aligned_addr: usize = addr.checked_add(align - 1)? & !(align - 1);
+        let new_cur: usize = aligned_addr.checked_add(size)?;
         if new_cur <= end as usize {
-            Some(aligned as *mut u8)
+            // Derive the aligned pointer from `from` via a byte offset rather than
+            // an integer-to-pointer cast, so the original allocation's provenance
+            // flows to the returned pointer (verifiable under Miri / strict
+            // provenance). `aligned_addr >= addr`, so the offset never underflows.
+            let offset: usize = aligned_addr - addr;
+            Some(from.wrapping_add(offset))
         } else {
             None
         }

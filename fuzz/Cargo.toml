@@ -1,0 +1,49 @@
+[package]
+name = "polyplug-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Intentionally a detached workspace: cargo-fuzz projects conventionally
+# declare an empty `[workspace]` so the fuzz crate is excluded from the main
+# polyplug workspace. This keeps the unstable libfuzzer-sys / -Z build-std
+# tooling out of the production build graph. Because it is detached, dependency
+# versions are declared inline here (the main workspace cannot own them).
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tempfile = "3.27"
+
+[dependencies.polyplug]
+path = "../crates/polyplug"
+
+[dependencies.polyplugc]
+path = "../crates/polyplugc"
+
+[dependencies.polyplug_abi]
+path = "../crates/polyplug_abi"
+
+[[bin]]
+name = "fuzz_manifest"
+path = "fuzz_targets/fuzz_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_contract"
+path = "fuzz_targets/fuzz_contract.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_version"
+path = "fuzz_targets/fuzz_version.rs"
+test = false
+doc = false
+bench = false

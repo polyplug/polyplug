@@ -1,0 +1,88 @@
+name: Nightly Hardening
+
+# Memory-safety and supply-chain checks that are too slow for every PR. Runs on a
+# daily schedule and on demand — never on push/pull_request, so it costs no
+# per-PR Action minutes.
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  miri:
+    name: Miri (UB detection)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      - uses: Swatinem/rust-cache@v2
+      # Miri runs the crates with no dlopen/FFI execution (the loaders dlopen
+      # native cdylibs, which Miri cannot interpret). The ABI types and hash
+      # utilities carry the unsafe pointer logic Miri verifies.
+      - name: cargo miri test
+        run: cargo +nightly miri test -p polyplug_abi -p polyplug_utils
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+
+  sanitizers:
+    name: AddressSanitizer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      # ASAN catches use-after-free / buffer-overflow / double-free across the
+      # unsafe boundary. Leak detection is OFF: the retire-not-drop model
+      # intentionally keeps superseded interfaces and libraries alive for the
+      # runtime's lifetime, which LSAN would report as leaks by design.
+      - name: cargo test (ASAN, leak detection off)
+        run: >
+          cargo +nightly test -Zbuild-std
+          -p polyplug -p polyplug_abi -p polyplug_utils
+          --target x86_64-unknown-linux-gnu --lib
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          ASAN_OPTIONS: detect_leaks=0
+
+  fuzz:
+    name: Fuzz parsers (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Build fuzz targets
+        run: cargo +nightly fuzz build
+      # A short smoke run per target; the corpus is not persisted, so this proves
+      # the parsers reject mutated input without crashing rather than running a
+      # long campaign. A crash artifact fails the job.
+      - name: Smoke each target (60s)
+        run: |
+          for target in fuzz_manifest fuzz_contract fuzz_version; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=60
+          done
+
+  supply-chain:
+    name: cargo-deny (advisories + licenses)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - run: cargo deny check
