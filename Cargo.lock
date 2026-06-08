@@ -1367,6 +1367,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "parity_host"
+version = "1.0.0"
+dependencies = [
+ "polyplug",
+ "polyplug_abi",
+ "polyplug_dotnet",
+ "polyplug_js",
+ "polyplug_lua",
+ "polyplug_native",
+ "polyplug_python",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

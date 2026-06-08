@@ -19,6 +19,7 @@ members = [
     "tests/integration",
 
     "examples/hosts/rust",
+    "examples/hosts/parity",
     "examples/guests/rust/decoder",
     "examples/guests/rust/encoder",
     "examples/guests/rust/transformer",

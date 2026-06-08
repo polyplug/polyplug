@@ -1,0 +1,19 @@
+[package]
+name = "parity_host"
+version = "1.0.0"
+edition = "2024"
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "parity_host"
+path = "src/main.rs"
+
+[dependencies]
+polyplug = { path = "../../../crates/polyplug" }
+polyplug_abi = { path = "../../../crates/polyplug_abi" }
+polyplug_native = { path = "../../../crates/polyplug_native" }
+polyplug_js = { path = "../../../crates/polyplug_js" }
+polyplug_lua = { path = "../../../crates/polyplug_lua" }
+polyplug_python = { path = "../../../crates/polyplug_python" }
+polyplug_dotnet = { path = "../../../crates/polyplug_dotnet" }

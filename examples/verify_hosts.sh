@@ -132,6 +132,23 @@ else
 fi
 echo ""
 
+# Run cross-language differential parity harness: proves all 6 guest-language
+# generators produce byte-identical results on the 5 rich string-returning
+# contracts (decoder/encoder/transformer/reporter/validator).
+echo "=== Cross-Language Parity Harness ==="
+if cargo build --release --manifest-path "$SCRIPT_DIR/hosts/parity/Cargo.toml" 2>&1; then
+    if "$SCRIPT_DIR/hosts/parity/run.sh" 2>&1; then
+        echo "✓ parity harness passed"
+    else
+        echo "✗ parity harness failed"
+        FAILED=$((FAILED + 1))
+    fi
+else
+    echo "✗ parity harness build failed"
+    FAILED=$((FAILED + 1))
+fi
+echo ""
+
 echo "=== Verification Summary ==="
 
 # Check for pipeline output from each host

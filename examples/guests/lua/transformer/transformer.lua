@@ -1,17 +1,14 @@
 local ffi = require('ffi')
 local polyplug = require('polyplug_guest')
-local abi = require('polyplug_abi')
 local contracts = require('generated.guest.contracts')
 
 local function transform(input)
     local s = polyplug.to_str(input)
-    s = abi.strip_prefix(s, "DECODED:")
-    local parts = abi.split(s, "|")
-    if #parts >= 3 then
-        local name = parts[1]:upper()
-        local value = parts[2] .. ' (transformed)'
-        local count = tonumber(parts[3]) + 1
-        return polyplug.alloc_string(string.format('TRANSFORMED:%s|%s|%d', name, value, count))
+    if s:sub(1, 8) == 'DECODED:' then s = s:sub(9) end
+    local name, value, count = s:match('^([^|]*)|([^|]*)|([^|]*)$')
+    if name and count and tonumber(count) then
+        return polyplug.alloc_string(string.format(
+            'TRANSFORMED:%s|%s (transformed)|%d', name:upper(), value, tonumber(count) + 1))
     end
     return polyplug.alloc_string('INVALID:format')
 end
