@@ -529,38 +529,6 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let get_host_contract_fn: Function<'js> = Function::new(
-        ctx.clone(),
-        |ctx: Ctx<'js>, contract_id: u64, min_version: u32| -> Option<u64> {
-            let hvt: *const HostApi = get_host_interface_from_globals(&ctx)?;
-            // SAFETY: hvt points to 'static HostApi data.
-            let instance: polyplug_abi::HostContractInstance =
-                unsafe { ((*hvt).get_host_contract)(hvt, contract_id, min_version) };
-            if instance.data.is_null() {
-                None
-            } else {
-                Some(instance.data as usize as u64)
-            }
-        },
-    )
-    .map_err(|e: rquickjs::Error| {
-        RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!(
-                "JS runtime js-quickjs error: getHostContract function creation failed: {e}"
-            ),
-        })
-    })?;
-
-    polyplug_obj
-        .set("getHostContract", get_host_contract_fn)
-        .map_err(|e: rquickjs::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!("JS runtime js-quickjs error: getHostContract set failed: {e}"),
-            })
-        })?;
-
     // ── callGuestMethod ────────────────────────────────────────────────────────
     // Guarded peer-call path: find → resolve → create_instance → call_guest_method.
     // The contract_id and min_version come from the generated peer_callers.ts

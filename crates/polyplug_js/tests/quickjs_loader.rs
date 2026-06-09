@@ -546,7 +546,7 @@ fn polyplug_object_has_expected_methods() {
     let bundle: String = format!(
         r#"
 var methods = ['findByContract', 'findByBundle', 'findAllByContract',
-                'resolveGuestContract', 'getHostContract', 'registerVtable', 'alloc', 'free'];
+                'resolveGuestContract', 'callHostContract', 'registerVtable', 'alloc', 'free'];
 for (var i = 0; i < methods.length; i++) {{
     if (typeof polyplug[methods[i]] !== 'function') {{
         throw new Error('missing method: ' + methods[i]);
