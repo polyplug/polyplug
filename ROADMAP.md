@@ -31,7 +31,8 @@ _Last updated: 2026-06-08._
 | **CI cost / caching** | ✅ Done (`rust-cache` on every job; cross-lang jobs main-only) |
 | **Benchmark regression gate in CI** | ✅ Done (nightly, core hot-path benches, >1.5x gross-regression gate) |
 | **Call-arena retain-and-rewind (perf)** | ✅ Done (ArenaOverflowBlock +used cursor; reset rewinds & retains, free on Drop/teardown; all 6 SDKs + 4 lockstep impls) |
-| Deferred: D11 counter, .NET ALC | ⏸ See Deferred |
+| D11 live-instance counter | ✅ Resolved — host-coordinated, no counter (zero hot-path cost) |
+| .NET collectible ALC (true managed unload) | ◐ In progress (#68) |
 
 ---
 
@@ -129,12 +130,29 @@ scoping:
 
 ---
 
-## Deferred (with unblock condition)
+## Resolved (was deferred)
 
-| Item | Why deferred | Unblock when |
-|---|---|---|
-| **D11 native live-instance counter** | The host owns the instance lifecycle (`create_instance`/`destroy_instance` are direct guest-vtable calls the runtime never mediates), so a runtime-side counter either duplicates host knowledge or needs auto-increment code in every native host-caller generator (CI-only validation). | A concrete need for runtime-visible live-instance counts surfaces (e.g. a reclaim-safety policy that requires it). |
-| **.NET collectible ALC** | True managed unload needs a larger `polyplug_dotnet` loader rework (collectible `AssemblyLoadContext`). | Native + Python reclaim battle-tested first; demand for .NET hot-unload confirmed. |
+- **D11 native live-instance counter. ✅ Resolved — host-coordinated, no counter (2026-06-09).**
+  The host owns the guest-instance lifecycle: generated `new()`/`drop()` host-caller
+  wrappers call `create_instance`/`destroy_instance` **directly** on the resolved
+  `GuestContractInterface`, so the runtime never sees instance create/destroy (it only
+  mediates host-contract singletons via `get_host_contract`). A runtime-visible counter
+  would therefore require a new `HostApi` callback (consuming the single free `reserved`
+  slot) **plus** an atomic increment/decrement on every instance create/destroy — a
+  measurable tax on the instance hot path. That cost is unjustified: the only consumer of
+  such a count is a *future* reclaim mode (truly freeing a dylib/VM on unload), and reclaim
+  safety is delegated to the host instead, exactly like hot-reload already requires ("all
+  instances must be destroyed before calling this") and consistent with the A5/Option-A
+  ruling (unload is host-coordinated). The host created the instances, so it already knows
+  the live count — a runtime counter would only duplicate host knowledge. **Zero ABI slot
+  consumed, zero hot-path cost.** Revisit only if a concrete reclaim-safety policy ever
+  needs runtime-visible counts (it would still be a pre-freeze ABI decision at that point).
+
+- **.NET collectible ALC (true managed unload). ◐ In progress (#68).** Reworking
+  `polyplug_dotnet` to load each bundle's assemblies into a collectible
+  `AssemblyLoadContext` so unload reclaims managed memory (today the .NET loader is
+  retire-only / `HotReloadDisabled`). The CLR-inits-once-per-process limitation is
+  unchanged — collectible ALC unloads the *bundle's assemblies*, not the CLR.
 
 ---
 
