@@ -2684,7 +2684,7 @@ fn generate_guest_host_contract_method(
     };
 
     let ret_type: String = match &func.returns {
-        Some(ty) => rust_type_name(ty),
+        Some(ty) => guest_host_return_type_name(ty),
         None => "()".to_owned(),
     };
 
@@ -2797,10 +2797,36 @@ fn generate_guest_host_contract_method(
     out.push_str("            return Err(HostContractError { code: AbiErrorCode::from_u32(err.code), message });\n");
     out.push_str("        }\n\n");
 
-    if func.returns.is_some() {
-        out.push_str("        Ok(out_val)\n");
-    } else {
-        out.push_str("        Ok(())\n");
+    match &func.returns {
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) => {
+            out.push_str(
+                "        // SAFETY: out_val.ptr points to host-owned memory that the contract guarantees\n\
+                 \x20       // stays valid until the next arena-backed call on this caller. The returned &str\n\
+                 \x20       // borrows &mut self, so the borrow checker forbids another call (which would reset\n\
+                 \x20       // the arena and invalidate this memory) while the view is alive. The bytes are\n\
+                 \x20       // valid UTF-8 per the StringView ABI contract.\n\
+                 \x20       let result: &str = unsafe {\n\
+                 \x20           let slice: &[u8] = core::slice::from_raw_parts(out_val.ptr, out_val.len);\n\
+                 \x20           core::str::from_utf8_unchecked(slice)\n\
+                 \x20       };\n\
+                 \x20       Ok(result)\n",
+            );
+        }
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)) => {
+            out.push_str(
+                "        // SAFETY: out_val.ptr points to host-owned memory valid until the next arena-backed\n\
+                 \x20       // call on this caller; the returned &[u8] borrows &mut self, so no second call can\n\
+                 \x20       // invalidate it while the view is alive.\n\
+                 \x20       let result: &[u8] = unsafe { core::slice::from_raw_parts(out_val.ptr, out_val.len) };\n\
+                 \x20       Ok(result)\n",
+            );
+        }
+        Some(_) => {
+            out.push_str("        Ok(out_val)\n");
+        }
+        None => {
+            out.push_str("        Ok(())\n");
+        }
     }
 
     out.push_str("    }\n\n");
@@ -2823,6 +2849,19 @@ fn guest_param_type_name(ty: &ResolvedTypeRef) -> String {
     }
 }
 
+/// Map a guest→host caller return type to the emitted Rust type.
+///
+/// StringView and Buffer become borrowed slices (`&str` / `&[u8]`), whose
+/// lifetime elides to `&mut self`. The borrow checker therefore enforces that
+/// the view cannot outlive the next arena-backed call (which resets the arena).
+/// All other types fall through to `rust_type_name`.
+fn guest_host_return_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "&str".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "&[u8]".to_owned(),
+        other => rust_type_name(other),
+    }
+}
 
 /// Emit the args_ptr setup for a guest host contract method.
 fn emit_guest_host_contract_args_setup(
@@ -3830,6 +3869,98 @@ mod tests {
         assert_eq!(
             guest_param_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
             "MyStruct"
+        );
+    }
+
+    #[test]
+    fn guest_host_return_type_name_mappings() {
+        assert_eq!(
+            guest_host_return_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "u32"
+        );
+        assert_eq!(
+            guest_host_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            "&str"
+        );
+        assert_eq!(
+            guest_host_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            "&[u8]"
+        );
+        assert_eq!(
+            guest_host_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            "MyStruct"
+        );
+    }
+
+    #[test]
+    fn guest_host_contract_method_stringview_return_emits_borrowed_str() {
+        use crate::ir::Version;
+
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.cache".to_owned(),
+            contract_id: 0xAAAA_BBBB_CCCC_DDDD_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            singleton: false,
+            functions: vec![ResolvedFunction {
+                name: "get".to_owned(),
+                function_id: 0,
+                params: vec![],
+                returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("pub fn get(&mut self) -> Result<&str, HostContractError>"),
+            "StringView return must emit Result<&str, HostContractError>: {out}"
+        );
+        assert!(
+            out.contains("core::str::from_utf8_unchecked(slice)"),
+            "StringView return must build &str from raw parts: {out}"
+        );
+        assert!(
+            out.contains("// SAFETY:"),
+            "StringView unsafe block must have a SAFETY comment: {out}"
+        );
+    }
+
+    #[test]
+    fn guest_host_contract_method_buffer_return_emits_borrowed_slice() {
+        use crate::ir::Version;
+
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.store".to_owned(),
+            contract_id: 0x1111_2222_3333_4444_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            singleton: false,
+            functions: vec![ResolvedFunction {
+                name: "read".to_owned(),
+                function_id: 0,
+                params: vec![],
+                returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("pub fn read(&mut self) -> Result<&[u8], HostContractError>"),
+            "Buffer return must emit Result<&[u8], HostContractError>: {out}"
+        );
+        assert!(
+            out.contains("core::slice::from_raw_parts(out_val.ptr, out_val.len)"),
+            "Buffer return must build &[u8] from raw parts: {out}"
+        );
+        assert!(
+            out.contains("// SAFETY:"),
+            "Buffer unsafe block must have a SAFETY comment: {out}"
         );
     }
 
