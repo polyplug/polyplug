@@ -669,7 +669,13 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, PolyplugcError> {
     let dep_bundle_id: u64 = compute_bundle_id(&raw.bundle.name);
     let mut resolved_deps: Vec<ResolvedDependency> = Vec::new();
     for dep in &raw.dependencies {
-        let contract_id_val: u64 = compute_contract_id(&dep.contract, 0);
+        // The contract_id must use the same major version the API schema uses when it
+        // resolves the same contract (compute_contract_id encodes major in the hash).
+        // Use min_version.major so the dep's contract_id matches the resolved contract.
+        let dep_major: u32 = Version::parse(&dep.min_version)
+            .map(|v| v.major)
+            .unwrap_or(0);
+        let contract_id_val: u64 = compute_contract_id(&dep.contract, dep_major);
         let resolved: ResolvedDependency = if dep.kind == "bundle" {
             let bundle_name: String = dep.bundle.clone().unwrap_or_default();
             let bundle_id_val: u64 = compute_bundle_id(&bundle_name);

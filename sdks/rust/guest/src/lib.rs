@@ -174,8 +174,15 @@ pub use polyplug_abi::HostContractInstance;
 /// Host capabilities passed to every plugin at init time.
 ///
 /// Accessed via `HostApi`. Provides allocation, plugin lookup,
-/// and extension vtable retrieval.
+/// and guest/host contract resolution.
 pub use polyplug_abi::HostApi;
+
+/// Per-call bump arena for variable-size return values (strings, buffers).
+///
+/// Peer callers that return `StringView` or `Buffer` hold one arena and reset
+/// it at the start of every such call; the returned view borrows arena memory
+/// and is valid until the next arena-backed call on the same caller.
+pub use polyplug_abi::types::CallArena;
 
 /// Metadata about a plugin within a bundle.
 ///

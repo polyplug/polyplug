@@ -3,4 +3,5 @@ pub mod contracts;
 pub mod host_contract_callers;
 pub mod init;
 pub mod interfaces;
+pub mod peer_callers;
 pub mod types;
