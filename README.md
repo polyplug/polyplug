@@ -107,10 +107,11 @@ polyplug/
 
 ## Documentation
 
+- **Quick Start** — See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) to write your first plugin in 10 minutes
+- **Examples** — See [`docs/EXAMPLES.md`](docs/EXAMPLES.md) for the full reference gallery (30 guests × 6 hosts)
 - **Features** — See [`docs/FEATURES.md`](docs/FEATURES.md) for a current-state overview of every shipped feature (arena, hot-reload, extensions, platform support, trust model)
 - **Workflow** — See [`docs/WORKFLOW.md`](docs/WORKFLOW.md) for the end-to-end host-app and plugin-developer pipelines
 - **SDKs** — See `sdks/` for host and guest libraries in each language
-- **Examples** — See `examples/` for complete working examples
 - **Design Docs** — See `docs/` for architecture and design decisions
 
 ## Code Generation
