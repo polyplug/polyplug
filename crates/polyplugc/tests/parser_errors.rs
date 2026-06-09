@@ -32,8 +32,8 @@ fn bundle_err(toml: &str) -> PolyplugcError {
 fn malformed_toml_missing_equals() {
     let err: PolyplugcError = api_err("[[contract]]\nname \"no-equals\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for malformed TOML, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for malformed TOML, got {err:?}",
     );
 }
 
@@ -41,8 +41,8 @@ fn malformed_toml_missing_equals() {
 fn malformed_toml_unclosed_bracket() {
     let err: PolyplugcError = api_err("[[contract\nname = \"x\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for unclosed bracket, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for unclosed bracket, got {err:?}",
     );
 }
 
@@ -51,8 +51,8 @@ fn malformed_toml_invalid_string_literal() {
     // Unquoted string value is not valid TOML.
     let err: PolyplugcError = api_err("[[contract]]\nname = bad value");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for invalid string literal, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for invalid string literal, got {err:?}",
     );
 }
 
@@ -61,8 +61,8 @@ fn malformed_toml_duplicate_key_in_table() {
     let err: PolyplugcError = api_err("[bundle]\nname = \"x\"\nname = \"y\"\nversion = \"1.0\"");
     // TOML spec disallows duplicate keys — the TOML parser returns an error.
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for duplicate TOML key, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for duplicate TOML key, got {err:?}",
     );
 }
 
@@ -71,8 +71,8 @@ fn malformed_bundle_toml_missing_bundle_section() {
     // A bundle.toml MUST have a [bundle] header.
     let err: PolyplugcError = bundle_err("name = \"x\"\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing [bundle] section, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing [bundle] section, got {err:?}",
     );
 }
 
@@ -85,8 +85,8 @@ fn bundle_missing_name_field() {
     // `name` is required under [bundle].
     let err: PolyplugcError = bundle_err("[bundle]\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing bundle name, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing bundle name, got {err:?}",
     );
 }
 
@@ -95,8 +95,8 @@ fn bundle_missing_version_field() {
     // `version` is required under [bundle].
     let err: PolyplugcError = bundle_err("[bundle]\nname = \"my-bundle\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing bundle version, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing bundle version, got {err:?}",
     );
 }
 
@@ -105,8 +105,8 @@ fn contract_missing_version_field() {
     // `version` is required inside [[contract]].
     let err: PolyplugcError = api_err("[[contract]]\nname = \"my.contract\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing contract version, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing contract version, got {err:?}",
     );
 }
 
@@ -115,8 +115,8 @@ fn contract_missing_name_field() {
     // `name` is required inside [[contract]].
     let err: PolyplugcError = api_err("[[contract]]\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing contract name, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing contract name, got {err:?}",
     );
 }
 
@@ -126,8 +126,8 @@ fn enum_missing_repr_field() {
     let err: PolyplugcError =
         api_err("[[enum]]\nname = \"Status\"\n\n[[enum.variants]]\nname = \"Ok\"\nvalue = \"0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing enum repr, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing enum repr, got {err:?}",
     );
 }
 
@@ -137,8 +137,8 @@ fn enum_variant_missing_value_field() {
     let err: PolyplugcError =
         api_err("[[enum]]\nname = \"Status\"\nrepr = \"u32\"\n\n[[enum.variants]]\nname = \"Ok\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing variant value, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing variant value, got {err:?}",
     );
 }
 
@@ -148,8 +148,8 @@ fn enum_variant_missing_name_field() {
     let err: PolyplugcError =
         api_err("[[enum]]\nname = \"Status\"\nrepr = \"u32\"\n\n[[enum.variants]]\nvalue = \"0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing variant name, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing variant name, got {err:?}",
     );
 }
 
@@ -159,8 +159,8 @@ fn type_field_missing_type_key() {
     let err: PolyplugcError =
         api_err("[[types]]\nname = \"Point\"\n\n[[types.fields]]\nname = \"x\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing field type, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing field type, got {err:?}",
     );
 }
 
@@ -178,7 +178,7 @@ fn duplicate_type_and_enum_name_rejected() {
     );
     let err: PolyplugcError = api_err(toml);
     assert!(
-        matches!(err, PolyplugcError::EnumNameCollision { ref name } if name == "Status"),
+        matches!(err, PolyplugcError::EnumNameCollision { ref name, .. } if name == "Status"),
         "expected EnumNameCollision for \"Status\", got {err:?}",
     );
 }
@@ -429,7 +429,7 @@ fn enum_invalid_repr_i32_rejected() {
     assert!(
         matches!(
             err,
-            PolyplugcError::EnumInvalidRepr { ref enum_name, ref repr }
+            PolyplugcError::EnumInvalidRepr { ref enum_name, ref repr, .. }
                 if enum_name == "Status" && repr == "i32"
         ),
         "expected EnumInvalidRepr for i32, got {err:?}",
@@ -446,7 +446,7 @@ fn enum_invalid_repr_f32_rejected() {
     assert!(
         matches!(
             err,
-            PolyplugcError::EnumInvalidRepr { ref enum_name, ref repr }
+            PolyplugcError::EnumInvalidRepr { ref enum_name, ref repr, .. }
                 if enum_name == "Mode" && repr == "f32"
         ),
         "expected EnumInvalidRepr for f32, got {err:?}",
@@ -654,10 +654,13 @@ fn version_major_minor_accepted() {
 
 #[test]
 fn bundle_version_overflow_rejected() {
-    let err: PolyplugcError = bundle_err("[bundle]\nname = \"b\"\nversion = \"4294967296.0\"");
+    // `file` is present so deserialization reaches version validation; minor=70000
+    // exceeds the u16 ABI ceiling, so the parser must raise VersionOverflow.
+    let err: PolyplugcError =
+        bundle_err("[bundle]\nname = \"b\"\nversion = \"1.70000\"\nfile = \"x.so\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for overflowing bundle version, got {err:?}",
+        matches!(err, PolyplugcError::VersionOverflow { .. }),
+        "expected VersionOverflow for overflowing bundle version, got {err:?}",
     );
 }
 
@@ -678,20 +681,24 @@ fn bundle_with_no_plugins_accepted() {
 
 #[test]
 fn bundle_plugin_missing_version_rejected() {
+    // `file` present so the bundle deserializes; the plugin omits the required
+    // `version` field, which the toml layer reports as a span-carrying parse error.
     let err: PolyplugcError = bundle_err(concat!(
-        "[bundle]\nname = \"b\"\nversion = \"1.0\"\n\n",
+        "[bundle]\nname = \"b\"\nversion = \"1.0\"\nfile = \"x.so\"\n\n",
         "[[plugin]]\nname = \"my-plugin\"\n",
     ));
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for plugin missing version, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for plugin missing version, got {err:?}",
     );
 }
 
 #[test]
 fn bundle_plugin_invalid_version_rejected() {
+    // `file` present so deserialization reaches version validation; "bad.ver" is a
+    // non-numeric component, so Version::parse raises ValidationFailed.
     let err: PolyplugcError = bundle_err(concat!(
-        "[bundle]\nname = \"b\"\nversion = \"1.0\"\n\n",
+        "[bundle]\nname = \"b\"\nversion = \"1.0\"\nfile = \"x.so\"\n\n",
         "[[plugin]]\nname = \"my-plugin\"\nversion = \"bad.ver\"\n",
     ));
     assert!(
@@ -831,7 +838,7 @@ fn duplicate_plugin_contract_name_rejected() {
         "[[plugin_contract]]\nname = \"svc.dup\"\nversion = \"1.0\"\n",
     ));
     assert!(
-        matches!(err, PolyplugcError::DuplicateContractName { ref name } if name == "svc.dup"),
+        matches!(err, PolyplugcError::DuplicateContractName { ref name, .. } if name == "svc.dup"),
         "expected DuplicateContractName for `svc.dup`, got {err:?}",
     );
 }
@@ -846,7 +853,7 @@ fn duplicate_function_name_within_contract_rejected() {
     assert!(
         matches!(
             err,
-            PolyplugcError::DuplicateFunctionName { ref contract, ref function }
+            PolyplugcError::DuplicateFunctionName { ref contract, ref function, .. }
                 if contract == "svc.ok" && function == "run"
         ),
         "expected DuplicateFunctionName for `run` in `svc.ok`, got {err:?}",

@@ -1,110 +1,346 @@
 //! Error — PolyplugcError type hierarchy for polyplugc.
 
-use thiserror::Error;
+use core::fmt;
+
+/// Source location (file path, 1-based line, 1-based column) for diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceLocation {
+    /// Canonical path to the source file, or `"<input>"` for in-memory strings.
+    pub file: String,
+    /// 1-based line number.
+    pub line: usize,
+    /// 1-based column number (byte-offset within the line).
+    pub col: usize,
+}
+
+impl fmt::Display for SourceLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}:{}", self.file, self.line, self.col)
+    }
+}
 
 /// Top-level error type for polyplugc code generation.
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum PolyplugcError {
-    #[error("unknown type `{type_ref}` in contract `{contract}`")]
-    UnknownType { type_ref: String, contract: String },
+    UnknownType {
+        type_ref: String,
+        contract: String,
+        /// Optional source location of the offending type reference.
+        location: Option<SourceLocation>,
+        /// "did you mean ...?" hint when a close match exists among known type names.
+        suggestion: Option<String>,
+    },
 
-    #[allow(dead_code)]
-    #[error("unsupported type `{type_name}` for language `{lang}`")]
-    UnsupportedType { type_name: String, lang: String },
+    UnsupportedType {
+        type_name: String,
+        lang: String,
+    },
 
-    #[error("unsupported language/runtime `{lang}`")]
-    UnsupportedLanguage { lang: String },
+    UnsupportedLanguage {
+        lang: String,
+    },
 
-    #[error("failed to write generated file `{path}`: {source}")]
     WriteFailed {
         path: String,
-        #[source]
         source: std::io::Error,
     },
 
-    #[error("failed to read file `{path}`: {source}")]
     ReadFailed {
         path: String,
-        #[source]
         source: std::io::Error,
     },
 
-    #[error("IR validation failed: {message}")]
-    ValidationFailed { message: String },
+    ValidationFailed {
+        message: String,
+    },
 
-    #[error(
-        "bundle name \"{bundle_name}\" conflicts with contract name \"{bundle_name}\" \
-         in api.toml. Bundle names and contract names must be unique across the \
-         ecosystem. Rename the bundle in bundle.toml or the contract in api.toml."
-    )]
-    BundleNameConflict { bundle_name: String },
+    /// TOML-level parse error with optional source location.
+    TomlParseError {
+        /// Human-readable parse error from the toml crate.
+        message: String,
+        /// Source location of the error, if the toml crate provided a byte span.
+        location: Option<SourceLocation>,
+    },
 
-    #[error("invalid repr `{repr}` for enum `{enum_name}`: must be u8 | u16 | u32 | u64")]
-    EnumInvalidRepr { enum_name: String, repr: String },
+    BundleNameConflict {
+        bundle_name: String,
+    },
 
-    #[error(
-        "invalid token in value expression `{expr}` for variant `{variant_name}` in enum `{enum_name}`"
-    )]
+    EnumInvalidRepr {
+        enum_name: String,
+        repr: String,
+        /// "did you mean ...?" hint for close repr spellings (e.g. "u33" → "u32").
+        suggestion: Option<String>,
+    },
+
     EnumInvalidValueExpr {
         enum_name: String,
         variant_name: String,
         expr: String,
     },
 
-    #[error(
-        "forward reference to variant `{ref_name}` in value expression for `{variant_name}` in enum `{enum_name}`: variant references must be backward-only"
-    )]
     EnumForwardRef {
         enum_name: String,
         variant_name: String,
         ref_name: String,
     },
 
-    #[error(
-        "chained variant reference: `{variant_name}` references `{ref_name}` which itself references another variant in enum `{enum_name}`: only one level of variant reference is allowed"
-    )]
     EnumChainedRef {
         enum_name: String,
         variant_name: String,
         ref_name: String,
     },
 
-    #[error(
-        "name `{name}` is used by both a [[type]] and an [[enum]]: names must be unique across both"
-    )]
-    EnumNameCollision { name: String },
+    EnumNameCollision {
+        name: String,
+        /// Optional contextual hint.
+        suggestion: Option<String>,
+    },
 
-    #[error("guest generation not supported for `{language}`: {reason}")]
-    GuestGenerationNotSupported { language: String, reason: String },
+    GuestGenerationNotSupported {
+        language: String,
+        reason: String,
+    },
 
-    #[error("host contract name `{name}` must start with \"host.\" prefix (e.g., \"host.logger\")")]
-    HostContractNameMissingPrefix { name: String },
+    HostContractNameMissingPrefix {
+        name: String,
+    },
 
-    #[error(
-        "duplicate contract name `{name}`: contract names must be unique across both [[plugin_contract]] and [[host_contract]]"
-    )]
-    DuplicateContractName { name: String },
+    DuplicateContractName {
+        name: String,
+        /// Optional pointer to where the name was first defined.
+        first_defined_at: Option<SourceLocation>,
+    },
 
-    #[error(
-        "version overflow: {component}={value} exceeds maximum 65535 in version `{version_str}`"
-    )]
     VersionOverflow {
         component: String,
         value: u32,
         version_str: String,
+        /// Source location of the version field that overflowed, if known.
+        location: Option<SourceLocation>,
+        /// Optional actionable suggestion.
+        suggestion: Option<String>,
     },
 
-    #[error(
-        "invalid {kind} name `{name}` in `{context}`: names must match [A-Za-z_][A-Za-z0-9_]* (a valid identifier)"
-    )]
     InvalidIdentifier {
         kind: String,
         name: String,
         context: String,
+        /// Source location of the invalid name, if known.
+        location: Option<SourceLocation>,
     },
 
-    #[error("duplicate function name `{function}` in contract `{contract}`")]
-    DuplicateFunctionName { contract: String, function: String },
+    DuplicateFunctionName {
+        contract: String,
+        function: String,
+        /// Optional note pointing at where the function was first declared.
+        first_defined_at: Option<SourceLocation>,
+    },
+}
+
+impl fmt::Display for PolyplugcError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PolyplugcError::UnknownType {
+                type_ref,
+                contract,
+                location,
+                suggestion,
+            } => {
+                if let Some(loc) = location {
+                    write!(f, "{loc} — ")?;
+                }
+                write!(f, "unknown type `{type_ref}` in contract `{contract}`")?;
+                if let Some(hint) = suggestion {
+                    write!(f, " — did you mean `{hint}`?")?;
+                }
+                Ok(())
+            }
+
+            PolyplugcError::UnsupportedType { type_name, lang } => {
+                write!(f, "unsupported type `{type_name}` for language `{lang}`")
+            }
+
+            PolyplugcError::UnsupportedLanguage { lang } => {
+                write!(f, "unsupported language/runtime `{lang}`")
+            }
+
+            PolyplugcError::WriteFailed { path, source } => {
+                write!(f, "failed to write generated file `{path}`: {source}")
+            }
+
+            PolyplugcError::ReadFailed { path, source } => {
+                write!(f, "failed to read file `{path}`: {source}")
+            }
+
+            PolyplugcError::ValidationFailed { message } => {
+                write!(f, "IR validation failed: {message}")
+            }
+
+            PolyplugcError::TomlParseError { message, location } => {
+                if let Some(loc) = location {
+                    write!(f, "{loc} — ")?;
+                }
+                write!(f, "TOML parse error: {message}")
+            }
+
+            PolyplugcError::BundleNameConflict { bundle_name } => {
+                write!(
+                    f,
+                    "bundle name \"{bundle_name}\" conflicts with contract name \"{bundle_name}\" \
+                     in api.toml. Bundle names and contract names must be unique across the \
+                     ecosystem. Rename the bundle in bundle.toml or the contract in api.toml."
+                )
+            }
+
+            PolyplugcError::EnumInvalidRepr {
+                enum_name,
+                repr,
+                suggestion,
+            } => {
+                write!(
+                    f,
+                    "invalid repr `{repr}` for enum `{enum_name}`: must be u8 | u16 | u32 | u64"
+                )?;
+                if let Some(hint) = suggestion {
+                    write!(f, " — did you mean `{hint}`?")?;
+                }
+                Ok(())
+            }
+
+            PolyplugcError::EnumInvalidValueExpr {
+                enum_name,
+                variant_name,
+                expr,
+            } => {
+                write!(
+                    f,
+                    "invalid token in value expression `{expr}` for variant `{variant_name}` in enum `{enum_name}`"
+                )
+            }
+
+            PolyplugcError::EnumForwardRef {
+                enum_name,
+                variant_name,
+                ref_name,
+            } => {
+                write!(
+                    f,
+                    "forward reference to variant `{ref_name}` in value expression for `{variant_name}` in enum `{enum_name}`: variant references must be backward-only"
+                )
+            }
+
+            PolyplugcError::EnumChainedRef {
+                enum_name,
+                variant_name,
+                ref_name,
+            } => {
+                write!(
+                    f,
+                    "chained variant reference: `{variant_name}` references `{ref_name}` which itself references another variant in enum `{enum_name}`: only one level of variant reference is allowed"
+                )
+            }
+
+            PolyplugcError::EnumNameCollision { name, suggestion } => {
+                write!(
+                    f,
+                    "name `{name}` is used by both a [[type]] and an [[enum]]: names must be unique across both"
+                )?;
+                if let Some(hint) = suggestion {
+                    write!(f, " — {hint}")?;
+                }
+                Ok(())
+            }
+
+            PolyplugcError::GuestGenerationNotSupported { language, reason } => {
+                write!(
+                    f,
+                    "guest generation not supported for `{language}`: {reason}"
+                )
+            }
+
+            PolyplugcError::HostContractNameMissingPrefix { name } => {
+                write!(
+                    f,
+                    "host contract name `{name}` must start with \"host.\" prefix (e.g., \"host.logger\")"
+                )
+            }
+
+            PolyplugcError::DuplicateContractName {
+                name,
+                first_defined_at,
+            } => {
+                write!(
+                    f,
+                    "duplicate contract name `{name}`: contract names must be unique across both [[plugin_contract]] and [[host_contract]]"
+                )?;
+                if let Some(loc) = first_defined_at {
+                    write!(f, " (first defined at {loc})")?;
+                }
+                Ok(())
+            }
+
+            PolyplugcError::VersionOverflow {
+                component,
+                value,
+                version_str,
+                location,
+                suggestion,
+            } => {
+                if let Some(loc) = location {
+                    write!(f, "{loc} — ")?;
+                }
+                write!(
+                    f,
+                    "version overflow: {component}={value} exceeds maximum 65535 in version `{version_str}`"
+                )?;
+                if let Some(hint) = suggestion {
+                    write!(f, " — did you mean `{hint}`?")?;
+                }
+                Ok(())
+            }
+
+            PolyplugcError::InvalidIdentifier {
+                kind,
+                name,
+                context,
+                location,
+            } => {
+                if let Some(loc) = location {
+                    write!(f, "{loc} — ")?;
+                }
+                write!(
+                    f,
+                    "invalid {kind} name `{name}` in `{context}`: names must match [A-Za-z_][A-Za-z0-9_]* (a valid identifier)"
+                )
+            }
+
+            PolyplugcError::DuplicateFunctionName {
+                contract,
+                function,
+                first_defined_at,
+            } => {
+                write!(
+                    f,
+                    "duplicate function name `{function}` in contract `{contract}`"
+                )?;
+                if let Some(loc) = first_defined_at {
+                    write!(f, " (first defined at {loc})")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl core::error::Error for PolyplugcError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            PolyplugcError::WriteFailed { source, .. } => Some(source),
+            PolyplugcError::ReadFailed { source, .. } => Some(source),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -117,11 +353,47 @@ mod tests {
         let err: PolyplugcError = PolyplugcError::UnknownType {
             type_ref: "MySpecialType".to_owned(),
             contract: "audio_api".to_owned(),
+            location: None,
+            suggestion: None,
         };
         let s: String = err.to_string();
         assert!(s.contains("unknown type"), "got: {s}");
         assert!(s.contains("MySpecialType"), "got: {s}");
         assert!(s.contains("audio_api"), "got: {s}");
+    }
+
+    #[test]
+    fn unknown_type_with_suggestion_display() {
+        let err: PolyplugcError = PolyplugcError::UnknownType {
+            type_ref: "Striing".to_owned(),
+            contract: "audio_api".to_owned(),
+            location: None,
+            suggestion: Some("StringView".to_owned()),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("unknown type"), "got: {s}");
+        assert!(s.contains("Striing"), "got: {s}");
+        assert!(s.contains("StringView"), "got: {s}");
+        assert!(s.contains("did you mean"), "got: {s}");
+    }
+
+    #[test]
+    fn unknown_type_with_location_display() {
+        use super::SourceLocation;
+        let err: PolyplugcError = PolyplugcError::UnknownType {
+            type_ref: "Foo".to_owned(),
+            contract: "bar".to_owned(),
+            location: Some(SourceLocation {
+                file: "api.toml".to_owned(),
+                line: 5,
+                col: 12,
+            }),
+            suggestion: None,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("api.toml"), "got: {s}");
+        assert!(s.contains("5"), "got: {s}");
+        assert!(s.contains("12"), "got: {s}");
     }
 
     #[test]
@@ -157,6 +429,35 @@ mod tests {
     }
 
     #[test]
+    fn toml_parse_error_without_location_display() {
+        let err: PolyplugcError = PolyplugcError::TomlParseError {
+            message: "expected `=` sign".to_owned(),
+            location: None,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("TOML parse error"), "got: {s}");
+        assert!(s.contains("expected `=` sign"), "got: {s}");
+    }
+
+    #[test]
+    fn toml_parse_error_with_location_display() {
+        use super::SourceLocation;
+        let err: PolyplugcError = PolyplugcError::TomlParseError {
+            message: "expected `=` sign".to_owned(),
+            location: Some(SourceLocation {
+                file: "bundle.toml".to_owned(),
+                line: 3,
+                col: 7,
+            }),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("TOML parse error"), "got: {s}");
+        assert!(s.contains("bundle.toml"), "got: {s}");
+        assert!(s.contains("3"), "got: {s}");
+        assert!(s.contains("7"), "got: {s}");
+    }
+
+    #[test]
     fn bundle_name_conflict_display() {
         let err: PolyplugcError = PolyplugcError::BundleNameConflict {
             bundle_name: "shared_types".to_owned(),
@@ -174,11 +475,26 @@ mod tests {
         let err: PolyplugcError = PolyplugcError::EnumInvalidRepr {
             enum_name: "Color".to_owned(),
             repr: "i32".to_owned(),
+            suggestion: None,
         };
         let s: String = err.to_string();
         assert!(s.contains("invalid repr"), "got: {s}");
         assert!(s.contains("Color"), "got: {s}");
         assert!(s.contains("i32"), "got: {s}");
+    }
+
+    #[test]
+    fn enum_invalid_repr_with_suggestion_display() {
+        let err: PolyplugcError = PolyplugcError::EnumInvalidRepr {
+            enum_name: "Color".to_owned(),
+            repr: "u33".to_owned(),
+            suggestion: Some("u32".to_owned()),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("invalid repr"), "got: {s}");
+        assert!(s.contains("u33"), "got: {s}");
+        assert!(s.contains("u32"), "got: {s}");
+        assert!(s.contains("did you mean"), "got: {s}");
     }
 
     #[test]
@@ -230,10 +546,10 @@ mod tests {
     fn enum_name_collision_display() {
         let err: PolyplugcError = PolyplugcError::EnumNameCollision {
             name: "EventKind".to_owned(),
+            suggestion: None,
         };
         let s: String = err.to_string();
         assert!(s.contains("EventKind"), "got: {s}");
-        // The message says both [[type]] and [[enum]] use the name
         assert!(s.contains("type") || s.contains("enum"), "got: {s}");
     }
 
@@ -243,12 +559,35 @@ mod tests {
             component: "minor".to_owned(),
             value: 70000,
             version_str: "1.70000.0".to_owned(),
+            location: None,
+            suggestion: None,
         };
         let s: String = err.to_string();
         assert!(s.contains("version overflow"), "got: {s}");
         assert!(s.contains("minor"), "got: {s}");
         assert!(s.contains("70000"), "got: {s}");
         assert!(s.contains("65535"), "got: {s}");
+    }
+
+    #[test]
+    fn version_overflow_with_location_display() {
+        use super::SourceLocation;
+        let err: PolyplugcError = PolyplugcError::VersionOverflow {
+            component: "patch".to_owned(),
+            value: 99999,
+            version_str: "1.0.99999".to_owned(),
+            location: Some(SourceLocation {
+                file: "api.toml".to_owned(),
+                line: 8,
+                col: 11,
+            }),
+            suggestion: Some("use a value <= 65535".to_owned()),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("version overflow"), "got: {s}");
+        assert!(s.contains("api.toml"), "got: {s}");
+        assert!(s.contains("8"), "got: {s}");
+        assert!(s.contains("did you mean"), "got: {s}");
     }
 
     #[test]
@@ -266,10 +605,24 @@ mod tests {
     fn duplicate_contract_name_display() {
         let err: PolyplugcError = PolyplugcError::DuplicateContractName {
             name: "shared.api".to_owned(),
+            first_defined_at: None,
         };
         let s: String = err.to_string();
         assert!(s.contains("duplicate"), "got: {s}");
         assert!(s.contains("shared.api"), "got: {s}");
         assert!(s.contains("unique"), "got: {s}");
+    }
+
+    #[test]
+    fn duplicate_function_name_display() {
+        let err: PolyplugcError = PolyplugcError::DuplicateFunctionName {
+            contract: "svc.api".to_owned(),
+            function: "run".to_owned(),
+            first_defined_at: None,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("duplicate"), "got: {s}");
+        assert!(s.contains("run"), "got: {s}");
+        assert!(s.contains("svc.api"), "got: {s}");
     }
 }

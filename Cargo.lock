@@ -1529,7 +1529,6 @@ dependencies = [
  "polyplug_abi",
  "polyplug_utils",
  "tempfile",
- "thiserror",
 ]
 
 [[package]]

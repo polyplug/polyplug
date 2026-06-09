@@ -45,6 +45,8 @@ impl Version {
                 component: "minor".to_owned(),
                 value: minor,
                 version_str: s.to_owned(),
+                location: None,
+                suggestion: None,
             });
         }
         if patch > U16_MAX {
@@ -52,6 +54,8 @@ impl Version {
                 component: "patch".to_owned(),
                 value: patch,
                 version_str: s.to_owned(),
+                location: None,
+                suggestion: None,
             });
         }
 
@@ -359,6 +363,8 @@ pub fn resolve_type_ref(
     Err(PolyplugcError::UnknownType {
         type_ref: type_str.to_owned(),
         contract: contract.to_owned(),
+        location: None,
+        suggestion: None,
     })
 }
 

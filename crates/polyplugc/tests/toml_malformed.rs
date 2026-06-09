@@ -34,8 +34,8 @@ fn missing_closing_bracket_single_table() {
     // `[bundle` missing the closing `]` — TOML parse error.
     let err: PolyplugcError = bundle_err("[bundle\nname = \"x\"\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing `]` in table header, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing `]` in table header, got {err:?}",
     );
 }
 
@@ -44,8 +44,8 @@ fn missing_closing_bracket_array_of_tables() {
     // `[[contract` missing the closing `]]` — TOML parse error.
     let err: PolyplugcError = api_err("[[contract\nname = \"x\"\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing `]]` in array-of-tables header, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing `]]` in array-of-tables header, got {err:?}",
     );
 }
 
@@ -57,8 +57,8 @@ fn missing_closing_bracket_nested_subtable() {
         "[[contract.functions\nname = \"f\"\n",
     ));
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for missing `]]` in sub-array header, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for missing `]]` in sub-array header, got {err:?}",
     );
 }
 
@@ -70,8 +70,8 @@ fn unclosed_inline_array_value() {
         "[[plugin]]\nname = \"p\"\nversion = \"1.0\"\nimplements = [\"x\"\n",
     ));
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for unclosed inline array, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for unclosed inline array, got {err:?}",
     );
 }
 
@@ -80,8 +80,8 @@ fn unclosed_inline_table_value() {
     // Inline table `{name = "x"` missing the closing `}`.
     let err: PolyplugcError = api_err("[[contract]]\nname = {value = \"x\"\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for unclosed inline table, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for unclosed inline table, got {err:?}",
     );
 }
 
@@ -94,8 +94,8 @@ fn invalid_escape_sequence_backslash_q() {
     // `\q` is not a valid TOML escape sequence.
     let err: PolyplugcError = api_err("[[contract]]\nname = \"bad\\qescape\"\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for `\\q` escape, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for `\\q` escape, got {err:?}",
     );
 }
 
@@ -104,8 +104,8 @@ fn invalid_escape_sequence_backslash_a() {
     // `\a` is not a valid TOML escape sequence (unlike C).
     let err: PolyplugcError = bundle_err("[bundle]\nname = \"bad\\aescape\"\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for `\\a` escape, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for `\\a` escape, got {err:?}",
     );
 }
 
@@ -114,8 +114,8 @@ fn invalid_escape_sequence_lone_backslash() {
     // A lone trailing backslash before end-of-string is invalid.
     let err: PolyplugcError = api_err("[[contract]]\nname = \"trailing\\\"\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for lone trailing backslash, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for lone trailing backslash, got {err:?}",
     );
 }
 
@@ -146,8 +146,8 @@ fn mixed_table_and_array_of_tables_same_key() {
         "[[contract]]\nname = \"array\"\nversion = \"1.0\"\n",
     ));
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for mixed `[contract]` + `[[contract]]`, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for mixed `[contract]` + `[[contract]]`, got {err:?}",
     );
 }
 
@@ -159,8 +159,8 @@ fn redefining_existing_table_header() {
         "[bundle]\nname = \"second\"\nversion = \"2.0\"\n",
     ));
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for duplicate `[bundle]` header, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for duplicate `[bundle]` header, got {err:?}",
     );
 }
 
@@ -173,8 +173,8 @@ fn array_element_defined_before_array_header() {
         "[[contract]]\nname = \"array\"\nversion = \"1.0\"\n",
     ));
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for dotted-key vs array-of-tables conflict, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for dotted-key vs array-of-tables conflict, got {err:?}",
     );
 }
 
@@ -201,8 +201,8 @@ fn empty_string_is_invalid_bundle_toml() {
     // A bundle.toml MUST have a `[bundle]` section — empty string should fail.
     let err: PolyplugcError = bundle_err("");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for empty bundle TOML, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for empty bundle TOML, got {err:?}",
     );
 }
 
@@ -234,8 +234,8 @@ fn comments_only_is_invalid_bundle_toml() {
     // Comments but no `[bundle]` section — must fail.
     let err: PolyplugcError = bundle_err("# just a comment\n# another comment\n");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for comments-only bundle TOML, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for comments-only bundle TOML, got {err:?}",
     );
 }
 
@@ -260,8 +260,8 @@ fn comment_mid_key_value_is_invalid() {
     // but a `#` between the key and `=` terminates the line early — TOML error.
     let err: PolyplugcError = api_err("[[contract]]\nname # comment = \"x\"\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for `#` between key and `=`, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for `#` between key and `=`, got {err:?}",
     );
 }
 
@@ -274,8 +274,8 @@ fn unicode_escape_with_too_few_hex_digits() {
     // `\uXXX` requires exactly 4 hex digits; 3 is invalid.
     let err: PolyplugcError = api_err("[[contract]]\nname = \"bad\\u004\"\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for `\\u` with 3 hex digits, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for `\\u` with 3 hex digits, got {err:?}",
     );
 }
 
@@ -284,8 +284,8 @@ fn unicode_escape_with_non_hex_digit() {
     // `\uXXXG` — `G` is not a valid hex digit.
     let err: PolyplugcError = api_err("[[contract]]\nname = \"bad\\u000G\"\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for `\\u000G` non-hex digit, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for `\\u000G` non-hex digit, got {err:?}",
     );
 }
 
@@ -294,8 +294,8 @@ fn unicode_escape_surrogate_pair_rejected() {
     // `\uD800` is a lone surrogate — invalid in TOML (must be valid Unicode scalar).
     let err: PolyplugcError = api_err("[[contract]]\nname = \"\\uD800\"\nversion = \"1.0\"");
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for lone surrogate `\\uD800`, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for lone surrogate `\\uD800`, got {err:?}",
     );
 }
 
@@ -315,7 +315,7 @@ fn long_unicode_escape_u_uppercase_valid() {
     // `\U0001F600` (8 hex digits) — valid TOML long Unicode escape. The TOML
     // lexer must accept it; the resulting name contains a non-identifier
     // codepoint (emoji), so name validation rejects it afterwards. An
-    // InvalidIdentifier (not a TOML ValidationFailed) proves the escape lexed.
+    // InvalidIdentifier (not a TomlParseError) proves the escape lexed.
     let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> =
         parse_api_str("[[contract]]\nname = \"emoji\\U0001F600end\"\nversion = \"1.0\"");
     assert!(
@@ -362,8 +362,8 @@ fn very_long_key_name_invalid() {
     let toml: String = format!("[[contract]]\n{long_key} = \"v\"\nversion = \"1.0\"\n");
     let err: PolyplugcError = api_err(&toml);
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for key with embedded space, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for key with embedded space, got {err:?}",
     );
 }
 
@@ -383,8 +383,8 @@ fn deeply_nested_dotted_keys_accepted() {
         "extra.deep.key = \"ignored\"\n",
     );
     // The `RawBundleMeta` struct has `#[serde(default)]`-annotated optional fields;
-    // unknown fields bubble to a `ValidationFailed` because serde's `deny_unknown_fields`
-    // is not set — so this might succeed or fail based on the schema. We test it doesn't panic.
+    // depending on the schema this may succeed or surface a `TomlParseError`.
+    // We only assert it doesn't panic.
     let _result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_bundle_str(toml);
     // No assertion on Ok/Err — just confirm no panic / no crash.
 }
@@ -398,8 +398,8 @@ fn nested_inline_table_in_array_is_malformed() {
         "implements = [{contract = \"svc\"\n",
     ));
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for unclosed inline table in array, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for unclosed inline table in array, got {err:?}",
     );
 }
 
@@ -412,8 +412,8 @@ fn super_table_key_conflict_after_dotted_key() {
         "[bundle]\nname = \"second\"\nversion = \"1.0\"\n",
     ));
     assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for dotted-key then [bundle] name conflict, got {err:?}",
+        matches!(err, PolyplugcError::TomlParseError { .. }),
+        "expected TomlParseError for dotted-key then [bundle] name conflict, got {err:?}",
     );
 }
 
