@@ -58,12 +58,19 @@ function M.string_view(s)
 end
 
 -- Decode a StringView (passed by value or as a pointer) into a Lua string.
--- Accepts either a StringView cdata or its address as an integer/pointer.
+-- Accepts a StringView cdata or nil (null view). Raises on any other type —
+-- most often a Lua string that was already converted (double-conversion), which
+-- would otherwise silently yield "" because a Lua string has no `.ptr` field.
 function M.to_str(sv)
     if sv == nil then
         return ""
     end
-    if sv.len == 0 then
+    if type(sv) ~= "cdata" then
+        error("polyplug_guest.to_str: expected a StringView cdata (or nil), got a " ..
+            type(sv) .. " — did you already convert it to a Lua string? " ..
+            "Pass the original StringView, not its to_str() result.", 2)
+    end
+    if sv.ptr == nil or sv.len == 0 then
         return ""
     end
     return ffi.string(sv.ptr, sv.len)

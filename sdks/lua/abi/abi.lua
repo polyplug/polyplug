@@ -1039,7 +1039,15 @@ M.POLYPLUG_ABI_VERSION = ffi.cast("uint32_t", 1)
 -- ─── Helper Methods (preserved from helper files) ───
 
 function M.to_str(sv)
-    if not sv or not sv.ptr or sv.len == 0 then
+    if sv == nil then
+        return ""
+    end
+    if type(sv) ~= "cdata" then
+        error("polyplug.to_str: expected a StringView cdata (or nil), got a " ..
+            type(sv) .. " — did you already convert it to a Lua string? " ..
+            "Pass the original StringView, not its to_str() result.", 2)
+    end
+    if sv.ptr == nil or sv.len == 0 then
         return ""
     end
     return ffi.string(sv.ptr, sv.len)

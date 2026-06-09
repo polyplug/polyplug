@@ -420,10 +420,21 @@ def bundle_id(name: str) -> int:
 /// Merged into abi.lua before `return M`.
 const HELPER_LUA: &str = r#"
 --- Convert StringView to Lua string.
--- @param sv StringView from polyplug ABI (ffi.cdata)
+-- @param sv StringView from polyplug ABI (ffi.cdata), or nil for a null view
 -- @return string Lua string (UTF-8), empty string if nil/empty
+-- Raises if given anything other than a StringView cdata or nil — most often a
+-- Lua string that was already converted (double-conversion), which would
+-- otherwise silently yield "" because a Lua string has no `.ptr` field.
 function M.to_str(sv)
-    if not sv or not sv.ptr or sv.len == 0 then
+    if sv == nil then
+        return ""
+    end
+    if type(sv) ~= "cdata" then
+        error("polyplug.to_str: expected a StringView cdata (or nil), got a " ..
+            type(sv) .. " — did you already convert it to a Lua string? " ..
+            "Pass the original StringView, not its to_str() result.", 2)
+    end
+    if sv.ptr == nil or sv.len == 0 then
         return ""
     end
     return ffi.string(sv.ptr, sv.len)
