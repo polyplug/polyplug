@@ -46,7 +46,10 @@ re-`find_guest_contract` + re-`resolve_guest_contract`.
 
 ## Host Library Performance Comparison
 
-### Call Overhead by Language
+This is the **host → runtime** direction: how much it costs an application
+written in each language to *call into* the runtime over FFI.
+
+![host call overhead by language](assets/benches/cross_lang_host.svg)
 
 | Language | Backend | Call Overhead | Speedup vs Python ctypes |
 |----------|---------|---------------|--------------------------|
@@ -55,6 +58,12 @@ re-`find_guest_contract` + re-`resolve_guest_contract`.
 | **JavaScript** | Deno FFI | ~50-100 ns | 5-10x |
 | **Python** | cffi ABI | ~380 ns | 1.7x |
 | **Python** | ctypes | ~670 ns | 1.0x (baseline) |
+
+> The **other** direction — the runtime *dispatching into* a guest plugin
+> written in each language — is charted under
+> [Loader Dispatch Benchmarks](#loader-dispatch-benchmarks) below. Host-call and
+> guest-dispatch are different boundaries; don't compare a bar from one chart to
+> a bar from the other.
 
 ### Why the Differences?
 
@@ -498,6 +507,18 @@ Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
 ---
 
 ## Loader Dispatch Benchmarks
+
+This is the **runtime → guest** direction: how much it costs the runtime to
+*dispatch into* a plugin written in each language. (The reverse direction —
+host calling into the runtime — is the [Call Overhead by Language](#call-overhead-by-language)
+chart far above.)
+
+![guest dispatch cost by language](assets/benches/cross_lang_guest.svg)
+
+The native bars (Rust, C++) are read live from the `counter_inc` run; the VM
+bars come from the per-loader benches below. Native dispatch is **language-blind**
+(~2.3–2.5 ns whether the plugin is Rust or C++); each VM then adds its own
+interpreter cost on top.
 
 > **All numbers below are from actual benchmark runs on the current codebase.**
 > Run `cargo bench -p polyplug --bench contract_dispatch`, `cargo bench -p polyplug_js`, etc. to reproduce.

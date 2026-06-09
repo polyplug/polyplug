@@ -93,8 +93,9 @@ _FG: str = "#c9d1d9"
 _MUTED: str = "#8b949e"
 _GRID: str = "#21262d"
 _HILITE: str = "#3fb950"  # polyplug (the product)
-_NEUTRAL: str = "#58a6ff"  # FFI / native reference
+_NEUTRAL: str = "#58a6ff"  # FFI / native reference / VM
 _FLOOR: str = "#6e7681"  # un-crossable floor
+_SLOW: str = "#d29922"  # the expensive end (Python GIL / ctypes)
 
 
 def chart_counter_inc(criterion_dir: Path, out: Path) -> None:
@@ -200,6 +201,112 @@ def chart_payload_scaling(criterion_dir: Path, out: Path) -> None:
     out.write_text(_svg(width, height, "".join(parts)))
 
 
+# ─── cross-language comparison (log-scale horizontal bars) ────────────────────
+#
+# These two charts compare the *languages* against each other, in both
+# directions of the boundary:
+#   - guest  = the runtime dispatching INTO a plugin written in language X
+#   - host   = an application written in language X calling INTO the runtime
+#
+# The native (Rust / C++) guest bars are read live from the counter_inc run so
+# they stay current. The VM-guest and host-FFI numbers are the measured figures
+# documented in docs/PERFORMANCE.md (they come from the per-loader
+# `dispatch_benchmark.rs` benches and the host FFI micro-benchmarks, which need
+# each language's runtime to reproduce). Re-run those and update the tables here
+# to refresh. All numbers are illustrative — one machine; trust the ordering.
+
+
+def _fmt_ns(value: float) -> str:
+    if value >= 1000.0:
+        return f"{value / 1000.0:.1f} µs"
+    if value >= 100.0:
+        return f"{value:.0f} ns"
+    return f"{value:.1f} ns"
+
+
+def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str) -> None:
+    """Horizontal log-scale bar chart; rows = [(label, ns, color)]."""
+    import math
+
+    width: int = 760
+    pad_l: int = 250
+    pad_r: int = 96
+    pad_t: int = 60
+    row_h: int = 40
+    height: int = pad_t + row_h * len(rows) + 52
+    plot_w: int = width - pad_l - pad_r
+
+    vmax: float = max(ns for _, ns, _ in rows)
+    axis_hi: float = math.log10(vmax * 1.6)
+
+    def x_of(ns: float) -> float:
+        # Log axis anchored at 1 ns; 0.3-decade floor so the fastest bar is visible.
+        frac: float = max(math.log10(ns), 0.3) / axis_hi
+        return pad_l + plot_w * frac
+
+    parts: list[str] = [
+        _text(24, 30, title, 17, _FG, "start"),
+        _text(24, 47, subtitle, 11, _MUTED, "start"),
+    ]
+    # decade gridlines (1 ns, 10 ns, 100 ns, 1 µs, 10 µs …)
+    decade: int = 0
+    while 10.0**decade <= vmax * 1.6:
+        gv: float = 10.0**decade
+        gx: float = pad_l + plot_w * (decade / axis_hi)
+        parts.append(_line(gx, pad_t - 4, gx, pad_t + row_h * len(rows), _GRID, 1))
+        parts.append(_text(gx, pad_t + row_h * len(rows) + 16, _fmt_ns(gv), 9, _MUTED, "middle"))
+        decade += 1
+    for i, (label, ns, color) in enumerate(rows):
+        y: float = pad_t + i * row_h
+        bar_w: float = x_of(ns) - pad_l
+        parts.append(_text(pad_l - 12, y + row_h / 2 + 4, label, 11, _FG, "end"))
+        parts.append(_rect(pad_l, y + 6, max(bar_w, 2.0), row_h - 16, color))
+        parts.append(_text(pad_l + bar_w + 8, y + row_h / 2 + 4, _fmt_ns(ns), 11, _FG, "start"))
+    parts.append(_text(24, height - 12, note, 9, _MUTED, "start"))
+    out.write_text(_svg(width, height, "".join(parts)))
+
+
+def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
+    """Per-call dispatch cost, runtime -> guest, by plugin language (log scale)."""
+    rust_ns: float = per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch")
+    cpp_ns: float = per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch_cpp")
+    rows: list = [
+        ("Rust (native cdylib)", rust_ns, _HILITE),
+        ("C++ (native cdylib)", cpp_ns, _HILITE),
+        (".NET (CLR, UnmanagedCallersOnly)", 8.0, _NEUTRAL),
+        ("Lua (LuaJIT)", 35.0, _NEUTRAL),
+        ("Python (GIL held, cached)", 63.0, _NEUTRAL),
+        ("JavaScript (QuickJS)", 95.0, _NEUTRAL),
+    ]
+    _chart_hbar_log(
+        out,
+        "Guest dispatch by language  (runtime → plugin)",
+        "steady-state per-call cost, log scale — lower is better",
+        rows,
+        "Rust/C++ measured live (counter_inc); VM rows from per-loader benches. "
+        "Python also pays a one-time ~13 µs GIL acquire per batch.",
+    )
+
+
+def chart_cross_language_host(criterion_dir: Path, out: Path) -> None:
+    """Per-call FFI overhead, host -> runtime, by host language (log scale)."""
+    rows: list = [
+        ("C++ (native)", 15.0, _HILITE),
+        ("Lua (LuaJIT FFI)", 35.0, _NEUTRAL),
+        ("JavaScript (Deno FFI)", 75.0, _NEUTRAL),
+        ("Python (cffi ABI)", 380.0, _SLOW),
+        ("Python (ctypes)", 670.0, _SLOW),
+    ]
+    _chart_hbar_log(
+        out,
+        "Host call overhead by language  (host → runtime)",
+        "per-call FFI cost to reach the runtime, log scale — lower is better",
+        rows,
+        "Host FFI micro-benchmarks (see docs/PERFORMANCE.md). C++/Lua/JS are the "
+        "fast end; Python's dynamic FFI is the cost of its convenience.",
+    )
+
+
 # ─── entry point ──────────────────────────────────────────────────────────────
 
 
@@ -219,6 +326,8 @@ def main() -> int:
     charts: list[tuple[str, object]] = [
         ("counter_inc.svg", chart_counter_inc),
         ("payload_scaling.svg", chart_payload_scaling),
+        ("cross_lang_guest.svg", chart_cross_language_guest),
+        ("cross_lang_host.svg", chart_cross_language_host),
     ]
     for name, render in charts:
         target: Path = out_dir / name
