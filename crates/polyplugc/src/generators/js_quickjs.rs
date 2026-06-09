@@ -1290,56 +1290,48 @@ fn generate_ts_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("export class {} {{\n", class_name));
-    out.push_str("    private _interface: { lo: number; hi: number };\n\n");
+    out.push_str("    private _minVersion: number;\n\n");
 
-    out.push_str("    private constructor(interfacePtr: { lo: number; hi: number }) {\n");
-    out.push_str("        this._interface = interfacePtr;\n");
+    out.push_str("    private constructor(minVersion: number) {\n");
+    out.push_str("        this._minVersion = minVersion;\n");
     out.push_str("    }\n\n");
 
-    out.push_str("    /** Factory method - creates caller instance or null if not found. */\n");
+    out.push_str("    /** Factory method - creates caller instance or null if the bridge is unavailable. */\n");
     out.push_str(&format!(
         "    static fromHost(hostPtr: {{ lo: number; hi: number }}, minVersion: number = 0): {} | null {{\n",
         class_name
     ));
-    out.push_str("        if (hostPtr.lo === 0 && hostPtr.hi === 0) {\n");
-    out.push_str("            return null;\n");
-    out.push_str("        }\n");
     out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
-    out.push_str("        if (!polyplug || !polyplug.getHostContract) {\n");
+    out.push_str("        if (!polyplug || !polyplug.callHostContract) {\n");
     out.push_str("            return null;\n");
     out.push_str("        }\n");
-    out.push_str(&format!(
-        "        const interfacePtr = polyplug.getHostContract(hostPtr.lo, hostPtr.hi, 0x{:08X}, 0x{:08X}, minVersion);\n",
-        contract_id_lo, contract_id_hi
-    ));
-    out.push_str("        if (interfacePtr === null || interfacePtr === undefined || (interfacePtr.lo === 0 && interfacePtr.hi === 0)) {\n");
-    out.push_str("            return null;\n");
-    out.push_str("        }\n");
-    out.push_str(&format!(
-        "        return new {}(interfacePtr);\n",
-        class_name
-    ));
+    out.push_str(&format!("        return new {}(minVersion);\n", class_name));
     out.push_str("    }\n\n");
 
-    out.push_str("    /** Check if this caller instance is still valid. */\n");
+    out.push_str("    /** Check if the bridge is available. */\n");
     out.push_str("    isValid(): boolean {\n");
-    out.push_str("        return this._interface.lo !== 0 || this._interface.hi !== 0;\n");
+    out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
+    out.push_str("        return !!(polyplug && polyplug.callHostContract);\n");
     out.push_str("    }\n\n");
 
     for func in &contract.functions {
-        generate_ts_guest_host_contract_method(out, func);
+        generate_ts_guest_host_contract_method(out, func, contract_id_lo, contract_id_hi);
     }
 
     out.push_str("}\n\n");
 }
 
 /// Generate one method for a guest-side host contract caller.
-fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::ResolvedFunction) {
+fn generate_ts_guest_host_contract_method(
+    out: &mut String,
+    func: &crate::ir::ResolvedFunction,
+    contract_id_lo: u32,
+    contract_id_hi: u32,
+) {
     let fn_id: u32 = func.function_id;
-    // Returns are RAW ABI values: the body initialises `result` via the shared
-    // `emit_ts_guest_host_contract_out_setup` and returns it unchanged, so the
-    // declared type must be the raw shape (e.g. StringView → {ptr_lo,ptr_hi,len}),
-    // not the ergonomic string/Uint8Array — otherwise deno rejects the return (TS2322).
+    // Returns are RAW ABI values — declared type must match the shape that
+    // emit_ts_guest_host_contract_readback produces (e.g. StringView →
+    // {ptr_lo,ptr_hi,len}), not the ergonomic string/Uint8Array.
     let return_type: String = match &func.returns {
         Some(ty) => ts_peer_raw_return_type(ty),
         None => "void".to_owned(),
@@ -1365,36 +1357,8 @@ fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::Re
         func.name, params_str, return_type
     ));
 
-    out.push_str("        if (this._interface.lo === 0 && this._interface.hi === 0) {\n");
-    if has_return {
-        out.push_str("            return null as any;\n");
-    } else {
-        out.push_str("            return;\n");
-    }
-    out.push_str("        }\n");
-
     out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
-    out.push_str("        if (!polyplug) {\n");
-    if has_return {
-        out.push_str("            return null as any;\n");
-    } else {
-        out.push_str("            return;\n");
-    }
-    out.push_str("        }\n");
-
-    // SAFETY comments for generated code are required per AGENTS.md for all unsafe operations
-    out.push_str(
-        "        // SAFETY: _interface.lo/hi are valid pointer halves per ABI contract.\n",
-    );
-    out.push_str("        // Pointer arithmetic reconstructs the full 64-bit address.\n");
-    out.push_str(
-        "        const interfaceAddr = this._interface.lo + this._interface.hi * 4294967296;\n",
-    );
-    out.push_str("        // SAFETY: readHostContractHeader reads from a valid interface pointer per the polyplug ABI.\n");
-    out.push_str("        const header = polyplug.readHostContractHeader(interfaceAddr);\n");
-    out.push_str(&format!(
-        "        if ({fn_id} >= header.functionCount) {{\n"
-    ));
+    out.push_str("        if (!polyplug || !polyplug.callHostContract) {\n");
     if has_return {
         out.push_str("            return null as any;\n");
     } else {
@@ -1405,29 +1369,11 @@ fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::Re
     emit_ts_guest_host_contract_args_setup(out, func);
     emit_ts_guest_host_contract_out_setup(out, &func.returns);
 
-    out.push_str("        const dispatchType = header.dispatchType;\n");
-    out.push_str("        let err: { lo: number; hi: number };\n");
-    out.push_str("        if (dispatchType === 0) {\n"); // DispatchType.Native
-    out.push_str("            // SAFETY: readU64 reads 8 bytes from a valid function table pointer per ABI contract.\n");
     out.push_str(&format!(
-        "            const fnPtr = polyplug.readU64(header.functionsPtr + {fn_id} * 8);\n"
+        "        const errCode: number = polyplug.callHostContract(0x{:08X}, 0x{:08X}, this._minVersion, {}, argsPtr, outPtr);\n",
+        contract_id_lo, contract_id_hi, fn_id
     ));
-    out.push_str("            const implPtr = header.implPtr;\n");
-    out.push_str("            // SAFETY: callDispatchFn invokes a valid function pointer with properly aligned args/out per ABI contract.\n");
-    out.push_str(
-        "            err = polyplug.callDispatchFn(fnPtr.lo, fnPtr.hi, implPtr.lo, implPtr.hi, argsPtr, outPtr);\n",
-    );
-    out.push_str("        } else {\n"); // DispatchType.VirtualMachine
-    out.push_str("            // SAFETY: callVmDispatch invokes the VM dispatch with valid bridge data and args/out per ABI contract.\n");
-    // Canonical 6-arg VM dispatch: call(loader_data, instance, fn_id, args, out, arena).
-    // QuickJS splits 64-bit values into lo/hi u32 pairs, so the trailing arena pointer
-    // is passed as (arenaLo, arenaHi). A null arena (0, 0) is the documented legacy
-    // fallback to per-value host->alloc — QuickJS host callers carry no per-call arena.
-    out.push_str(&format!(
-        "            err = polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, {fn_id}, argsPtr, outPtr, 0, 0);\n"
-    ));
-    out.push_str("        }\n");
-    out.push_str("        if (err.lo !== 0 || err.hi !== 0) {\n");
+    out.push_str("        if (errCode !== 0) {\n");
     if has_return {
         out.push_str("            return null as any;\n");
     } else {
@@ -1436,13 +1382,108 @@ fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::Re
     out.push_str("        }\n");
 
     if has_return {
+        emit_ts_guest_host_contract_readback(out, func.returns.as_ref());
         out.push_str("        return result;\n");
     }
 
     out.push_str("    }\n\n");
 }
 
-/// Emit the argsPtr setup for a TypeScript guest host contract method.
+/// Return the packed ABI byte-size of a single resolved type (for args struct packing).
+fn abi_sizeof(ty: &ResolvedTypeRef) -> usize {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => {
+            if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
+                8
+            } else {
+                4
+            }
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => 16,
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => 24,
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => 8,
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => 0,
+        // UserDefined types in guest caller context are enum-backed scalars (u32).
+        ResolvedTypeRef::UserDefined(_) => 4,
+    }
+}
+
+/// Emit a StringView into `buf` at `offset` using arenaAlloc + writeU32/writeByte.
+/// Defines `_<name>DataBuf` and `_<name>DataPtr` locals; `buf` is the combined args pointer.
+fn emit_ts_write_string_view(out: &mut String, param_name: &str, args_ptr: &str, offset: usize) {
+    let n: &str = param_name;
+    let ap: &str = args_ptr;
+    out.push_str(&format!(
+        "        const _{n}Bytes = new TextEncoder().encode({n});\n"
+    ));
+    out.push_str(&format!(
+        "        const _{n}DataBuf = polyplug.arenaAlloc(_{n}Bytes.length > 0 ? _{n}Bytes.length : 1);\n"
+    ));
+    out.push_str(&format!(
+        "        const _{n}DataPtr = _{n}DataBuf[0] + _{n}DataBuf[1] * 4294967296;\n"
+    ));
+    out.push_str(&format!(
+        "        for (let _i = 0; _i < _{n}Bytes.length; _i++) {{ polyplug.writeByte(_{n}DataPtr + _i, _{n}Bytes[_i]); }}\n"
+    ));
+    out.push_str(&format!(
+        "        polyplug.writeU32({ap} + {offset}, _{n}DataBuf[0]);\n"
+    ));
+    out.push_str(&format!(
+        "        polyplug.writeU32({ap} + {}, _{n}DataBuf[1]);\n",
+        offset + 4
+    ));
+    out.push_str(&format!(
+        "        polyplug.writeU32({ap} + {}, _{n}Bytes.length);\n",
+        offset + 8
+    ));
+    out.push_str(&format!(
+        "        polyplug.writeU32({ap} + {}, 0);\n",
+        offset + 12
+    ));
+}
+
+/// Emit a Buffer (Uint8Array) into `buf` at `offset` using arenaAlloc + writeU32/writeByte.
+fn emit_ts_write_buffer(out: &mut String, param_name: &str, args_ptr: &str, offset: usize) {
+    let n: &str = param_name;
+    let ap: &str = args_ptr;
+    out.push_str(&format!(
+        "        const _{n}DataBuf = polyplug.arenaAlloc({n}.length > 0 ? {n}.length : 1);\n"
+    ));
+    out.push_str(&format!(
+        "        const _{n}DataPtr = _{n}DataBuf[0] + _{n}DataBuf[1] * 4294967296;\n"
+    ));
+    out.push_str(&format!(
+        "        for (let _i = 0; _i < {n}.length; _i++) {{ polyplug.writeByte(_{n}DataPtr + _i, {n}[_i]); }}\n"
+    ));
+    out.push_str(&format!(
+        "        polyplug.writeU32({ap} + {offset}, _{n}DataBuf[0]);\n"
+    ));
+    out.push_str(&format!(
+        "        polyplug.writeU32({ap} + {}, _{n}DataBuf[1]);\n",
+        offset + 4
+    ));
+    out.push_str(&format!(
+        "        polyplug.writeU32({ap} + {}, {n}.length);\n",
+        offset + 8
+    ));
+    out.push_str(&format!(
+        "        polyplug.writeU32({ap} + {}, 0);\n",
+        offset + 12
+    ));
+    out.push_str(&format!(
+        "        polyplug.writeU32({ap} + {}, {n}.length);\n",
+        offset + 16
+    ));
+    out.push_str(&format!(
+        "        polyplug.writeU32({ap} + {}, 0);\n",
+        offset + 20
+    ));
+}
+
+/// Emit the argsPtr setup for a TypeScript guest host contract / peer method.
+///
+/// Uses `arenaAlloc` exclusively — no manual free needed; the arena is
+/// reclaimed automatically when the guest function returns.
 fn emit_ts_guest_host_contract_args_setup(out: &mut String, func: &crate::ir::ResolvedFunction) {
     if func.params.is_empty() {
         out.push_str("        const argsPtr = 0;\n");
@@ -1454,50 +1495,118 @@ fn emit_ts_guest_host_contract_args_setup(out: &mut String, func: &crate::ir::Re
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                 out.push_str(&format!(
-                    "        const {}Bytes = new TextEncoder().encode({});\n",
-                    param.name, param.name
+                    "        const _{0}Bytes = new TextEncoder().encode({0});\n",
+                    param.name
                 ));
                 out.push_str(&format!(
-                    "        const {}Ptr = polyplug.allocString({}Bytes);\n",
-                    param.name, param.name
+                    "        const _{0}DataBuf = polyplug.arenaAlloc(_{0}Bytes.length > 0 ? _{0}Bytes.length : 1);\n",
+                    param.name
                 ));
-                out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
+                out.push_str(&format!(
+                    "        const _{0}DataPtr = _{0}DataBuf[0] + _{0}DataBuf[1] * 4294967296;\n",
+                    param.name
+                ));
+                out.push_str(&format!(
+                    "        for (let _i = 0; _i < _{0}Bytes.length; _i++) {{ polyplug.writeByte(_{0}DataPtr + _i, _{0}Bytes[_i]); }}\n",
+                    param.name
+                ));
+                out.push_str("        const _argsBuf = polyplug.arenaAlloc(16);\n");
+                out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr, _{0}DataBuf[0]);\n",
+                    param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + 4, _{0}DataBuf[1]);\n",
+                    param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + 8, _{0}Bytes.length);\n",
+                    param.name
+                ));
+                out.push_str("        polyplug.writeU32(argsPtr + 12, 0);\n");
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
                 out.push_str(&format!(
-                    "        const {}Ptr = polyplug.allocBuffer({});\n",
-                    param.name, param.name
+                    "        const _{0}DataBuf = polyplug.arenaAlloc({0}.length > 0 ? {0}.length : 1);\n",
+                    param.name
                 ));
-                out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
-            }
-            ResolvedTypeRef::UserDefined(_) => {
                 out.push_str(&format!(
-                    "        const {}Ptr = polyplug.allocStruct({});\n",
-                    param.name, param.name
+                    "        const _{0}DataPtr = _{0}DataBuf[0] + _{0}DataBuf[1] * 4294967296;\n",
+                    param.name
                 ));
-                out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
+                out.push_str(&format!(
+                    "        for (let _i = 0; _i < {0}.length; _i++) {{ polyplug.writeByte(_{0}DataPtr + _i, {0}[_i]); }}\n",
+                    param.name
+                ));
+                out.push_str("        const _argsBuf = polyplug.arenaAlloc(24);\n");
+                out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr, _{0}DataBuf[0]);\n",
+                    param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + 4, _{0}DataBuf[1]);\n",
+                    param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + 8, {0}.length);\n",
+                    param.name
+                ));
+                out.push_str("        polyplug.writeU32(argsPtr + 12, 0);\n");
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + 16, {0}.length);\n",
+                    param.name
+                ));
+                out.push_str("        polyplug.writeU32(argsPtr + 20, 0);\n");
             }
             ResolvedTypeRef::Primitive(p) => {
                 if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
+                    out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str(
+                        "        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n",
+                    );
                     out.push_str(&format!(
-                        "        const {}Ptr = polyplug.allocU64({}.lo, {}.hi);\n",
-                        param.name, param.name, param.name
+                        "        polyplug.writeU32(argsPtr, {}.lo);\n",
+                        param.name
                     ));
-                    out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
+                    out.push_str(&format!(
+                        "        polyplug.writeU32(argsPtr + 4, {}.hi);\n",
+                        param.name
+                    ));
                 } else {
+                    out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str(
+                        "        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n",
+                    );
                     out.push_str(&format!(
-                        "        const {}Ptr = polyplug.allocU32({});\n",
-                        param.name, param.name
+                        "        polyplug.writeU32(argsPtr, {});\n",
+                        param.name
                     ));
-                    out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
                 }
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => {
+                out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
                 out.push_str(&format!(
-                    "        const {}Ptr = polyplug.allocU64({}.lo, {}.hi);\n",
-                    param.name, param.name, param.name
+                    "        polyplug.writeU32(argsPtr, {}.lo);\n",
+                    param.name
                 ));
-                out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + 4, {}.hi);\n",
+                    param.name
+                ));
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                // UserDefined types in guest caller context are enum-backed scalars
+                // (u32 in TypeScript). Pack as a 4-byte value in an 8-byte aligned slot.
+                out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr, Number({0}));\n",
+                    param.name
+                ));
+                out.push_str("        polyplug.writeU32(argsPtr + 4, 0);\n");
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {
                 out.push_str("        const argsPtr = 0;\n");
@@ -1506,82 +1615,28 @@ fn emit_ts_guest_host_contract_args_setup(out: &mut String, func: &crate::ir::Re
         return;
     }
 
-    // Multiple params: pack into inline struct
-    out.push_str("        const argsSize = ");
+    // Multiple params: compute total packed size then arenaAlloc once.
     let mut total_size: usize = 0;
     for param in &func.params {
-        match &param.ty {
-            ResolvedTypeRef::Primitive(p) => {
-                if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
-                    total_size += 8;
-                } else {
-                    total_size += 4;
-                }
-            }
-            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => total_size += 12,
-            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => total_size += 16,
-            ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => total_size += 8,
-            ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {}
-            ResolvedTypeRef::UserDefined(_) => {
-                total_size += 8;
-            }
-        }
+        total_size += abi_sizeof(&param.ty);
     }
-    out.push_str(&format!("{};\n", total_size));
-    out.push_str("        const argsPtr = polyplug.alloc(argsSize);\n");
+
+    out.push_str(&format!(
+        "        const _argsBuf = polyplug.arenaAlloc({});\n",
+        total_size
+    ));
+    out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
+
     let mut offset: usize = 0;
     for param in &func.params {
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-                out.push_str(&format!(
-                    "        const {}Bytes = new TextEncoder().encode({});\n",
-                    param.name, param.name
-                ));
-                out.push_str(&format!(
-                    "        const {}StrPtr = polyplug.allocString({}Bytes);\n",
-                    param.name, param.name
-                ));
-                out.push_str(&format!(
-                    "        polyplug.writeU32(argsPtr + {}, {}StrPtr.lo);\n",
-                    offset, param.name
-                ));
-                out.push_str(&format!(
-                    "        polyplug.writeU32(argsPtr + {}, {}StrPtr.hi);\n",
-                    offset + 4,
-                    param.name
-                ));
-                out.push_str(&format!(
-                    "        polyplug.writeU32(argsPtr + {}, {}Bytes.length);\n",
-                    offset + 8,
-                    param.name
-                ));
-                offset += 12;
+                emit_ts_write_string_view(out, &param.name, "argsPtr", offset);
+                offset += 16;
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
-                out.push_str(&format!(
-                    "        const {}BufPtr = polyplug.allocBuffer({});\n",
-                    param.name, param.name
-                ));
-                out.push_str(&format!(
-                    "        polyplug.writeU32(argsPtr + {}, {}BufPtr.lo);\n",
-                    offset, param.name
-                ));
-                out.push_str(&format!(
-                    "        polyplug.writeU32(argsPtr + {}, {}BufPtr.hi);\n",
-                    offset + 4,
-                    param.name
-                ));
-                out.push_str(&format!(
-                    "        polyplug.writeU32(argsPtr + {}, {}.length);\n",
-                    offset + 8,
-                    param.name
-                ));
-                out.push_str(&format!(
-                    "        polyplug.writeU32(argsPtr + {}, {}.length);\n",
-                    offset + 12,
-                    param.name
-                ));
-                offset += 16;
+                emit_ts_write_buffer(out, &param.name, "argsPtr", offset);
+                offset += 24;
             }
             ResolvedTypeRef::Primitive(p) => {
                 if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
@@ -1616,54 +1671,73 @@ fn emit_ts_guest_host_contract_args_setup(out: &mut String, func: &crate::ir::Re
                 offset += 8;
             }
             ResolvedTypeRef::UserDefined(_) => {
+                // UserDefined types in guest caller context are enum-backed scalars (u32).
                 out.push_str(&format!(
-                    "        const {}StructPtr = polyplug.allocStruct({});\n",
-                    param.name, param.name
-                ));
-                out.push_str(&format!(
-                    "        polyplug.writeU32(argsPtr + {}, {}StructPtr.lo);\n",
+                    "        polyplug.writeU32(argsPtr + {}, Number({}));\n",
                     offset, param.name
                 ));
-                out.push_str(&format!(
-                    "        polyplug.writeU32(argsPtr + {}, {}StructPtr.hi);\n",
-                    offset + 4,
-                    param.name
-                ));
-                offset += 8;
+                offset += 4;
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {}
         }
     }
 }
 
-/// Emit the outPtr setup for a TypeScript guest host contract method.
+/// Emit the outPtr setup for a TypeScript guest host contract / peer method.
+///
+/// Allocates the correct size via `arenaAlloc` and defines `const outPtr`.
+/// Does NOT pre-create `result` — that is done by `emit_ts_guest_host_contract_readback`
+/// after the dispatch call succeeds.
 fn emit_ts_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
     if let Some(ret_ty) = returns {
         match ret_ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-                out.push_str("        const outPtr = polyplug.alloc(12);\n");
-                out.push_str("        const result = { ptr_lo: 0, ptr_hi: 0, len: 0 };\n");
+                out.push_str("        const _outBuf = polyplug.arenaAlloc(16);\n");
+                out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
+                out.push_str("        polyplug.writeU32(outPtr, 0);\n");
+                out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
+                out.push_str("        polyplug.writeU32(outPtr + 8, 0);\n");
+                out.push_str("        polyplug.writeU32(outPtr + 12, 0);\n");
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
-                out.push_str("        const outPtr = polyplug.alloc(16);\n");
-                out.push_str("        const result = { ptr_lo: 0, ptr_hi: 0, len: 0, cap: 0 };\n");
+                out.push_str("        const _outBuf = polyplug.arenaAlloc(24);\n");
+                out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
+                out.push_str("        polyplug.writeU32(outPtr, 0);\n");
+                out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
+                out.push_str("        polyplug.writeU32(outPtr + 8, 0);\n");
+                out.push_str("        polyplug.writeU32(outPtr + 12, 0);\n");
+                out.push_str("        polyplug.writeU32(outPtr + 16, 0);\n");
+                out.push_str("        polyplug.writeU32(outPtr + 20, 0);\n");
             }
             ResolvedTypeRef::UserDefined(_) => {
-                out.push_str("        const outPtr = polyplug.allocStructSize();\n");
-                out.push_str("        const result = {} as any;\n");
+                // User-defined structs: allocate 8 bytes (pointer-sized slot); the host
+                // writes the return value here.  Without field-layout info at this call
+                // site we cannot allocate the exact struct size, so we use a pointer
+                // slot and note the limitation.
+                out.push_str("        const _outBuf = polyplug.arenaAlloc(8);\n");
+                out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
+                out.push_str("        polyplug.writeU32(outPtr, 0);\n");
+                out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
             }
             ResolvedTypeRef::Primitive(p) => {
                 if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
-                    out.push_str("        const outPtr = polyplug.alloc(8);\n");
-                    out.push_str("        const result = { lo: 0, hi: 0 };\n");
+                    out.push_str("        const _outBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
+                    out.push_str("        polyplug.writeU32(outPtr, 0);\n");
+                    out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
                 } else {
-                    out.push_str("        const outPtr = polyplug.alloc(4);\n");
-                    out.push_str("        const result = 0;\n");
+                    // Allocate 8 bytes for safety even though the value is 4 bytes.
+                    out.push_str("        const _outBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
+                    out.push_str("        polyplug.writeU32(outPtr, 0);\n");
+                    out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
                 }
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => {
-                out.push_str("        const outPtr = polyplug.alloc(8);\n");
-                out.push_str("        const result = { lo: 0, hi: 0 };\n");
+                out.push_str("        const _outBuf = polyplug.arenaAlloc(8);\n");
+                out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
+                out.push_str("        polyplug.writeU32(outPtr, 0);\n");
+                out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {
                 out.push_str("        const outPtr = 0;\n");
@@ -1671,6 +1745,57 @@ fn emit_ts_guest_host_contract_out_setup(out: &mut String, returns: &Option<Reso
         }
     } else {
         out.push_str("        const outPtr = 0;\n");
+    }
+}
+
+/// Emit `const result = ...;` by reading the dispatch result back from `outPtr`.
+///
+/// Called after the dispatch call succeeds (errCode === 0).  The `returns` value
+/// must NOT be `None` or `Void` — callers must guard against that.
+fn emit_ts_guest_host_contract_readback(out: &mut String, returns: Option<&ResolvedTypeRef>) {
+    let Some(ret_ty) = returns else {
+        return;
+    };
+    match ret_ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            out.push_str("        const result = { ptr_lo: polyplug.readU32(outPtr), ptr_hi: polyplug.readU32(outPtr + 4), len: polyplug.readU32(outPtr + 8) };\n");
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+            out.push_str("        const result = { ptr_lo: polyplug.readU32(outPtr), ptr_hi: polyplug.readU32(outPtr + 4), len: polyplug.readU32(outPtr + 8), cap: polyplug.readU32(outPtr + 16) };\n");
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => {
+            out.push_str(
+                "        const result = { lo: polyplug.readU32(outPtr), hi: polyplug.readU32(outPtr + 4) };\n",
+            );
+        }
+        ResolvedTypeRef::Primitive(p) => match p {
+            PrimitiveType::U64 | PrimitiveType::I64 => {
+                out.push_str(
+                    "        const result = { lo: polyplug.readU32(outPtr), hi: polyplug.readU32(outPtr + 4) };\n",
+                );
+            }
+            PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 => {
+                out.push_str("        const result: number = polyplug.readI32(outPtr);\n");
+            }
+            PrimitiveType::F32 => {
+                out.push_str("        const result: number = polyplug.readF32(outPtr);\n");
+            }
+            PrimitiveType::F64 => {
+                out.push_str("        const result: number = polyplug.readF64(outPtr);\n");
+            }
+            PrimitiveType::Bool => {
+                out.push_str("        const result: number = polyplug.readU32(outPtr);\n");
+            }
+            _ => {
+                out.push_str("        const result: number = polyplug.readU32(outPtr);\n");
+            }
+        },
+        ResolvedTypeRef::UserDefined(_) => {
+            out.push_str(
+                "        const result = { lo: polyplug.readU32(outPtr), hi: polyplug.readU32(outPtr + 4) } as any;\n",
+            );
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {}
     }
 }
 
@@ -2238,6 +2363,7 @@ fn generate_ts_peer_caller_method(
     out.push_str("        }\n");
 
     if has_return {
+        emit_ts_guest_host_contract_readback(out, func.returns.as_ref());
         out.push_str("        return result;\n");
     }
 
@@ -2630,7 +2756,7 @@ mod tests {
             "missing class: {out}"
         );
         assert!(
-            out.contains("private constructor(interfacePtr: { lo: number; hi: number })"),
+            out.contains("private constructor(minVersion: number)"),
             "missing private constructor: {out}"
         );
         assert!(
@@ -2647,6 +2773,19 @@ mod tests {
         assert!(
             out.contains("logf(level: number, format: string): void"),
             "missing logf method: {out}"
+        );
+        // New shape: uses callHostContract, arenaAlloc, not the old dispatch machinery.
+        assert!(
+            out.contains("polyplug.callHostContract("),
+            "must use callHostContract: {out}"
+        );
+        assert!(
+            !out.contains("readHostContractHeader"),
+            "must not use readHostContractHeader: {out}"
+        );
+        assert!(
+            !out.contains("callDispatchFn"),
+            "must not use callDispatchFn: {out}"
         );
     }
 
@@ -2967,6 +3106,76 @@ mod tests {
         assert!(
             index_file.content.contains("ValidatorPeer"),
             "guest/index.ts must re-export ValidatorPeer"
+        );
+    }
+
+    #[test]
+    fn guest_host_contract_stringview_return_uses_new_dispatch() {
+        // A StringView-returning host-contract method must use arenaAlloc(16) for the
+        // out buffer, emit polyplug.callHostContract, and read back via readU32(outPtr+8).
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.svc".to_owned(),
+            contract_id: 0xABCD_1234_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            singleton: false,
+            functions: vec![ResolvedFunction {
+                name: "describe".to_owned(),
+                function_id: 1,
+                params: vec![ResolvedParam {
+                    name: "key".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_ts_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("polyplug.arenaAlloc(16)"),
+            "out buffer must be arenaAlloc(16) for StringView: {out}"
+        );
+        assert!(
+            out.contains("polyplug.callHostContract("),
+            "must use callHostContract: {out}"
+        );
+        assert!(
+            out.contains("polyplug.readU32(outPtr + 8)"),
+            "must read len from outPtr+8: {out}"
+        );
+    }
+
+    #[test]
+    fn guest_host_contract_buffer_out_uses_arena_alloc_24() {
+        // A Buffer-returning host-contract method must allocate 24 bytes for the out slot.
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.store".to_owned(),
+            contract_id: 0x1111_2222_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            singleton: false,
+            functions: vec![ResolvedFunction {
+                name: "snapshot".to_owned(),
+                function_id: 2,
+                params: vec![],
+                returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_ts_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("polyplug.arenaAlloc(24)"),
+            "out buffer must be arenaAlloc(24) for Buffer: {out}"
+        );
+        assert!(
+            out.contains("polyplug.callHostContract("),
+            "must use callHostContract: {out}"
         );
     }
 

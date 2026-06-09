@@ -39,15 +39,27 @@ export class ValidatorPeer {
         if (!polyplug || !polyplug.callGuestMethod) {
             return null as any;
         }
-        const inputBytes = new TextEncoder().encode(input);
-        const inputPtr = polyplug.allocString(inputBytes);
-        const argsPtr = inputPtr;
-        const outPtr = polyplug.alloc(12);
-        const result = { ptr_lo: 0, ptr_hi: 0, len: 0 };
+        const _inputBytes = new TextEncoder().encode(input);
+        const _inputDataBuf = polyplug.arenaAlloc(_inputBytes.length > 0 ? _inputBytes.length : 1);
+        const _inputDataPtr = _inputDataBuf[0] + _inputDataBuf[1] * 4294967296;
+        for (let _i = 0; _i < _inputBytes.length; _i++) { polyplug.writeByte(_inputDataPtr + _i, _inputBytes[_i]); }
+        const _argsBuf = polyplug.arenaAlloc(16);
+        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;
+        polyplug.writeU32(argsPtr, _inputDataBuf[0]);
+        polyplug.writeU32(argsPtr + 4, _inputDataBuf[1]);
+        polyplug.writeU32(argsPtr + 8, _inputBytes.length);
+        polyplug.writeU32(argsPtr + 12, 0);
+        const _outBuf = polyplug.arenaAlloc(16);
+        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;
+        polyplug.writeU32(outPtr, 0);
+        polyplug.writeU32(outPtr + 4, 0);
+        polyplug.writeU32(outPtr + 8, 0);
+        polyplug.writeU32(outPtr + 12, 0);
         const errCode: number = polyplug.callGuestMethod(0x9EEC57C5, 0x45173A95, 1, 0, argsPtr, outPtr);
         if (errCode !== 0) {
             return null as any;
         }
+        const result = { ptr_lo: polyplug.readU32(outPtr), ptr_hi: polyplug.readU32(outPtr + 4), len: polyplug.readU32(outPtr + 8) };
         return result;
     }
 

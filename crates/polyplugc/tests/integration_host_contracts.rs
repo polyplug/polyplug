@@ -799,21 +799,29 @@ fn test_js_quickjs_host_contract_guest_generates_caller() {
     assert!(content.contains("fromHost"), "must contain fromHost");
     assert!(content.contains("isValid"), "must contain isValid");
 
-    // Defect (c): callVmDispatch must use the canonical 6-arg VM dispatch form,
-    // passing the trailing arena pointer as a (lo, hi) = (0, 0) null pair.
+    // Dispatch must go through the new callHostContract bridge primitive (resolves
+    // and dispatches internally — no vtable header reading or split dispatch paths).
     assert!(
-        content.contains("polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi,")
-            && content.contains(", argsPtr, outPtr, 0, 0);"),
-        "callVmDispatch must pass a null arena as the trailing lo/hi pair"
+        content.contains("polyplug.callHostContract("),
+        "must use callHostContract bridge primitive"
     );
-    // Guard against regressing to the old 5-arg form (no arena) on the VM call.
+    // The old split-dispatch machinery must NOT be present.
     assert!(
-        !content.contains(
-            "callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, 0, argsPtr, outPtr)"
-        ) && !content.contains(
-            "callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, 1, argsPtr, outPtr)"
-        ),
-        "callVmDispatch must not use the pre-arena 5-arg arity"
+        !content.contains("readHostContractHeader"),
+        "must not use readHostContractHeader"
+    );
+    assert!(
+        !content.contains("callVmDispatch"),
+        "must not use callVmDispatch"
+    );
+    assert!(
+        !content.contains("callDispatchFn"),
+        "must not use callDispatchFn"
+    );
+    // Out-buffer must use arenaAlloc (auto-reclaimed, correct sizing).
+    assert!(
+        content.contains("polyplug.arenaAlloc("),
+        "must use arenaAlloc for out-buffer"
     );
 
     println!("test_js_quickjs_host_contract_guest_generates_caller: passed ✓");

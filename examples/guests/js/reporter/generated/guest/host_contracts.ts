@@ -8,112 +8,70 @@ import { LogLevel } from './types';
  * Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
  */
 export class HostLoggerContract {
-    private _interface: { lo: number; hi: number };
+    private _minVersion: number;
 
-    private constructor(interfacePtr: { lo: number; hi: number }) {
-        this._interface = interfacePtr;
+    private constructor(minVersion: number) {
+        this._minVersion = minVersion;
     }
 
-    /** Factory method - creates caller instance or null if not found. */
+    /** Factory method - creates caller instance or null if the bridge is unavailable. */
     static fromHost(hostPtr: { lo: number; hi: number }, minVersion: number = 0): HostLoggerContract | null {
-        if (hostPtr.lo === 0 && hostPtr.hi === 0) {
-            return null;
-        }
         const polyplug = (globalThis as any).polyplug;
-        if (!polyplug || !polyplug.getHostContract) {
+        if (!polyplug || !polyplug.callHostContract) {
             return null;
         }
-        const interfacePtr = polyplug.getHostContract(hostPtr.lo, hostPtr.hi, 0x845853BB, 0xF53EB5F2, minVersion);
-        if (interfacePtr === null || interfacePtr === undefined || (interfacePtr.lo === 0 && interfacePtr.hi === 0)) {
-            return null;
-        }
-        return new HostLoggerContract(interfacePtr);
+        return new HostLoggerContract(minVersion);
     }
 
-    /** Check if this caller instance is still valid. */
+    /** Check if the bridge is available. */
     isValid(): boolean {
-        return this._interface.lo !== 0 || this._interface.hi !== 0;
+        const polyplug = (globalThis as any).polyplug;
+        return !!(polyplug && polyplug.callHostContract);
     }
 
     /** Call `log` */
     log(message: string): void {
-        if (this._interface.lo === 0 && this._interface.hi === 0) {
-            return;
-        }
         const polyplug = (globalThis as any).polyplug;
-        if (!polyplug) {
+        if (!polyplug || !polyplug.callHostContract) {
             return;
         }
-        // SAFETY: _interface.lo/hi are valid pointer halves per ABI contract.
-        // Pointer arithmetic reconstructs the full 64-bit address.
-        const interfaceAddr = this._interface.lo + this._interface.hi * 4294967296;
-        // SAFETY: readHostContractHeader reads from a valid interface pointer per the polyplug ABI.
-        const header = polyplug.readHostContractHeader(interfaceAddr);
-        if (0 >= header.functionCount) {
-            return;
-        }
-        const messageBytes = new TextEncoder().encode(message);
-        const messagePtr = polyplug.allocString(messageBytes);
-        const argsPtr = messagePtr;
+        const _messageBytes = new TextEncoder().encode(message);
+        const _messageDataBuf = polyplug.arenaAlloc(_messageBytes.length > 0 ? _messageBytes.length : 1);
+        const _messageDataPtr = _messageDataBuf[0] + _messageDataBuf[1] * 4294967296;
+        for (let _i = 0; _i < _messageBytes.length; _i++) { polyplug.writeByte(_messageDataPtr + _i, _messageBytes[_i]); }
+        const _argsBuf = polyplug.arenaAlloc(16);
+        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;
+        polyplug.writeU32(argsPtr, _messageDataBuf[0]);
+        polyplug.writeU32(argsPtr + 4, _messageDataBuf[1]);
+        polyplug.writeU32(argsPtr + 8, _messageBytes.length);
+        polyplug.writeU32(argsPtr + 12, 0);
         const outPtr = 0;
-        const dispatchType = header.dispatchType;
-        let err: { lo: number; hi: number };
-        if (dispatchType === 0) {
-            // SAFETY: readU64 reads 8 bytes from a valid function table pointer per ABI contract.
-            const fnPtr = polyplug.readU64(header.functionsPtr + 0 * 8);
-            const implPtr = header.implPtr;
-            // SAFETY: callDispatchFn invokes a valid function pointer with properly aligned args/out per ABI contract.
-            err = polyplug.callDispatchFn(fnPtr.lo, fnPtr.hi, implPtr.lo, implPtr.hi, argsPtr, outPtr);
-        } else {
-            // SAFETY: callVmDispatch invokes the VM dispatch with valid bridge data and args/out per ABI contract.
-            err = polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, 0, argsPtr, outPtr, 0, 0);
-        }
-        if (err.lo !== 0 || err.hi !== 0) {
+        const errCode: number = polyplug.callHostContract(0x845853BB, 0xF53EB5F2, this._minVersion, 0, argsPtr, outPtr);
+        if (errCode !== 0) {
             return;
         }
     }
 
     /** Call `log_with_level` */
     log_with_level(level: LogLevel, message: string): void {
-        if (this._interface.lo === 0 && this._interface.hi === 0) {
-            return;
-        }
         const polyplug = (globalThis as any).polyplug;
-        if (!polyplug) {
+        if (!polyplug || !polyplug.callHostContract) {
             return;
         }
-        // SAFETY: _interface.lo/hi are valid pointer halves per ABI contract.
-        // Pointer arithmetic reconstructs the full 64-bit address.
-        const interfaceAddr = this._interface.lo + this._interface.hi * 4294967296;
-        // SAFETY: readHostContractHeader reads from a valid interface pointer per the polyplug ABI.
-        const header = polyplug.readHostContractHeader(interfaceAddr);
-        if (1 >= header.functionCount) {
-            return;
-        }
-        const argsSize = 20;
-        const argsPtr = polyplug.alloc(argsSize);
-        const levelStructPtr = polyplug.allocStruct(level);
-        polyplug.writeU32(argsPtr + 0, levelStructPtr.lo);
-        polyplug.writeU32(argsPtr + 4, levelStructPtr.hi);
-        const messageBytes = new TextEncoder().encode(message);
-        const messageStrPtr = polyplug.allocString(messageBytes);
-        polyplug.writeU32(argsPtr + 8, messageStrPtr.lo);
-        polyplug.writeU32(argsPtr + 12, messageStrPtr.hi);
-        polyplug.writeU32(argsPtr + 16, messageBytes.length);
+        const _argsBuf = polyplug.arenaAlloc(20);
+        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;
+        polyplug.writeU32(argsPtr + 0, Number(level));
+        const _messageBytes = new TextEncoder().encode(message);
+        const _messageDataBuf = polyplug.arenaAlloc(_messageBytes.length > 0 ? _messageBytes.length : 1);
+        const _messageDataPtr = _messageDataBuf[0] + _messageDataBuf[1] * 4294967296;
+        for (let _i = 0; _i < _messageBytes.length; _i++) { polyplug.writeByte(_messageDataPtr + _i, _messageBytes[_i]); }
+        polyplug.writeU32(argsPtr + 4, _messageDataBuf[0]);
+        polyplug.writeU32(argsPtr + 8, _messageDataBuf[1]);
+        polyplug.writeU32(argsPtr + 12, _messageBytes.length);
+        polyplug.writeU32(argsPtr + 16, 0);
         const outPtr = 0;
-        const dispatchType = header.dispatchType;
-        let err: { lo: number; hi: number };
-        if (dispatchType === 0) {
-            // SAFETY: readU64 reads 8 bytes from a valid function table pointer per ABI contract.
-            const fnPtr = polyplug.readU64(header.functionsPtr + 1 * 8);
-            const implPtr = header.implPtr;
-            // SAFETY: callDispatchFn invokes a valid function pointer with properly aligned args/out per ABI contract.
-            err = polyplug.callDispatchFn(fnPtr.lo, fnPtr.hi, implPtr.lo, implPtr.hi, argsPtr, outPtr);
-        } else {
-            // SAFETY: callVmDispatch invokes the VM dispatch with valid bridge data and args/out per ABI contract.
-            err = polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, 1, argsPtr, outPtr, 0, 0);
-        }
-        if (err.lo !== 0 || err.hi !== 0) {
+        const errCode: number = polyplug.callHostContract(0x845853BB, 0xF53EB5F2, this._minVersion, 1, argsPtr, outPtr);
+        if (errCode !== 0) {
             return;
         }
     }
