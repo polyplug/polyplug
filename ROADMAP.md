@@ -31,7 +31,8 @@ _Last updated: 2026-06-08._
 | **polyplugc diagnostics (source spans + suggestions)** | ✅ Done (B3, #73 — `file:line:col` + did-you-mean on parse/validate errors) |
 | **Guest→guest peer callers + runtime tests** | ✅ Done (#69–#72, #75) — peer callers in all 6 generators; runtime execution tests green for **all 6** languages (rust/lua/js/cpp/csharp/python) |
 | **CI cost / caching** | ✅ Done (`rust-cache` on every job; cross-lang jobs main-only) |
-| **Benchmark regression gate in CI** | ✅ Done (nightly, core hot-path benches, >1.5x gross-regression gate) |
+| ~~Benchmark regression gate in CI~~ | ❌ Reverted — benchmarks are local-only (owner ruling); run `cargo bench` locally |
+| **Comparison benchmark (`counter_inc`)** | ✅ Done — safe dispatch ~0.5 ns over raw FFI; see `benches/README.md` (local-only) |
 | **Call-arena retain-and-rewind (perf)** | ✅ Done (ArenaOverflowBlock +used cursor; reset rewinds & retains, free on Drop/teardown; all 6 SDKs + 4 lockstep impls) |
 | D11 live-instance counter | ✅ Resolved — host-coordinated, no counter (zero hot-path cost) |
 | .NET collectible ALC (true managed unload) | ✅ Done (#68) — per-bundle collectible ALC; Reclaim truly unloads, Retire keeps it |
@@ -105,19 +106,14 @@ Held until the owner decides to publish. Kept here so it isn't lost.
 - **C1. CI cost reduction. ✅ Mostly done.** `Swatinem/rust-cache@v2` is already
   on every CI job and cross-language jobs run main-only. Remaining ideas if
   pressure persists: smarter matrix triggers, job consolidation.
-- **C2. Benchmark regression gate. ✅ Done.** A nightly `benches` job runs the
-  five pure-Rust `polyplug` hot-path benches (contract_dispatch, ffi_resolve,
-  ffi_find_all, registry_resolve, registry_find — no interpreter noise), caches
-  `target/criterion` across runs for a rolling baseline, and fails on any
-  benchmark that regresses >1.5x vs the previous run (`ci/check_bench_regression.py`).
-  The 1.5x threshold is generous enough that shared-runner noise never trips it;
-  building+running the benches is itself a gate against bench bitrot.
-  _Follow-up: ✅ Done. The nightly `benches` job now also runs the four
-  VM-dispatch benches — lua/js/python gate must-pass (vendored VMs / embedded
-  CPython, `python3-dev` provisioned for pyo3), and .NET runs best-effort
-  (`continue-on-error`, self-skips without hostfxr). The regression checker walks
-  all of `target/criterion`, so each joins the gate automatically once it has a
-  cached baseline._
+- **C2. Benchmark regression gate. ❌ Reverted — benchmarks are local-only
+  (owner ruling 2026-06-10).** A nightly `benches` job briefly ran the hot-path
+  benches in CI, but the owner ruled benchmarks are a **local** tool, not a CI
+  gate: they load native fixtures, embed VMs, and are too sensitive to
+  shared-runner noise to gate on. The whole `benches` job was removed from
+  `nightly.yml`. The benches themselves remain (run `cargo bench -p polyplug`),
+  and `ci/check_bench_regression.py` is kept as a **local** before/after
+  comparison helper. See `crates/polyplug/benches/README.md`.
 - **C4. Comparison / marketing benchmark. ✅ Done.** `counter_inc`
   (`cargo bench -p polyplug --bench counter_inc`) runs the same 1M-iteration
   `counter = inc(counter)` loop through four mechanisms — a direct `#[inline(never)]`
@@ -125,12 +121,12 @@ Held until the owner decides to publish. Kept here so it isn't lost.
   statically linked, and full polyplug resolved dispatch over a loaded `.so` —
   so each per-call delta isolates one cost. Result: polyplug's safe dispatch is
   **~0.5 ns over hand-rolled raw FFI** and within **2× of an un-inlinable direct
-  call** (~440 M calls/s). Documented in `docs/PERFORMANCE.md` ("The safety tax").
-  Added to the nightly regression gate (which also gained the missing
-  `build_all.sh` fixture-build step — the native/VM benches dlopen fixtures that
-  the benches job never built, so the gate would have panicked on its first real
-  schedule run).
-  _Follow-ups (not yet built):_
+  call** (~440 M calls/s). Documented in `docs/PERFORMANCE.md` ("The safety tax")
+  and `crates/polyplug/benches/README.md`. **Local-only** (per the C2 ruling) —
+  not wired into CI.
+  _Follow-ups (not yet built — documented in the benches README so they aren't
+  lost; each has a caveat, so none is a clean headline; build benches for what we
+  currently ship first):_
   - **Payload-scaling bench** — the most honest real-world view: plot per-call
     overhead as a *fraction of useful work* (inc → hash 1 KB → transform 4 KB →
     parse a doc). Overhead → ~0% as payload grows; this is the number to lead with.
