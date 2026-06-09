@@ -15,7 +15,7 @@ _Last updated: 2026-06-08._
 | Area | Status |
 |---|---|
 | Goal 1 — `generate` compiles clean + `validate --bundle-dir` | ✅ Done |
-| Goal 2 — Extension system (`get_extension`) | ✅ Done |
+| ~~Goal 2 — Extension system~~ | ❌ Removed (out of scope — two-contract model is complete) |
 | Cross-call dispatch (plugin → plugin) | ✅ Done |
 | Goal 3 — Call arena for VM dispatch | ✅ Done (perf refinement deferred) |
 | Platform support — Windows | ✅ Done |
@@ -103,10 +103,9 @@ Held until the owner decides to publish. Kept here so it isn't lost.
   building+running the benches is itself a gate against bench bitrot. _Follow-up:
   extend to the four VM-dispatch benches (need the external-toolchain setup the
   Examples/External jobs already provision)._
-- **C3. Reference tracing extension.** _Still open._ The extension system was
-  built for tracing/metrics but ships zero built-in extensions. A reference
-  tracing extension would prove the mechanism end-to-end and give adopters
-  observability. _CI cost: low._
+- **C3. ~~Reference tracing extension.~~ ❌ Cancelled (2026-06).** The extension
+  concept was removed (out of scope — see "Extension system — Removed"). Tracing
+  is an app concern: implement it as a `host.logger`-style host contract.
 
 ### Future / bigger bets ("what else would help")
 
@@ -175,18 +174,19 @@ e2e proof: `crates/polyplugc/tests/generate_e2e.rs` (rust → cargo build),
 deno check), `cli_validation.rs` (validate accepts correct, rejects missing
 artifact + tampered id).
 
-## Goal 2 — Extension System ✅ Done
+## Extension system — ❌ Removed (2026-06)
 
-`get_extension(extension_id: u32) → *const ()` is the 18th function pointer on
-`HostApi` (offset 144; struct is 160 bytes / 19 function pointers). The host
-registers extension pointers by ID; plugins call `host->get_extension(id)` and
-cast if non-null. Generic mechanism only — no built-in extensions. Pointers are
-registered once at startup and valid for the runtime's lifetime (host owns
-ABI-crossing memory).
+The extension mechanism (`get_extension` + side-table + `fnv1a_32`) was removed
+entirely. Owner ruling: the two-contract model — **guest contracts** (plugin
+functionality) + **host contracts** (services the host exposes to guests, e.g.
+the `host.logger` example) — is the complete model. Extensions forced an unused
+concept on every user and shipped zero consumers; anything they could carry is
+already an app-defined host contract.
 
-Delivered: `get_extension` on `HostApi`; `polyplug_utils::fnv1a_32`;
-`Runtime.extensions` + `register_extension` + `host_get_extension`; all 6 SDK
-ABIs + 6 generators carry the field; `sdk_validator` checks it.
+The `get_extension` slot on `HostApi` was replaced by a single trailing
+`reserved: *const c_void` (null), moved to the end of the struct (offset 152,
+after `unload_bundle`@144). The struct stays 160 bytes; `reserved` is silent
+forward-compat room (it can later point to a versioned table) with no narrative.
 
 ## Cross-call Dispatch (plugin → plugin) ✅ Done
 

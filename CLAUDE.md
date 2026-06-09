@@ -44,7 +44,7 @@ void* polyplug_runtime_create(const void* config);   // returns HostApi pointer
 void  polyplug_runtime_destroy(void* host);
 ```
 
-All other operations go through **`HostApi` struct fields** (function pointers). `HostApi` is `160 bytes` (1 opaque runtime pointer + 19 function pointer fields, the 17th being `call_guest_method` at offset 136, the 18th being `get_extension` at offset 144, and the 19th being `unload_bundle` at offset 152), `align = 8`. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostApi` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.
+All other operations go through **`HostApi` struct fields** (function pointers). `HostApi` is `160 bytes` (1 opaque runtime pointer + 18 function pointer fields + 1 trailing `reserved` data pointer: `call_guest_method` at offset 136, `unload_bundle` at offset 144, and `reserved` at offset 152), `align = 8`. The `reserved` pointer carries no meaning — producers set it to null, consumers must not read it; it exists only to keep the frozen struct size expandable later. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostApi` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.
 
 ### `polyplug_init` — the plugin entry point
 
@@ -310,7 +310,7 @@ unsafe {
   - Never add fields to `#[repr(C)]` structs that are part of the frozen ABI
   - Never change the order of fields in ABI structs
   - Never change function signatures in the core ABI
-  - All new functionality goes through the extension system
+  - New functionality is added through application-defined host/guest contracts, not by growing the ABI; the single trailing `reserved` pointer is the only sanctioned post-freeze expansion slot
 
 If you believe an ABI change is necessary, stop and raise it as a discussion with the owner. Do not proceed unilaterally.
 
@@ -788,7 +788,7 @@ polyplug/
 | `.expect()` in production | proper error types + `?` |
 | `return Err("string")` | `return Err(MyError::Variant)` |
 | `unsafe { ... }` no comment | `// SAFETY: ...` before every unsafe block |
-| unilateral ABI struct changes | pre-1.0: only with owner approval; at/after 1.0: new functionality via extension system only |
+| unilateral ABI struct changes | pre-1.0: only with owner approval; at/after 1.0: new functionality via host/guest contracts (ABI frozen; only the `reserved` slot may be repurposed) |
 | editing generated files | fix the generator, re-run polyplugc |
 | `fn polyplug_init(rt_ctx, host, ctx)` (3 args) | `fn polyplug_init(host, ctx)` (2 args — canonical) |
 | different ABI mechanisms per generator | identical `polyplug_init` + `register_guest_contract` across all generators |
