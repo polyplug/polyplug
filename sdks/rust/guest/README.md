@@ -305,9 +305,10 @@ pub struct HostApi {
         out: *mut c_void,
         arena: *mut CallArena,
     ) -> AbiError,
-    pub get_extension: unsafe extern "C" fn(
-        this: *const HostApi, extension_id: u32,
-    ) -> *const (),
+    pub unload_bundle: unsafe extern "C" fn(
+        this: *const HostApi, bundle_id: u64,
+    ) -> AbiError,
+    pub reserved: *const core::ffi::c_void,
 }
 ```
 

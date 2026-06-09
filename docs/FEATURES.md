@@ -26,9 +26,10 @@ Key ABI facts (verified in `crates/polyplug_abi/src/host/host_api.rs`):
 - **FFI surface is exactly two `#[no_mangle]` exports** — `polyplug_runtime_create`
   and `polyplug_runtime_destroy` (`crates/polyplug/src/ffi.rs`). Everything else
   is reached through function-pointer fields on `HostApi`.
-- **`HostApi` is 160 bytes, align 8**: one opaque `runtime` pointer plus 19
+- **`HostApi` is 160 bytes, align 8**: one opaque `runtime` pointer plus 18
   function pointers (the 17th, `call_guest_method`, at offset 136; the 18th,
-  `get_extension`, at offset 144; the 19th, `unload_bundle`, at offset 152).
+  `unload_bundle`, at offset 144) followed by a trailing `reserved: *const c_void`
+  data pointer at offset 152 (always null; forward-compat room only).
   Layout is locked by `layout_host_api` in `host_api.rs`.
 - **Plugin entry point is `polyplug_init(const HostApi*, const BundleInitContext*)`**
   (2 args). Plugins register via the self-passing pattern
@@ -194,27 +195,7 @@ safety guarantees: [`../TRUST_MODEL.md`](../TRUST_MODEL.md) (Hot-Reload Safety).
 
 ---
 
-## 6. Extension system (Goal 2)
-
-A generic, ID-based channel for optional host capabilities (tracing, debug hooks,
-custom metrics, etc.) that avoids changing the frozen `HostApi` layout.
-
-- `get_extension(extension_id: u32) -> *const ()` is the 18th `HostApi` function
-  pointer (offset 144; `unload_bundle` is the 19th at offset 152). The ID is the 32-bit FNV-1a hash of the extension name
-  (`polyplug_utils::fnv1a_32`). Returns null if no extension is registered.
-- The host registers pointers by ID via `Runtime::register_extension`; plugins
-  call `host->get_extension(id)` and cast the non-null result to the expected
-  struct.
-- **Lifetime contract:** extension pointers are registered once at startup and
-  valid for the runtime's entire lifetime; plugins read and cast, never free
-  (host owns ABI-crossing memory). No versioning, no contract machinery, and no
-  built-in extensions — it is a generic mechanism only.
-
-See [`../ROADMAP.md`](../ROADMAP.md) (Goal 2).
-
----
-
-## 7. Host contracts
+## 6. Host contracts
 
 Host contracts provide **bidirectional** communication: plugins call back into
 host-provided services (logging, metrics, config, etc.).
@@ -240,7 +221,7 @@ Full tutorial and per-language examples: [`HOST_CONTRACTS.md`](./HOST_CONTRACTS.
 
 ---
 
-## 8. Cross-dispatch (plugin → plugin)
+## 7. Cross-dispatch (plugin → plugin)
 
 A plugin can invoke a method on another plugin's guest contract through the host,
 without holding a raw interface pointer of its own.
@@ -266,7 +247,7 @@ without holding a raw interface pointer of its own.
 
 ---
 
-## 9. Runtime isolation
+## 8. Runtime isolation
 
 Multiple `Runtime` instances can coexist in one process, each owning its own
 `RuntimeStore`, loaded bundles, and configuration. No globals or thread-locals
@@ -288,7 +269,7 @@ its own VM. For full isolation with Python or .NET, use separate processes.
 
 ---
 
-## 10. Platform support
+## 9. Platform support
 
 | Platform | Status |
 |---|---|
@@ -317,7 +298,7 @@ Windows status (honest, per [`../ROADMAP.md`](../ROADMAP.md) Platform Support):
 
 ---
 
-## 11. Trust model
+## 10. Trust model
 
 polyplug is a software-architecture enforcement tool, not a security sandbox:
 host fully trusted (bundle ID 0), plugins semi-trusted (restricted at init to
@@ -331,7 +312,7 @@ isolation for untrusted code). Full detail: [`../TRUST_MODEL.md`](../TRUST_MODEL
 
 ---
 
-## 12. Performance posture
+## 11. Performance posture
 
 - **Native path is near-zero overhead:** the hot path is one guard load, one
   pointer dereference, and one indirect call (~2 ns for a trivial native

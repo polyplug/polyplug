@@ -235,7 +235,7 @@ The following table summarizes the sizes and alignments of the core ABI types on
 `resolve_host_contract_interface` (64), `list_bundles` (72), `get_dependencies` (80),
 `load_bundle` (88), `reload_bundle` (96), `register_host_contract` (104),
 `register_loader` (112), `get_last_error` (120), `get_error_len` (128),
-`call_guest_method` (136), `get_extension` (144), `unload_bundle` (152). There is no
+`call_guest_method` (136), `unload_bundle` (144), `reserved` (152, data pointer — always null). There is no
 `find_by_bundle` or `resolve_plugin` pointer in `HostApi`.
 
 ### Pointer Validity After Resolution
@@ -316,14 +316,13 @@ The following structures have the layouts and sizes that will be frozen at v1.0.
 - **`GuestContractHandle` (8 bytes)**: `index: u32` (offset 0) and `generation: u32` (offset 4), align 4.
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
 
-### Extensibility via host contracts and extensions
+### Extensibility via host contracts
 To support future capabilities without breaking the ABI, the host exposes contracts through
 `HostApi::get_host_contract(contract_id, min_version)` (and
 `resolve_host_contract_interface`). New host-side capabilities are added as new host contracts
 that plugins resolve by ID, rather than by extending the frozen `HostApi` struct.
-In addition, `HostApi::get_extension(extension_id)` returns host-provided opaque
-pointers keyed by a 32-bit FNV-1a hash of the extension name, giving the host a second,
-ID-based extension channel that also avoids changing the struct layout.
+The trailing `reserved: *const c_void` field (offset 152) is the only sanctioned
+post-freeze expansion slot; producers set it to null, consumers must not read it.
 
 ## Hot-Reload Safety Guarantees
 
@@ -458,6 +457,6 @@ and communicate via IPC. polyplug does not provide this facility.
 // explicit owner approval — never unilaterally. At and after v1.0, NO such changes
 // are permitted.
 //
-// New functionality should go through the host contract mechanism (get_host_contract)
-// or get_extension. For rationale and trust model, see TRUST_MODEL.md.
+// New functionality should go through the host/guest contract model
+// (get_host_contract / register_host_contract). For rationale and trust model, see TRUST_MODEL.md.
 // =============================================================================

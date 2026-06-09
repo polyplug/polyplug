@@ -44,21 +44,4 @@ function polyplug_init(host_ptr, ctx_ptr)
     return polyplug_guest.AbiErrorCode.Ok
 end
 
---- Get a host extension by name. Returns nil if not registered.
--- @param name string Extension name (as a Lua string).
--- @return cdata|nil Opaque extension pointer, or nil if not registered.
-function M.polyplug_get_extension(name)
-    local host_ptr = polyplug_guest.get_host_interface()
-    if host_ptr == nil then return nil end
-    local hash = 2166136261
-    for i = 1, #name do
-        hash = bit.bxor(hash, name:byte(i))
-        hash = bit.band(hash * 16777619, 0xFFFFFFFF)
-    end
-    local host = ffi.cast('HostApi*', ffi.cast('uintptr_t', host_ptr))
-    local ptr = host.get_extension(host_ptr, hash)
-    if ptr == nil then return nil end
-    return ptr
-end
-
 return M

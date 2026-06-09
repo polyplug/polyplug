@@ -37,23 +37,3 @@ extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* 
     return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
 }
 
-/// Get a host extension by name (pointer + length).
-///
-/// Computes extension_id = fnv1a_32(name), then calls host->get_extension.
-/// Returns nullptr if the host interface is not yet initialized or the
-/// extension is not registered.
-inline const void* polyplug_get_extension(const char* name, size_t name_len) noexcept {
-    const HostApi* host = polyplug::get_host_interface();
-    if (!host) return nullptr;
-    uint32_t hash = 2166136261u;
-    for (size_t i = 0; i < name_len; ++i) {
-        hash ^= static_cast<uint8_t>(name[i]);
-        hash *= 16777619u;
-    }
-    return host->get_extension(host, hash);
-}
-/// Convenience overload for string literals.
-template<size_t N>
-inline const void* polyplug_get_extension(const char (&name)[N]) noexcept {
-    return polyplug_get_extension(name, N - 1);
-}
