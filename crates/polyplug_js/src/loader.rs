@@ -36,6 +36,8 @@ use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::VmLoaderData;
@@ -1023,6 +1025,149 @@ fn register_host_functions<'js>(
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("JS runtime js-quickjs error: writeU32 set failed: {e}"),
+            })
+        })?;
+
+    // ── callHostContract ──────────────────────────────────────────────────────
+    // Dispatches a call to a host-provided contract service.  Resolves the
+    // HostContractInterface, reads the dispatch type, and invokes either the
+    // native function pointer or the VM call hook using the canonical host-caller
+    // pattern (null GuestContractInstance, null arena).
+    let call_host_contract_fn: Function<'js> = Function::new(
+        ctx.clone(),
+        |ctx: Ctx<'js>,
+         contract_id_lo: u32,
+         contract_id_hi: u32,
+         min_version: u32,
+         fn_id: u32,
+         args_ptr: u64,
+         out_ptr: u64|
+         -> u32 {
+            let contract_id: u64 = (contract_id_hi as u64) << 32 | contract_id_lo as u64;
+            let hvt: *const HostApi = match get_host_interface_from_globals(&ctx) {
+                Some(p) => p,
+                None => return AbiErrorCode::Generic as u32,
+            };
+            // SAFETY: hvt is a valid 'static HostApi pointer stored by register_host_functions;
+            // the self-passing ABI pattern is satisfied by passing hvt as the first argument.
+            let iface: *const HostContractInterface =
+                unsafe { ((*hvt).resolve_host_contract_interface)(hvt, contract_id, min_version) };
+            if iface.is_null() {
+                return AbiErrorCode::NotFound as u32;
+            }
+            // SAFETY: hvt is valid (same guarantee as above); hvt and contract_id/min_version
+            // match the resolve call that just succeeded so get_host_contract returns a valid
+            // HostContractInstance.
+            let instance: HostContractInstance =
+                unsafe { ((*hvt).get_host_contract)(hvt, contract_id, min_version) };
+            let args: *const core::ffi::c_void = args_ptr as usize as *const core::ffi::c_void;
+            let out: *mut core::ffi::c_void = out_ptr as usize as *mut core::ffi::c_void;
+            // SAFETY: iface is non-null (checked above); dispatch_type is a plain u32 field
+            // that is safe to read once we have a valid non-null pointer.
+            let dt: DispatchType = unsafe { (*iface).dispatch_type };
+            match dt {
+                DispatchType::Native => {
+                    // SAFETY: iface is non-null (checked); fn_id is a valid index supplied by the
+                    // generated caller for this contract; functions table is populated by the host.
+                    let fn_ptr: *const () =
+                        unsafe { *(*iface).dispatch.native.functions.add(fn_id as usize) };
+                    // SAFETY: fn_ptr came from the host's native dispatch table and has the documented
+                    // (state, args, out) -> AbiError C signature; instance.data is the contract state.
+                    let dispatch_fn: unsafe extern "C" fn(
+                        *const core::ffi::c_void,
+                        *const core::ffi::c_void,
+                        *mut core::ffi::c_void,
+                    ) -> AbiError = unsafe { core::mem::transmute(fn_ptr) };
+                    // SAFETY: dispatch_fn is transmuted from a valid host native function pointer;
+                    // instance.data is the contract-state pointer owned by the host; args and out
+                    // are caller-supplied buffers aligned by the generated caller via polyplug.alloc.
+                    let err: AbiError = unsafe {
+                        dispatch_fn(instance.data as *const core::ffi::c_void, args, out)
+                    };
+                    err.code
+                }
+                DispatchType::VirtualMachine => {
+                    // SAFETY: iface is non-null; vm.call + loader_data are the host-provided VM
+                    // dispatcher; a null GuestContractInstance + null arena match the canonical
+                    // rust host-contract caller (host contracts carry no guest instance / per-call arena).
+                    let err: AbiError = unsafe {
+                        ((*iface).dispatch.vm.call)(
+                            (*iface).dispatch.vm.loader_data,
+                            GuestContractInstance::null(),
+                            fn_id,
+                            args as *const (),
+                            out as *mut (),
+                            core::ptr::null_mut(),
+                        )
+                    };
+                    err.code
+                }
+            }
+        },
+    )
+    .map_err(|e: rquickjs::Error| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!(
+                "JS runtime js-quickjs error: callHostContract function creation failed: {e}"
+            ),
+        })
+    })?;
+
+    polyplug_obj
+        .set("callHostContract", call_host_contract_fn)
+        .map_err(|e: rquickjs::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: callHostContract set failed: {e}"),
+            })
+        })?;
+
+    let read_f64_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64| -> f64 {
+        let ptr: *const f64 = (ptr_num as u64) as usize as *const f64;
+        if ptr.is_null() {
+            return 0.0;
+        }
+        // SAFETY: ptr is a valid host-provided pointer to an 8-byte f64 return slot.
+        unsafe { *ptr }
+    })
+    .map_err(|e: rquickjs::Error| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: readF64 function creation failed: {e}"),
+        })
+    })?;
+
+    polyplug_obj
+        .set("readF64", read_f64_fn)
+        .map_err(|e: rquickjs::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: readF64 set failed: {e}"),
+            })
+        })?;
+
+    let read_f32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64| -> f64 {
+        let ptr: *const f32 = (ptr_num as u64) as usize as *const f32;
+        if ptr.is_null() {
+            return 0.0;
+        }
+        // SAFETY: ptr is a valid host-provided pointer to a 4-byte f32 return slot.
+        unsafe { *ptr as f64 }
+    })
+    .map_err(|e: rquickjs::Error| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: readF32 function creation failed: {e}"),
+        })
+    })?;
+
+    polyplug_obj
+        .set("readF32", read_f32_fn)
+        .map_err(|e: rquickjs::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: readF32 set failed: {e}"),
             })
         })?;
 
