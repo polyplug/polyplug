@@ -9,6 +9,7 @@ use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
+use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -92,6 +93,18 @@ impl CodeGenerator for LuaGenerator {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/host_contracts.lua"),
                 content: host_contracts_lua,
+                force_regenerate: false,
+            });
+        }
+
+        // ── guest/peer_callers.lua ─────────────────────────────────────────────
+        let peer_contracts: Vec<&ResolvedContract> = collect_lua_peer_contracts(ir);
+        if !peer_contracts.is_empty() {
+            let peer_callers_lua: String =
+                generate_lua_guest_peer_callers_file(ir, &peer_contracts);
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/peer_callers.lua"),
+                content: peer_callers_lua,
                 force_regenerate: false,
             });
         }
@@ -1488,6 +1501,268 @@ fn emit_lua_guest_host_contract_out_setup(out: &mut String, returns: &Option<Res
     }
 }
 
+// ─── Guest Peer Caller Generation ─────────────────────────────────────────────
+
+/// Collect every contract in `ir.contracts` whose `contract_id` appears in the
+/// bundle's declared dependencies.  Returns an empty vec when there is no bundle
+/// or when no dependency matches any known contract.
+fn collect_lua_peer_contracts(ir: &ValidatedIr) -> Vec<&ResolvedContract> {
+    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
+        Some(b) => &b.dependencies,
+        None => return Vec::new(),
+    };
+
+    ir.contracts
+        .iter()
+        .filter(|c: &&ResolvedContract| {
+            deps.iter().any(|d: &ResolvedDependency| {
+                let dep_contract_id: u64 = match d {
+                    ResolvedDependency::ByContract { contract_id, .. } => *contract_id,
+                    ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
+                };
+                dep_contract_id == c.contract_id
+            })
+        })
+        .collect()
+}
+
+/// Return the `min_version` (major) for the dependency whose `contract_id` matches `target`.
+/// Returns 0 when no matching dependency is found (callers guard the empty-peer-set case first).
+fn peer_min_version_lua(ir: &ValidatedIr, target_contract_id: u64) -> u32 {
+    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
+        Some(b) => &b.dependencies,
+        None => return 0,
+    };
+    for d in deps {
+        match d {
+            ResolvedDependency::ByContract {
+                contract_id,
+                min_version,
+                ..
+            } if *contract_id == target_contract_id => return *min_version,
+            ResolvedDependency::ByBundle {
+                contract_id,
+                min_version,
+                ..
+            } if *contract_id == target_contract_id => return *min_version,
+            _ => {}
+        }
+    }
+    0
+}
+
+/// Convert a guest contract name to the Lua peer-caller class name.
+/// e.g. "pipeline.Validator" -> "PipelineValidatorPeer"
+fn contract_name_to_lua_peer_class(name: &str) -> String {
+    let pascal: String = name
+        .split('.')
+        .map(|p: &str| {
+            let mut chars: core::str::Chars<'_> = p.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!("{pascal}Peer")
+}
+
+/// Generate the full `guest/peer_callers.lua` file for all peer contracts.
+fn generate_lua_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> String {
+    let mut out: String = String::new();
+    out.push_str(file_header());
+    out.push_str("local ffi = require(\"ffi\")\n");
+    // polyplug_abi declares GuestContractInterface, GuestContractInstance,
+    // GuestContractHandle, AbiError, StringView, Buffer, HostApi — all needed below.
+    out.push_str("local polyplug_abi = require(\"polyplug_abi\")\n");
+    out.push_str("local polyplug_guest = require(\"polyplug_guest\")\n\n");
+
+    // AbiErrorCode inline table — matches AbiErrorCode enum.
+    // Using a local table avoids depending on polyplug_abi exporting it directly.
+    out.push_str("local AbiErrorCode = { Ok = 0, NotFound = 3, Generic = 1 }\n\n");
+
+    out.push_str("local M = {}\n\n");
+
+    for contract in peers {
+        let min_ver: u32 = peer_min_version_lua(ir, contract.contract_id);
+        generate_lua_guest_peer_caller(&mut out, contract, min_ver);
+    }
+
+    // Export peer classes and their contract-ID constants.
+    out.push_str("-- Contract ID constants\n");
+    for contract in peers {
+        let class_name: String = contract_name_to_lua_peer_class(&contract.name);
+        let const_name: String = format!("{}_ID", class_name.to_uppercase());
+        out.push_str(&format!(
+            "M.{} = 0x{:016X}ULL\n",
+            const_name, contract.contract_id
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("-- Export peer caller classes\n");
+    for contract in peers {
+        let class_name: String = contract_name_to_lua_peer_class(&contract.name);
+        out.push_str(&format!("M.{} = {}\n", class_name, class_name));
+    }
+    out.push('\n');
+
+    out.push_str("return M\n");
+    out
+}
+
+/// Generate one guest-side peer caller class for `contract`.
+fn generate_lua_guest_peer_caller(out: &mut String, contract: &ResolvedContract, min_version: u32) {
+    let class_name: String = contract_name_to_lua_peer_class(&contract.name);
+
+    out.push_str(&format!(
+        "-- Peer caller for guest contract `{}` (id=0x{:016X})\n",
+        contract.name, contract.contract_id
+    ));
+    out.push_str(&format!("{} = {{}}\n", class_name));
+    out.push_str(&format!("{}.__index = {}\n\n", class_name, class_name));
+
+    // :new(interface, instance, host) — low-level constructor used by resolve().
+    out.push_str(&format!(
+        "function {}:new(interface, instance, host)\n",
+        class_name
+    ));
+    out.push_str(
+        "    local obj = { _interface = interface, _instance = instance, _host = host }\n",
+    );
+    out.push_str("    setmetatable(obj, self)\n");
+    out.push_str("    return obj\n");
+    out.push_str("end\n\n");
+
+    // .resolve() — factory: get host → find → resolve → create_instance.
+    // `host_ptr` comes from `polyplug_guest.get_host_interface()`, which returns
+    // a plain Lua number. Cast through uintptr_t first (matching the host-contract
+    // caller's from_host path) — a direct ffi.cast("HostApi*", number) is rejected
+    // by LuaJIT as the first FFI argument.
+    out.push_str(&format!("function {}.resolve()\n", class_name));
+    out.push_str("    local host_ptr = polyplug_guest.get_host_interface()\n");
+    out.push_str("    if host_ptr == nil then\n");
+    out.push_str("        return nil\n");
+    out.push_str("    end\n");
+    out.push_str("    local host = ffi.cast(\"HostApi*\", ffi.cast(\"uintptr_t\", host_ptr))\n");
+    // find_guest_contract: returns an opaque GuestContractHandle — do NOT inspect
+    // its fields; pass it straight to resolve_guest_contract and nil-check there.
+    out.push_str(&format!(
+        "    local handle = host.find_guest_contract(host, 0x{:016X}ULL, {})\n",
+        contract.contract_id, min_version
+    ));
+    out.push_str("    local interface = host.resolve_guest_contract(host, handle)\n");
+    out.push_str("    if interface == nil then\n");
+    out.push_str("        return nil\n");
+    out.push_str("    end\n");
+    // A null instance.data is valid: stateless contracts and all VM-dispatch guests
+    // return a null handle from create_instance and use it as an opaque dispatch token.
+    // Validity is keyed off the interface pointer, not the instance.
+    out.push_str("    local instance = interface.create_instance(host, nil)\n");
+    out.push_str(&format!(
+        "    return {}:new(interface, instance, host)\n",
+        class_name
+    ));
+    out.push_str("end\n\n");
+
+    out.push_str(&format!("function {}:is_valid()\n", class_name));
+    out.push_str("    return self._interface ~= nil\n");
+    out.push_str("end\n\n");
+
+    for func in &contract.functions {
+        generate_lua_guest_peer_method(out, func, &class_name);
+    }
+
+    out.push('\n');
+}
+
+/// Generate one method on a guest peer caller class.
+fn generate_lua_guest_peer_method(out: &mut String, func: &ResolvedFunction, class_name: &str) {
+    let fn_id: u32 = func.function_id;
+    let has_return: bool = func.returns.is_some();
+
+    // Colon-method syntax (`Class:method`) binds `self` implicitly — do NOT
+    // re-declare it in the parameter list (same rule as the host-contract caller).
+    let params_str: String = func
+        .params
+        .iter()
+        .map(|p: &ResolvedParam| p.name.clone())
+        .collect::<Vec<String>>()
+        .join(", ");
+
+    out.push_str(&format!(
+        "function {}:{}({})\n",
+        class_name, func.name, params_str
+    ));
+
+    out.push_str("    if self._interface == nil then\n");
+    if has_return {
+        out.push_str("        return nil\n");
+    } else {
+        out.push_str("        return\n");
+    }
+    out.push_str("    end\n");
+
+    // Cast the stored interface pointer to GuestContractInterface so we can read
+    // dispatch_type and the native/VM union — mirrors the host-caller path.
+    out.push_str("    local interface = ffi.cast(\"GuestContractInterface*\", self._interface)\n");
+    out.push_str(&format!(
+        "    if {fn_id} >= interface.dispatch.native.function_count then\n"
+    ));
+    if has_return {
+        out.push_str("        return nil\n");
+    } else {
+        out.push_str("        return\n");
+    }
+    out.push_str("    end\n");
+
+    out.push_str("    local dispatch_type = interface.dispatch_type\n");
+
+    // Args and out setup — reuse the same helpers as the host-contract caller so
+    // marshalling is identical (no extra tostring() layer = avoids the a3-parity
+    // double-conversion Lua footgun).
+    emit_lua_guest_host_contract_args_setup(out, func);
+    emit_lua_guest_host_contract_out_setup(out, &func.returns);
+
+    out.push_str("    local err\n");
+    out.push_str("    if dispatch_type == 0 then\n");
+    // Native dispatch path: call_guest_method routes through the host-mediated ABI.
+    // Pass nil for the arena — a Lua peer caller has no per-caller CallArena; the
+    // bridge falls back to host->alloc (same convention as the host caller's nil
+    // arena comment).
+    out.push_str(&format!(
+        "        err = self._host.call_guest_method(self._host, self._instance, {fn_id}, args_ptr, out_ptr, nil)\n"
+    ));
+    out.push_str("    elseif dispatch_type == 1 then\n");
+    // VM dispatch path: call_guest_method still applies; the host routes it through
+    // the loader vm.call trampoline internally. Arena is nil for the same reason.
+    out.push_str(&format!(
+        "        err = self._host.call_guest_method(self._host, self._instance, {fn_id}, args_ptr, out_ptr, nil)\n"
+    ));
+    out.push_str("    else\n");
+    if has_return {
+        out.push_str("        return nil\n");
+    } else {
+        out.push_str("        return\n");
+    }
+    out.push_str("    end\n");
+
+    // err.code == 0 means AbiErrorCode::Ok.
+    out.push_str("    if err.code ~= 0 then\n");
+    if has_return {
+        out.push_str("        return nil\n");
+    } else {
+        out.push_str("        return\n");
+    }
+    out.push_str("    end\n");
+
+    if has_return {
+        out.push_str("    return out_val\n");
+    }
+    out.push_str("end\n\n");
+}
+
 /// Generate `guest/host_contracts.lua` — caller classes for guest-side host contract callers.
 fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
@@ -2336,5 +2611,208 @@ mod tests {
         assert!(result.contains("HostLoggerContract = {}"));
         assert!(result.contains("M.HOSTLOGGERCONTRACT_ID = 0x123456789ABCDEF0ULL"));
         assert!(result.contains("M.HostLoggerContract = HostLoggerContract"));
+    }
+
+    // ─── Guest Peer Caller Tests ───────────────────────────────────────────────
+
+    #[test]
+    fn peer_caller_emitted_for_declared_dependency() {
+        use crate::ir::ResolvedBundle;
+        use crate::ir::ResolvedDependency;
+        use crate::ir::ResolvedPlugin;
+        use crate::ir::Version;
+        use polyplug_codegen::ResolvedBundleFile;
+
+        let contract: ResolvedContract = ResolvedContract {
+            name: "pipeline.Validator".to_owned(),
+            contract_id: 0xAAAA_BBBB_CCCC_DDDD_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "validate".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "input".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            }],
+        };
+
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![contract],
+            host_contracts: vec![],
+            bundle: Some(ResolvedBundle {
+                name: "test.bundle".to_owned(),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                runtime: "lua".to_owned(),
+                file: ResolvedBundleFile::Single("test.lua".to_owned()),
+                plugins: vec![ResolvedPlugin {
+                    name: "test_plugin".to_owned(),
+                    version: Version {
+                        major: 1,
+                        minor: 0,
+                        patch: 0,
+                    },
+                    implements: vec!["data.Transformer@1.0".to_owned()],
+                    optional: vec![],
+                }],
+                bundle_id: 0x1234_5678_9ABC_DEF0_u64,
+                dependencies: vec![ResolvedDependency::ByContract {
+                    contract: "pipeline.Validator".to_owned(),
+                    contract_id: 0xAAAA_BBBB_CCCC_DDDD_u64,
+                    min_version: 1,
+                }],
+                needs_reinit_on_dep_reload: false,
+            }),
+        };
+
+        let peers: Vec<&ResolvedContract> = collect_lua_peer_contracts(&ir);
+        assert!(
+            !peers.is_empty(),
+            "should find peer contract for declared dependency"
+        );
+
+        let mut out: String = String::new();
+        generate_lua_guest_peer_caller(&mut out, peers[0], 1);
+
+        assert!(
+            out.contains("PipelineValidatorPeer = {}"),
+            "missing peer class table: {out}"
+        );
+        assert!(
+            out.contains("PipelineValidatorPeer.__index = PipelineValidatorPeer"),
+            "missing __index: {out}"
+        );
+        assert!(
+            out.contains("function PipelineValidatorPeer.resolve()"),
+            "missing resolve factory: {out}"
+        );
+        assert!(
+            out.contains("polyplug_guest.get_host_interface()"),
+            "resolve must use polyplug_guest.get_host_interface(): {out}"
+        );
+        assert!(
+            out.contains("ffi.cast(\"HostApi*\", ffi.cast(\"uintptr_t\", host_ptr))"),
+            "host_ptr must be cast through uintptr_t: {out}"
+        );
+        assert!(
+            out.contains("host.find_guest_contract(host,"),
+            "must call find_guest_contract: {out}"
+        );
+        assert!(
+            out.contains("host.resolve_guest_contract(host, handle)"),
+            "must call resolve_guest_contract: {out}"
+        );
+        assert!(
+            out.contains("interface.create_instance(host, nil)"),
+            "must call create_instance: {out}"
+        );
+        assert!(
+            out.contains("function PipelineValidatorPeer:validate(input)"),
+            "missing validate method: {out}"
+        );
+        assert!(
+            out.contains("call_guest_method(self._host, self._instance,"),
+            "method must dispatch via call_guest_method: {out}"
+        );
+        // Arena must be nil — Lua peer callers have no per-caller CallArena.
+        assert!(
+            out.contains(", nil)"),
+            "call_guest_method must pass nil arena: {out}"
+        );
+        assert!(
+            out.contains("return out_val"),
+            "missing return statement: {out}"
+        );
+    }
+
+    #[test]
+    fn no_peer_callers_without_dependencies() {
+        use crate::ir::Version;
+
+        let contract: ResolvedContract = ResolvedContract {
+            name: "pipeline.Validator".to_owned(),
+            contract_id: 0xAAAA_BBBB_CCCC_DDDD_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![],
+        };
+
+        // No bundle at all — no peer contracts.
+        let ir_no_bundle: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![contract],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let peers: Vec<&ResolvedContract> = collect_lua_peer_contracts(&ir_no_bundle);
+        assert!(
+            peers.is_empty(),
+            "should produce no peers when there is no bundle"
+        );
+
+        // Bundle with no dependencies — no peer contracts even if contracts exist.
+        use crate::ir::ResolvedBundle;
+        use crate::ir::ResolvedPlugin;
+        use polyplug_codegen::ResolvedBundleFile;
+
+        let contract2: ResolvedContract = ResolvedContract {
+            name: "pipeline.Validator".to_owned(),
+            contract_id: 0xAAAA_BBBB_CCCC_DDDD_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![],
+        };
+        let ir_no_deps: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![contract2],
+            host_contracts: vec![],
+            bundle: Some(ResolvedBundle {
+                name: "test.bundle".to_owned(),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                runtime: "lua".to_owned(),
+                file: ResolvedBundleFile::Single("test.lua".to_owned()),
+                plugins: vec![ResolvedPlugin {
+                    name: "test_plugin".to_owned(),
+                    version: Version {
+                        major: 1,
+                        minor: 0,
+                        patch: 0,
+                    },
+                    implements: vec!["data.Transformer@1.0".to_owned()],
+                    optional: vec![],
+                }],
+                bundle_id: 0x1234_5678_9ABC_DEF0_u64,
+                dependencies: vec![],
+                needs_reinit_on_dep_reload: false,
+            }),
+        };
+        let peers2: Vec<&ResolvedContract> = collect_lua_peer_contracts(&ir_no_deps);
+        assert!(
+            peers2.is_empty(),
+            "should produce no peers when bundle has no declared dependencies"
+        );
     }
 }
