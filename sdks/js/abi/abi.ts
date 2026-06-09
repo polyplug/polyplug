@@ -963,18 +963,29 @@ export const BUFFER_SIZE: number = 24;
  * 
  *  Overflow blocks form a singly linked list rooted at `CallArena.first_overflow`.
  *  Each block stores the total `capacity` it was allocated with (including this
- *  header) so `reset()` can free it with the exact size/align the host expects.
+ *  header) so the arena can free it with the exact size/align the host expects.
+ *  Blocks are **retained across resets** and reused by rewinding `used` back to the
+ *  header size; they are freed only when the arena is dropped.
  */
 export interface ArenaOverflowBlock {
     /**  Next overflow block in the chain, or null for the last block. */
     next: bigint;
     /**  Total allocated size of this block in bytes, including this header. */
     capacity: number;
+    /**
+     *  Offset of the next free byte within this block, measured from the block
+     *  start (including this header). Initialized to the header size when the
+     *  block is created; advanced as values are bump-allocated from the block;
+     *  rewound to the header size by [`CallArena::reset`] so the block's capacity
+     *  is reused on the next call without a fresh host allocation.
+     */
+    used: number;
 }
 
 export const ARENA_OVERFLOW_BLOCK_NEXT_OFFSET: number = 0;
 export const ARENA_OVERFLOW_BLOCK_CAPACITY_OFFSET: number = 8;
-export const ARENA_OVERFLOW_BLOCK_SIZE: number = 16;
+export const ARENA_OVERFLOW_BLOCK_USED_OFFSET: number = 16;
+export const ARENA_OVERFLOW_BLOCK_SIZE: number = 24;
 
 /**
  *  Per-call bump allocator handed to a VM dispatch call.
@@ -983,8 +994,9 @@ export const ARENA_OVERFLOW_BLOCK_SIZE: number = 16;
  * 
  *  `#[repr(C)]` with five pointer-sized fields (40 bytes, align 8). The first
  *  three fields define the primary bump region `[base, end)` with `cur` as the
- *  next free byte. When the primary region is exhausted, `alloc` requests a fresh
- *  block from `host->alloc`, chains it onto `first_overflow`, and serves from it.
+ *  next free byte. When the primary region is exhausted, `alloc` walks the
+ *  retained overflow chain for a block with spare room; if none fits, it requests
+ *  a fresh block from `host->alloc`, chains it, and serves from it.
  * 
  *  A null `CallArena*` passed to a dispatch function means "no arena": the bridge
  *  falls back to per-value `host->alloc`.

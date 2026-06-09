@@ -85,8 +85,8 @@ Deno.test("Buffer is 24 bytes", () => {
     assert(BUFFER_SIZE === 24);
 });
 
-Deno.test("ArenaOverflowBlock is 16 bytes", () => {
-    assert(ARENA_OVERFLOW_BLOCK_SIZE === 16);
+Deno.test("ArenaOverflowBlock is 24 bytes", () => {
+    assert(ARENA_OVERFLOW_BLOCK_SIZE === 24);
 });
 
 Deno.test("CallArena is 40 bytes", () => {

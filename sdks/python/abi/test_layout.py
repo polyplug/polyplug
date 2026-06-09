@@ -88,7 +88,7 @@ def test_buffer_size():
 
 
 def test_arena_overflow_block_size():
-    assert ctypes.sizeof(ArenaOverflowBlock) == 16, f"ArenaOverflowBlock expected 16 bytes, got {ctypes.sizeof(ArenaOverflowBlock)}"
+    assert ctypes.sizeof(ArenaOverflowBlock) == 24, f"ArenaOverflowBlock expected 24 bytes, got {ctypes.sizeof(ArenaOverflowBlock)}"
 
 
 def test_call_arena_size():

@@ -808,17 +808,25 @@ public struct Buffer
 ///
 ///  Overflow blocks form a singly linked list rooted at `CallArena.first_overflow`.
 ///  Each block stores the total `capacity` it was allocated with (including this
-///  header) so `reset()` can free it with the exact size/align the host expects.
-[StructLayout(LayoutKind.Sequential, Size = 16)]
+///  header) so the arena can free it with the exact size/align the host expects.
+///  Blocks are **retained across resets** and reused by rewinding `used` back to the
+///  header size; they are freed only when the arena is dropped.
+[StructLayout(LayoutKind.Sequential, Size = 24)]
 public struct ArenaOverflowBlock
 {
     ///  Next overflow block in the chain, or null for the last block.
     public IntPtr Next;
     ///  Total allocated size of this block in bytes, including this header.
     public nuint Capacity;
+    ///  Offset of the next free byte within this block, measured from the block
+    ///  start (including this header). Initialized to the header size when the
+    ///  block is created; advanced as values are bump-allocated from the block;
+    ///  rewound to the header size by [`CallArena::reset`] so the block's capacity
+    ///  is reused on the next call without a fresh host allocation.
+    public nuint Used;
 }
 
-/// Expected size: 16 bytes
+/// Expected size: 24 bytes
 
 ///  Per-call bump allocator handed to a VM dispatch call.
 ///
@@ -826,8 +834,9 @@ public struct ArenaOverflowBlock
 ///
 ///  `#[repr(C)]` with five pointer-sized fields (40 bytes, align 8). The first
 ///  three fields define the primary bump region `[base, end)` with `cur` as the
-///  next free byte. When the primary region is exhausted, `alloc` requests a fresh
-///  block from `host->alloc`, chains it onto `first_overflow`, and serves from it.
+///  next free byte. When the primary region is exhausted, `alloc` walks the
+///  retained overflow chain for a block with spare room; if none fits, it requests
+///  a fresh block from `host->alloc`, chains it, and serves from it.
 ///
 ///  A null `CallArena*` passed to a dispatch function means "no arena": the bridge
 ///  falls back to per-value `host->alloc`.

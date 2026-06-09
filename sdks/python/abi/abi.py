@@ -170,15 +170,18 @@ class ArenaOverflowBlock(ctypes.Structure):
     
      Overflow blocks form a singly linked list rooted at `CallArena.first_overflow`.
      Each block stores the total `capacity` it was allocated with (including this
-     header) so `reset()` can free it with the exact size/align the host expects.
+     header) so the arena can free it with the exact size/align the host expects.
+     Blocks are **retained across resets** and reused by rewinding `used` back to the
+     header size; they are freed only when the arena is dropped.
     """
     _fields_ = [
         ("next", ctypes.c_void_p),
         ("capacity", ctypes.c_size_t),
+        ("used", ctypes.c_size_t),
     ]
 
-# Expected size: 16 bytes
-assert ctypes.sizeof(ArenaOverflowBlock) == 16, f"ArenaOverflowBlock expected 16 bytes, got {ctypes.sizeof(ArenaOverflowBlock)}"
+# Expected size: 24 bytes
+assert ctypes.sizeof(ArenaOverflowBlock) == 24, f"ArenaOverflowBlock expected 24 bytes, got {ctypes.sizeof(ArenaOverflowBlock)}"
 
 
 class CallArena(ctypes.Structure):
@@ -188,8 +191,9 @@ class CallArena(ctypes.Structure):
     
      `#[repr(C)]` with five pointer-sized fields (40 bytes, align 8). The first
      three fields define the primary bump region `[base, end)` with `cur` as the
-     next free byte. When the primary region is exhausted, `alloc` requests a fresh
-     block from `host->alloc`, chains it onto `first_overflow`, and serves from it.
+     next free byte. When the primary region is exhausted, `alloc` walks the
+     retained overflow chain for a block with spare room; if none fits, it requests
+     a fresh block from `host->alloc`, chains it, and serves from it.
     
      A null `CallArena*` passed to a dispatch function means "no arena": the bridge
      falls back to per-value `host->alloc`.

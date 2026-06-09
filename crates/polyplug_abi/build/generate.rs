@@ -671,7 +671,7 @@ const KNOWN_SIZES: &[(&str, usize)] = &[
     ("StringView", 16),
     ("Buffer", 24),
     ("CallArena", 40),
-    ("ArenaOverflowBlock", 16),
+    ("ArenaOverflowBlock", 24),
     ("Version", 12),
     ("AbiError", 24),
     ("DependencyInfo", 24),
