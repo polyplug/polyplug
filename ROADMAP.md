@@ -29,7 +29,7 @@ _Last updated: 2026-06-08._
 | **Published SDK packages (crates.io / PyPI / NuGet / npm / luarocks)** | ⏸ Deferred (owner: not publishing yet) |
 | **Quickstart + example gallery** | ✅ Done (B2, #74 — `docs/QUICKSTART.md` guided path + `docs/EXAMPLES.md` gallery) |
 | **polyplugc diagnostics (source spans + suggestions)** | ✅ Done (B3, #73 — `file:line:col` + did-you-mean on parse/validate errors) |
-| **Guest→guest peer callers + runtime tests** | ✅ Done (#69–#72) — peer callers in all 6 generators; runtime execution tests green for rust/lua/js/cpp/csharp (python reachability is an owner design call, #75) |
+| **Guest→guest peer callers + runtime tests** | ✅ Done (#69–#72, #75) — peer callers in all 6 generators; runtime execution tests green for **all 6** languages (rust/lua/js/cpp/csharp/python) |
 | **CI cost / caching** | ✅ Done (`rust-cache` on every job; cross-lang jobs main-only) |
 | **Benchmark regression gate in CI** | ✅ Done (nightly, core hot-path benches, >1.5x gross-regression gate) |
 | **Call-arena retain-and-rewind (perf)** | ✅ Done (ArenaOverflowBlock +used cursor; reset rewinds & retains, free on Drop/teardown; all 6 SDKs + 4 lockstep impls) |
@@ -170,15 +170,9 @@ scoping:
 - **B1 — publishing:** which registries, what package names/namespaces, and is
   publishing pre-1.0 (for battle-testing) desired now or held until 1.0?
 - **Lane priority:** which lane do we fund next given the CI-minute constraint?
-- **Python peer-caller reachability (#75):** `polyplugc --lang python` emits
-  `peer_callers.py`, but no idiomatic python guest can reach it — the VM
-  trampoline threads `arena_ptr` but not `host_ptr`, generated `polyplug_init`
-  discards `host_ptr`, and the python guest SDK has no `get_host_interface`
-  (lua/js/cpp all do). Recommended fix mirrors them (add `store/get_host_interface`
-  to the SDK, store in generated init, default `resolve()`'s host from it), but it
-  reverses python's documented "all state passed explicitly" stance and touches
-  the single-interpreter host-clobber question — hence an owner call. Until then,
-  guest→guest peer calling is proven on the other 5 languages.
+
+_(Resolved 2026-06-09: the python peer-caller reachability question (#75) was
+decided "fix it, mirror lua/js/cpp" and is shipped — see the status table.)_
 
 ---
 ---
