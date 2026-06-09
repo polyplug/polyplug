@@ -27,7 +27,9 @@ _Last updated: 2026-06-08._
 | **Supply-chain gate (cargo-deny)** | ✅ Done (nightly) |
 | **Cross-language differential parity tests** | ✅ Done (`examples/hosts/parity`, 6 langs × 5 contracts byte-identical) |
 | **Published SDK packages (crates.io / PyPI / NuGet / npm / luarocks)** | ⏸ Deferred (owner: not publishing yet) |
-| **Quickstart + example gallery** | ◐ Partial (examples exist, no guided path) |
+| **Quickstart + example gallery** | ✅ Done (B2, #74 — `docs/QUICKSTART.md` guided path + `docs/EXAMPLES.md` gallery) |
+| **polyplugc diagnostics (source spans + suggestions)** | ✅ Done (B3, #73 — `file:line:col` + did-you-mean on parse/validate errors) |
+| **Guest→guest peer callers + runtime tests** | ✅ Done (#69–#72) — peer callers in all 6 generators; runtime execution tests green for rust/lua/js/cpp/csharp (python reachability is an owner design call, #75) |
 | **CI cost / caching** | ✅ Done (`rust-cache` on every job; cross-lang jobs main-only) |
 | **Benchmark regression gate in CI** | ✅ Done (nightly, core hot-path benches, >1.5x gross-regression gate) |
 | **Call-arena retain-and-rewind (perf)** | ✅ Done (ArenaOverflowBlock +used cursor; reset rewinds & retains, free on Drop/teardown; all 6 SDKs + 4 lockstep impls) |
@@ -89,10 +91,13 @@ Held until the owner decides to publish. Kept here so it isn't lost.
   single biggest blocker to anyone outside the repo authoring a plugin.
   `release.yml` is the starting point. _Outward-facing — owner sign-off on
   names/registries + a decision to publish pre-1.0._
-- **B2. Quickstart + example gallery.** A guided "write your first plugin in
-  language X in 10 minutes" path plus a small gallery of reference plugins.
-- **B3. polyplugc diagnostics.** Improve contract-parse/validate error messages
-  (spans, suggestions). _Not scaffolding_ — owner ruled out `polyplugc new`.
+- **B2. Quickstart + example gallery. ✅ Done (#74).** `docs/QUICKSTART.md` is a
+  guided "write your first plugin in language X" path; `docs/EXAMPLES.md` is a
+  gallery of the reference plugins. (Shipped independently of B1's publish gate.)
+- **B3. polyplugc diagnostics. ✅ Done (#73).** Contract-parse/validate errors now
+  carry `file:line:col` source spans (via `toml::Spanned`) plus did-you-mean
+  suggestions (Levenshtein over known type/contract names). _Not scaffolding_ —
+  owner ruled out `polyplugc new`.
 
 ### Lane C — Performance & ops (continuous)
 
@@ -165,6 +170,15 @@ scoping:
 - **B1 — publishing:** which registries, what package names/namespaces, and is
   publishing pre-1.0 (for battle-testing) desired now or held until 1.0?
 - **Lane priority:** which lane do we fund next given the CI-minute constraint?
+- **Python peer-caller reachability (#75):** `polyplugc --lang python` emits
+  `peer_callers.py`, but no idiomatic python guest can reach it — the VM
+  trampoline threads `arena_ptr` but not `host_ptr`, generated `polyplug_init`
+  discards `host_ptr`, and the python guest SDK has no `get_host_interface`
+  (lua/js/cpp all do). Recommended fix mirrors them (add `store/get_host_interface`
+  to the SDK, store in generated init, default `resolve()`'s host from it), but it
+  reverses python's documented "all state passed explicitly" stance and touches
+  the single-interpreter host-clobber question — hence an owner call. Until then,
+  guest→guest peer calling is proven on the other 5 languages.
 
 ---
 ---
