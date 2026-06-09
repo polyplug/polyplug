@@ -32,7 +32,7 @@ _Last updated: 2026-06-08._
 | **Benchmark regression gate in CI** | ✅ Done (nightly, core hot-path benches, >1.5x gross-regression gate) |
 | **Call-arena retain-and-rewind (perf)** | ✅ Done (ArenaOverflowBlock +used cursor; reset rewinds & retains, free on Drop/teardown; all 6 SDKs + 4 lockstep impls) |
 | D11 live-instance counter | ✅ Resolved — host-coordinated, no counter (zero hot-path cost) |
-| .NET collectible ALC (true managed unload) | ◐ In progress (#68) |
+| .NET collectible ALC (true managed unload) | ✅ Done (#68) — per-bundle collectible ALC; Reclaim truly unloads, Retire keeps it |
 
 ---
 
@@ -148,11 +148,15 @@ scoping:
   consumed, zero hot-path cost.** Revisit only if a concrete reclaim-safety policy ever
   needs runtime-visible counts (it would still be a pre-freeze ABI decision at that point).
 
-- **.NET collectible ALC (true managed unload). ◐ In progress (#68).** Reworking
-  `polyplug_dotnet` to load each bundle's assemblies into a collectible
-  `AssemblyLoadContext` so unload reclaims managed memory (today the .NET loader is
-  retire-only / `HotReloadDisabled`). The CLR-inits-once-per-process limitation is
-  unchanged — collectible ALC unloads the *bundle's assemblies*, not the CLR.
+- **.NET collectible ALC (true managed unload). ✅ Done (#68).** `polyplug_dotnet` now
+  loads each bundle's assemblies into its own collectible `AssemblyLoadContext`, keyed by
+  bundle id (Path via `LoadFromAssemblyPath` + `AssemblyDependencyResolver`; Bytes via
+  `LoadFromStream`). `DotnetLoader::unload` is implemented: under host-attested
+  `UnloadMode::Reclaim` (+ `reclaim_safe`) it truly unloads the bundle's ALC so the managed
+  assemblies become GC-eligible (proven by a `WeakReference`-after-GC test); under the default
+  `Retire` it keeps the ALC rooted (retire-not-drop). `reload` stays disabled and the
+  CLR-inits-once-per-process limitation is unchanged — collectible ALC unloads the *bundle's
+  assemblies*, not the CLR.
 
 ---
 
