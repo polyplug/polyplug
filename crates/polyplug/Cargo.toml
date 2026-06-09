@@ -55,3 +55,7 @@ harness = false
 name = "counter_inc"
 harness = false
 
+[[bench]]
+name = "payload_scaling"
+harness = false
+

@@ -124,12 +124,14 @@ Held until the owner decides to publish. Kept here so it isn't lost.
   call** (~440 M calls/s). Documented in `docs/PERFORMANCE.md` ("The safety tax")
   and `crates/polyplug/benches/README.md`. **Local-only** (per the C2 ruling) —
   not wired into CI.
+  - **Payload-scaling bench. ✅ Done — `payload_scaling`.** Same byte-fill work
+    (N bytes) `native_direct` vs `polyplug_dispatch` across N ∈ [0, 16384] using
+    `memory_plugin` (no fixture change). Shows the dispatch overhead is a *fixed*
+    ~0.25–0.5 ns that collapses to <0.3% (within measurement noise) by a few KB —
+    the honest real-world view. Local-only; see `benches/README.md`.
   _Follow-ups (not yet built — documented in the benches README so they aren't
   lost; each has a caveat, so none is a clean headline; build benches for what we
   currently ship first):_
-  - **Payload-scaling bench** — the most honest real-world view: plot per-call
-    overhead as a *fraction of useful work* (inc → hash 1 KB → transform 4 KB →
-    parse a doc). Overhead → ~0% as payload grows; this is the number to lead with.
   - **Cross-language dispatch matrix** — one table, same contract, all 6 langs
     (native vs VM dispatch) so users can price their language choice.
   - **vs sandboxed alternatives** — call-overhead comparison against a WASM

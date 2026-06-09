@@ -92,6 +92,39 @@ boundary — crossing that boundary adds only ~0.2 ns on top.
 > `x + 1`. The contract is resolved **once** before the loop, which is how a
 > real host uses it — see `contract_dispatch` below for the re-resolve case.
 
+### `payload_scaling` — where the overhead disappears (the honest one)
+
+The companion to `counter_inc`. `counter_inc` uses the cheapest payload to
+*expose* the fixed per-call overhead; this one shows **how little that overhead
+matters once the call does real work**. It runs the *same* unit of work — write
+N bytes, one at a time — two ways across a sweep of N:
+
+- `native_direct` — an `#[inline(never)]` copy of the byte-write loop, statically
+  linked (the work with the cheapest call).
+- `polyplug_dispatch` — the **identical** loop, but living in a dynamically
+  loaded plugin (`memory_plugin` fn 0) reached through resolved dispatch.
+
+Because both arms run the same per-byte loop, the gap between them at any N is
+*only* the dispatch overhead. Measured locally:
+
+| N (bytes) | `native_direct` | `polyplug_dispatch` | overhead | overhead % |
+|---|---|---|---|---|
+| 0 | ~2.7 ns | ~2.9 ns | ~0.25 ns | ~9% |
+| 16 | ~3.4 ns | ~3.7 ns | ~0.27 ns | ~8% |
+| 256 | ~5.6 ns | ~5.9 ns | ~0.33 ns | ~6% |
+| 1024 | ~9.9 ns | ~10.4 ns | ~0.49 ns | ~5% |
+| 4096 | ~37 ns | ~33 ns | below noise | ~0% |
+| 16384 | ~125 ns | ~121 ns | below noise | ~0% |
+
+The `overhead` column is roughly **constant** (~0.25–0.5 ns — the fixed dispatch
+cost), so the `overhead %` column collapses toward zero as the payload grows. By
+a few KB the two arms are statistically indistinguishable (the dispatch arm even
+measures *faster* sometimes — that's run-to-run noise on identical work, which is
+the point: the fixed cost is now smaller than the measurement jitter). **On any
+call that does meaningful work, the safety boundary is free.** Caveat: a
+byte-write loop is a light per-byte workload; a heavier one (crypto, parsing)
+only makes the overhead % *smaller*.
+
 ### `contract_dispatch` — dispatch overhead by argument shape
 
 Calls a registered contract function directly through its resolved interface
@@ -139,9 +172,11 @@ These are worth building, but each has a caveat that keeps it from being a clean
 "polyplug wins" headline — recorded here and in `ROADMAP.md` (Lane C) so they
 aren't lost. **Priority: benches for what we currently ship come first.**
 
+> **Payload-scaling — ✅ built** (now the `payload_scaling` bench above). Kept
+> off this list; documented here only to note it was the first idea realized.
+
 | Idea | What it would show | The caveat ("it can be argued against") |
 |---|---|---|
-| **Payload-scaling** | Overhead as a *fraction of useful work* (inc → hash 1 KB → transform 4 KB → parse a doc); the fraction → ~0% as payload grows. The single most honest real-world view. | The chosen payloads are arbitrary; a critic can always pick a payload small enough to make overhead look large. Mitigate by sweeping a range and plotting, not quoting one point. |
 | **Cross-language dispatch matrix** | One table, same contract, all 6 languages (native vs VM dispatch) so a user can price their language choice. | VM numbers depend heavily on the embedded VM version and JIT warm-up; not a polyplug property, so it measures the *language* as much as us. Label clearly. |
 | **vs sandboxed alternatives** | Call overhead vs a WASM boundary (wasmtime) and vs subprocess/IPC, to quantify what "trusted, same-process, native speed" buys. | Apples-to-oranges on *safety guarantees* — WASM/IPC give isolation we don't. It's a speed-vs-isolation trade, not a strict win; frame it as "here's the cost of isolation you may not need." |
 | **One-time cost amortization** | Load-bundle + resolve-contract latency and where it amortizes over N calls; hot-reload swap latency (a feature static linking / WASM can't cheaply match). | These are one-time costs; a critic notes they're irrelevant to steady-state throughput. True — the value is in the amortization curve and the hot-reload capability, not the raw number. |
