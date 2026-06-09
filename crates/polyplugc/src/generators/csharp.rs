@@ -10,6 +10,7 @@ use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
+use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -2363,6 +2364,348 @@ fn cs_host_abi_type_name(ty: &ResolvedTypeRef) -> String {
     }
 }
 
+// ─── Peer caller collection helpers ──────────────────────────────────────────
+
+/// Collect contracts from `ir.contracts` whose `contract_id` matches any entry
+/// in the bundle's declared dependencies. Returns an empty vec when there is no
+/// bundle (--api mode) or when no dependency maps to a known contract.
+fn collect_peer_contracts(ir: &ValidatedIr) -> Vec<&ResolvedContract> {
+    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
+        Some(b) => &b.dependencies,
+        None => return Vec::new(),
+    };
+
+    ir.contracts
+        .iter()
+        .filter(|c: &&ResolvedContract| {
+            deps.iter().any(|d: &ResolvedDependency| {
+                let dep_contract_id: u64 = match d {
+                    ResolvedDependency::ByContract { contract_id, .. } => *contract_id,
+                    ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
+                };
+                dep_contract_id == c.contract_id
+            })
+        })
+        .collect()
+}
+
+/// Return the `min_version` (major) for the dependency whose `contract_id`
+/// matches `target_contract_id`. Returns 0 when no match is found; callers
+/// guard against an empty peer set before reaching this.
+fn peer_min_version(ir: &ValidatedIr, target_contract_id: u64) -> u32 {
+    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
+        Some(b) => &b.dependencies,
+        None => return 0,
+    };
+    for d in deps {
+        match d {
+            ResolvedDependency::ByContract {
+                contract_id,
+                min_version,
+                ..
+            } if *contract_id == target_contract_id => return *min_version,
+            ResolvedDependency::ByBundle {
+                contract_id,
+                min_version,
+                ..
+            } if *contract_id == target_contract_id => return *min_version,
+            _ => {}
+        }
+    }
+    0
+}
+
+/// Generate the full `guest/PeerCallers.cs` file for all peer contracts.
+///
+/// Each peer contract gets one `<Name>ContractPeer` sealed class that:
+///
+///   1. Fetches the host pointer via `RuntimeAbiStorage.GetRuntimeAbi()` (same
+///      accessor that `PolyplugHost.AllocString` uses — no new import needed).
+///   2. Resolves the contract via `FindGuestContract` → `ResolveGuestContract`
+///      → `CreateInstance` using `delegate* unmanaged[Cdecl]` casts on the
+///      IntPtr fields of `HostApi`, exactly as the host-side `Callers.cs` does.
+///   3. Dispatches each method via `CallGuestMethod` (offset 136 on HostApi)
+///      with the canonical 6-arg signature:
+///      `(host, instance, fn_id, args, out, arena)`.
+///
+/// Returns raw ABI types (StringView/Buffer) — mirrors the host caller exactly.
+fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> String {
+    let mut out: String = String::new();
+    out.push_str(CS_HEADER);
+    out.push_str("using Polyplug.Guest;\n");
+    out.push_str("using Polyplug.Abi;\n");
+    out.push_str("using System;\n");
+    out.push_str("using System.Runtime.CompilerServices;\n");
+    out.push_str("using System.Runtime.InteropServices;\n\n");
+    out.push_str("namespace Polyplug.Generated;\n\n");
+
+    let any_needs_arena: bool = peers
+        .iter()
+        .any(|c: &&ResolvedContract| contract_needs_arena(c));
+    if any_needs_arena {
+        emit_cs_call_arena_helpers(&mut out);
+    }
+
+    for contract in peers {
+        let class_name: String = contract_name_to_cs_class(&contract.name);
+        let peer_name: String = format!("{}Peer", class_name);
+        let min_ver: u32 = peer_min_version(ir, contract.contract_id);
+        let needs_arena: bool = contract_needs_arena(contract);
+        let contract_upper: String = contract_name_to_upper_snake(&contract.name);
+
+        out.push_str(&format!(
+            "/// <summary>\n/// Guest-side peer caller for contract `{}` (id=0x{:016X}).\n\
+             /// Resolves via the host-mediated CallGuestMethod path (offset 136 on HostApi);\n\
+             /// the host pointer is fetched from RuntimeAbiStorage on each Resolve() call.\n\
+             /// Returns raw ABI types — do not convert StringView/Buffer to managed strings.\n\
+             /// </summary>\n",
+            contract.name, contract.contract_id
+        ));
+        out.push_str(&format!(
+            "public sealed unsafe class {peer_name} : IDisposable {{\n"
+        ));
+        out.push_str("    private GuestContractInterface* _interface;\n");
+        out.push_str("    private GuestContractInstance _instance;\n");
+        out.push_str("    private HostApi* _host;\n");
+        out.push_str("    private bool _disposed;\n");
+        if needs_arena {
+            out.push_str(
+                "    /// <summary>Unmanaged backing buffer for the per-call arena. C-heap\n",
+            );
+            out.push_str(
+                "    /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>\n",
+            );
+            out.push_str("    private readonly byte* _arenaBuf;\n");
+            out.push_str(
+                "    /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>\n",
+            );
+            out.push_str("    private CallArena _arena;\n");
+        }
+        out.push('\n');
+
+        // Private constructor
+        out.push_str(&format!(
+            "    private {peer_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {{\n"
+        ));
+        out.push_str("        _interface = iface;\n");
+        out.push_str("        _instance = inst;\n");
+        out.push_str("        _host = host;\n");
+        out.push_str("        _disposed = false;\n");
+        if needs_arena {
+            out.push_str(
+                "        // C-heap allocation: cross-boundary arena data must not live on the managed heap.\n",
+            );
+            out.push_str(
+                "        _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);\n",
+            );
+            out.push_str("        _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);\n");
+        }
+        out.push_str("    }\n\n");
+
+        // Resolve factory — guest-side: get host from RuntimeAbiStorage, then
+        // FindGuestContract → ResolveGuestContract → CreateInstance.
+        out.push_str("    /// <summary>Resolve the peer contract and create a caller instance.\n");
+        out.push_str("    /// Returns null when the host pointer is not stored yet, or when the\n");
+        out.push_str(
+            "    /// contract is not found/resolved (handle invalid or stale).</summary>\n",
+        );
+        out.push_str(&format!("    public static {peer_name}? Resolve() {{\n"));
+        // Fetch host from RuntimeAbiStorage — same accessor PolyplugHost.AllocString uses.
+        out.push_str("        IntPtr hostPtr = RuntimeAbiStorage.GetRuntimeAbi();\n");
+        out.push_str("        if (hostPtr == IntPtr.Zero) { return null; }\n");
+        out.push_str("        var host = (HostApi*)hostPtr;\n");
+        // FindGuestContract: (this, contract_id, min_major) → GuestContractHandle
+        out.push_str(&format!(
+            "        // FindGuestContract: find contract 0x{:016X}UL, min major = {min_ver}u\n",
+            contract.contract_id
+        ));
+        out.push_str("        var findFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, GuestContractHandle>)host->FindGuestContract;\n");
+        out.push_str(&format!(
+            "        GuestContractHandle handle = findFn(hostPtr, 0x{:016X}UL, {min_ver}u);\n",
+            contract.contract_id
+        ));
+        // ResolveGuestContract: (this, handle) → GuestContractInterface*
+        // GuestContractHandle is opaque — pass it straight; null interface means not found.
+        out.push_str("        var resolveFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractHandle, GuestContractInterface*>)host->ResolveGuestContract;\n");
+        out.push_str("        GuestContractInterface* iface = resolveFn(hostPtr, handle);\n");
+        out.push_str("        if (iface == null) { return null; }\n");
+        // CreateInstance: (this, user_data) → GuestContractInstance
+        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, void*, GuestContractInstance>)iface->CreateInstance;\n");
+        out.push_str("        GuestContractInstance inst = createFn(hostPtr, null);\n");
+        out.push_str(&format!(
+            "        return new {peer_name}(iface, inst, host);\n"
+        ));
+        out.push_str("    }\n\n");
+
+        // IsValid property
+        out.push_str(
+            "    /// <summary>True while this peer holds a live interface and has not been disposed.</summary>\n",
+        );
+        out.push_str("    public bool IsValid => !_disposed && _interface != null;\n\n");
+
+        // Dispose
+        let destroy_cast: &str = "((delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)_interface->DestroyInstance)";
+        out.push_str(
+            "    /// <summary>Dispose pattern — calls destroy_instance and frees arena memory.</summary>\n",
+        );
+        out.push_str("    public void Dispose() {\n");
+        out.push_str("        if (!_disposed) {\n");
+        out.push_str(&format!(
+            "            {destroy_cast}((IntPtr)_host, _instance);\n"
+        ));
+        out.push_str("            _instance.Data = nint.Zero;\n");
+        if needs_arena {
+            out.push_str(
+                "            // Free any overflow blocks the arena still holds, then the C-heap buffer.\n",
+            );
+            out.push_str("            fixed (CallArena* arenaPtr = &_arena) {\n");
+            out.push_str("                CallArenaOps.Reset(arenaPtr);\n");
+            out.push_str("            }\n");
+            out.push_str("            NativeMemory.Free(_arenaBuf);\n");
+        }
+        out.push_str("            _disposed = true;\n");
+        out.push_str("        }\n");
+        out.push_str("    }\n\n");
+
+        // Emit one method per function
+        for func in &contract.functions {
+            generate_peer_fn_caller_cs(&mut out, func, &peer_name, &contract_upper, needs_arena);
+        }
+
+        out.push_str("}\n\n");
+    }
+    out
+}
+
+/// Emit a single peer-caller method that dispatches via `CallGuestMethod`.
+///
+/// The canonical `call_guest_method` ABI signature (offset 136 on HostApi):
+///   `(host: *HostApi, instance: GuestContractInstance, fn_id: u32,
+///     args: *const u8, out: *mut u8, arena: *mut CallArena) → AbiError`
+///
+/// C# cast used here:
+///   `delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>`
+fn generate_peer_fn_caller_cs(
+    out: &mut String,
+    func: &ResolvedFunction,
+    peer_name: &str,
+    _contract_upper: &str,
+    peer_needs_arena: bool,
+) {
+    let fn_id: u32 = func.function_id;
+    let method_name: String = pascal_case(&func.name);
+    let ret: String = cs_return_type(func);
+    let has_return: bool = func.returns.is_some();
+    let needs_arena: bool = fn_needs_arena(func);
+
+    let params_sig: String = if func.params.is_empty() {
+        String::new()
+    } else if needs_arg_pack(&func.params) {
+        let args_struct: String = format!("{}{}{}", peer_name, method_name, "Args");
+        format!("ref {args_struct} args")
+    } else {
+        let p: &ResolvedParam = &func.params[0];
+        let cs_ty: String = cs_type_name(&p.ty);
+        match &p.ty {
+            ResolvedTypeRef::UserDefined(_) => {
+                format!("ref {cs_ty} {name}", name = p.name, cs_ty = cs_ty)
+            }
+            _ => format!("{cs_ty} {name}", name = p.name, cs_ty = cs_ty),
+        }
+    };
+
+    if needs_arena {
+        out.push_str(
+            "    /// <summary>Returns a value borrowing this peer's arena; it stays valid\n",
+        );
+        out.push_str("    /// until the next arena-backed call on this peer.</summary>\n");
+    }
+    out.push_str(&format!(
+        "    public {ret} {method_name}({params_sig}) {{\n"
+    ));
+
+    out.push_str("        if (_disposed) {\n");
+    out.push_str(&format!(
+        "            throw new ObjectDisposedException(nameof({peer_name}));\n"
+    ));
+    out.push_str("        }\n\n");
+
+    if needs_arena && peer_needs_arena {
+        out.push_str("        // Reset the arena at call start: frees previous overflow blocks\n");
+        out.push_str("        // and rewinds the primary region, invalidating prior views.\n");
+        out.push_str("        fixed (CallArena* arenaResetPtr = &_arena) {\n");
+        out.push_str("            CallArenaOps.Reset(arenaResetPtr);\n");
+        out.push_str("        }\n");
+    }
+
+    out.push_str("        {\n");
+
+    // Args setup (mirrors generate_host_fn_caller exactly)
+    if func.params.is_empty() {
+        out.push_str("            nint argsPtr = nint.Zero;\n");
+    } else if needs_arg_pack(&func.params) {
+        out.push_str("            nint argsPtr = (nint)(&args);\n");
+    } else {
+        let p: &ResolvedParam = &func.params[0];
+        match &p.ty {
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str(&format!(
+                    "            nint argsPtr = (nint)(&{name});\n",
+                    name = p.name
+                ));
+            }
+            _ => {
+                out.push_str(&format!(
+                    "            {ty} {name}_arg = {name};\n",
+                    ty = cs_type_name(&p.ty),
+                    name = p.name
+                ));
+                out.push_str(&format!(
+                    "            nint argsPtr = (nint)(&{name}_arg);\n",
+                    name = p.name
+                ));
+            }
+        }
+    }
+
+    if has_return {
+        out.push_str(&format!("            {ret} result = default;\n"));
+        out.push_str("            nint outPtr = (nint)(&result);\n");
+    } else {
+        out.push_str("            nint outPtr = nint.Zero;\n");
+    }
+
+    // Dispatch via CallGuestMethod (offset 136 on HostApi).
+    // Canonical 6-arg signature: (host, instance, fn_id, args, out, arena).
+    out.push_str(
+        "            // Dispatch via CallGuestMethod (host-mediated, offset 136 on HostApi).\n",
+    );
+    out.push_str(
+        "            var callFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_host->CallGuestMethod;\n",
+    );
+    if needs_arena && peer_needs_arena {
+        out.push_str("            AbiError err;\n");
+        out.push_str("            fixed (CallArena* arenaPtr = &_arena) {\n");
+        out.push_str(&format!(
+            "                err = callFn((IntPtr)_host, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr);\n"
+        ));
+        out.push_str("            }\n");
+    } else {
+        out.push_str(&format!(
+            "            AbiError err = callFn((IntPtr)_host, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null);\n"
+        ));
+    }
+
+    out.push_str("            if (err.Code != (uint)AbiErrorCode.Ok) {\n");
+    out.push_str("                throw new InvalidOperationException($\"peer call failed: code={{err.Code}}\");\n");
+    out.push_str("            }\n");
+    if has_return {
+        out.push_str("            return result;\n");
+    }
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+}
+
 impl CodeGenerator for CSharpGenerator {
     fn generate_host(
         &self,
@@ -2444,6 +2787,15 @@ impl CodeGenerator for CSharpGenerator {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/HostContracts.cs"),
                 content: generate_cs_guest_host_contracts_file(ir),
+                force_regenerate: false,
+            });
+        }
+        // ── guest/PeerCallers.cs (guest→guest peer callers) ──────────────────
+        let peer_contracts: Vec<&ResolvedContract> = collect_peer_contracts(ir);
+        if !peer_contracts.is_empty() {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/PeerCallers.cs"),
+                content: generate_cs_peer_callers_file(ir, &peer_contracts),
                 force_regenerate: false,
             });
         }
@@ -3203,6 +3555,167 @@ mod tests {
         assert!(
             out.contains("host_logger_log_thunk"),
             "missing thunk function: {out}"
+        );
+    }
+
+    #[test]
+    fn peer_caller_emitted_for_declared_dependency() {
+        let generator: CSharpGenerator = CSharpGenerator;
+        // pipeline.Validator@1 — contract_id must match the dep's contract_id so the
+        // gating logic (collect_peer_contracts) maps the dep to the contract.
+        let validator_contract_id: u64 = polyplug_utils::guest_contract_id("pipeline.Validator", 1);
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![ResolvedContract {
+                name: "pipeline.Validator".to_owned(),
+                contract_id: validator_contract_id,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "validate".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "input".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    }],
+                    returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+                }],
+            }],
+            host_contracts: vec![],
+            bundle: Some(ResolvedBundle {
+                name: "csharp_transformer".to_owned(),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                runtime: "dotnet".to_owned(),
+                file: polyplug_codegen::ResolvedBundleFile::Single("transformer.dll".to_owned()),
+                plugins: vec![],
+                bundle_id: 0xDEAD_BEEF_CAFE_0001_u64,
+                dependencies: vec![ResolvedDependency::ByContract {
+                    contract: "pipeline.Validator".to_owned(),
+                    contract_id: validator_contract_id,
+                    min_version: 1,
+                }],
+                needs_reinit_on_dep_reload: false,
+            }),
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.contains(&"guest/PeerCallers.cs".to_owned()),
+            "missing guest/PeerCallers.cs: {names:?}"
+        );
+        let content: &str = files
+            .files
+            .iter()
+            .find(|f: &&GeneratedFile| f.path.to_string_lossy() == "guest/PeerCallers.cs")
+            .expect("PeerCallers.cs")
+            .content
+            .as_str();
+        assert!(
+            content.contains("PipelineValidatorContractPeer"),
+            "missing peer class: {content}"
+        );
+        assert!(
+            content.contains("CallGuestMethod"),
+            "peer class must dispatch via CallGuestMethod: {content}"
+        );
+        assert!(
+            content.contains("RuntimeAbiStorage.GetRuntimeAbi()"),
+            "peer class must use RuntimeAbiStorage host accessor: {content}"
+        );
+    }
+
+    #[test]
+    fn no_peer_callers_without_dependencies() {
+        let generator: CSharpGenerator = CSharpGenerator;
+
+        // Case 1: bundle field is None (--api mode)
+        let ir_no_bundle: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![ResolvedContract {
+                name: "pipeline.Validator".to_owned(),
+                contract_id: polyplug_utils::guest_contract_id("pipeline.Validator", 1),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![],
+            }],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir_no_bundle, &mut files)
+            .expect("generate_guest (no bundle)");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.contains(&"guest/PeerCallers.cs".to_owned()),
+            "guest/PeerCallers.cs must NOT be emitted when bundle is None: {names:?}"
+        );
+
+        // Case 2: bundle present but no dependencies
+        let ir_no_deps: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![ResolvedContract {
+                name: "pipeline.Encoder".to_owned(),
+                contract_id: polyplug_utils::guest_contract_id("pipeline.Encoder", 1),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![],
+            }],
+            host_contracts: vec![],
+            bundle: Some(ResolvedBundle {
+                name: "csharp_encoder".to_owned(),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                runtime: "dotnet".to_owned(),
+                file: polyplug_codegen::ResolvedBundleFile::Single("encoder.dll".to_owned()),
+                plugins: vec![],
+                bundle_id: 0xAAAA_BBBB_0000_0001_u64,
+                dependencies: vec![],
+                needs_reinit_on_dep_reload: false,
+            }),
+        };
+        let mut files2: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir_no_deps, &mut files2)
+            .expect("generate_guest (no deps)");
+        let names2: Vec<String> = files2
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names2.contains(&"guest/PeerCallers.cs".to_owned()),
+            "guest/PeerCallers.cs must NOT be emitted when no deps: {names2:?}"
         );
     }
 }
