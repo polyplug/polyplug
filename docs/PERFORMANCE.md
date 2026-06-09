@@ -242,20 +242,25 @@ registry/find_guest_contract:   ~21 ns
 The `counter_inc` bench (`cargo bench -p polyplug --bench counter_inc`)
 answers the only question that matters for adoption: **what does polyplug's
 safety actually cost on the hot path?** It runs the *identical*
-one-million-iteration `counter = inc(counter)` loop through four mechanisms,
-so each per-call number isolates exactly one cost. Arms 3 and 4 load the
-*same* `libtest_plugin.so` and both compute `x + 1`; the only difference
-between them is polyplug's safety machinery.
+one-million-iteration `counter = inc(counter)` loop through five mechanisms,
+so each per-call number isolates exactly one cost. Arms 3–5 load the
+*same* contract (`x + 1`); the only difference between the FFI arm and the
+polyplug arms is polyplug's safety machinery, and the only difference between
+the Rust and C++ polyplug arms is the plugin's source language.
+
+![counter_inc per-call cost](assets/benches/counter_inc.svg)
 
 | Arm | Mechanism | ns/call | Throughput | vs floor |
 |---|---|---|---|---|
-| `native/inline_never` | direct Rust call, `#[inline(never)]`, no ABI boundary | ~1.1 ns | ~895 M/s | 1.0× (floor) |
-| `ffi/by_value` | raw `dlsym` `extern "C" inc(u32)->u32`, by value | ~1.8 ns | ~556 M/s | 1.6× |
-| `native/abi_marshalled` | ptr-in / ptr-out ABI convention, **statically linked** | ~2.1 ns | ~484 M/s | 1.8× |
-| `polyplug/dispatch` | **resolved contract dispatch over a loaded `.so`** | ~2.3 ns | ~440 M/s | 2.0× |
+| `native/inline_never` | direct Rust call, `#[inline(never)]`, no ABI boundary | ~1.5 ns | ~650 M/s | 1.0× (floor) |
+| `ffi/by_value` | raw `dlsym` `extern "C" inc(u32)->u32`, by value | ~1.8 ns | ~553 M/s | 1.2× |
+| `native/abi_marshalled` | ptr-in / ptr-out ABI convention, **statically linked** | ~2.3 ns | ~480 M/s | 1.5× |
+| `polyplug/dispatch` | **resolved contract dispatch over a loaded Rust `.so`** | ~2.3 ns | ~430 M/s | 1.5× |
+| `polyplug/dispatch_cpp` | the same, dispatching a **C++**-authored plugin | ~2.5 ns | ~390 M/s | 1.7× |
 
 _(Numbers from one developer machine — treat the **ratios**, not the absolute
-ns, as the result; they move with CPU but the ordering and gaps are stable.)_
+ns, as the result; they move with CPU but the ordering and gaps are stable. The
+chart above is regenerated from the same run by `ci/gen_bench_charts.py`.)_
 
 **What the numbers say:**
 
@@ -278,13 +283,30 @@ is sub-nanosecond. The pessimal "re-resolve the contract on every call" pattern
 (nobody does this in a loop) is measured separately by
 `contract_dispatch::bench_dispatch_cross_plugin`.
 
-> **Where overhead disappears entirely:** this bench deliberately uses the
-> cheapest possible payload (`x + 1`) to expose the *fixed* per-call cost. In a
-> real plugin the call does real work — hash a buffer, transform a record, parse
-> a document — and a fixed ~1 ns sits next to hundreds or thousands of ns of
-> useful work, i.e. it vanishes into noise. A payload-scaling bench that plots
-> overhead-as-a-fraction-of-work is the most honest "real world" view and is a
-> planned follow-up (see ROADMAP, Lane C).
+**Where the overhead disappears entirely.** `counter_inc` deliberately uses the
+cheapest possible payload (`x + 1`) to *expose* the fixed per-call cost. In a
+real plugin the call does real work, and that fixed sub-nanosecond cost vanishes
+next to it. The `payload_scaling` bench
+(`cargo bench -p polyplug --bench payload_scaling`) proves it: it runs the
+*same* byte-fill work natively and through polyplug across a sweep of payload
+sizes. The two lines converge as the payload grows — by a few hundred bytes the
+dispatch overhead is below measurement noise.
+
+![payload_scaling — overhead vs work](assets/benches/payload_scaling.svg)
+
+So the honest "real world" reading is: **on any call that does meaningful work,
+the safety boundary is free.** The pessimal "re-resolve the contract on every
+call" pattern (nobody does this in a loop) is measured separately by
+`contract_dispatch::bench_dispatch_cross_plugin`.
+
+> **Regenerating these charts.** Both SVGs are committed under
+> `docs/assets/benches/` and rebuilt locally — never in CI — from a criterion
+> run:
+> ```bash
+> cargo bench -p polyplug                                   # produces target/criterion
+> python3 ci/gen_bench_charts.py target/criterion docs/assets/benches
+> ```
+> Run benches on a quiet machine and trust the **ratios**, not the absolute ns.
 
 ---
 

@@ -25,6 +25,13 @@ that directory and flags any benchmark that regressed beyond a threshold:
 python3 ci/check_bench_regression.py target/criterion --threshold 1.5
 ```
 
+To turn a run into the committed SVG charts embedded in `docs/PERFORMANCE.md`
+(dependency-free — no matplotlib, no web service), run:
+
+```bash
+python3 ci/gen_bench_charts.py target/criterion docs/assets/benches
+```
+
 > Prerequisite: the benches `dlopen` the fixture plugins. Build them once with
 > `bash tests/fixtures/build_all.sh` before running (the root-level cdylibs are
 > not committed).
