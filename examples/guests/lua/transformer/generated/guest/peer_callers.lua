@@ -32,6 +32,9 @@ function PipelineValidatorPeer.resolve()
         return nil
     end
     local instance = interface.create_instance(host, nil)
+    -- Stamp the peer contract id so call_guest_method routes by it even when a
+    -- stateless peer's create_instance returns a null (null-id) handle.
+    instance.contract_id = 0x45173A959EEC57C5ULL
     return PipelineValidatorPeer:new(interface, instance, host)
 end
 

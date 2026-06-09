@@ -107,6 +107,9 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
         if (iface == null) { return null; }
         var createFn = (delegate* unmanaged[Cdecl]<IntPtr, void*, GuestContractInstance>)iface->CreateInstance;
         GuestContractInstance inst = createFn(hostPtr, null);
+        // Stamp the peer contract id so CallGuestMethod routes by it even when a
+        // stateless peer's create_instance returns a null (null-id) handle.
+        inst.ContractId = 0x45173A959EEC57C5UL;
         return new PipelineValidatorContractPeer(iface, inst, host);
     }
 

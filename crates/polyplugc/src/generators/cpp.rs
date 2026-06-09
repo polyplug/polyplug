@@ -2805,6 +2805,13 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
     out.push_str(
         "        GuestContractInstance instance = iface->create_instance(host, nullptr);\n",
     );
+    out.push_str("        // Stamp the peer contract id so `host->call_guest_method` routes by it\n");
+    out.push_str("        // even when a stateless peer's create_instance returns a null (null-id)\n");
+    out.push_str("        // handle. The host-mediated path keys routing on contract_id.\n");
+    out.push_str(&format!(
+        "        instance.contract_id = 0x{:016X}ULL;\n",
+        contract.contract_id
+    ));
     out.push_str(&format!(
         "        return {}(iface, instance, host);\n",
         class_name

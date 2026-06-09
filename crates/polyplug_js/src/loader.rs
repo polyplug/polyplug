@@ -566,8 +566,11 @@ fn register_host_functions<'js>(
             }
             // SAFETY: iface is non-null and points to a valid GuestContractInterface
             // returned by resolve_guest_contract; null ctx is accepted for stateless contracts.
-            let instance: GuestContractInstance =
+            let mut instance: GuestContractInstance =
                 unsafe { ((*iface).create_instance)(hvt, core::ptr::null()) };
+            // create_instance returns a null (null-id) handle for stateless/VM peers, but
+            // host call_guest_method routes by instance.contract_id — stamp the id we resolved.
+            instance.contract_id = GuestContractId::from_u64(contract_id);
             // SAFETY: hvt, instance, and iface are all valid; args_ptr/out_ptr are caller-supplied
             // addresses that the generated peer_callers.ts aligns via polyplug.alloc; a null arena
             // is the documented fallback for callers that carry no per-call arena.

@@ -173,6 +173,10 @@ public:
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         GuestContractInstance instance = iface->create_instance(host, nullptr);
+        // Stamp the peer contract id so `host->call_guest_method` routes by it
+        // even when a stateless peer's create_instance returns a null (null-id)
+        // handle. The host-mediated path keys routing on contract_id.
+        instance.contract_id = 0x45173A959EEC57C5ULL;
         return PipelineValidatorContractPeer(iface, instance, host);
     }
 

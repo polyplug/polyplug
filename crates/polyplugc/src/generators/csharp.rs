@@ -2593,6 +2593,12 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         // CreateInstance: (this, user_data) → GuestContractInstance
         out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, void*, GuestContractInstance>)iface->CreateInstance;\n");
         out.push_str("        GuestContractInstance inst = createFn(hostPtr, null);\n");
+        out.push_str("        // Stamp the peer contract id so CallGuestMethod routes by it even when a\n");
+        out.push_str("        // stateless peer's create_instance returns a null (null-id) handle.\n");
+        out.push_str(&format!(
+            "        inst.ContractId = 0x{:016X}UL;\n",
+            contract.contract_id
+        ));
         out.push_str(&format!(
             "        return new {peer_name}(iface, inst, host);\n"
         ));

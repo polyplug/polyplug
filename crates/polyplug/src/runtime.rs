@@ -1895,7 +1895,14 @@ pub(crate) unsafe extern "C" fn host_call_guest_method(
     out: *mut core::ffi::c_void,
     arena: *mut polyplug_abi::types::CallArena,
 ) -> polyplug_abi::types::AbiError {
-    if this.is_null() || instance.data.is_null() {
+    // Only the host vtable pointer is a hard precondition. A null `instance.data`
+    // is explicitly VALID: stateless contracts (every VM-backed contract, plus
+    // native contracts with no per-instance state) return a null handle from
+    // `create_instance` and use it as an opaque dispatch token. Routing is keyed
+    // solely on `instance.contract_id` (re-resolved below), so a null `data` that
+    // carries a valid `contract_id` must dispatch normally; a fully-null instance
+    // (contract_id == 0) still fails cleanly as `NotFound` at re-resolution.
+    if this.is_null() {
         return polyplug_abi::types::AbiError {
             code: polyplug_abi::types::AbiErrorCode::InvalidPointer as u32,
             message: polyplug_abi::types::StringView::null(),
@@ -2401,11 +2408,15 @@ mod tests {
     }
 
     #[test]
-    fn call_guest_method_null_instance_returns_invalid_pointer() {
+    fn call_guest_method_null_instance_returns_not_found() {
+        // A fully-null instance (null data AND null contract_id) is no longer
+        // rejected on the data field — null data is valid for stateless contracts.
+        // Routing keys on contract_id, so contract_id == 0 fails cleanly as NotFound
+        // (never dereferencing data/args/out).
         let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
         let instance: polyplug_abi::guest::GuestContractInstance =
             polyplug_abi::guest::GuestContractInstance::null();
-        // SAFETY: instance.data is null; the call must reject it before any deref.
+        // SAFETY: re-resolution of contract_id == 0 fails before any pointer deref.
         let err: polyplug_abi::types::AbiError = unsafe {
             host_call_guest_method(
                 host_with_runtime(&runtime),
@@ -2416,10 +2427,39 @@ mod tests {
                 core::ptr::null_mut(),
             )
         };
-        assert_eq!(
-            err.code,
-            polyplug_abi::types::AbiErrorCode::InvalidPointer as u32
-        );
+        assert_eq!(err.code, polyplug_abi::types::AbiErrorCode::NotFound as u32);
+    }
+
+    #[test]
+    fn call_guest_method_null_data_valid_contract_dispatches() {
+        // The peer-caller contract: a stateless instance carries a null `data` but a
+        // valid `contract_id`. call_guest_method must route by contract_id and
+        // dispatch successfully — this is the case the generated peer callers rely on.
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let contract_id: u64 = 0x0FED_CBA9_8765_4321;
+        register_native_caller_contract(&runtime.registry, contract_id, 0x1);
+
+        let instance: polyplug_abi::guest::GuestContractInstance =
+            polyplug_abi::guest::GuestContractInstance {
+                data: core::ptr::null_mut(),
+                contract_id: GuestContractId::from_u64(contract_id),
+            };
+        let input: i32 = 41;
+        let mut output: i32 = 0;
+        // SAFETY: native_add_one reads *const i32 from args and writes *mut i32 to out;
+        // it ignores instance.data, so a null data handle is sound.
+        let err: polyplug_abi::types::AbiError = unsafe {
+            host_call_guest_method(
+                host_with_runtime(&runtime),
+                instance,
+                0,
+                &raw const input as *const core::ffi::c_void,
+                &raw mut output as *mut core::ffi::c_void,
+                core::ptr::null_mut(),
+            )
+        };
+        assert_eq!(err.code, polyplug_abi::types::AbiErrorCode::Ok as u32);
+        assert_eq!(output, 42, "stateless dispatch must run with null instance.data");
     }
 
     #[test]

@@ -3047,6 +3047,12 @@ fn generate_peer_caller_class(out: &mut String, contract: &ResolvedContract, min
     out.push_str(
         "        instance: GuestContractInstance = iface_ptr.contents.create_instance(host_ptr, None)\n",
     );
+    out.push_str("        # Stamp the peer contract id so call_guest_method routes by it even when\n");
+    out.push_str("        # a stateless peer's create_instance returns a null (null-id) handle.\n");
+    out.push_str(&format!(
+        "        instance.contract_id = 0x{:016X}\n",
+        contract.contract_id
+    ));
     out.push_str("        return cls(host_ptr, interface, instance)\n\n");
 
     // __del__: destroy instance

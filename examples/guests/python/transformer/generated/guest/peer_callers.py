@@ -93,6 +93,9 @@ class PipelineValidatorPeer:
         iface_ptr: Any = ctypes.cast(interface, ctypes.POINTER(GuestContractInterface))
         # A null instance is valid for stateless contracts.
         instance: GuestContractInstance = iface_ptr.contents.create_instance(host_ptr, None)
+        # Stamp the peer contract id so call_guest_method routes by it even when
+        # a stateless peer's create_instance returns a null (null-id) handle.
+        instance.contract_id = 0x45173A959EEC57C5
         return cls(host_ptr, interface, instance)
 
     def __del__(self) -> None:

@@ -84,8 +84,15 @@ impl PipelineValidatorContractPeer {
         // handle from create_instance and use it as an opaque dispatch token.
         // SAFETY: interface is non-null (checked above) and points to a valid
         // GuestContractInterface produced by resolve_guest_contract.
-        let instance: GuestContractInstance =
+        let created: GuestContractInstance =
             unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        // Stamp the peer contract id so `host->call_guest_method` routes by it
+        // even when a stateless peer's create_instance returns a null handle
+        // (null contract_id). The host-mediated path keys routing on contract_id.
+        let instance: GuestContractInstance = GuestContractInstance {
+            data: created.data,
+            contract_id: polyplug_guest::GuestContractId::from_u64(0x45173A959EEC57C5_u64),
+        };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);

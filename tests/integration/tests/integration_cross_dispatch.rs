@@ -141,12 +141,11 @@ fn cross_call_unloaded_contract_returns_not_found() {
     rt.load_bundle(Path::new(CROSS_CALLER_PLUGIN_DIR))
         .expect("load cross_caller_plugin");
 
-    // Fabricate an instance stamped with an unloaded contract id. The non-null
-    // marker satisfies the call's non-null-`data` precondition; re-resolution by
-    // contract_id is what must fail.
-    let mut marker: u8 = 0;
+    // Fabricate an instance stamped with an unloaded contract id. Routing keys on
+    // contract_id, so re-resolution is what must fail (NotFound); instance.data is
+    // irrelevant here (null data is valid for stateless contracts).
     let unknown: GuestContractInstance = GuestContractInstance {
-        data: &mut marker as *mut u8 as *mut core::ffi::c_void,
+        data: core::ptr::null_mut(),
         contract_id: GuestContractId::new("cross.target", 1),
     };
     let args: AddArgs = AddArgs { a: 1, b: 2 };

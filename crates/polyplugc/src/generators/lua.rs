@@ -1692,6 +1692,12 @@ fn generate_lua_guest_peer_caller(out: &mut String, contract: &ResolvedContract,
     // return a null handle from create_instance and use it as an opaque dispatch token.
     // Validity is keyed off the interface pointer, not the instance.
     out.push_str("    local instance = interface.create_instance(host, nil)\n");
+    out.push_str("    -- Stamp the peer contract id so call_guest_method routes by it even when a\n");
+    out.push_str("    -- stateless peer's create_instance returns a null (null-id) handle.\n");
+    out.push_str(&format!(
+        "    instance.contract_id = 0x{:016X}ULL\n",
+        contract.contract_id
+    ));
     out.push_str(&format!(
         "    return {}:new(interface, instance, host)\n",
         class_name
