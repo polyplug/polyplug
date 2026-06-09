@@ -70,10 +70,13 @@ owner is currently budget-constrained.
   guarantee (resolve concurrent with unload → valid pointer or clean
   `StaleHandle`, never a use-after-free). A nightly TSAN job runs it under
   `-Zsanitizer=thread` — clean, no data races in the registry locking.
-- **A5. Finalize the resolve→dispatch UAF window for 1.0.** Currently Option A
-  (host-coordinated, best-effort `in_dispatch_threads` defense). Decide whether
-  that is the permanent 1.0 contract or whether Option B (per-dispatch
-  weak-upgrade) is warranted. _Owner decision — see below._
+- **A5. Finalize the resolve→dispatch UAF window for 1.0. ✅ Resolved — Option A.**
+  Owner ratified the host-coordinated, best-effort `in_dispatch_threads` defense as
+  the permanent 1.0 contract (2026-06-09): unload is host-coordinated exactly like
+  hot-reload, so the VM dispatch hot path carries zero extra synchronization. Option B
+  (per-dispatch weak-upgrade) was rejected — it would tax every VM call with atomic
+  weak-upgrades and leak a per-load control block to guarantee what the trusted
+  same-process model already delegates to the host.
 
 ### Lane B — Adoption / DX ⏸ Deferred (owner: not publishing yet)
 
@@ -137,9 +140,6 @@ scoping:
 
 ## Decisions needed from owner
 
-- **A4 — resolve→dispatch UAF window:** keep Option A (host-coordinated,
-  best-effort) as the permanent 1.0 contract, or invest in Option B
-  (per-dispatch weak-upgrade, race-free, tiny per-load control-block leak)?
 - **B1 — publishing:** which registries, what package names/namespaces, and is
   publishing pre-1.0 (for battle-testing) desired now or held until 1.0?
 - **Lane priority:** which lane do we fund next given the CI-minute constraint?
