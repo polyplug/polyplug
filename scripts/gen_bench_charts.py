@@ -291,7 +291,8 @@ def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
 def chart_cross_language_host(criterion_dir: Path, out: Path) -> None:
     """Per-call FFI overhead, host -> runtime, by host language (log scale)."""
     rows: list = [
-        ("C++ (native)", 15.0, _HILITE),
+        ("Rust (links the crate, no FFI)", 2.0, _HILITE),
+        ("C++ (native)", 15.0, _NEUTRAL),
         ("Lua (LuaJIT FFI)", 35.0, _NEUTRAL),
         ("JavaScript (Deno FFI)", 75.0, _NEUTRAL),
         ("Python (cffi ABI)", 380.0, _SLOW),
@@ -302,8 +303,9 @@ def chart_cross_language_host(criterion_dir: Path, out: Path) -> None:
         "Host call overhead by language  (host → runtime)",
         "per-call FFI cost to reach the runtime, log scale — lower is better",
         rows,
-        "Host FFI micro-benchmarks (see docs/PERFORMANCE.md). C++/Lua/JS are the "
-        "fast end; Python's dynamic FFI is the cost of its convenience.",
+        "A Rust host links libpolyplug directly — there is no FFI boundary, so it is "
+        "the floor. C++/Lua/JS are the fast FFI end; Python's dynamic FFI is the cost "
+        "of its convenience. Host FFI micro-benchmarks — see docs/PERFORMANCE.md.",
     )
 
 

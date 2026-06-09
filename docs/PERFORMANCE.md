@@ -53,11 +53,16 @@ written in each language to *call into* the runtime over FFI.
 
 | Language | Backend | Call Overhead | Speedup vs Python ctypes |
 |----------|---------|---------------|--------------------------|
+| **Rust** | Links the crate (no FFI) | ~2 ns | 300x+ |
 | **C++** | Native | ~10-20 ns | 30-60x |
 | **Lua** | LuaJIT FFI | ~20-50 ns | 10-30x |
 | **JavaScript** | Deno FFI | ~50-100 ns | 5-10x |
 | **Python** | cffi ABI | ~380 ns | 1.7x |
 | **Python** | ctypes | ~670 ns | 1.0x (baseline) |
+
+A Rust host is the floor: it links `libpolyplug` as a normal crate and calls its
+methods directly, so there is **no FFI boundary to cross** — the only cost is the
+operation itself. Every other language reaches the runtime through the C ABI.
 
 > The **other** direction — the runtime *dispatching into* a guest plugin
 > written in each language — is charted under

@@ -123,6 +123,42 @@ callgrind_annotate callgrind.out | head -50
 
 ---
 
+## Baseline findings (2026-06-10, `amortization` load path)
+
+The first real flamegraph pass profiled the `amortization` bench (load / resolve /
+reload). The headline: **polyplug's own code is a rounding error on the load
+path — the cost is the kernel loading a shared object.** Self-time, ranked:
+
+| Frame | Self % | What it is |
+|---|---|---|
+| `exp` | ~18.8% | **criterion's own statistics** (KDE / bootstrap in the Analyzing phase) — harness, not us |
+| `[k] 0x…` (kernel) | ~13% | **`mmap` / `dlopen` / relocation syscalls** — the actual cost of loading the `.so` |
+| `cargo::util::toml::*`, resolver | a few % | **cargo itself** — `cargo flamegraph` profiled the build/driver too |
+| `_dl_catch_exception`, `___dlopen`, `dlopen_implementation` | ~0.5% | libc's dynamic-linker machinery |
+| `malloc` | ~0.23% | allocator |
+| **`polyplug_init`** | **~0.15%** | our registration entry point |
+| `polyplug_abi_version`, `toml::de::*` (manifest parse) | ~0.02% each | our load logic |
+
+**Conclusion:** the ~14 µs `load_bundle` cost is **kernel-bound** (`dlopen`/`mmap`),
+not polyplug code. Manifest parsing, `polyplug_init`, and registration together are
+under ~1% of CPU. There is **no meaningful optimization headroom in our load
+logic** — the only lever is doing *fewer* loads, which the retire-not-drop model
+already does (it never re-`dlopen`s a live bundle). This matches the dispatch
+story: the costs that remain are physics (an OS load, an indirect call), not fat
+to trim.
+
+> **Harness caveat — read before trusting a microbench flamegraph.** Profiling a
+> criterion bench through `cargo flamegraph` pollutes the graph with two things
+> that are *not* your code: criterion's statistics (`exp`, ~19% here) and cargo's
+> own build/driver frames. For a clean polyplug-only flamegraph, build the bench
+> binary once and profile *it* directly with a fixed iteration count:
+> ```bash
+> cargo bench -p polyplug --bench amortization --no-run
+> flamegraph -o fg.svg -- target/release/deps/amortization-<hash> --bench --profile-time 10
+> ```
+> Also note: kernel frames show as raw addresses unless `kernel.kptr_restrict=0`
+> and `perf_event_paranoid<=1`; for userspace-only profiling that is fine.
+
 ## See also
 
 - [`crates/polyplug/benches/README.md`](../crates/polyplug/benches/README.md) — what each benchmark measures
