@@ -16,7 +16,7 @@ namespace polyplug_generated {
 ///
 /// Variable-size VM return values (strings, buffers) are bump-allocated from
 /// this buffer; outputs larger than it spill into host-allocated overflow
-/// blocks that the arena frees on the next reset.
+/// blocks that are retained across resets and freed only at teardown.
 static constexpr size_t CALL_ARENA_BUF_LEN = 512;
 
 /// Minimum size of a host-allocated overflow block, including its header.
@@ -38,9 +38,29 @@ inline uint8_t* polyplug_arena_bump(uint8_t* from, uint8_t* end, size_t size, si
     return nullptr;
 }
 
+/// Try to bump-allocate `size`@`align` from `block`'s free region.
+///
+/// Advances `block->used` on success and returns the allocation pointer.
+/// Returns nullptr if the request does not fit in the block's remaining room.
+inline uint8_t* polyplug_arena_serve_from_block(ArenaOverflowBlock* block, size_t size, size_t align) noexcept {
+    // SAFETY: block is a valid overflow block previously allocated by polyplug_arena_alloc;
+    // reading used/capacity and deriving pointers from the block base stays within
+    // the capacity-byte allocation.
+    auto block_bytes = reinterpret_cast<uint8_t*>(block);
+    uint8_t* from = block_bytes + block->used;
+    uint8_t* end  = block_bytes + block->capacity;
+    uint8_t* p = polyplug_arena_bump(from, end, size, align);
+    if (p == nullptr) { return nullptr; }
+    // SAFETY: block is a valid chain node; writing used (a plain size_t field)
+    // is in-bounds because the block was allocated with at least sizeof(ArenaOverflowBlock) bytes.
+    block->used = static_cast<size_t>(p - block_bytes) + size;
+    return p;
+}
+
 /// Allocate `size` bytes aligned to `align` from `arena`.
 ///
-/// Serves from the primary region by bumping `cur`; on exhaustion, requests a
+/// Serves from the primary region by bumping `cur`; on exhaustion, walks the
+/// retained overflow chain for a block with spare room; if none fits, requests a
 /// fresh overflow block from the host and serves from it. Returns nullptr if
 /// `size == 0`, if `align` is not a power of two, or if a host allocation fails.
 /// The returned pointer is valid until the next polyplug_arena_reset().
@@ -53,6 +73,11 @@ inline uint8_t* polyplug_arena_alloc(CallArena* arena, size_t size, size_t align
         return p;
     }
     if (arena->host == nullptr) { return nullptr; }
+    // REUSE PASS: walk the retained chain; serve from the first block with room.
+    for (ArenaOverflowBlock* b = arena->first_overflow; b != nullptr; b = b->next) {
+        if (uint8_t* p = polyplug_arena_serve_from_block(b, size, align)) { return p; }
+    }
+    // ALLOCATE NEW: no retained block had enough room.
     size_t header = sizeof(ArenaOverflowBlock);
     size_t needed = header + align + size;
     size_t capacity = needed > POLYPLUG_OVERFLOW_BLOCK_MIN ? needed : POLYPLUG_OVERFLOW_BLOCK_MIN;
@@ -65,15 +90,29 @@ inline uint8_t* polyplug_arena_alloc(CallArena* arena, size_t size, size_t align
     auto block = reinterpret_cast<ArenaOverflowBlock*>(block_ptr);
     block->next = arena->first_overflow;
     block->capacity = capacity;
+    block->used = header;
     arena->first_overflow = block;
-    uint8_t* data_start = block_ptr + header;
-    uint8_t* block_end = block_ptr + capacity;
-    return polyplug_arena_bump(data_start, block_end, size, align);
+    return polyplug_arena_serve_from_block(block, size, align);
 }
 
-/// Reset `arena`, freeing every overflow block and rewinding the primary region.
+/// Rewind `arena` for reuse: the primary region and every retained overflow block
+/// become available again. Overflow blocks are NOT freed — they are retained for
+/// reuse across calls; call polyplug_arena_free_all() at teardown to free them.
 /// After reset, all pointers previously returned by polyplug_arena_alloc are invalid.
 inline void polyplug_arena_reset(CallArena* arena) noexcept {
+    arena->cur = arena->base;
+    ArenaOverflowBlock* block = arena->first_overflow;
+    while (block != nullptr) {
+        // SAFETY: every block in the chain was allocated by polyplug_arena_alloc
+        // with a valid header; reading next and writing used are in-bounds.
+        block->used = sizeof(ArenaOverflowBlock);
+        block = block->next;
+    }
+}
+
+/// Free all retained overflow blocks and reset the overflow chain to empty.
+/// Call this at teardown (destructor) to release all host-allocated memory.
+inline void polyplug_arena_free_all(CallArena* arena) noexcept {
     ArenaOverflowBlock* block = arena->first_overflow;
     while (block != nullptr) {
         // SAFETY: every block was allocated by polyplug_arena_alloc with a valid
@@ -87,7 +126,6 @@ inline void polyplug_arena_reset(CallArena* arena) noexcept {
         block = next;
     }
     arena->first_overflow = nullptr;
-    arena->cur = arena->base;
 }
 
 /// Construct a CallArena over `buf` (primary region) with `host` for overflow.
@@ -147,7 +185,7 @@ public:
         // Free any overflow blocks the arena still holds before destruction.
         // arena_buf_ is null only on a moved-from caller.
         if (arena_buf_) {
-            polyplug_arena_reset(&arena_);
+            polyplug_arena_free_all(&arena_);
         }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
@@ -170,7 +208,7 @@ public:
         if (this != &other) {
             // Release this caller's overflow blocks before overwriting.
             if (arena_buf_) {
-                polyplug_arena_reset(&arena_);
+                polyplug_arena_free_all(&arena_);
             }
             // Destroy current instance first
             if (instance_.data != nullptr) {
@@ -304,7 +342,7 @@ public:
         // Free any overflow blocks the arena still holds before destruction.
         // arena_buf_ is null only on a moved-from caller.
         if (arena_buf_) {
-            polyplug_arena_reset(&arena_);
+            polyplug_arena_free_all(&arena_);
         }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
@@ -327,7 +365,7 @@ public:
         if (this != &other) {
             // Release this caller's overflow blocks before overwriting.
             if (arena_buf_) {
-                polyplug_arena_reset(&arena_);
+                polyplug_arena_free_all(&arena_);
             }
             // Destroy current instance first
             if (instance_.data != nullptr) {
@@ -461,7 +499,7 @@ public:
         // Free any overflow blocks the arena still holds before destruction.
         // arena_buf_ is null only on a moved-from caller.
         if (arena_buf_) {
-            polyplug_arena_reset(&arena_);
+            polyplug_arena_free_all(&arena_);
         }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
@@ -484,7 +522,7 @@ public:
         if (this != &other) {
             // Release this caller's overflow blocks before overwriting.
             if (arena_buf_) {
-                polyplug_arena_reset(&arena_);
+                polyplug_arena_free_all(&arena_);
             }
             // Destroy current instance first
             if (instance_.data != nullptr) {
@@ -618,7 +656,7 @@ public:
         // Free any overflow blocks the arena still holds before destruction.
         // arena_buf_ is null only on a moved-from caller.
         if (arena_buf_) {
-            polyplug_arena_reset(&arena_);
+            polyplug_arena_free_all(&arena_);
         }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
@@ -641,7 +679,7 @@ public:
         if (this != &other) {
             // Release this caller's overflow blocks before overwriting.
             if (arena_buf_) {
-                polyplug_arena_reset(&arena_);
+                polyplug_arena_free_all(&arena_);
             }
             // Destroy current instance first
             if (instance_.data != nullptr) {
@@ -775,7 +813,7 @@ public:
         // Free any overflow blocks the arena still holds before destruction.
         // arena_buf_ is null only on a moved-from caller.
         if (arena_buf_) {
-            polyplug_arena_reset(&arena_);
+            polyplug_arena_free_all(&arena_);
         }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
@@ -798,7 +836,7 @@ public:
         if (this != &other) {
             // Release this caller's overflow blocks before overwriting.
             if (arena_buf_) {
-                polyplug_arena_reset(&arena_);
+                polyplug_arena_free_all(&arena_);
             }
             // Destroy current instance first
             if (instance_.data != nullptr) {

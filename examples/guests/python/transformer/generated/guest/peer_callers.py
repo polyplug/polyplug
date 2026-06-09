@@ -20,8 +20,18 @@ from polyplug_abi import (
 CALL_ARENA_BUF_LEN: int = 512
 _OVERFLOW_BLOCK_ALIGN: int = ctypes.sizeof(ctypes.c_void_p)
 
-def _arena_reset(arena: CallArena, host: ctypes.c_void_p) -> None:
-    """Free every overflow block and rewind the primary region."""
+def _arena_reset(arena: CallArena) -> None:
+    """Rewind the arena for reuse: retain all overflow blocks."""
+    arena.cur = arena.base
+    block: int = arena.first_overflow or 0
+    header_size: int = ctypes.sizeof(ArenaOverflowBlock)
+    while block:
+        hdr: ArenaOverflowBlock = ArenaOverflowBlock.from_address(block)
+        hdr.used = header_size
+        block = hdr.next or 0
+
+def _arena_free_all(arena: CallArena, host: ctypes.c_void_p) -> None:
+    """Free every overflow block and clear the chain (teardown)."""
     block: int = arena.first_overflow or 0
     host_api: Any = ctypes.cast(host, ctypes.POINTER(HostApi))
     while block:
@@ -32,7 +42,6 @@ def _arena_reset(arena: CallArena, host: ctypes.c_void_p) -> None:
             host_api.contents.free(host, block, capacity, _OVERFLOW_BLOCK_ALIGN)
         block = next_block
     arena.first_overflow = None
-    arena.cur = arena.base
 
 _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)
 
@@ -94,15 +103,15 @@ class PipelineValidatorPeer:
         iface_ptr.contents.destroy_instance(self._host_ptr, self._instance)
         self._interface = 0
         if getattr(self, "_arena", None) is not None:
-            _arena_reset(self._arena, self._host_ptr)
+            _arena_free_all(self._arena, self._host_ptr)
 
     def is_valid(self) -> bool:
         """Return True if the peer interface is resolved and live."""
         return bool(getattr(self, "_interface", None))
 
     def validate(self, input: StringView) -> StringView:
-        # Reset arena at call start; prior returned views are invalidated.
-        _arena_reset(self._arena, self._host_ptr)
+        # Rewind arena at call start; prior returned views are invalidated.
+        _arena_reset(self._arena)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)

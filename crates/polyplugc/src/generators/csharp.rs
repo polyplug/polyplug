@@ -133,11 +133,11 @@ fn cs_assembly_namespace(file: &polyplug_codegen::ResolvedBundleFile) -> Option<
 /// Emit the inline call-arena helpers used by per-caller arenas.
 ///
 /// `CallArena` in `Polyplug.Abi` is a layout-only POD (no methods), so the
-/// overflow-freeing reset and the construction logic are emitted here. They are a
-/// direct port of `polyplug_abi::CallArena::{new, reset}`; keeping the two in
-/// lockstep is required by Rule 10 (identical ABI mechanisms across generators).
+/// construction, rewind-reset, and free-all logic are emitted here. They are a
+/// direct port of `polyplug_abi::CallArena::{new, reset, drop}`; keeping the two
+/// in lockstep is required by Rule 10 (identical ABI mechanisms across generators).
 /// The host caller never bump-allocates itself — the VM bridge does, through the
-/// arena it is handed — so only `New` and `Reset` are emitted here.
+/// arena it is handed — so only `New`, `Reset`, and `FreeAll` are emitted here.
 fn emit_cs_call_arena_helpers(out: &mut String) {
     out.push_str(
         "/// <summary>Inline call-arena helpers (port of polyplug_abi::CallArena).</summary>\n",
@@ -151,7 +151,9 @@ fn emit_cs_call_arena_helpers(out: &mut String) {
     out.push_str(
         "    /// this buffer; outputs larger than it spill into host-allocated overflow\n",
     );
-    out.push_str("    /// blocks that the arena frees on the next reset.\n");
+    out.push_str(
+        "    /// blocks that are retained across resets and freed only by FreeAll.\n",
+    );
     out.push_str("    public const nuint CALL_ARENA_BUF_LEN = 512;\n");
     out.push_str(
         "    /// <summary>Alignment used to free host-allocated overflow blocks.</summary>\n",
@@ -172,12 +174,35 @@ fn emit_cs_call_arena_helpers(out: &mut String) {
     out.push_str("    }\n\n");
 
     out.push_str(
-        "    /// <summary>Reset `arena`: free every overflow block and rewind the primary region.</summary>\n",
+        "    /// <summary>Rewind `arena` for reuse: the primary region and every retained\n",
     );
     out.push_str(
-        "    /// After reset, all pointers previously returned by arena allocations are invalid.\n",
+        "    /// overflow block become available again. Overflow blocks are NOT freed —\n",
     );
+    out.push_str(
+        "    /// they are retained for the next call. Call FreeAll before releasing the\n",
+    );
+    out.push_str(
+        "    /// arena. After reset, all pointers previously returned by arena allocations\n",
+    );
+    out.push_str("    /// are invalid.</summary>\n");
     out.push_str("    public static void Reset(CallArena* arena) {\n");
+    out.push_str("        arena->Cur = arena->Base;\n");
+    out.push_str("        IntPtr block = arena->FirstOverflow;\n");
+    out.push_str("        while (block != IntPtr.Zero) {\n");
+    out.push_str("            var hdr = (ArenaOverflowBlock*)block;\n");
+    out.push_str("            hdr->Used = (nuint)sizeof(ArenaOverflowBlock);\n");
+    out.push_str("            block = hdr->Next;\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+
+    out.push_str(
+        "    /// <summary>Free all retained overflow blocks and clear the chain.\n",
+    );
+    out.push_str(
+        "    /// Call this before releasing the arena's backing buffer (e.g. in Dispose).</summary>\n",
+    );
+    out.push_str("    public static void FreeAll(CallArena* arena) {\n");
     out.push_str("        IntPtr block = arena->FirstOverflow;\n");
     out.push_str("        while (block != IntPtr.Zero) {\n");
     out.push_str("            var hdr = (ArenaOverflowBlock*)block;\n");
@@ -191,7 +216,6 @@ fn emit_cs_call_arena_helpers(out: &mut String) {
     out.push_str("            block = next;\n");
     out.push_str("        }\n");
     out.push_str("        arena->FirstOverflow = IntPtr.Zero;\n");
-    out.push_str("        arena->Cur = arena->Base;\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
 }
@@ -1098,10 +1122,10 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("            _instance.Data = nint.Zero;\n");
         if needs_arena {
             out.push_str(
-                "            // Free any overflow blocks the arena still holds, then the C-heap buffer.\n",
+                "            // Free all retained overflow blocks, then the C-heap buffer.\n",
             );
             out.push_str("            fixed (CallArena* arenaPtr = &_arena) {\n");
-            out.push_str("                CallArenaOps.Reset(arenaPtr);\n");
+            out.push_str("                CallArenaOps.FreeAll(arenaPtr);\n");
             out.push_str("            }\n");
             out.push_str("            NativeMemory.Free(_arenaBuf);\n");
         }
@@ -1168,10 +1192,10 @@ fn generate_host_fn_caller(
 
     if needs_arena {
         out.push_str(
-            "        // Reset the arena at call start: frees the previous call's overflow\n",
+            "        // Rewind the arena at call start: retained overflow blocks and the primary\n",
         );
         out.push_str(
-            "        // blocks and rewinds the primary region, invalidating prior views.\n",
+            "        // region become available again, invalidating prior views.\n",
         );
         out.push_str("        fixed (CallArena* arenaResetPtr = &_arena) {\n");
         out.push_str("            CallArenaOps.Reset(arenaResetPtr);\n");
@@ -2593,10 +2617,10 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         out.push_str("            _instance.Data = nint.Zero;\n");
         if needs_arena {
             out.push_str(
-                "            // Free any overflow blocks the arena still holds, then the C-heap buffer.\n",
+                "            // Free all retained overflow blocks, then the C-heap buffer.\n",
             );
             out.push_str("            fixed (CallArena* arenaPtr = &_arena) {\n");
-            out.push_str("                CallArenaOps.Reset(arenaPtr);\n");
+            out.push_str("                CallArenaOps.FreeAll(arenaPtr);\n");
             out.push_str("            }\n");
             out.push_str("            NativeMemory.Free(_arenaBuf);\n");
         }
@@ -2668,8 +2692,8 @@ fn generate_peer_fn_caller_cs(
     out.push_str("        }\n\n");
 
     if needs_arena && peer_needs_arena {
-        out.push_str("        // Reset the arena at call start: frees previous overflow blocks\n");
-        out.push_str("        // and rewinds the primary region, invalidating prior views.\n");
+        out.push_str("        // Rewind the arena at call start: retained overflow blocks and the\n");
+        out.push_str("        // primary region become available again, invalidating prior views.\n");
         out.push_str("        fixed (CallArena* arenaResetPtr = &_arena) {\n");
         out.push_str("            CallArenaOps.Reset(arenaResetPtr);\n");
         out.push_str("        }\n");

@@ -12,11 +12,21 @@ from polyplug_abi import AbiErrorCode, ArenaOverflowBlock, CallArena, DispatchTy
 CALL_ARENA_BUF_LEN: int = 512
 _OVERFLOW_BLOCK_ALIGN: int = ctypes.sizeof(ctypes.c_void_p)
 
-def _arena_reset(arena: CallArena, host: ctypes.c_void_p) -> None:
-    """Free every overflow block and rewind the primary region.
+def _arena_reset(arena: CallArena) -> None:
+    """Rewind the arena for reuse: retain all overflow blocks.
 
     After reset, all pointers previously returned by arena allocations are invalid.
     """
+    arena.cur = arena.base
+    block: int = arena.first_overflow or 0
+    header_size: int = ctypes.sizeof(ArenaOverflowBlock)
+    while block:
+        hdr: ArenaOverflowBlock = ArenaOverflowBlock.from_address(block)
+        hdr.used = header_size
+        block = hdr.next or 0
+
+def _arena_free_all(arena: CallArena, host: ctypes.c_void_p) -> None:
+    """Free every overflow block and clear the chain (teardown)."""
     block: int = arena.first_overflow or 0
     host_api: Any = ctypes.cast(host, ctypes.POINTER(HostApi))
     while block:
@@ -27,7 +37,6 @@ def _arena_reset(arena: CallArena, host: ctypes.c_void_p) -> None:
             host_api.contents.free(host, block, capacity, _OVERFLOW_BLOCK_ALIGN)
         block = next_block
     arena.first_overflow = None
-    arena.cur = arena.base
 
 class ContractError(Exception):
     def __init__(self, message: str, code: int = AbiErrorCode.Generic) -> None:
@@ -116,7 +125,7 @@ class PipelineDecoderContractCaller:
             self._interface = None  # Prevent reuse after cleanup.
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
-            _arena_reset(self._arena, self._host)
+            _arena_free_all(self._arena, self._host)
         # Release the runtime pin now that teardown has completed.
         self._owner = None
 
@@ -158,9 +167,9 @@ class PipelineDecoderContractCaller:
     def decode(self, input: StringView) -> StringView:
         # Returns a value borrowing this caller's arena; it stays valid until
         # the next arena-backed call on this caller.
-        # Reset the arena at call start: frees the previous call's overflow
-        # blocks and rewinds the primary region, invalidating prior views.
-        _arena_reset(self._arena, self._host)
+        # Rewind the arena at call start: retains overflow blocks for reuse,
+        # invalidating all pointers from the previous call.
+        _arena_reset(self._arena)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
@@ -249,7 +258,7 @@ class DataTransformerContractCaller:
             self._interface = None  # Prevent reuse after cleanup.
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
-            _arena_reset(self._arena, self._host)
+            _arena_free_all(self._arena, self._host)
         # Release the runtime pin now that teardown has completed.
         self._owner = None
 
@@ -291,9 +300,9 @@ class DataTransformerContractCaller:
     def transform(self, input: StringView) -> StringView:
         # Returns a value borrowing this caller's arena; it stays valid until
         # the next arena-backed call on this caller.
-        # Reset the arena at call start: frees the previous call's overflow
-        # blocks and rewinds the primary region, invalidating prior views.
-        _arena_reset(self._arena, self._host)
+        # Rewind the arena at call start: retains overflow blocks for reuse,
+        # invalidating all pointers from the previous call.
+        _arena_reset(self._arena)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
@@ -382,7 +391,7 @@ class PipelineEncoderContractCaller:
             self._interface = None  # Prevent reuse after cleanup.
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
-            _arena_reset(self._arena, self._host)
+            _arena_free_all(self._arena, self._host)
         # Release the runtime pin now that teardown has completed.
         self._owner = None
 
@@ -424,9 +433,9 @@ class PipelineEncoderContractCaller:
     def encode(self, input: StringView) -> StringView:
         # Returns a value borrowing this caller's arena; it stays valid until
         # the next arena-backed call on this caller.
-        # Reset the arena at call start: frees the previous call's overflow
-        # blocks and rewinds the primary region, invalidating prior views.
-        _arena_reset(self._arena, self._host)
+        # Rewind the arena at call start: retains overflow blocks for reuse,
+        # invalidating all pointers from the previous call.
+        _arena_reset(self._arena)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
@@ -515,7 +524,7 @@ class DataReporterContractCaller:
             self._interface = None  # Prevent reuse after cleanup.
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
-            _arena_reset(self._arena, self._host)
+            _arena_free_all(self._arena, self._host)
         # Release the runtime pin now that teardown has completed.
         self._owner = None
 
@@ -557,9 +566,9 @@ class DataReporterContractCaller:
     def report(self, input: StringView) -> StringView:
         # Returns a value borrowing this caller's arena; it stays valid until
         # the next arena-backed call on this caller.
-        # Reset the arena at call start: frees the previous call's overflow
-        # blocks and rewinds the primary region, invalidating prior views.
-        _arena_reset(self._arena, self._host)
+        # Rewind the arena at call start: retains overflow blocks for reuse,
+        # invalidating all pointers from the previous call.
+        _arena_reset(self._arena)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
@@ -648,7 +657,7 @@ class PipelineValidatorContractCaller:
             self._interface = None  # Prevent reuse after cleanup.
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
-            _arena_reset(self._arena, self._host)
+            _arena_free_all(self._arena, self._host)
         # Release the runtime pin now that teardown has completed.
         self._owner = None
 
@@ -690,9 +699,9 @@ class PipelineValidatorContractCaller:
     def validate(self, input: StringView) -> StringView:
         # Returns a value borrowing this caller's arena; it stays valid until
         # the next arena-backed call on this caller.
-        # Reset the arena at call start: frees the previous call's overflow
-        # blocks and rewinds the primary region, invalidating prior views.
-        _arena_reset(self._arena, self._host)
+        # Rewind the arena at call start: retains overflow blocks for reuse,
+        # invalidating all pointers from the previous call.
+        _arena_reset(self._arena)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)

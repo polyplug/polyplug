@@ -1083,7 +1083,7 @@ fn emit_cpp_call_arena_helpers(out: &mut String) {
     out.push_str("///\n");
     out.push_str("/// Variable-size VM return values (strings, buffers) are bump-allocated from\n");
     out.push_str("/// this buffer; outputs larger than it spill into host-allocated overflow\n");
-    out.push_str("/// blocks that the arena frees on the next reset.\n");
+    out.push_str("/// blocks that are retained across resets and freed only at teardown.\n");
     out.push_str("static constexpr size_t CALL_ARENA_BUF_LEN = 512;\n\n");
 
     out.push_str("/// Minimum size of a host-allocated overflow block, including its header.\n");
@@ -1109,12 +1109,48 @@ fn emit_cpp_call_arena_helpers(out: &mut String) {
     out.push_str("    return nullptr;\n");
     out.push_str("}\n\n");
 
+    out.push_str("/// Try to bump-allocate `size`@`align` from `block`'s free region.\n");
+    out.push_str("///\n");
+    out.push_str("/// Advances `block->used` on success and returns the allocation pointer.\n");
+    out.push_str("/// Returns nullptr if the request does not fit in the block's remaining room.\n");
+    out.push_str(
+        "inline uint8_t* polyplug_arena_serve_from_block(ArenaOverflowBlock* block, size_t size, size_t align) noexcept {\n",
+    );
+    out.push_str(
+        "    // SAFETY: block is a valid overflow block previously allocated by polyplug_arena_alloc;\n",
+    );
+    out.push_str(
+        "    // reading used/capacity and deriving pointers from the block base stays within\n",
+    );
+    out.push_str("    // the capacity-byte allocation.\n");
+    out.push_str("    auto block_bytes = reinterpret_cast<uint8_t*>(block);\n");
+    out.push_str("    uint8_t* from = block_bytes + block->used;\n");
+    out.push_str("    uint8_t* end  = block_bytes + block->capacity;\n");
+    out.push_str("    uint8_t* p = polyplug_arena_bump(from, end, size, align);\n");
+    out.push_str("    if (p == nullptr) { return nullptr; }\n");
+    out.push_str(
+        "    // SAFETY: block is a valid chain node; writing used (a plain size_t field)\n",
+    );
+    out.push_str(
+        "    // is in-bounds because the block was allocated with at least sizeof(ArenaOverflowBlock) bytes.\n",
+    );
+    out.push_str(
+        "    block->used = static_cast<size_t>(p - block_bytes) + size;\n",
+    );
+    out.push_str("    return p;\n");
+    out.push_str("}\n\n");
+
     out.push_str("/// Allocate `size` bytes aligned to `align` from `arena`.\n");
     out.push_str("///\n");
     out.push_str(
-        "/// Serves from the primary region by bumping `cur`; on exhaustion, requests a\n",
+        "/// Serves from the primary region by bumping `cur`; on exhaustion, walks the\n",
     );
-    out.push_str("/// fresh overflow block from the host and serves from it. Returns nullptr if\n");
+    out.push_str(
+        "/// retained overflow chain for a block with spare room; if none fits, requests a\n",
+    );
+    out.push_str(
+        "/// fresh overflow block from the host and serves from it. Returns nullptr if\n",
+    );
     out.push_str(
         "/// `size == 0`, if `align` is not a power of two, or if a host allocation fails.\n",
     );
@@ -1132,6 +1168,13 @@ fn emit_cpp_call_arena_helpers(out: &mut String) {
     out.push_str("        return p;\n");
     out.push_str("    }\n");
     out.push_str("    if (arena->host == nullptr) { return nullptr; }\n");
+    out.push_str("    // REUSE PASS: walk the retained chain; serve from the first block with room.\n");
+    out.push_str("    for (ArenaOverflowBlock* b = arena->first_overflow; b != nullptr; b = b->next) {\n");
+    out.push_str(
+        "        if (uint8_t* p = polyplug_arena_serve_from_block(b, size, align)) { return p; }\n",
+    );
+    out.push_str("    }\n");
+    out.push_str("    // ALLOCATE NEW: no retained block had enough room.\n");
     out.push_str("    size_t header = sizeof(ArenaOverflowBlock);\n");
     out.push_str("    size_t needed = header + align + size;\n");
     out.push_str("    size_t capacity = needed > POLYPLUG_OVERFLOW_BLOCK_MIN ? needed : POLYPLUG_OVERFLOW_BLOCK_MIN;\n");
@@ -1150,19 +1193,45 @@ fn emit_cpp_call_arena_helpers(out: &mut String) {
     out.push_str("    auto block = reinterpret_cast<ArenaOverflowBlock*>(block_ptr);\n");
     out.push_str("    block->next = arena->first_overflow;\n");
     out.push_str("    block->capacity = capacity;\n");
+    out.push_str("    block->used = header;\n");
     out.push_str("    arena->first_overflow = block;\n");
-    out.push_str("    uint8_t* data_start = block_ptr + header;\n");
-    out.push_str("    uint8_t* block_end = block_ptr + capacity;\n");
-    out.push_str("    return polyplug_arena_bump(data_start, block_end, size, align);\n");
+    out.push_str("    return polyplug_arena_serve_from_block(block, size, align);\n");
     out.push_str("}\n\n");
 
     out.push_str(
-        "/// Reset `arena`, freeing every overflow block and rewinding the primary region.\n",
+        "/// Rewind `arena` for reuse: the primary region and every retained overflow block\n",
+    );
+    out.push_str(
+        "/// become available again. Overflow blocks are NOT freed — they are retained for\n",
+    );
+    out.push_str(
+        "/// reuse across calls; call polyplug_arena_free_all() at teardown to free them.\n",
     );
     out.push_str(
         "/// After reset, all pointers previously returned by polyplug_arena_alloc are invalid.\n",
     );
     out.push_str("inline void polyplug_arena_reset(CallArena* arena) noexcept {\n");
+    out.push_str("    arena->cur = arena->base;\n");
+    out.push_str("    ArenaOverflowBlock* block = arena->first_overflow;\n");
+    out.push_str("    while (block != nullptr) {\n");
+    out.push_str(
+        "        // SAFETY: every block in the chain was allocated by polyplug_arena_alloc\n",
+    );
+    out.push_str(
+        "        // with a valid header; reading next and writing used are in-bounds.\n",
+    );
+    out.push_str("        block->used = sizeof(ArenaOverflowBlock);\n");
+    out.push_str("        block = block->next;\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+
+    out.push_str(
+        "/// Free all retained overflow blocks and reset the overflow chain to empty.\n",
+    );
+    out.push_str(
+        "/// Call this at teardown (destructor) to release all host-allocated memory.\n",
+    );
+    out.push_str("inline void polyplug_arena_free_all(CallArena* arena) noexcept {\n");
     out.push_str("    ArenaOverflowBlock* block = arena->first_overflow;\n");
     out.push_str("    while (block != nullptr) {\n");
     out.push_str(
@@ -1182,7 +1251,6 @@ fn emit_cpp_call_arena_helpers(out: &mut String) {
     out.push_str("        block = next;\n");
     out.push_str("    }\n");
     out.push_str("    arena->first_overflow = nullptr;\n");
-    out.push_str("    arena->cur = arena->base;\n");
     out.push_str("}\n\n");
 
     out.push_str(
@@ -1281,7 +1349,7 @@ fn generate_cpp_host_contract(
         );
         out.push_str("        // arena_buf_ is null only on a moved-from caller.\n");
         out.push_str("        if (arena_buf_) {\n");
-        out.push_str("            polyplug_arena_reset(&arena_);\n");
+        out.push_str("            polyplug_arena_free_all(&arena_);\n");
         out.push_str("        }\n");
     }
     out.push_str("        // Destroy instance via factory\n");
@@ -1319,7 +1387,7 @@ fn generate_cpp_host_contract(
     if needs_arena {
         out.push_str("            // Release this caller's overflow blocks before overwriting.\n");
         out.push_str("            if (arena_buf_) {\n");
-        out.push_str("                polyplug_arena_reset(&arena_);\n");
+        out.push_str("                polyplug_arena_free_all(&arena_);\n");
         out.push_str("            }\n");
     }
     out.push_str("            // Destroy current instance first\n");

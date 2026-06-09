@@ -461,10 +461,38 @@ fn test_cpp_codegen_host_caller_threads_arena() {
         "fixed-size returns must pass a null arena to vm.call"
     );
 
-    // The destructor must release the arena's overflow chain before teardown.
+    // The destructor must free (not just rewind) the arena's overflow chain at teardown.
     assert!(
         content.contains("if (arena_buf_) {"),
-        "the caller must guard arena reset against moved-from state"
+        "the caller must guard arena teardown against moved-from state"
+    );
+    assert!(
+        content.contains("polyplug_arena_free_all(&arena_);"),
+        "the destructor and move-assign must call polyplug_arena_free_all to actually free blocks"
+    );
+
+    // The arena helpers: serve_from_block and free_all must be emitted; reset must
+    // rewind only (no host->free loop inside it).
+    assert!(
+        content.contains("inline uint8_t* polyplug_arena_serve_from_block(ArenaOverflowBlock* block"),
+        "host_callers.hpp must emit the serve_from_block helper"
+    );
+    assert!(
+        content.contains("inline void polyplug_arena_free_all(CallArena* arena"),
+        "host_callers.hpp must emit the free_all teardown helper"
+    );
+    // polyplug_arena_reset must NOT contain host->free (rewind-only; free is in free_all).
+    let reset_start: usize = content
+        .find("inline void polyplug_arena_reset(")
+        .expect("polyplug_arena_reset must be emitted");
+    let reset_end: usize = content[reset_start..]
+        .find("\ninline ")
+        .map(|off| reset_start + off)
+        .unwrap_or(content.len());
+    let reset_body: &str = &content[reset_start..reset_end];
+    assert!(
+        !reset_body.contains("host->free"),
+        "polyplug_arena_reset must NOT call host->free (retain-and-rewind; free_all handles teardown)"
     );
 
     println!("test_cpp_codegen_host_caller_threads_arena: arena threading assertions passed");

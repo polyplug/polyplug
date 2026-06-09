@@ -225,11 +225,11 @@ fn csharp_host_caller_emits_arena_for_stringview_return() {
         "C#: host caller must branch on dispatch type:\n{callers}"
     );
 
-    // The arena-backed (echo, fn 0) call resets the arena and passes a live arena
+    // The arena-backed (echo, fn 0) call rewinds the arena and passes a live arena
     // pointer to the VM dispatch; the scalar (add, fn 1) call passes a null arena.
     assert!(
         callers.contains("CallArenaOps.Reset(arenaResetPtr)"),
-        "C#: arena-backed method must reset the arena at call start:\n{callers}"
+        "C#: arena-backed method must rewind the arena at call start:\n{callers}"
     );
     assert!(
         callers.contains("argsPtr, outPtr, arenaPtr)"),
@@ -238,6 +238,17 @@ fn csharp_host_caller_emits_arena_for_stringview_return() {
     assert!(
         callers.contains("argsPtr, outPtr, (CallArena*)null)"),
         "C#: scalar VM call must pass a null arena (host->alloc fallback):\n{callers}"
+    );
+
+    // Dispose must use FreeAll (frees overflow chain) not Reset (rewind only).
+    assert!(
+        callers.contains("CallArenaOps.FreeAll(arenaPtr)"),
+        "C#: Dispose must call FreeAll to release retained overflow blocks:\n{callers}"
+    );
+    // Reset is the rewind-only path; Dispose must never call it (would leak overflow blocks).
+    assert!(
+        !callers.contains("CallArenaOps.Reset(arenaPtr)"),
+        "C#: Dispose must NOT call Reset (would leave overflow blocks unreleased):\n{callers}"
     );
 }
 
@@ -284,10 +295,18 @@ fn python_host_caller_emits_arena_for_stringview_return() {
         "Python: arena buffer must be C-heap (create_string_buffer):\n{callers}"
     );
 
-    // Arena-backed (echo) resets and passes the arena; scalar (add) passes None.
+    // Arena-backed (echo) rewinds (1-arg) at call start; scalar (add) passes None.
     assert!(
-        callers.contains("_arena_reset(self._arena, self._host)"),
-        "Python: arena-backed method must reset the arena at call start:\n{callers}"
+        callers.contains("_arena_reset(self._arena)"),
+        "Python: arena-backed method must rewind the arena (1-arg) at call start:\n{callers}"
+    );
+    assert!(
+        callers.contains("def _arena_free_all("),
+        "Python: _arena_free_all teardown helper must be emitted:\n{callers}"
+    );
+    assert!(
+        callers.contains("_arena_free_all(self._arena, self._host)"),
+        "Python: __del__ must call _arena_free_all (teardown frees blocks):\n{callers}"
     );
     assert!(
         callers.contains("out_ptr, ctypes.byref(self._arena))"),
@@ -307,6 +326,10 @@ fn python_host_caller_omits_arena_for_scalar_only() {
     assert!(
         !callers.contains("def _arena_reset("),
         "Python: scalar-only contract must NOT emit the arena reset helper:\n{callers}"
+    );
+    assert!(
+        !callers.contains("def _arena_free_all("),
+        "Python: scalar-only contract must NOT emit the arena free_all helper:\n{callers}"
     );
     assert!(
         !callers.contains("create_string_buffer"),

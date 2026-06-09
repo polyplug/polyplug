@@ -325,12 +325,22 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
         out.push_str("# Size of each caller's inline call-arena buffer.\n");
         out.push_str("CALL_ARENA_BUF_LEN: int = 512\n");
         out.push_str("_OVERFLOW_BLOCK_ALIGN: int = ctypes.sizeof(ctypes.c_void_p)\n\n");
-        out.push_str("def _arena_reset(arena: CallArena, host: ctypes.c_void_p) -> None:\n");
-        out.push_str("    \"\"\"Free every overflow block and rewind the primary region.\n\n");
+        out.push_str("def _arena_reset(arena: CallArena) -> None:\n");
+        out.push_str("    \"\"\"Rewind the arena for reuse: retain all overflow blocks.\n\n");
         out.push_str(
             "    After reset, all pointers previously returned by arena allocations are invalid.\n",
         );
         out.push_str("    \"\"\"\n");
+        out.push_str("    arena.cur = arena.base\n");
+        out.push_str("    block: int = arena.first_overflow or 0\n");
+        out.push_str("    header_size: int = ctypes.sizeof(ArenaOverflowBlock)\n");
+        out.push_str("    while block:\n");
+        out.push_str("        hdr: ArenaOverflowBlock = ArenaOverflowBlock.from_address(block)\n");
+        out.push_str("        hdr.used = header_size\n");
+        out.push_str("        block = hdr.next or 0\n");
+        out.push('\n');
+        out.push_str("def _arena_free_all(arena: CallArena, host: ctypes.c_void_p) -> None:\n");
+        out.push_str("    \"\"\"Free every overflow block and clear the chain (teardown).\"\"\"\n");
         out.push_str("    block: int = arena.first_overflow or 0\n");
         out.push_str("    host_api: Any = ctypes.cast(host, ctypes.POINTER(HostApi))\n");
         out.push_str("    while block:\n");
@@ -342,8 +352,7 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
             "            host_api.contents.free(host, block, capacity, _OVERFLOW_BLOCK_ALIGN)\n",
         );
         out.push_str("        block = next_block\n");
-        out.push_str("    arena.first_overflow = None\n");
-        out.push_str("    arena.cur = arena.base\n\n");
+        out.push_str("    arena.first_overflow = None\n\n");
     }
 
     // ContractError class for host-side error handling
@@ -785,7 +794,7 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     if needs_arena {
         out.push_str("        # Free any overflow blocks the arena still holds before teardown.\n");
         out.push_str("        if getattr(self, \"_arena\", None) is not None:\n");
-        out.push_str("            _arena_reset(self._arena, self._host)\n");
+        out.push_str("            _arena_free_all(self._arena, self._host)\n");
     }
     out.push_str("        # Release the runtime pin now that teardown has completed.\n");
     out.push_str("        self._owner = None\n");
@@ -854,12 +863,10 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
         );
         out.push_str("        # the next arena-backed call on this caller.\n");
         out.push_str(
-            "        # Reset the arena at call start: frees the previous call's overflow\n",
+            "        # Rewind the arena at call start: retains overflow blocks for reuse,\n",
         );
-        out.push_str(
-            "        # blocks and rewinds the primary region, invalidating prior views.\n",
-        );
-        out.push_str("        _arena_reset(self._arena, self._host)\n");
+        out.push_str("        # invalidating all pointers from the previous call.\n");
+        out.push_str("        _arena_reset(self._arena)\n");
     }
     emit_python_host_args_setup(out, func, contract_struct);
     emit_python_host_out_setup(out, &func.returns);
@@ -2873,11 +2880,21 @@ fn generate_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract
     }
 
     if any_arena {
-        // Same arena constant and reset helper as host/callers.py (Rule 10 parity).
+        // Same arena constant and helpers as host/callers.py (Rule 10 parity).
         out.push_str("CALL_ARENA_BUF_LEN: int = 512\n");
         out.push_str("_OVERFLOW_BLOCK_ALIGN: int = ctypes.sizeof(ctypes.c_void_p)\n\n");
-        out.push_str("def _arena_reset(arena: CallArena, host: ctypes.c_void_p) -> None:\n");
-        out.push_str("    \"\"\"Free every overflow block and rewind the primary region.\"\"\"\n");
+        out.push_str("def _arena_reset(arena: CallArena) -> None:\n");
+        out.push_str("    \"\"\"Rewind the arena for reuse: retain all overflow blocks.\"\"\"\n");
+        out.push_str("    arena.cur = arena.base\n");
+        out.push_str("    block: int = arena.first_overflow or 0\n");
+        out.push_str("    header_size: int = ctypes.sizeof(ArenaOverflowBlock)\n");
+        out.push_str("    while block:\n");
+        out.push_str("        hdr: ArenaOverflowBlock = ArenaOverflowBlock.from_address(block)\n");
+        out.push_str("        hdr.used = header_size\n");
+        out.push_str("        block = hdr.next or 0\n");
+        out.push('\n');
+        out.push_str("def _arena_free_all(arena: CallArena, host: ctypes.c_void_p) -> None:\n");
+        out.push_str("    \"\"\"Free every overflow block and clear the chain (teardown).\"\"\"\n");
         out.push_str("    block: int = arena.first_overflow or 0\n");
         out.push_str("    host_api: Any = ctypes.cast(host, ctypes.POINTER(HostApi))\n");
         out.push_str("    while block:\n");
@@ -2889,8 +2906,7 @@ fn generate_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract
             "            host_api.contents.free(host, block, capacity, _OVERFLOW_BLOCK_ALIGN)\n",
         );
         out.push_str("        block = next_block\n");
-        out.push_str("    arena.first_overflow = None\n");
-        out.push_str("    arena.cur = arena.base\n\n");
+        out.push_str("    arena.first_overflow = None\n\n");
     }
 
     // Native dispatch function type: fn(instance, args, out) -> AbiError.
@@ -3043,7 +3059,7 @@ fn generate_peer_caller_class(out: &mut String, contract: &ResolvedContract, min
     out.push_str("        self._interface = 0\n");
     if needs_arena {
         out.push_str("        if getattr(self, \"_arena\", None) is not None:\n");
-        out.push_str("            _arena_reset(self._arena, self._host_ptr)\n");
+        out.push_str("            _arena_free_all(self._arena, self._host_ptr)\n");
     }
     out.push('\n');
 
@@ -3077,9 +3093,9 @@ fn generate_peer_caller_method(out: &mut String, func: &ResolvedFunction, contra
 
     if needs_arena {
         out.push_str(
-            "        # Reset arena at call start; prior returned views are invalidated.\n",
+            "        # Rewind arena at call start; prior returned views are invalidated.\n",
         );
-        out.push_str("        _arena_reset(self._arena, self._host_ptr)\n");
+        out.push_str("        _arena_reset(self._arena)\n");
     }
 
     // args setup — reuse the proven host-caller pattern.

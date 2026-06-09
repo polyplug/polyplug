@@ -15,7 +15,7 @@ internal static unsafe class CallArenaOps {
     ///
     /// Variable-size VM return values (strings, buffers) are bump-allocated from
     /// this buffer; outputs larger than it spill into host-allocated overflow
-    /// blocks that the arena frees on the next reset.
+    /// blocks that are retained across resets and freed only by FreeAll.
     public const nuint CALL_ARENA_BUF_LEN = 512;
     /// <summary>Alignment used to free host-allocated overflow blocks.</summary>
     public static readonly nuint OVERFLOW_BLOCK_ALIGN = (nuint)IntPtr.Size;
@@ -31,9 +31,24 @@ internal static unsafe class CallArenaOps {
         };
     }
 
-    /// <summary>Reset `arena`: free every overflow block and rewind the primary region.</summary>
-    /// After reset, all pointers previously returned by arena allocations are invalid.
+    /// <summary>Rewind `arena` for reuse: the primary region and every retained
+    /// overflow block become available again. Overflow blocks are NOT freed —
+    /// they are retained for the next call. Call FreeAll before releasing the
+    /// arena. After reset, all pointers previously returned by arena allocations
+    /// are invalid.</summary>
     public static void Reset(CallArena* arena) {
+        arena->Cur = arena->Base;
+        IntPtr block = arena->FirstOverflow;
+        while (block != IntPtr.Zero) {
+            var hdr = (ArenaOverflowBlock*)block;
+            hdr->Used = (nuint)sizeof(ArenaOverflowBlock);
+            block = hdr->Next;
+        }
+    }
+
+    /// <summary>Free all retained overflow blocks and clear the chain.
+    /// Call this before releasing the arena's backing buffer (e.g. in Dispose).</summary>
+    public static void FreeAll(CallArena* arena) {
         IntPtr block = arena->FirstOverflow;
         while (block != IntPtr.Zero) {
             var hdr = (ArenaOverflowBlock*)block;
@@ -47,7 +62,6 @@ internal static unsafe class CallArenaOps {
             block = next;
         }
         arena->FirstOverflow = IntPtr.Zero;
-        arena->Cur = arena->Base;
     }
 }
 
@@ -108,9 +122,9 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
-            // Free any overflow blocks the arena still holds, then the C-heap buffer.
+            // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
-                CallArenaOps.Reset(arenaPtr);
+                CallArenaOps.FreeAll(arenaPtr);
             }
             NativeMemory.Free(_arenaBuf);
             _disposed = true;
@@ -124,8 +138,8 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
             throw new ObjectDisposedException(nameof(PipelineDecoderContractCaller));
         }
 
-        // Reset the arena at call start: frees the previous call's overflow
-        // blocks and rewinds the primary region, invalidating prior views.
+        // Rewind the arena at call start: retained overflow blocks and the primary
+        // region become available again, invalidating prior views.
         fixed (CallArena* arenaResetPtr = &_arena) {
             CallArenaOps.Reset(arenaResetPtr);
         }
@@ -222,9 +236,9 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
-            // Free any overflow blocks the arena still holds, then the C-heap buffer.
+            // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
-                CallArenaOps.Reset(arenaPtr);
+                CallArenaOps.FreeAll(arenaPtr);
             }
             NativeMemory.Free(_arenaBuf);
             _disposed = true;
@@ -238,8 +252,8 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
             throw new ObjectDisposedException(nameof(DataTransformerContractCaller));
         }
 
-        // Reset the arena at call start: frees the previous call's overflow
-        // blocks and rewinds the primary region, invalidating prior views.
+        // Rewind the arena at call start: retained overflow blocks and the primary
+        // region become available again, invalidating prior views.
         fixed (CallArena* arenaResetPtr = &_arena) {
             CallArenaOps.Reset(arenaResetPtr);
         }
@@ -336,9 +350,9 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
-            // Free any overflow blocks the arena still holds, then the C-heap buffer.
+            // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
-                CallArenaOps.Reset(arenaPtr);
+                CallArenaOps.FreeAll(arenaPtr);
             }
             NativeMemory.Free(_arenaBuf);
             _disposed = true;
@@ -352,8 +366,8 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
             throw new ObjectDisposedException(nameof(PipelineEncoderContractCaller));
         }
 
-        // Reset the arena at call start: frees the previous call's overflow
-        // blocks and rewinds the primary region, invalidating prior views.
+        // Rewind the arena at call start: retained overflow blocks and the primary
+        // region become available again, invalidating prior views.
         fixed (CallArena* arenaResetPtr = &_arena) {
             CallArenaOps.Reset(arenaResetPtr);
         }
@@ -450,9 +464,9 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
-            // Free any overflow blocks the arena still holds, then the C-heap buffer.
+            // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
-                CallArenaOps.Reset(arenaPtr);
+                CallArenaOps.FreeAll(arenaPtr);
             }
             NativeMemory.Free(_arenaBuf);
             _disposed = true;
@@ -466,8 +480,8 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
             throw new ObjectDisposedException(nameof(DataReporterContractCaller));
         }
 
-        // Reset the arena at call start: frees the previous call's overflow
-        // blocks and rewinds the primary region, invalidating prior views.
+        // Rewind the arena at call start: retained overflow blocks and the primary
+        // region become available again, invalidating prior views.
         fixed (CallArena* arenaResetPtr = &_arena) {
             CallArenaOps.Reset(arenaResetPtr);
         }
@@ -564,9 +578,9 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
             _instance.Data = nint.Zero;
-            // Free any overflow blocks the arena still holds, then the C-heap buffer.
+            // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
-                CallArenaOps.Reset(arenaPtr);
+                CallArenaOps.FreeAll(arenaPtr);
             }
             NativeMemory.Free(_arenaBuf);
             _disposed = true;
@@ -580,8 +594,8 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
             throw new ObjectDisposedException(nameof(PipelineValidatorContractCaller));
         }
 
-        // Reset the arena at call start: frees the previous call's overflow
-        // blocks and rewinds the primary region, invalidating prior views.
+        // Rewind the arena at call start: retained overflow blocks and the primary
+        // region become available again, invalidating prior views.
         fixed (CallArena* arenaResetPtr = &_arena) {
             CallArenaOps.Reset(arenaResetPtr);
         }
