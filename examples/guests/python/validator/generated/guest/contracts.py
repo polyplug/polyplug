@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from polyplug_abi import StringView, to_str
-from polyplug_guest import register_contract, alloc_string_arena
+from polyplug_guest import register_contract, store_host_interface, alloc_string_arena
 
 POLYPLUG_ABI_VERSION: int = 1
 
@@ -42,10 +42,12 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
     it after this returns and registers each contract itself.
 
     Args:
-        host_ptr: HostApi pointer (unused: VM dispatch carries no host state here)
+        host_ptr: HostApi pointer — stored via store_host_interface so guest→guest
+                  peer callers can resolve a peer through the host (VM dispatch
+                  itself carries no per-call host state).
         ctx_ptr: BundleInitContext pointer (unused)
     """
-    _ = host_ptr
+    store_host_interface(host_ptr)
     _ = ctx_ptr
     register_contract(
         globals(),

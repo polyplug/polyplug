@@ -13,8 +13,16 @@ This library provides the registration helper that deposits that list, the
 (host-allocator for data that must outlive the call, arena for per-call return
 buffers). It also re-exports the ABI types plugin authors need.
 
-All state is passed explicitly through ``polyplug_init``'s ``host_ptr`` and the
-per-call ``arena_ptr`` — there are no module globals or thread-locals (Rule 12).
+Per-call state (args, out, arena) is passed explicitly through each dispatch
+call. The one piece of bundle-lifetime state is the ``HostApi`` pointer: it is
+stored once at ``polyplug_init`` time via :func:`store_host_interface` so that
+guest→guest peer callers can resolve a peer through the host without threading
+the pointer through every ``str``-level impl method — exactly as the Lua, JS,
+and C++ guest SDKs do (``get_host_interface`` / ``polyplug::get_host_interface``).
+This is module-level storage; it is consistent within a single runtime (one
+shared ``HostApi``) and shares the CPython-once-per-process isolation limit the
+Python loader already documents. CLAUDE.md Rule 12 governs *host Runtime* state,
+not this guest-side SDK accessor.
 """
 
 from __future__ import annotations
@@ -49,11 +57,40 @@ __all__ = [
     "register_contract",
     "alloc_string",
     "alloc_string_arena",
+    "store_host_interface",
+    "get_host_interface",
 ]
 
 # The module-level attribute the loader reads after polyplug_init. Must match
 # `REGISTRATIONS_ATTR` in crates/polyplug_python/src/loader.rs verbatim.
 _REGISTRATIONS_ATTR: str = "_polyplug_registrations"
+
+# The HostApi pointer the loader passes to polyplug_init, stored once so peer
+# callers can resolve a peer without it being threaded through every call. 0
+# until polyplug_init runs. See the module docstring for the isolation scope.
+_HOST_INTERFACE_PTR: int = 0
+
+
+def store_host_interface(host_ptr: int) -> None:
+    """Record the ``HostApi`` pointer the loader passed to ``polyplug_init``.
+
+    Call this from the plugin's ``polyplug_init`` (the generated init does so).
+    Mirrors the Lua/JS/C++ guest SDKs so guest→guest peer callers can resolve a
+    peer through the host without threading the pointer through every call.
+
+    Args:
+        host_ptr: the ``HostApi`` pointer received in ``polyplug_init``.
+    """
+    global _HOST_INTERFACE_PTR
+    _HOST_INTERFACE_PTR = host_ptr
+
+
+def get_host_interface() -> int:
+    """Return the stored ``HostApi`` pointer, or 0 if ``polyplug_init`` has not run.
+
+    Peer callers use this as the default host source for ``resolve()``.
+    """
+    return _HOST_INTERFACE_PTR
 
 
 def register_contract(
