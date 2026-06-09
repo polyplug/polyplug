@@ -1239,16 +1239,6 @@ fn ts_guest_caller_param_type(ty: &ResolvedTypeRef) -> String {
     }
 }
 
-/// Generate TypeScript return type name for guest caller methods.
-/// Return types are owned where appropriate:
-/// - StringView -> string (owned)
-/// - Buffer -> Uint8Array (owned)
-/// - UserDefined -> TypeName (owned)
-/// - Primitives -> number or { lo: number; hi: number }
-fn ts_guest_caller_return_type(ty: &ResolvedTypeRef) -> String {
-    ts_guest_caller_param_type(ty) // Same mapping for params and returns
-}
-
 /// Raw ABI return type for peer caller methods — must match the `result` shape
 /// that `emit_ts_guest_host_contract_out_setup` initialises in the generated body.
 /// Peer callers return raw ABI values; the caller is responsible for decoding.
@@ -1346,8 +1336,12 @@ fn generate_ts_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
 /// Generate one method for a guest-side host contract caller.
 fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::ResolvedFunction) {
     let fn_id: u32 = func.function_id;
+    // Returns are RAW ABI values: the body initialises `result` via the shared
+    // `emit_ts_guest_host_contract_out_setup` and returns it unchanged, so the
+    // declared type must be the raw shape (e.g. StringView → {ptr_lo,ptr_hi,len}),
+    // not the ergonomic string/Uint8Array — otherwise deno rejects the return (TS2322).
     let return_type: String = match &func.returns {
-        Some(ty) => ts_guest_caller_return_type(ty),
+        Some(ty) => ts_peer_raw_return_type(ty),
         None => "void".to_owned(),
     };
     let has_return: bool = func.returns.is_some();
@@ -2592,26 +2586,6 @@ mod tests {
     }
 
     #[test]
-    fn ts_guest_caller_return_type_mappings() {
-        assert_eq!(
-            ts_guest_caller_return_type(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
-            "number"
-        );
-        assert_eq!(
-            ts_guest_caller_return_type(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
-            "string"
-        );
-        assert_eq!(
-            ts_guest_caller_return_type(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
-            "Uint8Array"
-        );
-        assert_eq!(
-            ts_guest_caller_return_type(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
-            "MyStruct"
-        );
-    }
-
-    #[test]
     fn generate_ts_guest_host_contract_caller_produces_class() {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
@@ -2704,8 +2678,10 @@ mod tests {
             "missing class: {out}"
         );
         assert!(
-            out.contains("read(path: string): Uint8Array"),
-            "missing read method with return: {out}"
+            out.contains(
+                "read(path: string): { ptr_lo: number; ptr_hi: number; len: number; cap: number }"
+            ),
+            "missing read method with raw Buffer return: {out}"
         );
     }
 
