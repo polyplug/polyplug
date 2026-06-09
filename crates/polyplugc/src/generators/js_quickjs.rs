@@ -15,6 +15,7 @@ use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
+use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedField;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
@@ -105,6 +106,15 @@ impl CodeGenerator for JsQuickjsGenerator {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/host_contracts.ts"),
                 content: generate_guest_host_contracts_ts(ir),
+                force_regenerate: false,
+            });
+        }
+        // ── peer_callers.ts ────────────────────────────────────────────────────
+        let peer_contracts: Vec<&ResolvedContract> = collect_peer_contracts(ir);
+        if !peer_contracts.is_empty() {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/peer_callers.ts"),
+                content: generate_guest_peer_callers_ts(ir, &peer_contracts),
                 force_regenerate: false,
             });
         }
@@ -553,6 +563,15 @@ fn generate_index_ts(ir: &ValidatedIr) -> String {
                 "export {{ {set_impl_name} }} from './contracts';\n"
             ));
         }
+    }
+
+    // Re-export peer caller classes when the bundle declares dependencies.
+    let peer_contracts: Vec<&ResolvedContract> = collect_peer_contracts(ir);
+    for contract in &peer_contracts {
+        let class_name: String = guest_contract_name_to_ts_peer(&contract.name);
+        out.push_str(&format!(
+            "export {{ {class_name} }} from './peer_callers';\n"
+        ));
     }
 
     out
@@ -1228,6 +1247,30 @@ fn ts_guest_caller_param_type(ty: &ResolvedTypeRef) -> String {
 /// - Primitives -> number or { lo: number; hi: number }
 fn ts_guest_caller_return_type(ty: &ResolvedTypeRef) -> String {
     ts_guest_caller_param_type(ty) // Same mapping for params and returns
+}
+
+/// Raw ABI return type for peer caller methods — must match the `result` shape
+/// that `emit_ts_guest_host_contract_out_setup` initialises in the generated body.
+/// Peer callers return raw ABI values; the caller is responsible for decoding.
+fn ts_peer_raw_return_type(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            "{ ptr_lo: number; ptr_hi: number; len: number }".to_owned()
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+            "{ ptr_lo: number; ptr_hi: number; len: number; cap: number }".to_owned()
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "{ lo: number; hi: number }".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::Primitive(p) => {
+            if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
+                "{ lo: number; hi: number }".to_owned()
+            } else {
+                "number".to_owned()
+            }
+        }
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
 }
 
 /// TypeScript primitive type for guest callers (ergonomic, not ABI-level).
@@ -1973,6 +2016,240 @@ fn generate_js_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_re
     }
 }
 
+// ─── Peer Caller Generation ───────────────────────────────────────────────────
+
+/// Collect every contract in `ir.contracts` whose contract_id appears in the
+/// bundle's declared dependencies.  Returns an empty vec when there is no bundle
+/// or when no dependency matches any known contract.
+fn collect_peer_contracts(ir: &ValidatedIr) -> Vec<&ResolvedContract> {
+    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
+        Some(b) => &b.dependencies,
+        None => return Vec::new(),
+    };
+
+    ir.contracts
+        .iter()
+        .filter(|c: &&ResolvedContract| {
+            deps.iter().any(|d: &ResolvedDependency| {
+                let dep_contract_id: u64 = match d {
+                    ResolvedDependency::ByContract { contract_id, .. } => *contract_id,
+                    ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
+                };
+                dep_contract_id == c.contract_id
+            })
+        })
+        .collect()
+}
+
+/// Look up the `min_version` (packed u32 — major in high 16 bits) declared for
+/// `target_contract_id` in the bundle dependencies.  Returns 0 when not found.
+fn peer_min_version(ir: &ValidatedIr, target_contract_id: u64) -> u32 {
+    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
+        Some(b) => &b.dependencies,
+        None => return 0,
+    };
+    for d in deps {
+        match d {
+            ResolvedDependency::ByContract {
+                contract_id,
+                min_version,
+                ..
+            } if *contract_id == target_contract_id => return *min_version,
+            ResolvedDependency::ByBundle {
+                contract_id,
+                min_version,
+                ..
+            } if *contract_id == target_contract_id => return *min_version,
+            _ => {}
+        }
+    }
+    0
+}
+
+/// Convert a guest contract name (e.g. `pipeline.Validator`) to a TypeScript
+/// peer-caller class name (e.g. `ValidatorPeer`).
+fn guest_contract_name_to_ts_peer(name: &str) -> String {
+    let last: &str = name.split('.').next_back().unwrap_or(name);
+    let mut chars: core::str::Chars<'_> = last.chars();
+    let pascal: String = match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    };
+    pascal + "Peer"
+}
+
+/// Generate `guest/peer_callers.ts` — one typed peer class per matched dependency.
+fn generate_guest_peer_callers_ts(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> String {
+    let mut out: String = String::new();
+    out.push_str(
+        "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
+         // DO NOT EDIT BY HAND\n\
+         // Runtime: js-quickjs (guest-side peer callers)\n\n",
+    );
+
+    // Collect user-defined type imports needed by peer method signatures.
+    let mut type_imports: BTreeSet<String> = BTreeSet::new();
+    for contract in peers {
+        for func in &contract.functions {
+            for param in &func.params {
+                if let ResolvedTypeRef::UserDefined(name) = &param.ty {
+                    type_imports.insert(name.clone());
+                }
+            }
+            if let Some(ResolvedTypeRef::UserDefined(name)) = &func.returns {
+                type_imports.insert(name.clone());
+            }
+        }
+    }
+    if !type_imports.is_empty() {
+        let import_list: String = type_imports.into_iter().collect::<Vec<String>>().join(", ");
+        out.push_str(&format!("import {{ {} }} from './types';\n\n", import_list));
+    }
+
+    for contract in peers {
+        let min_ver: u32 = peer_min_version(ir, contract.contract_id);
+        generate_ts_peer_caller_class(&mut out, contract, min_ver);
+    }
+
+    out
+}
+
+/// Generate one `<Name>Peer` class for a single peer contract.
+fn generate_ts_peer_caller_class(out: &mut String, contract: &ResolvedContract, min_version: u32) {
+    let class_name: String = guest_contract_name_to_ts_peer(&contract.name);
+    let contract_id_lo: u32 = (contract.contract_id & 0xFFFF_FFFF) as u32;
+    let contract_id_hi: u32 = (contract.contract_id >> 32) as u32;
+
+    out.push_str(&format!(
+        "/**\n * Peer caller for guest contract `{}` (id=0x{:016X})\n *\n\
+         * Dispatches through the host-mediated `callGuestMethod` bridge.\n\
+         * Uses per-call create+destroy (stateless contract model).\n\
+         * Stateful peers would require a retained instance-handle API.\n */\n",
+        contract.name, contract.contract_id
+    ));
+    out.push_str(&format!("export class {} {{\n", class_name));
+    out.push_str(&format!(
+        "    /** Contract ID for `{}@{}` (FNV-1a). */\n",
+        contract.name, contract.version.major
+    ));
+    out.push_str(&format!(
+        "    static readonly CONTRACT_ID_LO = 0x{:08X};\n",
+        contract_id_lo
+    ));
+    out.push_str(&format!(
+        "    static readonly CONTRACT_ID_HI = 0x{:08X};\n",
+        contract_id_hi
+    ));
+    out.push_str(&format!(
+        "    static readonly MIN_VERSION = {};\n\n",
+        min_version
+    ));
+
+    out.push_str("    private constructor() {}\n\n");
+
+    out.push_str("    /**\n");
+    out.push_str("     * Verify the peer contract is reachable via the host.\n");
+    out.push_str("     * Returns a `");
+    out.push_str(&class_name);
+    out.push_str("` instance or `null` if not found.\n");
+    out.push_str("     */\n");
+    out.push_str(&format!("    static resolve(): {} | null {{\n", class_name));
+    out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
+    out.push_str("        if (!polyplug || !polyplug.findByContract) {\n");
+    out.push_str("            return null;\n");
+    out.push_str("        }\n");
+    out.push_str(&format!(
+        "        const handle = polyplug.findByContract(0x{:08X}, 0x{:08X}, {});\n",
+        contract_id_lo, contract_id_hi, min_version
+    ));
+    out.push_str("        if (handle === null || handle === undefined || handle === 0) {\n");
+    out.push_str("            return null;\n");
+    out.push_str("        }\n");
+    out.push_str(&format!("        return new {}();\n", class_name));
+    out.push_str("    }\n\n");
+
+    for func in &contract.functions {
+        generate_ts_peer_caller_method(out, func, contract_id_lo, contract_id_hi, min_version);
+    }
+
+    out.push_str("}\n\n");
+}
+
+/// Generate one method for a peer caller class.
+///
+/// Reuses `emit_ts_guest_host_contract_args_setup` and
+/// `emit_ts_guest_host_contract_out_setup` for identical StringView/Buffer/u64
+/// marshalling.  The call itself routes through `polyplug.callGuestMethod`
+/// instead of reading a vtable header — that is the key simplification vs the
+/// host-contract method.
+fn generate_ts_peer_caller_method(
+    out: &mut String,
+    func: &ResolvedFunction,
+    contract_id_lo: u32,
+    contract_id_hi: u32,
+    min_version: u32,
+) {
+    let fn_id: u32 = func.function_id;
+    let has_return: bool = func.returns.is_some();
+    // Use the raw ABI return type — it must match the `result` shape that
+    // emit_ts_guest_host_contract_out_setup initialises (StringView → {ptr_lo,ptr_hi,len}, etc.).
+    let return_type: String = match &func.returns {
+        Some(ty) => ts_peer_raw_return_type(ty),
+        None => "void".to_owned(),
+    };
+
+    let params_str: String = if func.params.is_empty() {
+        String::new()
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| {
+                let ts_ty: String = ts_guest_caller_param_type(&p.ty);
+                format!("{}: {}", p.name, ts_ty)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    out.push_str(&format!("    /** Call peer `{}` */\n", func.name));
+    out.push_str(&format!(
+        "    {}({}): {} {{\n",
+        func.name, params_str, return_type
+    ));
+
+    out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
+    out.push_str("        if (!polyplug || !polyplug.callGuestMethod) {\n");
+    if has_return {
+        out.push_str("            return null as any;\n");
+    } else {
+        out.push_str("            return;\n");
+    }
+    out.push_str("        }\n");
+
+    // Marshal args and out buffer using the same helpers as host-contract methods.
+    emit_ts_guest_host_contract_args_setup(out, func);
+    emit_ts_guest_host_contract_out_setup(out, &func.returns);
+
+    // Call the bridge primitive.  It returns the u32 error code directly.
+    out.push_str(&format!(
+        "        const errCode: number = polyplug.callGuestMethod(0x{:08X}, 0x{:08X}, {}, {}, argsPtr, outPtr);\n",
+        contract_id_lo, contract_id_hi, min_version, fn_id
+    ));
+    out.push_str("        if (errCode !== 0) {\n");
+    if has_return {
+        out.push_str("            return null as any;\n");
+    } else {
+        out.push_str("            return;\n");
+    }
+    out.push_str("        }\n");
+
+    if has_return {
+        out.push_str("        return result;\n");
+    }
+
+    out.push_str("    }\n\n");
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -2634,6 +2911,121 @@ mod tests {
         assert!(
             !names.contains(&"guest/host_contracts.ts".to_owned()),
             "unexpected guest/host_contracts.ts: {names:?}"
+        );
+    }
+
+    #[test]
+    fn peer_caller_emitted_for_declared_dependency() {
+        use crate::ir::ResolvedDependency;
+        use crate::ir::Version;
+        // Build an IR where the bundle declares a dependency on a contract that
+        // IS present in ir.contracts — the generator must emit peer_callers.ts.
+        let validator_id: u64 = polyplug_utils::guest_contract_id("pipeline.Validator", 1);
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![crate::ir::ResolvedContract {
+                name: "pipeline.Validator".to_owned(),
+                contract_id: validator_id,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![],
+            }],
+            host_contracts: vec![],
+            bundle: Some(crate::ir::ResolvedBundle {
+                name: "transformer".to_owned(),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                runtime: "js-quickjs".to_owned(),
+                file: polyplug_codegen::ResolvedBundleFile::Single("libtransformer.so".to_owned()),
+                plugins: vec![],
+                bundle_id: 0,
+                dependencies: vec![ResolvedDependency::ByContract {
+                    contract: "pipeline.Validator".to_owned(),
+                    contract_id: validator_id,
+                    min_version: 1 << 16,
+                }],
+                needs_reinit_on_dep_reload: false,
+            }),
+        };
+        let generator: JsQuickjsGenerator = JsQuickjsGenerator;
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.contains(&"guest/peer_callers.ts".to_owned()),
+            "expected guest/peer_callers.ts in {names:?}"
+        );
+        // The generated file must mention callGuestMethod.
+        let peer_file: &GeneratedFile = files
+            .files
+            .iter()
+            .find(|f: &&GeneratedFile| f.path.to_string_lossy() == "guest/peer_callers.ts")
+            .expect("peer_callers.ts");
+        assert!(
+            peer_file.content.contains("callGuestMethod"),
+            "peer_callers.ts must call callGuestMethod"
+        );
+        assert!(
+            peer_file.content.contains("ValidatorPeer"),
+            "peer_callers.ts must contain ValidatorPeer class"
+        );
+        // guest/index.ts must re-export ValidatorPeer.
+        let index_file: &GeneratedFile = files
+            .files
+            .iter()
+            .find(|f: &&GeneratedFile| f.path.to_string_lossy() == "guest/index.ts")
+            .expect("guest/index.ts");
+        assert!(
+            index_file.content.contains("ValidatorPeer"),
+            "guest/index.ts must re-export ValidatorPeer"
+        );
+    }
+
+    #[test]
+    fn no_peer_callers_without_dependencies() {
+        // A bundle with no [[dependency]] entries must NOT emit peer_callers.ts.
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![crate::ir::ResolvedContract {
+                name: "pipeline.Validator".to_owned(),
+                contract_id: polyplug_utils::guest_contract_id("pipeline.Validator", 1),
+                version: crate::ir::Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![],
+            }],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let generator: JsQuickjsGenerator = JsQuickjsGenerator;
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.contains(&"guest/peer_callers.ts".to_owned()),
+            "unexpected guest/peer_callers.ts: {names:?}"
         );
     }
 }

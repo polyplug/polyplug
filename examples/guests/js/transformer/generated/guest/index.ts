@@ -6,3 +6,4 @@
 export { polyplug_init } from './init';
 export { TRANSFORMER_INTERFACE } from './contracts';
 export { setTransformerImpl } from './contracts';
+export { ValidatorPeer } from './peer_callers';

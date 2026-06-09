@@ -559,6 +559,83 @@ fn register_host_functions<'js>(
             })
         })?;
 
+    // ── callGuestMethod ────────────────────────────────────────────────────────
+    // Guarded peer-call path: find → resolve → create_instance → call_guest_method.
+    // The contract_id and min_version come from the generated peer_callers.ts
+    // constants so the caller never hard-codes raw numbers.
+    //
+    // Per-call create+destroy is intentional: the stateless contract model used
+    // by all examples today has null instance.data and treats destroy_instance as
+    // a no-op.  Stateful peers would need a retained instance-handle API (out of
+    // scope for now; the bridge primitive is the right place to add it later).
+    let call_guest_method_fn: Function<'js> = Function::new(
+        ctx.clone(),
+        |ctx: Ctx<'js>,
+         contract_id_lo: u32,
+         contract_id_hi: u32,
+         min_version: u32,
+         fn_id: u32,
+         args_ptr: u64,
+         out_ptr: u64|
+         -> u32 {
+            let contract_id: u64 = (contract_id_hi as u64) << 32 | contract_id_lo as u64;
+            let hvt: *const HostApi = match get_host_interface_from_globals(&ctx) {
+                Some(p) => p,
+                None => return AbiErrorCode::Generic as u32,
+            };
+            // SAFETY: hvt is a valid 'static HostApi pointer stored by register_host_functions;
+            // the self-passing ABI pattern is satisfied by passing hvt as the first argument.
+            let handle: GuestContractHandle =
+                unsafe { ((*hvt).find_guest_contract)(hvt, contract_id, min_version) };
+            // SAFETY: hvt is valid (same guarantee as above); handle was just returned by
+            // find_guest_contract so it is a well-formed GuestContractHandle.
+            let iface: *const GuestContractInterface =
+                unsafe { ((*hvt).resolve_guest_contract)(hvt, handle) };
+            if iface.is_null() {
+                return AbiErrorCode::NotFound as u32;
+            }
+            // SAFETY: iface is non-null and points to a valid GuestContractInterface
+            // returned by resolve_guest_contract; null ctx is accepted for stateless contracts.
+            let instance: GuestContractInstance =
+                unsafe { ((*iface).create_instance)(hvt, core::ptr::null()) };
+            // SAFETY: hvt, instance, and iface are all valid; args_ptr/out_ptr are caller-supplied
+            // addresses that the generated peer_callers.ts aligns via polyplug.alloc; a null arena
+            // is the documented fallback for callers that carry no per-call arena.
+            let err: AbiError = unsafe {
+                ((*hvt).call_guest_method)(
+                    hvt,
+                    instance,
+                    fn_id,
+                    args_ptr as usize as *const core::ffi::c_void,
+                    out_ptr as usize as *mut core::ffi::c_void,
+                    core::ptr::null_mut(),
+                )
+            };
+            // SAFETY: iface is non-null (checked above); instance was produced by create_instance
+            // on this same interface.  Stateless contracts treat destroy_instance as a no-op.
+            // Best-effort: stateful peers are out of scope for this bridge primitive.
+            unsafe { ((*iface).destroy_instance)(hvt, instance) };
+            err.code
+        },
+    )
+    .map_err(|e: rquickjs::Error| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!(
+                "JS runtime js-quickjs error: callGuestMethod function creation failed: {e}"
+            ),
+        })
+    })?;
+
+    polyplug_obj
+        .set("callGuestMethod", call_guest_method_fn)
+        .map_err(|e: rquickjs::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: callGuestMethod set failed: {e}"),
+            })
+        })?;
+
     let register_vtable_fn: Function<'js> = Function::new(
         ctx.clone(),
         |ctx: Ctx<'js>,
