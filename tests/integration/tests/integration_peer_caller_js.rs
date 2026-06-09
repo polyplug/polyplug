@@ -45,13 +45,7 @@ use std::sync::Arc;
 /// `js_src` is the complete bundle JS source.
 /// `provides` is the contract name (without version suffix).
 /// `fn_count` is the number of functions the contract exposes.
-fn write_js_bundle(
-    dir: &std::path::Path,
-    name: &str,
-    js_src: &str,
-    provides: &str,
-    fn_count: u32,
-) {
+fn write_js_bundle(dir: &std::path::Path, name: &str, js_src: &str, provides: &str, fn_count: u32) {
     let id_val: u64 = bundle_id(name);
     let contract_version: u32 = 1;
     let manifest: String = format!(
@@ -141,12 +135,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
 /// Arguments:
 ///   - `peer_lo` / `peer_hi`: low/high halves of `test.peer@1` contract id.
 ///   - `consumer_lo` / `consumer_hi`: low/high halves of `test.consumer@1` id.
-fn consumer_js_src(
-    peer_lo: u32,
-    peer_hi: u32,
-    consumer_lo: u32,
-    consumer_hi: u32,
-) -> String {
+fn consumer_js_src(peer_lo: u32, peer_hi: u32, consumer_lo: u32, consumer_hi: u32) -> String {
     format!(
         r#"
 function invoke(argsPtr, outPtr) {{
@@ -322,9 +311,11 @@ fn js_peer_caller_echo_roundtrip() {
     );
 
     // Decode the StringView the consumer forwarded from the provider.
-    let result_addr: usize =
-        (out_view.ptr_hi as usize) << 32 | out_view.ptr_lo as usize;
-    assert_ne!(result_addr, 0, "returned StringView pointer must not be null");
+    let result_addr: usize = (out_view.ptr_hi as usize) << 32 | out_view.ptr_lo as usize;
+    assert_ne!(
+        result_addr, 0,
+        "returned StringView pointer must not be null"
+    );
     // SAFETY: result_addr points to out_view.len UTF-8 bytes written by the
     // provider into arena memory. The null-arena fallback used host->alloc, so
     // the bytes are valid until the runtime frees them on bundle unload (not yet).

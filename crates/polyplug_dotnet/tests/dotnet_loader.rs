@@ -746,9 +746,10 @@ fn assert_add_dispatch_works(runtime: &Runtime) {
 /// liveness probe reports the ALC reclaimed. The contract is also gone from the registry.
 #[test]
 fn unload_reclaim_mode_collects_alc() {
-    let Some((runtime, bundle_id)) =
-        load_named_fixture("csharp_reclaim_probe", polyplug_abi::runtime::UnloadMode::Reclaim)
-    else {
+    let Some((runtime, bundle_id)) = load_named_fixture(
+        "csharp_reclaim_probe",
+        polyplug_abi::runtime::UnloadMode::Reclaim,
+    ) else {
         return; // soft-skip: fixture not built
     };
 
@@ -778,9 +779,10 @@ fn unload_reclaim_mode_collects_alc() {
 /// valid. The probe still reports the ALC alive after unload.
 #[test]
 fn unload_retire_mode_keeps_alc() {
-    let Some((runtime, bundle_id)) =
-        load_named_fixture("csharp_retire_probe", polyplug_abi::runtime::UnloadMode::Retire)
-    else {
+    let Some((runtime, bundle_id)) = load_named_fixture(
+        "csharp_retire_probe",
+        polyplug_abi::runtime::UnloadMode::Retire,
+    ) else {
         return; // soft-skip: fixture not built
     };
 

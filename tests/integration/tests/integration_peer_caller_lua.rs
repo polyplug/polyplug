@@ -41,7 +41,15 @@ use std::sync::Arc;
 // ─── Bundle helpers ────────────────────────────────────────────────────────────
 
 /// Write a manifest.toml + Lua script into `dir` and return `dir`.
-fn write_lua_bundle(dir: &std::path::Path, name: &str, runtime: &str, file: &str, src: &str, provides: &str, fn_count: u32) {
+fn write_lua_bundle(
+    dir: &std::path::Path,
+    name: &str,
+    runtime: &str,
+    file: &str,
+    src: &str,
+    provides: &str,
+    fn_count: u32,
+) {
     let id_val: u64 = bundle_id(name);
     let contract_version: u32 = 1;
     let manifest: String = format!(
@@ -299,8 +307,7 @@ fn lua_peer_caller_echo_roundtrip() {
     // written by the provider guest into host-allocated memory (null-arena
     // fallback to host->alloc) that stays valid until the runtime frees it
     // on bundle unload — which has not happened yet.
-    let result_bytes: &[u8] =
-        unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
+    let result_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
     let result: &str = core::str::from_utf8(result_bytes).expect("result is UTF-8");
 
     assert_eq!(

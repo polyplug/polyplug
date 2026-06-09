@@ -3166,9 +3166,13 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
     out.push_str("        let created: GuestContractInstance = unsafe {\n");
     out.push_str("            ((*interface).create_instance)(host, core::ptr::null())\n");
     out.push_str("        };\n");
-    out.push_str("        // Stamp the peer contract id so `host->call_guest_method` routes by it\n");
+    out.push_str(
+        "        // Stamp the peer contract id so `host->call_guest_method` routes by it\n",
+    );
     out.push_str("        // even when a stateless peer's create_instance returns a null handle\n");
-    out.push_str("        // (null contract_id). The host-mediated path keys routing on contract_id.\n");
+    out.push_str(
+        "        // (null contract_id). The host-mediated path keys routing on contract_id.\n",
+    );
     out.push_str(&format!(
         "        let instance: GuestContractInstance = GuestContractInstance {{\n\
          \x20           data: created.data,\n\

@@ -474,7 +474,8 @@ fn test_cpp_codegen_host_caller_threads_arena() {
     // The arena helpers: serve_from_block and free_all must be emitted; reset must
     // rewind only (no host->free loop inside it).
     assert!(
-        content.contains("inline uint8_t* polyplug_arena_serve_from_block(ArenaOverflowBlock* block"),
+        content
+            .contains("inline uint8_t* polyplug_arena_serve_from_block(ArenaOverflowBlock* block"),
         "host_callers.hpp must emit the serve_from_block helper"
     );
     assert!(

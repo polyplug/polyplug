@@ -257,9 +257,7 @@ fn rust_peer_caller_echo_roundtrip() {
         ptr: input.as_ptr(),
         len: input.len(),
     };
-    let result_view: StringView = caller
-        .echo(input_view)
-        .expect("echo must return Ok");
+    let result_view: StringView = caller.echo(input_view).expect("echo must return Ok");
 
     assert!(
         !result_view.ptr.is_null(),

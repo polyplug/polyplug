@@ -151,7 +151,10 @@ impl CallArena {
         // `alloc_overflow`; reading `used`/`capacity` and deriving pointers from
         // the block base stays within the `capacity`-byte allocation.
         let (from, end): (*mut u8, *mut u8) = unsafe {
-            (block_ptr.add((*block).used), block_ptr.add((*block).capacity))
+            (
+                block_ptr.add((*block).used),
+                block_ptr.add((*block).capacity),
+            )
         };
         match Self::bump(from, end, size, align) {
             Some(ptr) => {
@@ -161,7 +164,9 @@ impl CallArena {
                 // SAFETY: `block` is a valid chain node; writing `used` (a plain
                 // `usize` field) is in-bounds because the block was allocated with
                 // at least `size_of::<ArenaOverflowBlock>()` bytes.
-                unsafe { (*block).used = new_used; }
+                unsafe {
+                    (*block).used = new_used;
+                }
                 ptr
             }
             None => core::ptr::null_mut(),
@@ -512,14 +517,22 @@ mod tests {
         // trigger another host allocation — it packs into the existing block.
         let small: *mut u8 = arena.alloc(8, 8);
         assert!(!small.is_null());
-        assert_eq!(ALLOC_COUNT.with(Cell::get), 1, "second alloc must reuse the retained block");
+        assert_eq!(
+            ALLOC_COUNT.with(Cell::get),
+            1,
+            "second alloc must reuse the retained block"
+        );
 
         // An overflowing alloc too large to fit the remaining room in the current
         // block (OVERFLOW_BLOCK_MIN=4096, header=24, 32+8=40 used; 4096-40=4056
         // bytes free — so use an alloc > 4056 to force a new block).
         let huge: *mut u8 = arena.alloc(4096, 8);
         assert!(!huge.is_null());
-        assert_eq!(ALLOC_COUNT.with(Cell::get), 2, "oversized alloc must allocate a new block");
+        assert_eq!(
+            ALLOC_COUNT.with(Cell::get),
+            2,
+            "oversized alloc must allocate a new block"
+        );
 
         // Chain must now have two blocks.
         let second_block: *mut ArenaOverflowBlock = arena.first_overflow;
@@ -563,8 +576,15 @@ mod tests {
         arena.reset();
 
         // reset() must NOT free anything — blocks are retained for reuse.
-        assert_eq!(FREE_COUNT.with(Cell::get), 0, "reset must not free overflow blocks");
-        assert!(!arena.first_overflow.is_null(), "reset must retain the overflow chain");
+        assert_eq!(
+            FREE_COUNT.with(Cell::get),
+            0,
+            "reset must not free overflow blocks"
+        );
+        assert!(
+            !arena.first_overflow.is_null(),
+            "reset must retain the overflow chain"
+        );
 
         // After reset, the same overflowing alloc must reuse the retained block —
         // ALLOC_COUNT must not increase.
@@ -602,6 +622,10 @@ mod tests {
         }
 
         // Drop must free all 3 blocks.
-        assert_eq!(FREE_COUNT.with(Cell::get), 3, "drop must free all retained overflow blocks");
+        assert_eq!(
+            FREE_COUNT.with(Cell::get),
+            3,
+            "drop must free all retained overflow blocks"
+        );
     }
 }

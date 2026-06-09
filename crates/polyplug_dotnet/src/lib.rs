@@ -115,8 +115,12 @@ impl DotnetLoader {
         // the bundle's collectible ALC (no assembly-name re-binding), so a simple type name is
         // sufficient — identical to the Bytes convention.
         let simple_type_name: String = format!("{bundle_name}.Plugin");
-        let init_fn: InitFn =
-            context.get_init_fn_from_path(manifest.id, &abs_path, &bundle_name, &simple_type_name)?;
+        let init_fn: InitFn = context.get_init_fn_from_path(
+            manifest.id,
+            &abs_path,
+            &bundle_name,
+            &simple_type_name,
+        )?;
         Ok((init_fn, bundle_name))
     }
 

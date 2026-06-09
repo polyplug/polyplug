@@ -177,11 +177,7 @@ fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
 }
 
 /// Build a `SourceLocation` from a byte span start and the source text.
-fn location_from_span(
-    file: &str,
-    source: &str,
-    span_start: usize,
-) -> SourceLocation {
+fn location_from_span(file: &str, source: &str, span_start: usize) -> SourceLocation {
     let (line, col): (usize, usize) = byte_offset_to_line_col(source, span_start);
     SourceLocation {
         file: file.to_owned(),
@@ -272,8 +268,21 @@ fn nearest_repr_suggestion(repr: &str) -> Option<String> {
 /// All type names that are always valid (primitives + ABI builtins).  Used for
 /// "did you mean?" suggestions when a type reference is unknown.
 const BUILTIN_TYPE_NAMES: &[&str] = &[
-    "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "bool",
-    "StringView", "Buffer", "Ptr", "Void",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "f32",
+    "f64",
+    "bool",
+    "StringView",
+    "Buffer",
+    "Ptr",
+    "Void",
 ];
 
 /// Resolve a type reference with source location and suggestion enrichment.
@@ -286,11 +295,8 @@ fn resolve_type_ref_spanned(
 ) -> core::result::Result<ResolvedTypeRef, PolyplugcError> {
     let ty: &str = spanned_ty.get_ref().as_str();
     resolve_type_ref(ty, contract, all_known_names).map_err(|_| {
-        let location: Option<SourceLocation> = Some(location_from_span(
-            file,
-            source,
-            spanned_ty.span().start,
-        ));
+        let location: Option<SourceLocation> =
+            Some(location_from_span(file, source, spanned_ty.span().start));
         // Build candidate list: builtins + user-defined types/enums.
         let mut candidates: Vec<&str> = BUILTIN_TYPE_NAMES.to_vec();
         for name in all_known_names {
@@ -329,9 +335,9 @@ fn parse_api_str_with_file(
         eprintln!("warning: [[contract]] is deprecated, use [[plugin_contract]] instead");
     }
     let raw: RawApiSchema = toml::from_str(content).map_err(|e| {
-        let location: Option<SourceLocation> = e.span().map(|span| {
-            location_from_span(file, content, span.start)
-        });
+        let location: Option<SourceLocation> = e
+            .span()
+            .map(|span| location_from_span(file, content, span.start));
         PolyplugcError::TomlParseError {
             message: e.message().to_owned(),
             location,
@@ -350,9 +356,9 @@ fn parse_bundle_str_with_file(
     file: &str,
 ) -> core::result::Result<ValidatedIr, PolyplugcError> {
     let raw: RawBundleSchema = toml::from_str(content).map_err(|e| {
-        let location: Option<SourceLocation> = e.span().map(|span| {
-            location_from_span(file, content, span.start)
-        });
+        let location: Option<SourceLocation> = e
+            .span()
+            .map(|span| location_from_span(file, content, span.start));
         PolyplugcError::TomlParseError {
             message: e.message().to_owned(),
             location,
@@ -369,9 +375,9 @@ pub fn parse_bundle_with_api(path: &Path) -> core::result::Result<ValidatedIr, P
         })?;
     let file: String = path.to_string_lossy().into_owned();
     let raw: RawBundleSchema = toml::from_str(&content).map_err(|e| {
-        let location: Option<SourceLocation> = e.span().map(|span| {
-            location_from_span(&file, &content, span.start)
-        });
+        let location: Option<SourceLocation> = e
+            .span()
+            .map(|span| location_from_span(&file, &content, span.start));
         PolyplugcError::TomlParseError {
             message: e.message().to_owned(),
             location,
@@ -574,7 +580,11 @@ fn is_valid_identifier(name: &str) -> bool {
 
 /// Validate a plain identifier (function/param name). Names flow verbatim into
 /// generated source, so invalid identifiers must be rejected before codegen.
-fn validate_identifier(name: &str, kind: &str, context: &str) -> core::result::Result<(), PolyplugcError> {
+fn validate_identifier(
+    name: &str,
+    kind: &str,
+    context: &str,
+) -> core::result::Result<(), PolyplugcError> {
     if is_valid_identifier(name) {
         Ok(())
     } else {
@@ -748,7 +758,13 @@ fn lower_api(
                 .returns
                 .as_ref()
                 .map(|spanned| {
-                    resolve_type_ref_spanned(spanned, &raw_contract.name, &all_known_names, file, source)
+                    resolve_type_ref_spanned(
+                        spanned,
+                        &raw_contract.name,
+                        &all_known_names,
+                        file,
+                        source,
+                    )
                 })
                 .transpose()?
                 // An explicit `return = "void"` means "no return"; normalize it to

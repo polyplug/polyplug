@@ -151,9 +151,7 @@ fn emit_cs_call_arena_helpers(out: &mut String) {
     out.push_str(
         "    /// this buffer; outputs larger than it spill into host-allocated overflow\n",
     );
-    out.push_str(
-        "    /// blocks that are retained across resets and freed only by FreeAll.\n",
-    );
+    out.push_str("    /// blocks that are retained across resets and freed only by FreeAll.\n");
     out.push_str("    public const nuint CALL_ARENA_BUF_LEN = 512;\n");
     out.push_str(
         "    /// <summary>Alignment used to free host-allocated overflow blocks.</summary>\n",
@@ -196,9 +194,7 @@ fn emit_cs_call_arena_helpers(out: &mut String) {
     out.push_str("        }\n");
     out.push_str("    }\n\n");
 
-    out.push_str(
-        "    /// <summary>Free all retained overflow blocks and clear the chain.\n",
-    );
+    out.push_str("    /// <summary>Free all retained overflow blocks and clear the chain.\n");
     out.push_str(
         "    /// Call this before releasing the arena's backing buffer (e.g. in Dispose).</summary>\n",
     );
@@ -1194,9 +1190,7 @@ fn generate_host_fn_caller(
         out.push_str(
             "        // Rewind the arena at call start: retained overflow blocks and the primary\n",
         );
-        out.push_str(
-            "        // region become available again, invalidating prior views.\n",
-        );
+        out.push_str("        // region become available again, invalidating prior views.\n");
         out.push_str("        fixed (CallArena* arenaResetPtr = &_arena) {\n");
         out.push_str("            CallArenaOps.Reset(arenaResetPtr);\n");
         out.push_str("        }\n");
@@ -2593,8 +2587,12 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         // CreateInstance: (this, user_data) → GuestContractInstance
         out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, void*, GuestContractInstance>)iface->CreateInstance;\n");
         out.push_str("        GuestContractInstance inst = createFn(hostPtr, null);\n");
-        out.push_str("        // Stamp the peer contract id so CallGuestMethod routes by it even when a\n");
-        out.push_str("        // stateless peer's create_instance returns a null (null-id) handle.\n");
+        out.push_str(
+            "        // Stamp the peer contract id so CallGuestMethod routes by it even when a\n",
+        );
+        out.push_str(
+            "        // stateless peer's create_instance returns a null (null-id) handle.\n",
+        );
         out.push_str(&format!(
             "        inst.ContractId = 0x{:016X}UL;\n",
             contract.contract_id
@@ -2698,8 +2696,12 @@ fn generate_peer_fn_caller_cs(
     out.push_str("        }\n\n");
 
     if needs_arena && peer_needs_arena {
-        out.push_str("        // Rewind the arena at call start: retained overflow blocks and the\n");
-        out.push_str("        // primary region become available again, invalidating prior views.\n");
+        out.push_str(
+            "        // Rewind the arena at call start: retained overflow blocks and the\n",
+        );
+        out.push_str(
+            "        // primary region become available again, invalidating prior views.\n",
+        );
         out.push_str("        fixed (CallArena* arenaResetPtr = &_arena) {\n");
         out.push_str("            CallArenaOps.Reset(arenaResetPtr);\n");
         out.push_str("        }\n");

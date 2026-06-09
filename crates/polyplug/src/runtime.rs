@@ -2459,7 +2459,10 @@ mod tests {
             )
         };
         assert_eq!(err.code, polyplug_abi::types::AbiErrorCode::Ok as u32);
-        assert_eq!(output, 42, "stateless dispatch must run with null instance.data");
+        assert_eq!(
+            output, 42,
+            "stateless dispatch must run with null instance.data"
+        );
     }
 
     #[test]

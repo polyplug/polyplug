@@ -1112,7 +1112,9 @@ fn emit_cpp_call_arena_helpers(out: &mut String) {
     out.push_str("/// Try to bump-allocate `size`@`align` from `block`'s free region.\n");
     out.push_str("///\n");
     out.push_str("/// Advances `block->used` on success and returns the allocation pointer.\n");
-    out.push_str("/// Returns nullptr if the request does not fit in the block's remaining room.\n");
+    out.push_str(
+        "/// Returns nullptr if the request does not fit in the block's remaining room.\n",
+    );
     out.push_str(
         "inline uint8_t* polyplug_arena_serve_from_block(ArenaOverflowBlock* block, size_t size, size_t align) noexcept {\n",
     );
@@ -1134,23 +1136,17 @@ fn emit_cpp_call_arena_helpers(out: &mut String) {
     out.push_str(
         "    // is in-bounds because the block was allocated with at least sizeof(ArenaOverflowBlock) bytes.\n",
     );
-    out.push_str(
-        "    block->used = static_cast<size_t>(p - block_bytes) + size;\n",
-    );
+    out.push_str("    block->used = static_cast<size_t>(p - block_bytes) + size;\n");
     out.push_str("    return p;\n");
     out.push_str("}\n\n");
 
     out.push_str("/// Allocate `size` bytes aligned to `align` from `arena`.\n");
     out.push_str("///\n");
-    out.push_str(
-        "/// Serves from the primary region by bumping `cur`; on exhaustion, walks the\n",
-    );
+    out.push_str("/// Serves from the primary region by bumping `cur`; on exhaustion, walks the\n");
     out.push_str(
         "/// retained overflow chain for a block with spare room; if none fits, requests a\n",
     );
-    out.push_str(
-        "/// fresh overflow block from the host and serves from it. Returns nullptr if\n",
-    );
+    out.push_str("/// fresh overflow block from the host and serves from it. Returns nullptr if\n");
     out.push_str(
         "/// `size == 0`, if `align` is not a power of two, or if a host allocation fails.\n",
     );
@@ -1168,8 +1164,12 @@ fn emit_cpp_call_arena_helpers(out: &mut String) {
     out.push_str("        return p;\n");
     out.push_str("    }\n");
     out.push_str("    if (arena->host == nullptr) { return nullptr; }\n");
-    out.push_str("    // REUSE PASS: walk the retained chain; serve from the first block with room.\n");
-    out.push_str("    for (ArenaOverflowBlock* b = arena->first_overflow; b != nullptr; b = b->next) {\n");
+    out.push_str(
+        "    // REUSE PASS: walk the retained chain; serve from the first block with room.\n",
+    );
+    out.push_str(
+        "    for (ArenaOverflowBlock* b = arena->first_overflow; b != nullptr; b = b->next) {\n",
+    );
     out.push_str(
         "        if (uint8_t* p = polyplug_arena_serve_from_block(b, size, align)) { return p; }\n",
     );
@@ -1217,20 +1217,14 @@ fn emit_cpp_call_arena_helpers(out: &mut String) {
     out.push_str(
         "        // SAFETY: every block in the chain was allocated by polyplug_arena_alloc\n",
     );
-    out.push_str(
-        "        // with a valid header; reading next and writing used are in-bounds.\n",
-    );
+    out.push_str("        // with a valid header; reading next and writing used are in-bounds.\n");
     out.push_str("        block->used = sizeof(ArenaOverflowBlock);\n");
     out.push_str("        block = block->next;\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
 
-    out.push_str(
-        "/// Free all retained overflow blocks and reset the overflow chain to empty.\n",
-    );
-    out.push_str(
-        "/// Call this at teardown (destructor) to release all host-allocated memory.\n",
-    );
+    out.push_str("/// Free all retained overflow blocks and reset the overflow chain to empty.\n");
+    out.push_str("/// Call this at teardown (destructor) to release all host-allocated memory.\n");
     out.push_str("inline void polyplug_arena_free_all(CallArena* arena) noexcept {\n");
     out.push_str("    ArenaOverflowBlock* block = arena->first_overflow;\n");
     out.push_str("    while (block != nullptr) {\n");
@@ -2805,8 +2799,12 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
     out.push_str(
         "        GuestContractInstance instance = iface->create_instance(host, nullptr);\n",
     );
-    out.push_str("        // Stamp the peer contract id so `host->call_guest_method` routes by it\n");
-    out.push_str("        // even when a stateless peer's create_instance returns a null (null-id)\n");
+    out.push_str(
+        "        // Stamp the peer contract id so `host->call_guest_method` routes by it\n",
+    );
+    out.push_str(
+        "        // even when a stateless peer's create_instance returns a null (null-id)\n",
+    );
     out.push_str("        // handle. The host-mediated path keys routing on contract_id.\n");
     out.push_str(&format!(
         "        instance.contract_id = 0x{:016X}ULL;\n",
