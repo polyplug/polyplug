@@ -65,9 +65,10 @@ owner is currently budget-constrained.
   Examples job). Caught a real bug on first run: three hand-written Lua example
   guests double-converted a `StringView` into the SDK helpers and silently
   returned `INVALID:*` — fixed to native Lua string ops.
-  _Follow-up (low pri): the Lua SDK helpers `to_str`/`split`/`strip_prefix`
-  silently return `""` on plain-string input; consider hardening in the
-  generator so misuse fails loudly rather than silently._
+  _Follow-up: ✅ Done (#77). The Lua `to_str` (and `split`/`strip_prefix`/
+  `starts_with`/`ends_with` which delegate to it) now raise a clear error on
+  non-StringView input instead of silently returning `""`. Fixed at the
+  `HELPER_LUA` emitter + the hand-written guest SDK; runtime test added._
 - **A4. TSAN for the resolve→dispatch race. ✅ Done.** Added
   `stress_concurrent_unload_with_resolvers` (resolver threads `find`+`resolve`+
   read while one thread invalidates+re-registers), proving the retire-not-drop
@@ -110,9 +111,13 @@ Held until the owner decides to publish. Kept here so it isn't lost.
   `target/criterion` across runs for a rolling baseline, and fails on any
   benchmark that regresses >1.5x vs the previous run (`ci/check_bench_regression.py`).
   The 1.5x threshold is generous enough that shared-runner noise never trips it;
-  building+running the benches is itself a gate against bench bitrot. _Follow-up:
-  extend to the four VM-dispatch benches (need the external-toolchain setup the
-  Examples/External jobs already provision)._
+  building+running the benches is itself a gate against bench bitrot.
+  _Follow-up: ✅ Done. The nightly `benches` job now also runs the four
+  VM-dispatch benches — lua/js/python gate must-pass (vendored VMs / embedded
+  CPython, `python3-dev` provisioned for pyo3), and .NET runs best-effort
+  (`continue-on-error`, self-skips without hostfxr). The regression checker walks
+  all of `target/criterion`, so each joins the gate automatically once it has a
+  cached baseline._
 - **C3. ~~Reference tracing extension.~~ ❌ Cancelled (2026-06).** The extension
   concept was removed (out of scope — see "Extension system — Removed"). Tracing
   is an app concern: implement it as a `host.logger`-style host contract.
