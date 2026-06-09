@@ -7,7 +7,7 @@ namespace Polyplug.Guest;
 
 /// <summary>
 /// Guest-side access to the host runtime stored during <c>polyplug_init</c>.
-/// Provides the host allocator and extension lookup over the raw
+/// Provides the host allocator over the raw
 /// <see cref="HostApi"/> function-pointer table.
 /// </summary>
 public static unsafe class PolyplugHost
@@ -40,23 +40,5 @@ public static unsafe class PolyplugHost
 
         Marshal.Copy(bytes, 0, buffer, bytes.Length);
         return new StringView { Ptr = buffer, Len = (nuint)bytes.Length };
-    }
-
-    /// <summary>
-    /// Look up a host extension by its pre-computed FNV-1a-32 identifier.
-    /// </summary>
-    /// <returns>
-    /// The opaque extension pointer, or <see cref="IntPtr.Zero"/> if no host is
-    /// stored or the extension is not registered.
-    /// </returns>
-    public static IntPtr GetExtension(uint extensionId)
-    {
-        IntPtr hostPtr = RuntimeAbiStorage.GetRuntimeAbi();
-        if (hostPtr == IntPtr.Zero)
-            return IntPtr.Zero;
-
-        var host = (HostApi*)hostPtr;
-        var getExtensionFn = (delegate* unmanaged[Cdecl]<IntPtr, uint, IntPtr>)host->GetExtension;
-        return getExtensionFn(hostPtr, extensionId);
     }
 }

@@ -38,7 +38,7 @@ use crate::{
 ///
 /// Contains an opaque runtime pointer and function pointers for guest calls.
 /// All functions use self-passing pattern (receive HostApi pointer as first parameter).
-/// `HostApi` is `160 bytes` (1 opaque runtime pointer + 19 function pointer fields).
+/// `HostApi` is `160 bytes` (1 opaque runtime pointer + 18 function pointer fields + 1 reserved data pointer).
 ///
 /// # Who provides
 /// The runtime creates this struct and passes it to `polyplug_init()`.
@@ -353,21 +353,6 @@ pub struct HostApi {
         out: *mut c_void,
         arena: *mut CallArena,
     ) -> AbiError,
-    /// Get a registered extension by extension ID.
-    ///
-    /// Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
-    /// of the extension name. Use `polyplug_utils::fnv1a_32(name.as_bytes())` to
-    /// compute the ID.
-    ///
-    /// Returns null if no extension is registered for the given ID.
-    ///
-    /// # Arguments
-    /// - `this`: HostApi pointer (self-passing)
-    /// - `extension_id`: 32-bit FNV-1a hash of the extension name
-    ///
-    /// # Returns
-    /// Opaque pointer to the extension, or null if not registered.
-    pub get_extension: unsafe extern "C" fn(this: *const HostApi, extension_id: u32) -> *const (),
     /// Unload a guest bundle, invalidating its handles and removing it from the registry.
     ///
     /// Today this performs **retire/invalidate-only** unload: the bundle's slots have
@@ -393,6 +378,8 @@ pub struct HostApi {
     /// `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
     /// or a still-loaded bundle declared a dependency on a contract this bundle provides).
     pub unload_bundle: unsafe extern "C" fn(this: *const HostApi, bundle_id: BundleId) -> AbiError,
+    /// Reserved. Producers must set this to null; consumers must not read it.
+    pub reserved: *const core::ffi::c_void,
 }
 
 // SAFETY: HostApi contains an opaque pointer and function pointers.
@@ -414,14 +401,14 @@ mod tests {
 
     #[test]
     fn layout_host_api() {
-        // HostApi: runtime pointer (8 bytes) + 19 extern "C" fn pointers (152 bytes).
+        // HostApi: runtime pointer (8 bytes) + 18 extern "C" fn pointers (144 bytes) + 1 reserved data pointer (8 bytes).
         // Total: 160 bytes (20 pointer-sized fields)
         // Fields: runtime, register_guest_contract, alloc, free, find_guest_contract,
         //         find_all_guest_contracts, resolve_guest_contract,
         //         get_host_contract, resolve_host_contract_interface, list_bundles,
         //         get_dependencies, load_bundle, reload_bundle, register_host_contract,
         //         register_loader, get_last_error, get_error_len, call_guest_method,
-        //         get_extension, unload_bundle
+        //         unload_bundle, reserved
         assert_eq!(size_of::<HostApi>(), 160);
         assert_eq!(align_of::<HostApi>(), 8);
         // Existing fields (unchanged offsets)
@@ -443,8 +430,8 @@ mod tests {
         assert_eq!(offset_of!(HostApi, get_last_error), 120);
         assert_eq!(offset_of!(HostApi, get_error_len), 128);
         assert_eq!(offset_of!(HostApi, call_guest_method), 136);
-        assert_eq!(offset_of!(HostApi, get_extension), 144);
-        assert_eq!(offset_of!(HostApi, unload_bundle), 152);
+        assert_eq!(offset_of!(HostApi, unload_bundle), 144);
+        assert_eq!(offset_of!(HostApi, reserved), 152);
     }
 
     /// Verify HostApi has runtime: *mut c_void field at offset 0.

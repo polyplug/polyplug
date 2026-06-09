@@ -469,14 +469,13 @@ _host_api_register_loader_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, String
 _host_api_get_last_error_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
 _host_api_get_error_len_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p)
 _host_api_call_guest_method_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
-_host_api_get_extension_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32)
 _host_api_unload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_uint64)
 class HostApi(ctypes.Structure):
     """ Host Interface — function table passed to guests during initialization.
     
      Contains an opaque runtime pointer and function pointers for guest calls.
      All functions use self-passing pattern (receive HostApi pointer as first parameter).
-     `HostApi` is `160 bytes` (1 opaque runtime pointer + 19 function pointer fields).
+     `HostApi` is `160 bytes` (1 opaque runtime pointer + 18 function pointer fields + 1 reserved data pointer).
     
      # Who provides
      The runtime creates this struct and passes it to `polyplug_init()`.
@@ -521,8 +520,8 @@ class HostApi(ctypes.Structure):
         ("get_last_error", _host_api_get_last_error_t),
         ("get_error_len", _host_api_get_error_len_t),
         ("call_guest_method", _host_api_call_guest_method_t),
-        ("get_extension", _host_api_get_extension_t),
         ("unload_bundle", _host_api_unload_bundle_t),
+        ("reserved", ctypes.c_void_p),
     ]
 
 # Expected size: 160 bytes

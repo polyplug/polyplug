@@ -445,24 +445,6 @@ pub fn get_host_vtable() -> *const polyplug_abi::HostApi {
     HOST_VTABLE.get().map(|p| p.0).unwrap_or(core::ptr::null())
 }
 
-/// Look up a registered extension by name.
-///
-/// Computes the 32-bit FNV-1a hash of `extension_name` and calls
-/// `host->get_extension(host, extension_id)`. Returns `None` if the host
-/// interface is unavailable or no extension is registered for that name.
-pub fn get_extension(extension_name: &str) -> Option<*const ()> {
-    let host_ptr: *const polyplug_abi::HostApi = get_host_vtable();
-    if host_ptr.is_null() {
-        return None;
-    }
-    let extension_id: u32 = polyplug_utils::fnv1a_32(extension_name.as_bytes());
-    // SAFETY: host_ptr is non-null (checked above) and was validated during
-    // store_host_vtable. The pointer is 'static for the plugin lifetime.
-    // get_extension is a valid function pointer set by the host runtime.
-    let result: *const () = unsafe { ((*host_ptr).get_extension)(host_ptr, extension_id) };
-    if result.is_null() { None } else { Some(result) }
-}
-
 // ─── FFI Module ────────────────────────────────────────────────────────────────
 
 /// FFI utilities for guest plugins.

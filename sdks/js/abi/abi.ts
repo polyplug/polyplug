@@ -217,7 +217,7 @@ export const GUEST_CONTRACT_INTERFACE_SIZE: number = 56;
  * 
  *  Contains an opaque runtime pointer and function pointers for guest calls.
  *  All functions use self-passing pattern (receive HostApi pointer as first parameter).
- *  `HostApi` is `160 bytes` (1 opaque runtime pointer + 19 function pointer fields).
+ *  `HostApi` is `160 bytes` (1 opaque runtime pointer + 18 function pointer fields + 1 reserved data pointer).
  * 
  *  # Who provides
  *  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -528,23 +528,6 @@ export interface HostApi {
      */
     call_guest_method: number;
     /**
-     *  Get a registered extension by extension ID.
-     * 
-     *  Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
-     *  of the extension name. Use `polyplug_utils::fnv1a_32(name.as_bytes())` to
-     *  compute the ID.
-     * 
-     *  Returns null if no extension is registered for the given ID.
-     * 
-     *  # Arguments
-     *  - `this`: HostApi pointer (self-passing)
-     *  - `extension_id`: 32-bit FNV-1a hash of the extension name
-     * 
-     *  # Returns
-     *  Opaque pointer to the extension, or null if not registered.
-     */
-    get_extension: number;
-    /**
      *  Unload a guest bundle, invalidating its handles and removing it from the registry.
      * 
      *  Today this performs **retire/invalidate-only** unload: the bundle's slots have
@@ -571,6 +554,8 @@ export interface HostApi {
      *  or a still-loaded bundle declared a dependency on a contract this bundle provides).
      */
     unload_bundle: number;
+    /**  Reserved. Producers must set this to null; consumers must not read it. */
+    reserved: bigint;
 }
 
 export const HOST_API_RUNTIME_OFFSET: number = 0;
@@ -591,8 +576,8 @@ export const HOST_API_REGISTER_LOADER_OFFSET: number = 112;
 export const HOST_API_GET_LAST_ERROR_OFFSET: number = 120;
 export const HOST_API_GET_ERROR_LEN_OFFSET: number = 128;
 export const HOST_API_CALL_GUEST_METHOD_OFFSET: number = 136;
-export const HOST_API_GET_EXTENSION_OFFSET: number = 144;
-export const HOST_API_UNLOAD_BUNDLE_OFFSET: number = 152;
+export const HOST_API_UNLOAD_BUNDLE_OFFSET: number = 144;
+export const HOST_API_RESERVED_OFFSET: number = 152;
 export const HOST_API_SIZE: number = 160;
 
 /**

@@ -1052,37 +1052,6 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("//   #[unsafe(no_mangle)]\n");
     out.push_str("//   pub extern \"C\" fn polyplug_abi_version() -> u32 { 1 }\n\n");
 
-    out.push_str("fn fnv1a_32(data: &[u8]) -> u32 {\n");
-    out.push_str("    let mut hash: u32 = 2_166_136_261_u32;\n");
-    out.push_str("    for &byte in data {\n");
-    out.push_str("        hash ^= byte as u32;\n");
-    out.push_str("        hash = hash.wrapping_mul(16_777_619_u32);\n");
-    out.push_str("    }\n");
-    out.push_str("    hash\n");
-    out.push_str("}\n\n");
-
-    out.push_str("/// Get a host extension by name.\n");
-    out.push_str("///\n");
-    out.push_str("/// Computes the extension ID via FNV-1a 32-bit hash of the name bytes,\n");
-    out.push_str("/// then calls `host.get_extension`. Returns `None` if not registered.\n");
-    out.push_str("///\n");
-    out.push_str("/// # Safety\n");
-    out.push_str("/// The returned pointer is valid only as long as the host runtime is alive.\n");
-    out.push_str("pub unsafe fn polyplug_get_extension(name: &[u8]) -> Option<*const ()> {\n");
-    out.push_str("    let host_ptr: *const HostApi = polyplug_guest::get_host_vtable();\n");
-    out.push_str("    if host_ptr.is_null() {\n");
-    out.push_str("        return None;\n");
-    out.push_str("    }\n");
-    out.push_str("    // SAFETY: host_ptr was stored during polyplug_init and is valid for the plugin lifetime.\n");
-    out.push_str("    let host: &HostApi = unsafe { &*host_ptr };\n");
-    out.push_str("    let extension_id: u32 = fnv1a_32(name);\n");
-    out.push_str("    // SAFETY: get_extension is a valid function pointer from the host ABI.\n");
-    out.push_str(
-        "    let ptr: *const () = unsafe { (host.get_extension)(host_ptr, extension_id) };\n",
-    );
-    out.push_str("    if ptr.is_null() { None } else { Some(ptr) }\n");
-    out.push_str("}\n\n");
-
     out.push_str("/// Register all plugin interfaces with the host.\n");
     out.push_str("///\n");
     out.push_str("/// # Safety\n");

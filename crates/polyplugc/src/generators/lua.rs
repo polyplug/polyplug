@@ -331,23 +331,6 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     out.push_str("    return polyplug_guest.AbiErrorCode.Ok\n");
     out.push_str("end\n\n");
 
-    out.push_str("--- Get a host extension by name. Returns nil if not registered.\n");
-    out.push_str("-- @param name string Extension name (as a Lua string).\n");
-    out.push_str("-- @return cdata|nil Opaque extension pointer, or nil if not registered.\n");
-    out.push_str("function M.polyplug_get_extension(name)\n");
-    out.push_str("    local host_ptr = polyplug_guest.get_host_interface()\n");
-    out.push_str("    if host_ptr == nil then return nil end\n");
-    out.push_str("    local hash = 2166136261\n");
-    out.push_str("    for i = 1, #name do\n");
-    out.push_str("        hash = bit.bxor(hash, name:byte(i))\n");
-    out.push_str("        hash = bit.band(hash * 16777619, 0xFFFFFFFF)\n");
-    out.push_str("    end\n");
-    out.push_str("    local host = ffi.cast('HostApi*', ffi.cast('uintptr_t', host_ptr))\n");
-    out.push_str("    local ptr = host.get_extension(host_ptr, hash)\n");
-    out.push_str("    if ptr == nil then return nil end\n");
-    out.push_str("    return ptr\n");
-    out.push_str("end\n\n");
-
     out.push_str("return M\n");
     Ok(out)
 }

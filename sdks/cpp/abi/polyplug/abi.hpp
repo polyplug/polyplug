@@ -109,7 +109,7 @@ static_assert(sizeof(GuestContractInstance) == 16, "GuestContractInstance size m
 ///
 ///  Contains an opaque runtime pointer and function pointers for guest calls.
 ///  All functions use self-passing pattern (receive HostApi pointer as first parameter).
-///  `HostApi` is `160 bytes` (1 opaque runtime pointer + 19 function pointer fields).
+///  `HostApi` is `160 bytes` (1 opaque runtime pointer + 18 function pointer fields + 1 reserved data pointer).
 ///
 ///  # Who provides
 ///  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -151,7 +151,6 @@ using HostApi_register_loader_fn = AbiError(*)(const HostApi*, StringView, void*
 using HostApi_get_last_error_fn = size_t(*)(const HostApi*, uint8_t*, size_t);
 using HostApi_get_error_len_fn = size_t(*)(const HostApi*);
 using HostApi_call_guest_method_fn = AbiError(*)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
-using HostApi_get_extension_fn = const void*(*)(const HostApi*, uint32_t);
 using HostApi_unload_bundle_fn = AbiError(*)(const HostApi*, uint64_t);
 struct HostApi {
     ///  Opaque pointer to Runtime.
@@ -401,21 +400,6 @@ struct HostApi {
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
     HostApi_call_guest_method_fn call_guest_method;
-    ///  Get a registered extension by extension ID.
-    ///
-    ///  Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
-    ///  of the extension name. Use `polyplug_utils::fnv1a_32(name.as_bytes())` to
-    ///  compute the ID.
-    ///
-    ///  Returns null if no extension is registered for the given ID.
-    ///
-    ///  # Arguments
-    ///  - `this`: HostApi pointer (self-passing)
-    ///  - `extension_id`: 32-bit FNV-1a hash of the extension name
-    ///
-    ///  # Returns
-    ///  Opaque pointer to the extension, or null if not registered.
-    HostApi_get_extension_fn get_extension;
     ///  Unload a guest bundle, invalidating its handles and removing it from the registry.
     ///
     ///  Today this performs **retire/invalidate-only** unload: the bundle's slots have
@@ -441,6 +425,8 @@ struct HostApi {
     ///  `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
     ///  or a still-loaded bundle declared a dependency on a contract this bundle provides).
     HostApi_unload_bundle_fn unload_bundle;
+    ///  Reserved. Producers must set this to null; consumers must not read it.
+    const void* reserved;
 };
 static_assert(sizeof(HostApi) == 160, "HostApi size mismatch");
 

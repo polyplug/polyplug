@@ -588,28 +588,6 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
     out.push_str("    (globalThis as any).polyplug._hostVtableLo = lo;\n");
     out.push_str("    (globalThis as any).polyplug._hostVtableHi = hi;\n");
     out.push_str("}\n\n");
-    out.push_str("/**\n");
-    out.push_str(" * Get a host extension by name.\n");
-    out.push_str(" *\n");
-    out.push_str(
-        " * Computes the extension ID via FNV-1a 32-bit hash of the UTF-8 encoded name,\n",
-    );
-    out.push_str(" * then calls polyplug.getExtension. Returns 0 if not registered.\n");
-    out.push_str(" *\n");
-    out.push_str(" * @param name - Extension name string.\n");
-    out.push_str(" * @returns Opaque extension pointer as number, or 0 if not registered.\n");
-    out.push_str(" */\n");
-    out.push_str("export function polyplug_get_extension(name: string): number {\n");
-    out.push_str("    const polyplug = (globalThis as any).polyplug;\n");
-    out.push_str("    if (!polyplug) return 0;\n");
-    out.push_str("    const enc: Uint8Array = new TextEncoder().encode(name);\n");
-    out.push_str("    let hash: number = 2166136261;\n");
-    out.push_str("    for (let i = 0; i < enc.length; i++) {\n");
-    out.push_str("        hash = (Math.imul(hash ^ enc[i], 16777619)) >>> 0;\n");
-    out.push_str("    }\n");
-    out.push_str("    const result: unknown = polyplug.getExtension(hash);\n");
-    out.push_str("    return (result as number) ?? 0;\n");
-    out.push_str("}\n\n");
     out.push_str("// ABI error codes (match polyplug_abi.AbiErrorCode)\n");
     out.push_str("const AbiErrorCode = {\n");
     out.push_str("    Ok: 0,\n");

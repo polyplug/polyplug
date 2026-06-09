@@ -764,29 +764,6 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     );
     out.push_str("}\n\n");
 
-    out.push_str("/// Get a host extension by name (pointer + length).\n");
-    out.push_str("///\n");
-    out.push_str("/// Computes extension_id = fnv1a_32(name), then calls host->get_extension.\n");
-    out.push_str("/// Returns nullptr if the host interface is not yet initialized or the\n");
-    out.push_str("/// extension is not registered.\n");
-    out.push_str(
-        "inline const void* polyplug_get_extension(const char* name, size_t name_len) noexcept {\n",
-    );
-    out.push_str("    const HostApi* host = polyplug::get_host_interface();\n");
-    out.push_str("    if (!host) return nullptr;\n");
-    out.push_str("    uint32_t hash = 2166136261u;\n");
-    out.push_str("    for (size_t i = 0; i < name_len; ++i) {\n");
-    out.push_str("        hash ^= static_cast<uint8_t>(name[i]);\n");
-    out.push_str("        hash *= 16777619u;\n");
-    out.push_str("    }\n");
-    out.push_str("    return host->get_extension(host, hash);\n");
-    out.push_str("}\n");
-    out.push_str("/// Convenience overload for string literals.\n");
-    out.push_str("template<size_t N>\n");
-    out.push_str("inline const void* polyplug_get_extension(const char (&name)[N]) noexcept {\n");
-    out.push_str("    return polyplug_get_extension(name, N - 1);\n");
-    out.push_str("}\n");
-
     Ok(out)
 }
 

@@ -126,7 +126,7 @@ impl RuntimeBuilder {
             get_last_error: crate::runtime::host_get_last_error,
             get_error_len: crate::runtime::host_get_error_len,
             call_guest_method: crate::runtime::host_call_guest_method,
-            get_extension: crate::runtime::host_get_extension,
+            reserved: core::ptr::null(),
             unload_bundle: crate::runtime::host_unload_bundle,
         }));
 
@@ -181,7 +181,6 @@ impl RuntimeBuilder {
             host_contracts: std::sync::RwLock::new(HashMap::new()),
             singleton_instances: std::sync::RwLock::new(HashMap::new()),
             host_runtime: self.host_runtime,
-            extensions: std::sync::RwLock::new(HashMap::new()),
             init_bundle_stack: std::sync::Mutex::new(HashMap::new()),
         };
 

@@ -210,11 +210,6 @@ unsafe extern "C" fn stub_call_guest_method(
     }
 }
 
-/// Stub get_extension callback.
-unsafe extern "C" fn stub_get_extension(_this: *const HostApi, _extension_id: u32) -> *const () {
-    core::ptr::null()
-}
-
 unsafe extern "C" fn stub_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
     AbiError::ok()
 }
@@ -343,7 +338,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        get_extension: stub_get_extension,
+        reserved: core::ptr::null(),
         unload_bundle: stub_unload_bundle,
     };
 
@@ -738,7 +733,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        get_extension: stub_get_extension,
+        reserved: core::ptr::null(),
         unload_bundle: stub_unload_bundle,
     };
 

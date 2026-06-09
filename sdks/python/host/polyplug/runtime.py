@@ -410,9 +410,6 @@ class Runtime:
         # No explicit release needed - the registry manages lifetimes
         pass
 
-    def get_extension(self, extension_id: int) -> None:
-        return None
-
     def register_host_contract(
         self,
         contract_id: int,

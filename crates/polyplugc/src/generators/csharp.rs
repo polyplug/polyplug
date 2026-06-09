@@ -779,14 +779,6 @@ fn emit_cs_guest_dispatch_body(
 /// Generate `guest/Init.cs` — the [UnmanagedCallersOnly] PolyplugInit entry point.
 fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
-    let has_trace: bool = ir
-        .bundle
-        .as_ref()
-        .is_some_and(|b: &crate::ir::ResolvedBundle| {
-            b.plugins
-                .iter()
-                .any(|p: &crate::ir::ResolvedPlugin| p.optional.contains(&"trace".to_owned()))
-        });
     out.push_str(CS_HEADER);
     out.push_str("using System.Runtime.CompilerServices;\n");
     out.push_str("using System.Runtime.InteropServices;\n");
@@ -815,16 +807,6 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
     out.push_str("        unsafe {\n");
-    if has_trace {
-        out.push_str("            const uint ExtTraceId = 0xC4EB9AEEu;\n");
-        out.push_str("            // Optional: trace extension\n");
-        out.push_str(
-            "            IntPtr traceVtablePtr = PolyplugHost.GetExtension(ExtTraceId);\n",
-        );
-        out.push_str(
-            "            // traceVtablePtr is IntPtr.Zero if trace extension not available\n\n",
-        );
-    }
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -964,21 +946,6 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("        }\n");
     out.push_str("    }\n\n");
 
-    out.push_str("    /// <summary>Gets a host extension by name.</summary>\n");
-    out.push_str("    /// <param name=\"name\">Extension name as UTF-8 bytes.</param>\n");
-    out.push_str("    /// <returns>\n");
-    out.push_str(
-        "    /// Opaque extension pointer, or <see cref=\"IntPtr.Zero\"/> if not registered.\n",
-    );
-    out.push_str("    /// </returns>\n");
-    out.push_str("    public static IntPtr GetExtension(System.ReadOnlySpan<byte> name) {\n");
-    out.push_str("        uint hash = 2166136261u;\n");
-    out.push_str("        foreach (byte b in name) {\n");
-    out.push_str("            hash ^= b;\n");
-    out.push_str("            hash *= 16777619u;\n");
-    out.push_str("        }\n");
-    out.push_str("        return PolyplugHost.GetExtension(hash);\n");
-    out.push_str("    }\n");
     out.push_str("}\n");
     out
 }

@@ -28,7 +28,7 @@ use polyplug_abi::{
     HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, RuntimeLanguage,
     StringView, types::Version,
 };
-use polyplug_utils::{BundleId, GuestContractId, fnv1a_32};
+use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::HostContractError;
 use crate::error::LoaderError;
@@ -92,9 +92,6 @@ pub struct Runtime {
     pub(crate) singleton_instances: RwLock<HashMap<u64, HostContractInstance>>,
     /// Host runtime type identifier.
     pub(crate) host_runtime: RuntimeLanguage,
-    /// Host-registered extensions, keyed by fnv1a_32 of the extension name.
-    /// Raw pointer stored as usize for Send+Sync. Callers are responsible for thread safety.
-    pub(crate) extensions: RwLock<HashMap<u32, usize>>,
     /// Per-thread stack of bundle_ids currently inside `polyplug_init`.
     ///
     /// Replaces the former process-global `thread_local!` (Rule 12: no thread-locals
@@ -283,20 +280,6 @@ impl Runtime {
     #[inline(always)]
     pub fn host_abi(&self) -> &'static HostApi {
         self.host_abi
-    }
-
-    /// Register a host extension by name.
-    ///
-    /// Plugins retrieve extensions via `get_extension` on the HostApi.
-    /// The extension_id is computed with `polyplug_utils::fnv1a_32(name.as_bytes())`.
-    ///
-    /// # Safety
-    /// `ptr` must remain valid for the lifetime of the runtime.
-    pub unsafe fn register_extension(&self, name: &str, ptr: *const ()) {
-        let extension_id: u32 = fnv1a_32(name.as_bytes());
-        if let Ok(mut map) = self.extensions.write() {
-            map.insert(extension_id, ptr as usize);
-        }
     }
 
     /// Get the HostApi pointer for passing to guest contracts.
@@ -2020,23 +2003,6 @@ pub(crate) unsafe extern "C" fn host_call_guest_method(
     }
 }
 
-/// HostApi.get_extension callback — returns a registered extension pointer.
-///
-/// # Safety
-/// - `this` must be a valid HostApi pointer with valid runtime field
-/// - `extension_id` must be fnv1a_32 of the extension name
-pub(crate) unsafe extern "C" fn host_get_extension(
-    this: *const HostApi,
-    extension_id: u32,
-) -> *const () {
-    // SAFETY: this is non-null per ABI contract; runtime field was set at init.
-    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    match runtime.extensions.read() {
-        Ok(map) => map.get(&extension_id).copied().unwrap_or(0) as *const (),
-        Err(_) => core::ptr::null(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -2208,7 +2174,7 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            get_extension: host_get_extension,
+            reserved: core::ptr::null(),
             unload_bundle: host_unload_bundle,
         };
 
@@ -3266,7 +3232,7 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            get_extension: host_get_extension,
+            reserved: core::ptr::null(),
             unload_bundle: host_unload_bundle,
         };
 
@@ -3308,7 +3274,7 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            get_extension: host_get_extension,
+            reserved: core::ptr::null(),
             unload_bundle: host_unload_bundle,
         };
 
@@ -3422,7 +3388,7 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            get_extension: host_get_extension,
+            reserved: core::ptr::null(),
             unload_bundle: host_unload_bundle,
         };
 
@@ -3510,7 +3476,7 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            get_extension: host_get_extension,
+            reserved: core::ptr::null(),
             unload_bundle: host_unload_bundle,
         };
 
@@ -3609,7 +3575,7 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            get_extension: host_get_extension,
+            reserved: core::ptr::null(),
             unload_bundle: host_unload_bundle,
         };
 
@@ -3639,66 +3605,6 @@ mod tests {
         assert_ne!(
             s1.data, m2.data,
             "singleton and multi instances are different"
-        );
-    }
-
-    // ─── Extension System Tests ────────────────────────────────────────────────
-
-    #[test]
-    fn extension_round_trip() {
-        let runtime: Arc<Runtime> = Runtime::builder()
-            .build()
-            .expect("runtime build should succeed");
-
-        static EXTENSION_VALUE: u32 = 0xDEAD_BEEF;
-        let ext_ptr: *const () = &EXTENSION_VALUE as *const u32 as *const ();
-
-        // SAFETY: ext_ptr points to a 'static variable; valid for the program lifetime.
-        unsafe { runtime.register_extension("test.extension", ext_ptr) };
-
-        let host: *const HostApi = runtime.as_context_ptr();
-        let extension_id: u32 = polyplug_utils::fnv1a_32(b"test.extension");
-        // SAFETY: host points to the runtime's 'static HostApi; runtime is live for the
-        // duration of this call. The get_extension callback reads from runtime.extensions which
-        // was populated above.
-        let retrieved: *const () = unsafe { ((*host).get_extension)(host, extension_id) };
-
-        assert!(
-            !retrieved.is_null(),
-            "registered extension must not be null"
-        );
-        assert_eq!(
-            retrieved, ext_ptr,
-            "retrieved pointer must equal registered pointer"
-        );
-    }
-
-    #[test]
-    fn extension_missing_returns_null() {
-        let runtime: Arc<Runtime> = Runtime::builder()
-            .build()
-            .expect("runtime build should succeed");
-
-        let host: *const HostApi = runtime.as_context_ptr();
-        let extension_id: u32 = polyplug_utils::fnv1a_32(b"nonexistent.extension");
-        // SAFETY: host points to the runtime's 'static HostApi; runtime is live.
-        // No extension was registered, so the callback reads from an empty map.
-        let retrieved: *const () = unsafe { ((*host).get_extension)(host, extension_id) };
-
-        assert!(
-            retrieved.is_null(),
-            "unregistered extension must return null pointer"
-        );
-    }
-
-    #[test]
-    fn extension_id_collision_resistance() {
-        // Two distinct extension names must produce distinct extension IDs.
-        let id_logger: u32 = polyplug_utils::fnv1a_32(b"logger");
-        let id_tracer: u32 = polyplug_utils::fnv1a_32(b"tracer");
-        assert_ne!(
-            id_logger, id_tracer,
-            "different extension names must not collide"
         );
     }
 

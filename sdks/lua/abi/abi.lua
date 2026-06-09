@@ -118,13 +118,12 @@ ffi.cdef[[
     typedef size_t (*HostApi_get_last_error_fn)(const HostApi*, uint8_t*, size_t);
     typedef size_t (*HostApi_get_error_len_fn)(const HostApi*);
     typedef AbiError (*HostApi_call_guest_method_fn)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
-    typedef const void* (*HostApi_get_extension_fn)(const HostApi*, uint32_t);
     typedef AbiError (*HostApi_unload_bundle_fn)(const HostApi*, uint64_t);
     //  Host Interface — function table passed to guests during initialization.
     // 
     //  Contains an opaque runtime pointer and function pointers for guest calls.
     //  All functions use self-passing pattern (receive HostApi pointer as first parameter).
-    //  `HostApi` is `160 bytes` (1 opaque runtime pointer + 19 function pointer fields).
+    //  `HostApi` is `160 bytes` (1 opaque runtime pointer + 18 function pointer fields + 1 reserved data pointer).
     // 
     //  # Who provides
     //  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -397,21 +396,6 @@ ffi.cdef[[
         //  # Returns
         //  AbiError::OK on success, error code on failure.
         HostApi_call_guest_method_fn call_guest_method;
-        //  Get a registered extension by extension ID.
-        // 
-        //  Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
-        //  of the extension name. Use `polyplug_utils::fnv1a_32(name.as_bytes())` to
-        //  compute the ID.
-        // 
-        //  Returns null if no extension is registered for the given ID.
-        // 
-        //  # Arguments
-        //  - `this`: HostApi pointer (self-passing)
-        //  - `extension_id`: 32-bit FNV-1a hash of the extension name
-        // 
-        //  # Returns
-        //  Opaque pointer to the extension, or null if not registered.
-        HostApi_get_extension_fn get_extension;
         //  Unload a guest bundle, invalidating its handles and removing it from the registry.
         // 
         //  Today this performs **retire/invalidate-only** unload: the bundle's slots have
@@ -437,6 +421,8 @@ ffi.cdef[[
         //  `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
         //  or a still-loaded bundle declared a dependency on a contract this bundle provides).
         HostApi_unload_bundle_fn unload_bundle;
+        //  Reserved. Producers must set this to null; consumers must not read it.
+        const void* reserved;
     } HostApi;
     // Expected size: 160 bytes
 

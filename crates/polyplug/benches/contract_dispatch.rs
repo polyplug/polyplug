@@ -275,11 +275,6 @@ unsafe extern "C" fn bench_call_guest_method(
     }
 }
 
-/// get_extension stub — returns null (not used in benches).
-unsafe extern "C" fn bench_get_extension(_this: *const HostApi, _extension_id: u32) -> *const () {
-    core::ptr::null()
-}
-
 /// unload_bundle stub — returns ok (not used in benches).
 unsafe extern "C" fn bench_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
     AbiError::ok()
@@ -341,7 +336,7 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
         get_last_error: bench_get_last_error,
         get_error_len: bench_get_error_len,
         call_guest_method: bench_call_guest_method,
-        get_extension: bench_get_extension,
+        reserved: core::ptr::null(),
         unload_bundle: bench_unload_bundle,
     };
 
@@ -567,7 +562,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
         get_last_error: bench_get_last_error,
         get_error_len: bench_get_error_len,
         call_guest_method: bench_call_guest_method,
-        get_extension: bench_get_extension,
+        reserved: core::ptr::null(),
         unload_bundle: bench_unload_bundle,
     };
 

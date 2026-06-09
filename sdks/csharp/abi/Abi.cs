@@ -188,7 +188,7 @@ public struct GuestContractInterface
 ///
 ///  Contains an opaque runtime pointer and function pointers for guest calls.
 ///  All functions use self-passing pattern (receive HostApi pointer as first parameter).
-///  `HostApi` is `160 bytes` (1 opaque runtime pointer + 19 function pointer fields).
+///  `HostApi` is `160 bytes` (1 opaque runtime pointer + 18 function pointer fields + 1 reserved data pointer).
 ///
 ///  # Who provides
 ///  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -463,21 +463,6 @@ public struct HostApi
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
     public IntPtr CallGuestMethod;
-    ///  Get a registered extension by extension ID.
-    ///
-    ///  Extensions are host-provided opaque pointers keyed by a 32-bit FNV-1a hash
-    ///  of the extension name. Use `polyplug_utils::fnv1a_32(name.as_bytes())` to
-    ///  compute the ID.
-    ///
-    ///  Returns null if no extension is registered for the given ID.
-    ///
-    ///  # Arguments
-    ///  - `this`: HostApi pointer (self-passing)
-    ///  - `extension_id`: 32-bit FNV-1a hash of the extension name
-    ///
-    ///  # Returns
-    ///  Opaque pointer to the extension, or null if not registered.
-    public IntPtr GetExtension;
     ///  Unload a guest bundle, invalidating its handles and removing it from the registry.
     ///
     ///  Today this performs **retire/invalidate-only** unload: the bundle's slots have
@@ -503,6 +488,8 @@ public struct HostApi
     ///  `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
     ///  or a still-loaded bundle declared a dependency on a contract this bundle provides).
     public IntPtr UnloadBundle;
+    ///  Reserved. Producers must set this to null; consumers must not read it.
+    public IntPtr Reserved;
 }
 
 /// Expected size: 160 bytes

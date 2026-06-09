@@ -352,10 +352,6 @@ mod tests {
         AbiError::ok()
     }
 
-    unsafe extern "C" fn stub_get_extension(_this: *const HostApi, _id: u32) -> *const () {
-        core::ptr::null()
-    }
-
     unsafe extern "C" fn stub_unload(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
         AbiError::ok()
     }
@@ -380,7 +376,7 @@ mod tests {
             get_last_error: stub_get_last_error,
             get_error_len: stub_get_len,
             call_guest_method: stub_call_guest_method,
-            get_extension: stub_get_extension,
+            reserved: core::ptr::null(),
             unload_bundle: stub_unload,
         }
     }

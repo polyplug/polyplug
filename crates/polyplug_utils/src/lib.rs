@@ -55,26 +55,6 @@ pub fn fnv1a_64(data: &[u8]) -> u64 {
     hash
 }
 
-// ─── FNV-1a 32-bit Hash ───────────────────────────────────────────────────────
-
-/// FNV-1a 32-bit offset basis.
-const FNV32_OFFSET: u32 = 2_166_136_261_u32;
-
-/// FNV-1a 32-bit prime.
-const FNV32_PRIME: u32 = 16_777_619_u32;
-
-/// Compute FNV-1a 32-bit hash of the input bytes.
-///
-/// Used to compute extension IDs for the extension system.
-pub fn fnv1a_32(data: &[u8]) -> u32 {
-    let mut hash: u32 = FNV32_OFFSET;
-    for &byte in data {
-        hash ^= byte as u32;
-        hash = hash.wrapping_mul(FNV32_PRIME);
-    }
-    hash
-}
-
 /// Compute the contract ID for `"name@major_version"` using FNV-1a 64-bit.
 ///
 /// The contract ID is a stable identifier for a contract interface.
@@ -90,7 +70,7 @@ fn contract_id(prefix: &str, name: &str, major_version: u32) -> u64 {
 mod tests {
     use crate::{FNV_OFFSET, FNV_PRIME, GuestContractId, HostContractId};
 
-    use super::{contract_id, fnv1a_32, fnv1a_64};
+    use super::{contract_id, fnv1a_64};
 
     #[test]
     fn fnv1a_known_values() {
@@ -102,24 +82,6 @@ mod tests {
         assert_eq!(fnv1a_64(b"image.decode@1"), fnv1a_64(b"image.decode@1"));
         // Different inputs produce different hashes
         assert_ne!(fnv1a_64(b"image.decode@1"), fnv1a_64(b"image.decode@2"));
-    }
-
-    #[test]
-    fn fnv1a_32_known_values() {
-        // Empty string returns offset basis
-        assert_eq!(fnv1a_32(b""), 2_166_136_261_u32);
-        // Determinism
-        assert_eq!(fnv1a_32(b"logging"), fnv1a_32(b"logging"));
-        // Different inputs differ
-        assert_ne!(fnv1a_32(b"logging"), fnv1a_32(b"tracing"));
-    }
-
-    #[test]
-    fn fnv1a_32_golden_values() {
-        // Verified against reference FNV-1a 32-bit implementations
-        assert_eq!(fnv1a_32(b"polyplug"), 2_976_533_527_u32);
-        assert_eq!(fnv1a_32(b"logging"), 2_306_788_254_u32);
-        assert_eq!(fnv1a_32(b"tracing"), 3_929_385_785_u32);
     }
 
     #[test]

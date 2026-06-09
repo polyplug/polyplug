@@ -262,11 +262,6 @@ unsafe extern "C" fn noop_call_guest_method(
     }
 }
 
-/// No-op get_extension callback.
-unsafe extern "C" fn noop_get_extension(_this: *const HostApi, _extension_id: u32) -> *const () {
-    core::ptr::null()
-}
-
 unsafe extern "C" fn noop_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
     AbiError::ok()
 }
@@ -350,7 +345,7 @@ fn make_host_interface() -> HostApi {
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
-        get_extension: noop_get_extension,
+        reserved: core::ptr::null(),
         unload_bundle: noop_unload_bundle,
     }
 }
@@ -581,7 +576,7 @@ fn stress_error_chain_b_errors_a_propagates() {
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
-        get_extension: noop_get_extension,
+        reserved: core::ptr::null(),
         unload_bundle: noop_unload_bundle,
     };
 
