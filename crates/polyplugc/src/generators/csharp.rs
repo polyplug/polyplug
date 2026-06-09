@@ -1367,9 +1367,7 @@ fn cs_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
             PrimitiveType::F64 => "double".to_owned(),
             PrimitiveType::Bool => "bool".to_owned(),
         },
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-            "System.ReadOnlySpan<byte>".to_owned()
-        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "System.ReadOnlySpan<byte>".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "System.ReadOnlySpan<byte>".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "IntPtr".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
@@ -1382,9 +1380,7 @@ fn cs_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
 /// struct even when the public return type is a span.
 fn cs_guest_caller_out_local_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-            "Polyplug.Abi.StringView".to_owned()
-        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "Polyplug.Abi.StringView".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Polyplug.Abi.Buffer".to_owned(),
         _ => cs_guest_caller_return_type_name(ty),
     }

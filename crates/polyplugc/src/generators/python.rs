@@ -1805,9 +1805,7 @@ fn emit_python_guest_host_contract_success_return(
             out.push_str("        _len: int = result.len\n");
             out.push_str("        if not _addr or _len == 0:\n");
             out.push_str("            return memoryview(b\"\")\n");
-            out.push_str(
-                "        return memoryview((ctypes.c_char * _len).from_address(_addr))\n",
-            );
+            out.push_str("        return memoryview((ctypes.c_char * _len).from_address(_addr))\n");
         }
         ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => {
             out.push_str("        return result.value\n");
