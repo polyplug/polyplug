@@ -2488,18 +2488,33 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(header);
 
+    let any_needs_arena: bool = ir
+        .host_contracts
+        .iter()
+        .any(|c: &ResolvedHostContract| c.functions.iter().any(fn_needs_arena));
+
     out.push_str("use polyplug_guest::HostApi;\n");
     out.push_str("use polyplug_guest::HostContractInterface;\n");
     out.push_str("use polyplug_guest::HostContractInstance;\n");
     out.push_str("use polyplug_guest::GuestContractInstance;\n");
     out.push_str("use polyplug_guest::DispatchType;\n");
     out.push_str("use polyplug_guest::StringView;\n");
+    out.push_str("use polyplug_guest::Buffer;\n");
     out.push_str("use polyplug_guest::AbiError;\n");
     out.push_str("use polyplug_guest::AbiErrorCode;\n");
     out.push_str("use polyplug_guest::alloc_string;\n");
     out.push_str("use polyplug_guest::string_view_null;\n");
+    if any_needs_arena {
+        out.push_str("use polyplug_guest::CallArena;\n");
+    }
     out.push_str("use core::ffi::c_void;\n");
     out.push_str("use super::types::*;\n\n");
+
+    if any_needs_arena {
+        // Same constant the peer_callers file uses — kept in sync here so
+        // host_contracts.rs is self-contained and does not depend on peer_callers being in scope.
+        out.push_str("const CALL_ARENA_BUF_LEN: usize = 512;\n\n");
+    }
 
     out.push_str("/// Error type for host contract calls from guest.\n");
     out.push_str("#[derive(Debug)]\n");
@@ -2539,11 +2554,23 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
 /// Generate one guest-side host contract caller struct.
 fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
     let caller_name: String = host_contract_name_to_caller(&contract.name);
+    let needs_arena: bool = contract.functions.iter().any(fn_needs_arena);
 
     out.push_str(&format!(
         "/// Guest caller for host contract `{}` (id=0x{:016X})\n",
         contract.name, contract.contract_id
     ));
+    if needs_arena {
+        out.push_str("///\n");
+        out.push_str(
+            "/// # Call-arena lifetime\n\
+             ///\n\
+             /// Methods returning variable-size values (`StringView`, `Buffer`, or structs\n\
+             /// that may embed one) take `&mut self` and reset this caller's arena at the\n\
+             /// start of the call. Any view returned by such a method borrows arena memory\n\
+             /// and is valid only until the next arena-backed call on the same caller.\n",
+        );
+    }
     out.push_str(&format!("pub struct {caller_name} {{\n"));
     out.push_str(
         "    /// Vtable for the host contract: provides dispatch metadata and function pointers.\n",
@@ -2554,6 +2581,17 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
     out.push_str("    /// `HostApi::get_host_contract`. Passed as the first argument to native\n");
     out.push_str("    /// dispatch functions (the host thunk dereferences it as the implementation pointer).\n");
     out.push_str("    instance: HostContractInstance,\n");
+    if needs_arena {
+        out.push_str(
+            "    /// Stable-address backing buffer for the per-call arena. Boxed so the\n\
+             \x20   /// arena's interior pointers stay valid when the caller is moved.\n",
+        );
+        out.push_str("    arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,\n");
+        out.push_str(
+            "    /// Per-call bump arena over `arena_buf`, reset at each arena-backed call.\n",
+        );
+        out.push_str("    arena: CallArena,\n");
+    }
     out.push_str("}\n\n");
 
     out.push_str(&format!("impl {caller_name} {{\n"));
@@ -2593,9 +2631,25 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
         contract.contract_id
     ));
     out.push_str("        };\n");
-    out.push_str(&format!(
-        "        Some({caller_name} {{ interface, instance }})\n"
-    ));
+    if needs_arena {
+        out.push_str(
+            "        // Box the backing buffer first so the arena's interior pointers refer\n",
+        );
+        out.push_str(
+            "        // to a stable heap address that survives moving the caller value.\n",
+        );
+        out.push_str("        let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);\n");
+        out.push_str(
+            "        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);\n",
+        );
+        out.push_str(&format!(
+            "        Some({caller_name} {{ interface, instance, arena_buf, arena }})\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "        Some({caller_name} {{ interface, instance }})\n"
+        ));
+    }
     out.push_str("    }\n\n");
 
     out.push_str("    /// Check if caller is valid (resolved interface is non-null).\n");
@@ -2617,6 +2671,7 @@ fn generate_guest_host_contract_method(
     caller_name: &str,
 ) {
     let fn_id: u32 = func.function_id;
+    let needs_arena: bool = fn_needs_arena(func);
 
     let params_str: String = if func.params.is_empty() {
         String::new()
@@ -2629,7 +2684,7 @@ fn generate_guest_host_contract_method(
     };
 
     let ret_type: String = match &func.returns {
-        Some(ty) => guest_return_type_name(ty),
+        Some(ty) => rust_type_name(ty),
         None => "()".to_owned(),
     };
 
@@ -2637,10 +2692,27 @@ fn generate_guest_host_contract_method(
         "    /// Call host contract function `{}` (function_id={})\n",
         func.name, fn_id
     ));
+    let self_param: &str = if needs_arena { "&mut self" } else { "&self" };
+    if needs_arena {
+        out.push_str(
+            "    /// Returns a value borrowing this caller's arena; it stays valid until\n\
+             \x20   /// the next arena-backed call on this caller.\n",
+        );
+    }
     out.push_str(&format!(
-        "    pub fn {}(&self{}) -> Result<{ret_type}, HostContractError> {{\n",
+        "    pub fn {}({self_param}{}) -> Result<{ret_type}, HostContractError> {{\n",
         func.name, params_str
     ));
+
+    if needs_arena {
+        out.push_str(
+            "        // Reset the arena at call start: frees the previous call's overflow\n",
+        );
+        out.push_str(
+            "        // blocks and rewinds the primary region, invalidating prior views.\n",
+        );
+        out.push_str("        self.arena.reset();\n");
+    }
 
     out.push_str("        if self.interface.is_null() {\n");
     out.push_str(
@@ -2693,8 +2765,13 @@ fn generate_guest_host_contract_method(
     );
     out.push_str("                }\n");
     out.push_str("                DispatchType::VirtualMachine => {\n");
+    let arena_arg: &str = if needs_arena {
+        "&mut self.arena as *mut CallArena"
+    } else {
+        "core::ptr::null_mut()"
+    };
     out.push_str(&format!(
-        "                    (interface.dispatch.vm.call)(interface.dispatch.vm.loader_data, GuestContractInstance::null(), {fn_id}_u32, args_ptr, out_ptr, core::ptr::null_mut())\n"
+        "                    (interface.dispatch.vm.call)(interface.dispatch.vm.loader_data, GuestContractInstance::null(), {fn_id}_u32, args_ptr, out_ptr, {arena_arg})\n"
     ));
     out.push_str("                }\n");
     out.push_str("            }\n");
@@ -2746,22 +2823,6 @@ fn guest_param_type_name(ty: &ResolvedTypeRef) -> String {
     }
 }
 
-/// Generate guest-side return type name for caller methods.
-/// Return types are owned where appropriate:
-/// - StringView -> String (owned)
-/// - Buffer -> Vec<u8> (owned)
-/// - UserDefined -> TypeName (owned)
-/// - Primitives -> T (by value)
-fn guest_return_type_name(ty: &ResolvedTypeRef) -> String {
-    match ty {
-        ResolvedTypeRef::Primitive(p) => p.rust_name().to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "String".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Vec<u8>".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "*mut ()".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "()".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => name.clone(),
-    }
-}
 
 /// Emit the args_ptr setup for a guest host contract method.
 fn emit_guest_host_contract_args_setup(
@@ -2857,7 +2918,7 @@ fn emit_guest_host_contract_args_setup(
 /// Emit the out_val setup for a guest host contract method.
 fn emit_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
     if let Some(ret_ty) = returns {
-        let ty_name: String = guest_return_type_name(ret_ty);
+        let ty_name: String = rust_type_name(ret_ty);
         out.push_str(&format!(
             "        let mut out_val: {ty_name} = unsafe {{ core::mem::zeroed() }};\n"
         ));
@@ -3768,26 +3829,6 @@ mod tests {
         );
         assert_eq!(
             guest_param_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
-            "MyStruct"
-        );
-    }
-
-    #[test]
-    fn guest_return_type_name_mappings() {
-        assert_eq!(
-            guest_return_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
-            "u32"
-        );
-        assert_eq!(
-            guest_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
-            "String"
-        );
-        assert_eq!(
-            guest_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
-            "Vec<u8>"
-        );
-        assert_eq!(
-            guest_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
             "MyStruct"
         );
     }

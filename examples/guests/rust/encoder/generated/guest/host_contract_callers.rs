@@ -10,6 +10,7 @@ use super::types::*;
 use core::ffi::c_void;
 use polyplug_guest::AbiError;
 use polyplug_guest::AbiErrorCode;
+use polyplug_guest::Buffer;
 use polyplug_guest::DispatchType;
 use polyplug_guest::GuestContractInstance;
 use polyplug_guest::HostApi;
