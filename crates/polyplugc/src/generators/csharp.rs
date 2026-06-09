@@ -1344,17 +1344,14 @@ fn cs_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
     }
 }
 
-/// Generate C# return type name for guest caller methods.
-/// Returns are RAW ABI types so the out-pointer can address an unmanaged value:
-/// - StringView -> Polyplug.Abi.StringView (raw, borrowed view; guest never frees)
-/// - Buffer -> Polyplug.Abi.Buffer (raw, borrowed view; guest never frees)
+/// Generate C# return type name for guest caller methods (the public method signature).
+/// StringView/Buffer return a zero-copy borrowed span — the host owns the memory and
+/// guarantees it is valid until the next call on this caller. The raw ABI struct is
+/// used only for the `result` local; the public return type is a span.
+/// - StringView -> System.ReadOnlySpan<byte>  (zero-copy borrowed view)
+/// - Buffer     -> System.ReadOnlySpan<byte>  (zero-copy borrowed view)
 /// - UserDefined -> TypeName (raw unmanaged struct, by value)
 /// - Primitives -> T (by value)
-///
-/// Managed returns (`string`/`byte[]`) are forbidden here: `(IntPtr)(&result)` on a
-/// managed type is a CS0208 compile error, and copying host-owned bytes onto the
-/// managed heap violates the cross-boundary memory rule. The ABI types are
-/// fully qualified to avoid the `System.Buffer` collision under ImplicitUsings.
 fn cs_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
         ResolvedTypeRef::Primitive(p) => match p {
@@ -1370,11 +1367,44 @@ fn cs_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
             PrimitiveType::F64 => "double".to_owned(),
             PrimitiveType::Bool => "bool".to_owned(),
         },
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "Polyplug.Abi.StringView".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Polyplug.Abi.Buffer".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            "System.ReadOnlySpan<byte>".to_owned()
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "System.ReadOnlySpan<byte>".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "IntPtr".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
         ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Generate the RAW ABI type for the `result` local used inside the method body.
+/// The host writes into this via `(IntPtr)(&result)`, so it must be an unmanaged
+/// struct even when the public return type is a span.
+fn cs_guest_caller_out_local_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            "Polyplug.Abi.StringView".to_owned()
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Polyplug.Abi.Buffer".to_owned(),
+        _ => cs_guest_caller_return_type_name(ty),
+    }
+}
+
+/// Generate the success-return expression for a guest caller method.
+/// For StringView/Buffer the `result` local holds the raw ABI struct; we build
+/// a span over host-owned memory. The method is inside `unsafe`, so `void*` casts
+/// and raw-pointer span construction are legal. The span is unscoped (built from a
+/// raw pointer, not a local ref), so returning it from the method is valid C#.
+fn cs_guest_caller_return_expr(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        // Borrowed view into host-owned memory, valid until the next call on this caller.
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            "new System.ReadOnlySpan<byte>((void*)result.Ptr, (int)result.Len)".to_owned()
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+            "new System.ReadOnlySpan<byte>((void*)result.Ptr, (int)result.Len)".to_owned()
+        }
+        _ => "result".to_owned(),
     }
 }
 
@@ -1453,6 +1483,10 @@ fn generate_cs_guest_host_contract_method(
     let return_type: String = match &func.returns {
         Some(ty) => cs_guest_caller_return_type_name(ty),
         None => "void".to_owned(),
+    };
+    let return_expr: String = match &func.returns {
+        Some(ty) => cs_guest_caller_return_expr(ty),
+        None => String::new(),
     };
     let has_return: bool = func.returns.is_some();
 
@@ -1559,7 +1593,7 @@ fn generate_cs_guest_host_contract_method(
 
     // Return result
     if has_return {
-        out.push_str("            return result;\n");
+        out.push_str(&format!("            return {};\n", return_expr));
     }
 
     out.push_str("        }\n");
@@ -1659,10 +1693,12 @@ fn emit_cs_guest_host_contract_args_setup(
 }
 
 /// Emit the out_ptr setup for a C# guest host contract method.
+/// The `result` local uses the RAW ABI type so `(IntPtr)(&result)` is valid
+/// even when the public return type is a span (StringView/Buffer).
 fn emit_cs_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
     if let Some(ret_ty) = returns {
-        let cs_ty: String = cs_guest_caller_return_type_name(ret_ty);
-        out.push_str(&format!("            {} result = default;\n", cs_ty));
+        let local_ty: String = cs_guest_caller_out_local_type_name(ret_ty);
+        out.push_str(&format!("            {} result = default;\n", local_ty));
         out.push_str("            var outPtr = (IntPtr)(&result);\n\n");
     } else {
         out.push_str("            var outPtr = IntPtr.Zero;\n\n");
@@ -3196,11 +3232,11 @@ mod tests {
         );
         assert_eq!(
             cs_guest_caller_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
-            "Polyplug.Abi.StringView"
+            "System.ReadOnlySpan<byte>"
         );
         assert_eq!(
             cs_guest_caller_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
-            "Polyplug.Abi.Buffer"
+            "System.ReadOnlySpan<byte>"
         );
         assert_eq!(
             cs_guest_caller_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
