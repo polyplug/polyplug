@@ -59,3 +59,7 @@ harness = false
 name = "payload_scaling"
 harness = false
 
+[[bench]]
+name = "amortization"
+harness = false
+

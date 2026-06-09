@@ -125,6 +125,91 @@ call that does meaningful work, the safety boundary is free.** Caveat: a
 byte-write loop is a light per-byte workload; a heavier one (crypto, parsing)
 only makes the overhead % *smaller*.
 
+### `counter_inc` cross-language dispatch matrix (native rows) + the VM benches
+
+The "matrix" answers: *how much does dispatch cost in each guest language?* It is
+deliberately split into two tiers, because the two are **not** measured the same
+way and lumping them into one table would be dishonest.
+
+**Native tier — fully comparable.** `counter_inc` arms 4 and 5 dispatch the
+*identical* `test.add` contract through the *identical* native dispatch path; the
+only difference is the plugin's source language. These numbers are apples-to-apples:
+
+| Plugin language | `counter_inc` arm | ~ns/call | ~throughput |
+|---|---|---|---|
+| Rust (cdylib) | `polyplug/dispatch` | ~2.5 | ~395 M/s |
+| C++ (cdylib) | `polyplug/dispatch_cpp` | ~2.7 | ~370 M/s |
+
+The ~0.2 ns spread is compiler codegen + run-to-run noise, not a polyplug
+property: **native dispatch does not care what language wrote the plugin.** Any
+language that compiles to a native cdylib (Rust, C++, C, Zig, …) lands here.
+
+**VM tier — measured per loader, *not* directly comparable to the native rows.**
+Lua, JavaScript (QuickJS), Python, and .NET dispatch *into an embedded
+interpreter*, so the dominant cost is the VM's own call/GIL/marshalling overhead,
+not polyplug's. Each loader crate ships its own `dispatch_benchmark.rs` that
+isolates that VM's call cost. Run them locally:
+
+```bash
+cargo bench -p polyplug      --bench counter_inc        # rust + cpp native (arms 4, 5)
+cargo bench -p polyplug_lua    --bench dispatch_benchmark  # Lua (mlua)
+cargo bench -p polyplug_js     --bench dispatch_benchmark  # JavaScript (QuickJS)
+cargo bench -p polyplug_python --bench dispatch_benchmark  # Python (pyo3 / GIL)
+cargo bench -p polyplug_dotnet --bench dispatch_benchmark  # .NET (CLR)
+```
+
+> **Why no single combined table with VM numbers?** The VM benches each measure
+> *the interpreter*, and they each measure it slightly differently (e.g. the
+> Python one times GIL acquisition + a Python function call). A row reading
+> "Python: 300 ns" is mostly CPython, not polyplug — quoting it next to the
+> ~2.5 ns native rows would invite a false "polyplug is 100× slower in Python"
+> read. The honest statement is: **native dispatch is ~2.5 ns regardless of
+> plugin language; VM-hosted languages additionally pay their interpreter's
+> per-call cost, which is a property of that VM, and which you pay no matter how
+> you'd embed it.** Keep the two tiers separate.
+
+### `amortization` — one-time load / resolve / hot-reload costs
+
+`counter_inc` and `payload_scaling` measure the *steady-state* per-call hot path.
+This one measures the costs *around* it — the things you pay once, not per call —
+so you can see where they amortize:
+
+| Stage | What it measures | ~cost (local) |
+|---|---|---|
+| `load_bundle` | dlopen + ABI check + `polyplug_init` + register | ~13 µs (once per bundle) |
+| `find_and_resolve` | handle lookup + interface-pointer return | ~22 ns (once per contract, *cached* in real use) |
+| `hot_reload_swap` | dlopen new dylib + init + atomic swap + retire old | ~17 µs (once per reload) |
+
+**The amortization curve.** `load_bundle` is a fixed ~13 µs. Spread over *N*
+dispatch calls (each ~2.5 ns), its per-call contribution is `13 µs / N`:
+
+| N calls after load | load cost / call | as % of a ~2.5 ns dispatch |
+|---|---|---|
+| 1 | ~13 µs | — (startup) |
+| ~5,200 | ~2.5 ns | ~100% (break-even: load ≈ one dispatch) |
+| 100,000 | ~0.13 ns | ~5% |
+| 1,000,000 | ~0.013 ns | ~0.5% |
+
+So past a few thousand calls the load cost is below the per-call dispatch cost,
+and by a million calls it is noise. **A long-lived plugin pays its load cost
+once and then runs at native dispatch speed forever.**
+
+`find_and_resolve` (~22 ns) is the per-call cost *only if you re-resolve every
+call* — which nobody should: resolve once, cache the interface pointer (that is
+exactly what `counter_inc`/`polyplug` does), and it drops out of the hot path
+entirely. The pessimal "re-resolve every call" path is measured separately in
+`contract_dispatch::cross_plugin`.
+
+`hot_reload_swap` (~17 µs, native bundles only) is the price of swapping a
+plugin's code *without restarting the host* — a capability static linking and the
+WASM/subprocess alternatives cannot match cheaply. Its value is the capability,
+not the nanoseconds.
+
+> Honesty note: `load`/`reload` re-`dlopen` the *same* file each iteration, so the
+> first dlopen pays the cold page-in and the rest are warm/refcounted. These are
+> *warm* load costs; a real "reload after the file changed on disk" pays the cold
+> mmap once on top.
+
 ### `contract_dispatch` — dispatch overhead by argument shape
 
 Calls a registered contract function directly through its resolved interface
@@ -172,14 +257,14 @@ These are worth building, but each has a caveat that keeps it from being a clean
 "polyplug wins" headline — recorded here and in `ROADMAP.md` (Lane C) so they
 aren't lost. **Priority: benches for what we currently ship come first.**
 
-> **Payload-scaling — ✅ built** (now the `payload_scaling` bench above). Kept
-> off this list; documented here only to note it was the first idea realized.
+> **Already built** (kept off this list, documented in their own sections above):
+> `payload_scaling` (overhead vs work), the **cross-language dispatch matrix**
+> (`counter_inc` native rows + per-loader VM benches), and **one-time cost
+> amortization** (`amortization` — load / resolve / hot-reload).
 
 | Idea | What it would show | The caveat ("it can be argued against") |
 |---|---|---|
-| **Cross-language dispatch matrix** | One table, same contract, all 6 languages (native vs VM dispatch) so a user can price their language choice. | VM numbers depend heavily on the embedded VM version and JIT warm-up; not a polyplug property, so it measures the *language* as much as us. Label clearly. |
-| **vs sandboxed alternatives** | Call overhead vs a WASM boundary (wasmtime) and vs subprocess/IPC, to quantify what "trusted, same-process, native speed" buys. | Apples-to-oranges on *safety guarantees* — WASM/IPC give isolation we don't. It's a speed-vs-isolation trade, not a strict win; frame it as "here's the cost of isolation you may not need." |
-| **One-time cost amortization** | Load-bundle + resolve-contract latency and where it amortizes over N calls; hot-reload swap latency (a feature static linking / WASM can't cheaply match). | These are one-time costs; a critic notes they're irrelevant to steady-state throughput. True — the value is in the amortization curve and the hot-reload capability, not the raw number. |
+| **vs sandboxed alternatives** | Call overhead vs a WASM boundary (wasmtime) and vs subprocess/IPC, to quantify what "trusted, same-process, native speed" buys. | Apples-to-oranges on *safety guarantees* — WASM/IPC give isolation we don't. It's a speed-vs-isolation trade, not a strict win; frame it as "here's the cost of isolation you may not need." Also pulls in a heavy `wasmtime` dev-dependency. |
 
 If you build any of these, keep them **local-only** (this folder), keep the
 payload-isolation discipline above, and state the caveat next to the number so

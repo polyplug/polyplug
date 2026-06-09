@@ -129,17 +129,26 @@ Held until the owner decides to publish. Kept here so it isn't lost.
     `memory_plugin` (no fixture change). Shows the dispatch overhead is a *fixed*
     ~0.25–0.5 ns that collapses to <0.3% (within measurement noise) by a few KB —
     the honest real-world view. Local-only; see `benches/README.md`.
-  _Follow-ups (not yet built — documented in the benches README so they aren't
-  lost; each has a caveat, so none is a clean headline; build benches for what we
-  currently ship first):_
-  - **Cross-language dispatch matrix** — one table, same contract, all 6 langs
-    (native vs VM dispatch) so users can price their language choice.
+  - **Cross-language dispatch matrix. ✅ Done.** `counter_inc` gained a C++
+    native-dispatch arm (`polyplug/dispatch_cpp`, `libtest_plugin_cpp.so`)
+    alongside the Rust one, proving native dispatch is language-agnostic
+    (Rust ~2.5 ns, C++ ~2.7 ns — same path, same contract). The VM tier
+    (Lua/JS/Python/.NET) is documented as the per-loader `dispatch_benchmark.rs`
+    benches, kept in a *separate* tier because those measure the interpreter's
+    call cost, not polyplug's, and are not apples-to-apples with native. Matrix +
+    regenerate recipe in `benches/README.md`. Local-only.
+  - **One-time cost amortization. ✅ Done — `amortization`.** Measures the costs
+    *around* the hot path: `load_bundle` (~13 µs, once per bundle), `find_and_resolve`
+    (~22 ns, cached in real use), and native `hot_reload_swap` (~17 µs, once per
+    reload). Shows the load cost amortizes below one dispatch (~2.5 ns) past a few
+    thousand calls and is noise by 1 M. Reuses the integration tests' `TestNativeLoader`
+    (the `polyplug` crate cannot dev-depend on `polyplug_native` — that would be a
+    dependency cycle). Local-only; see `benches/README.md`.
+  _Follow-up (not yet built — documented in the benches README so it isn't lost;
+  it has a caveat, so it is not a clean headline):_
   - **vs sandboxed alternatives** — call-overhead comparison against a WASM
     boundary (wasmtime) and a subprocess/IPC boundary, to quantify what the
     "trusted same-process, native speed" posture buys vs the isolation tiers.
-  - **One-time cost amortization** — load-bundle + resolve-contract latency and
-    where it amortizes over N calls; hot-reload swap latency (a feature static
-    linking and WASM can't cheaply match).
 - **C3. ~~Reference tracing extension.~~ ❌ Cancelled (2026-06).** The extension
   concept was removed (out of scope — see "Extension system — Removed"). Tracing
   is an app concern: implement it as a `host.logger`-style host contract.

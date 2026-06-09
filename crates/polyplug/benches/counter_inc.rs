@@ -30,11 +30,21 @@
 //                              and its function is dispatched 1,000,000 times. This
 //                              is the realistic hot path: resolve a contract once,
 //                              then call it in a loop.
+//   5. polyplug/dispatch_cpp — identical to arm 4, but the loaded plugin was
+//                              authored in C++ (`libtest_plugin_cpp.so`) instead
+//                              of Rust. Same `test.add` contract, same native
+//                              dispatch path — proving native dispatch is
+//                              compiler/language-agnostic. This is the native
+//                              row that anchors the cross-language dispatch matrix
+//                              in README.md (VM rows live in the per-loader
+//                              `dispatch_benchmark.rs` benches).
 //
 // Arms 3 and 4 load the *identical* `libtest_plugin.so`. `polyplug_bench_inc`
 // (arm 3) and the registered `add` (arm 4) both compute `x + 1`, so the only
 // difference between "raw FFI" and "polyplug" is the safety machinery — which is
-// exactly the comparison we want the numbers to make.
+// exactly the comparison we want the numbers to make. Arm 5 swaps the Rust
+// plugin for a C++ one to show the dispatch cost does not depend on the plugin's
+// source language.
 //
 // Honesty notes:
 //   * A direct call (arm 1) is genuinely cheaper than any FFI/dynamic-dispatch
@@ -76,6 +86,7 @@ use polyplug_abi::StringView;
 use polyplug_utils::BundleId;
 
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
+const TEST_PLUGIN_CPP_SO: &str = env!("TEST_PLUGIN_CPP_SO");
 
 /// Number of increments per measured sample — "count to one million".
 const COUNT: u64 = 1_000_000;
@@ -297,15 +308,21 @@ fn capture_host() -> HostApi {
     }
 }
 
-/// Load `libtest_plugin.so`, run `polyplug_init`, and return the dispatch
+/// Load the cdylib at `so_path`, run `polyplug_init`, and return the dispatch
 /// function for `test.add` fn 0 (`add(a, b) -> u32`) plus the kept-alive library.
-fn load_dispatch_fn() -> (
+///
+/// Both the Rust (`libtest_plugin.so`) and C++ (`libtest_plugin_cpp.so`) fixtures
+/// register the identical `test.add` contract with the same native-dispatch
+/// signature, so the same loader works for either.
+fn load_dispatch_fn(
+    so_path: &str,
+) -> (
     libloading::Library,
     unsafe extern "C" fn(*const (), *mut ()) -> AbiError,
 ) {
-    // SAFETY: TEST_PLUGIN_SO is a valid cdylib built by tests/fixtures/build_all.sh.
+    // SAFETY: so_path is a valid cdylib built by tests/fixtures/build_all.sh.
     let library: libloading::Library =
-        unsafe { libloading::Library::new(TEST_PLUGIN_SO).expect("load test plugin") };
+        unsafe { libloading::Library::new(so_path).expect("load test plugin") };
 
     // SAFETY: polyplug_init matches the 2-arg ABI.
     let init_fn: libloading::Symbol<
@@ -410,12 +427,12 @@ fn bench_counter_inc(c: &mut Criterion) {
         core::mem::forget(library);
     }
 
-    // ── Arm 4: polyplug resolved dispatch, dynamically loaded .so ──────────────
+    // ── Arm 4: polyplug resolved dispatch, dynamically loaded Rust .so ─────────
     {
         let (library, dispatch_fn): (
             libloading::Library,
             unsafe extern "C" fn(*const (), *mut ()) -> AbiError,
-        ) = load_dispatch_fn();
+        ) = load_dispatch_fn(TEST_PLUGIN_SO);
 
         group.bench_function(BenchmarkId::new("polyplug", "dispatch"), |b| {
             b.iter(|| {
@@ -425,6 +442,39 @@ fn bench_counter_inc(c: &mut Criterion) {
                     let mut out: u32 = 0;
                     // SAFETY: args is a valid AddArgs, out is a valid u32; the
                     // registered `add` reads (a, b) and writes the u32 sum.
+                    let err: AbiError = unsafe {
+                        black_box(dispatch_fn)(
+                            black_box(&args as *const AddArgs as *const ()),
+                            black_box(&mut out as *mut u32 as *mut ()),
+                        )
+                    };
+                    debug_assert!(err.is_ok());
+                    counter = out;
+                }
+                black_box(counter)
+            });
+        });
+
+        core::mem::forget(library);
+    }
+
+    // ── Arm 5: polyplug resolved dispatch, dynamically loaded C++ .so ──────────
+    // Same contract, same dispatch path — only the plugin's source language
+    // differs. Anchors the native rows of the cross-language dispatch matrix.
+    {
+        let (library, dispatch_fn): (
+            libloading::Library,
+            unsafe extern "C" fn(*const (), *mut ()) -> AbiError,
+        ) = load_dispatch_fn(TEST_PLUGIN_CPP_SO);
+
+        group.bench_function(BenchmarkId::new("polyplug", "dispatch_cpp"), |b| {
+            b.iter(|| {
+                let mut counter: u32 = 0;
+                for _ in 0..COUNT {
+                    let args: AddArgs = AddArgs { a: counter, b: 1 };
+                    let mut out: u32 = 0;
+                    // SAFETY: args is a valid AddArgs, out is a valid u32; the
+                    // C++ `test.add` reads (a, b) and writes the u32 sum.
                     let err: AbiError = unsafe {
                         black_box(dispatch_fn)(
                             black_box(&args as *const AddArgs as *const ()),
