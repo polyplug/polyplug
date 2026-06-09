@@ -526,7 +526,10 @@ fn generate_host_caller_method(
     out.push_str("        end\n");
 
     if has_return_value(&func.returns) {
-        out.push_str("        return out_val\n");
+        out.push_str(&format!(
+            "        return {}\n",
+            lua_return_expr(&func.returns)
+        ));
     } else {
         out.push_str("        return nil\n");
     }
@@ -771,7 +774,12 @@ fn emit_lua_host_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) 
         Some(ret) => lua_type_name(ret),
         None => "void".to_owned(),
     };
-    out.push_str(&format!("    local out_val = ffi.new(\"{ret_ty}\")\n"));
+    let is_scalar: bool = matches!(returns, Some(ret) if lua_return_is_scalar(ret));
+    if is_scalar {
+        out.push_str(&format!("    local out_val = ffi.new(\"{ret_ty}[1]\")\n"));
+    } else {
+        out.push_str(&format!("    local out_val = ffi.new(\"{ret_ty}\")\n"));
+    }
     out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
 }
 
@@ -790,6 +798,26 @@ fn has_return_value(returns: &Option<ResolvedTypeRef>) -> bool {
     match returns {
         Some(ty) => !matches!(ty, ResolvedTypeRef::AbiType(AbiBuiltin::Void)),
         None => false,
+    }
+}
+
+/// LuaJIT represents primitives and raw pointers as *value* cdata. A value cdata
+/// cannot serve as an out-pointer (`ffi.cast("void*", value)` reinterprets the
+/// value and yields NULL), so a scalar out slot must be a 1-element array (a
+/// reference cdata whose cast yields its address) and the result is read with
+/// `out_val[0]` — which also produces a native Lua number/boolean instead of a
+/// value cdata. Struct/StringView/Buffer returns are already reference cdata.
+fn lua_return_is_scalar(ty: &ResolvedTypeRef) -> bool {
+    matches!(
+        ty,
+        ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(AbiBuiltin::Ptr)
+    )
+}
+
+fn lua_return_expr(returns: &Option<ResolvedTypeRef>) -> &'static str {
+    match returns {
+        Some(ret) if lua_return_is_scalar(ret) => "out_val[0]",
+        _ => "out_val",
     }
 }
 
@@ -1361,7 +1389,7 @@ fn generate_lua_guest_host_contract_method(
     out.push_str("    end\n");
 
     if has_return {
-        out.push_str("    return out_val\n");
+        out.push_str(&format!("    return {}\n", lua_return_expr(&func.returns)));
     }
     out.push_str("end\n\n");
 }
@@ -1490,6 +1518,10 @@ fn emit_lua_guest_host_contract_out_setup(out: &mut String, returns: &Option<Res
             out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
         } else if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)) {
             out.push_str("    local out_val = ffi.new(\"Buffer\")\n");
+            out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
+        } else if lua_return_is_scalar(ret_ty) {
+            let ty_name: String = lua_type_name(ret_ty);
+            out.push_str(&format!("    local out_val = ffi.new(\"{ty_name}[1]\")\n"));
             out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
         } else {
             let ty_name: String = lua_type_name(ret_ty);
@@ -1758,7 +1790,7 @@ fn generate_lua_guest_peer_method(out: &mut String, func: &ResolvedFunction, cla
     out.push_str("    end\n");
 
     if has_return {
-        out.push_str("    return out_val\n");
+        out.push_str(&format!("    return {}\n", lua_return_expr(&func.returns)));
     }
     out.push_str("end\n\n");
 }
@@ -2813,6 +2845,102 @@ mod tests {
         assert!(
             peers2.is_empty(),
             "should produce no peers when bundle has no declared dependencies"
+        );
+    }
+
+    // ─── Scalar out-slot tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn host_out_setup_scalar_u32_emits_array_slot() {
+        // A u32 return is scalar: out slot must be ffi.new("uint32_t[1]") and
+        // the caller must read back with out_val[0].
+        use crate::ir::PrimitiveType;
+        use crate::ir::Version;
+
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "get_count".to_owned(),
+            function_id: 0,
+            params: vec![],
+            returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+        };
+        let contract: ResolvedContract = ResolvedContract {
+            name: "data.Counter".to_owned(),
+            contract_id: 0x1111_2222_3333_4444_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![func],
+        };
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![contract],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let out: String = generate_host_callers_file(&ir);
+        assert!(
+            out.contains("ffi.new(\"uint32_t[1]\")"),
+            "scalar u32 return must use a 1-element array slot: {out}"
+        );
+        assert!(
+            out.contains("return out_val[0]"),
+            "scalar u32 return must read result with out_val[0]: {out}"
+        );
+        assert!(
+            !out.contains("ffi.new(\"uint32_t\")"),
+            "scalar u32 must NOT use a bare value slot (would yield NULL out_ptr): {out}"
+        );
+    }
+
+    #[test]
+    fn host_out_setup_string_view_keeps_struct_slot() {
+        // A StringView return is a struct (reference cdata): out slot must stay
+        // ffi.new("StringView") and the caller must return the raw handle.
+        use crate::ir::Version;
+
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "get_name".to_owned(),
+            function_id: 0,
+            params: vec![],
+            returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+        };
+        let contract: ResolvedContract = ResolvedContract {
+            name: "data.Namer".to_owned(),
+            contract_id: 0xAAAA_BBBB_1111_2222_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![func],
+        };
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![contract],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let out: String = generate_host_callers_file(&ir);
+        assert!(
+            out.contains("ffi.new(\"StringView\")"),
+            "StringView return must use a bare struct slot: {out}"
+        );
+        assert!(
+            !out.contains("ffi.new(\"StringView[1]\")"),
+            "StringView must NOT use an array slot: {out}"
+        );
+        // "return out_val" is the expected form; "return out_val[0]" must NOT appear.
+        assert!(
+            !out.contains("return out_val[0]"),
+            "StringView return must NOT use out_val[0]: {out}"
+        );
+        assert!(
+            out.contains("return out_val"),
+            "StringView return must use return out_val: {out}"
         );
     }
 }
