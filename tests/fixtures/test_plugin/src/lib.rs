@@ -199,3 +199,19 @@ pub unsafe extern "C" fn polyplug_get_last_bundle_path() -> StringView {
 pub extern "C" fn polyplug_panicking_fn(_args: *const (), _out: *mut ()) -> AbiError {
     panic!("intentional test panic");
 }
+
+// ─── Bench symbol ───────────────────────────────────────────────────────────────
+
+/// A bare by-value `inc` exported under a stable symbol name.
+///
+/// This is NOT part of the polyplug ABI and is NOT registered in any interface.
+/// The `counter_inc` benchmark resolves it directly via `dlsym` to measure the
+/// cost of a raw, hand-rolled FFI call (`inc(u32) -> u32`, by value) — the
+/// unsafe do-it-yourself alternative a user would write without polyplug — so it
+/// can be compared apples-to-apples against the same `.so` reached through the
+/// safe polyplug dispatch path. Computes the identical `+1` as `plugin_add`'s
+/// `add(x, 1)`, keeping the two call paths semantically equal.
+#[unsafe(no_mangle)]
+pub extern "C" fn polyplug_bench_inc(x: u32) -> u32 {
+    x.wrapping_add(1)
+}
