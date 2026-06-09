@@ -1,6 +1,5 @@
 //! DotnetContext — CLR runtime context, cached across all plugin loads.
 
-use std::collections::HashMap;
 use std::fs;
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -11,7 +10,6 @@ use netcorehost::hostfxr::AssemblyDelegateLoader;
 use netcorehost::hostfxr::HostfxrContext;
 use netcorehost::hostfxr::InitializedForRuntimeConfig;
 use netcorehost::hostfxr::ManagedFunction;
-use netcorehost::pdcstring::PdCStr;
 use netcorehost::pdcstring::PdCString;
 
 use once_cell::sync::OnceCell;
@@ -46,26 +44,35 @@ pub(crate) const BYTE_BRIDGE_AVAILABLE: bool = matches!(
 );
 
 /// Signature of the bridge's `PolyplugByteBridgeLoadAndGetInit` entry point:
-/// `(asm_ptr, asm_len, type_name_ptr, type_name_len) -> init_fn_ptr (null on failure)`.
+/// `(bundle_id, asm_ptr, asm_len, type_name_ptr, type_name_len) -> init_fn_ptr (null on failure)`.
+/// The assembly is loaded into the bundle's own collectible ALC.
 pub(crate) type BridgeLoadAndGetInitFn =
-    unsafe extern "system" fn(*const u8, i32, *const u8, i32) -> *const core::ffi::c_void;
+    unsafe extern "system" fn(u64, *const u8, i32, *const u8, i32) -> *const core::ffi::c_void;
+
+/// Signature of the bridge's `PolyplugByteBridgeLoadFromPathAndGetInit` entry point:
+/// `(bundle_id, path_ptr, path_len, type_name_ptr, type_name_len) -> init_fn_ptr (null on failure)`.
+/// The assembly is loaded from disk into the bundle's own collectible ALC (with sibling-dependency
+/// probing), so on-disk (`Path`) bundles also support true managed unload.
+pub(crate) type BridgeLoadFromPathAndGetInitFn =
+    unsafe extern "system" fn(u64, *const u8, i32, *const u8, i32) -> *const core::ffi::c_void;
 
 /// Signature of the bridge's `PolyplugByteBridgePreloadDependency` entry point:
-/// `(asm_ptr, asm_len) -> u32 (0 on success)`.
-pub(crate) type BridgePreloadDependencyFn = unsafe extern "system" fn(*const u8, i32) -> u32;
+/// `(bundle_id, asm_ptr, asm_len) -> u32 (0 on success)`. Loads into the bundle's collectible ALC.
+pub(crate) type BridgePreloadDependencyFn = unsafe extern "system" fn(u64, *const u8, i32) -> u32;
 
-/// DotnetContext holds the live CLR runtime and per-assembly loader cache.
+/// Signature of the bridge's `PolyplugByteBridgeUnload` entry point: `(bundle_id) -> u32`.
+/// Requests true managed unload of the bundle's collectible ALC (cooperative/async).
+pub(crate) type BridgeUnloadFn = unsafe extern "system" fn(u64) -> u32;
+
+/// Signature of the bridge's `PolyplugByteBridgeIsAlcAlive` test-probe entry point:
+/// `(bundle_id) -> u32` (1 = still loaded/not-yet-collected, 0 = reclaimed/never-loaded).
+pub(crate) type BridgeIsAlcAliveFn = unsafe extern "system" fn(u64) -> u32;
+
+/// DotnetContext holds the live CLR runtime and the managed byte-load bridge.
 /// Created exactly once per process via CLR_CONTEXT.
 pub(crate) struct DotnetContext {
     /// Held to keep CLR runtime alive. Never locked after initialization except to obtain delegate loaders.
     _context: Mutex<HostfxrContext<InitializedForRuntimeConfig>>,
-    /// Per-assembly loader cache.
-    /// Each `AssemblyDelegateLoader` is wrapped in `Arc<Mutex<...>>` because
-    /// `AssemblyDelegateLoader` is `!Send` (it contains raw function pointers without an
-    /// explicit `Send` impl). The outer `Mutex` synchronizes access to the map itself;
-    /// the inner `Arc<Mutex<AssemblyDelegateLoader>>` allows the loader to be cloned
-    /// out of the map and used without holding the outer lock.
-    loader_cache: Mutex<HashMap<PathBuf, Arc<Mutex<AssemblyDelegateLoader>>>>,
     /// Lazily-resolved managed byte-load bridge entry points. The embedded bridge assembly
     /// is staged to a temp file and loaded once; its `[UnmanagedCallersOnly]` entry points
     /// are resolved through the path-based delegate loader (which works for on-disk
@@ -78,7 +85,10 @@ pub(crate) struct DotnetContext {
 /// process runs — the retire-not-drop discipline the rest of the loader follows).
 struct ByteBridge {
     load_and_get_init: BridgeLoadAndGetInitFn,
+    load_from_path_and_get_init: BridgeLoadFromPathAndGetInitFn,
     preload_dependency: BridgePreloadDependencyFn,
+    unload: BridgeUnloadFn,
+    is_alc_alive: BridgeIsAlcAliveFn,
     /// Owns the directory holding the staged bridge dll; kept alive for the process lifetime
     /// so the CLR's loaded image is never removed (retire-not-drop). Never read after init.
     _staged_dir: tempfile::TempDir,
@@ -223,126 +233,11 @@ pub(crate) fn init_context(
 
     Ok(Arc::new(DotnetContext {
         _context: Mutex::new(context),
-        loader_cache: Mutex::new(HashMap::new()),
         bridge: OnceCell::new(),
     }))
 }
 
 impl DotnetContext {
-    /// Get the `[UnmanagedCallersOnly]` init function for the given assembly path.
-    ///
-    /// Uses a per-assembly loader cache — `AssemblyDelegateLoader` is obtained at most once
-    /// per canonical path.
-    ///
-    /// # Lock Ordering (deadlock prevention)
-    ///
-    /// NEVER hold both `loader_cache` and `_context` locks simultaneously.
-    /// Protocol:
-    /// 1. Lock `loader_cache` → check for existing entry → if hit, clone Arc, drop lock, get fn.
-    /// 2. On cache miss: drop `loader_cache` lock, lock `_context`, obtain new loader, drop
-    ///    `_context` lock.
-    /// 3. Lock `loader_cache` again → insert (or accept race winner) → get fn → drop lock.
-    pub(crate) fn get_init_fn(
-        &self,
-        asm_path: PathBuf,
-        type_name: &PdCStr,
-        method_name: &PdCStr,
-    ) -> Result<ManagedFunction<InitFn>, RuntimeError> {
-        // Step 1: Check cache — short-circuit if the loader is already present.
-        let maybe_loader: Option<Arc<Mutex<AssemblyDelegateLoader>>> = {
-            let cache: std::sync::MutexGuard<
-                '_,
-                HashMap<PathBuf, Arc<Mutex<AssemblyDelegateLoader>>>,
-            > = self.loader_cache.lock().map_err(|_| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: asm_path.to_string_lossy().into_owned(),
-                    error: "CLR init failed: loader cache mutex poisoned".to_owned(),
-                })
-            })?;
-            cache.get(&asm_path).map(Arc::clone)
-            // loader_cache lock is dropped here.
-        };
-
-        if let Some(loader_arc) = maybe_loader {
-            let loader: std::sync::MutexGuard<'_, AssemblyDelegateLoader> =
-                loader_arc.lock().map_err(|_| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: asm_path.to_string_lossy().into_owned(),
-                        error: "CLR init failed: assembly loader mutex poisoned".to_owned(),
-                    })
-                })?;
-            return loader
-                .get_function_with_unmanaged_callers_only::<InitFn>(type_name, method_name)
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
-                        bundle: format!("{}: error={}", asm_path.to_string_lossy().into_owned(), e),
-                    })
-                });
-        }
-
-        // Step 2: Cache miss — build the PdCString path and get a new loader from _context.
-        let asm_pdc: PdCString = PdCString::from_os_str(asm_path.as_os_str()).map_err(|_| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: asm_path.to_string_lossy().into_owned(),
-                error: "CLR init failed: assembly path contains embedded nul byte".to_owned(),
-            })
-        })?;
-
-        let new_loader: AssemblyDelegateLoader = {
-            let ctx: std::sync::MutexGuard<'_, HostfxrContext<InitializedForRuntimeConfig>> =
-                self._context.lock().map_err(|_| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: asm_path.to_string_lossy().into_owned(),
-                        error: "CLR init failed: CLR context mutex poisoned".to_owned(),
-                    })
-                })?;
-            ctx.get_delegate_loader_for_assembly(asm_pdc).map_err(|e| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: asm_path.to_string_lossy().into_owned(),
-                    error: format!("CLR init failed: {}", e),
-                })
-            })?
-            // _context lock is dropped here.
-        };
-
-        // Step 3: Insert into cache and get the function pointer.
-        // Accept a race: if another thread inserted while we held no lock, use its entry.
-        let loader_arc: Arc<Mutex<AssemblyDelegateLoader>> = {
-            let mut cache: std::sync::MutexGuard<
-                '_,
-                HashMap<PathBuf, Arc<Mutex<AssemblyDelegateLoader>>>,
-            > = self.loader_cache.lock().map_err(|_| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: asm_path.to_string_lossy().into_owned(),
-                    error: "CLR init failed: loader cache mutex poisoned (relock)".to_owned(),
-                })
-            })?;
-            // `or_insert` wins the race correctly — if a concurrent thread already inserted,
-            // we discard `new_loader` and reuse the existing Arc.
-            Arc::clone(
-                cache
-                    .entry(asm_path.clone())
-                    .or_insert_with(|| Arc::new(Mutex::new(new_loader))),
-            )
-            // loader_cache lock is dropped here.
-        };
-
-        let loader: std::sync::MutexGuard<'_, AssemblyDelegateLoader> =
-            loader_arc.lock().map_err(|_| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: asm_path.to_string_lossy().into_owned(),
-                    error: "CLR init failed: assembly loader mutex poisoned (new)".to_owned(),
-                })
-            })?;
-        loader
-            .get_function_with_unmanaged_callers_only::<InitFn>(type_name, method_name)
-            .map_err(|e| {
-                RuntimeError::Loader(LoaderError::InitSymbolMissing {
-                    bundle: format!("{}: error={}", asm_path.to_string_lossy().into_owned(), e),
-                })
-            })
-    }
-
     /// Resolve (once) and return the managed byte-load bridge entry points.
     ///
     /// The embedded bridge assembly ([`BYTE_BRIDGE_DLL`]) is staged to a temp file and
@@ -411,7 +306,10 @@ impl DotnetContext {
             "Polyplug.Loaders.DotnetByteBridge.ByteBridge, Polyplug.Loaders.DotnetByteBridge",
         )?;
         let load_method_pdc: PdCString = bridge_pdc("LoadAndGetInit")?;
+        let load_path_method_pdc: PdCString = bridge_pdc("LoadFromPathAndGetInit")?;
         let preload_method_pdc: PdCString = bridge_pdc("PreloadDependency")?;
+        let unload_method_pdc: PdCString = bridge_pdc("Unload")?;
+        let is_alive_method_pdc: PdCString = bridge_pdc("IsAlcAlive")?;
 
         let load_and_get_init: BridgeLoadAndGetInitFn = {
             let f: ManagedFunction<BridgeLoadAndGetInitFn> = loader
@@ -422,6 +320,19 @@ impl DotnetContext {
                 .map_err(|e| {
                     RuntimeError::Loader(LoaderError::InitSymbolMissing {
                         bundle: format!("<byte-bridge>: LoadAndGetInit error={e}"),
+                    })
+                })?;
+            *f
+        };
+        let load_from_path_and_get_init: BridgeLoadFromPathAndGetInitFn = {
+            let f: ManagedFunction<BridgeLoadFromPathAndGetInitFn> = loader
+                .get_function_with_unmanaged_callers_only::<BridgeLoadFromPathAndGetInitFn>(
+                    type_pdc.as_ref(),
+                    load_path_method_pdc.as_ref(),
+                )
+                .map_err(|e| {
+                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                        bundle: format!("<byte-bridge>: LoadFromPathAndGetInit error={e}"),
                     })
                 })?;
             *f
@@ -439,27 +350,62 @@ impl DotnetContext {
                 })?;
             *f
         };
+        let unload: BridgeUnloadFn = {
+            let f: ManagedFunction<BridgeUnloadFn> = loader
+                .get_function_with_unmanaged_callers_only::<BridgeUnloadFn>(
+                    type_pdc.as_ref(),
+                    unload_method_pdc.as_ref(),
+                )
+                .map_err(|e| {
+                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                        bundle: format!("<byte-bridge>: Unload error={e}"),
+                    })
+                })?;
+            *f
+        };
+        let is_alc_alive: BridgeIsAlcAliveFn = {
+            let f: ManagedFunction<BridgeIsAlcAliveFn> = loader
+                .get_function_with_unmanaged_callers_only::<BridgeIsAlcAliveFn>(
+                    type_pdc.as_ref(),
+                    is_alive_method_pdc.as_ref(),
+                )
+                .map_err(|e| {
+                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                        bundle: format!("<byte-bridge>: IsAlcAlive error={e}"),
+                    })
+                })?;
+            *f
+        };
 
         Ok(ByteBridge {
             load_and_get_init,
+            load_from_path_and_get_init,
             preload_dependency,
+            unload,
+            is_alc_alive,
             _staged_dir: dir,
         })
     }
 
-    /// Pre-load a dependency assembly from raw bytes into the default load context via the
-    /// managed bridge, so a non-self-contained byte-loaded plugin can resolve its references.
+    /// Pre-load a dependency assembly from raw bytes into the given bundle's collectible ALC
+    /// via the managed bridge, so a non-self-contained byte-loaded plugin can resolve its
+    /// references. Must be called before loading the dependent plugin for the same `bundle_id`.
     ///
     /// # Memory ownership (CLAUDE.md Rule 8)
     ///
     /// `dep_bytes` is borrowed only for the duration of the managed call; the bridge copies
     /// the buffer into managed storage before returning.
-    pub(crate) fn preload_dependency_bytes(&self, dep_bytes: &[u8]) -> Result<(), RuntimeError> {
+    pub(crate) fn preload_dependency_bytes(
+        &self,
+        bundle_id: u64,
+        dep_bytes: &[u8],
+    ) -> Result<(), RuntimeError> {
         let bridge: &ByteBridge = self.bridge()?;
         // SAFETY: `preload_dependency` is a valid CLR fn ptr resolved in `init_bridge`.
         // `dep_bytes` is a valid, correctly-sized buffer; the bridge copies it during the call.
-        let code: u32 =
-            unsafe { (bridge.preload_dependency)(dep_bytes.as_ptr(), dep_bytes.len() as i32) };
+        let code: u32 = unsafe {
+            (bridge.preload_dependency)(bundle_id, dep_bytes.as_ptr(), dep_bytes.len() as i32)
+        };
         if code != 0 {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: "<byte-bridge-dependency>".to_owned(),
@@ -472,8 +418,8 @@ impl DotnetContext {
     /// Get the `[UnmanagedCallersOnly]` `PolyplugInit` function for a plugin assembly
     /// supplied as raw bytes, via the managed byte-load bridge.
     ///
-    /// The bridge loads `asm_bytes` into the default `AssemblyLoadContext` with
-    /// `LoadFromStream` and resolves `simple_type_name` (e.g. `"CsharpPlugin.Plugin"`)
+    /// The bridge loads `asm_bytes` into the bundle's own collectible `AssemblyLoadContext`
+    /// with `LoadFromStream` and resolves `simple_type_name` (e.g. `"CsharpPlugin.Plugin"`)
     /// directly from the returned `Assembly` object — avoiding hostfxr's name-rebinding path
     /// that cannot find a stream-loaded assembly. `asm_name` is used only in diagnostics.
     ///
@@ -483,6 +429,7 @@ impl DotnetContext {
     /// the buffer into managed storage before returning, so the caller may drop it after.
     pub(crate) fn get_init_fn_from_bytes(
         &self,
+        bundle_id: u64,
         asm_name: &str,
         asm_bytes: &[u8],
         simple_type_name: &str,
@@ -494,6 +441,7 @@ impl DotnetContext {
         // and returns either a valid native fn ptr or null.
         let raw: *const core::ffi::c_void = unsafe {
             (bridge.load_and_get_init)(
+                bundle_id,
                 asm_bytes.as_ptr(),
                 asm_bytes.len() as i32,
                 type_name_bytes.as_ptr(),
@@ -513,6 +461,76 @@ impl DotnetContext {
         let init_fn: InitFn =
             unsafe { core::mem::transmute::<*const core::ffi::c_void, InitFn>(raw) };
         Ok(init_fn)
+    }
+
+    /// Get the `[UnmanagedCallersOnly]` `PolyplugInit` function for an on-disk plugin assembly,
+    /// loading it into the bundle's own collectible `AssemblyLoadContext` (with sibling-dependency
+    /// probing) so the bundle supports true managed unload. `asm_name` is used only in diagnostics.
+    pub(crate) fn get_init_fn_from_path(
+        &self,
+        bundle_id: u64,
+        asm_path: &std::path::Path,
+        asm_name: &str,
+        simple_type_name: &str,
+    ) -> Result<InitFn, RuntimeError> {
+        let bridge: &ByteBridge = self.bridge()?;
+        let path_str: String = asm_path.to_string_lossy().into_owned();
+        let path_bytes: &[u8] = path_str.as_bytes();
+        let type_name_bytes: &[u8] = simple_type_name.as_bytes();
+        // SAFETY: `load_from_path_and_get_init` is a valid CLR fn ptr resolved in `init_bridge`.
+        // Both buffers are valid and correctly sized; the bridge copies them during the call and
+        // returns either a valid native fn ptr or null.
+        let raw: *const core::ffi::c_void = unsafe {
+            (bridge.load_from_path_and_get_init)(
+                bundle_id,
+                path_bytes.as_ptr(),
+                path_bytes.len() as i32,
+                type_name_bytes.as_ptr(),
+                type_name_bytes.len() as i32,
+            )
+        };
+        if raw.is_null() {
+            return Err(RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                bundle: format!(
+                    "{asm_name}: byte-bridge could not load '{path_str}' / resolve {simple_type_name}.PolyplugInit"
+                ),
+            }));
+        }
+        // SAFETY: a non-null return is the native entry of the guest's `[UnmanagedCallersOnly]`
+        // PolyplugInit, whose ABI matches `InitFn` (host, ctx) -> u32. Transmuting a raw fn
+        // pointer of identical ABI is sound; the ALC keeps the method alive until Unload.
+        let init_fn: InitFn =
+            unsafe { core::mem::transmute::<*const core::ffi::c_void, InitFn>(raw) };
+        Ok(init_fn)
+    }
+
+    /// Request true managed unload of a bundle's collectible ALC via the managed bridge.
+    ///
+    /// Unload is cooperative and asynchronous: this drops the bridge's rooting reference and
+    /// requests teardown; actual managed memory reclaim completes after the next GC once all
+    /// references and native frames into the ALC have cleared. The host is responsible for
+    /// attesting (via `UnloadMode::Reclaim`) that no thread is calling or holding a pointer
+    /// into the bundle before this is invoked.
+    pub(crate) fn unload_bundle_alc(&self, bundle_id: u64) -> Result<(), RuntimeError> {
+        let bridge: &ByteBridge = self.bridge()?;
+        // SAFETY: `unload` is a valid CLR fn ptr resolved in `init_bridge`.
+        let code: u32 = unsafe { (bridge.unload)(bundle_id) };
+        if code != 0 {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: format!("<byte-bridge-unload:{bundle_id}>"),
+                error: format!("bridge Unload returned {code}"),
+            }));
+        }
+        Ok(())
+    }
+
+    /// Test-only probe: returns whether a bundle's collectible ALC is still alive (1) or has
+    /// been reclaimed / was never loaded (0). Forces a GC inside the managed bridge.
+    pub(crate) fn is_alc_alive(&self, bundle_id: u64) -> Result<bool, RuntimeError> {
+        let bridge: &ByteBridge = self.bridge()?;
+        // SAFETY: `is_alc_alive` is a valid CLR fn ptr resolved in `init_bridge`.
+        let alive: u32 = unsafe { (bridge.is_alc_alive)(bundle_id) };
+        Ok(alive != 0)
     }
 }
 

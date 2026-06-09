@@ -9,11 +9,8 @@ pub use config::HostfxrLocation;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::StringView;
 
-use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::Arc;
-
-use netcorehost::pdcstring::PdCString;
 
 use polyplug::Runtime;
 use polyplug::error::LoaderError;
@@ -52,32 +49,17 @@ impl DotnetLoader {
     /// copies it into managed storage before returning.
     ///
     /// [`BundleSource::Bytes`]: polyplug::loader::BundleSource::Bytes
-    pub fn preload_dependency_from_bytes(&self, dep_bytes: &[u8]) -> Result<(), RuntimeError> {
+    pub fn preload_dependency_from_bytes(
+        &self,
+        bundle_id: u64,
+        dep_bytes: &[u8],
+    ) -> Result<(), RuntimeError> {
         // Dependencies have no bundle directory; the CLR probing path is irrelevant here, so
-        // an empty path is passed for the (already-initialized) context lookup.
+        // an empty path is passed for the (already-initialized) context lookup. The dependency
+        // is loaded into `bundle_id`'s collectible ALC so it is reclaimed when that bundle is.
         let context: Arc<DotnetContext> =
             Arc::clone(CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, Path::new("")))?);
-        context.preload_dependency_bytes(dep_bytes)
-    }
-
-    /// Build the `[UnmanagedCallersOnly]` `PolyplugInit` symbol names for a given assembly
-    /// simple name. The plugin entry type is `{name}.Plugin` in assembly `{name}`, so the
-    /// assembly-qualified type name is `"{name}.Plugin, {name}"`.
-    fn init_symbol_names(asm_name: &str) -> Result<(PdCString, PdCString), RuntimeError> {
-        let type_name_str: String = format!("{asm_name}.Plugin, {asm_name}");
-        let type_name_pdc: PdCString =
-            PdCString::from_os_str(OsStr::new(&type_name_str)).map_err(|_| {
-                RuntimeError::Loader(LoaderError::InitSymbolMissing {
-                    bundle: asm_name.to_owned(),
-                })
-            })?;
-        let method_name_pdc: PdCString = PdCString::from_os_str(OsStr::new("PolyplugInit"))
-            .map_err(|_| {
-                RuntimeError::Loader(LoaderError::InitSymbolMissing {
-                    bundle: asm_name.to_owned(),
-                })
-            })?;
-        Ok((type_name_pdc, method_name_pdc))
+        context.preload_dependency_bytes(bundle_id, dep_bytes)
     }
 
     /// Resolve the managed `PolyplugInit` function for an on-disk assembly
@@ -129,14 +111,13 @@ impl DotnetLoader {
         let stem: std::borrow::Cow<'_, str> =
             abs_path.file_stem().unwrap_or_default().to_string_lossy();
         let bundle_name: String = stem.into_owned();
-        let (type_name_pdc, method_name_pdc): (PdCString, PdCString) =
-            Self::init_symbol_names(&bundle_name)?;
-
-        let managed_init: netcorehost::hostfxr::ManagedFunction<InitFn> =
-            context.get_init_fn(abs_path, type_name_pdc.as_ref(), method_name_pdc.as_ref())?;
-        // `ManagedFunction<InitFn>` derefs to the inner `InitFn`; the CLR keeps the assembly
-        // (and thus this pointer) alive for the process lifetime.
-        Ok((*managed_init, bundle_name))
+        // The bridge resolves `{name}.Plugin` directly from the Assembly object it loads into
+        // the bundle's collectible ALC (no assembly-name re-binding), so a simple type name is
+        // sufficient — identical to the Bytes convention.
+        let simple_type_name: String = format!("{bundle_name}.Plugin");
+        let init_fn: InitFn =
+            context.get_init_fn_from_path(manifest.id, &abs_path, &bundle_name, &simple_type_name)?;
+        Ok((init_fn, bundle_name))
     }
 
     /// Resolve the managed `PolyplugInit` function for an in-memory assembly
@@ -188,8 +169,18 @@ impl DotnetLoader {
         // The bridge resolves `{name}.Plugin` directly from the byte-loaded Assembly object.
         let simple_type_name: String = format!("{bundle_name}.Plugin");
         let init_fn: InitFn =
-            context.get_init_fn_from_bytes(&bundle_name, bytes, &simple_type_name)?;
+            context.get_init_fn_from_bytes(manifest.id, &bundle_name, bytes, &simple_type_name)?;
         Ok((init_fn, bundle_name))
+    }
+}
+
+/// Test/diagnostic probe: returns whether the bundle's collectible `AssemblyLoadContext` is
+/// still alive (`true`) or has been reclaimed / was never loaded (`false`). Forces a managed
+/// GC inside the bridge, so it is for tests and tooling — not the hot path.
+pub fn bundle_alc_alive(bundle_id: u64) -> Result<bool, RuntimeError> {
+    match CLR_CONTEXT.get() {
+        Some(context) => context.is_alc_alive(bundle_id),
+        None => Ok(false),
     }
 }
 
@@ -344,7 +335,43 @@ impl BundleLoader for DotnetLoader {
         _manifest: &polyplug::loader::ManifestData,
         _runtime: &Runtime,
     ) -> Result<(), RuntimeError> {
+        // Collectible ALC enables true UNLOAD reclaim (see `unload`); hot-reload
+        // (load-new → swap → free-old under quiescence) is a separate, larger workstream
+        // and remains disabled for .NET.
         Err(RuntimeError::HotReloadDisabled)
+    }
+
+    /// Unload a .NET bundle. Under `UnloadMode::Retire` (default) the bundle's collectible
+    /// `AssemblyLoadContext` is kept rooted by the managed bridge (retire-not-drop), so any
+    /// raw managed function pointer already resolved into it stays valid. Under host-attested
+    /// `UnloadMode::Reclaim` with `reclaim_safe`, the ALC is truly unloaded — its assemblies
+    /// become eligible for GC reclamation once all references and native frames into it clear.
+    ///
+    /// SAFETY discipline mirrors the native `dlclose` loader: the runtime is structurally blind
+    /// to in-flight native dispatch into managed code, so true reclaim is sound ONLY because the
+    /// host selected `Reclaim`, attesting no thread is calling — or holds a pointer into — this
+    /// bundle. `reclaim_safe` is an additional best-effort defer signal.
+    fn unload(
+        &self,
+        bundle_id: polyplug_utils::BundleId,
+        runtime: &Runtime,
+        reclaim_safe: bool,
+    ) -> Result<(), RuntimeError> {
+        let mode: polyplug_abi::runtime::UnloadMode = runtime.config().unload_mode;
+        match mode {
+            polyplug_abi::runtime::UnloadMode::Retire => Ok(()),
+            polyplug_abi::runtime::UnloadMode::Reclaim => {
+                if !reclaim_safe {
+                    // A resolver may still hold the interface; keep the ALC rooted (deferred).
+                    return Ok(());
+                }
+                let context: Arc<DotnetContext> = match CLR_CONTEXT.get() {
+                    Some(c) => Arc::clone(c),
+                    None => return Ok(()),
+                };
+                context.unload_bundle_alc(bundle_id.id())
+            }
+        }
     }
 }
 

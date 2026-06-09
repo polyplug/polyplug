@@ -577,9 +577,10 @@ fn bytes_source_loads_fixture_and_dispatches() {
     let bundle_dir: &Path = dll.parent().expect("fixture dll must have a parent dir");
 
     // The fixture is NOT self-contained: CsharpPlugin.dll references Polyplug.Abi. Pre-load
-    // that dependency from bytes into the shared CLR default load context so the in-memory
-    // plugin can resolve it. CLR_CONTEXT is process-global, so this standalone loader and
-    // the runtime's loader (built below) share the same context + byte bridge.
+    // that dependency from bytes into the SAME bundle's collectible ALC (keyed by bundle id)
+    // so the in-memory plugin can resolve it. CLR_CONTEXT is process-global, so this standalone
+    // loader and the runtime's loader (built below) share the same context + byte bridge.
+    let manifest: ManifestData = make_csharp_fixture_manifest(bundle_dir);
     let abi_dll: PathBuf = bundle_dir.join("Polyplug.Abi.dll");
     if !abi_dll.exists() {
         eprintln!("skipping: Polyplug.Abi.dll dependency not built next to fixture");
@@ -588,7 +589,7 @@ fn bytes_source_loads_fixture_and_dispatches() {
     let abi_bytes: Vec<u8> = std::fs::read(&abi_dll).expect("failed to read Polyplug.Abi.dll");
     let preloader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     preloader
-        .preload_dependency_from_bytes(&abi_bytes)
+        .preload_dependency_from_bytes(manifest.id, &abi_bytes)
         .expect("preload Polyplug.Abi dependency from bytes");
 
     let runtime: Arc<Runtime> = RuntimeBuilder::new()
@@ -596,7 +597,6 @@ fn bytes_source_loads_fixture_and_dispatches() {
         .build()
         .expect("failed to build runtime with dotnet loader");
 
-    let manifest: ManifestData = make_csharp_fixture_manifest(bundle_dir);
     let load_result: Result<(), RuntimeError> =
         runtime.load_bundle_from_source(manifest, polyplug::loader::BundleSource::Bytes(bytes));
     assert!(
@@ -646,5 +646,153 @@ fn bytes_source_loads_fixture_and_dispatches() {
     assert_eq!(
         out, 8,
         "add(3, 5) must equal 8 (Bytes-source dispatch parity)"
+    );
+}
+
+/// Build a fixture manifest with a caller-chosen bundle `name` (and thus a unique bundle id).
+/// Per-bundle collectible ALCs are keyed by bundle id and the CLR is process-global, so each
+/// unload test must use its own id to stay isolated from other tests running concurrently.
+fn make_named_fixture_manifest(dir: &Path, name: &str) -> ManifestData {
+    let mut function_count: HashMap<String, u32> = HashMap::new();
+    function_count.insert("test.add@1".to_owned(), 4);
+    ManifestData {
+        id: polyplug_utils::bundle_id(name),
+        name: name.to_owned(),
+        runtime: "dotnet".to_owned(),
+        file: "CsharpPlugin.dll".to_owned(),
+        path: dir.to_path_buf(),
+        version: "1.0.0".to_owned(),
+        provides: vec!["test.add@1".to_owned()],
+        function_count,
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+        bundle_dependencies: Vec::new(),
+    }
+}
+
+/// Load the C# fixture (Bytes source) under a chosen `name`/`unload_mode`, returning the runtime
+/// and bundle id, or `None` (soft-skip) if the fixture/dependency is not built.
+fn load_named_fixture(
+    name: &str,
+    unload_mode: polyplug_abi::runtime::UnloadMode,
+) -> Option<(Arc<Runtime>, u64)> {
+    let dll: PathBuf = csharp_fixture_dll_path();
+    if !dll.exists() {
+        eprintln!("skipping: CsharpPlugin.dll fixture not built at {dll:?}");
+        return None;
+    }
+    let bytes: Vec<u8> = std::fs::read(&dll).expect("failed to read fixture dll");
+    let bundle_dir: &Path = dll.parent().expect("fixture dll must have a parent dir");
+    let manifest: ManifestData = make_named_fixture_manifest(bundle_dir, name);
+    let bundle_id: u64 = manifest.id;
+
+    let abi_dll: PathBuf = bundle_dir.join("Polyplug.Abi.dll");
+    if !abi_dll.exists() {
+        eprintln!("skipping: Polyplug.Abi.dll dependency not built next to fixture");
+        return None;
+    }
+    let abi_bytes: Vec<u8> = std::fs::read(&abi_dll).expect("failed to read Polyplug.Abi.dll");
+    // Preload the shared dependency into THIS bundle's collectible ALC (same bundle id).
+    DotnetLoader::new(DotnetConfig::default())
+        .preload_dependency_from_bytes(bundle_id, &abi_bytes)
+        .expect("preload Polyplug.Abi dependency");
+
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
+        .loader(DotnetLoader::new(DotnetConfig::default()))
+        .config(polyplug_abi::runtime::RuntimeConfig {
+            unload_mode,
+            ..Default::default()
+        })
+        .build()
+        .expect("failed to build runtime");
+    runtime
+        .load_bundle_from_source(manifest, polyplug::loader::BundleSource::Bytes(bytes))
+        .expect("load_bundle_from_source(Bytes) failed");
+    Some((runtime, bundle_id))
+}
+
+/// Dispatch `add(3,5)` on the loaded fixture, asserting the result is 8 — proves the bundle's
+/// collectible ALC is live and dispatch through it works.
+fn assert_add_dispatch_works(runtime: &Runtime) {
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
+    let handle: polyplug_abi::GuestContractHandle = runtime
+        .find_guest_contract(contract_id, 0)
+        .expect("test.add must be registered after load");
+    let interface_ptr: *const polyplug_abi::GuestContractInterface = runtime
+        .resolve_guest_contract(handle)
+        .expect("handle must resolve");
+    // SAFETY: interface_ptr is a live, non-null interface for the loaded bundle.
+    let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
+    let args: AddArgs = AddArgs { a: 3, b: 5 };
+    let mut out: u32 = 0;
+    // SAFETY: functions[0] is the `add` wrapper; its ABI is the generic native dispatch signature.
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
+    // SAFETY: fn_ptr is the add wrapper; its ABI is the generic native dispatch signature.
+    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> polyplug_abi::AbiError =
+        unsafe { core::mem::transmute(fn_ptr) };
+    // SAFETY: args/out point to valid storage for AddArgs/u32.
+    let result: polyplug_abi::AbiError = unsafe {
+        dispatch_fn(
+            core::ptr::addr_of!(args) as *const (),
+            core::ptr::addr_of_mut!(out) as *mut (),
+        )
+    };
+    assert_eq!(result.code, polyplug_abi::AbiErrorCode::Ok as u32);
+    assert_eq!(out, 8, "add(3,5) must equal 8 before unload");
+}
+
+/// Under host-attested `UnloadMode::Reclaim`, unloading a .NET bundle truly unloads its
+/// collectible `AssemblyLoadContext` — the managed assemblies become eligible for GC and the
+/// liveness probe reports the ALC reclaimed. The contract is also gone from the registry.
+#[test]
+fn unload_reclaim_mode_collects_alc() {
+    let Some((runtime, bundle_id)) =
+        load_named_fixture("csharp_reclaim_probe", polyplug_abi::runtime::UnloadMode::Reclaim)
+    else {
+        return; // soft-skip: fixture not built
+    };
+
+    assert_add_dispatch_works(&runtime);
+    assert!(
+        polyplug_dotnet::bundle_alc_alive(bundle_id).expect("alc probe"),
+        "ALC must be alive while the bundle is loaded"
+    );
+
+    runtime
+        .unload_bundle(polyplug_utils::BundleId::from_u64(bundle_id))
+        .expect("unload_bundle must succeed");
+
+    assert!(
+        !polyplug_dotnet::bundle_alc_alive(bundle_id).expect("alc probe"),
+        "ALC must be reclaimed after a host-attested Reclaim unload"
+    );
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
+    assert!(
+        runtime.find_guest_contract(contract_id, 0).is_err(),
+        "the contract must no longer resolve after unload"
+    );
+}
+
+/// Under the default `UnloadMode::Retire`, unloading does NOT free managed memory: the bundle's
+/// collectible ALC is kept rooted (retire-not-drop) so already-resolved managed pointers stay
+/// valid. The probe still reports the ALC alive after unload.
+#[test]
+fn unload_retire_mode_keeps_alc() {
+    let Some((runtime, bundle_id)) =
+        load_named_fixture("csharp_retire_probe", polyplug_abi::runtime::UnloadMode::Retire)
+    else {
+        return; // soft-skip: fixture not built
+    };
+
+    assert_add_dispatch_works(&runtime);
+
+    runtime
+        .unload_bundle(polyplug_utils::BundleId::from_u64(bundle_id))
+        .expect("unload_bundle must succeed");
+
+    // The contract is invalidated in the registry, but the ALC stays rooted (retired).
+    assert!(
+        polyplug_dotnet::bundle_alc_alive(bundle_id).expect("alc probe"),
+        "ALC must remain alive under Retire (retire-not-drop)"
     );
 }
