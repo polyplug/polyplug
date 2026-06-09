@@ -1761,16 +1761,16 @@ fn cpp_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
 }
 
 /// Generate C++ guest-side return type name for caller methods.
-/// Return types are ABI types where appropriate:
-/// - StringView -> StringView (ABI type, caller must copy if needed)
-/// - Buffer -> Buffer (ABI type)
+/// Returns ergonomic borrowed-view types for host-owned memory:
+/// - StringView -> std::string_view (borrowed view into host-owned memory)
+/// - Buffer -> std::span<const std::uint8_t> (borrowed view into host-owned memory)
 /// - UserDefined -> TypeName (by value)
 /// - Primitives -> T (by value)
 fn cpp_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
         ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "std::string_view".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "std::span<const std::uint8_t>".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
         ResolvedTypeRef::UserDefined(name) => name.clone(),
@@ -1932,8 +1932,9 @@ fn generate_cpp_guest_host_contract_method(
     out.push_str("        }\n\n");
 
     // Return result
-    if func.returns.is_some() {
-        out.push_str("        return out;\n");
+    if let Some(ret_ty) = &func.returns {
+        let expr: String = cpp_guest_caller_return_expr(ret_ty);
+        out.push_str(&format!("        return {};\n", expr));
     }
 
     out.push_str("    }\n\n");
@@ -2035,11 +2036,40 @@ fn cpp_guest_caller_abi_type_name(ty: &ResolvedTypeRef) -> String {
     }
 }
 
+/// Get the raw ABI type name for the `out` local in a guest caller method.
+/// This is always the ABI struct (StringView/Buffer), never the ergonomic view type,
+/// because the host writes into this local via the void* out_ptr.
+fn cpp_guest_caller_out_local_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
+        _ => cpp_guest_caller_return_type_name(ty),
+    }
+}
+
+/// Build the return expression for a guest caller method given the filled `out` local.
+/// For StringView/Buffer, constructs a borrowed view into host-owned memory.
+/// For all other types, returns `out` directly.
+fn cpp_guest_caller_return_expr(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            // Borrowed view into host-owned memory, valid until the next call on this caller.
+            "std::string_view(reinterpret_cast<const char*>(out.ptr), out.len)".to_owned()
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+            // Borrowed view into host-owned memory, valid until the next call on this caller.
+            "std::span<const std::uint8_t>(out.ptr, out.len)".to_owned()
+        }
+        _ => "out".to_owned(),
+    }
+}
+
 /// Emit the out_ptr setup for a C++ guest host contract method.
+/// The `out` local is always the raw ABI type so the host can write into it via void*.
 fn emit_cpp_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
     if let Some(ret_ty) = returns {
-        let cpp_ty: String = cpp_guest_caller_return_type_name(ret_ty);
-        out.push_str(&format!("        {} out{{}};\n", cpp_ty));
+        let abi_ty: String = cpp_guest_caller_out_local_type_name(ret_ty);
+        out.push_str(&format!("        {} out{{}};\n", abi_ty));
         out.push_str("        void* out_ptr = &out;\n");
     } else {
         out.push_str("        void* out_ptr = nullptr;\n");
@@ -2058,6 +2088,7 @@ fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("#include \"polyplug/abi.hpp\"\n");
     out.push_str("#include <cstdint>\n");
     out.push_str("#include <optional>\n");
+    out.push_str("#include <span>\n");
     out.push_str("#include <string_view>\n\n");
     out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
 
@@ -3498,11 +3529,11 @@ mod tests {
         );
         assert_eq!(
             cpp_guest_caller_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
-            "StringView"
+            "std::string_view"
         );
         assert_eq!(
             cpp_guest_caller_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
-            "Buffer"
+            "std::span<const std::uint8_t>"
         );
         assert_eq!(
             cpp_guest_caller_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
