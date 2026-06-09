@@ -1912,8 +1912,11 @@ fn generate_cpp_guest_host_contract_method(
     out.push_str("                break;\n");
     out.push_str("            }\n");
     out.push_str("            case DispatchType::VirtualMachine: {\n");
+    // The vm.call expects a GuestContractInstance; a host contract has no guest
+    // instance, so pass a null one (matches rust.rs). The host-contract instance
+    // is conveyed to the native thunk via the Native branch, not the VM bridge.
     out.push_str(&format!(
-        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, {fn_id}U, args_ptr, out_ptr, nullptr);\n"
+        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, GuestContractInstance{{}}, {fn_id}U, args_ptr, out_ptr, nullptr);\n"
     ));
     out.push_str("                break;\n");
     out.push_str("            }\n");
