@@ -30,7 +30,8 @@ _Last updated: 2026-06-08._
 | **Quickstart + example gallery** | ◐ Partial (examples exist, no guided path) |
 | **CI cost / caching** | ✅ Done (`rust-cache` on every job; cross-lang jobs main-only) |
 | **Benchmark regression gate in CI** | ✅ Done (nightly, core hot-path benches, >1.5x gross-regression gate) |
-| Deferred: arena retain-and-rewind, D11 counter, .NET ALC | ⏸ See Deferred |
+| **Call-arena retain-and-rewind (perf)** | ✅ Done (ArenaOverflowBlock +used cursor; reset rewinds & retains, free on Drop/teardown; all 6 SDKs + 4 lockstep impls) |
+| Deferred: D11 counter, .NET ALC | ⏸ See Deferred |
 
 ---
 
@@ -132,7 +133,6 @@ scoping:
 
 | Item | Why deferred | Unblock when |
 |---|---|---|
-| **Call-arena retain-and-rewind (perf)** | Changing the arena's free-on-`reset()` contract to a teardown/`Drop` model ripples into the C++ and other generated host callers, validated only in the CI Examples job. Niche win (only consistently-overflowing VM calls). | CI-minute budget refreshes; bundle with another generator/ABI change to amortize the CI run. |
 | **D11 native live-instance counter** | The host owns the instance lifecycle (`create_instance`/`destroy_instance` are direct guest-vtable calls the runtime never mediates), so a runtime-side counter either duplicates host knowledge or needs auto-increment code in every native host-caller generator (CI-only validation). | A concrete need for runtime-visible live-instance counts surfaces (e.g. a reclaim-safety policy that requires it). |
 | **.NET collectible ALC** | True managed unload needs a larger `polyplug_dotnet` loader rework (collectible `AssemblyLoadContext`). | Native + Python reclaim battle-tested first; demand for .NET hot-unload confirmed. |
 
