@@ -1756,11 +1756,16 @@ fn python_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
 }
 
 /// Generate Python return type name for guest caller methods.
-/// Return types are owned where appropriate:
-/// - StringView -> str (owned)
-/// - Buffer -> bytes (owned)
-/// - UserDefined -> TypeName (owned)
+/// Returns are the RAW ABI ctypes values that the method body actually returns
+/// (`emit_python_guest_host_contract_out_setup` writes the host's reply into a
+/// ctypes object and `return result` hands it back unchanged):
+/// - StringView -> StringView (raw ctypes struct; a borrowed view into host memory)
+/// - Buffer -> Buffer (raw ctypes struct; a borrowed view into host memory)
+/// - UserDefined -> TypeName (raw ctypes struct)
 /// - Primitives -> Python primitive types
+///
+/// The earlier `str`/`bytes` annotations lied: the body never decodes the view,
+/// so the annotation must name the raw ABI struct that is returned.
 fn python_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
         ResolvedTypeRef::Primitive(p) => match p {
@@ -1773,8 +1778,8 @@ fn python_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
             PrimitiveType::F32 | PrimitiveType::F64 => "float".to_owned(),
             PrimitiveType::Bool => "bool".to_owned(),
         },
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "str".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "bytes".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "int".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "None".to_owned(),
         ResolvedTypeRef::UserDefined(name) => name.clone(),
@@ -2196,7 +2201,23 @@ fn generate_guest_host_contracts_stub(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
-    out.push_str("from typing import Any, Self\n\n");
+    out.push_str("from typing import Any, Self\n");
+
+    // A guest→host caller returns the raw ABI ctypes struct for StringView/Buffer
+    // returns, so the stub must import those names to annotate them.
+    let needs_abi_return: bool = ir.host_contracts.iter().any(|c: &ResolvedHostContract| {
+        c.functions.iter().any(|f: &ResolvedFunction| {
+            matches!(
+                f.returns,
+                Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
+                    | Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer))
+            )
+        })
+    });
+    if needs_abi_return {
+        out.push_str("from polyplug_abi import Buffer, StringView\n");
+    }
+    out.push('\n');
 
     let type_imports: BTreeSet<String> = collect_python_guest_host_contract_type_imports(ir);
     if !type_imports.is_empty() {
@@ -3417,13 +3438,13 @@ mod tests {
     #[test]
     fn python_guest_caller_return_type_stringview() {
         let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
-        assert_eq!(python_guest_caller_return_type_name(&ty), "str");
+        assert_eq!(python_guest_caller_return_type_name(&ty), "StringView");
     }
 
     #[test]
     fn python_guest_caller_return_type_buffer() {
         let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
-        assert_eq!(python_guest_caller_return_type_name(&ty), "bytes");
+        assert_eq!(python_guest_caller_return_type_name(&ty), "Buffer");
     }
 
     #[test]
@@ -3505,8 +3526,8 @@ mod tests {
             "missing class def: {out}"
         );
         assert!(
-            out.contains("def read(self, path: str) -> bytes:"),
-            "missing method with return: {out}"
+            out.contains("def read(self, path: str) -> Buffer:"),
+            "missing method with raw Buffer return: {out}"
         );
     }
 
