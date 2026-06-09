@@ -118,6 +118,30 @@ Held until the owner decides to publish. Kept here so it isn't lost.
   (`continue-on-error`, self-skips without hostfxr). The regression checker walks
   all of `target/criterion`, so each joins the gate automatically once it has a
   cached baseline._
+- **C4. Comparison / marketing benchmark. ✅ Done.** `counter_inc`
+  (`cargo bench -p polyplug --bench counter_inc`) runs the same 1M-iteration
+  `counter = inc(counter)` loop through four mechanisms — a direct `#[inline(never)]`
+  call (floor), raw `dlsym` by-value FFI, the ptr-in/ptr-out ABI convention
+  statically linked, and full polyplug resolved dispatch over a loaded `.so` —
+  so each per-call delta isolates one cost. Result: polyplug's safe dispatch is
+  **~0.5 ns over hand-rolled raw FFI** and within **2× of an un-inlinable direct
+  call** (~440 M calls/s). Documented in `docs/PERFORMANCE.md` ("The safety tax").
+  Added to the nightly regression gate (which also gained the missing
+  `build_all.sh` fixture-build step — the native/VM benches dlopen fixtures that
+  the benches job never built, so the gate would have panicked on its first real
+  schedule run).
+  _Follow-ups (not yet built):_
+  - **Payload-scaling bench** — the most honest real-world view: plot per-call
+    overhead as a *fraction of useful work* (inc → hash 1 KB → transform 4 KB →
+    parse a doc). Overhead → ~0% as payload grows; this is the number to lead with.
+  - **Cross-language dispatch matrix** — one table, same contract, all 6 langs
+    (native vs VM dispatch) so users can price their language choice.
+  - **vs sandboxed alternatives** — call-overhead comparison against a WASM
+    boundary (wasmtime) and a subprocess/IPC boundary, to quantify what the
+    "trusted same-process, native speed" posture buys vs the isolation tiers.
+  - **One-time cost amortization** — load-bundle + resolve-contract latency and
+    where it amortizes over N calls; hot-reload swap latency (a feature static
+    linking and WASM can't cheaply match).
 - **C3. ~~Reference tracing extension.~~ ❌ Cancelled (2026-06).** The extension
   concept was removed (out of scope — see "Extension system — Removed"). Tracing
   is an app concern: implement it as a `host.logger`-style host contract.

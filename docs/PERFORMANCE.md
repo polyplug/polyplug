@@ -237,6 +237,55 @@ ffi/find_all_by_contract:    ~25 ns
 registry/find_guest_contract:   ~21 ns
 ```
 
+### The safety tax — polyplug vs raw FFI vs a direct call
+
+The `counter_inc` bench (`cargo bench -p polyplug --bench counter_inc`)
+answers the only question that matters for adoption: **what does polyplug's
+safety actually cost on the hot path?** It runs the *identical*
+one-million-iteration `counter = inc(counter)` loop through four mechanisms,
+so each per-call number isolates exactly one cost. Arms 3 and 4 load the
+*same* `libtest_plugin.so` and both compute `x + 1`; the only difference
+between them is polyplug's safety machinery.
+
+| Arm | Mechanism | ns/call | Throughput | vs floor |
+|---|---|---|---|---|
+| `native/inline_never` | direct Rust call, `#[inline(never)]`, no ABI boundary | ~1.1 ns | ~895 M/s | 1.0× (floor) |
+| `ffi/by_value` | raw `dlsym` `extern "C" inc(u32)->u32`, by value | ~1.8 ns | ~556 M/s | 1.6× |
+| `native/abi_marshalled` | ptr-in / ptr-out ABI convention, **statically linked** | ~2.1 ns | ~484 M/s | 1.8× |
+| `polyplug/dispatch` | **resolved contract dispatch over a loaded `.so`** | ~2.3 ns | ~440 M/s | 2.0× |
+
+_(Numbers from one developer machine — treat the **ratios**, not the absolute
+ns, as the result; they move with CPU but the ordering and gaps are stable.)_
+
+**What the numbers say:**
+
+- **polyplug's safe dispatch costs ~0.5 ns more than hand-rolled raw FFI**
+  (2.3 ns vs 1.8 ns) — roughly a single L1 cache hit — for full type-checked
+  registration, lifecycle management, hot-reload, and retire-not-drop safety.
+- **Most of that gap is the calling convention, not dispatch.** The
+  `abi_marshalled` arm pays 2.1 ns with *no dynamic library at all*: passing a
+  struct by pointer and writing the result through an out-pointer is inherently
+  a touch more than passing a `u32` in a register. Crossing the `.so` boundary
+  on top of that adds only ~0.2 ns.
+- Both FFI paths are within **2×** of a function call the compiler is *forbidden
+  to inline*. At **~440 million calls/second**, the safety boundary is free for
+  any workload that does real work per call.
+
+The honest framing: a *direct* call (arm 1) is genuinely cheaper — it has no
+ABI boundary — and we don't claim parity with it. The real-world comparison is
+"polyplug vs the raw, unsafe FFI you'd otherwise hand-write," and there the tax
+is sub-nanosecond. The pessimal "re-resolve the contract on every call" pattern
+(nobody does this in a loop) is measured separately by
+`contract_dispatch::bench_dispatch_cross_plugin`.
+
+> **Where overhead disappears entirely:** this bench deliberately uses the
+> cheapest possible payload (`x + 1`) to expose the *fixed* per-call cost. In a
+> real plugin the call does real work — hash a buffer, transform a record, parse
+> a document — and a fixed ~1 ns sits next to hundreds or thousands of ns of
+> useful work, i.e. it vanishes into noise. A payload-scaling bench that plots
+> overhead-as-a-fraction-of-work is the most honest "real world" view and is a
+> planned follow-up (see ROADMAP, Lane C).
+
 ---
 
 ## Optimization Tips

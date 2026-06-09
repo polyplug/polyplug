@@ -123,6 +123,13 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      # The native hot-path benches (contract_dispatch, counter_inc, ffi_*)
+      # dlopen the compiled fixture plugins (libtest_plugin.so, …), and the
+      # VM-dispatch benches need the provisioned lua/python/js fixture modules.
+      # The root-level fixture cdylibs are not committed, so build them here —
+      # exactly as the CI test job does — or every bench panics at load time.
+      - name: Build test fixtures
+        run: bash tests/fixtures/build_all.sh
       # Restore the previous nightly's criterion results so each run compares
       # against the last. The key is unique per run (always saves a fresh
       # baseline); restore-keys fetches the most recent prior one.
@@ -137,7 +144,7 @@ jobs:
       # them is itself a gate against bench bitrot — nothing else compiles them.
       - name: Run core benchmarks
         run: |
-          for b in contract_dispatch ffi_resolve ffi_find_all registry_resolve registry_find; do
+          for b in contract_dispatch counter_inc ffi_resolve ffi_find_all registry_resolve registry_find; do
             cargo bench -p polyplug --bench "$b" -- --warm-up-time 1 --measurement-time 3
           done
       # VM-dispatch hot paths. lua/js/python are deterministic and self-contained
