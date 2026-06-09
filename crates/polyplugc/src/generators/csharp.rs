@@ -1345,11 +1345,16 @@ fn cs_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
 }
 
 /// Generate C# return type name for guest caller methods.
-/// Return types are owned where appropriate:
-/// - StringView -> string (owned)
-/// - Buffer -> byte[] (owned)
-/// - UserDefined -> TypeName (owned)
+/// Returns are RAW ABI types so the out-pointer can address an unmanaged value:
+/// - StringView -> Polyplug.Abi.StringView (raw, borrowed view; guest never frees)
+/// - Buffer -> Polyplug.Abi.Buffer (raw, borrowed view; guest never frees)
+/// - UserDefined -> TypeName (raw unmanaged struct, by value)
 /// - Primitives -> T (by value)
+///
+/// Managed returns (`string`/`byte[]`) are forbidden here: `(IntPtr)(&result)` on a
+/// managed type is a CS0208 compile error, and copying host-owned bytes onto the
+/// managed heap violates the cross-boundary memory rule. The ABI types are
+/// fully qualified to avoid the `System.Buffer` collision under ImplicitUsings.
 fn cs_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
         ResolvedTypeRef::Primitive(p) => match p {
@@ -1365,8 +1370,8 @@ fn cs_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
             PrimitiveType::F64 => "double".to_owned(),
             PrimitiveType::Bool => "bool".to_owned(),
         },
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "byte[]".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "Polyplug.Abi.StringView".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Polyplug.Abi.Buffer".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "IntPtr".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
         ResolvedTypeRef::UserDefined(name) => name.clone(),
@@ -3191,11 +3196,11 @@ mod tests {
         );
         assert_eq!(
             cs_guest_caller_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
-            "string"
+            "Polyplug.Abi.StringView"
         );
         assert_eq!(
             cs_guest_caller_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
-            "byte[]"
+            "Polyplug.Abi.Buffer"
         );
         assert_eq!(
             cs_guest_caller_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
