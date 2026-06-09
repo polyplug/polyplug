@@ -12,29 +12,35 @@ This document uses the following terminology (current as of v1.1):
 
 polyplug is designed for **zero-overhead hot path calls**. The architecture ensures:
 
-1. **One guard load** - Resolve handle to interface once
-2. **One pointer dereference** - Access cached interface
-3. **One indirect call** - Dispatch to plugin function
+1. **Resolve once** - Find the contract handle, then resolve it to an interface pointer
+2. **Cache the pointer** - The resolved `*const GuestContractInterface` stays valid (retire-not-drop)
+3. **One indirect call** - Dispatch to the plugin function
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    HOT PATH CALL FLOW                            │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│   1. Runtime.resolve_plugin(handle)                              │
-│      └─> Reads the interface slot under the RuntimeStore RwLock │
-│      └─> Returns Guard with interface pointer                   │
+│   Setup (once per contract):                                     │
+│   1. Runtime.find_guest_contract(contract_id, min_version)       │
+│      └─> Returns a GuestContractHandle (slot index + generation) │
+│   2. Runtime.resolve_guest_contract(handle)                      │
+│      └─> Validates the generation, returns a raw                 │
+│          *const GuestContractInterface (no RAII guard)           │
 │                                                                  │
-│   2. Guard.interface()                                           │
-│      └─> Returns cached pointer (no FFI)                        │
-│                                                                  │
+│   Hot path (per call):                                           │
 │   3. interface.functions[fn_id](args, out)                      │
 │      └─> Direct indirect call                                   │
 │                                                                  │
-│   Total overhead: ~10-50ns (native) to ~400ns (Python ctypes)   │
+│   Total overhead: ~2 ns (native) to ~13 µs (Python, GIL)        │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+The resolved pointer stays valid for the runtime's lifetime under the
+**retire-not-drop** model — superseded interfaces are retained, never freed — so
+a caller may cache it across calls. To observe a *new* version after a hot-reload,
+re-`find_guest_contract` + re-`resolve_guest_contract`.
 
 ---
 
@@ -67,18 +73,20 @@ polyplug is designed for **zero-overhead hot path calls**. The architecture ensu
 ### C++ (Optimal)
 
 **Already zero-overhead:**
-- `PluginGuard` caches interface at construction
-- Direct pointer access, no FFI on hot path
-- Move semantics for efficient transfer
+- `resolve_guest_contract` returns a raw interface pointer — no FFI on the hot path
+- The pointer is cached by the caller and reused across calls
+- Retire-not-drop keeps it valid for the runtime's lifetime
 
 ```cpp
-// Hot path - zero FFI overhead
-auto guard = rt.resolve_plugin(handle);
-const auto* interface = guard.interface();  // Cached pointer
-interface->process(data);  // Direct indirect call
+// Setup (once): resolve the interface pointer
+const GuestContractInterface* interface = rt.resolve_guest_contract(handle);
+
+// Hot path - direct indirect call, zero FFI overhead
+interface->functions[fn_id](args, out);
 ```
 
-**Hot-reload safety:** Guard stores handle, re-resolves interface on each call.
+**Hot-reload safety:** re-`find_guest_contract` + `resolve_guest_contract` to
+observe a swapped-in version; the previously resolved pointer stays valid (retired, not freed).
 
 ### Lua (Near-Optimal)
 
@@ -88,12 +96,14 @@ interface->process(data);  // Direct indirect call
 - JIT-compiled calls
 
 ```lua
--- Hot path
-local guard = rt:resolve_plugin(handle)
-local result = guard:call(0, input)  -- Re-resolves interface for hot-reload safety
+-- Setup (once): resolve the interface cdata pointer
+local interface = rt:resolve_guest_contract(handle)
+
+-- Hot path: dispatch through the cached interface
+local result = interface:call(0, input)
 ```
 
-**Hot-reload safety:** Guard stores `runtime + handle`, re-resolves interface each call.
+**Hot-reload safety:** re-`find_guest_contract` + `resolve_guest_contract` to observe a swapped-in version.
 
 ### JavaScript / Deno (Good)
 
@@ -103,12 +113,14 @@ local result = guard:call(0, input)  -- Re-resolves interface for hot-reload saf
 - `UnsafeFnPointer` for direct calls
 
 ```javascript
-// Hot path
-const guard = rt.resolvePlugin(handle);
-const result = guard.call(0, input);  // Re-resolves interface for hot-reload safety
+// Setup (once): resolve the interface view
+const interface = rt.resolveGuestContractInterface(handle);
+
+// Hot path: dispatch through the cached interface
+const result = interface.call(0, input);
 ```
 
-**Hot-reload safety:** Guard stores `runtime + handle`, re-resolves interface each call.
+**Hot-reload safety:** re-`findGuestContract` + `resolveGuestContract` to observe a swapped-in version.
 
 ### Python (Acceptable)
 
@@ -125,15 +137,14 @@ const result = guard.call(0, input);  // Re-resolves interface for hot-reload sa
 - **Best for**: Performance-sensitive applications
 
 ```python
-# Automatic backend selection
+# Automatic backend selection (ctypes by default, cffi if installed)
 from polyplug import Runtime
 
 rt = Runtime()
-guard = rt.resolve_plugin(handle)
-interface = guard.interface  # Cached pointer
+interface = rt.resolve_guest_contract(handle)  # raw interface pointer
 ```
 
-**Hot-reload safety:** Guard stores handle, re-resolves interface each call.
+**Hot-reload safety:** re-`find_guest_contract` + `resolve_guest_contract` to observe a swapped-in version.
 
 ---
 
@@ -166,44 +177,46 @@ All host libraries implement the same hot-reload safety pattern:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    HOT-RELOAD SAFE GUARD                         │
+│                  HOT-RELOAD SAFE RESOLUTION                       │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│   Guard stores: runtime + handle (NOT cached interface)         │
+│   resolve_guest_contract(handle) -> *const GuestContractInterface│
+│   1. Validates the handle's generation against the slot          │
+│   2. Returns the slot's current interface pointer                │
 │                                                                  │
-│   On each interface() call:                                      │
-│   1. Guard.interface() -> resolve_plugin(runtime, handle)       │
-│   2. Runtime reads the interface slot under the RwLock          │
-│   3. Returns the current interface pointer for the slot         │
+│   The caller MAY cache that pointer and reuse it, because:       │
+│   - A hot-reload swaps the slot to the new interface, but        │
+│   - the superseded interface is retired, not freed, so a         │
+│     previously resolved pointer stays valid (keeps serving the   │
+│     old version)                                                  │
 │                                                                  │
-│   This ensures:                                                  │
-│   - Hot-reload swaps the slot to the new interface              │
-│   - The superseded interface is retired, not freed, so          │
-│     in-flight pointers stay valid                                │
-│   - Safe concurrent access                                       │
+│   To observe the NEW version after a reload, re-find +           │
+│   re-resolve the handle.                                         │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Why re-resolve instead of caching a raw interface pointer in the SDK?**
+**Cache the pointer, or re-resolve — your choice.**
 
 When hot-reload happens, the Rust runtime, under the `RuntimeStore` RwLock write guard:
 1. Swaps the interface in the slot to the newly registered one (`apply_reload_swap`)
 2. Pushes the superseded interface onto `retired_interfaces`
 
 The retire-not-drop model keeps superseded interfaces alive for the runtime lifetime,
-so a previously resolved pointer never dangles. Re-resolving on each call ensures the
-SDK observes the **new** interface after a swap rather than continuing to dispatch into
-the retired one.
+so a previously resolved pointer never dangles. This is the deliberate design choice
+behind the benchmarks: there is **no per-call guard** and no forced re-resolve. A
+long-lived caller resolves once and dispatches through the cached pointer at native
+speed; it only re-`find_guest_contract` + `resolve_guest_contract` when it explicitly
+wants to pick up a swapped-in version.
 
 **Overhead:**
 
 | Operation | Cost | Impact |
 |-----------|------|--------|
-| Cached interface | ~0-5 ns | Keeps dispatching into the retired interface after reload |
-| Re-resolve interface | ~10-50 ns | Observes the swapped-in interface |
+| Cached interface pointer (the hot path) | ~2 ns dispatch | Keeps serving the version it resolved (valid via retire-not-drop) |
+| Re-find + re-resolve | ~30 ns (≈20 ns find + ~10 ns resolve) | Picks up the swapped-in interface |
 
-For typical plugin calls (>1us), the 10-50ns overhead is <5%.
+For typical plugin calls (>1µs), even an explicit re-resolve every call is <5%.
 
 ---
 
@@ -224,17 +237,22 @@ cargo bench -p polyplug
 
 ### Expected Results
 
-**Python FFI (1M iterations):**
+> Methodology: criterion 0.8, `--release`, 100 samples/bench. The illustrative
+> numbers here and below were taken on an AMD Ryzen 9 5900X (12-core) / 32 GiB
+> Linux box. Re-run on your own quiet machine and trust **ratios**, not absolute ns.
+
+**Python host FFI (1M iterations, host calling into `libpolyplug`):**
 ```
 ctypes:   ~670 ns/call
 cffi ABI: ~380 ns/call (1.7x faster)
 ```
 
-**Rust Core (from previous benchmarks):**
+**Rust core (`cargo bench -p polyplug`):**
 ```
-ffi/resolve_plugin:          ~10 ns
-ffi/find_all_by_contract:    ~25 ns
-registry/find_guest_contract:   ~21 ns
+ffi/resolve_plugin/direct_interface:    ~10 ns
+ffi/find_all_by_contract/single_match:  ~46 ns   (allocates the result array)
+registry/resolve:                       ~4 ns
+registry/find_guest_contract:           ~20 ns
 ```
 
 ### The safety tax — polyplug vs raw FFI vs a direct call
@@ -260,7 +278,7 @@ the Rust and C++ polyplug arms is the plugin's source language.
 
 _(Numbers from one developer machine — treat the **ratios**, not the absolute
 ns, as the result; they move with CPU but the ordering and gaps are stable. The
-chart above is regenerated from the same run by `ci/gen_bench_charts.py`.)_
+chart above is regenerated from the same run by `scripts/gen_bench_charts.py`.)_
 
 **What the numbers say:**
 
@@ -324,18 +342,18 @@ for contract_id in contract_ids:
 handles = rt.find_all_by_contract(contract_id, 1)
 ```
 
-### 2. Reuse Guards
+### 2. Resolve once, reuse the interface pointer
 
 ```python
 # Bad: Resolve on every call
 for data in dataset:
-    guard = rt.resolve_plugin(handle)
-    result = call_plugin(guard.interface, data)
+    interface = rt.resolve_guest_contract(handle)
+    result = call_plugin(interface, data)
 
-# Good: Resolve once, call many times
-guard = rt.resolve_plugin(handle)
+# Good: Resolve once, call many times (the pointer stays valid — retire-not-drop)
+interface = rt.resolve_guest_contract(handle)
 for data in dataset:
-    result = call_plugin(guard.interface, data)
+    result = call_plugin(interface, data)
 ```
 
 ### 3. Choose the Right Language
@@ -559,6 +577,8 @@ Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
 
 ## See Also
 
+- [Profiling Guide](./PROFILING.md) — flamegraph any hot path locally
+- [Benchmark Suite](../crates/polyplug/benches/README.md) — what each bench measures + chart regen
 - [ABI Architecture](./ABI_ARCHITECTURE.md)
 - [ABI Types](./abi_types.md)
 - [Python README](../sdks/python/host/README.md)

@@ -18,19 +18,22 @@ cargo bench -p polyplug --bench counter_inc -- --warm-up-time 1 --measurement-ti
 ```
 
 Criterion writes results to `target/criterion/`. To compare two runs locally
-(e.g. before/after a change), the helper `ci/check_bench_regression.py` walks
+(e.g. before/after a change), the helper `scripts/check_bench_regression.py` walks
 that directory and flags any benchmark that regressed beyond a threshold:
 
 ```bash
-python3 ci/check_bench_regression.py target/criterion --threshold 1.5
+python3 scripts/check_bench_regression.py target/criterion --threshold 1.5
 ```
 
 To turn a run into the committed SVG charts embedded in `docs/PERFORMANCE.md`
 (dependency-free — no matplotlib, no web service), run:
 
 ```bash
-python3 ci/gen_bench_charts.py target/criterion docs/assets/benches
+python3 scripts/gen_bench_charts.py target/criterion docs/assets/benches
 ```
+
+Both are also wrapped as `just` recipes — `just bench-check` and
+`just bench-charts` — so you rarely call them by hand.
 
 > Prerequisite: the benches `dlopen` the fixture plugins. Build them once with
 > `bash tests/fixtures/build_all.sh` before running (the root-level cdylibs are

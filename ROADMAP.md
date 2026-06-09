@@ -112,7 +112,7 @@ Held until the owner decides to publish. Kept here so it isn't lost.
   gate: they load native fixtures, embed VMs, and are too sensitive to
   shared-runner noise to gate on. The whole `benches` job was removed from
   `nightly.yml`. The benches themselves remain (run `cargo bench -p polyplug`),
-  and `ci/check_bench_regression.py` is kept as a **local** before/after
+  and `scripts/check_bench_regression.py` is kept as a **local** before/after
   comparison helper. See `crates/polyplug/benches/README.md`.
 - **C4. Comparison / marketing benchmark. ✅ Done.** `counter_inc`
   (`cargo bench -p polyplug --bench counter_inc`) runs the same 1M-iteration

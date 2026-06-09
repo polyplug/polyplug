@@ -451,7 +451,6 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-
 # .NET build artifacts (dotnet build output)
 **/bin/
 **/obj/
@@ -486,3 +485,8 @@ entities.json
 examples/hosts/cpp/host
 examples/hosts/cpp/hot_reload_host
 tests/integration/cpp/hot_reload_test
+
+# Local profiling output (just flamegraph)
+flamegraph-*.svg
+perf.data
+perf.data.old

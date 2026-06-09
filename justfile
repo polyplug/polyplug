@@ -580,10 +580,48 @@ doc-open:
     @echo "=== Opening Documentation ==="
     cargo doc --{{profile}} --no-deps -p polyplug -p polyplug_abi -p polyplug_guest --open
 
-# Run benchmarks
+# ============================================================================
+# Benchmarks & Profiling (LOCAL ONLY — never run in CI; see crates/polyplug/benches/README.md)
+# ============================================================================
+
+# Run the polyplug core benchmarks (criterion) on this machine
 bench:
-    @echo "=== Running Benchmarks ==="
-    cargo bench
+    @echo "=== Running polyplug Benchmarks (local) ==="
+    cargo bench -p polyplug
+
+# Regenerate the committed SVG charts in docs/assets/benches from the last run
+bench-charts:
+    @echo "=== Generating Benchmark Charts ==="
+    @if [ ! -d target/criterion ]; then echo "No target/criterion — run 'just bench' first"; exit 1; fi
+    python3 scripts/gen_bench_charts.py target/criterion docs/assets/benches
+
+# Flag any benchmark that regressed vs its previous run (criterion base/)
+bench-check threshold="1.5":
+    @echo "=== Checking Benchmark Regressions (threshold {{threshold}}x) ==="
+    @if [ ! -d target/criterion ]; then echo "No target/criterion — run 'just bench' first"; exit 1; fi
+    python3 scripts/check_bench_regression.py target/criterion --threshold {{threshold}}
+
+# Run benches and refresh charts in one step
+bench-all: bench bench-charts
+    @echo "=== Benchmarks + charts refreshed ==="
+
+# Flamegraph-profile a single benchmark (requires cargo-flamegraph + perf).
+# Usage: just flamegraph [bench] [package]
+# Examples:
+#   just flamegraph counter_inc                 # profile the dispatch hot path
+#   just flamegraph amortization                # profile load / resolve / reload
+#   just flamegraph dispatch_benchmark polyplug_lua   # profile a VM loader
+# See docs/PROFILING.md for setup (perf_event_paranoid) and how to read the output.
+flamegraph bench="counter_inc" package="polyplug":
+    @echo "=== Flamegraph: {{package}}/{{bench}} ==="
+    @if ! command -v cargo-flamegraph >/dev/null 2>&1 && ! command -v flamegraph >/dev/null 2>&1; then \
+        echo "cargo-flamegraph not installed. Install with:"; \
+        echo "    cargo install flamegraph"; \
+        echo "and ensure 'perf' is available (Linux) — see docs/PROFILING.md"; \
+        exit 1; \
+    fi
+    cargo flamegraph --bench {{bench}} -p {{package}} -o flamegraph-{{bench}}.svg -- --bench
+    @echo "Wrote flamegraph-{{bench}}.svg"
 
 # ============================================================================
 # Local CI Testing (using nektos/act)
