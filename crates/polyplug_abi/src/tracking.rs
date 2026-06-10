@@ -91,16 +91,24 @@ impl TrackingAllocator {
         TrackingAllocator
     }
 
-    /// Returns a function pointer suitable for `HostApi.alloc`.
+    /// Returns a counting `(size, align) -> *mut u8` allocator function pointer.
     ///
-    /// The returned fn increments the thread-local alloc counter on each call.
+    /// This is NOT directly assignable to `HostApi.alloc`, whose pointer takes
+    /// `this: *const HostApi` as its first argument. It is a test-support wrapper around
+    /// `polyplug_host_alloc` with the bare 2-argument signature; wrap it in a `HostApi`
+    /// trampoline (or call it directly in tests) to drive allocation through the counter.
+    /// Each call increments the thread-local alloc counter.
     pub fn alloc_fn(&self) -> unsafe extern "C" fn(usize, usize) -> *mut u8 {
         tracking_alloc
     }
 
-    /// Returns a function pointer suitable for `HostApi.free`.
+    /// Returns a counting `(ptr, size, align)` free function pointer.
     ///
-    /// The returned fn increments the thread-local free counter on each call.
+    /// This is NOT directly assignable to `HostApi.free`, whose pointer takes
+    /// `this: *const HostApi` as its first argument. It is a test-support wrapper around
+    /// `polyplug_host_free` with the bare 3-argument signature; wrap it in a `HostApi`
+    /// trampoline (or call it directly in tests) to drive deallocation through the
+    /// counter. Each call increments the thread-local free counter.
     pub fn free_fn(&self) -> unsafe extern "C" fn(*mut u8, usize, usize) {
         tracking_free
     }

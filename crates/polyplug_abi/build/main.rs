@@ -18,7 +18,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::extractor::extract_from_dir;
+use crate::extractor::{extract_doc, extract_fields, extract_from_dir, has_repr_c, is_public};
 use crate::generate::generate_all_sdks;
 
 /// Loader crates whose config structs should be discovered.
@@ -79,9 +79,8 @@ fn main() -> Result<(), Box<dyn core::error::Error>> {
                     // pub struct with #[repr(C)]
                     if is_public(&item_struct.vis) && has_repr_c(&item_struct.attrs) {
                         let name: String = item_struct.ident.to_string();
-                        let fields: Vec<types::AbiField> =
-                            extract_fields_from_syn(&item_struct.fields);
-                        let doc: Option<String> = extract_doc_from_attrs(&item_struct.attrs);
+                        let fields: Vec<types::AbiField> = extract_fields(&item_struct.fields);
+                        let doc: Option<String> = extract_doc(&item_struct.attrs);
 
                         loader_types.add_struct(types::AbiStruct {
                             name,
@@ -102,103 +101,4 @@ fn main() -> Result<(), Box<dyn core::error::Error>> {
     // ─── Step 3: Generate SDKs ───────────────────────────────────────────────
     generate_all_sdks(&mut abi_types, &workspace_root, &tracked_files)?;
     Ok(())
-}
-
-/// Check if a visibility is public.
-fn is_public(vis: &syn::Visibility) -> bool {
-    matches!(vis, syn::Visibility::Public(_))
-}
-
-/// Check if attributes contain #[repr(C)].
-fn has_repr_c(attrs: &[syn::Attribute]) -> bool {
-    use syn::Meta;
-    attrs.iter().any(|attr| {
-        if !attr.path().is_ident("repr") {
-            return false;
-        }
-        let meta: &Meta = &attr.meta;
-        match meta {
-            Meta::List(list) => list.tokens.to_string().split(',').any(|s| s.trim() == "C"),
-            _ => false,
-        }
-    })
-}
-
-/// Extract fields from a syn Fields.
-fn extract_fields_from_syn(fields: &syn::Fields) -> Vec<types::AbiField> {
-    use syn::Fields;
-
-    match fields {
-        Fields::Named(named) => named
-            .named
-            .iter()
-            .filter_map(|field| {
-                if !is_public(&field.vis) {
-                    return None;
-                }
-                let name: String = field.ident.as_ref()?.to_string();
-                let rust_type: String = quote::quote!(#field.ty).to_string().replace(' ', "");
-                let doc: Option<String> = extract_doc_from_attrs(&field.attrs);
-                Some(types::AbiField {
-                    name,
-                    rust_type,
-                    doc,
-                })
-            })
-            .collect(),
-        Fields::Unnamed(unnamed) => unnamed
-            .unnamed
-            .iter()
-            .enumerate()
-            .filter_map(|(index, field)| {
-                if !is_public(&field.vis) {
-                    return None;
-                }
-                let name: String = format!("field_{}", index);
-                let rust_type: String = quote::quote!(#field.ty).to_string().replace(' ', "");
-                let doc: Option<String> = extract_doc_from_attrs(&field.attrs);
-                Some(types::AbiField {
-                    name,
-                    rust_type,
-                    doc,
-                })
-            })
-            .collect(),
-        Fields::Unit => Vec::new(),
-    }
-}
-
-/// Extract documentation from attributes.
-fn extract_doc_from_attrs(attrs: &[syn::Attribute]) -> Option<String> {
-    use syn::{Expr, ExprLit, Lit, Meta};
-
-    let doc_lines: Vec<String> = attrs
-        .iter()
-        .filter_map(|attr| {
-            if !attr.path().is_ident("doc") {
-                return None;
-            }
-            let meta: &Meta = &attr.meta;
-            match meta {
-                Meta::NameValue(name_value) => {
-                    if let Expr::Lit(ExprLit {
-                        lit: Lit::Str(lit_str),
-                        ..
-                    }) = &name_value.value
-                    {
-                        Some(lit_str.value())
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            }
-        })
-        .collect();
-
-    if doc_lines.is_empty() {
-        None
-    } else {
-        Some(doc_lines.join("\n"))
-    }
 }

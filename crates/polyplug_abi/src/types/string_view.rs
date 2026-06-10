@@ -37,26 +37,59 @@ impl StringView {
         }
     }
 
-    /// Returns the StringView contents as a `&str`.
+    /// Returns the StringView contents as a `&str`, assuming valid UTF-8.
+    ///
+    /// A null pointer or zero length yields `""` — this is the defined behaviour for
+    /// [`StringView::null`] and any empty view, and never dereferences the pointer.
     ///
     /// # Safety
-    /// Caller must ensure `ptr` is valid UTF-8 for `len` bytes and the memory is live.
+    /// For a non-null, non-empty view, the caller must guarantee that:
+    /// - `ptr` points to `len` initialized bytes that remain live for the borrow, and
+    /// - those bytes are valid UTF-8.
+    ///
+    /// UTF-8 validity is NOT checked here. Prefer [`StringView::try_as_str`] when the
+    /// bytes originate from an untrusted source (e.g. plugin-provided data).
     pub unsafe fn as_str(&self) -> &str {
-        // SAFETY: string_view_as_str is only called with host-owned StringViews created
-        // via string_view_from_static — guarantees valid UTF-8.
-        // Plugin-provided StringViews must never be passed to this function.
+        if self.ptr.is_null() || self.len == 0 {
+            return "";
+        }
+        // SAFETY: ptr is non-null and the caller guarantees `len` live, initialized,
+        // valid-UTF-8 bytes (documented contract above).
         unsafe {
             let slice: &[u8] = core::slice::from_raw_parts(self.ptr, self.len);
-            core::str::from_utf8_unchecked(slice) // SAFETY: see comment above
+            core::str::from_utf8_unchecked(slice)
         }
+    }
+
+    /// Returns the StringView contents as a `&str`, validating UTF-8.
+    ///
+    /// A null pointer or zero length yields `Ok("")` without dereferencing the pointer.
+    /// For a non-null, non-empty view, the bytes are validated with
+    /// [`core::str::from_utf8`]; invalid UTF-8 returns `Err`.
+    ///
+    /// # Safety
+    /// For a non-null, non-empty view, the caller must guarantee that `ptr` points to
+    /// `len` initialized bytes that remain live for the borrow. UTF-8 validity is
+    /// checked, so this is the correct entry point for untrusted (plugin-provided) data.
+    pub unsafe fn try_as_str(&self) -> Result<&str, core::str::Utf8Error> {
+        if self.ptr.is_null() || self.len == 0 {
+            return Ok("");
+        }
+        // SAFETY: ptr is non-null and the caller guarantees `len` live, initialized
+        // bytes (documented contract above). UTF-8 is validated below, not assumed.
+        let slice: &[u8] = unsafe { core::slice::from_raw_parts(self.ptr, self.len) };
+        core::str::from_utf8(slice)
     }
 
     /// Copies the StringView contents into a new owned `String`.
     ///
+    /// A null pointer or zero length yields an empty `String`.
+    ///
     /// # Safety
-    /// Caller must ensure `ptr` is valid UTF-8 for `len` bytes and the memory is live.
+    /// Same contract as [`StringView::as_str`]: for a non-null, non-empty view the
+    /// caller must guarantee `len` live, initialized, valid-UTF-8 bytes.
     pub unsafe fn to_owned_string(&self) -> String {
-        // SAFETY: Caller guarantees ptr is valid, non-null, UTF-8, and live.
+        // SAFETY: forwards the documented as_str contract; null/empty is handled there.
         unsafe { self.as_str().to_owned() }
     }
 }
@@ -73,5 +106,40 @@ mod tests {
         assert_eq!(align_of::<StringView>(), 8);
         assert_eq!(offset_of!(StringView, ptr), 0);
         assert_eq!(offset_of!(StringView, len), 8);
+    }
+
+    #[test]
+    fn as_str_on_null_returns_empty() {
+        let sv: StringView = StringView::null();
+        // SAFETY: null view never dereferences the pointer; defined to yield "".
+        let s: &str = unsafe { sv.as_str() };
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn try_as_str_on_null_returns_empty() {
+        let sv: StringView = StringView::null();
+        // SAFETY: null view never dereferences the pointer; defined to yield Ok("").
+        let s: Result<&str, core::str::Utf8Error> = unsafe { sv.try_as_str() };
+        assert_eq!(s, Ok(""));
+    }
+
+    #[test]
+    fn try_as_str_on_valid_utf8_returns_str() {
+        let bytes: &'static [u8] = b"hello";
+        let sv: StringView = StringView::from_static(bytes);
+        // SAFETY: from_static yields a live, valid-UTF-8 view for the program lifetime.
+        let s: Result<&str, core::str::Utf8Error> = unsafe { sv.try_as_str() };
+        assert_eq!(s, Ok("hello"));
+    }
+
+    #[test]
+    fn try_as_str_on_invalid_utf8_errors() {
+        // 0xFF is never a valid UTF-8 byte.
+        let bytes: &'static [u8] = &[0xFF, 0xFE];
+        let sv: StringView = StringView::from_static(bytes);
+        // SAFETY: from_static yields a live view; UTF-8 is checked, not assumed.
+        let s: Result<&str, core::str::Utf8Error> = unsafe { sv.try_as_str() };
+        assert!(s.is_err());
     }
 }

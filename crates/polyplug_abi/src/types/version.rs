@@ -6,9 +6,27 @@ use core::str::FromStr;
 #[repr(u32)]
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseVersionError {
+    // The string was not one-to-three dot-separated components.
+    // (Non-doc comment: keeps the generated SDK abi files byte-identical.)
     InvalidFormat = 0,
+    // A component was present but not a valid unsigned 32-bit integer.
     InvalidInt = 1,
 }
+
+impl fmt::Display for ParseVersionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseVersionError::InvalidFormat => {
+                f.write_str("invalid version format: expected \"major[.minor[.patch]]\"")
+            }
+            ParseVersionError::InvalidInt => {
+                f.write_str("invalid version component: not an unsigned 32-bit integer")
+            }
+        }
+    }
+}
+
+impl core::error::Error for ParseVersionError {}
 
 /// A three-component semantic version (major.minor.patch).
 #[repr(C)]
@@ -40,10 +58,13 @@ impl Version {
 impl FromStr for Version {
     type Err = ParseVersionError;
 
-    /// Parse a version string of the form `"major.minor.patch"`.
+    /// Parse a version string of the form `"major.minor[.patch]"`.
     ///
-    /// Returns `Err(LoaderError::ManifestParse)` if the string is not exactly two
-    /// dot-separated unsigned integers.
+    /// Accepts one to three dot-separated unsigned 32-bit integers; an omitted patch
+    /// defaults to `0`. Returns:
+    /// - `Err(ParseVersionError::InvalidFormat)` if there are more than three
+    ///   components, or a required leading component is missing, and
+    /// - `Err(ParseVersionError::InvalidInt)` if any component is not a valid `u32`.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let mut v_iter: core::str::Split<'_, char> = value.split('.');
 
@@ -64,6 +85,11 @@ impl FromStr for Version {
             .unwrap_or("0")
             .parse::<u32>()
             .map_err(|_| ParseVersionError::InvalidInt)?;
+
+        // Reject extra components: a strict three-component format never carries a 4th+.
+        if v_iter.next().is_some() {
+            return Err(ParseVersionError::InvalidFormat);
+        }
 
         Ok(Version {
             major,
@@ -153,18 +179,24 @@ mod tests {
     }
 
     #[test]
-    fn version_parse_four_component_overflow() {
-        // "1.2.3.4" splits to ["1", "2", "3", "4"]
-        // The parser takes major="1", minor="2", patch="3" (ignoring "4")
-        // This is valid - extra components after patch are ignored.
-        let v: Version = "1.2.3.4".parse::<Version>().expect("parse 1.2.3.4");
+    fn version_parse_four_component_rejected() {
+        // "1.2.3.4" has a 4th component — the strict parser rejects it as InvalidFormat
+        // rather than silently dropping the extra component.
+        let err: super::ParseVersionError = "1.2.3.4"
+            .parse::<Version>()
+            .expect_err("1.2.3.4 must be rejected");
+        assert_eq!(err, super::ParseVersionError::InvalidFormat);
+    }
+
+    #[test]
+    fn parse_version_error_display() {
         assert_eq!(
-            v,
-            Version {
-                major: 1,
-                minor: 2,
-                patch: 3
-            }
+            super::ParseVersionError::InvalidFormat.to_string(),
+            "invalid version format: expected \"major[.minor[.patch]]\""
+        );
+        assert_eq!(
+            super::ParseVersionError::InvalidInt.to_string(),
+            "invalid version component: not an unsigned 32-bit integer"
         );
     }
 

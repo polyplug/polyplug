@@ -10,6 +10,12 @@ build = "build/main.rs"
 [lints]
 workspace = true
 
+[features]
+default = []
+# Test-support tracking allocator (`tracking` module). Off by default so the shim
+# is not compiled into release builds; consumers enable it in dev-dependencies.
+tracking = []
+
 [dependencies]
 thiserror = { workspace = true }
 polyplug_utils = { workspace = true }

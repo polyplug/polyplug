@@ -210,7 +210,7 @@ fn extract_struct(item: &ItemStruct) -> Option<AbiStruct> {
 }
 
 /// Extract fields from a struct.
-fn extract_fields(fields: &Fields) -> Vec<AbiField> {
+pub(crate) fn extract_fields(fields: &Fields) -> Vec<AbiField> {
     match fields {
         Fields::Named(named) => named
             .named
@@ -336,12 +336,12 @@ fn extract_union(item: &ItemUnion) -> Option<AbiUnion> {
 }
 
 /// Check if a visibility is public.
-fn is_public(vis: &Visibility) -> bool {
+pub(crate) fn is_public(vis: &Visibility) -> bool {
     matches!(vis, Visibility::Public(_))
 }
 
 /// Check if attributes contain #[repr(C)].
-fn has_repr_c(attrs: &[Attribute]) -> bool {
+pub(crate) fn has_repr_c(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| {
         if !attr.path().is_ident("repr") {
             return false;
@@ -383,7 +383,7 @@ fn extract_enum_repr(attrs: &[Attribute]) -> String {
 }
 
 /// Extract documentation from attributes.
-fn extract_doc(attrs: &[Attribute]) -> Option<String> {
+pub(crate) fn extract_doc(attrs: &[Attribute]) -> Option<String> {
     let doc_lines: Vec<String> = attrs
         .iter()
         .filter_map(|attr| {

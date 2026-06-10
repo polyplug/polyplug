@@ -12,6 +12,7 @@ pub mod host;
 pub mod plugin;
 pub mod runtime;
 mod runtime_language;
+#[cfg(feature = "tracking")]
 pub mod tracking;
 pub mod types;
 
