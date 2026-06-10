@@ -1,8 +1,8 @@
 //! SDK Validator - Cross-language SDK consistency validation tool.
 //!
 //! This crate provides functionality to validate that SDK implementations
-//! across different languages (Rust, Python, C#, C++, TypeScript, JavaScript)
-//! are consistent with each other.
+//! across different languages (Rust, Python, C#, C++, JavaScript/TypeScript,
+//! and Lua) are consistent with each other.
 
 pub mod aggregator;
 pub mod ast_grep;

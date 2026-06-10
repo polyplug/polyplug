@@ -16,6 +16,7 @@ use polyplug_abi::StringView;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
+use polyplug_utils::BundleId;
 use polyplug_utils::guest_contract_id;
 use std::sync::Arc;
 
@@ -280,8 +281,10 @@ fn integration_dotnet_wrong_major_version_rejected() {
 #[test]
 fn integration_dotnet_clr_shared_across_loads() {
     skip_if_no_dotnet!();
-    // Load the fixture twice using the same DotnetLoader.
-    // CLR is a global once-initialized singleton — second load must succeed.
+    // Load the fixture, unload it, and load it again with the same DotnetLoader.
+    // CLR is a global once-initialized singleton — the re-load must succeed and
+    // reuse the already-initialized CLR. (The unload in between is required:
+    // re-loading a still-loaded bundle is rejected as a duplicate registration.)
     let rt: Arc<Runtime> = create_runtime();
     let result1: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
@@ -289,10 +292,12 @@ fn integration_dotnet_clr_shared_across_loads() {
         "first load must succeed: {:?}",
         result1.err()
     );
+    rt.unload_bundle(BundleId::new("csharp_test_adder"))
+        .expect("unload must succeed");
     let result2: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result2.is_ok(),
-        "second load (CLR shared) must succeed: {:?}",
+        "re-load after unload (CLR shared) must succeed: {:?}",
         result2.err()
     );
 }
@@ -336,7 +341,10 @@ fn version_mismatch_pelite() {
 #[test]
 fn delegate_loader_cached_across_loads() {
     skip_if_no_dotnet!();
-    // Load the same DLL twice — both must succeed, proving AssemblyDelegateLoader is cached and reused
+    // Load, unload, and re-load the same DLL — the re-load must succeed, proving
+    // the AssemblyDelegateLoader is cached and reused. (The unload in between is
+    // required: re-loading a still-loaded bundle is rejected as a duplicate
+    // registration.)
     let rt: Arc<Runtime> = create_runtime();
     let result1: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
@@ -344,10 +352,12 @@ fn delegate_loader_cached_across_loads() {
         "first load must succeed: {:?}",
         result1.err()
     );
+    rt.unload_bundle(BundleId::new("csharp_test_adder"))
+        .expect("unload must succeed");
     let result2: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result2.is_ok(),
-        "second load (cached loader) must succeed: {:?}",
+        "re-load after unload (cached loader) must succeed: {:?}",
         result2.err()
     );
 }

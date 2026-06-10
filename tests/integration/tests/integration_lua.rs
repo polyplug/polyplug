@@ -320,15 +320,24 @@ fn integration_lua_utf8_roundtrip() {
     assert_eq!(version_str.as_bytes(), b"1.0.0-lua");
 }
 
+/// Loading the same bundle twice without an unload or reload in between must be
+/// rejected: the second registration is a same-bundle duplicate of the same
+/// contract (DuplicateProvider). The old "second load succeeds" behaviour left a
+/// stale duplicate registration that `find` kept resolving to the first VM.
+/// Legitimate re-loading goes through `unload_bundle` + `load_bundle` or
+/// `reload_bundle`, both covered by their own tests.
 #[test]
-fn integration_lua_second_load_succeeds() {
+fn integration_lua_second_load_rejected_as_duplicate() {
     let rt: Arc<Runtime> = create_runtime();
     load_fixture(&rt).expect("first load must succeed");
     let result: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(LUA_PLUGIN));
     assert!(
-        result.is_ok(),
-        "second load should succeed (multi-impl allowed): {:?}",
-        result.err()
+        matches!(
+            result,
+            Err(RuntimeError::Loader(LoaderError::InitFailed { .. }))
+        ),
+        "second load of the same bundle must fail as a duplicate registration, got: {:?}",
+        result.as_ref().err()
     );
 }
 
