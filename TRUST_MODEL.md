@@ -222,7 +222,7 @@ The following table summarizes the sizes and alignments of the core ABI types on
 
 | Type | Size (bytes) | Alignment (bytes) | Key Fields |
 |------|--------------|-------------------|------------|
-| `HostApi` | 160 | 8 | `runtime` opaque ptr + 19 function pointers |
+| `HostApi` | 168 | 8 | `runtime` opaque ptr + 20 function pointers |
 | `GuestContractInterface` | 24 | 8 | `contract_id`, `functions` ptr |
 | `GuestContractHandle` | 8 | 4 | `index: u32`, `generation: u32` |
 | `StringView` | 16 | 8 | `ptr`, `len` |
@@ -235,7 +235,7 @@ The following table summarizes the sizes and alignments of the core ABI types on
 `resolve_host_contract_interface` (64), `list_bundles` (72), `get_dependencies` (80),
 `load_bundle` (88), `reload_bundle` (96), `register_host_contract` (104),
 `register_loader` (112), `get_last_error` (120), `get_error_len` (128),
-`call_guest_method` (136), `unload_bundle` (144), `reserved` (152, data pointer — always null). There is no
+`call_guest_method` (136), `unload_bundle` (144), `log` (152), `reserved` (160, data pointer — always null). There is no
 `find_by_bundle` or `resolve_plugin` pointer in `HostApi`.
 
 ### Pointer Validity After Resolution
@@ -311,7 +311,7 @@ The core polyplug ABI **freezes at v1.0**. There is no public release yet, so th
 
 ### Frozen Surface Areas
 The following structures have the layouts and sizes that will be frozen at v1.0. At/after v1.0, any modification to these (e.g., adding a field or changing field order) is a breaking change. Sizes are verified by the layout tests in `crates/polyplug_abi`.
-- **`HostApi` (160 bytes)**: An opaque `runtime` pointer followed by 19 function pointers (full list in §5).
+- **`HostApi` (168 bytes)**: An opaque `runtime` pointer followed by 20 function pointers (full list in §5).
 - **`GuestContractInterface` (24 bytes)**: Fixed header before the function pointer array.
 - **`GuestContractHandle` (8 bytes)**: `index: u32` (offset 0) and `generation: u32` (offset 4), align 4.
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
@@ -375,7 +375,7 @@ The trust model continues to evolve as polyplug expands its reach into more dyna
 
 ### Unload ✅ done
 
-`HostApi.unload_bundle(this, bundle_id)` (19th pointer, offset 152) is live.
+`HostApi.unload_bundle(this, bundle_id)` (offset 144) is live.
 `Runtime::unload_bundle(bundle_id)` refuses if any still-loaded bundle declared a
 dependency on a contract this bundle provides (`RuntimeError::DependencyInUse`);
 `Runtime::unload_bundle_cascade(bundle_id)` unloads dependents first. Unload bumps the

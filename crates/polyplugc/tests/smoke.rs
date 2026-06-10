@@ -457,6 +457,7 @@ fn smoke_rust_codegen_dispatch() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
 
@@ -617,4 +618,13 @@ fn smoke_cpp_codegen_dispatch() {
     } else {
         eprintln!("skipping g++ compile check: g++ not found");
     }
+}
+
+/// `HostApi.log` stub for test hosts — drops the record.
+unsafe extern "C" fn stub_host_log(
+    _this: *const polyplug_abi::HostApi,
+    _level: u32,
+    _scope: polyplug_abi::StringView,
+    _message: polyplug_abi::StringView,
+) {
 }

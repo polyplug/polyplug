@@ -24,7 +24,7 @@ namespace Polyplug.Abi.Tests
         public void GuestContractInterfaceIs56Bytes() => Assert.Equal(56, Marshal.SizeOf<GuestContractInterface>());
 
         [Fact]
-        public void HostApiIs160Bytes() => Assert.Equal(160, Marshal.SizeOf<HostApi>());
+        public void HostApiIs168Bytes() => Assert.Equal(168, Marshal.SizeOf<HostApi>());
 
         [Fact]
         public void HostContractInstanceIs8Bytes() => Assert.Equal(8, Marshal.SizeOf<HostContractInstance>());

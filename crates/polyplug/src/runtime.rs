@@ -2028,6 +2028,40 @@ pub unsafe extern "C" fn host_get_error_len(this: *const HostApi) -> usize {
     runtime.last_error_len()
 }
 
+/// HostApi.log callback — route a guest diagnostic into the host logging funnel.
+///
+/// Delivers to the same sink as `RuntimeConfig::log`: the host-installed
+/// callback when set, otherwise the stderr default (Error/Warn only). Unknown
+/// `level` values are clamped to [`LogLevel::Error`] (plugins are untrusted —
+/// any u32 can cross the boundary). Null/empty views are legal and read as "".
+///
+/// # Safety
+/// - `this` must be a valid HostApi pointer with a valid runtime field
+/// - `scope` / `message` must be valid UTF-8 views (or null) for the duration
+///   of the call; the runtime reads them only within this call
+pub(crate) unsafe extern "C" fn host_log(
+    this: *const HostApi,
+    level: u32,
+    scope: StringView,
+    message: StringView,
+) {
+    if this.is_null() {
+        return;
+    }
+    // SAFETY: this is a valid HostApi pointer. (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+    let level: LogLevel = match LogLevel::from_u32(level) {
+        Some(l) => l,
+        None => LogLevel::Error,
+    };
+    // SAFETY: caller contract — both views are valid (or null) for the duration
+    // of this call; `as_str` is null-safe and the bytes are copied before return.
+    let (scope_str, message_str): (&str, &str) = unsafe { (scope.as_str(), message.as_str()) };
+    runtime
+        .logger()
+        .log(level, scope_str, || message_str.to_owned());
+}
+
 /// HostApi.call_guest_method callback — host-mediated plugin→plugin cross-dispatch.
 ///
 /// Re-resolves the target contract through the registry via `instance.contract_id`
@@ -2203,6 +2237,15 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
 
+    /// `HostApi.log` stub for test hosts — drops the record.
+    unsafe extern "C" fn stub_host_log(
+        _this: *const HostApi,
+        _level: u32,
+        _scope: polyplug_abi::StringView,
+        _message: polyplug_abi::StringView,
+    ) {
+    }
+
     /// No-op create_instance for a test host contract interface.
     unsafe extern "C" fn test_create_instance(
         _this: *const HostContractInterface,
@@ -2370,6 +2413,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             reserved: core::ptr::null(),
+            log: stub_host_log,
             unload_bundle: host_unload_bundle,
         };
 
@@ -3523,6 +3567,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             reserved: core::ptr::null(),
+            log: stub_host_log,
             unload_bundle: host_unload_bundle,
         };
 
@@ -3565,6 +3610,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             reserved: core::ptr::null(),
+            log: stub_host_log,
             unload_bundle: host_unload_bundle,
         };
 
@@ -3679,6 +3725,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             reserved: core::ptr::null(),
+            log: stub_host_log,
             unload_bundle: host_unload_bundle,
         };
 
@@ -3767,6 +3814,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             reserved: core::ptr::null(),
+            log: stub_host_log,
             unload_bundle: host_unload_bundle,
         };
 
@@ -3866,6 +3914,7 @@ mod tests {
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
             reserved: core::ptr::null(),
+            log: stub_host_log,
             unload_bundle: host_unload_bundle,
         };
 

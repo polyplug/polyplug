@@ -187,6 +187,7 @@ impl RuntimeBuilder {
             call_guest_method: crate::runtime::host_call_guest_method,
             reserved: core::ptr::null(),
             unload_bundle: crate::runtime::host_unload_bundle,
+            log: crate::runtime::host_log,
         }));
 
         let mut loader_map: HashMap<String, Box<dyn BundleLoader>> = HashMap::new();

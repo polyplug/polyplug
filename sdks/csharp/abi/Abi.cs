@@ -213,7 +213,7 @@ public struct GuestContractInterface
 ///  Each function receives the interface pointer as its first parameter,
 ///  allowing guests to call: `host->find_guest_contract(host, id, ver)`
 ///  SDKs hide this pattern: `host.find_guest_contract(id, ver)`
-[StructLayout(LayoutKind.Sequential, Size = 160)]
+[StructLayout(LayoutKind.Sequential, Size = 168)]
 public struct HostApi
 {
     ///  Opaque pointer to Runtime.
@@ -495,11 +495,33 @@ public struct HostApi
     ///  `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
     ///  or a still-loaded bundle declared a dependency on a contract this bundle provides).
     public IntPtr UnloadBundle;
+    ///  Log a guest diagnostic into the host's logging funnel.
+    ///
+    ///  Routes to the same sink as `RuntimeConfig::log`: the host-installed
+    ///  callback when one is set, otherwise the stderr default (Error/Warn
+    ///  visibility only). `level` is a `LogLevel` discriminant; unknown values
+    ///  are clamped to `LogLevel::Error`. `scope` is a short stable tag — guest
+    ///  plugins should use `"guest.<plugin-name>"` or similar.
+    ///
+    ///  The runtime always provides this function — guests may call it
+    ///  unconditionally via the self-passing pattern:
+    ///  `host->log(host, level, scope, message)`.
+    ///
+    ///  # Ownership
+    ///  `scope` and `message` are borrowed views, read only for the duration of
+    ///  the call; the runtime copies what it needs. Null/empty views are legal.
+    ///
+    ///  # Arguments
+    ///  - `this`: HostApi pointer (self-passing)
+    ///  - `level`: `LogLevel` discriminant (`1 = Error` .. `5 = Trace`)
+    ///  - `scope`: short UTF-8 subsystem tag
+    ///  - `message`: UTF-8 log message
+    public IntPtr Log;
     ///  Reserved. Producers must set this to null; consumers must not read it.
     public IntPtr Reserved;
 }
 
-/// Expected size: 160 bytes
+/// Expected size: 168 bytes
 
 ///  Opaque handle to a host contract instance.
 ///

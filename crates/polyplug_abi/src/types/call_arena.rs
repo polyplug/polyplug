@@ -420,6 +420,15 @@ mod tests {
         AbiError::ok()
     }
 
+    /// `HostApi.log` stub for the test host — drops the record.
+    unsafe extern "C" fn stub_host_log(
+        _this: *const crate::host::HostApi,
+        _level: u32,
+        _scope: crate::types::StringView,
+        _message: crate::types::StringView,
+    ) {
+    }
+
     fn test_host() -> HostApi {
         HostApi {
             runtime: core::ptr::null_mut(),
@@ -441,6 +450,7 @@ mod tests {
             get_error_len: stub_get_len,
             call_guest_method: stub_call_guest_method,
             reserved: core::ptr::null(),
+            log: stub_host_log,
             unload_bundle: stub_unload,
         }
     }

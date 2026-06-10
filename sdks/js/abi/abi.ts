@@ -561,6 +561,30 @@ export interface HostApi {
      *  or a still-loaded bundle declared a dependency on a contract this bundle provides).
      */
     unload_bundle: number;
+    /**
+     *  Log a guest diagnostic into the host's logging funnel.
+     * 
+     *  Routes to the same sink as `RuntimeConfig::log`: the host-installed
+     *  callback when one is set, otherwise the stderr default (Error/Warn
+     *  visibility only). `level` is a `LogLevel` discriminant; unknown values
+     *  are clamped to `LogLevel::Error`. `scope` is a short stable tag — guest
+     *  plugins should use `"guest.<plugin-name>"` or similar.
+     * 
+     *  The runtime always provides this function — guests may call it
+     *  unconditionally via the self-passing pattern:
+     *  `host->log(host, level, scope, message)`.
+     * 
+     *  # Ownership
+     *  `scope` and `message` are borrowed views, read only for the duration of
+     *  the call; the runtime copies what it needs. Null/empty views are legal.
+     * 
+     *  # Arguments
+     *  - `this`: HostApi pointer (self-passing)
+     *  - `level`: `LogLevel` discriminant (`1 = Error` .. `5 = Trace`)
+     *  - `scope`: short UTF-8 subsystem tag
+     *  - `message`: UTF-8 log message
+     */
+    log: number;
     /**  Reserved. Producers must set this to null; consumers must not read it. */
     reserved: bigint;
 }
@@ -584,8 +608,9 @@ export const HOST_API_GET_LAST_ERROR_OFFSET: number = 120;
 export const HOST_API_GET_ERROR_LEN_OFFSET: number = 128;
 export const HOST_API_CALL_GUEST_METHOD_OFFSET: number = 136;
 export const HOST_API_UNLOAD_BUNDLE_OFFSET: number = 144;
-export const HOST_API_RESERVED_OFFSET: number = 152;
-export const HOST_API_SIZE: number = 160;
+export const HOST_API_LOG_OFFSET: number = 152;
+export const HOST_API_RESERVED_OFFSET: number = 160;
+export const HOST_API_SIZE: number = 168;
 
 /**
  *  Opaque handle to a host contract instance.

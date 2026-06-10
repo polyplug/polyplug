@@ -264,6 +264,7 @@ fn counting_host() -> HostApi {
         get_error_len: arena_stub_get_len,
         call_guest_method: arena_stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: arena_stub_unload_bundle,
     }
 }
@@ -388,4 +389,13 @@ fn js_quickjs_echo_uses_call_arena() {
         0,
         "the 512-byte arena region serves every 11-byte echo with zero host allocations"
     );
+}
+
+/// `HostApi.log` stub for test hosts — drops the record.
+unsafe extern "C" fn stub_host_log(
+    _this: *const polyplug_abi::HostApi,
+    _level: u32,
+    _scope: polyplug_abi::StringView,
+    _message: polyplug_abi::StringView,
+) {
 }

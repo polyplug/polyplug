@@ -120,6 +120,7 @@ ffi.cdef[[
     typedef size_t (*HostApi_get_error_len_fn)(const HostApi*);
     typedef AbiError (*HostApi_call_guest_method_fn)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
     typedef AbiError (*HostApi_unload_bundle_fn)(const HostApi*, uint64_t);
+    typedef void (*HostApi_log_fn)(const HostApi*, uint32_t, StringView, StringView);
     //  Host Interface — function table passed to guests during initialization.
     // 
     //  Contains an opaque runtime pointer and function pointers for guest calls.
@@ -429,10 +430,32 @@ ffi.cdef[[
         //  `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
         //  or a still-loaded bundle declared a dependency on a contract this bundle provides).
         HostApi_unload_bundle_fn unload_bundle;
+        //  Log a guest diagnostic into the host's logging funnel.
+        // 
+        //  Routes to the same sink as `RuntimeConfig::log`: the host-installed
+        //  callback when one is set, otherwise the stderr default (Error/Warn
+        //  visibility only). `level` is a `LogLevel` discriminant; unknown values
+        //  are clamped to `LogLevel::Error`. `scope` is a short stable tag — guest
+        //  plugins should use `"guest.<plugin-name>"` or similar.
+        // 
+        //  The runtime always provides this function — guests may call it
+        //  unconditionally via the self-passing pattern:
+        //  `host->log(host, level, scope, message)`.
+        // 
+        //  # Ownership
+        //  `scope` and `message` are borrowed views, read only for the duration of
+        //  the call; the runtime copies what it needs. Null/empty views are legal.
+        // 
+        //  # Arguments
+        //  - `this`: HostApi pointer (self-passing)
+        //  - `level`: `LogLevel` discriminant (`1 = Error` .. `5 = Trace`)
+        //  - `scope`: short UTF-8 subsystem tag
+        //  - `message`: UTF-8 log message
+        HostApi_log_fn log;
         //  Reserved. Producers must set this to null; consumers must not read it.
         const void* reserved;
     } HostApi;
-    // Expected size: 160 bytes
+    // Expected size: 168 bytes
 
     //  Opaque handle to a host contract instance.
     // 

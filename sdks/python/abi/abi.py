@@ -492,6 +492,7 @@ _host_api_get_last_error_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, 
 _host_api_get_error_len_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p)
 _host_api_call_guest_method_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 _host_api_unload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_uint64)
+_host_api_log_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32, StringView, StringView)
 class HostApi(ctypes.Structure):
     """ Host Interface — function table passed to guests during initialization.
     
@@ -543,11 +544,12 @@ class HostApi(ctypes.Structure):
         ("get_error_len", _host_api_get_error_len_t),
         ("call_guest_method", _host_api_call_guest_method_t),
         ("unload_bundle", _host_api_unload_bundle_t),
+        ("log", _host_api_log_t),
         ("reserved", ctypes.c_void_p),
     ]
 
-# Expected size: 160 bytes
-assert ctypes.sizeof(HostApi) == 160, f"HostApi expected 160 bytes, got {ctypes.sizeof(HostApi)}"
+# Expected size: 168 bytes
+assert ctypes.sizeof(HostApi) == 168, f"HostApi expected 168 bytes, got {ctypes.sizeof(HostApi)}"
 
 
 class DispatchMechanisms(ctypes.Union):

@@ -385,6 +385,33 @@ pub struct HostApi {
     /// `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
     /// or a still-loaded bundle declared a dependency on a contract this bundle provides).
     pub unload_bundle: unsafe extern "C" fn(this: *const HostApi, bundle_id: BundleId) -> AbiError,
+    /// Log a guest diagnostic into the host's logging funnel.
+    ///
+    /// Routes to the same sink as `RuntimeConfig::log`: the host-installed
+    /// callback when one is set, otherwise the stderr default (Error/Warn
+    /// visibility only). `level` is a `LogLevel` discriminant; unknown values
+    /// are clamped to `LogLevel::Error`. `scope` is a short stable tag — guest
+    /// plugins should use `"guest.<plugin-name>"` or similar.
+    ///
+    /// The runtime always provides this function — guests may call it
+    /// unconditionally via the self-passing pattern:
+    /// `host->log(host, level, scope, message)`.
+    ///
+    /// # Ownership
+    /// `scope` and `message` are borrowed views, read only for the duration of
+    /// the call; the runtime copies what it needs. Null/empty views are legal.
+    ///
+    /// # Arguments
+    /// - `this`: HostApi pointer (self-passing)
+    /// - `level`: `LogLevel` discriminant (`1 = Error` .. `5 = Trace`)
+    /// - `scope`: short UTF-8 subsystem tag
+    /// - `message`: UTF-8 log message
+    pub log: unsafe extern "C" fn(
+        this: *const HostApi,
+        level: u32,
+        scope: StringView,
+        message: StringView,
+    ),
     /// Reserved. Producers must set this to null; consumers must not read it.
     pub reserved: *const core::ffi::c_void,
 }
@@ -408,15 +435,15 @@ mod tests {
 
     #[test]
     fn layout_host_api() {
-        // HostApi: runtime pointer (8 bytes) + 18 extern "C" fn pointers (144 bytes) + 1 reserved data pointer (8 bytes).
-        // Total: 160 bytes (20 pointer-sized fields)
+        // HostApi: runtime pointer (8 bytes) + 19 extern "C" fn pointers (152 bytes) + 1 reserved data pointer (8 bytes).
+        // Total: 168 bytes (21 pointer-sized fields)
         // Fields: runtime, register_guest_contract, alloc, free, find_guest_contract,
         //         find_all_guest_contracts, resolve_guest_contract,
         //         get_host_contract, resolve_host_contract_interface, list_bundles,
         //         get_dependencies, load_bundle, reload_bundle, register_host_contract,
         //         register_loader, get_last_error, get_error_len, call_guest_method,
-        //         unload_bundle, reserved
-        assert_eq!(size_of::<HostApi>(), 160);
+        //         unload_bundle, log, reserved
+        assert_eq!(size_of::<HostApi>(), 168);
         assert_eq!(align_of::<HostApi>(), 8);
         // Existing fields (unchanged offsets)
         assert_eq!(offset_of!(HostApi, runtime), 0);
@@ -438,7 +465,8 @@ mod tests {
         assert_eq!(offset_of!(HostApi, get_error_len), 128);
         assert_eq!(offset_of!(HostApi, call_guest_method), 136);
         assert_eq!(offset_of!(HostApi, unload_bundle), 144);
-        assert_eq!(offset_of!(HostApi, reserved), 152);
+        assert_eq!(offset_of!(HostApi, log), 152);
+        assert_eq!(offset_of!(HostApi, reserved), 160);
     }
 
     /// Verify HostApi has runtime: *mut c_void field at offset 0.

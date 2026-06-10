@@ -346,6 +346,7 @@ fn counting_host() -> HostApi {
         get_error_len: caller_stub_get_len,
         call_guest_method: caller_stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: caller_stub_unload_bundle,
     }
 }
@@ -526,3 +527,12 @@ unsafe extern "C" fn vm_noop_create(
 }
 
 unsafe extern "C" fn vm_noop_destroy(_host: *const HostApi, _instance: GuestContractInstance) {}
+
+/// `HostApi.log` stub for test hosts — drops the record.
+unsafe extern "C" fn stub_host_log(
+    _this: *const polyplug_abi::HostApi,
+    _level: u32,
+    _scope: polyplug_abi::StringView,
+    _message: polyplug_abi::StringView,
+) {
+}

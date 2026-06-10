@@ -355,6 +355,7 @@ fn test_rust_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -448,6 +449,7 @@ fn test_cpp_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -541,6 +543,7 @@ fn test_csharp_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -634,6 +637,7 @@ fn test_python_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -727,6 +731,7 @@ fn test_lua_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -820,6 +825,7 @@ fn test_js_host_rust_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -919,6 +925,7 @@ fn test_rust_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1012,6 +1019,7 @@ fn test_cpp_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1105,6 +1113,7 @@ fn test_csharp_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1198,6 +1207,7 @@ fn test_python_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1291,6 +1301,7 @@ fn test_lua_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1384,6 +1395,7 @@ fn test_js_host_cpp_guest() {
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1970,4 +1982,13 @@ fn test_js_host_js_guest() {
     );
     let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
+}
+
+/// `HostApi.log` stub for test hosts — drops the record.
+unsafe extern "C" fn stub_host_log(
+    _this: *const polyplug_abi::HostApi,
+    _level: u32,
+    _scope: polyplug_abi::StringView,
+    _message: polyplug_abi::StringView,
+) {
 }

@@ -136,3 +136,76 @@ fn raw_config_max_level_error_filters_warn() {
         "max_level=Error must filter the Warn scan diagnostic, got: {captured:?}"
     );
 }
+
+/// `HostApi.log` (guest-side logging) routes into the same funnel as
+/// `RuntimeConfig::log`: a guest calling `host->log(host, ...)` is delivered to
+/// the builder-installed callback; unknown level values are clamped to Error;
+/// null views are legal and read as "".
+#[test]
+fn host_api_log_routes_guest_records_into_host_logger() {
+    let sink: Box<Mutex<Vec<(u32, String, String)>>> = Box::new(Mutex::new(Vec::new()));
+    let config = RuntimeConfig {
+        log: Some(capture_log),
+        log_user_data: (&*sink) as *const Mutex<Vec<(u32, String, String)>> as *mut c_void,
+        log_max_level: LogLevel::Trace as u32,
+        ..Default::default()
+    };
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .config(config)
+        .build()
+        .expect("build runtime");
+
+    let host: &polyplug_abi::HostApi = runtime.host_abi();
+    let scope: &str = "guest.test_plugin";
+    let message: &str = "hello from a guest";
+    let scope_view = StringView {
+        ptr: scope.as_ptr(),
+        len: scope.len(),
+    };
+    let message_view = StringView {
+        ptr: message.as_ptr(),
+        len: message.len(),
+    };
+    // SAFETY: host is the runtime's live HostApi; both views borrow local UTF-8
+    // string data valid for the duration of each synchronous call.
+    unsafe {
+        (host.log)(
+            host as *const polyplug_abi::HostApi,
+            LogLevel::Info as u32,
+            scope_view,
+            message_view,
+        );
+        // Unknown level (plugins are untrusted): must clamp to Error, not UB.
+        (host.log)(
+            host as *const polyplug_abi::HostApi,
+            999,
+            scope_view,
+            message_view,
+        );
+        // Null views are legal at the ABI boundary and read as "".
+        (host.log)(
+            host as *const polyplug_abi::HostApi,
+            LogLevel::Warn as u32,
+            StringView::null(),
+            StringView::null(),
+        );
+    }
+
+    let captured: Vec<(u32, String, String)> = sink.lock().expect("sink lock").clone();
+    assert_eq!(
+        captured,
+        vec![
+            (
+                LogLevel::Info as u32,
+                String::from("guest.test_plugin"),
+                String::from("hello from a guest"),
+            ),
+            (
+                LogLevel::Error as u32,
+                String::from("guest.test_plugin"),
+                String::from("hello from a guest"),
+            ),
+            (LogLevel::Warn as u32, String::new(), String::new()),
+        ]
+    );
+}

@@ -44,7 +44,7 @@ void* polyplug_runtime_create(const void* config);   // returns HostApi pointer
 void  polyplug_runtime_destroy(void* host);
 ```
 
-All other operations go through **`HostApi` struct fields** (function pointers). `HostApi` is `160 bytes` (1 opaque runtime pointer + 18 function pointer fields + 1 trailing `reserved` data pointer: `call_guest_method` at offset 136, `unload_bundle` at offset 144, and `reserved` at offset 152), `align = 8`. The `reserved` pointer carries no meaning — producers set it to null, consumers must not read it; it exists only to keep the frozen struct size expandable later. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostApi` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.
+All other operations go through **`HostApi` struct fields** (function pointers). `HostApi` is `168 bytes` (1 opaque runtime pointer + 19 function pointer fields + 1 trailing `reserved` data pointer: `call_guest_method` at offset 136, `unload_bundle` at offset 144, `log` at offset 152, and `reserved` at offset 160), `align = 8`. The `reserved` pointer carries no meaning — producers set it to null, consumers must not read it; it exists only to keep the frozen struct size expandable later. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostApi` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.
 
 ### `polyplug_init` — the plugin entry point
 
@@ -84,7 +84,7 @@ Each language SDK has `abi/`, `host/`, `guest/`, and `loaders/` subdirectories:
 
 ```
 sdks/
-├── rust/        abi/, guest/, host/
+├── rust/        abi/, guest/   (the host side IS the `polyplug` crate)
 ├── cpp/         abi/, host/, guest/, loaders/
 ├── csharp/      abi/, host/, guest/, loaders/, abi.tests/, host.tests/
 ├── python/      abi/, host/, guest/, loaders/, polyplug_abi/
@@ -762,7 +762,7 @@ polyplug/
 │   │           ├── rust.rs, cpp.rs, csharp.rs, python.rs, lua.rs, js_quickjs.rs
 │   └── sdk_validator/               validates SDKs against the ABI
 ├── sdks/
-│   ├── rust/    abi/, guest/, host/
+│   ├── rust/    abi/, guest/   (host side = the polyplug crate itself)
 │   ├── cpp/     abi/, host/, guest/, loaders/
 │   ├── csharp/  abi/, host/, guest/, loaders/, abi.tests/, host.tests/
 │   ├── python/  abi/, host/, guest/, loaders/, polyplug_abi/

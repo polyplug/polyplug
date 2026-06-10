@@ -287,6 +287,7 @@ fn test_init_registers_interface() {
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: noop_unload_bundle,
     };
 
@@ -349,4 +350,13 @@ fn test_missing_symbol_returns_error() {
     assert!(result.is_err(), "non-existent symbol must return Err");
 
     core::mem::forget(library);
+}
+
+/// `HostApi.log` stub for test hosts — drops the record.
+unsafe extern "C" fn stub_host_log(
+    _this: *const polyplug_abi::HostApi,
+    _level: u32,
+    _scope: polyplug_abi::StringView,
+    _message: polyplug_abi::StringView,
+) {
 }

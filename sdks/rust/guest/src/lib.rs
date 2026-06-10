@@ -364,6 +364,34 @@ pub fn get_host_vtable() -> *const polyplug_abi::HostApi {
     HOST_VTABLE.get().map(|p| p.0).unwrap_or(core::ptr::null())
 }
 
+/// Log a diagnostic into the host's logging funnel (`HostApi.log`).
+///
+/// Routes to the same sink as the host's `RuntimeConfig::log` callback (or its
+/// stderr default). `scope` should be a short stable tag, e.g.
+/// `"guest.<plugin-name>"`.
+///
+/// No-op when called before `polyplug_init` has stored the host vtable — there
+/// is no host to deliver to yet.
+pub fn log(level: polyplug_abi::types::LogLevel, scope: &str, message: &str) {
+    let host: *const polyplug_abi::HostApi = get_host_vtable();
+    if host.is_null() {
+        return;
+    }
+    let scope_view = StringView {
+        ptr: scope.as_ptr(),
+        len: scope.len(),
+    };
+    let message_view = StringView {
+        ptr: message.as_ptr(),
+        len: message.len(),
+    };
+    // SAFETY: `host` was stored from a valid HostApi during polyplug_init and
+    // stays valid for the plugin's lifetime; `log` is always provided by the
+    // runtime. Both views borrow live UTF-8 Rust string data that outlives the
+    // synchronous call, matching the field's documented ownership contract.
+    unsafe { ((*host).log)(host, level as u32, scope_view, message_view) }
+}
+
 // ─── FFI Module ────────────────────────────────────────────────────────────────
 
 /// FFI utilities for guest plugins.

@@ -280,6 +280,7 @@ fn test_dispatch_add_function() {
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: noop_unload_bundle,
     };
 
@@ -396,6 +397,7 @@ fn test_dispatch_add_with_zero() {
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: noop_unload_bundle,
     };
 
@@ -488,6 +490,7 @@ fn test_dispatch_add_wrapping_overflow() {
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: noop_unload_bundle,
     };
 
@@ -538,4 +541,13 @@ fn test_dispatch_add_wrapping_overflow() {
     assert_eq!(out, 0_u32, "u32::MAX + 1 wraps to 0");
 
     core::mem::forget(library);
+}
+
+/// `HostApi.log` stub for test hosts — drops the record.
+unsafe extern "C" fn stub_host_log(
+    _this: *const polyplug_abi::HostApi,
+    _level: u32,
+    _scope: polyplug_abi::StringView,
+    _message: polyplug_abi::StringView,
+) {
 }

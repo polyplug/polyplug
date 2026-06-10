@@ -689,7 +689,7 @@ const KNOWN_SIZES: &[(&str, usize)] = &[
     ("DispatchMechanisms", 16),
     ("GuestContractInterface", 56),
     ("GuestContractInstance", 16),
-    ("HostApi", 160),
+    ("HostApi", 168),
     ("HostContractInterface", 80),
     ("HostContractInstance", 8),
     ("GuestContractHandle", 8),

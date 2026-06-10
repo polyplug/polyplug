@@ -278,6 +278,7 @@ fn load_and_init_plugin() -> libloading::Library {
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
         reserved: core::ptr::null(),
+        log: stub_host_log,
         unload_bundle: noop_unload_bundle,
     };
 
@@ -471,4 +472,13 @@ fn test_multi_lookup_consistent() {
     );
 
     core::mem::forget(lib);
+}
+
+/// `HostApi.log` stub for test hosts — drops the record.
+unsafe extern "C" fn stub_host_log(
+    _this: *const polyplug_abi::HostApi,
+    _level: u32,
+    _scope: polyplug_abi::StringView,
+    _message: polyplug_abi::StringView,
+) {
 }
