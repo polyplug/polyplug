@@ -159,6 +159,7 @@ fn hot_reload_config() -> polyplug::RuntimeConfig {
         hot_reload_enabled: true,
         on_reload: None,
         on_reload_user_data: core::ptr::null_mut(),
+        ..Default::default()
     }
 }
 

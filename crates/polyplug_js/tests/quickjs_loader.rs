@@ -117,6 +117,7 @@ fn make_runtime_hot_reload() -> Arc<Runtime> {
             hot_reload_enabled: true,
             on_reload: None,
             on_reload_user_data: core::ptr::null_mut(),
+            ..Default::default()
         })
         .build()
         .expect("runtime build must succeed")

@@ -24,6 +24,7 @@ use polyplug_abi::{
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::RegistryError;
+use crate::logger::{LoggerHandle, RecoverPoisoned, RecoveringGuard};
 
 /// Outcome of [`RuntimeStore::resolve_single_provider`] — the single-read-guard
 /// primitive behind the `call_guest_method` HostApi cross-dispatch path.
@@ -318,13 +319,26 @@ impl RuntimeStoreData {
 pub struct RuntimeStore {
     /// Single RwLock protecting all mutable registry state.
     data: RwLock<RuntimeStoreData>,
+    /// Instance-owned copy of the host logging configuration. The store has no
+    /// back-reference to its `Runtime`, so the handle is copied in at
+    /// construction (Rule 12: instance state, no globals).
+    logger: LoggerHandle,
 }
 
 impl RuntimeStore {
-    /// Create an empty registry.
+    /// Create an empty registry with the default (stderr Error/Warn) logger.
     pub fn new() -> RuntimeStore {
         RuntimeStore {
             data: RwLock::new(RuntimeStoreData::new()),
+            logger: LoggerHandle::default_stderr(),
+        }
+    }
+
+    /// Create an empty registry that logs through the given handle.
+    pub(crate) fn with_logger(logger: LoggerHandle) -> RuntimeStore {
+        RuntimeStore {
+            data: RwLock::new(RuntimeStoreData::new()),
+            logger,
         }
     }
 
@@ -380,11 +394,8 @@ impl RuntimeStore {
         let owned_name: String =
             unsafe { string_view_to_owned_string(&descriptor.name, "PluginDescriptor.name")? };
 
-        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
-            self.data.write().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+            self.data.write().recover_poisoned(self.logger, "store");
 
         // During a reload window the bundle legitimately re-registers its own
         // contracts into fresh (pending) slots; that is re-init, not a duplicate.
@@ -555,11 +566,8 @@ impl RuntimeStore {
         bundle_id: BundleId,
         contract_ids: Vec<GuestContractId>,
     ) -> Result<(), RegistryError> {
-        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
-            self.data.write().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+            self.data.write().recover_poisoned(self.logger, "store");
         let set: &mut HashSet<GuestContractId> =
             data.bundle_declared_deps.entry(bundle_id).or_default();
         for cid in contract_ids {
@@ -574,11 +582,8 @@ impl RuntimeStore {
         bundle_id: BundleId,
         contract_id: GuestContractId,
     ) -> bool {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_declared_deps
             .get(&bundle_id)
             .is_some_and(|s| s.contains(&contract_id))
@@ -595,11 +600,8 @@ impl RuntimeStore {
         contract_id: GuestContractId,
         min_version: u32,
     ) -> Result<GuestContractHandle, RegistryError> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
 
         let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
             Some(v) => v,
@@ -640,11 +642,8 @@ impl RuntimeStore {
         contract_id: GuestContractId,
         min_version: u32,
     ) -> Result<GuestContractHandle, RegistryError> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
 
         // Get all slot indices for this bundle (O(1) via bundle_data)
         let slot_indices: &Vec<u32> = match data.bundle_data.get(&bundle_id) {
@@ -705,11 +704,8 @@ impl RuntimeStore {
         min_version: u32,
         out: &mut [GuestContractHandle],
     ) -> usize {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
 
         let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
             Some(v) => v,
@@ -758,11 +754,8 @@ impl RuntimeStore {
         min_version: u32,
         out: &mut [u64],
     ) -> usize {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
 
         let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
             Some(v) => v,
@@ -796,10 +789,8 @@ impl RuntimeStore {
 
     /// Count plugins satisfying the given contract_id and minimum version.
     pub fn count_guest_contracts(&self, contract_id: GuestContractId, min_version: u32) -> usize {
-        let data = self.data.read().unwrap_or_else(|e| {
-            eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-            e.into_inner()
-        });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
 
         let indices = match data.guest_contract_index.get(&contract_id) {
             Some(v) => v,
@@ -847,11 +838,8 @@ impl RuntimeStore {
         contract_id: GuestContractId,
         min_version: u32,
     ) -> SingleProviderResolution {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
 
         let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
             Some(v) => v,
@@ -909,11 +897,8 @@ impl RuntimeStore {
         contract_id: GuestContractId,
         min_version: u32,
     ) -> Vec<GuestContractHandle> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
 
         let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
             Some(v) => v,
@@ -979,11 +964,8 @@ impl RuntimeStore {
         &self,
         handle: GuestContractHandle,
     ) -> Result<*const GuestContractInterface, RegistryError> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
 
         let slot_idx: usize = handle.index as usize;
         if slot_idx >= data.slots.len() {
@@ -1019,11 +1001,8 @@ impl RuntimeStore {
         slot_index: u32,
         new_interface: Arc<GuestContractInterface>,
     ) -> Result<(), RegistryError> {
-        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
-            self.data.write().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+            self.data.write().recover_poisoned(self.logger, "store");
         let slot_idx: usize = slot_index as usize;
         if slot_idx >= data.slots.len() {
             return Err(RegistryError::InvalidHandle { index: slot_index });
@@ -1077,11 +1056,8 @@ impl RuntimeStore {
     /// not observe a second live slot per contract. Pair with `apply_reload_swap`
     /// (which closes the window) or `abort_reload` on the failure path.
     pub(crate) fn begin_reload(&self, bundle_id: BundleId) {
-        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
-            self.data.write().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+            self.data.write().recover_poisoned(self.logger, "store");
         data.reloading_bundles.insert(bundle_id);
     }
 
@@ -1097,11 +1073,8 @@ impl RuntimeStore {
     /// Pre-reload (live) and previously-retired slots are left untouched, so any
     /// raw pointer a caller already resolved stays valid.
     pub(crate) fn abort_reload(&self, bundle_id: BundleId, old_slots: &[u32]) {
-        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
-            self.data.write().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+            self.data.write().recover_poisoned(self.logger, "store");
         data.reloading_bundles.remove(&bundle_id);
 
         // Pending slots = current bundle slots minus the pre-reload set.
@@ -1152,11 +1125,8 @@ impl RuntimeStore {
         bundle_id: BundleId,
         old_slots: &[u32],
     ) -> Result<(), RegistryError> {
-        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
-            self.data.write().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+            self.data.write().recover_poisoned(self.logger, "store");
         // Close the reload window: subsequent registrations (if any) publish normally,
         // and the swap below makes the new interfaces visible via the old slots.
         data.reloading_bundles.remove(&bundle_id);
@@ -1278,11 +1248,8 @@ impl RuntimeStore {
         &self,
         handle: GuestContractHandle,
     ) -> Option<OwnedPluginDescriptor> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
         if handle.is_null() {
             return None;
         }
@@ -1303,11 +1270,8 @@ impl RuntimeStore {
     /// Returns an empty `Vec` if the bundle has no registered slots.
     /// O(1) lookup via bundle_data HashMap.
     pub fn get_bundle_plugin_slots(&self, bundle_id: BundleId) -> Vec<u32> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_data
             .get(&bundle_id)
             .map(|bd: &BundleData| bd.plugin_slots.clone())
@@ -1325,11 +1289,8 @@ impl RuntimeStore {
         &self,
         bundle_id: BundleId,
     ) -> Vec<(String, u32, Option<u32>)> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
         let slots: &Vec<u32> = match data.bundle_data.get(&bundle_id) {
             Some(bd) => &bd.plugin_slots,
             None => return Vec::new(),
@@ -1370,11 +1331,8 @@ impl RuntimeStore {
     /// slot indices belongs to the bundle. Used by cascade reload to determine
     /// which contracts a freshly-reloaded bundle provides.
     pub(crate) fn bundle_exported_contracts(&self, bundle_id: BundleId) -> Vec<GuestContractId> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
         let bundle_slots: &Vec<u32> = match data.bundle_data.get(&bundle_id) {
             Some(bd) => &bd.plugin_slots,
             None => return Vec::new(),
@@ -1397,11 +1355,8 @@ impl RuntimeStore {
         &self,
         contracts: &HashSet<GuestContractId>,
     ) -> Vec<BundleId> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_declared_deps
             .iter()
             .filter(|(_, declared)| !declared.is_disjoint(contracts))
@@ -1422,11 +1377,8 @@ impl RuntimeStore {
         file_path: PathBuf,
         dependencies: Vec<BundleDependency>,
     ) -> Result<(), RegistryError> {
-        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
-            self.data.write().unwrap_or_else(|e| {
-                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+            self.data.write().recover_poisoned(self.logger, "store");
 
         // Update bundle_data descriptor if entry exists
         if let Some(bundle_data) = data.bundle_data.get_mut(&bundle_id) {
@@ -1491,11 +1443,8 @@ impl RuntimeStore {
         &self,
         bundle_id: BundleId,
     ) -> Result<(u32, Vec<Arc<GuestContractInterface>>), RegistryError> {
-        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
-            self.data.write().unwrap_or_else(|e| {
-                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+            self.data.write().recover_poisoned(self.logger, "store");
 
         // Collect slot indices and bundle name before mutating.
         let (slot_indices, bundle_name): (Vec<u32>, String) = match data.bundle_data.get(&bundle_id)
@@ -1534,21 +1483,15 @@ impl RuntimeStore {
 
     /// List all loaded bundle IDs.
     pub fn list_bundles(&self) -> Vec<BundleId> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_data.keys().copied().collect::<Vec<BundleId>>()
     }
 
     /// Get bundle metadata by bundle ID.
     pub fn get_bundle_descriptor(&self, bundle_id: BundleId) -> Option<BundleDescriptor> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_data.get(&bundle_id).map(|bd: &BundleData| {
             // Clone descriptor fields manually since BundleDescriptor doesn't derive Clone
             BundleDescriptor {
@@ -1572,11 +1515,8 @@ impl RuntimeStore {
 
     /// Get all BundleIds for a given bundle name (multi-version support).
     pub fn get_bundles_by_name(&self, bundle_name: &str) -> Vec<BundleId> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_name_index
             .get(bundle_name)
             .cloned()
@@ -1589,11 +1529,8 @@ impl RuntimeStore {
         &self,
         slot_index: u32,
     ) -> Option<Arc<GuestContractInterface>> {
-        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
-            self.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
         let slot: &PluginSlot = data.slots.get(slot_index as usize)?;
         slot.interface.as_ref().map(Arc::clone)
     }
@@ -1602,11 +1539,8 @@ impl RuntimeStore {
     /// This is only available in test builds to allow test isolation.
     #[cfg(test)]
     pub fn clear_for_test(&self) {
-        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
-            self.data.write().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+            self.data.write().recover_poisoned(self.logger, "store");
         data.slots.clear();
         data.guest_contract_index.clear();
         data.bundle_data.clear();

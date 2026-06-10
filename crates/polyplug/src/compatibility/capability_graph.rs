@@ -14,6 +14,7 @@ use crate::compatibility::{bundle_node::BundleNode, dependency_edge::DependencyE
 use crate::error::GraphError;
 use crate::loader::ManifestData;
 use crate::loader::ManifestDependency;
+use crate::logger::LoggerHandle;
 
 /// The capability dependency graph for all bundles.
 //
@@ -149,8 +150,21 @@ impl CapabilityGraph {
     /// Returns `Err(GraphError::UnsatisfiedCapability)` if any ByBundle dep is missing
     /// or if a bundle does not provide the required contract.
     /// The caller should then call `graph.topological_order()` for load ordering.
+    ///
+    /// Diagnostics go to the default logger (stderr, Error/Warn). Internal
+    /// callers with a host logger use
+    /// [`CapabilityGraph::from_manifests_with_logger`].
     pub fn from_manifests(
         manifests: &[(PathBuf, ManifestData)],
+    ) -> Result<CapabilityGraph, GraphError> {
+        CapabilityGraph::from_manifests_with_logger(manifests, LoggerHandle::default_stderr())
+    }
+
+    /// [`CapabilityGraph::from_manifests`] with an explicit logger for
+    /// dependency-resolution diagnostics.
+    pub(crate) fn from_manifests_with_logger(
+        manifests: &[(PathBuf, ManifestData)],
+        logger: LoggerHandle,
     ) -> Result<CapabilityGraph, GraphError> {
         let mut graph: CapabilityGraph = CapabilityGraph::new();
 
@@ -207,7 +221,8 @@ impl CapabilityGraph {
                 .collect::<Vec<ContractCapability>>();
 
             // Build requires capabilities from resolved dependencies
-            let resolved: Vec<ManifestDependency> = manifest.resolved_dependencies();
+            let resolved: Vec<ManifestDependency> =
+                manifest.resolved_dependencies_with_logger(logger);
             let mut requires_caps: Vec<ContractCapability> = Vec::new();
             for dep in &resolved {
                 match dep {

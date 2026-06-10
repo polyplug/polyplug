@@ -1,6 +1,7 @@
 use core::ffi::c_void;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use polyplug_abi::types::{LogLevel, StringView};
 use polyplug_abi::{HostApi, RuntimeLanguage};
 
 use crate::{
@@ -8,16 +9,51 @@ use crate::{
     compatibility::{CapabilityGraph, Compatibility},
     error::{GraphError, LoaderError, RuntimeError},
     loader::{BundleLoader, ManifestData},
-    runtime::{ReloadCallback, Runtime, WarningCallback},
+    logger::{LoggerClosure, LoggerHandle},
+    runtime::{ReloadCallback, Runtime},
     runtime_store::RuntimeStore,
 };
+
+/// `RuntimeConfig::log` trampoline that forwards to the boxed Rust closure
+/// installed via [`RuntimeBuilder::logger`].
+///
+/// # Safety
+/// `user_data` must point to the [`LoggerClosure`] owned by the `Runtime`
+/// (kept alive for the runtime's lifetime); `scope` and `message` must be
+/// valid UTF-8 views for the duration of the call — both are guaranteed by
+/// the runtime's logger plumbing, the only producer of these calls.
+unsafe extern "C" fn rust_logger_trampoline(
+    user_data: *mut c_void,
+    level: u32,
+    scope: StringView,
+    message: StringView,
+) {
+    if user_data.is_null() {
+        return;
+    }
+    // SAFETY: user_data points to the runtime-owned LoggerClosure (see function
+    // docs); the box lives for the runtime's lifetime, which covers every log call.
+    let callback: &LoggerClosure = unsafe { &*(user_data as *const LoggerClosure) };
+    // Unknown level values cannot occur from the runtime's own logger, but the
+    // conversion stays total: collapse anything unexpected to Error.
+    let level: LogLevel = match LogLevel::from_u32(level) {
+        Some(l) => l,
+        None => LogLevel::Error,
+    };
+    // SAFETY: the runtime's LoggerHandle built both views from live, UTF-8 Rust
+    // string data that outlives this call (documented callback contract).
+    let (scope_str, message_str): (&str, &str) = unsafe { (scope.as_str(), message.as_str()) };
+    callback.0.emit(level, scope_str, message_str);
+}
 
 /// Builder for constructing a Runtime.
 pub struct RuntimeBuilder {
     plugin_dirs: Vec<PathBuf>,
     loaders: Vec<Box<dyn BundleLoader>>,
     compatibility: Compatibility,
-    warning_cb: Option<WarningCallback>,
+    /// Boxed Rust logger closure (boxed for a thin, stable `user_data`
+    /// pointer); ownership moves into the Runtime so it outlives every log call.
+    logger_closure: Option<Box<LoggerClosure>>,
     on_reload_cb: Option<ReloadCallback>,
     config: RuntimeConfig,
     host_runtime: RuntimeLanguage,
@@ -30,7 +66,7 @@ impl RuntimeBuilder {
             plugin_dirs: Vec::new(),
             loaders: Vec::new(),
             compatibility: Compatibility::default(),
-            warning_cb: None,
+            logger_closure: None,
             on_reload_cb: None,
             config: RuntimeConfig::default(),
             host_runtime: RuntimeLanguage::Rust,
@@ -60,12 +96,34 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Register a warning callback.
+    /// Install a Rust closure as the runtime logger.
     ///
-    /// Only the first registered callback takes effect (OnceLock semantics).
-    /// The callback receives human-readable warning strings.
-    pub fn on_warning(mut self, cb: impl Fn(&str) + Send + Sync + 'static) -> RuntimeBuilder {
-        self.warning_cb = Some(WarningCallback(Box::new(cb)));
+    /// Ergonomic wrapper over `RuntimeConfig::log` for Rust hosts: the closure
+    /// is boxed, owned by the built `Runtime`, and reached through an
+    /// `extern "C"` trampoline. All levels are delivered
+    /// (`log_max_level = LogLevel::Trace`) — filter inside the closure if you
+    /// want less.
+    ///
+    /// # Callback contract
+    /// - May be invoked from any thread.
+    /// - Must NOT re-enter the runtime (calling any runtime/HostApi function
+    ///   from inside the closure may deadlock).
+    /// - The `scope` and `message` slices are valid only for the duration of
+    ///   the call — copy them (`to_owned`) to retain.
+    /// - Scope examples: `"registry"`, `"loader.lua"`, `"reload"`.
+    ///
+    /// Note: a later [`RuntimeBuilder::config`] call overwrites the
+    /// `log` / `log_user_data` / `log_max_level` fields this installs — set the
+    /// config first, then the logger.
+    pub fn logger(
+        mut self,
+        cb: impl Fn(LogLevel, &str, &str) + Send + Sync + 'static,
+    ) -> RuntimeBuilder {
+        let holder: Box<LoggerClosure> = Box::new(LoggerClosure(Box::new(cb)));
+        self.config.log = Some(rust_logger_trampoline);
+        self.config.log_user_data = (&*holder) as *const LoggerClosure as *mut c_void;
+        self.config.log_max_level = LogLevel::Trace as u32;
+        self.logger_closure = Some(holder);
         self
     }
 
@@ -100,7 +158,8 @@ impl RuntimeBuilder {
     //  loads them in sorted order, registers interfaces.
     //  Full capability graph resolution is a future enhancement.
     pub fn build(self) -> Result<Arc<Runtime>, RuntimeError> {
-        let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::new());
+        let logger: LoggerHandle = LoggerHandle::from_config(&self.config);
+        let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::with_logger(logger));
 
         // Build the static HostApi. This must be 'static.
         // The `runtime` field is null here and patched once below, after the
@@ -151,11 +210,7 @@ impl RuntimeBuilder {
         // corrupt or unreadable bundle must not hide the others, but it must be
         // visible to the host.
         for diagnostic in &scan.diagnostics {
-            let msg: String = format!("scan: {diagnostic}");
-            match &self.warning_cb {
-                Some(cb) => (cb.0)(&msg),
-                None => eprintln!("[polyplug] {msg}"),
-            }
+            logger.log(LogLevel::Warn, "builder", || format!("scan: {diagnostic}"));
         }
 
         let discovered: Vec<(PathBuf, ManifestData)> = scan.found;
@@ -176,7 +231,8 @@ impl RuntimeBuilder {
             bundle_manifests: std::sync::Mutex::new(manifests_map),
             on_reload_cb: self.on_reload_cb,
             config: self.config,
-            warning_cb: self.warning_cb,
+            logger,
+            _logger_closure: self.logger_closure,
             last_error: std::sync::Mutex::new(String::new()),
             host_contracts: std::sync::RwLock::new(HashMap::new()),
             singleton_instances: std::sync::RwLock::new(HashMap::new()),
@@ -201,15 +257,12 @@ impl RuntimeBuilder {
         // If nothing discovered, return Runtime with no loaded bundles (no graph needed)
         if !discovered.is_empty() {
             // Phase 2: Build capability graph
-            let graph: CapabilityGraph = CapabilityGraph::from_manifests(&discovered)
-                .map_err(|e: GraphError| RuntimeError::Graph(e))?;
+            let graph: CapabilityGraph =
+                CapabilityGraph::from_manifests_with_logger(&discovered, logger)
+                    .map_err(|e: GraphError| RuntimeError::Graph(e))?;
 
             // Phase 2.5: Validate version compatibility
-            crate::runtime::validate_bundle_compatibility(
-                &discovered,
-                self.compatibility,
-                runtime.warning_cb(),
-            )?;
+            crate::runtime::validate_bundle_compatibility(&discovered, self.compatibility, logger)?;
 
             // Phase 3: Get topological load order (providers first)
             let load_order: Vec<String> = graph

@@ -676,6 +676,7 @@ fn reload_with_tampered_manifest_id_fails_and_fires_failed_callback() {
         hot_reload_enabled: true,
         on_reload: None,
         on_reload_user_data: core::ptr::null_mut(),
+        ..Default::default()
     };
 
     let runtime: Arc<Runtime> = Runtime::builder()

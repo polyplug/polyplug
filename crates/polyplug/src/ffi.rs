@@ -219,6 +219,7 @@ mod tests {
             hot_reload_enabled: true,
             on_reload: None,
             on_reload_user_data: core::ptr::null_mut(),
+            ..Default::default()
         };
         let config2: RuntimeConfig = RuntimeConfig {
             compatibility: Compatibility::Relaxed,
@@ -226,6 +227,7 @@ mod tests {
             hot_reload_enabled: false,
             on_reload: None,
             on_reload_user_data: core::ptr::null_mut(),
+            ..Default::default()
         };
 
         // SAFETY: config1 points to a valid RuntimeConfig owned by this stack frame.

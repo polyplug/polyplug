@@ -38,6 +38,7 @@ enum class ReloadPhaseType : uint32_t;
 enum class UnloadMode : uint32_t;
 enum class RuntimeLanguage : uint32_t;
 enum class AbiErrorCode : uint32_t;
+enum class LogLevel : uint32_t;
 enum class ParseVersionError : uint32_t;
 union DispatchMechanisms;
 
@@ -482,6 +483,8 @@ static_assert(sizeof(GuestContractHandle) == 8, "GuestContractHandle size mismat
 ///  The runtime copies any data it needs to retain.
 using RuntimeConfig_on_reload_fn = void(*)(void*, ReloadPhase);
 // Nullable function pointer.
+using RuntimeConfig_log_fn = void(*)(void*, uint32_t, StringView, StringView);
+// Nullable function pointer.
 struct RuntimeConfig {
     ///  Compatibility mode for version resolution.
     Compatibility compatibility;
@@ -500,8 +503,42 @@ struct RuntimeConfig {
     ///  Owned by the host that supplies the callback. The runtime never reads,
     ///  writes, or frees the pointee — it only forwards the pointer.
     void* on_reload_user_data;
+    ///  Optional logger callback, or null for the default behaviour.
+    ///
+    ///  The runtime routes every diagnostic message through this callback as
+    ///  `(log_user_data, level, scope, message)`, where `level` is a
+    ///  [`LogLevel`] discriminant and `scope` is a short stable subsystem tag
+    ///  (examples: `"registry"`, `"loader.lua"`, `"reload"`).
+    ///
+    ///  # Default (null callback)
+    ///  Messages at [`LogLevel::Error`] and [`LogLevel::Warn`] are written to
+    ///  stderr; all other levels are dropped. Hosts wanting full silence must
+    ///  install a no-op callback.
+    ///
+    ///  # Callback contract
+    ///  - May be invoked from any thread.
+    ///  - Must NOT re-enter the runtime (calling any HostApi / runtime function
+    ///    from inside the callback may deadlock).
+    ///  - The `scope` and `message` `StringView`s are valid only for the
+    ///    duration of the call — copy the bytes to retain them.
+    RuntimeConfig_log_fn log;
+    ///  Opaque user-data pointer forwarded to `log` as its first argument.
+    ///
+    ///  # Ownership
+    ///  Owned by the host that supplies the callback. The runtime never reads,
+    ///  writes, or frees the pointee — it only forwards the pointer. The host
+    ///  must keep the pointee valid (and safe to use from any thread) for the
+    ///  runtime's entire lifetime.
+    void* log_user_data;
+    ///  Maximum [`LogLevel`] (as `u32`) delivered to the `log` callback.
+    ///
+    ///  Messages with a level value greater than this are skipped before any
+    ///  formatting work is performed (zero cost for disabled levels). Ignored
+    ///  when `log` is null — the stderr default is always capped at
+    ///  [`LogLevel::Warn`].
+    uint32_t log_max_level;
 };
-static_assert(sizeof(RuntimeConfig) == 32, "RuntimeConfig size mismatch");
+static_assert(sizeof(RuntimeConfig) == 56, "RuntimeConfig size mismatch");
 
 ///  FFI-safe array with caller-frees ownership model.
 ///
@@ -755,6 +792,23 @@ enum class AbiErrorCode : uint32_t {
     HostContractVersionMismatch = 101,
     ///  Host contract call failed — host contract function call failed.
     HostContractCallFailed = 102,
+};
+
+///  Log severity levels for the host-supplied logger callback (`RuntimeConfig::log`).
+///
+///  Numeric ordering is significant: lower values are more severe. A message is
+///  delivered to the callback only when `level as u32 <= RuntimeConfig::log_max_level`.
+enum class LogLevel : uint32_t {
+    ///  Unrecoverable or host-visible failures (e.g. rejected registrations).
+    Error = 1,
+    ///  Recoverable anomalies the host should know about (e.g. lock poison recovery).
+    Warn = 2,
+    ///  High-level lifecycle events.
+    Info = 3,
+    ///  Detailed diagnostic information.
+    Debug = 4,
+    ///  Very fine-grained tracing.
+    Trace = 5,
 };
 
 enum class ParseVersionError : uint32_t {

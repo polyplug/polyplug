@@ -695,7 +695,7 @@ const KNOWN_SIZES: &[(&str, usize)] = &[
     ("GuestContractHandle", 8),
     ("PluginDescriptor", 48),
     ("BundleInitContext", 24),
-    ("RuntimeConfig", 32),
+    ("RuntimeConfig", 56),
     ("ReloadPhase", 48),
     ("NativeDispatch", 16),
     ("VmDispatch", 16),

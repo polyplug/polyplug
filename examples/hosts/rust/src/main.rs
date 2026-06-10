@@ -60,6 +60,7 @@ fn run() -> Result<(), String> {
         hot_reload_enabled: true,
         on_reload: None,
         on_reload_user_data: core::ptr::null_mut(),
+        ..Default::default()
     };
 
     let runtime: &'static Runtime = Box::leak(Box::new(

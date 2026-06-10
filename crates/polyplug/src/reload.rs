@@ -20,11 +20,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use polyplug_abi::runtime::ReloadPhase;
-use polyplug_abi::types::StringView;
+use polyplug_abi::types::{LogLevel, StringView};
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::RuntimeError;
 use crate::loader::ManifestData;
+use crate::logger::{RecoverPoisoned, RecoveringGuard};
 use crate::runtime::Runtime;
 
 /// Helper to create a StringView from a Rust string slice.
@@ -165,11 +166,13 @@ impl Runtime {
         for slot_idx in &slot_indices {
             if let Some(arc) = self.registry.get_guest_contract_interface_arc(*slot_idx) {
                 if Arc::strong_count(&arc) > 1 {
-                    self.emit_warning(&format!(
-                        "Potential UB: Arc refs still exist for bundle '{}' after Preparing callback. \
-                         Host may not have destroyed all instances. Proceeding with reload anyway.",
-                        manifest.name
-                    ));
+                    self.logger.log(LogLevel::Warn, "reload", || {
+                        format!(
+                            "Potential UB: Arc refs still exist for bundle '{}' after Preparing callback. \
+                             Host may not have destroyed all instances. Proceeding with reload anyway.",
+                            manifest.name
+                        )
+                    });
                     // Only emit once per bundle, not per slot
                     break;
                 }
@@ -277,13 +280,12 @@ impl Runtime {
         // reloading (reload re-acquires the manifest lock).
         let dependent_ids: Vec<BundleId> = self.registry.bundles_depending_on_any(&exported);
         let mut candidates: Vec<(String, std::path::PathBuf)> = {
-            let manifests: std::sync::MutexGuard<
-                '_,
-                std::collections::HashMap<String, ManifestData>,
-            > = self.bundle_manifests.lock().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+            let manifests: RecoveringGuard<
+                std::sync::MutexGuard<'_, std::collections::HashMap<String, ManifestData>>,
+            > = self
+                .bundle_manifests
+                .lock()
+                .recover_poisoned(self.logger, "reload");
             let mut collected: Vec<(String, std::path::PathBuf)> = Vec::new();
             for manifest in manifests.values() {
                 let dep_bundle_id: BundleId = BundleId::new(&manifest.name);
@@ -307,12 +309,14 @@ impl Runtime {
                 continue;
             }
             if let Err(e) = self.reload_bundle_with_visited(dep_path.as_path(), visited) {
-                self.emit_warning(&format!(
-                    "cascade reload of dependent bundle '{}' failed after '{}' reloaded: {}",
-                    dep_name,
-                    reloaded_bundle_id.id(),
-                    e
-                ));
+                self.logger.log(LogLevel::Warn, "reload", || {
+                    format!(
+                        "cascade reload of dependent bundle '{}' failed after '{}' reloaded: {}",
+                        dep_name,
+                        reloaded_bundle_id.id(),
+                        e
+                    )
+                });
             }
         }
     }

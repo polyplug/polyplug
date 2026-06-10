@@ -62,10 +62,17 @@ const HostApi* polyplug_runtime_create(const void* config);
 void polyplug_runtime_destroy(const HostApi* host);
 ```
 
-`config` points at a `RuntimeConfig` (`#[repr(C)]`, **32 bytes, align 8**):
+`config` points at a `RuntimeConfig` (`#[repr(C)]`, **56 bytes, align 8**):
 `compatibility: Compatibility` (u32, offset 0), `unload_mode: UnloadMode` (u32,
 offset 4), `hot_reload_enabled: bool` (offset 8), `on_reload` callback (offset 16),
-and `on_reload_user_data` (offset 24). `UnloadMode { Retire = 0 (default), Reclaim = 1 }`
+`on_reload_user_data` (offset 24), `log` callback (offset 32), `log_user_data`
+(offset 40), and `log_max_level` (u32, offset 48). The `log` callback —
+`fn(user_data, level: u32, scope: StringView, message: StringView)` — receives
+every runtime diagnostic at or below `log_max_level` (`LogLevel { Error = 1,
+Warn = 2, Info = 3, Debug = 4, Trace = 5 }`); when null, Error/Warn messages go
+to stderr and `log_max_level` is ignored. The callback may run on any thread,
+must not re-enter the runtime, and the `StringView`s are only valid for the
+duration of the call. `UnloadMode { Retire = 0 (default), Reclaim = 1 }`
 selects whether `unload_bundle` frees loader-owned resources (e.g. native `dlclose`)
 or keeps them mapped (retire-not-drop). The `on_reload` callback receives a
 `ReloadPhase` whose `ReloadPhaseType` is one of `Preparing = 0`, `Reloaded = 1`,

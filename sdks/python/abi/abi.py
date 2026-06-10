@@ -332,6 +332,19 @@ class AbiErrorCode(enum.IntEnum):
     HostContractCallFailed = 102
 
 
+class LogLevel(enum.IntEnum):
+    """ Log severity levels for the host-supplied logger callback (`RuntimeConfig::log`).
+    
+     Numeric ordering is significant: lower values are more severe. A message is
+     delivered to the callback only when `level as u32 <= RuntimeConfig::log_max_level`.
+    """
+    Error = 1
+    Warn = 2
+    Info = 3
+    Debug = 4
+    Trace = 5
+
+
 class ParseVersionError(enum.IntEnum):
     """ABI enum."""
     InvalidFormat = 0
@@ -396,6 +409,8 @@ assert ctypes.sizeof(ReloadPhase) == 48, f"ReloadPhase expected 48 bytes, got {c
 
 _runtime_config_on_reload_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ReloadPhase)
 # Nullable function pointer (Option<fn>). Can be set to None.
+_runtime_config_log_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32, StringView, StringView)
+# Nullable function pointer (Option<fn>). Can be set to None.
 class RuntimeConfig(ctypes.Structure):
     """ Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
     
@@ -409,10 +424,13 @@ class RuntimeConfig(ctypes.Structure):
         ("hot_reload_enabled", ctypes.c_bool),
         ("on_reload", _runtime_config_on_reload_t),
         ("on_reload_user_data", ctypes.c_void_p),
+        ("log", _runtime_config_log_t),
+        ("log_user_data", ctypes.c_void_p),
+        ("log_max_level", ctypes.c_uint32),
     ]
 
-# Expected size: 32 bytes
-assert ctypes.sizeof(RuntimeConfig) == 32, f"RuntimeConfig expected 32 bytes, got {ctypes.sizeof(RuntimeConfig)}"
+# Expected size: 56 bytes
+assert ctypes.sizeof(RuntimeConfig) == 56, f"RuntimeConfig expected 56 bytes, got {ctypes.sizeof(RuntimeConfig)}"
 
 
 class AbiError(ctypes.Structure):

@@ -132,8 +132,14 @@ pub struct RuntimeConfig {
     /// Opaque user-data pointer forwarded to `on_reload` as its first argument. (offset 24)
     /// Owned by the host; the runtime only forwards it, never reads or frees it.
     pub on_reload_user_data: *mut core::ffi::c_void,
+
+    /// Optional logger callback (offset 32), its user_data (offset 40), and the
+    /// maximum delivered LogLevel (u32, offset 48). See ABI_ARCHITECTURE.md.
+    pub log: Option<unsafe extern "C" fn(*mut core::ffi::c_void, u32, StringView, StringView)>,
+    pub log_user_data: *mut core::ffi::c_void,
+    pub log_max_level: u32,
 }
-// sizeof(RuntimeConfig) == 32, align 8 on 64-bit.
+// sizeof(RuntimeConfig) == 56, align 8 on 64-bit.
 ```
 
 #### Why `hot_reload_enabled` Defaults to `false`

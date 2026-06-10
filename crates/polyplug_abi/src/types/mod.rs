@@ -4,6 +4,7 @@ mod buffer;
 mod call_arena;
 mod dependency_info;
 mod error_code;
+mod log_level;
 mod string_view;
 mod version;
 
@@ -13,6 +14,7 @@ pub use buffer::Buffer;
 pub use call_arena::{ArenaOverflowBlock, CallArena};
 pub use dependency_info::DependencyInfo;
 pub use error_code::AbiErrorCode;
+pub use log_level::LogLevel;
 pub use string_view::StringView;
 pub use version::{ParseVersionError, Version};
 

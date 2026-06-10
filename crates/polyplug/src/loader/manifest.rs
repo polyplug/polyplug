@@ -14,9 +14,10 @@ use serde::Deserializer;
 use serde::de::MapAccess;
 use serde::de::Visitor;
 
-use polyplug_abi::types::Version;
+use polyplug_abi::types::{LogLevel, Version};
 use polyplug_utils::{BundleId, GuestContractId};
 
+use crate::logger::LoggerHandle;
 use crate::runtime_store::BundleDependency;
 
 const fn current_os() -> &'static str {
@@ -135,8 +136,9 @@ pub struct RawManifestDependency {
 impl RawManifestDependency {
     /// Resolve this raw dependency into a typed `ManifestDependency`.
     ///
-    /// Returns `None` if the dependency is a ByBundle dep without a `bundle_id` (and emits a warning).
-    pub fn resolve(&self) -> Option<ManifestDependency> {
+    /// Returns `None` if the dependency is a ByBundle dep without a `bundle_id`
+    /// (and emits a Warn-level log through `logger`).
+    pub(crate) fn resolve(&self, logger: LoggerHandle) -> Option<ManifestDependency> {
         match &self.bundle {
             None => Some(ManifestDependency::ByContract {
                 contract: self.contract.clone(),
@@ -145,10 +147,12 @@ impl RawManifestDependency {
             }),
             Some(bundle) => match self.bundle_id {
                 None => {
-                    eprintln!(
-                        "[polyplug] warning: ByBundle dep '{}' has no bundle_id; skipping",
-                        self.contract
-                    );
+                    logger.log(LogLevel::Warn, "manifest", || {
+                        format!(
+                            "ByBundle dep '{}' has no bundle_id; skipping",
+                            self.contract
+                        )
+                    });
                     None
                 }
                 Some(bid) => Some(ManifestDependency::ByBundle {
@@ -226,11 +230,22 @@ pub struct ManifestData {
 impl ManifestData {
     /// Resolve all raw dependencies into typed `ManifestDependency` values.
     ///
-    /// Deps with missing `bundle_id` are silently skipped (with a warning printed).
+    /// Deps with missing `bundle_id` are skipped, with a Warn-level diagnostic
+    /// going to the default logger (stderr, Error/Warn). Internal callers with
+    /// a host logger use [`ManifestData::resolved_dependencies_with_logger`].
     pub fn resolved_dependencies(&self) -> Vec<ManifestDependency> {
+        self.resolved_dependencies_with_logger(LoggerHandle::default_stderr())
+    }
+
+    /// [`ManifestData::resolved_dependencies`] with an explicit logger for the
+    /// skipped-dependency diagnostics.
+    pub(crate) fn resolved_dependencies_with_logger(
+        &self,
+        logger: LoggerHandle,
+    ) -> Vec<ManifestDependency> {
         self.dependencies
             .iter()
-            .filter_map(|dep: &RawManifestDependency| dep.resolve())
+            .filter_map(|dep: &RawManifestDependency| dep.resolve(logger))
             .collect::<Vec<ManifestDependency>>()
     }
 
@@ -428,6 +443,7 @@ mod tests {
     use polyplug_utils::{BundleId, GuestContractId};
 
     use super::{ManifestData, ManifestDependency, RawManifestDependency};
+    use crate::logger::LoggerHandle;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -543,7 +559,7 @@ mod tests {
             contract_id: b_contract_id,
             bundle_id: None,
         };
-        let resolved: Option<ManifestDependency> = dep.resolve();
+        let resolved: Option<ManifestDependency> = dep.resolve(LoggerHandle::default_stderr());
         match resolved.expect("should resolve") {
             ManifestDependency::ByContract {
                 contract,
@@ -571,7 +587,7 @@ mod tests {
             contract_id: b_contract_id,
             bundle_id: Some(b_bundle_id),
         };
-        let resolved: Option<ManifestDependency> = dep.resolve();
+        let resolved: Option<ManifestDependency> = dep.resolve(LoggerHandle::default_stderr());
         match resolved.expect("should resolve") {
             ManifestDependency::ByBundle {
                 bundle,
@@ -602,7 +618,7 @@ mod tests {
             contract_id: b_contract_id,
             bundle_id: None,
         };
-        let resolved: Option<ManifestDependency> = dep.resolve();
+        let resolved: Option<ManifestDependency> = dep.resolve(LoggerHandle::default_stderr());
         assert!(
             resolved.is_none(),
             "expected None when bundle_id is missing"

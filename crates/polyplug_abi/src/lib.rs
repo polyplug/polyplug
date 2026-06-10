@@ -25,7 +25,7 @@ pub use runtime::{Compatibility, ReloadPhase, ReloadPhaseType, RuntimeConfig, Un
 // ─── Type exports ───────────────────────────────────────────────────────────
 
 pub use types::{
-    AbiError, AbiErrorCode, ArenaOverflowBlock, Array, Buffer, CallArena, DependencyInfo,
+    AbiError, AbiErrorCode, ArenaOverflowBlock, Array, Buffer, CallArena, DependencyInfo, LogLevel,
     StringView, Version,
 };
 

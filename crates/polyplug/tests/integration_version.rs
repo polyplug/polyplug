@@ -9,6 +9,7 @@ use polyplug::loader::BundleLoader;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug_abi::runtime::Compatibility;
+use polyplug_abi::types::LogLevel;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
 use std::fs;
@@ -297,7 +298,7 @@ fn too_old_relaxed_warns_and_loads() {
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
-        .on_warning(move |msg: &str| {
+        .logger(move |_level: LogLevel, _scope: &str, msg: &str| {
             sink_clone.lock().expect("lock").push(msg.to_owned());
         })
         .build();
@@ -512,7 +513,7 @@ fn function_count_mismatch_relaxed_warns_and_loads() {
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
-        .on_warning(move |msg: &str| {
+        .logger(move |_level: LogLevel, _scope: &str, msg: &str| {
             sink_clone.lock().expect("lock").push(msg.to_owned());
         })
         .build();

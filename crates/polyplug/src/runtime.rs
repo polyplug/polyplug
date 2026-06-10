@@ -25,6 +25,7 @@ use std::sync::RwLock;
 use std::thread::ThreadId;
 
 use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
+use polyplug_abi::types::LogLevel;
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, DependencyInfo, GuestContractHandle, GuestContractInterface,
     HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, RuntimeLanguage,
@@ -39,13 +40,11 @@ use crate::error::RuntimeError;
 use crate::loader::BundleLoader;
 use crate::loader::ManifestData;
 use crate::loader::ManifestDependency;
+use crate::logger::{LoggerHandle, RecoverPoisoned, RecoveringGuard};
 pub use crate::runtime_builder::RuntimeBuilder;
 use crate::runtime_store::RuntimeStore;
 
 // ─── Runtime Configuration ───────────────────────────────────────────────────
-
-/// Warning callback invoked with human-readable diagnostic strings.
-pub(crate) struct WarningCallback(pub(crate) Box<dyn Fn(&str) + Send + Sync>);
 
 /// Reload callback invoked after each interface swap, before dlclose.
 ///
@@ -83,8 +82,12 @@ pub struct Runtime {
     /// Optional callback fired after interface swap, before dlclose.
     pub(crate) on_reload_cb: Option<ReloadCallback>,
     pub(crate) config: RuntimeConfig,
-    /// Optional warning callback. If None, warnings go to stderr.
-    pub(crate) warning_cb: Option<WarningCallback>,
+    /// Instance-owned copy of the host logging configuration (from `config`).
+    pub(crate) logger: LoggerHandle,
+    /// Keeps the Rust closure installed via `RuntimeBuilder::logger` alive for
+    /// the runtime's lifetime — `config.log_user_data` points into this box.
+    /// Never read after construction; it exists purely as an owner.
+    pub(crate) _logger_closure: Option<Box<crate::logger::LoggerClosure>>,
     /// Last error message for FFI error reporting.
     pub(crate) last_error: Mutex<String>,
     /// Registered host contracts, keyed by contract_id.
@@ -241,13 +244,12 @@ impl Runtime {
         contract_id: u64,
         interface: &'static HostContractInterface,
     ) -> Result<(), HostContractError> {
-        let mut guard: std::sync::RwLockWriteGuard<
-            '_,
-            HashMap<u64, &'static HostContractInterface>,
-        > = self.host_contracts.write().unwrap_or_else(|e| {
-            eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-            e.into_inner()
-        });
+        let mut guard: RecoveringGuard<
+            std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>>,
+        > = self
+            .host_contracts
+            .write()
+            .recover_poisoned(self.logger, "runtime");
         if guard.contains_key(&contract_id) {
             return Err(HostContractError::DuplicateContract { contract_id });
         }
@@ -258,13 +260,12 @@ impl Runtime {
     /// Unregister a host contract interface.
     /// Returns `true` if the contract was registered and removed, `false` if it was not found.
     pub fn unregister_host_contract(&self, contract_id: u64) -> bool {
-        let mut guard: std::sync::RwLockWriteGuard<
-            '_,
-            HashMap<u64, &'static HostContractInterface>,
-        > = self.host_contracts.write().unwrap_or_else(|e| {
-            eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-            e.into_inner()
-        });
+        let mut guard: RecoveringGuard<
+            std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>>,
+        > = self
+            .host_contracts
+            .write()
+            .recover_poisoned(self.logger, "runtime");
         guard.remove(&contract_id).is_some()
     }
 
@@ -275,11 +276,12 @@ impl Runtime {
         contract_id: u64,
         min_version: u32,
     ) -> Option<&'static HostContractInterface> {
-        let guard: std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>> =
-            self.host_contracts.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let guard: RecoveringGuard<
+            std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>>,
+        > = self
+            .host_contracts
+            .read()
+            .recover_poisoned(self.logger, "runtime");
         guard.get(&contract_id).and_then(|interface| {
             if host_contract_version_satisfies(interface, min_version) {
                 Some(*interface)
@@ -293,11 +295,6 @@ impl Runtime {
     #[inline(always)]
     pub fn host_runtime(&self) -> RuntimeLanguage {
         self.host_runtime
-    }
-
-    /// Get the warning callback.
-    pub(crate) fn warning_cb(&self) -> Option<&WarningCallback> {
-        self.warning_cb.as_ref()
     }
 
     /// Get the HostApi for use in plugin registrars.
@@ -336,31 +333,29 @@ impl Runtime {
         &self.on_reload_cb
     }
 
-    /// Emit a warning message via the registered warning callback, or to stderr if none.
+    /// Emit a Warn-level message through the runtime logger
+    /// (`RuntimeConfig::log`, or stderr if no callback is installed).
     pub fn emit_warning(&self, msg: &str) {
-        match &self.warning_cb {
-            Some(cb) => (cb.0)(msg),
-            None => eprintln!("[polyplug] {msg}"),
-        }
+        self.logger
+            .log(LogLevel::Warn, "runtime", || msg.to_owned());
     }
 
     /// Set the last error message for FFI error reporting.
     pub(crate) fn set_last_error(&self, msg: impl Into<String>) {
-        let mut guard: std::sync::MutexGuard<'_, String> =
-            self.last_error.lock().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            });
-        *guard = msg.into();
+        let mut guard: RecoveringGuard<std::sync::MutexGuard<'_, String>> = self
+            .last_error
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
+        **guard = msg.into();
     }
 
     /// Get the last error message for FFI error reporting.
     /// Returns the number of bytes written to the buffer.
     pub(crate) fn get_last_error(&self, buf: &mut [u8]) -> usize {
-        let guard: std::sync::MutexGuard<'_, String> = self.last_error.lock().unwrap_or_else(|e| {
-            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-            e.into_inner()
-        });
+        let guard: RecoveringGuard<std::sync::MutexGuard<'_, String>> = self
+            .last_error
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
         let bytes: &[u8] = guard.as_bytes();
         let write_n: usize = bytes.len().min(buf.len());
         if write_n > 0 {
@@ -371,20 +366,19 @@ impl Runtime {
 
     /// Clear the last error message.
     pub(crate) fn clear_last_error(&self) {
-        let mut guard: std::sync::MutexGuard<'_, String> =
-            self.last_error.lock().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut guard: RecoveringGuard<std::sync::MutexGuard<'_, String>> = self
+            .last_error
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
         guard.clear();
     }
 
     /// Get the length of the last error message.
     pub(crate) fn last_error_len(&self) -> usize {
-        let guard: std::sync::MutexGuard<'_, String> = self.last_error.lock().unwrap_or_else(|e| {
-            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-            e.into_inner()
-        });
+        let guard: RecoveringGuard<std::sync::MutexGuard<'_, String>> = self
+            .last_error
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
         guard.len()
     }
 
@@ -401,11 +395,12 @@ impl Runtime {
     /// still consumed in that case.
     pub fn register_loader(&self, loader: Box<dyn BundleLoader>) -> Result<(), RuntimeError> {
         let name: String = loader.runtime_name().to_string();
-        let mut loaders: std::sync::RwLockWriteGuard<'_, HashMap<String, Box<dyn BundleLoader>>> =
-            self.loaders.write().unwrap_or_else(|e| {
-                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut loaders: RecoveringGuard<
+            std::sync::RwLockWriteGuard<'_, HashMap<String, Box<dyn BundleLoader>>>,
+        > = self
+            .loaders
+            .write()
+            .recover_poisoned(self.logger, "runtime");
         if loaders.contains_key(&name) {
             return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
                 runtime_name: name,
@@ -428,11 +423,9 @@ impl Runtime {
     /// `host_register_loader` and take the `loaders` write guard — holding a read
     /// guard on the same thread would deadlock.
     pub(crate) fn loader_for(&self, runtime_name: &str) -> Option<&dyn BundleLoader> {
-        let loaders: std::sync::RwLockReadGuard<'_, HashMap<String, Box<dyn BundleLoader>>> =
-            self.loaders.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let loaders: RecoveringGuard<
+            std::sync::RwLockReadGuard<'_, HashMap<String, Box<dyn BundleLoader>>>,
+        > = self.loaders.read().recover_poisoned(self.logger, "runtime");
         let loader_ptr: *const dyn BundleLoader = loaders.get(runtime_name).map(Box::as_ref)?;
         // SAFETY: loaders are append-only (never removed or replaced for the runtime
         // lifetime), so the `Box`'s heap allocation behind `loader_ptr` stays valid and
@@ -447,11 +440,10 @@ impl Runtime {
     /// [`Runtime::pop_init_bundle_id`] MUST be called afterwards (including on the
     /// panic path) so the stack does not leak entries.
     pub fn push_init_bundle_id(&self, bundle_id: u64) {
-        let mut stack: std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>> =
-            self.init_bundle_stack.lock().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut stack: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> =
+            self.init_bundle_stack
+                .lock()
+                .recover_poisoned(self.logger, "runtime");
         stack
             .entry(std::thread::current().id())
             .or_default()
@@ -467,11 +459,10 @@ impl Runtime {
     /// Restores the previous (outer) bundle_id for reentrant loads on the same thread.
     pub fn pop_init_bundle_id(&self) {
         let thread_id: ThreadId = std::thread::current().id();
-        let mut stack: std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>> =
-            self.init_bundle_stack.lock().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let mut stack: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> =
+            self.init_bundle_stack
+                .lock()
+                .recover_poisoned(self.logger, "runtime");
         if let Some(thread_stack) = stack.get_mut(&thread_id) {
             // Only decrement the hint when an entry was actually removed, so the
             // counter never drifts below the real number of pushed ids. A pop with
@@ -500,11 +491,10 @@ impl Runtime {
             return 0;
         }
         let thread_id: ThreadId = std::thread::current().id();
-        let stack: std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>> =
-            self.init_bundle_stack.lock().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let stack: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> = self
+            .init_bundle_stack
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
         stack
             .get(&thread_id)
             .and_then(|thread_stack| thread_stack.last().copied())
@@ -676,11 +666,10 @@ impl Runtime {
     /// back to a `BundleLoader::runtime_name()`. It is read from `bundle_manifests`,
     /// which must be consulted BEFORE `invalidate_bundle` removes the bundle.
     fn bundle_loader_name(&self, bundle_name: &str) -> Option<String> {
-        let manifests: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> =
-            self.bundle_manifests.lock().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            });
+        let manifests: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<String, ManifestData>>> =
+            self.bundle_manifests
+                .lock()
+                .recover_poisoned(self.logger, "runtime");
         manifests
             .get(bundle_name)
             .map(|m: &ManifestData| m.runtime.clone())
@@ -899,10 +888,12 @@ impl Runtime {
             // string falls back to Rust (see `runtime_language_from_str`); surface
             // that as a warning so a typo'd `runtime` field is not silently coerced.
             if !is_known_runtime_language(&manifest.runtime) {
-                self.emit_warning(&format!(
-                    "bundle `{}`: unknown runtime `{}`; defaulting RuntimeLanguage to Rust",
-                    manifest.name, manifest.runtime
-                ));
+                self.logger.log(LogLevel::Warn, "runtime", || {
+                    format!(
+                        "bundle `{}`: unknown runtime `{}`; defaulting RuntimeLanguage to Rust",
+                        manifest.name, manifest.runtime
+                    )
+                });
             }
             let runtime_lang: RuntimeLanguage = runtime_language_from_str(&manifest.runtime);
 
@@ -928,11 +919,12 @@ impl Runtime {
                 self.validate_loaded_function_counts(bundle_id, &manifest, opts.compatibility)?;
             }
 
-            let mut manifests: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> =
-                self.bundle_manifests.lock().unwrap_or_else(|e| {
-                    eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-                    e.into_inner()
-                });
+            let mut manifests: RecoveringGuard<
+                std::sync::MutexGuard<'_, HashMap<String, ManifestData>>,
+            > = self
+                .bundle_manifests
+                .lock()
+                .recover_poisoned(self.logger, "runtime");
             manifests.insert(bundle_name, manifest);
         }
         result
@@ -972,10 +964,12 @@ impl Runtime {
                         }));
                     }
                     Compatibility::Relaxed => {
-                        self.emit_warning(&format!(
-                            "bundle `{}` contract `{}`: declared function_count {} but interface exports {}",
-                            manifest.name, key, declared, actual
-                        ));
+                        self.logger.log(LogLevel::Warn, "runtime", || {
+                            format!(
+                                "bundle `{}` contract `{}`: declared function_count {} but interface exports {}",
+                                manifest.name, key, declared, actual
+                            )
+                        });
                     }
                     Compatibility::Yolo => {}
                 }
@@ -1000,7 +994,7 @@ impl Runtime {
 pub(crate) fn validate_bundle_compatibility(
     manifests: &[(PathBuf, ManifestData)],
     compatibility: Compatibility,
-    warning_cb: Option<&WarningCallback>,
+    logger: LoggerHandle,
 ) -> Result<(), RuntimeError> {
     // Build provider_map: bare contract_name -> &ManifestData.
     //
@@ -1022,7 +1016,7 @@ pub(crate) fn validate_bundle_compatibility(
 
     for (path, manifest) in manifests {
         // Check version compatibility for each dependency
-        let resolved: Vec<ManifestDependency> = manifest.resolved_dependencies();
+        let resolved: Vec<ManifestDependency> = manifest.resolved_dependencies_with_logger(logger);
         for dep in &resolved {
             let (dep_contract, dep_min_version_str): (&str, &str) = match dep {
                 ManifestDependency::ByContract {
@@ -1069,14 +1063,12 @@ pub(crate) fn validate_bundle_compatibility(
                         }));
                     }
                     Compatibility::Relaxed => {
-                        let msg: String = format!(
-                            "version mismatch for contract `{}`: required={}, found={} (bundle `{}`)",
-                            dep_contract, required, provided, provider.name
-                        );
-                        match warning_cb {
-                            Some(cb) => (cb.0)(&msg),
-                            None => eprintln!("[polyplug] {msg}"),
-                        }
+                        logger.log(LogLevel::Warn, "runtime", || {
+                            format!(
+                                "version mismatch for contract `{}`: required={}, found={} (bundle `{}`)",
+                                dep_contract, required, provided, provider.name
+                            )
+                        });
                     }
                     Compatibility::Yolo => {} // intentionally silent — Yolo mode skips all version checks
                 }
@@ -1108,14 +1100,12 @@ pub(crate) fn validate_bundle_compatibility(
                         }));
                     }
                     Compatibility::Relaxed => {
-                        let msg: String = format!(
-                            "bundle `{}` provides `{}` but has no function_count entry for key `{}`",
-                            manifest.name, contract, key
-                        );
-                        match warning_cb {
-                            Some(cb) => (cb.0)(&msg),
-                            None => eprintln!("[polyplug] {msg}"),
-                        }
+                        logger.log(LogLevel::Warn, "runtime", || {
+                            format!(
+                                "bundle `{}` provides `{}` but has no function_count entry for key `{}`",
+                                manifest.name, contract, key
+                            )
+                        });
                     }
                     Compatibility::Yolo => {} // intentionally silent — Yolo mode skips all function_count checks
                 }
@@ -1293,7 +1283,9 @@ pub(crate) unsafe extern "C" fn host_register_guest_contract(
         Ok(name) => name,
         Err(e) => {
             runtime.set_last_error(e.to_string());
-            eprintln!("[polyplug] registration rejected for bundle {bundle_id}: {e}");
+            runtime.logger.log(LogLevel::Error, "registry", || {
+                format!("registration rejected for bundle {bundle_id}: {e}")
+            });
             return polyplug_abi::types::AbiError {
                 code: polyplug_abi::types::AbiErrorCode::Generic as u32,
                 message: polyplug_abi::types::StringView::null(),
@@ -1312,7 +1304,9 @@ pub(crate) unsafe extern "C" fn host_register_guest_contract(
     } {
         Ok(_handle) => polyplug_abi::types::AbiError::ok(),
         Err(e) => {
-            eprintln!("[polyplug] registration failed for bundle {bundle_id}: {e}");
+            runtime.logger.log(LogLevel::Error, "registry", || {
+                format!("registration failed for bundle {bundle_id}: {e}")
+            });
             // Surface the detail through get_last_error (stderr alone is not
             // programmatically reachable) and map the registry error to its
             // specific ABI code where one exists, so guests can distinguish a
@@ -1502,10 +1496,12 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
     // Find the host contract interface
-    let host_contracts_guard = runtime.host_contracts.read().unwrap_or_else(|e| {
-        eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-        e.into_inner()
-    });
+    let host_contracts_guard: RecoveringGuard<
+        std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>>,
+    > = runtime
+        .host_contracts
+        .read()
+        .recover_poisoned(runtime.logger, "runtime");
 
     // Find interface matching contract_id and version
     let interface: Option<&HostContractInterface> = host_contracts_guard
@@ -1527,20 +1523,24 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
 
             if interface.singleton {
                 // Singleton: check cache first
-                let singleton_guard = runtime.singleton_instances.read().unwrap_or_else(|e| {
-                    eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-                    e.into_inner()
-                });
+                let singleton_guard: RecoveringGuard<
+                    std::sync::RwLockReadGuard<'_, HashMap<u64, HostContractInstance>>,
+                > = runtime
+                    .singleton_instances
+                    .read()
+                    .recover_poisoned(runtime.logger, "runtime");
                 if let Some(&instance) = singleton_guard.get(&contract_id) {
                     return instance;
                 }
                 drop(singleton_guard);
 
                 // Create singleton and cache it
-                let mut singleton_guard = runtime.singleton_instances.write().unwrap_or_else(|e| {
-                    eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-                    e.into_inner()
-                });
+                let mut singleton_guard: RecoveringGuard<
+                    std::sync::RwLockWriteGuard<'_, HashMap<u64, HostContractInstance>>,
+                > = runtime
+                    .singleton_instances
+                    .write()
+                    .recover_poisoned(runtime.logger, "runtime");
                 // Double-check pattern: another thread may have created while we waited
                 if let Some(&instance) = singleton_guard.get(&contract_id) {
                     return instance;
@@ -1599,10 +1599,12 @@ pub(crate) unsafe extern "C" fn host_resolve_host_contract_interface(
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
     // Find the host contract interface
-    let host_contracts_guard = runtime.host_contracts.read().unwrap_or_else(|e| {
-        eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
-        e.into_inner()
-    });
+    let host_contracts_guard: RecoveringGuard<
+        std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>>,
+    > = runtime
+        .host_contracts
+        .read()
+        .recover_poisoned(runtime.logger, "runtime");
 
     // Find interface matching contract_id and version
     host_contracts_guard
@@ -1634,10 +1636,11 @@ pub(crate) unsafe extern "C" fn host_list_bundles(
     // SAFETY: this is a valid HostApi pointer.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
-    let manifests = runtime.bundle_manifests.lock().unwrap_or_else(|e| {
-        eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-        e.into_inner()
-    });
+    let manifests: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<String, ManifestData>>> =
+        runtime
+            .bundle_manifests
+            .lock()
+            .recover_poisoned(runtime.logger, "runtime");
 
     let count = manifests.len();
     if count == 0 {
@@ -1689,10 +1692,11 @@ pub(crate) unsafe extern "C" fn host_get_dependencies(
         return Array::empty();
     }
 
-    let manifests = runtime.bundle_manifests.lock().unwrap_or_else(|e| {
-        eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-        e.into_inner()
-    });
+    let manifests: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<String, ManifestData>>> =
+        runtime
+            .bundle_manifests
+            .lock()
+            .recover_poisoned(runtime.logger, "runtime");
 
     // Find manifest by ID
     let manifest = match manifests.values().find(|m| m.id == caller_bundle_id) {

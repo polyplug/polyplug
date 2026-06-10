@@ -18,7 +18,7 @@ assert(ffi.sizeof("GuestContractHandle") == 8, "GuestContractHandle size mismatc
 assert(ffi.sizeof("BundleInitContext") == 24, "BundleInitContext size mismatch")
 assert(ffi.sizeof("PluginDescriptor") == 48, "PluginDescriptor size mismatch")
 assert(ffi.sizeof("ReloadPhase") == 48, "ReloadPhase size mismatch")
-assert(ffi.sizeof("RuntimeConfig") == 32, "RuntimeConfig size mismatch")
+assert(ffi.sizeof("RuntimeConfig") == 56, "RuntimeConfig size mismatch")
 assert(ffi.sizeof("AbiError") == 24, "AbiError size mismatch")
 assert(ffi.sizeof("Buffer") == 24, "Buffer size mismatch")
 assert(ffi.sizeof("ArenaOverflowBlock") == 24, "ArenaOverflowBlock size mismatch")

@@ -856,6 +856,46 @@ export interface RuntimeConfig {
      *  writes, or frees the pointee — it only forwards the pointer.
      */
     on_reload_user_data: bigint;
+    /**
+     *  Optional logger callback, or null for the default behaviour.
+     * 
+     *  The runtime routes every diagnostic message through this callback as
+     *  `(log_user_data, level, scope, message)`, where `level` is a
+     *  [`LogLevel`] discriminant and `scope` is a short stable subsystem tag
+     *  (examples: `"registry"`, `"loader.lua"`, `"reload"`).
+     * 
+     *  # Default (null callback)
+     *  Messages at [`LogLevel::Error`] and [`LogLevel::Warn`] are written to
+     *  stderr; all other levels are dropped. Hosts wanting full silence must
+     *  install a no-op callback.
+     * 
+     *  # Callback contract
+     *  - May be invoked from any thread.
+     *  - Must NOT re-enter the runtime (calling any HostApi / runtime function
+     *    from inside the callback may deadlock).
+     *  - The `scope` and `message` `StringView`s are valid only for the
+     *    duration of the call — copy the bytes to retain them.
+     */
+    log: number;
+    /**
+     *  Opaque user-data pointer forwarded to `log` as its first argument.
+     * 
+     *  # Ownership
+     *  Owned by the host that supplies the callback. The runtime never reads,
+     *  writes, or frees the pointee — it only forwards the pointer. The host
+     *  must keep the pointee valid (and safe to use from any thread) for the
+     *  runtime's entire lifetime.
+     */
+    log_user_data: bigint;
+    /**
+     *  Maximum [`LogLevel`] (as `u32`) delivered to the `log` callback.
+     * 
+     *  Messages with a level value greater than this are skipped before any
+     *  formatting work is performed (zero cost for disabled levels). Ignored
+     *  when `log` is null — the stderr default is always capped at
+     *  [`LogLevel::Warn`].
+     */
+    log_max_level: number;
 }
 
 export const RUNTIME_CONFIG_COMPATIBILITY_OFFSET: number = 0;
@@ -863,7 +903,10 @@ export const RUNTIME_CONFIG_UNLOAD_MODE_OFFSET: number = 4;
 export const RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET: number = 8;
 export const RUNTIME_CONFIG_ON_RELOAD_OFFSET: number = 16;
 export const RUNTIME_CONFIG_ON_RELOAD_USER_DATA_OFFSET: number = 24;
-export const RUNTIME_CONFIG_SIZE: number = 32;
+export const RUNTIME_CONFIG_LOG_OFFSET: number = 32;
+export const RUNTIME_CONFIG_LOG_USER_DATA_OFFSET: number = 40;
+export const RUNTIME_CONFIG_LOG_MAX_LEVEL_OFFSET: number = 48;
+export const RUNTIME_CONFIG_SIZE: number = 56;
 
 /**
  *  ABI error — returned by value from all ABI calls.
@@ -1211,6 +1254,25 @@ export const enum AbiErrorCode {
     HostContractVersionMismatch = 101,
     /**  Host contract call failed — host contract function call failed. */
     HostContractCallFailed = 102,
+}
+
+/**
+ *  Log severity levels for the host-supplied logger callback (`RuntimeConfig::log`).
+ * 
+ *  Numeric ordering is significant: lower values are more severe. A message is
+ *  delivered to the callback only when `level as u32 <= RuntimeConfig::log_max_level`.
+ */
+export const enum LogLevel {
+    /**  Unrecoverable or host-visible failures (e.g. rejected registrations). */
+    Error = 1,
+    /**  Recoverable anomalies the host should know about (e.g. lock poison recovery). */
+    Warn = 2,
+    /**  High-level lifecycle events. */
+    Info = 3,
+    /**  Detailed diagnostic information. */
+    Debug = 4,
+    /**  Very fine-grained tracing. */
+    Trace = 5,
 }
 
 export const enum ParseVersionError {

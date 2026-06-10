@@ -697,6 +697,7 @@ fn make_runtime_with_hot_reload(enabled: bool) -> Arc<Runtime> {
             hot_reload_enabled: enabled,
             on_reload: None,
             on_reload_user_data: core::ptr::null_mut(),
+            ..Default::default()
         })
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()

@@ -34,6 +34,7 @@ ffi.cdef[[
     typedef enum UnloadMode UnloadMode;
     typedef enum RuntimeLanguage RuntimeLanguage;
     typedef enum AbiErrorCode AbiErrorCode;
+    typedef enum LogLevel LogLevel;
     typedef enum ParseVersionError ParseVersionError;
     typedef union DispatchMechanisms DispatchMechanisms;
 
@@ -725,6 +726,23 @@ ffi.cdef[[
         AbiErrorCode_HostContractCallFailed = 102,
     } AbiErrorCode;
 
+    //  Log severity levels for the host-supplied logger callback (`RuntimeConfig::log`).
+    // 
+    //  Numeric ordering is significant: lower values are more severe. A message is
+    //  delivered to the callback only when `level as u32 <= RuntimeConfig::log_max_level`.
+    typedef enum LogLevel {
+        //  Unrecoverable or host-visible failures (e.g. rejected registrations).
+        LogLevel_Error = 1,
+        //  Recoverable anomalies the host should know about (e.g. lock poison recovery).
+        LogLevel_Warn = 2,
+        //  High-level lifecycle events.
+        LogLevel_Info = 3,
+        //  Detailed diagnostic information.
+        LogLevel_Debug = 4,
+        //  Very fine-grained tracing.
+        LogLevel_Trace = 5,
+    } LogLevel;
+
     typedef enum ParseVersionError {
         ParseVersionError_InvalidFormat = 0,
         ParseVersionError_InvalidInt = 1,
@@ -806,6 +824,7 @@ ffi.cdef[[
     // Expected size: 48 bytes
 
     typedef void (*RuntimeConfig_on_reload_fn)(void*, ReloadPhase);
+    typedef void (*RuntimeConfig_log_fn)(void*, uint32_t, StringView, StringView);
     //  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
     // 
     //  # OWNERSHIP
@@ -829,8 +848,42 @@ ffi.cdef[[
         //  Owned by the host that supplies the callback. The runtime never reads,
         //  writes, or frees the pointee — it only forwards the pointer.
         void* on_reload_user_data;
+        //  Optional logger callback, or null for the default behaviour.
+        // 
+        //  The runtime routes every diagnostic message through this callback as
+        //  `(log_user_data, level, scope, message)`, where `level` is a
+        //  [`LogLevel`] discriminant and `scope` is a short stable subsystem tag
+        //  (examples: `"registry"`, `"loader.lua"`, `"reload"`).
+        // 
+        //  # Default (null callback)
+        //  Messages at [`LogLevel::Error`] and [`LogLevel::Warn`] are written to
+        //  stderr; all other levels are dropped. Hosts wanting full silence must
+        //  install a no-op callback.
+        // 
+        //  # Callback contract
+        //  - May be invoked from any thread.
+        //  - Must NOT re-enter the runtime (calling any HostApi / runtime function
+        //    from inside the callback may deadlock).
+        //  - The `scope` and `message` `StringView`s are valid only for the
+        //    duration of the call — copy the bytes to retain them.
+        RuntimeConfig_log_fn log;
+        //  Opaque user-data pointer forwarded to `log` as its first argument.
+        // 
+        //  # Ownership
+        //  Owned by the host that supplies the callback. The runtime never reads,
+        //  writes, or frees the pointee — it only forwards the pointer. The host
+        //  must keep the pointee valid (and safe to use from any thread) for the
+        //  runtime's entire lifetime.
+        void* log_user_data;
+        //  Maximum [`LogLevel`] (as `u32`) delivered to the `log` callback.
+        // 
+        //  Messages with a level value greater than this are skipped before any
+        //  formatting work is performed (zero cost for disabled levels). Ignored
+        //  when `log` is null — the stderr default is always capped at
+        //  [`LogLevel::Warn`].
+        uint32_t log_max_level;
     } RuntimeConfig;
-    // Expected size: 32 bytes
+    // Expected size: 56 bytes
 
     //  ABI error — returned by value from all ABI calls.
     // 

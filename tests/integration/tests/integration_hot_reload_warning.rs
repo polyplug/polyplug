@@ -19,6 +19,7 @@ use std::sync::Mutex;
 use polyplug::ReloadPhase;
 use polyplug::runtime::Runtime;
 use polyplug_abi::runtime::ReloadPhaseType;
+use polyplug_abi::types::LogLevel;
 use polyplug_native::{NativeConfig, NativeLoader};
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
@@ -73,7 +74,7 @@ fn test_warning_callback_invoked_during_reload() {
     let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(NativeConfig::default()))
         .config(hot_reload_config())
-        .on_warning(move |msg: &str| {
+        .logger(move |_level: LogLevel, _scope: &str, msg: &str| {
             warnings_clone.lock().unwrap().push(msg.to_owned());
         })
         .build()
@@ -121,10 +122,12 @@ fn test_warning_timing_after_preparing_before_reloaded() {
     let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(NativeConfig::default()))
         .config(hot_reload_config())
-        .on_warning({
+        .logger({
             let events = Arc::clone(&events);
-            move |msg: &str| {
-                events.lock().unwrap().push(format!("WARNING: {}", msg));
+            move |level: LogLevel, _scope: &str, msg: &str| {
+                if level == LogLevel::Warn {
+                    events.lock().unwrap().push(format!("WARNING: {}", msg));
+                }
             }
         })
         .on_reload({
@@ -217,7 +220,7 @@ fn test_warning_message_content_structure() {
     let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(NativeConfig::default()))
         .config(hot_reload_config())
-        .on_warning(move |msg: &str| {
+        .logger(move |_level: LogLevel, _scope: &str, msg: &str| {
             warnings_clone.lock().unwrap().push(msg.to_owned());
         })
         .build()

@@ -45,7 +45,7 @@ namespace Polyplug.Abi.Tests
         public void ReloadPhaseIs48Bytes() => Assert.Equal(48, Marshal.SizeOf<ReloadPhase>());
 
         [Fact]
-        public void RuntimeConfigIs32Bytes() => Assert.Equal(32, Marshal.SizeOf<RuntimeConfig>());
+        public void RuntimeConfigIs56Bytes() => Assert.Equal(56, Marshal.SizeOf<RuntimeConfig>());
 
         [Fact]
         public void AbiErrorIs24Bytes() => Assert.Equal(24, Marshal.SizeOf<AbiError>());
