@@ -10,7 +10,7 @@ If you are unsure whether something violates a rule — it probably does. Ask fi
 
 polyplug is a universal, blazing-fast, cross-language plugin runtime platform written in Rust. A host application loads plugin bundles at runtime; each bundle exports one or more guest contracts that the host discovers and calls through a frozen C ABI. Plugins can be written in any language (Rust, C++, C#, Python, Lua, JavaScript) — the `polyplugc` CLI generates the language-specific glue code from a `.toml` contract definition.
 
-**Trust model**: See `TRUST_MODEL.md` for bundle identity, declared dependencies, and ABI freeze details.
+**Trust model**: See `docs/TRUST_MODEL.md` for bundle identity, declared dependencies, and ABI freeze details.
 
 **Do NOT timeout tasks.** Wait for them to complete; the system will notify you. Do NOT poll.
 
@@ -464,6 +464,8 @@ pub struct Runtime {
 
 **Lua, JavaScript (QuickJS), and Native loaders**: Fully compliant with runtime isolation. Each bundle gets its own isolated VM.
 
+**Static-free SDKs — ALL languages, host AND guest.** No SDK file (hand-written or generated, any language) may hold runtime or plugin state in module-level / class-static / process-global storage. The host pointer, plugin implementation objects, and per-bundle state always flow through instances and context parameters. Per-VM globals injected by a loader are instance state (each VM is per-bundle-per-runtime) and are allowed. Interpreter-level once-per-process constraints (CPython, CLR bootstrap) are external limitations, not a license for SDK statics.
+
 ---
 
 ### 13. No Re-exports That Obscure Module Boundaries
@@ -704,12 +706,25 @@ fn test_something_else() { }
 
 ---
 
+### 19. SDK Helper Surface Is Derived From `sdk_validator.yaml`
+
+**`sdk_validator.yaml` is the single source of truth for built-in-type helper methods. Helpers live ONLY in the validator-target files — duplicate or stale helper implementations anywhere else are FORBIDDEN.**
+
+- The golden method set in `sdk_validator.yaml` defines what every language must implement; the `targets:` section defines the ONE file per language where those helpers live (the `sdks/*/abi` mirrors and `sdks/rust/guest`).
+- Never hand-write a second copy of a helper (or a "Helper" class duplicating one) in guest/host/loader SDK files — consumers use the validated implementation.
+- Adding a new helper concept = add it to `sdk_validator.yaml` AND implement it in ALL validated targets in the same change; the validator must stay green (`cargo run -p sdk-validator -- --config sdk_validator.yaml --fail-on-missing`).
+- A helper found outside the validated files is stale scaffolding: delete it and retarget any consumers.
+
+---
+
 ## Project Structure
 
 ```
 polyplug/
-├── CLAUDE.md                        this file
-├── TRUST_MODEL.md                   bundle identity, ABI freeze, trust boundaries
+├── CLAUDE.md                        this file (stays at root)
+├── README.md                        stays at root (GitHub convention)
+├── docs/                            ALL other documentation (.md) lives here —
+│                                    incl. TRUST_MODEL.md, ROADMAP.md, RELEASING.md
 ├── crates/
 │   ├── polyplug/                    core runtime
 │   │   └── src/
@@ -800,6 +815,9 @@ polyplug/
 | type aliases (`pub type OldName = NewName`) | use canonical names everywhere |
 | `ABI_OK` / `ABI_ERROR_*` constants | `AbiErrorCode::Ok` / `AbiErrorCode::*` enum |
 | `pub use other_crate::Type` | consumers import from source crate directly |
+| SDK static / module-global holding runtime or plugin state (any language, host or guest) | state flows through instances and context parameters |
+| duplicate "helper" implementations outside the `sdk_validator.yaml` target files | helpers live only in validated files; golden set in `sdk_validator.yaml` |
+| documentation `.md` at repo root (except CLAUDE.md, README.md) | all docs live in `docs/` |
 
 ---
 
