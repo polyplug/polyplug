@@ -119,6 +119,34 @@ def _fmt_bytes(n: int) -> str:
     return str(n)
 
 
+def _wrap(text: str, width_px: int, font_size: int, margin: int = 24) -> list:
+    """Greedy word-wrap `text` into lines that fit `width_px` at the given monospace
+    font size (≈0.6 em per glyph). Returns a list of line strings (≥1)."""
+    max_chars: int = max(8, int((width_px - 2 * margin) / (font_size * 0.6)))
+    lines: list = []
+    current: str = ""
+    for word in text.split():
+        if current and len(current) + 1 + len(word) > max_chars:
+            lines.append(current)
+            current = word
+        else:
+            current = word if not current else f"{current} {word}"
+    if current:
+        lines.append(current)
+    return lines or [""]
+
+
+def _header(title: str, subtitle: str, width: int) -> tuple:
+    """Build the title + word-wrapped subtitle block. Returns (svg_str, extra_y)
+    where extra_y is the additional vertical space used by wrapped subtitle lines
+    (0 when the subtitle fits on one line) — callers add it to pad_t / height."""
+    lines: list = _wrap(subtitle, width, 11)
+    parts: list = [_text(24, 30, title, 17, _FG, "start")]
+    for i, line in enumerate(lines):
+        parts.append(_text(24, 47 + i * 15, line, 11, _MUTED, "start"))
+    return "".join(parts), 15 * (len(lines) - 1)
+
+
 # ─── reusable chart layouts ───────────────────────────────────────────────────
 
 
@@ -127,16 +155,14 @@ def _chart_hbar_linear(out: Path, title: str, subtitle: str, rows: list) -> None
     width: int = 720
     pad_l: int = 250
     pad_r: int = 96
-    pad_t: int = 56
+    header_svg, extra_y = _header(title, subtitle, width)
+    pad_t: int = 56 + extra_y
     row_h: int = 46
     height: int = pad_t + row_h * len(rows) + 30
     plot_w: int = width - pad_l - pad_r
     vmax: float = max(ns for _, ns, _ in rows) * 1.12
 
-    parts: list = [
-        _text(24, 30, title, 17, _FG, "start"),
-        _text(24, 47, subtitle, 11, _MUTED, "start"),
-    ]
+    parts: list = [header_svg]
     for i, (label, value, color) in enumerate(rows):
         y: float = pad_t + i * row_h
         bar_w: float = plot_w * value / vmax
@@ -154,9 +180,13 @@ def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str)
     width: int = 760
     pad_l: int = 250
     pad_r: int = 96
-    pad_t: int = 60
+    header_svg, extra_y = _header(title, subtitle, width)
+    pad_t: int = 60 + extra_y
     row_h: int = 40
-    height: int = pad_t + row_h * len(rows) + 52
+    note_lines: list = _wrap(note, width, 9)
+    bars_bottom: int = pad_t + row_h * len(rows)
+    note_y0: int = bars_bottom + 40
+    height: int = note_y0 + 14 * (len(note_lines) - 1) + 12
     plot_w: int = width - pad_l - pad_r
 
     vmax: float = max(ns for _, ns, _ in rows)
@@ -167,10 +197,7 @@ def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str)
         frac: float = max(math.log10(ns), 0.3) / axis_hi
         return pad_l + plot_w * frac
 
-    parts: list = [
-        _text(24, 30, title, 17, _FG, "start"),
-        _text(24, 47, subtitle, 11, _MUTED, "start"),
-    ]
+    parts: list = [header_svg]
     # decade gridlines (1 ns, 10 ns, 100 ns, 1 µs, 10 µs …)
     decade: int = 0
     while 10.0**decade <= vmax * 1.6:
@@ -185,7 +212,8 @@ def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str)
         parts.append(_text(pad_l - 12, y + row_h / 2 + 4, label, 11, _FG, "end"))
         parts.append(_rect(pad_l, y + 6, max(bar_w, 2.0), row_h - 16, color))
         parts.append(_text(pad_l + bar_w + 8, y + row_h / 2 + 4, _fmt_ns(ns), 11, _FG, "start"))
-    parts.append(_text(24, height - 12, note, 9, _MUTED, "start"))
+    for li, line in enumerate(note_lines):
+        parts.append(_text(24, note_y0 + li * 14, line, 9, _MUTED, "start"))
     out.write_text(_svg(width, height, "".join(parts)))
 
 
@@ -194,10 +222,11 @@ def _chart_lines(
 ) -> None:
     """Log-y line chart over a shared x axis; series = [(key, label, color)]."""
     width: int = 720
-    height: int = 420
+    header_svg, extra_y = _header(title, subtitle, width)
+    height: int = 420 + extra_y
     pad_l: int = 64
     pad_r: int = 24
-    pad_t: int = 64
+    pad_t: int = 64 + extra_y
     pad_b: int = 56
     plot_w: int = width - pad_l - pad_r
     plot_h: int = height - pad_t - pad_b
@@ -213,10 +242,7 @@ def _chart_lines(
     def y_of(v: float) -> float:
         return pad_t + plot_h * (1 - (math.log10(v) - lo) / span)
 
-    parts: list = [
-        _text(24, 30, title, 17, _FG, "start"),
-        _text(24, 47, subtitle, 11, _MUTED, "start"),
-    ]
+    parts: list = [header_svg]
     for i, n in enumerate(sizes):
         gx: float = x_of(i)
         parts.append(_line(gx, pad_t, gx, pad_t + plot_h, _GRID, 1))
@@ -262,19 +288,20 @@ def _chart_heatmap(
     cell_w: int = 96
     cell_h: int = 46
     pad_l: int = 132
-    pad_t: int = 104
     width: int = pad_l + cell_w * n_cols + 24
-    height: int = pad_t + cell_h * n_rows + 78
+    header_svg, extra_y = _header(title, subtitle, width)
+    pad_t: int = 104 + extra_y
+    grid_bottom: int = pad_t + cell_h * n_rows
+    note_lines: list = _wrap(note, width, 9)
+    note_y0: int = grid_bottom + 68
+    height: int = note_y0 + 14 * (len(note_lines) - 1) + 10
 
     present: list = [v for v in cells.values() if v is not None]
     lo: float = math.log10(min(present))
     hi: float = math.log10(max(present))
     span: float = hi - lo if hi > lo else 1.0
 
-    parts: list = [
-        _text(24, 30, title, 17, _FG, "start"),
-        _text(24, 47, subtitle, 11, _MUTED, "start"),
-    ]
+    parts: list = [header_svg]
     # Axis captions: guest across the top, host down the left (rotated).
     parts.append(
         _text(pad_l + n_cols * cell_w / 2, pad_t - 34, "GUEST — plugin language  →", 11, _MUTED, "middle")
@@ -302,14 +329,15 @@ def _chart_heatmap(
                 t: float = (math.log10(value) - lo) / span
                 parts.append(_rect(cx + 2, ry + 2, cell_w - 4, cell_h - 4, _heat_color(t)))
                 parts.append(_text(cx + cell_w / 2, ry + cell_h / 2 + 4, _fmt_ns(value), 11, "#0d1117", "middle"))
-    # Color legend (fast → slow).
-    leg_y: float = height - 30
+    # Color legend (fast → slow), anchored just below the grid.
+    leg_y: float = grid_bottom + 48
     for k in range(40):
         lx: float = pad_l + k * 4
         parts.append(_rect(lx, leg_y, 4, 10, _heat_color(k / 39)))
     parts.append(_text(pad_l - 8, leg_y + 9, "faster", 9, _MUTED, "end"))
     parts.append(_text(pad_l + 40 * 4 + 8, leg_y + 9, "slower", 9, _MUTED, "start"))
-    parts.append(_text(24, height - 10, note, 9, _MUTED, "start"))
+    for li, line in enumerate(note_lines):
+        parts.append(_text(24, note_y0 + li * 14, line, 9, _MUTED, "start"))
     out.write_text(_svg(width, height, "".join(parts)))
 
 
