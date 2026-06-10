@@ -942,9 +942,11 @@ fn generate_host_caller_method_deno(out: &mut String, func: &ResolvedFunction) {
         func.name, param_name
     ));
 
-    // Validate function index against the interface's reported function count.
+    // Validate the function index against the interface's reported function count.
+    // VM-dispatch interfaces report a count of 0 (the VM routes by fn_id itself),
+    // so only enforce the bound for native interfaces that report a real count.
     out.push_str(&format!(
-        "        if ({fn_id} >= this.#view.functionCount()) {{\n"
+        "        if (this.#view.functionCount() > 0 && {fn_id} >= this.#view.functionCount()) {{\n"
     ));
     out.push_str(&format!(
         "            throw new Error('function `{}` not available in interface');\n",

@@ -76,7 +76,7 @@ export class PipelineDecoderContract {
 
     /** Call `decode` */
     decode(input: string): string {
-        if (0 >= this.#view.functionCount()) {
+        if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `decode` not available in interface');
         }
         const inputBytes = _encoder.encode(input);
@@ -153,7 +153,7 @@ export class DataTransformerContract {
 
     /** Call `transform` */
     transform(input: string): string {
-        if (0 >= this.#view.functionCount()) {
+        if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `transform` not available in interface');
         }
         const inputBytes = _encoder.encode(input);
@@ -230,7 +230,7 @@ export class PipelineEncoderContract {
 
     /** Call `encode` */
     encode(input: string): string {
-        if (0 >= this.#view.functionCount()) {
+        if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `encode` not available in interface');
         }
         const inputBytes = _encoder.encode(input);
@@ -307,7 +307,7 @@ export class DataReporterContract {
 
     /** Call `report` */
     report(input: string): string {
-        if (0 >= this.#view.functionCount()) {
+        if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `report` not available in interface');
         }
         const inputBytes = _encoder.encode(input);
@@ -384,7 +384,7 @@ export class PipelineValidatorContract {
 
     /** Call `validate` */
     validate(input: string): string {
-        if (0 >= this.#view.functionCount()) {
+        if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `validate` not available in interface');
         }
         const inputBytes = _encoder.encode(input);

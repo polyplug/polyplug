@@ -62,3 +62,45 @@ fn test_generate_js_quickjs_files_exist() {
         expected_files.len()
     );
 }
+
+/// Regression: the JS host caller's function-index guard must be VM-safe.
+///
+/// A VM-dispatch interface reports `functionCount() == 0` (the VM routes by
+/// `fn_id` itself), so a bare `fn_id >= functionCount()` guard rejects *every*
+/// call into a Lua/JS/Python guest. The guard must only fire when the interface
+/// reports a real (native) count, i.e. it must be gated on `functionCount() > 0`.
+#[test]
+fn test_js_host_caller_function_count_guard_is_vm_safe() {
+    let root: PathBuf = workspace_root();
+    // examples/api.toml has string→string contract methods (e.g. decode) that
+    // emit the function-index guard; the minimal test fixture does not.
+    let api_toml: PathBuf = root.join("examples").join("api.toml");
+    let out_dir: PathBuf =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("js_quickjs_vm_safe_guard");
+
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    generate_js_quickjs_bindings(&api_toml, &out_dir);
+
+    let callers: String = std::fs::read_to_string(out_dir.join("host/callers.ts"))
+        .expect("read generated host/callers.ts");
+
+    // The caller must emit at least one function-index guard.
+    assert!(
+        callers.contains(">= this.#view.functionCount()"),
+        "expected a function-index guard in the generated JS host caller"
+    );
+
+    // Every guard line must be gated on a positive (native) count, so VM
+    // interfaces (count 0) are never wrongly rejected.
+    for line in callers.lines() {
+        if line.contains(">= this.#view.functionCount()") {
+            assert!(
+                line.contains("this.#view.functionCount() > 0 &&"),
+                "JS host caller guard is not VM-safe (rejects VM guests): {}",
+                line.trim()
+            );
+        }
+    }
+
+    println!("test_js_host_caller_function_count_guard_is_vm_safe: guard is VM-safe ✓");
+}
