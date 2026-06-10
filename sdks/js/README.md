@@ -127,37 +127,38 @@ QuickJS runtime adapter:
 
 ## Hot-Reload
 
-To enable hot-reload, set `hotReloadEnabled: true` and register an `onReload` callback:
+To enable hot-reload, pass `config.hotReloadEnabled: true` and an `onReload`
+callback per-instance to `runtimeNew` (no module-level state — each runtime
+owns its own callback):
 
 ```typescript
-import { Runtime, RuntimeConfig, ReloadPhase } from "@polyplug/core";
+import { openPolyplug, runtimeNew, ReloadPhase } from "@polyplug/core";
 
-// Enable hot-reload
-const config: RuntimeConfig = { hotReloadEnabled: true };
-Runtime.setConfig(config);
-
-// Register callback before creating runtime
-Runtime.onReload((phase) => {
-    switch (phase.type) {
-        case ReloadPhase.TYPE_PREPARING:
-            // Destroy instances for this bundle
-            instances.delete(phase.bundleId);
-            break;
-        case ReloadPhase.TYPE_RELOADED:
-            console.log(`Reloaded: ${phase.bundleName}`);
-            break;
-        case ReloadPhase.TYPE_FAILED:
-            console.error(`Failed: ${phase.reason}`);
-            break;
-    }
+const lib = openPolyplug(libPath);
+const runtime = runtimeNew(lib, {
+    config: { hotReloadEnabled: true },
+    onReload: (phase) => {
+        switch (phase.type) {
+            case ReloadPhase.TYPE_PREPARING:
+                // Destroy instances for this bundle
+                instances.delete(phase.bundleId);
+                break;
+            case ReloadPhase.TYPE_RELOADED:
+                console.log(`Reloaded: ${phase.bundleName}`);
+                break;
+            case ReloadPhase.TYPE_FAILED:
+                console.error(`Failed: ${phase.reason}`);
+                break;
+        }
+    },
 });
-
-const runtime = Runtime.builder().build();
+// runtime.destroy() closes the runtime AND the FFI callback it owns.
 ```
 
 **Key points:**
 - `hotReloadEnabled` defaults to `false` — must be explicitly enabled
-- Callback must be registered **before** creating the runtime
+- The callback is per-runtime (passed at construction); call `runtime.destroy()`
+  to release the runtime and its `Deno.UnsafeCallback`
 - Host must track and destroy instances on `TYPE_PREPARING` notification
 - See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
 

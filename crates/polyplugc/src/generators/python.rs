@@ -2483,6 +2483,32 @@ fn generate_python_enum(out: &mut String, e: &EnumDef) {
 
 // ─── Host Interface Factories Generation ─────────────────────────────────────────
 
+/// Collect the user-defined type names referenced by host contract function
+/// signatures (params and returns), deduplicated in first-seen order. These
+/// are defined in the generated `host/types.py` and must be imported
+/// explicitly — never via a wildcard.
+fn collect_host_contract_user_types(ir: &ValidatedIr) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let push_unique = |name: &str, names: &mut Vec<String>| {
+        if !names.iter().any(|n: &String| n == name) {
+            names.push(name.to_owned());
+        }
+    };
+    for contract in &ir.host_contracts {
+        for func in &contract.functions {
+            for param in &func.params {
+                if let ResolvedTypeRef::UserDefined(name) = &param.ty {
+                    push_unique(name, &mut names);
+                }
+            }
+            if let Some(ResolvedTypeRef::UserDefined(name)) = &func.returns {
+                push_unique(name, &mut names);
+            }
+        }
+    }
+    names
+}
+
 /// Generate all host-side interface factories into a single file.
 fn generate_python_host_interface_factories_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
@@ -2502,7 +2528,29 @@ fn generate_python_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("    Version,\n");
     out.push_str("    VmDispatch,\n");
     out.push_str(")\n");
-    out.push_str("from host.contracts import *\n\n");
+
+    // Explicit imports only: a wildcard (`from host.contracts import *`)
+    // silently shadows earlier names depending on import order — the same
+    // collision class as the cpp generator's global LogLevel clash.
+    let contract_classes: Vec<String> = ir
+        .host_contracts
+        .iter()
+        .map(|c: &ResolvedHostContract| host_contract_name_to_python_class(&c.name))
+        .collect();
+    if !contract_classes.is_empty() {
+        out.push_str(&format!(
+            "from host.contracts import {}\n",
+            contract_classes.join(", ")
+        ));
+    }
+    let user_types: Vec<String> = collect_host_contract_user_types(ir);
+    if !user_types.is_empty() {
+        out.push_str(&format!(
+            "from host.types import {}\n",
+            user_types.join(", ")
+        ));
+    }
+    out.push('\n');
 
     for contract in &ir.host_contracts {
         generate_python_host_interface_factory(&mut out, contract);
@@ -3224,6 +3272,7 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
     use crate::ir::ReprType;
+    use crate::ir::Version;
 
     #[test]
     fn generate_python_enum_non_bitflag() {
@@ -3276,6 +3325,108 @@ mod tests {
             "missing class def: {out}"
         );
         assert!(out.contains("NONE = 0"), "missing NONE: {out}");
+    }
+
+    /// The interface-factories file must import every name explicitly:
+    /// `from X import *` silently shadows earlier names depending on import
+    /// order (same defect class as the cpp global-LogLevel collision).
+    #[test]
+    fn python_interface_factories_no_wildcard_imports() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                singleton: false,
+                functions: vec![
+                    ResolvedFunction {
+                        name: "log".to_owned(),
+                        function_id: 0,
+                        params: vec![ResolvedParam {
+                            name: "message".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        }],
+                        returns: None,
+                    },
+                    ResolvedFunction {
+                        name: "log_with_level".to_owned(),
+                        function_id: 1,
+                        params: vec![
+                            ResolvedParam {
+                                name: "level".to_owned(),
+                                ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                            },
+                            ResolvedParam {
+                                name: "message".to_owned(),
+                                ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                            },
+                        ],
+                        returns: None,
+                    },
+                ],
+            }],
+            bundle: None,
+        };
+        let out: String = generate_python_host_interface_factories_file(&ir);
+        assert!(
+            !out.contains("import *"),
+            "generated python must not contain wildcard imports: {out}"
+        );
+        assert!(
+            out.contains("from host.contracts import HostLogger"),
+            "contract classes must be imported explicitly: {out}"
+        );
+        assert!(
+            out.contains("from host.types import LogLevel"),
+            "user-defined types referenced by thunks must be imported explicitly: {out}"
+        );
+    }
+
+    /// No generated python file (host or guest) may contain a wildcard import.
+    #[test]
+    fn python_generated_files_no_wildcard_imports() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                singleton: false,
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let generator: PythonGenerator = PythonGenerator;
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator.generate_host(&ir, &mut files).expect("host gen");
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("guest gen");
+        for file in &files.files {
+            assert!(
+                !file.content.contains("import *"),
+                "wildcard import in generated {}",
+                file.path.display()
+            );
+        }
     }
 
     // ─── Host Contract ABC Tests ───────────────────────────────────────────────────
@@ -3791,7 +3942,6 @@ mod tests {
     }
 
     fn make_bundle_with_dep(contract_id: u64) -> crate::ir::ResolvedBundle {
-        use crate::ir::Version;
         use polyplug_codegen::ResolvedBundleFile;
         ResolvedBundle {
             name: "python_transformer".to_owned(),

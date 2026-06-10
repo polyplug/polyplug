@@ -84,22 +84,40 @@ namespace Polyplug.Host.Tests
             }
 
             bool callbackRegistered = false;
-            Runtime.OnReload(_ => callbackRegistered = true);
-            try
-            {
-                Runtime runtime = new RuntimeBuilder().Build();
-                Assert.NotEqual(nint.Zero, runtime.HostHandle);
-                GC.KeepAlive(runtime);
-            }
-            finally
-            {
-                Runtime.OnReload(null!);
-            }
+            Runtime runtime = new RuntimeBuilder()
+                .OnReload(_ => callbackRegistered = true)
+                .Build();
+            Assert.NotEqual(nint.Zero, runtime.HostHandle);
+            GC.KeepAlive(runtime);
 
             // The callback is invoked only on a real reload event; here we only
             // assert that building with a config-bearing OnReload registration
             // succeeded without crashing across the FFI boundary.
             Assert.False(callbackRegistered);
+        }
+
+        [Fact]
+        public void ReloadCallbacksArePerInstance()
+        {
+            if (!NativeLibAvailable())
+            {
+                return;
+            }
+
+            // Rule 12: each runtime owns its reload callback — building a second
+            // runtime with a different callback must not clobber the first.
+            bool firstFired = false;
+            bool secondFired = false;
+            Runtime first = new RuntimeBuilder().OnReload(_ => firstFired = true).Build();
+            Runtime second = new RuntimeBuilder().OnReload(_ => secondFired = true).Build();
+
+            Assert.NotEqual(nint.Zero, first.HostHandle);
+            Assert.NotEqual(nint.Zero, second.HostHandle);
+            Assert.NotEqual(first.HostHandle, second.HostHandle);
+            Assert.False(firstFired);
+            Assert.False(secondFired);
+            GC.KeepAlive(first);
+            GC.KeepAlive(second);
         }
     }
 }

@@ -52,29 +52,24 @@ public sealed class ReloadPhase
     public string BundleName { get; }
 
     /// <summary>
-    /// Current retry attempt (0-indexed, only for Preparing).
-    /// </summary>
-    public uint RetryCount { get; }
-
-    /// <summary>
     /// Error reason (only for Failed phase).
     /// </summary>
     public string Reason { get; }
 
     /// <summary>
     /// Creates a new ReloadPhase instance.
+    /// Mirrors the ABI <c>ReloadPhase</c> struct exactly — there is no
+    /// retry-count field in the ABI.
     /// </summary>
     public ReloadPhase(
         ReloadPhaseType type,
         ulong bundleId,
         string bundleName,
-        uint retryCount = 0u,
         string reason = "")
     {
         Type = type;
         BundleId = bundleId;
         BundleName = bundleName ?? string.Empty;
-        RetryCount = retryCount;
         Reason = reason ?? string.Empty;
     }
 
@@ -103,7 +98,7 @@ public sealed class ReloadPhase
     {
         return Type switch
         {
-            ReloadPhaseType.Preparing => $"ReloadPhase.Preparing(BundleId={BundleId}, BundleName=\"{BundleName}\", RetryCount={RetryCount})",
+            ReloadPhaseType.Preparing => $"ReloadPhase.Preparing(BundleId={BundleId}, BundleName=\"{BundleName}\")",
             ReloadPhaseType.Reloaded => $"ReloadPhase.Reloaded(BundleId={BundleId}, BundleName=\"{BundleName}\")",
             ReloadPhaseType.Failed => $"ReloadPhase.Failed(BundleId={BundleId}, BundleName=\"{BundleName}\", Reason=\"{Reason}\")",
             _ => $"ReloadPhase.Unknown(Type={Type}, BundleId={BundleId})"

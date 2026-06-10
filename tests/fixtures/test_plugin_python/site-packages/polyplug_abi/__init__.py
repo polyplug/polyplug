@@ -46,6 +46,7 @@ from polyplug_abi.string_view_helper import (
     to_str,
     strip_prefix,
     starts_with,
+    ends_with,
     split,
     bytes_as_view,
 )
@@ -63,26 +64,29 @@ class ReloadPhaseType(IntEnum):
 class ReloadPhase:
     """Python representation of hot-reload phase notification.
 
+    Mirrors the ABI ``ReloadPhase`` struct exactly — there is no retry-count
+    field in the ABI.
+
     Attributes:
-        type: The phase type (Preparing, Reloaded, Failed, or Unloading).
+        type: The phase type (Preparing, Reloaded, Failed, or Unloading), or
+            the raw ``int`` discriminant when the runtime reports a phase this
+            SDK version does not know (the conversion is total — see
+            ``polyplug.runtime``).
         bundle_id: The FNV-1a hash of the bundle name.
         bundle_name: The human-readable bundle name.
-        retry_count: Number of retry attempts (valid only for Preparing).
         reason: Failure reason string (valid only for Failed).
     """
 
     def __init__(
         self,
-        type: ReloadPhaseType,
+        type: ReloadPhaseType | int,
         bundle_id: int,
         bundle_name: str,
-        retry_count: int = 0,
         reason: Optional[str] = None,
     ) -> None:
-        self.type: ReloadPhaseType = type
+        self.type: ReloadPhaseType | int = type
         self.bundle_id: int = bundle_id
         self.bundle_name: str = bundle_name
-        self.retry_count: int = retry_count
         self.reason: Optional[str] = reason
 
     def is_preparing(self) -> bool:
@@ -102,10 +106,14 @@ class ReloadPhase:
         return self.type == ReloadPhaseType.Unloading
 
     def __repr__(self) -> str:
+        type_name: str = (
+            self.type.name
+            if isinstance(self.type, ReloadPhaseType)
+            else f"Unknown({self.type})"
+        )
         return (
-            f"ReloadPhase(type={self.type.name}, bundle_id={self.bundle_id}, "
-            f"bundle_name={self.bundle_name!r}, retry_count={self.retry_count}, "
-            f"reason={self.reason!r})"
+            f"ReloadPhase(type={type_name}, bundle_id={self.bundle_id}, "
+            f"bundle_name={self.bundle_name!r}, reason={self.reason!r})"
         )
 
 
@@ -145,6 +153,7 @@ __all__ = [
     "to_str",
     "strip_prefix",
     "starts_with",
+    "ends_with",
     "split",
     "bytes_as_view",
 ]

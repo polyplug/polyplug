@@ -49,7 +49,6 @@ public static class ReloadPhaseTests
             ReloadPhaseType.Preparing,
             12345UL,
             "TestBundle",
-            2u,
             "Test reason"
         );
 
@@ -64,10 +63,6 @@ public static class ReloadPhaseTests
         if (phase.BundleName != "TestBundle")
         {
             throw new Exception("phase.BundleName should be TestBundle");
-        }
-        if (phase.RetryCount != 2u)
-        {
-            throw new Exception("phase.RetryCount should be 2");
         }
         if (phase.Reason != "Test reason")
         {
@@ -95,10 +90,6 @@ public static class ReloadPhaseTests
         {
             throw new Exception("phase.BundleName should be MyBundle");
         }
-        if (phase.RetryCount != 0u)
-        {
-            throw new Exception("phase.RetryCount should default to 0");
-        }
         if (phase.Reason != "")
         {
             throw new Exception("phase.Reason should default to empty string");
@@ -111,7 +102,6 @@ public static class ReloadPhaseTests
             ReloadPhaseType.Failed,
             1UL,
             null!,
-            0u,
             "Error"
         );
 
@@ -127,7 +117,6 @@ public static class ReloadPhaseTests
             ReloadPhaseType.Failed,
             1UL,
             "Bundle",
-            0u,
             null!
         );
 
@@ -197,7 +186,6 @@ public static class ReloadPhaseTests
             ReloadPhaseType.Preparing,
             42UL,
             "TestBundle",
-            3u,
             "Ignored"
         );
         var result = phase.ToString();
@@ -213,10 +201,6 @@ public static class ReloadPhaseTests
         if (!result.Contains("TestBundle"))
         {
             throw new Exception("ToString should include BundleName");
-        }
-        if (!result.Contains("3"))
-        {
-            throw new Exception("ToString should include RetryCount");
         }
     }
 }

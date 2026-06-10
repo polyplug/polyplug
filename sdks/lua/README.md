@@ -124,34 +124,25 @@ Lua runtime adapter:
 
 ## Hot-Reload
 
-To enable hot-reload, set `hot_reload_enabled = true` and register an `on_reload` callback:
+To enable hot-reload, pass `config.hot_reload_enabled = true` per-instance to
+`Runtime.new(opts)` (no module-level state — each runtime owns its options):
 
 ```lua
 local polyplug = require("polyplug")
-local reload_phase = require("polyplug.reload_phase")
 
--- Enable hot-reload
-polyplug.set_config({ hot_reload_enabled = true })
-
--- Register callback before creating runtime
-polyplug.on_reload(function(phase)
-    if phase.type == reload_phase.TYPE_PREPARING then
-        -- Destroy instances for this bundle
-        instances[phase.bundle_id] = nil
-    elseif phase.type == reload_phase.TYPE_RELOADED then
-        print("Reloaded: " .. phase.bundle_name)
-    elseif phase.type == reload_phase.TYPE_FAILED then
-        print("Failed: " .. phase.reason)
-    end
-end)
-
-local runtime = polyplug.Runtime.new()
+-- Enable hot-reload (per-instance configuration)
+local runtime = polyplug.Runtime.new({
+    config = { hot_reload_enabled = true },
+})
 ```
 
 **Key points:**
 - `hot_reload_enabled` defaults to `false` — must be explicitly enabled
-- Callback must be registered **before** creating the runtime
 - Host must track and destroy instances on `TYPE_PREPARING` notification
+- **Known limitation:** `opts.on_reload` raises an error on LuaJIT — the ABI
+  passes `ReloadPhase` to the callback **by value**, and LuaJIT FFI cannot
+  create callbacks with struct-by-value parameters. Lua hosts currently cannot
+  receive reload-phase notifications.
 - See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
 
 ## Performance Notes

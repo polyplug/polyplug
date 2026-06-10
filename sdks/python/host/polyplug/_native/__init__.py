@@ -1,9 +1,12 @@
 """Native library loader for polyplug.
 
 This module handles loading the native libpolyplug shared library.
-Resolution order:
-  1. Locally staged platform subdirectory (e.g. _native/linux-x64/).
-  2. The POLYPLUG_LIB environment variable (absolute path to the .so/.dylib/.dll).
+
+Resolution order (an explicit POLYPLUG_LIB always wins — this is the same
+order the FFI backend in ``polyplug.runtime`` uses, so the preloaded library
+and the backend library are always the SAME file):
+  1. The POLYPLUG_LIB environment variable (absolute path to the .so/.dylib/.dll).
+  2. Locally staged platform subdirectory (e.g. _native/linux-x64/).
   3. System library paths (LD_LIBRARY_PATH / DYLD_LIBRARY_PATH / PATH).
 """
 
@@ -74,10 +77,11 @@ def get_platform_identifier() -> str:
 class NativeLibLoader:
     """Manages loading of the native polyplug library.
 
-    This class attempts to load the native library from multiple locations:
-    1. Embedded _native/ directory (preferred)
-    2. System library paths
-    3. POLYPLUG_LIB environment variable
+    This class attempts to load the native library from multiple locations
+    (an explicit POLYPLUG_LIB always wins):
+    1. POLYPLUG_LIB environment variable
+    2. Embedded _native/ directory
+    3. System library paths
 
     Attributes:
         lib: The loaded ctypes.CDLL instance, or None if not loaded.
@@ -103,17 +107,21 @@ class NativeLibLoader:
         lib_name = get_native_lib_name()
         platform_id = get_platform_identifier()
 
+        # POLYPLUG_LIB wins over the embedded copy: the FFI backend
+        # (polyplug.runtime._resolve_lib_path) honors the env var first, so
+        # preferring the embedded copy here would dlopen TWO different
+        # libpolyplug builds into one process.
+        env_path = os.environ.get("POLYPLUG_LIB")
+        if env_path and os.path.exists(env_path):
+            self.lib = ctypes.CDLL(env_path)
+            self.load_path = env_path
+            return self.lib
+
         embedded_path = os.path.join(os.path.dirname(__file__), platform_id, lib_name)
 
         if os.path.exists(embedded_path):
             self.lib = ctypes.CDLL(embedded_path)
             self.load_path = embedded_path
-            return self.lib
-
-        env_path = os.environ.get("POLYPLUG_LIB")
-        if env_path and os.path.exists(env_path):
-            self.lib = ctypes.CDLL(env_path)
-            self.load_path = env_path
             return self.lib
 
         try:
@@ -138,9 +146,10 @@ _loader: Optional[NativeLibLoader] = None
 def load_native_lib() -> ctypes.CDLL:
     """Load the native polyplug library.
 
-    This function attempts to load the native library from:
-    1. The embedded _native/ directory (preferred)
-    2. The POLYPLUG_LIB environment variable
+    This function attempts to load the native library from
+    (an explicit POLYPLUG_LIB always wins):
+    1. The POLYPLUG_LIB environment variable
+    2. The embedded _native/ directory
     3. System library paths
 
     Returns:

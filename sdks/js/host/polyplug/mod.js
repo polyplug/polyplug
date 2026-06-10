@@ -41,8 +41,13 @@ import {
   HOST_API_GET_LAST_ERROR_OFFSET,
   HOST_API_GET_ERROR_LEN_OFFSET,
   RUNTIME_CONFIG_COMPATIBILITY_OFFSET,
+  RUNTIME_CONFIG_UNLOAD_MODE_OFFSET,
   RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET,
   RUNTIME_CONFIG_ON_RELOAD_OFFSET,
+  RUNTIME_CONFIG_ON_RELOAD_USER_DATA_OFFSET,
+  RUNTIME_CONFIG_LOG_OFFSET,
+  RUNTIME_CONFIG_LOG_USER_DATA_OFFSET,
+  RUNTIME_CONFIG_LOG_MAX_LEVEL_OFFSET,
   RUNTIME_CONFIG_SIZE,
   GUEST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET,
   GUEST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET,
@@ -155,18 +160,11 @@ const HOST_API_OFFSETS = {
   get_error_len: HOST_API_GET_ERROR_LEN_OFFSET,
 };
 
-// Module-level caches for hot path performance
+// Module-level caches for hot path performance (stateless encode/decode
+// helpers only — runtime/plugin state never lives at module level, Rule 12).
 const _funcCache = new Map();
 const _encoder = new TextEncoder();
 const _decoder = new TextDecoder();
-
-// Module-level pending callbacks for hot-reload notification
-/** @type {function(ReloadPhase): void | null} */
-let _pendingReloadCallback = null;
-/** @type {{ hotReloadEnabled: boolean, compatibility: number } | null} */
-let _pendingConfig = null;
-/** @type {Deno.UnsafeCallback | null} */
-let _ffiReloadCallback = null;
 
 // Callback type for reload notifications.
 //
@@ -183,6 +181,36 @@ const _RELOAD_CALLBACK_TYPE = {
     parameters: ["pointer", { struct: ["u32", "u32", "u64", "pointer", "usize", "pointer", "usize"] }],
     result: "void"
 };
+
+// Callback type for the runtime logger.
+//
+// The ABI signature is `void(*)(void* log_user_data, u32 level, StringView scope,
+// StringView message)`. Each StringView crosses BY VALUE as a 16-byte
+// { ptr, len } struct.
+const _LOG_CALLBACK_TYPE = {
+    parameters: [
+        "pointer",
+        "u32",
+        { struct: ["pointer", "usize"] },
+        { struct: ["pointer", "usize"] },
+    ],
+    result: "void"
+};
+
+/**
+ * Decode a by-value StringView struct buffer ({ ptr @ 0, len @ 8 }) into a string.
+ * @param {Uint8Array} svStruct - 16-byte StringView struct buffer.
+ * @returns {string}
+ */
+function decodeStringViewStruct(svStruct) {
+  const dv = new DataView(svStruct.buffer, svStruct.byteOffset, svStruct.byteLength);
+  const ptr = Deno.UnsafePointer.create(dv.getBigUint64(0, true));
+  const len = Number(dv.getBigUint64(8, true));
+  if (ptr === null || len === 0) {
+    return "";
+  }
+  return new Deno.UnsafePointerView(ptr).getUtf8String(len);
+}
 
 /**
  * Compute FNV-1a 64-bit hash.
@@ -228,30 +256,6 @@ export function hostContractId(name, majorVersion) {
  */
 export function bundleId(name) {
     return fnv1a64(name);
-}
-
-/**
- * Register a callback to be invoked during hot-reload operations.
- * Must be called BEFORE creating a Runtime instance.
- * @param {function(ReloadPhase): void} callback - Callback function
- */
-export function onReload(callback) {
-    _pendingReloadCallback = callback;
-}
-
-/**
- * Set runtime configuration for subsequently created runtimes.
- * Must be called BEFORE creating a Runtime instance.
- * RuntimeConfig is 32 bytes (compatibility, unload_mode, hot_reload_enabled, on_reload, on_reload_user_data).
- * @param {Object} config - Configuration options
- * @param {boolean} [config.hotReloadEnabled=false] - Whether hot-reload is enabled
- * @param {number} [config.compatibility=0] - Compatibility mode (COMPATIBILITY_STRICT=0, RELAXED=1, YOLO=2)
- */
-export function setConfig(config) {
-    _pendingConfig = {
-        hotReloadEnabled: config.hotReloadEnabled ?? false,
-        compatibility: config.compatibility ?? COMPATIBILITY_STRICT,
-    };
 }
 
 /**
@@ -507,18 +511,43 @@ export class GuestContractInterfaceView {
 export class Runtime {
   #lib;
   #host;  // HostApi pointer
+  // Per-instance Deno.UnsafeCallback handles (on_reload / log trampolines).
+  // Owned by THIS runtime (Rule 12: no module globals); closed on destroy.
+  #callbacks;
+  #destroyed;
 
   /**
    * @param {Deno.DynamicLibrary} lib - Dynamic library instance
    * @param {Deno.PointerValue} host - HostApi pointer
+   * @param {Deno.UnsafeCallback[]} [callbacks=[]] - Owned FFI callbacks to close on destroy
    */
-  constructor(lib, host) {
+  constructor(lib, host, callbacks = []) {
     this.#lib = lib;
     this.#host = host;
+    this.#callbacks = callbacks;
+    this.#destroyed = false;
+  }
+
+  /**
+   * Destroy the native runtime, then close the owned FFI callbacks.
+   * The native side may invoke the trampolines up until
+   * polyplug_runtime_destroy returns, so close() happens strictly after.
+   * Idempotent.
+   */
+  destroy() {
+    if (this.#destroyed) {
+      return;
+    }
+    this.#destroyed = true;
+    this.#lib.symbols.polyplug_runtime_destroy(this.#host);
+    for (const cb of this.#callbacks) {
+      cb.close();
+    }
+    this.#callbacks = [];
   }
 
   [Symbol.dispose]() {
-    this.#lib.symbols.polyplug_runtime_destroy(this.#host);
+    this.destroy();
   }
 
   /**
@@ -677,22 +706,25 @@ export class Runtime {
    * @returns {{ index: number, generation: number }[]} Array of guest contract handles
    */
   findAllGuestContracts(contractId, minVersion = 0, cap = 64) {
-    // find_all_guest_contracts returns `Array<GuestContractHandle>` by value as a
-    // 16-byte struct { ptr: pointer, len: usize } — NOT a pointer to an Array.
-    // Deno FFI returns by-value structs as a Uint8Array buffer (mirrors the
+    // find_all_guest_contracts returns the ABI `Array` struct BY VALUE:
+    // #[repr(C)] { items: pointer @ 0, len: usize @ 8, align: usize @ 16 } =
+    // 24 bytes. Declaring anything smaller makes the SysV sret write past the
+    // buffer Deno allocates for the return value (memory corruption). Deno FFI
+    // returns by-value structs as a Uint8Array buffer (mirrors the
     // AbiError-by-value pattern in loadBundle above).
     const result = callHostMethod(
       this.#host,
       HOST_API_OFFSETS.find_all_guest_contracts,
       ["pointer", "u64", "u32"],
-      { struct: ["pointer", "usize"] },
+      { struct: ["pointer", "usize", "usize"] },
       [this.#host, contractId, minVersion]
     );
 
-    // Read the returned Array struct: { ptr: pointer @ 0, len: usize @ 8 }.
+    // Read the returned Array struct: { items @ 0, len @ 8, align @ 16 }.
     const resultDv = new DataView(result.buffer, result.byteOffset, result.byteLength);
     const arrPtrRaw = resultDv.getBigUint64(0, true);
     const arrLen = Number(resultDv.getBigUint64(8, true));
+    const arrAlign = resultDv.getBigUint64(16, true);
     const arrPtr = Deno.UnsafePointer.create(arrPtrRaw);
 
     if (arrPtr === null || arrLen === 0) {
@@ -712,17 +744,16 @@ export class Runtime {
       });
     }
 
-    // Free the array via HostApi.free.
-    // GuestContractHandle is 8 bytes, align 4, so the allocation size is
-    // `arrLen * GUEST_CONTRACT_HANDLE_SIZE` and alignment is 4 — matching the
-    // 8-byte stride used above when reading the handles.
+    // Free the array via HostApi.free using the runtime's allocation size and
+    // alignment: size = len * sizeof(GuestContractHandle), align = Array.align
+    // as returned by the runtime.
     if (arrLen > 0) {
       callHostMethod(
         this.#host,
         HOST_API_OFFSETS.free,
         ["pointer", "pointer", "usize", "usize"],
         "void",
-        [this.#host, arrPtr, BigInt(arrLen * GUEST_CONTRACT_HANDLE_SIZE), BigInt(4)]
+        [this.#host, arrPtr, BigInt(arrLen * GUEST_CONTRACT_HANDLE_SIZE), arrAlign]
       );
     }
 
@@ -881,59 +912,100 @@ export function openPolyplug(soPath) {
 /**
  * Create new runtime instance.
  * Uses HostApi-based API: polyplug_runtime_create returns HostApi*.
- * RuntimeConfig is 32 bytes (compatibility, unload_mode, hot_reload_enabled, on_reload, on_reload_user_data).
+ *
+ * All configuration is per-instance (Rule 12: no module globals shared across
+ * runtimes). The FFI callbacks created for `onReload` / `logger` are owned by
+ * the returned Runtime and closed by {@link Runtime#destroy}.
+ *
+ * RuntimeConfig is the full 56-byte ABI struct: compatibility (u32 @ 0),
+ * unload_mode (u32 @ 4), hot_reload_enabled (bool @ 8), on_reload (fn @ 16),
+ * on_reload_user_data (ptr @ 24), log (fn @ 32), log_user_data (ptr @ 40),
+ * log_max_level (u32 @ 48). Offsets/size come from the abi.ts constants.
+ *
  * @param {Deno.DynamicLibrary} lib - Dynamic library
+ * @param {Object} [options] - Per-runtime options
+ * @param {Object} [options.config] - RuntimeConfig fields
+ * @param {number} [options.config.compatibility=0] - Compatibility mode (COMPATIBILITY_STRICT=0, RELAXED=1, YOLO=2)
+ * @param {number} [options.config.unloadMode=0] - Unload mode discriminant (0 = Retire)
+ * @param {boolean} [options.config.hotReloadEnabled=false] - Whether hot-reload is enabled
+ * @param {number} [options.config.logMaxLevel=5] - Max LogLevel (1=Error … 5=Trace) delivered to `logger`
+ * @param {function(ReloadPhase): void} [options.onReload] - Hot-reload phase callback
+ * @param {function(number, string, string): void} [options.logger] - Logger callback (level, scope, message)
  * @returns {Runtime}
  */
-export function runtimeNew(lib) {
+export function runtimeNew(lib, options = {}) {
+  const config = options.config ?? null;
+  const onReloadCallback = options.onReload ?? null;
+  const loggerCallback = options.logger ?? null;
+
+  /** @type {Deno.UnsafeCallback[]} */
+  const ownedCallbacks = [];
   let host;
 
-  if (_pendingConfig || _pendingReloadCallback) {
-    // RuntimeConfig is 32 bytes: compatibility(u32) @ 0 + unload_mode(u32) @ 4
-    // + hot_reload_enabled(bool/u8) @ 8 + padding + on_reload(fn ptr) @ 16
-    // + on_reload_user_data(ptr) @ 24. Offsets/size come from abi.ts constants.
+  if (config || onReloadCallback || loggerCallback) {
     const configBuf = new Uint8Array(RUNTIME_CONFIG_SIZE);
     const configView = new DataView(configBuf.buffer);
 
-    if (_pendingConfig) {
-      // compatibility (u32) at its abi.ts offset.
-      configView.setUint32(RUNTIME_CONFIG_COMPATIBILITY_OFFSET, _pendingConfig.compatibility, true);
-      // hot_reload_enabled (1 byte bool) at its abi.ts offset.
-      configView.setUint8(RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET, _pendingConfig.hotReloadEnabled ? 1 : 0);
-    }
+    configView.setUint32(RUNTIME_CONFIG_COMPATIBILITY_OFFSET, config?.compatibility ?? COMPATIBILITY_STRICT, true);
+    configView.setUint32(RUNTIME_CONFIG_UNLOAD_MODE_OFFSET, config?.unloadMode ?? 0, true);
+    configView.setUint8(RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET, config?.hotReloadEnabled ? 1 : 0);
 
-    if (_pendingReloadCallback) {
-      const callback = _pendingReloadCallback;
-      _ffiReloadCallback = new Deno.UnsafeCallback(_RELOAD_CALLBACK_TYPE,
+    if (onReloadCallback) {
+      const ffiReloadCallback = new Deno.UnsafeCallback(_RELOAD_CALLBACK_TYPE,
         (_userData, phaseStruct) => {
           // _userData is the opaque on_reload_user_data pointer (unused here — the
-          // JS closure already captures `callback`). phaseStruct is the 48-byte
-          // ReloadPhase passed by value as a buffer.
-          const dv = new DataView(phaseStruct.buffer, phaseStruct.byteOffset, phaseStruct.byteLength);
-          const phaseType = dv.getUint32(0, true);
-          const bundleId = dv.getBigUint64(8, true);
-          const bundleNamePtrRaw = dv.getBigUint64(16, true);
-          const bundleNameLen = Number(dv.getBigUint64(24, true));
-          const reasonPtrRaw = dv.getBigUint64(32, true);
-          const reasonLen = Number(dv.getBigUint64(40, true));
+          // JS closure already captures the callback). phaseStruct is the 48-byte
+          // ReloadPhase passed by value as a buffer. A JS exception must never
+          // unwind across the C ABI mid-reload: catch-all, log to stderr.
+          try {
+            const dv = new DataView(phaseStruct.buffer, phaseStruct.byteOffset, phaseStruct.byteLength);
+            const phaseType = dv.getUint32(0, true);
+            const bundleId = dv.getBigUint64(8, true);
+            const bundleNamePtrRaw = dv.getBigUint64(16, true);
+            const bundleNameLen = Number(dv.getBigUint64(24, true));
+            const reasonPtrRaw = dv.getBigUint64(32, true);
+            const reasonLen = Number(dv.getBigUint64(40, true));
 
-          let bundleName = "";
-          const bundleNamePtr = Deno.UnsafePointer.create(bundleNamePtrRaw);
-          if (bundleNamePtr !== null && bundleNameLen > 0) {
-            bundleName = new Deno.UnsafePointerView(bundleNamePtr).getUtf8String(bundleNameLen);
+            let bundleName = "";
+            const bundleNamePtr = Deno.UnsafePointer.create(bundleNamePtrRaw);
+            if (bundleNamePtr !== null && bundleNameLen > 0) {
+              bundleName = new Deno.UnsafePointerView(bundleNamePtr).getUtf8String(bundleNameLen);
+            }
+            let reason = "";
+            const reasonPtr = Deno.UnsafePointer.create(reasonPtrRaw);
+            if (reasonPtr !== null && reasonLen > 0) {
+              reason = new Deno.UnsafePointerView(reasonPtr).getUtf8String(reasonLen);
+            }
+            onReloadCallback(new ReloadPhase(phaseType, bundleId, bundleName, reason));
+          } catch (e) {
+            console.error(`polyplug: reload callback threw: ${e}`);
           }
-          let reason = "";
-          const reasonPtr = Deno.UnsafePointer.create(reasonPtrRaw);
-          if (reasonPtr !== null && reasonLen > 0) {
-            reason = new Deno.UnsafePointerView(reasonPtr).getUtf8String(reasonLen);
-          }
-          const phase = new ReloadPhase(phaseType, bundleId, bundleName, reason);
-          callback(phase);
         }
       );
-      // on_reload lives at offset 16 inside the RuntimeConfig (fn pointer, 8 bytes).
+      ownedCallbacks.push(ffiReloadCallback);
       // on_reload_user_data is left null: the JS closure already captures the callback.
-      configView.setBigUint64(RUNTIME_CONFIG_ON_RELOAD_OFFSET, Deno.UnsafePointer.value(_ffiReloadCallback.pointer), true);
+      configView.setBigUint64(RUNTIME_CONFIG_ON_RELOAD_OFFSET, BigInt(Deno.UnsafePointer.value(ffiReloadCallback.pointer)), true);
+    }
+
+    if (loggerCallback) {
+      const ffiLogCallback = new Deno.UnsafeCallback(_LOG_CALLBACK_TYPE,
+        (_userData, level, scopeStruct, messageStruct) => {
+          // A JS exception must never unwind across the C ABI from inside the
+          // runtime's logging funnel: catch-all, report to stderr.
+          try {
+            loggerCallback(level, decodeStringViewStruct(scopeStruct), decodeStringViewStruct(messageStruct));
+          } catch (e) {
+            console.error(`polyplug: logger callback threw: ${e}`);
+          }
+        }
+      );
+      ownedCallbacks.push(ffiLogCallback);
+      // log_user_data is left null: the JS closure already captures the callback.
+      configView.setBigUint64(RUNTIME_CONFIG_LOG_OFFSET, BigInt(Deno.UnsafePointer.value(ffiLogCallback.pointer)), true);
+      // Default to Trace (5): deliver everything, filter inside the JS callback.
+      configView.setUint32(RUNTIME_CONFIG_LOG_MAX_LEVEL_OFFSET, config?.logMaxLevel ?? 5, true);
+    } else if (config?.logMaxLevel !== undefined) {
+      configView.setUint32(RUNTIME_CONFIG_LOG_MAX_LEVEL_OFFSET, config.logMaxLevel, true);
     }
 
     const configPtr = Deno.UnsafePointer.of(configBuf);
@@ -943,7 +1015,10 @@ export function runtimeNew(lib) {
   }
 
   if (host === null) {
+    for (const cb of ownedCallbacks) {
+      cb.close();
+    }
     throw new Error("polyplug_runtime_create failed: unable to create runtime (returned null HostApi)");
   }
-  return new Runtime(lib, host);
+  return new Runtime(lib, host, ownedCallbacks);
 }

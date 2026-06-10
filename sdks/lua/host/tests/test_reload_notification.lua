@@ -118,36 +118,77 @@ assert_equals("Reloaded",  reload_phase.phase_type_name(reload_phase.TYPE_RELOAD
 assert_equals("Failed",    reload_phase.phase_type_name(reload_phase.TYPE_FAILED),    "name for TYPE_FAILED")
 assert_equals("Unknown(99)", reload_phase.phase_type_name(99), "name for unknown type")
 
--- ─── RuntimeConfig (pure-Lua table, no native runtime) ───────────────────────
-print("\n=== RuntimeConfig Defaults ===")
+-- ─── Runtime module: per-instance config (Rule 12) ───────────────────────────
+print("\n=== Runtime per-instance config ===")
 
--- The Lua SDK represents RuntimeConfig as a plain table passed to set_config().
--- Canonical 3-field ABI struct: compatibility, hot_reload_enabled, on_reload.
--- Verify the runtime module exposes the expected defaults / field names.
+-- Configuration is passed per-instance to Runtime.new(opts) — the module must
+-- hold NO pending-config / pending-callback statics shared across runtimes.
 local runtime = require("polyplug.runtime")
 
--- set_config stores the table in M._pending_config; verify round-trip
-runtime._pending_config = nil  -- ensure clean state
+assert_equals(nil, runtime._pending_config,          "module must not hold a _pending_config static")
+assert_equals(nil, runtime._pending_reload_callback, "module must not hold a _pending_reload_callback static")
+assert_equals(nil, runtime.set_config,               "module-level set_config is gone (per-instance opts)")
+assert_equals(nil, runtime.on_reload,                "module-level on_reload is gone (per-instance opts)")
 
-local config = { compatibility = 0, hot_reload_enabled = false, on_reload = nil }
-runtime.set_config(config)
-assert_equals(0,     runtime._pending_config.compatibility,    "config.compatibility default is 0")
-assert_false(runtime._pending_config.hot_reload_enabled,       "config.hot_reload_enabled default is false")
-assert_equals(nil,   runtime._pending_config.on_reload,        "config.on_reload default is nil")
+-- ─── find_all_guest_contracts ABI signature (defect: sret corruption) ────────
+print("\n=== find_all_guest_contracts ABI layout ===")
 
--- hot_reload_enabled can be set to true
-local config_enabled = { compatibility = 0, hot_reload_enabled = true, on_reload = nil }
-runtime.set_config(config_enabled)
-assert_true(runtime._pending_config.hot_reload_enabled, "config.hot_reload_enabled can be set to true")
+local ffi = require("ffi")
 
--- on_reload callback can be set
-local cb_called = false
-local config_with_cb = { compatibility = 0, hot_reload_enabled = true, on_reload = function() cb_called = true end }
-runtime.set_config(config_with_cb)
-assert_equals("function", type(runtime._pending_config.on_reload), "config.on_reload should be a function when set")
+-- The ABI returns Array BY VALUE: { items ptr, len size_t, align size_t } = 24
+-- bytes, align 8. The host binding must declare exactly this layout — a
+-- narrower struct return makes the SysV sret write past LuaJIT's return slot.
+assert_equals(24, ffi.sizeof("Array"),  "ABI Array struct is 24 bytes")
+assert_equals(8,  ffi.alignof("Array"), "ABI Array struct is 8-byte aligned")
+assert_equals("Array(*)(const HostApi*, uint64_t, uint32_t)",
+    runtime.FIND_ALL_FN_SIGNATURE,
+    "find_all cast signature returns the by-value Array struct")
+-- The cast signature must be constructible against the generated cdef.
+local fn_ctype_ok = pcall(ffi.typeof, runtime.FIND_ALL_FN_SIGNATURE)
+assert_true(fn_ctype_ok, "FIND_ALL_FN_SIGNATURE is a valid ctype against the generated ABI")
 
--- Clean up module state so tests are hermetic
-runtime._pending_config = nil
+-- ─── Runtime exercise (real native lib, when available) ──────────────────────
+print("\n=== find_all_guest_contracts runtime exercise ===")
+
+-- Exercise the real 24-byte sret path when a native libpolyplug is reachable
+-- (POLYPLUG_LIB or the staged _native/ copy). The polyplug entry module
+-- auto-loads the library; if none is available this section is skipped (the
+-- layout assertions above remain the minimum bar).
+package.path = script_dir .. "../../?.lua;" .. package.path
+local polyplug_ok, polyplug = pcall(require, "polyplug")
+if polyplug_ok then
+    local rt = polyplug.Runtime.new({
+        config = { compatibility = 0, hot_reload_enabled = true },
+    })
+    assert_true(rt ~= nil, "Runtime.new with per-instance config succeeds")
+
+    -- LuaJIT FFI cannot create callbacks with struct-by-value parameters, so
+    -- requesting on_reload must fail LOUDLY with the documented message (not a
+    -- cryptic cast error, and never silently).
+    local cb_ok, cb_err = pcall(polyplug.Runtime.new, {
+        on_reload = function(_) end,
+    })
+    assert_false(cb_ok, "on_reload request fails (LuaJIT struct-by-value callback limit)")
+    assert_true(tostring(cb_err):find("on_reload is not supported", 1, true) ~= nil,
+        "on_reload failure carries the documented diagnostic")
+
+    -- A second runtime must not inherit or clobber the first's options.
+    local rt2 = polyplug.Runtime.new()
+    assert_equals(nil, rt2._reload_cb_cdata, "second runtime owns no callback (no cross-instance leak)")
+
+    -- No bundles loaded: find_all must return an empty table — and the 24-byte
+    -- sret must not corrupt adjacent memory (verified by the host surviving
+    -- further calls).
+    local handles = rt:find_all_guest_contracts(0xDEADBEEFULL, 0)
+    assert_equals(0, #handles, "find_all on empty runtime returns no handles")
+    local handle = rt:find_guest_contract(0xDEADBEEFULL, 0)
+    assert_equals(polyplug.NULL_HANDLE_INDEX, handle.index, "host still functional after find_all sret")
+
+    rt2:destroy()
+    rt:destroy()
+else
+    print("  SKIP: native libpolyplug unavailable (" .. tostring(polyplug) .. ")")
+end
 
 -- ─── Results ─────────────────────────────────────────────────────────────────
 print("\n=== Results ===")

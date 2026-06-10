@@ -1,6 +1,7 @@
 """Python loader registration for polyplug."""
 
 import ctypes
+import os
 from polyplug.runtime import Runtime
 
 _lib = None
@@ -9,7 +10,10 @@ _lib = None
 def _get_lib() -> ctypes.CDLL:
     global _lib
     if _lib is None:
-        _lib = ctypes.CDLL("libpolyplug_python.so")
+        # POLYPLUG_PYTHON_LIB (set by the test/CI harness) wins over the bare
+        # soname so the loader cdylib matches the freshly built core.
+        lib_path: str = os.environ.get("POLYPLUG_PYTHON_LIB", "libpolyplug_python.so")
+        _lib = ctypes.CDLL(lib_path)
         _lib.polyplug_python_loader_create.restype = ctypes.c_void_p
         _lib.polyplug_python_loader_create.argtypes = [ctypes.c_void_p]
     return _lib

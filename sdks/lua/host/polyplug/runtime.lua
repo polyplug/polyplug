@@ -28,6 +28,13 @@ local FNV_PRIME = 0x00000100000001B3ULL
 M.NULL_HANDLE_INDEX = 0xFFFFFFFF
 M.AbiErrorCode = abi.AbiErrorCode
 
+-- Exact FFI signature used for HostApi.find_all_guest_contracts. The return
+-- type is the ABI `Array` struct BY VALUE (24 bytes: items ptr + len size_t +
+-- align size_t) — asserted against the generated ABI layout in
+-- tests/test_reload_notification.lua. Never narrow this to a smaller struct:
+-- the callee writes the full 24-byte sret.
+M.FIND_ALL_FN_SIGNATURE = "Array(*)(const HostApi*, uint64_t, uint32_t)"
+
 M.bundle_id = abi.bundle_id
 
 -- Compatibility modes matching polyplug_abi::Compatibility #[repr(u32)]
@@ -84,64 +91,83 @@ end
 M.Runtime = {}
 M.Runtime.__index = M.Runtime
 
-M._pending_reload_callback = nil
-M._pending_config = nil
-
-function M.on_reload(callback)
-    M._pending_reload_callback = callback
-end
-
-function M.set_config(config)
-    M._pending_config = config
-end
-
 --- Create a new Runtime instance.
 -- Uses HostApi-based API: polyplug_runtime_create returns HostApi*.
+--
+-- All configuration is per-instance (Rule 12: no module statics shared
+-- across runtimes). The reload-callback FFI cdata is owned by the returned
+-- Runtime and released on destroy().
+-- @param opts table|nil  Optional options table:
+--   opts.config    table     { compatibility = number, hot_reload_enabled = boolean }
+--   opts.on_reload function  Callback receiving a ReloadPhase table.
 -- @return Runtime             The runtime instance.
-function M.Runtime.new()
+function M.Runtime.new(opts)
     local lib = get_lib()
+    opts = opts or {}
     local host_ptr
+    local reload_cb_cdata = nil
 
-    if M._pending_config or M._pending_reload_callback then
+    if opts.config or opts.on_reload then
         -- Build a single RuntimeConfig; the on_reload callback pointer lives
-        -- inside it (offset 8) — there is no separate options wrapper.
+        -- inside it — there is no separate options wrapper.
         local config_c = ffi.new("RuntimeConfig", {
-            compatibility = (M._pending_config and M._pending_config.compatibility)
+            compatibility = (opts.config and opts.config.compatibility)
                 or M.COMPATIBILITY_STRICT,
-            hot_reload_enabled = (M._pending_config and M._pending_config.hot_reload_enabled)
+            hot_reload_enabled = (opts.config and opts.config.hot_reload_enabled)
                 and 1 or 0,
             on_reload = nil,
         })
 
-        if M._pending_reload_callback then
-            local callback = M._pending_reload_callback
+        if opts.on_reload then
+            local callback = opts.on_reload
             -- The ABI signature is void(*)(void* user_data, ReloadPhase): an opaque
-            -- user-data pointer followed by ONE ReloadPhase struct by value (no
+            -- user-data pointer followed by ONE ReloadPhase struct BY VALUE (no
             -- retry_count field). user_data is unused here — the Lua closure already
-            -- captures `callback`.
-            M._ffi_reload_callback = ffi.cast("RuntimeConfig_on_reload_fn", function(
+            -- captures `callback`. The callback body is wrapped in pcall: a Lua
+            -- error must never unwind across the C ABI mid-reload.
+            --
+            -- LuaJIT FFI cannot create callbacks whose C signature passes an
+            -- aggregate by value; the cast below is therefore attempted under
+            -- pcall and surfaced as a precise error instead of a cryptic
+            -- conversion failure. (Tracked SDK limitation: the ABI's by-value
+            -- ReloadPhase parameter is not expressible as a LuaJIT callback.)
+            local cast_ok, cdata_or_err = pcall(ffi.cast, "RuntimeConfig_on_reload_fn", function(
                 _user_data,
                 phase_struct
             )
-                local phase = reload_phase.new(
-                    phase_struct.phase_type,
-                    phase_struct.bundle_id,
-                    abi.to_str(phase_struct.bundle_name),
-                    abi.to_str(phase_struct.reason)
-                )
-                callback(phase)
+                local ok, err = pcall(function()
+                    local phase = reload_phase.new(
+                        phase_struct.phase_type,
+                        phase_struct.bundle_id,
+                        abi.to_str(phase_struct.bundle_name),
+                        abi.to_str(phase_struct.reason)
+                    )
+                    callback(phase)
+                end)
+                if not ok then
+                    io.stderr:write("polyplug: reload callback error: " .. tostring(err) .. "\n")
+                end
             end)
-            config_c.on_reload = M._ffi_reload_callback
+            if not cast_ok then
+                error("polyplug: on_reload is not supported on this LuaJIT: the ABI passes "
+                    .. "ReloadPhase by value and LuaJIT FFI cannot create callbacks with "
+                    .. "struct-by-value parameters (" .. tostring(cdata_or_err) .. ")")
+            end
+            reload_cb_cdata = cdata_or_err
+            config_c.on_reload = reload_cb_cdata
         end
 
-        -- Keep the config cdata anchored for the duration of the create call.
-        M._pending_config_cdata = config_c
+        -- config_c stays anchored (local) for the duration of the create call;
+        -- the runtime copies what it needs before returning.
         host_ptr = lib.polyplug_runtime_create(config_c)
     else
         host_ptr = lib.polyplug_runtime_create(nil)
     end
 
     if host_ptr == nil then
+        if reload_cb_cdata ~= nil then
+            reload_cb_cdata:free()
+        end
         error("polyplug_runtime_create failed: returned null HostApi")
     end
 
@@ -151,6 +177,9 @@ function M.Runtime.new()
         _host = host_ptr,      -- HostApi* pointer (for FFI calls)
         _host_struct = host,   -- Dereferenced struct (for field access)
         _lib = lib,
+        -- Owned reload-callback cdata: must outlive the native runtime (the
+        -- runtime may invoke it until destroy), freed in destroy()/GC.
+        _reload_cb_cdata = reload_cb_cdata,
         _destroyed = false
     }
     local obj = setmetatable(self, M.Runtime)
@@ -159,6 +188,10 @@ function M.Runtime.new()
     ffi.gc(host_ptr, function(ptr)
         if not self._destroyed and ptr ~= nil then
             lib.polyplug_runtime_destroy(ptr)
+            if self._reload_cb_cdata ~= nil then
+                self._reload_cb_cdata:free()
+                self._reload_cb_cdata = nil
+            end
         end
     end)
     return obj
@@ -230,20 +263,29 @@ end
 function M.Runtime:find_all_guest_contracts(contract_id, min_version, cap)
     cap = cap or 64
     -- Cast function pointer and call with self-passing pattern.
-    -- Returns Array<GuestContractHandle> struct with ptr and len. GuestContractHandle
-    -- is `#[repr(C)] { index: u32, generation: u32 }` = 8 bytes, so the element type is
-    -- GuestContractHandle and the array stride is 8 bytes.
-    local fn = ffi.cast("struct { GuestContractHandle* ptr; size_t len; }(*)(const HostApi*, uint64_t, uint32_t)", self._host_struct.find_all_guest_contracts)
+    -- Returns the ABI `Array` struct BY VALUE: #[repr(C)] { items: *mut T,
+    -- len: usize, align: usize } = 24 bytes. Declaring anything smaller makes
+    -- the SysV sret write past the buffer LuaJIT allocates for the return
+    -- value (memory corruption). The element type is GuestContractHandle
+    -- (#[repr(C)] { index: u32, generation: u32 } = 8 bytes / stride 8).
+    local fn = ffi.cast(M.FIND_ALL_FN_SIGNATURE, self._host_struct.find_all_guest_contracts)
     local arr = fn(self._host, contract_id, min_version)
     local result = {}
-    for i = 0, math.min(arr.len, cap) - 1 do
-        table.insert(result, arr.ptr[i])
+    -- arr.len is a size_t cdata (uint64_t); math.min on cdata errors, so
+    -- convert to a Lua number first.
+    local len = tonumber(arr.len)
+    local items = ffi.cast("GuestContractHandle*", arr.items)
+    if items ~= nil then
+        for i = 0, math.min(len, cap) - 1 do
+            table.insert(result, items[i])
+        end
     end
-    -- Free the array via HostApi.free (size = len * sizeof(GuestContractHandle), align = 4).
-    if arr.ptr ~= nil and arr.len > 0 then
+    -- Free the array via HostApi.free using the runtime's allocation size and
+    -- alignment: size = len * sizeof(GuestContractHandle), align = arr.align.
+    if arr.items ~= nil and len > 0 then
         local elem_size = ffi.sizeof("GuestContractHandle")
         local free_fn = ffi.cast("void(*)(const HostApi*, void*, size_t, size_t)", self._host_struct.free)
-        free_fn(self._host, arr.ptr, arr.len * elem_size, ffi.alignof("GuestContractHandle"))
+        free_fn(self._host, arr.items, len * elem_size, arr.align)
     end
     return result
 end
@@ -312,12 +354,17 @@ function M.Runtime:host()
 end
 
 --- Destroy the runtime explicitly.
--- Call polyplug_runtime_destroy on the HostApi.
+-- Call polyplug_runtime_destroy on the HostApi, then release the owned
+-- reload-callback FFI cdata (the runtime may invoke it up until destroy).
 function M.Runtime:destroy()
     if self._host ~= nil and not self._destroyed then
         self._lib.polyplug_runtime_destroy(self._host)
         self._destroyed = true
         self._host = nil
+        if self._reload_cb_cdata ~= nil then
+            self._reload_cb_cdata:free()
+            self._reload_cb_cdata = nil
+        end
     end
 end
 

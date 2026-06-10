@@ -130,10 +130,20 @@ Deno.test("toString includes Unknown for unrecognised type", () => {
     assertEquals(true, s.includes("Unknown"), `toString should include 'Unknown' for type 99, got: ${s}`);
 });
 
-// ─── RuntimeConfig canonical 3-field ABI struct ───────────────────────────────
-// The JS SDK represents RuntimeConfig as a plain object passed to setConfig().
-// Canonical fields per D-22: compatibility (u32), hot_reload_enabled (bool), on_reload (fn | null).
+// ─── RuntimeConfig per-instance options object ───────────────────────────────
+// The JS SDK represents RuntimeConfig as a plain object passed per-instance to
+// runtimeNew(lib, { config, onReload, logger }) — there is NO module-level
+// pending-config/pending-callback state (Rule 12).
 // Tests verify the documented default values for each field.
+
+import * as hostMod from "../polyplug/mod.js";
+
+Deno.test("module holds no pending-config statics (Rule 12)", () => {
+    // The old module-global API is gone: configuration is per-instance.
+    assertEquals(undefined, (hostMod as Record<string, unknown>).setConfig);
+    assertEquals(undefined, (hostMod as Record<string, unknown>).onReload);
+    assertEquals("function", typeof hostMod.runtimeNew);
+});
 
 Deno.test("RuntimeConfig: default compatibility is 0 (COMPATIBILITY_STRICT)", () => {
     // COMPATIBILITY_STRICT = 0 is exported from mod.js; test value only

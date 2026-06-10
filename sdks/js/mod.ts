@@ -8,8 +8,6 @@ export {
     Runtime,
     openPolyplug,
     runtimeNew,
-    onReload,
-    setConfig,
     NULL_HANDLE,
     fnv1a64,
     COMPATIBILITY_STRICT,

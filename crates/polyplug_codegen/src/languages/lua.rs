@@ -69,9 +69,14 @@ impl LuaGenerator {
             return Self::rust_type_to_lua(inner);
         }
 
-        // Handle Array<T> — expand into 3 fields; this returns the items type.
+        // Handle Array<T> used as a VALUE type (fn-pointer return/param):
+        // map to the concrete 24-byte `Array` C struct so by-value sret/argument
+        // passing uses the real ABI layout. (`void*` here corrupts memory: the
+        // callee writes a 24-byte struct return over a smaller slot.)
+        // Struct FIELDS of type Array<T> are expanded into 3 sub-fields by
+        // `generate_struct` before this mapping is consulted.
         if Self::is_array(rust_type) {
-            return String::from("void*");
+            return String::from("Array");
         }
 
         if rust_type.contains("extern\"C\"fn") || rust_type.contains("extern\"C\"") {
@@ -499,6 +504,28 @@ mod tests {
         assert!(
             typedef.contains("void (*Test_destroy_fn)("),
             "void return type should produce a named C function-pointer typedef: {}",
+            typedef
+        );
+    }
+
+    /// Test that fn ptrs returning Array<T> by value declare the concrete
+    /// 24-byte `Array` struct return — NOT `void*`. A narrowed return type
+    /// makes the SysV sret write past the slot LuaJIT allocates (corruption).
+    #[test]
+    fn lua_fn_ptr_array_return_is_by_value_struct() {
+        let (typedef, _type_name) = LuaGenerator::generate_fn_ptr_typedef(
+            "HostApi",
+            "find_all_guest_contracts",
+            "unsafeextern\"C\"fn(this:*constHostApi,contract_id:u64,min_version:u32)->Array<GuestContractHandle>",
+        );
+        assert!(
+            typedef.contains("typedef Array (*HostApi_find_all_guest_contracts_fn)("),
+            "Array<T> return must map to the by-value Array struct: {}",
+            typedef
+        );
+        assert!(
+            !typedef.contains("void* (*HostApi_find_all_guest_contracts_fn)"),
+            "Array<T> return must not be narrowed to void*: {}",
             typedef
         );
     }

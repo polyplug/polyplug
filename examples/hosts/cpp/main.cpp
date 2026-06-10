@@ -114,8 +114,10 @@ int main() {
 
     // Build the runtime with a hot-reload callback registered via the builder.
     // ReloadPhaseType is an enum class — use :: scoped access.
+    // plugin_dir() is NOT used here: builder-time auto-loading happens before
+    // the language loaders below are registered, so this host loads bundles
+    // explicitly after loader registration.
     auto rt = polyplug::Runtime::builder()
-        .plugin_dir(plugin_path)
         .on_reload([](const ReloadPhase& phase) {
             switch (phase.phase_type) {
                 case ReloadPhaseType::Preparing: {

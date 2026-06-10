@@ -73,7 +73,7 @@ def handle_reload(phase: ReloadPhase) -> None:
     if phase.is_preparing():
         print(
             f"[HOT-RELOAD] Preparing: {phase.bundle_name} "
-            f"(id=0x{phase.bundle_id:016X}, retry {phase.retry_count})"
+            f"(id=0x{phase.bundle_id:016X})"
         )
     elif phase.is_reloaded():
         print(
@@ -94,10 +94,9 @@ def main():
 
     config = RuntimeConfig()
     config.hot_reload_enabled = True
-    Runtime.set_config(config)
-    Runtime.on_reload(handle_reload)
-
-    rt = Runtime()
+    # Config and reload callback are per-instance constructor arguments
+    # (no class-level statics shared across runtimes).
+    rt = Runtime(config=config, on_reload=handle_reload)
 
     # Register loaders for every runtime the example plugins may use. Loaders
     # whose backing package or cdylib is unavailable are skipped so the host

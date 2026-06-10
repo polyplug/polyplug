@@ -9,13 +9,16 @@
 #include "error.hpp"
 #include "handle.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 static_assert(POLYPLUG_ABI_VERSION == 1,
@@ -66,11 +69,20 @@ class Runtime {
 public:
     class Builder {
     public:
+        /// Add a directory to scan for plugin bundles during `build()`.
+        /// Mirrors the Rust RuntimeBuilder: every bundle subdirectory containing
+        /// a `manifest.toml` is loaded (sorted order) after the runtime is
+        /// created. Bundles requiring a language loader can only load after that
+        /// loader is registered — hosts registering loaders after `build()` must
+        /// load such bundles explicitly instead of using `plugin_dir()`.
         Builder& plugin_dir(std::string_view path) {
             plugin_dirs_.emplace_back(path);
             return *this;
         }
 
+        /// Set the compatibility mode (`Compatibility` discriminant) used for
+        /// version resolution. Overrides the `compatibility` field of a config
+        /// passed via `config()`.
         Builder& compatibility(uint32_t mode) noexcept {
             compatibility_ = mode;
             return *this;
@@ -87,11 +99,22 @@ public:
         }
 
         Runtime build() {
-            if (config_.has_value() || on_reload_cb_.has_value()) {
+            Runtime rt = create_runtime();
+            load_plugin_dirs(rt);
+            return rt;
+        }
+
+    private:
+        Runtime create_runtime() {
+            if (config_.has_value() || on_reload_cb_.has_value() || compatibility_.has_value()) {
                 // Build a RuntimeConfig from stored options.
                 RuntimeConfig cfg{};
                 if (config_.has_value()) {
                     cfg = config_.value();
+                }
+                // compatibility() wins over a config()-supplied value.
+                if (compatibility_.has_value()) {
+                    cfg.compatibility = static_cast<Compatibility>(compatibility_.value());
                 }
                 // The owned functor (if any) is heap-allocated so its address is
                 // stable; the pointer is handed to the runtime as on_reload_user_data
@@ -108,7 +131,7 @@ public:
                 }
                 return Runtime(h, std::move(cb));
             } else {
-                // No config or callback — pass null for defaults.
+                // No config, callback, or compatibility — pass null for defaults.
                 const HostApi* h = polyplug_runtime_create(nullptr);
                 if (h == nullptr) {
                     throw std::runtime_error("polyplug_runtime_create returned null");
@@ -117,9 +140,31 @@ public:
             }
         }
 
-    private:
+        /// Scan each stored plugin directory for bundle subdirectories
+        /// (containing `manifest.toml`) and load them in sorted order —
+        /// mirroring the Rust builder's scan-and-load-at-build semantics.
+        void load_plugin_dirs(Runtime& rt) const {
+            namespace fs = std::filesystem;
+            for (const std::string& dir : plugin_dirs_) {
+                std::error_code ec{};
+                if (!fs::is_directory(dir, ec)) {
+                    continue;
+                }
+                std::vector<std::string> bundle_dirs{};
+                for (const fs::directory_entry& entry : fs::directory_iterator(dir, ec)) {
+                    if (entry.is_directory() && fs::exists(entry.path() / "manifest.toml")) {
+                        bundle_dirs.push_back(entry.path().string());
+                    }
+                }
+                std::sort(bundle_dirs.begin(), bundle_dirs.end());
+                for (const std::string& bundle_dir : bundle_dirs) {
+                    rt.load_bundle(bundle_dir);
+                }
+            }
+        }
+
         std::vector<std::string> plugin_dirs_{};
-        uint32_t compatibility_{0U};
+        std::optional<uint32_t> compatibility_{};
         std::optional<RuntimeConfig> config_{};
         std::optional<std::function<void(const ReloadPhase&)>> on_reload_cb_{};
     };

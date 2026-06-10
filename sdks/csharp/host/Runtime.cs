@@ -9,13 +9,21 @@ namespace Polyplug.Host;
 
 public sealed class Runtime
 {
-    private static Action<ReloadPhase>? s_reloadCallback;
-    private static GCHandle s_reloadCallbackHandle;
-    private static readonly object s_lock = new();
-
     // HostApi pointer and loaded struct (18-03)
     private nint _host;
     private HostApi _hostStruct;
+
+    // ─── Per-instance reload callback storage (Rule 12: no statics) ──────────────
+    //
+    // Mirrors the C++ reference pattern (sdks/cpp/host/polyplug/runtime.hpp):
+    // the user callback lives in a heap-allocated state object owned by THIS
+    // Runtime instance. A GCHandle to that state is passed to the native side as
+    // `RuntimeConfig.OnReloadUserData` and recovered by the static (stateless)
+    // trampoline on every invocation. The trampoline delegate itself is also
+    // pinned per-instance so the function pointer stays valid for the runtime's
+    // lifetime.
+    private GCHandle _reloadStateHandle;
+    private GCHandle _reloadTrampolineHandle;
 
     // Cached function pointer delegates (18-03)
     private LoadBundleDelegate? _loadBundleFn;
@@ -90,66 +98,122 @@ public sealed class Runtime
     /// Used by RuntimeBuilder after creating the HostApi.
     /// </summary>
     /// <param name="hostInterfacePtr">HostApi pointer from polyplug_runtime_create.</param>
-    internal Runtime(nint hostInterfacePtr)
+    /// <param name="reloadStateHandle">GCHandle on the per-instance <see cref="ReloadCallbackState"/> (or default).</param>
+    /// <param name="reloadTrampolineHandle">GCHandle keeping the trampoline delegate alive (or default).</param>
+    internal Runtime(nint hostInterfacePtr, GCHandle reloadStateHandle, GCHandle reloadTrampolineHandle)
     {
         if (hostInterfacePtr == nint.Zero)
         {
             throw new InvalidOperationException("HostApi pointer is null.");
         }
         _host = hostInterfacePtr;
+        _reloadStateHandle = reloadStateHandle;
+        _reloadTrampolineHandle = reloadTrampolineHandle;
+        if (_reloadStateHandle.IsAllocated && _reloadStateHandle.Target is ReloadCallbackState state)
+        {
+            state.Owner = this;
+        }
         _hostStruct = Marshal.PtrToStructure<HostApi>(_host);
         CacheFunctionPointers();
     }
 
     /// <summary>
-    /// Register a callback to be invoked during hot-reload operations.
-    /// Must be called BEFORE creating a Runtime instance.
-    /// The callback is stored statically so the C ABI trampoline can reference it.
+    /// Per-instance reload callback state recovered from
+    /// <c>RuntimeConfig.OnReloadUserData</c> by <see cref="OnReloadNative"/>.
+    /// Owned by the Runtime instance via <see cref="_reloadStateHandle"/>.
     /// </summary>
-    public static void OnReload(Action<ReloadPhase> callback)
+    internal sealed class ReloadCallbackState
     {
-        lock (s_lock)
+        internal ReloadCallbackState(Action<ReloadPhase> callback)
         {
-            if (s_reloadCallbackHandle.IsAllocated)
-            {
-                s_reloadCallbackHandle.Free();
-            }
-
-            s_reloadCallback = callback;
-
-            if (callback is null)
-            {
-                s_reloadTrampoline = null;
-                return;
-            }
-
-            OnReloadTrampoline trampoline = OnReloadNative;
-            s_reloadCallbackHandle = GCHandle.Alloc(trampoline);
-            s_reloadTrampoline = trampoline;
+            Callback = callback;
         }
+
+        internal Action<ReloadPhase> Callback { get; }
+
+        /// <summary>The owning runtime, set once construction completes; used for failure logging.</summary>
+        internal Runtime? Owner { get; set; }
     }
 
     /// <summary>
-    /// C ABI trampoline for the reload callback. Stored as a static so the
-    /// delegate is not garbage-collected while the runtime holds the pointer.
+    /// C ABI trampoline for the reload callback. Stateless: the per-instance
+    /// callback is recovered from <paramref name="userData"/>, which carries the
+    /// GCHandle of the owning runtime's <see cref="ReloadCallbackState"/>.
+    /// A managed exception must never unwind across the C ABI mid-reload, so the
+    /// invocation is wrapped in a catch-all that logs and swallows.
     /// </summary>
-    private static OnReloadTrampoline? s_reloadTrampoline;
-
-    private static void OnReloadNative(nint userData, Polyplug.Abi.ReloadPhase phase)
+    internal static void OnReloadNative(nint userData, Polyplug.Abi.ReloadPhase phase)
     {
-        _ = userData;
-        Action<ReloadPhase>? cb = s_reloadCallback;
-        if (cb is null)
+        if (userData == nint.Zero)
         {
             return;
         }
 
-        ReloadPhaseType type = (ReloadPhaseType)phase.PhaseType;
-        string bundleName = StringViewToString(phase.BundleName);
-        string reason = StringViewToString(phase.Reason);
+        ReloadCallbackState? state = GCHandle.FromIntPtr(userData).Target as ReloadCallbackState;
+        if (state is null)
+        {
+            return;
+        }
 
-        // Polyplug.Abi.ReloadPhase has no RetryCount field; use 0 as default.
-        cb(new ReloadPhase(type, (ulong)phase.BundleId, bundleName, 0u, reason));
+        try
+        {
+            ReloadPhaseType type = (ReloadPhaseType)phase.PhaseType;
+            string bundleName = StringViewToString(phase.BundleName);
+            string reason = StringViewToString(phase.Reason);
+            state.Callback(new ReloadPhase(type, (ulong)phase.BundleId, bundleName, reason));
+        }
+        catch (Exception e)
+        {
+            // Swallow: unwinding a managed exception across the C ABI mid-reload
+            // is undefined behavior. Funnel the failure through the host logging
+            // path when the owning runtime is available, else stderr.
+            state.Owner?.TryLogReloadCallbackFailure(e);
+            if (state.Owner is null)
+            {
+                Console.Error.WriteLine($"polyplug: reload callback threw: {e}");
+            }
+        }
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void LogDelegate(nint host, uint level, StringView scope, StringView message);
+
+    /// <summary>
+    /// Best-effort funnel of a reload-callback failure through <c>HostApi.log</c>
+    /// (level 1 = Error); falls back to stderr if the host is unavailable or the
+    /// log call itself fails.
+    /// </summary>
+    private void TryLogReloadCallbackFailure(Exception e)
+    {
+        try
+        {
+            if (_host == nint.Zero || _hostStruct.Log == nint.Zero)
+            {
+                Console.Error.WriteLine($"polyplug: reload callback threw: {e}");
+                return;
+            }
+
+            LogDelegate logFn = Marshal.GetDelegateForFunctionPointer<LogDelegate>(_hostStruct.Log);
+            byte[] scopeBytes = Encoding.UTF8.GetBytes("host.reload_callback");
+            byte[] messageBytes = Encoding.UTF8.GetBytes($"reload callback threw: {e.Message}");
+            GCHandle scopePin = GCHandle.Alloc(scopeBytes, GCHandleType.Pinned);
+            GCHandle messagePin = GCHandle.Alloc(messageBytes, GCHandleType.Pinned);
+            try
+            {
+                StringView scopeView = new StringView { Ptr = scopePin.AddrOfPinnedObject(), Len = (nuint)scopeBytes.Length };
+                StringView messageView = new StringView { Ptr = messagePin.AddrOfPinnedObject(), Len = (nuint)messageBytes.Length };
+                logFn(_host, (uint)LogLevel.Error, scopeView, messageView);
+            }
+            finally
+            {
+                scopePin.Free();
+                messagePin.Free();
+            }
+        }
+        catch (Exception logError)
+        {
+            Console.Error.WriteLine($"polyplug: reload callback threw: {e} (log funnel also failed: {logError.Message})");
+        }
     }
 
     private static string StringViewToString(StringView sv)
@@ -166,55 +230,15 @@ public sealed class Runtime
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate void OnReloadTrampoline(nint userData, Polyplug.Abi.ReloadPhase phase);
+    internal delegate void OnReloadTrampoline(nint userData, Polyplug.Abi.ReloadPhase phase);
 
     /// <summary>
-    /// Build a RuntimeConfig struct that includes the stored reload callback.
-    /// Returns null if no callback has been set via OnReload().
-    /// </summary>
-    internal static RuntimeConfig? BuildRuntimeConfig()
-    {
-        lock (s_lock)
-        {
-            if (s_reloadTrampoline is null)
-            {
-                return null;
-            }
-
-            return new RuntimeConfig
-            {
-                Compatibility = Compatibility.Strict,
-                HotReloadEnabled = true,
-                OnReload = Marshal.GetFunctionPointerForDelegate(s_reloadTrampoline),
-            };
-        }
-    }
-
-    /// <summary>
-    /// Calls <c>polyplug_runtime_create</c>, marshaling a configured
-    /// <see cref="RuntimeConfig"/> when one was set via <see cref="OnReload"/>.
-    /// The native core copies the config during the call, so the unmanaged copy
-    /// is freed once create returns. The reload trampoline delegate is kept alive
-    /// for the process lifetime by <c>s_reloadCallbackHandle</c> / <c>s_reloadTrampoline</c>.
+    /// Calls <c>polyplug_runtime_create</c> with default configuration
+    /// (no <see cref="RuntimeConfig"/>; the native side applies its defaults).
     /// </summary>
     internal static nint CreateNative()
     {
-        RuntimeConfig? config = BuildRuntimeConfig();
-        if (config is null)
-        {
-            return NativeMethods.PolyplugRuntimeCreate(nint.Zero);
-        }
-
-        nint configPtr = Marshal.AllocHGlobal(Marshal.SizeOf<RuntimeConfig>());
-        try
-        {
-            Marshal.StructureToPtr(config.Value, configPtr, fDeleteOld: false);
-            return NativeMethods.PolyplugRuntimeCreate(configPtr);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(configPtr);
-        }
+        return NativeMethods.PolyplugRuntimeCreate(nint.Zero);
     }
 
     private void CacheFunctionPointers()
@@ -238,6 +262,18 @@ public sealed class Runtime
         {
             NativeMethods.PolyplugRuntimeDestroy(_host);
             _host = nint.Zero;
+        }
+
+        // Release the per-instance reload callback storage only after the native
+        // runtime is destroyed — the native side may invoke the trampoline (and
+        // dereference the state GCHandle) up until polyplug_runtime_destroy returns.
+        if (_reloadStateHandle.IsAllocated)
+        {
+            _reloadStateHandle.Free();
+        }
+        if (_reloadTrampolineHandle.IsAllocated)
+        {
+            _reloadTrampolineHandle.Free();
         }
     }
 

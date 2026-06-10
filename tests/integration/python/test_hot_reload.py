@@ -47,13 +47,11 @@ class TestReloadPhaseConstructor(unittest.TestCase):
             type=ReloadPhaseType.Preparing,
             bundle_id=12345,
             bundle_name="TestBundle",
-            retry_count=2,
             reason="Test reason",
         )
         self.assertEqual(ReloadPhaseType.Preparing, phase.type)
         self.assertEqual(12345, phase.bundle_id)
         self.assertEqual("TestBundle", phase.bundle_name)
-        self.assertEqual(2, phase.retry_count)
         self.assertEqual("Test reason", phase.reason)
 
     def test_constructor_uses_default_values(self):
@@ -64,7 +62,6 @@ class TestReloadPhaseConstructor(unittest.TestCase):
         self.assertEqual(ReloadPhaseType.Reloaded, phase.type)
         self.assertEqual(999, phase.bundle_id)
         self.assertEqual("MyBundle", phase.bundle_name)
-        self.assertEqual(0, phase.retry_count)
         self.assertIsNone(phase.reason)
 
     def test_constructor_handles_none_reason(self):
@@ -73,7 +70,6 @@ class TestReloadPhaseConstructor(unittest.TestCase):
             type=ReloadPhaseType.Failed,
             bundle_id=1,
             bundle_name="Bundle",
-            retry_count=0,
             reason=None,
         )
         self.assertIsNone(phase.reason)
@@ -104,7 +100,7 @@ class TestReloadPhaseHelperMethods(unittest.TestCase):
 
     def test_is_failed_returns_true_for_failed(self):
         """is_failed should return True for Failed type."""
-        phase = ReloadPhase(ReloadPhaseType.Failed, 1, "Bundle", 0, "Error")
+        phase = ReloadPhase(ReloadPhaseType.Failed, 1, "Bundle", "Error")
         self.assertTrue(phase.is_failed())
 
     def test_is_failed_returns_false_for_preparing(self):
@@ -121,6 +117,58 @@ class TestReloadPhaseHelperMethods(unittest.TestCase):
         """is_unloading should return False for Preparing type."""
         phase = ReloadPhase(ReloadPhaseType.Preparing, 1, "Bundle")
         self.assertFalse(phase.is_unloading())
+
+
+class TestReloadPhaseTotality(unittest.TestCase):
+    """The phase-type handling must be total: an unknown discriminant from a
+    newer runtime must never raise (ctypes swallows exceptions inside the
+    reload callback, silently killing it)."""
+
+    def test_unknown_phase_type_passes_through(self):
+        """An unknown raw discriminant is carried as-is, repr says Unknown."""
+        phase = ReloadPhase(type=99, bundle_id=7, bundle_name="B")
+        self.assertEqual(99, phase.type)
+        self.assertIn("Unknown(99)", repr(phase))
+        self.assertFalse(phase.is_preparing())
+        self.assertFalse(phase.is_reloaded())
+        self.assertFalse(phase.is_failed())
+        self.assertFalse(phase.is_unloading())
+
+    def test_no_retry_count_attribute(self):
+        """The ABI has no retry-count field; the mirror must not fabricate one."""
+        phase = ReloadPhase(ReloadPhaseType.Preparing, 1, "Bundle")
+        self.assertFalse(hasattr(phase, "retry_count"))
+
+
+class TestRuntimePerInstanceState(unittest.TestCase):
+    """Rule 12: the Runtime class must hold NO class-level callback/config/
+    keepalive statics — everything flows through __init__."""
+
+    def test_no_class_level_statics(self):
+        from polyplug.runtime import Runtime as RuntimeClass
+
+        for attr in (
+            "_on_reload_cb",
+            "_config",
+            "_c_callback",
+            "_host_contract_impls",
+            "_host_contract_callbacks",
+            "_host_contract_interfaces",
+        ):
+            self.assertNotIn(
+                attr,
+                vars(RuntimeClass),
+                f"Runtime.{attr} must be instance state, not a class static",
+            )
+
+    def test_no_class_level_registration_api(self):
+        from polyplug.runtime import Runtime as RuntimeClass
+
+        self.assertFalse(hasattr(RuntimeClass, "set_config"))
+        self.assertIsNone(
+            getattr(RuntimeClass, "on_reload", None),
+            "class-level on_reload registration is gone (constructor arg)",
+        )
 
 
 class TestRuntimeConfigDefaults(unittest.TestCase):

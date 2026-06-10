@@ -131,38 +131,42 @@ Runtime adapters for loading C++ plugins:
 
 ## Hot-Reload
 
-To enable hot-reload, set `hot_reload_enabled = true` and register an `on_reload` callback:
+To enable hot-reload, set `hot_reload_enabled = true` on the config and pass
+the `on_reload` callback through the builder (per-instance — the built Runtime
+owns the callback functor, no globals):
 
 ```cpp
 #include <polyplug/runtime.hpp>
 
-// Enable hot-reload
-polyplug::RuntimeConfig config;
+RuntimeConfig config{};
 config.hot_reload_enabled = true;
-polyplug::Runtime::set_config(config);
 
-// Register callback before creating runtime
-polyplug::Runtime::on_reload([](const ReloadPhase& phase) {
-    switch (phase.type) {
-        case ReloadPhaseType::Preparing:
-            // Destroy instances for this bundle
-            instances_[phase.bundle_id].clear();
-            break;
-        case ReloadPhaseType::Reloaded:
-            std::cout << "Reloaded: " << phase.bundle_name << "\n";
-            break;
-        case ReloadPhaseType::Failed:
-            std::cerr << "Failed: " << phase.reason << "\n";
-            break;
-    }
-});
-
-auto runtime = polyplug::Runtime::builder().build();
+auto runtime = polyplug::Runtime::builder()
+    .config(config)
+    .on_reload([](const ReloadPhase& phase) {
+        switch (phase.phase_type) {
+            case ReloadPhaseType::Preparing:
+                // Destroy instances for this bundle
+                instances_[phase.bundle_id].clear();
+                break;
+            case ReloadPhaseType::Reloaded:
+                std::cout << "Reloaded: "
+                          << polyplug::abi::to_string(phase.bundle_name) << "\n";
+                break;
+            case ReloadPhaseType::Failed:
+                std::cerr << "Failed: "
+                          << polyplug::abi::to_string(phase.reason) << "\n";
+                break;
+            case ReloadPhaseType::Unloading:
+                break;
+        }
+    })
+    .build();
 ```
 
 **Key points:**
 - `hot_reload_enabled` defaults to `false` — must be explicitly enabled
-- Callback must be registered **before** creating the runtime
+- The callback is supplied at build time and owned by the Runtime instance
 - Host must track and destroy instances on `Preparing` notification
 - See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
 

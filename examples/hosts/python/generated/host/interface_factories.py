@@ -17,7 +17,8 @@ from polyplug_abi import (
     Version,
     VmDispatch,
 )
-from host.contracts import *
+from host.contracts import HostLogger
+from host.types import LogLevel
 
 # Create a host contract interface for `host.logger` with NATIVE dispatch.
 #

@@ -35,12 +35,14 @@ dotnet add package Polyplug.Guest
 ```csharp
 using Polyplug;
 
-var runtime = Runtime.Builder()
+// PluginDir scans the directory at Build() and loads every bundle found
+// (a subdirectory containing manifest.toml), mirroring the Rust builder.
+var runtime = new RuntimeBuilder()
     .PluginDir("./plugins")
     .Build();
 
-// Load a plugin bundle
-runtime.LoadBundle("./plugins/my_plugin");
+// ...or load a single bundle explicitly (e.g. after registering loaders):
+// runtime.LoadBundle("./plugins/my_plugin");
 
 // Use generated host callers to interact with plugins
 var decoder = PipelineDecoder.Create(runtime);
@@ -138,37 +140,33 @@ Bootstrap layer for C# plugins:
 
 ## Hot-Reload
 
-To enable hot-reload, set `HotReloadEnabled = true` and register an `OnReload` callback:
+To enable hot-reload, pass the `OnReload` callback through the builder
+(per-instance — the built Runtime owns the callback storage, no statics):
 
 ```csharp
-using Polyplug;
+using Polyplug.Host;
 
-// Enable hot-reload
-var config = new RuntimeConfig { HotReloadEnabled = true };
-Runtime.SetConfig(config);
-
-// Register callback before creating runtime
-Runtime.OnReload(phase => {
-    switch (phase.Type) {
-        case ReloadPhaseType.Preparing:
-            // Destroy instances for this bundle
-            instances.Remove(phase.BundleId);
-            break;
-        case ReloadPhaseType.Reloaded:
-            Console.WriteLine($"Reloaded: {phase.BundleName}");
-            break;
-        case ReloadPhaseType.Failed:
-            Console.WriteLine($"Failed: {phase.Reason}");
-            break;
-    }
-});
-
-var runtime = Runtime.Builder().Build();
+var runtime = new RuntimeBuilder()
+    .OnReload(phase => {
+        switch (phase.Type) {
+            case ReloadPhaseType.Preparing:
+                // Destroy instances for this bundle
+                instances.Remove(phase.BundleId);
+                break;
+            case ReloadPhaseType.Reloaded:
+                Console.WriteLine($"Reloaded: {phase.BundleName}");
+                break;
+            case ReloadPhaseType.Failed:
+                Console.WriteLine($"Failed: {phase.Reason}");
+                break;
+        }
+    })
+    .Build();
 ```
 
 **Key points:**
-- `HotReloadEnabled` defaults to `false` — must be explicitly enabled
-- Callback must be registered **before** creating the runtime
+- Registering an `OnReload` callback enables hot-reload for that runtime
+- The callback is supplied at build time and owned by the Runtime instance
 - Host must track and destroy instances on `Preparing` notification
 - See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
 

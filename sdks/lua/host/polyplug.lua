@@ -31,11 +31,20 @@ local function get_script_dir()
     return "."
 end
 
+-- Resolution order (an explicit POLYPLUG_LIB always wins):
+--   1. The POLYPLUG_LIB environment variable (path to the .so/.dylib/.dll).
+--   2. Locally staged platform subdirectory (_native/<platform>/).
+--   3. System library paths (plain library name via the OS loader).
 local function auto_load_native_lib()
+    local env_lib = os.getenv("POLYPLUG_LIB")
+    if env_lib then
+        return M.load_lib(env_lib)
+    end
+
     local platform = get_platform_identifier()
     local script_dir = get_script_dir()
     local native_dir = script_dir .. "/_native/" .. platform
-    
+
     local jit_os = jit.os
     local lib_name
     if jit_os == "Windows" then
@@ -43,20 +52,15 @@ local function auto_load_native_lib()
     else
         lib_name = "libpolyplug.so"
     end
-    
+
     local lib_path = native_dir .. "/" .. lib_name
-    
+
     local f = io.open(lib_path, "r")
     if f then
         f:close()
         return M.load_lib(lib_path)
     end
-    
-    local env_lib = os.getenv("POLYPLUG_LIB")
-    if env_lib then
-        return M.load_lib(env_lib)
-    end
-    
+
     return M.load_lib(lib_name)
 end
 
@@ -68,8 +72,6 @@ M.guest_contract_id = abi.guest_contract_id
 M.host_contract_id = runtime.host_contract_id
 
 M.Runtime = runtime.Runtime
-M.on_reload = runtime.on_reload
-M.set_config = runtime.set_config
 
 function M.load_lib(so_path)
     runtime.load_lib(so_path)
@@ -77,8 +79,14 @@ function M.load_lib(so_path)
     return M._lib
 end
 
-function M.last_error(lib)
-    return runtime.last_error(lib)
+--- Get last error message from a HostApi pointer.
+-- Forwards BOTH arguments: runtime.last_error(host, lib) requires the host
+-- pointer first; lib is optional (defaults to the loaded library).
+-- @param host HostApi*  The host interface pointer.
+-- @param lib            Optional library handle.
+-- @return string        The error message, or empty string.
+function M.last_error(host, lib)
+    return runtime.last_error(host, lib)
 end
 
 M.get_platform_identifier = get_platform_identifier

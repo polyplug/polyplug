@@ -117,8 +117,10 @@ int main() {
 
     std::cerr << "loading plugins from: " << plugin_path << "\n\n";
 
+    // plugin_dir() is NOT used here: builder-time auto-loading happens before
+    // the language loaders below are registered, so this host loads bundles
+    // explicitly after loader registration.
     auto rt = polyplug::Runtime::builder()
-        .plugin_dir(plugin_path)
         .build();
 
     polyplug::loaders::register_native(rt);

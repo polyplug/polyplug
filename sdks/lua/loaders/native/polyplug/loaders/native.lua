@@ -12,7 +12,9 @@ pcall(ffi.cdef, [[
 local _lib = nil
 local function get_lib()
     if not _lib then
-        _lib = ffi.load("polyplug_native")
+        -- POLYPLUG_NATIVE_LIB (set by the test/CI harness) wins over the bare
+        -- library name so the loader cdylib matches the freshly built core.
+        _lib = ffi.load(os.getenv("POLYPLUG_NATIVE_LIB") or "polyplug_native")
     end
     return _lib
 end

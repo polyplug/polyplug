@@ -160,16 +160,16 @@ Python runtime adapter:
 
 ## Hot-Reload
 
-To enable hot-reload, set `hot_reload_enabled=True` and register an `on_reload` callback:
+To enable hot-reload, pass `config` and `on_reload` per-instance to the
+`Runtime` constructor (no class-level state — each runtime owns its callback):
 
 ```python
-from polyplug import Runtime, RuntimeConfig, ReloadPhaseType
+from polyplug import Runtime, ReloadPhaseType
+from polyplug_abi import RuntimeConfig
 
-# Enable hot-reload
-config = RuntimeConfig(hot_reload_enabled=True)
-Runtime.set_config(config)
+config = RuntimeConfig()
+config.hot_reload_enabled = True
 
-# Register callback before creating runtime
 def on_reload(phase):
     if phase.type == ReloadPhaseType.Preparing:
         # Destroy instances for this bundle
@@ -179,14 +179,12 @@ def on_reload(phase):
     elif phase.type == ReloadPhaseType.Failed:
         print(f"Failed: {phase.reason}")
 
-Runtime.on_reload(on_reload)
-
-runtime = Runtime()
+runtime = Runtime(config=config, on_reload=on_reload)
 ```
 
 **Key points:**
 - `hot_reload_enabled` defaults to `False` — must be explicitly enabled
-- Callback must be registered **before** creating the runtime
+- Config and callback are constructor arguments (per-instance, Rule 12)
 - Host must track and destroy instances on `Preparing` notification
 - See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
 

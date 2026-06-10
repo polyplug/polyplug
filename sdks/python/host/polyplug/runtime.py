@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 from pathlib import Path
 from typing import Callable, Optional, Protocol, runtime_checkable
 
@@ -190,15 +191,34 @@ class Runtime:
     """polyplug runtime for loading and managing plugins.
 
     Holds HostApi pointer and calls methods through struct fields.
+
+    All configuration is per-instance (Rule 12: no class-level statics shared
+    across runtimes): pass ``config`` and ``on_reload`` to the constructor.
+    The ctypes callback wrapper and host-contract keepalives live on the
+    instance and die with it.
     """
 
-    _on_reload_cb: Optional[Callable[[ReloadPhase], None]] = None
-    _config: Optional["RuntimeConfig"] = None
-
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        config: Optional["RuntimeConfig"] = None,
+        on_reload: Optional[Callable[[ReloadPhase], None]] = None,
+    ) -> None:
         lib_path: str = _resolve_lib_path()
         self._backend: Backend = _create_backend(lib_path)
         self.ctypes = ctypes
+
+        # Per-instance reload-callback and config state (set before create so
+        # the C callback wrapper outlives the create call).
+        self._on_reload_cb: Optional[Callable[[ReloadPhase], None]] = on_reload
+        self._config: Optional["RuntimeConfig"] = config
+        self._c_callback: Optional[ctypes.CFUNCTYPE] = None
+        self._runtime_config: Optional[RuntimeConfig] = None
+
+        # Per-instance host-contract keepalives: implementation objects, ctypes
+        # dispatch callbacks, and interface structs, keyed by contract_id.
+        self._host_contract_impls: dict[int, Callable[[int, int, int], None]] = {}
+        self._host_contract_callbacks: dict[int, ctypes.CFUNCTYPE] = {}
+        self._host_contract_interfaces: dict[int, HostContractInterface] = {}
 
         # Create HostApi (options or default)
         if self._on_reload_cb is not None or self._config is not None:
@@ -257,13 +277,12 @@ class Runtime:
                 config.compatibility = self._config.compatibility
 
         if self._on_reload_cb is not None:
-            if not hasattr(Runtime, "_c_callback"):
-                Runtime._c_callback = self._make_c_callback()
-            config.on_reload = Runtime._c_callback
+            self._c_callback = self._make_c_callback()
+            config.on_reload = self._c_callback
         else:
             config.on_reload = ctypes.cast(None, type(config.on_reload))
 
-        self._runtime_config: RuntimeConfig = config
+        self._runtime_config = config
         return self._backend.create_host_interface(ctypes.addressof(config))
 
     def __del__(self) -> None:
@@ -273,41 +292,47 @@ class Runtime:
             backend.destroy_host_interface(host_ptr)
             self._host = 0
 
-    @classmethod
-    def on_reload(cls, callback: Callable[[ReloadPhase], None]) -> None:
-        """Register a callback for hot-reload notifications.
+    def _make_c_callback(self) -> ctypes.CFUNCTYPE:
+        """Internal: Create a C-compatible callback wrapper bound to THIS instance.
 
-        Must be called before creating a Runtime instance.
+        The wrapper never raises: a Python exception inside a ctypes callback
+        is swallowed by ctypes (the callback silently dies), so the phase-type
+        conversion is total (unknown discriminants pass through as the raw
+        ``int``) and the user callback is wrapped in a catch-all that logs to
+        stderr.
         """
-        cls._on_reload_cb = callback
-
-    @classmethod
-    def set_config(cls, config: "RuntimeConfig") -> None:
-        """Set runtime configuration for subsequently created runtimes.
-
-        Must be called before creating a Runtime instance.
-        """
-        cls._config = config
-
-    @classmethod
-    def _make_c_callback(cls) -> ctypes.CFUNCTYPE:
-        """Internal: Create a C-compatible callback wrapper."""
+        user_callback: Callable[[ReloadPhase], None] = self._on_reload_cb  # type: ignore[assignment]
 
         @ctypes.CFUNCTYPE(None, ctypes.c_void_p, AbiReloadPhase)
         def c_callback(_user_data: int, abi_phase: AbiReloadPhase) -> None:
-            if cls._on_reload_cb is not None:
+            try:
+                raw_type: int = abi_phase.phase_type
+                # Total conversion: ReloadPhaseType(raw) raises ValueError on an
+                # unknown discriminant, which ctypes would swallow — fall back to
+                # the raw int and warn instead.
+                if raw_type in ReloadPhaseType._value2member_map_:
+                    phase_type: ReloadPhaseType | int = ReloadPhaseType(raw_type)
+                else:
+                    phase_type = raw_type
+                    print(
+                        f"polyplug: unknown reload phase type {raw_type}; "
+                        "passing raw value through",
+                        file=sys.stderr,
+                    )
                 reason: str = _read_c_string(
                     abi_phase.reason.ptr, abi_phase.reason.len
                 )
                 phase = ReloadPhase(
-                    type=ReloadPhaseType(abi_phase.phase_type),
+                    type=phase_type,
                     bundle_id=abi_phase.bundle_id,
                     bundle_name=_read_c_string(
                         abi_phase.bundle_name.ptr, abi_phase.bundle_name.len
                     ),
                     reason=reason if reason else None,
                 )
-                cls._on_reload_cb(phase)
+                user_callback(phase)
+            except Exception as e:  # noqa: BLE001 — must not unwind across the C ABI
+                print(f"polyplug: reload callback error: {e}", file=sys.stderr)
 
         return c_callback
 
@@ -421,13 +446,17 @@ class Runtime:
         function_count: int,
         impl: Callable[[int, int, int], None],
     ) -> None:
-        """Register a host contract implementation."""
+        """Register a host contract implementation.
+
+        The implementation, dispatch callback, and interface struct are kept
+        alive on THIS instance (per-runtime, keyed by contract_id) — never on
+        the class, where a second runtime registering the same contract_id
+        would clobber the first (Rule 12).
+        """
         host: int = self._ensure_host()
 
-        # Store implementation to keep it alive
-        if not hasattr(Runtime, "_host_contract_impls"):
-            Runtime._host_contract_impls: dict[int, Callable[[int, int, int], None]] = {}
-        Runtime._host_contract_impls[contract_id] = impl
+        # Store implementation to keep it alive (instance-owned).
+        self._host_contract_impls[contract_id] = impl
 
         # Create dispatch callback
         @ctypes.CFUNCTYPE(
@@ -438,7 +467,7 @@ class Runtime:
             ctypes.c_void_p,
         )
         def dispatch_callback(bridge_data: int, fn_id: int, args_ptr: int, out_ptr: int) -> int:
-            impl_func = Runtime._host_contract_impls.get(contract_id)
+            impl_func = self._host_contract_impls.get(contract_id)
             if impl_func is None:
                 return AbiErrorCode.HostContractNotFound
             try:
@@ -447,10 +476,8 @@ class Runtime:
             except Exception:
                 return AbiErrorCode.HostContractCallFailed
 
-        # Store callback
-        if not hasattr(Runtime, "_host_contract_callbacks"):
-            Runtime._host_contract_callbacks: dict[int, ctypes.CFUNCTYPE] = {}
-        Runtime._host_contract_callbacks[contract_id] = dispatch_callback
+        # Store callback (instance-owned keepalive).
+        self._host_contract_callbacks[contract_id] = dispatch_callback
 
         # Create HostContractInterface (flat struct per D-25)
         interface = HostContractInterface()
@@ -466,10 +493,8 @@ class Runtime:
         interface.dispatch.vm.call = ctypes.cast(dispatch_callback, type(interface.dispatch.vm.call))
         interface.dispatch.vm.loader_data = VmDispatch().loader_data
 
-        # Store interface
-        if not hasattr(Runtime, "_host_contract_interfaces"):
-            Runtime._host_contract_interfaces: dict[int, HostContractInterface] = {}
-        Runtime._host_contract_interfaces[contract_id] = interface
+        # Store interface (instance-owned keepalive).
+        self._host_contract_interfaces[contract_id] = interface
 
         # Register via HostApi
         interface_ptr = ctypes.addressof(interface)

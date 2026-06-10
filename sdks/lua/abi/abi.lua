@@ -106,12 +106,12 @@ ffi.cdef[[
     typedef uint8_t* (*HostApi_alloc_fn)(const HostApi*, size_t, size_t);
     typedef void (*HostApi_free_fn)(const HostApi*, uint8_t*, size_t, size_t);
     typedef GuestContractHandle (*HostApi_find_guest_contract_fn)(const HostApi*, uint64_t, uint32_t);
-    typedef void* (*HostApi_find_all_guest_contracts_fn)(const HostApi*, uint64_t, uint32_t);
+    typedef Array (*HostApi_find_all_guest_contracts_fn)(const HostApi*, uint64_t, uint32_t);
     typedef const GuestContractInterface* (*HostApi_resolve_guest_contract_fn)(const HostApi*, GuestContractHandle);
     typedef HostContractInstance (*HostApi_get_host_contract_fn)(const HostApi*, uint64_t, uint32_t);
     typedef const HostContractInterface* (*HostApi_resolve_host_contract_interface_fn)(const HostApi*, uint64_t, uint32_t);
-    typedef void* (*HostApi_list_bundles_fn)(const HostApi*);
-    typedef void* (*HostApi_get_dependencies_fn)(const HostApi*);
+    typedef Array (*HostApi_list_bundles_fn)(const HostApi*);
+    typedef Array (*HostApi_get_dependencies_fn)(const HostApi*);
     typedef AbiError (*HostApi_load_bundle_fn)(const HostApi*, const uint8_t*, size_t);
     typedef AbiError (*HostApi_reload_bundle_fn)(const HostApi*, const uint8_t*, size_t);
     typedef AbiError (*HostApi_register_host_contract_fn)(const HostApi*, const HostContractInterface*);

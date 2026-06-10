@@ -1537,8 +1537,14 @@ fn generate_cs_guest_host_contract_method(
         return_type, method_name, params_str
     ));
 
-    // Null interface check
+    let what: String = format!("{}.{}", class_name, method_name);
+
+    // Null interface check — funnel the failure through the host logging path
+    // before returning the default (silent defaults hide real wiring bugs).
     out.push_str("        if (_interface == IntPtr.Zero) {\n");
+    out.push_str(&format!(
+        "            HostCallerFailureLog.Log(\"{what}\", (uint)AbiErrorCode.InvalidPointer);\n"
+    ));
     if has_return {
         out.push_str(&format!("            return default({});\n", return_type));
     } else {
@@ -1565,6 +1571,9 @@ fn generate_cs_guest_host_contract_method(
     // The VM-side loader enforces its own bounds (FunctionNotAvailable).
     out.push_str(&format!(
         "                    if ({fn_id}u >= contract->Dispatch.Native.FunctionCount) {{\n"
+    ));
+    out.push_str(&format!(
+        "                        HostCallerFailureLog.Log(\"{what}\", (uint)AbiErrorCode.FunctionNotAvailable);\n"
     ));
     if has_return {
         out.push_str(&format!(
@@ -1596,6 +1605,9 @@ fn generate_cs_guest_host_contract_method(
     out.push_str("                    break;\n");
     out.push_str("                }\n");
     out.push_str("                default:\n");
+    out.push_str(&format!(
+        "                    HostCallerFailureLog.Log(\"{what}\", (uint)AbiErrorCode.Generic);\n"
+    ));
     if has_return {
         out.push_str(&format!(
             "                    return default({});\n",
@@ -1606,8 +1618,12 @@ fn generate_cs_guest_host_contract_method(
     }
     out.push_str("            }\n\n");
 
-    // Error handling
+    // Error handling — funnel the error code through the host logging path
+    // before returning the default.
     out.push_str("            if (err.Code != (uint)AbiErrorCode.Ok) {\n");
+    out.push_str(&format!(
+        "                HostCallerFailureLog.Log(\"{what}\", err.Code);\n"
+    ));
     if has_return {
         out.push_str(&format!(
             "                return default({});\n",
@@ -1733,6 +1749,31 @@ fn emit_cs_guest_host_contract_out_setup(out: &mut String, returns: &Option<Reso
 }
 
 /// Generate all guest-side host contract callers into a single file.
+/// Emit the shared `HostCallerFailureLog` helper used by guest-side host
+/// contract callers to funnel call failures through the host logging path
+/// (`PolyplugHost.Log` → `HostApi.Log`, level Error) before returning a
+/// default value. C# mirror of the cpp generator's `detail::log_call_failure`.
+/// Emitted exactly once, into `guest/HostContracts.cs`.
+fn emit_cs_log_call_failure_helper(out: &mut String) {
+    out.push_str("/// <summary>\n");
+    out.push_str("/// Funnels failed guest→host calls through the host logging path\n");
+    out.push_str("/// (level Error) before the caller returns its default value.\n");
+    out.push_str(
+        "/// No-op until polyplug_init has stored the host (PolyplugHost.Log contract).\n",
+    );
+    out.push_str("/// </summary>\n");
+    out.push_str("internal static class HostCallerFailureLog {\n");
+    out.push_str("    internal static void Log(string what, uint code) {\n");
+    // Fully qualified on purpose: a contract-defined `LogLevel` enum in the
+    // same compilation would otherwise shadow the ABI's LogLevel (same
+    // collision class as the cpp generator's global ::LogLevel).
+    out.push_str(
+        "        Polyplug.Guest.PolyplugHost.Log(Polyplug.Abi.LogLevel.Error, \"guest.host_caller\", $\"{what} failed: code={code}\");\n",
+    );
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+}
+
 fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
@@ -1740,6 +1781,8 @@ fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("using Polyplug.Abi;\n");
     out.push_str("using System.Runtime.CompilerServices;\n");
     out.push_str("using System.Runtime.InteropServices;\n\n");
+
+    emit_cs_log_call_failure_helper(&mut out);
 
     // Emit arg-pack structs for host contract functions with 2+ parameters.
     // The caller methods marshal multi-arg calls through these structs.
@@ -3408,6 +3451,71 @@ mod tests {
             out.contains("HOSTLOGGERCONTRACT_ID"),
             "missing constant: {out}"
         );
+        // The error funnel helper is emitted exactly once per file.
+        assert_eq!(
+            out.matches("internal static class HostCallerFailureLog")
+                .count(),
+            1,
+            "HostCallerFailureLog helper must be emitted exactly once: {out}"
+        );
+    }
+
+    /// Guest→host caller methods must funnel every failure path through the
+    /// host logging helper (with the error code) instead of silently returning
+    /// `default` — mirrors the cpp generator's `detail::log_call_failure`.
+    #[test]
+    fn generate_cs_guest_host_contract_method_logs_failures() {
+        let contract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x1234_5678_9ABC_DEF0_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            singleton: false,
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "message".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_cs_guest_host_contract_caller(&mut out, &contract);
+        // Null-interface path logs InvalidPointer.
+        assert!(
+            out.contains(
+                "HostCallerFailureLog.Log(\"HostLoggerContract.Log\", (uint)AbiErrorCode.InvalidPointer);"
+            ),
+            "null-interface path must log InvalidPointer: {out}"
+        );
+        // Native bounds-check path logs FunctionNotAvailable.
+        assert!(
+            out.contains(
+                "HostCallerFailureLog.Log(\"HostLoggerContract.Log\", (uint)AbiErrorCode.FunctionNotAvailable);"
+            ),
+            "bounds-check path must log FunctionNotAvailable: {out}"
+        );
+        // ABI error path logs the actual error code.
+        assert!(
+            out.contains("HostCallerFailureLog.Log(\"HostLoggerContract.Log\", err.Code);"),
+            "ABI error path must log err.Code: {out}"
+        );
+        // No failure path returns default without a preceding log call: every
+        // `return default(` is directly preceded by a HostCallerFailureLog line.
+        let lines: Vec<&str> = out.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if line.contains("return default(") {
+                assert!(
+                    i > 0 && lines[i - 1].contains("HostCallerFailureLog.Log("),
+                    "silent default return at line {i}: {line}\n{out}"
+                );
+            }
+        }
     }
 
     #[test]

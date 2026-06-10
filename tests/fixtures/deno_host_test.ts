@@ -1,4 +1,5 @@
 import { openPolyplug, runtimeNew, contractId, NULL_HANDLE } from "../../sdks/js/host/mod.js";
+import { registerNativeLoader } from "../../sdks/js/loaders/native/mod.ts";
 
 const POLYPLUG_SO = Deno.env.get("POLYPLUG_SO") ?? "";
 const TEST_PLUGIN_DIR = Deno.env.get("TEST_PLUGIN_DIR") ?? "";
@@ -49,7 +50,7 @@ skipUnlessNative("load_bundle_succeeds", () => {
     const lib = openPolyplug(POLYPLUG_SO);
     try {
         const rt = runtimeNew(lib);
-        try { rt.loadBundle(TEST_PLUGIN_DIR); }
+        try { registerNativeLoader(rt); rt.loadBundle(TEST_PLUGIN_DIR); }
         finally { rt[Symbol.dispose](); }
     } finally { lib.close(); }
 });
@@ -59,9 +60,31 @@ skipUnlessNative("find_guest_contract_returns_valid_handle", () => {
     try {
         const rt = runtimeNew(lib);
         try {
+            registerNativeLoader(rt);
             rt.loadBundle(TEST_PLUGIN_DIR);
             const handle = rt.findGuestContract(TEST_ADD_CONTRACT_ID);
             if (handle === NULL_HANDLE) throw new Error("Got NULL_HANDLE");
+        } finally { rt[Symbol.dispose](); }
+    } finally { lib.close(); }
+});
+
+skipUnlessNative("find_all_guest_contracts_24_byte_array_return", () => {
+    // The ABI returns `Array` BY VALUE (items ptr + len + align = 24 bytes).
+    // This exercises the real sret path: one matching handle expected, and the
+    // host must stay functional afterwards (a narrowed return type corrupts
+    // adjacent memory).
+    const lib = openPolyplug(POLYPLUG_SO);
+    try {
+        const rt = runtimeNew(lib);
+        try {
+            registerNativeLoader(rt);
+            rt.loadBundle(TEST_PLUGIN_DIR);
+            const handles = rt.findAllGuestContracts(TEST_ADD_CONTRACT_ID);
+            if (handles.length !== 1) throw new Error(`Expected 1 handle, got ${handles.length}`);
+            const none = rt.findAllGuestContracts(0xDEADBEEFn);
+            if (none.length !== 0) throw new Error(`Expected 0 handles, got ${none.length}`);
+            const handle = rt.findGuestContract(TEST_ADD_CONTRACT_ID);
+            if (handle === NULL_HANDLE) throw new Error("host corrupted after find_all sret");
         } finally { rt[Symbol.dispose](); }
     } finally { lib.close(); }
 });
@@ -71,6 +94,7 @@ skipUnlessNative("resolve_guest_contract_returns_interface", () => {
     try {
         const rt = runtimeNew(lib);
         try {
+            registerNativeLoader(rt);
             rt.loadBundle(TEST_PLUGIN_DIR);
             const handle = rt.findGuestContract(TEST_ADD_CONTRACT_ID);
             const iface = rt.resolveGuestContract(handle);

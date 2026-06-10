@@ -112,11 +112,13 @@ class Program
 
         Console.Error.WriteLine($"loading plugins from: {pluginPath}\n");
 
-        Runtime.OnReload(phase =>
+        // Polyplug.Host.ReloadPhase spelled out: Polyplug.Abi also defines a
+        // ReloadPhase (the raw ABI struct), which is ambiguous here.
+        Action<Polyplug.Host.ReloadPhase> onReload = phase =>
         {
             if (phase.IsPreparing())
             {
-                Console.Error.WriteLine($"[HOT-RELOAD] Preparing: {phase.BundleName} (bundle_id=0x{phase.BundleId:X16}, retry {phase.RetryCount})");
+                Console.Error.WriteLine($"[HOT-RELOAD] Preparing: {phase.BundleName} (bundle_id=0x{phase.BundleId:X16})");
                 if (_instances.Remove(phase.BundleId, out var instances))
                 {
                     foreach (var instance in instances)
@@ -134,10 +136,13 @@ class Program
             {
                 Console.Error.WriteLine($"[HOT-RELOAD] Failed: {phase.BundleName} (bundle_id=0x{phase.BundleId:X16}) - {phase.Reason}");
             }
-        });
+        };
 
+        // PluginDir is NOT used here: builder-time auto-loading happens before
+        // the language loaders below are registered, so this host loads bundles
+        // explicitly after loader registration instead.
         var rt = new RuntimeBuilder()
-            .PluginDir(pluginPath)
+            .OnReload(onReload)
             .Build();
 
         rt.RegisterNativeLoader();
