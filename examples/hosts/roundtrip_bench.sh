@@ -9,7 +9,8 @@
 # varies between bars is the HOST language's binding cost — an honest comparison.
 #
 # Local-only, like every benchmark here. Writes `<lang> <ns_per_call>` lines to
-# docs/assets/benches/roundtrip.txt, which scripts/gen_bench_charts.py renders.
+# docs/assets/benches/roundtrip.txt, then renders cross_lang_roundtrip.svg from
+# them in the same run (scripts/gen_bench_charts.py --roundtrip-only).
 #
 # Each host enters a timed loop only when POLYPLUG_BENCH_ITERS is set, so normal
 # (parity) runs are unaffected.
@@ -89,3 +90,11 @@ fi
 echo "" >&2
 echo "wrote $OUT:" >&2
 cat "$OUT" >&2
+
+# Render the SVG from the freshly-measured numbers so this is a single command.
+# --roundtrip-only skips the criterion charts (no cargo bench needed here).
+if command -v python3 >/dev/null; then
+    echo "" >&2
+    python3 "$WORKSPACE_DIR/scripts/gen_bench_charts.py" --roundtrip-only \
+        "$WORKSPACE_DIR/target/criterion" "$WORKSPACE_DIR/docs/assets/benches" >&2
+fi

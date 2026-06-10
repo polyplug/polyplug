@@ -475,11 +475,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("criterion_dir", type=Path, help="target/criterion")
     parser.add_argument("out_dir", type=Path, help="directory to write SVGs into")
+    parser.add_argument(
+        "--roundtrip-only",
+        action="store_true",
+        help="render only the cross-language round-trip chart from roundtrip.txt "
+        "(no criterion data required — used by examples/hosts/roundtrip_bench.sh)",
+    )
     args = parser.parse_args()
 
     criterion_dir: Path = args.criterion_dir
     out_dir: Path = args.out_dir
-    if not criterion_dir.is_dir():
+    roundtrip_only: bool = args.roundtrip_only
+    if not roundtrip_only and not criterion_dir.is_dir():
         print(f"error: {criterion_dir} is not a directory (run cargo bench first)", file=sys.stderr)
         return 1
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -495,6 +502,8 @@ def main() -> int:
         ("cross_lang_host.svg", chart_cross_language_host),
         ("cross_lang_roundtrip.svg", chart_cross_language_roundtrip),
     ]
+    if roundtrip_only:
+        charts = [("cross_lang_roundtrip.svg", chart_cross_language_roundtrip)]
     for name, render in charts:
         target: Path = out_dir / name
         try:
