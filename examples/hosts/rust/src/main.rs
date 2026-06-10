@@ -6,6 +6,7 @@ use polyplug_abi::GuestContractHandle;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::runtime::ReloadPhaseType;
+use polyplug_dotnet::{DotnetConfig, DotnetLoader};
 use polyplug_js::{JsConfig, JsLoader};
 use polyplug_lua::{LuaConfig, LuaLoader};
 use polyplug_native::{NativeConfig, NativeLoader};
@@ -67,6 +68,7 @@ fn run() -> Result<(), String> {
             .loader(JsLoader::new(JsConfig {}))
             .loader(LuaLoader::new(LuaConfig::default()))
             .loader(PythonLoader::new(PythonConfig::default()))
+            .loader(DotnetLoader::new(DotnetConfig::default()))
             .config(config)
             .on_reload(|_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
                 match phase.phase_type {

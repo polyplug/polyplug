@@ -28,8 +28,11 @@ cd "$EXAMPLES_DIR"
 DEPS_DIR="$WORKSPACE_DIR/target/release/deps"
 ITERS="${POLYPLUG_BENCH_ITERS:-200000}"
 
-# Guest languages that ship a built `*_decoder` bundle in examples/plugins.
-GUEST_LANGS=(rust cpp lua js python)
+# Guest languages with a built `*_decoder` bundle. Native-process hosts can load
+# any of them. The csharp guest lives in examples/plugins-csharp (it needs the
+# .NET loader, now registered by every example host) — see the per-guest source
+# directory selection in the sweep loop below.
+GUEST_LANGS=(rust cpp lua js python csharp)
 
 # Shared environment every host needs to find the core lib + loader cdylibs and
 # the language SDKs. Mirrors examples/verify_hosts.sh.
@@ -39,11 +42,12 @@ export POLYPLUG_NATIVE_LIB="$DEPS_DIR/libpolyplug_native.so"
 export POLYPLUG_LUA_LIB="$DEPS_DIR/libpolyplug_lua.so"
 export POLYPLUG_JS_LIB="$DEPS_DIR/libpolyplug_js.so"
 export POLYPLUG_PYTHON_LIB="$DEPS_DIR/libpolyplug_python.so"
+export POLYPLUG_DOTNET_LIB="$DEPS_DIR/libpolyplug_dotnet.so"
 export PYTHONFAULTHANDLER=1
 export POLYPLUG_BENCH_ITERS="$ITERS"
 
-PYTHON_HOST_PATH="$WORKSPACE_DIR/sdks/python/host:$WORKSPACE_DIR/sdks/python/polyplug_abi:$WORKSPACE_DIR/sdks/python:$WORKSPACE_DIR/sdks/python/loaders/native:$WORKSPACE_DIR/sdks/python/loaders/python:$WORKSPACE_DIR/sdks/python/loaders/lua:$WORKSPACE_DIR/sdks/python/loaders/js"
-LUA_HOST_PATH="$WORKSPACE_DIR/sdks/lua/host/?.lua;$WORKSPACE_DIR/sdks/lua/abi/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/native/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/lua/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/js/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/python/?.lua;$SCRIPT_DIR/lua/?.lua;;"
+PYTHON_HOST_PATH="$WORKSPACE_DIR/sdks/python/host:$WORKSPACE_DIR/sdks/python/polyplug_abi:$WORKSPACE_DIR/sdks/python:$WORKSPACE_DIR/sdks/python/loaders/native:$WORKSPACE_DIR/sdks/python/loaders/python:$WORKSPACE_DIR/sdks/python/loaders/lua:$WORKSPACE_DIR/sdks/python/loaders/js:$WORKSPACE_DIR/sdks/python/loaders/dotnet"
+LUA_HOST_PATH="$WORKSPACE_DIR/sdks/lua/host/?.lua;$WORKSPACE_DIR/sdks/lua/abi/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/native/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/lua/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/js/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/python/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/dotnet/?.lua;$SCRIPT_DIR/lua/?.lua;;"
 
 # Matrix data, written as `<host> <guest> <ns>` lines. A fresh temp file each
 # run — never committed; the chart is the only artifact that lands in the repo.
@@ -86,7 +90,11 @@ for guest in "${GUEST_LANGS[@]}"; do
     # contract resolves deterministically to the language under test. Real copies
     # (cp -rL) because the Deno scanner does not follow symlinked plugin dirs.
     guest_dir="$(mktemp -d)"
-    for d in "$EXAMPLES_DIR"/plugins/"${guest}"_*; do
+    # C# guest bundles are published separately (they need the .NET loader); every
+    # other guest lives in examples/plugins.
+    src_root="$EXAMPLES_DIR/plugins"
+    [ "$guest" = "csharp" ] && src_root="$EXAMPLES_DIR/plugins-csharp"
+    for d in "$src_root"/"${guest}"_*; do
         [ -d "$d" ] && cp -rL "$d" "$guest_dir/"
     done
     export POLYPLUG_PLUGIN_PATH="$guest_dir"

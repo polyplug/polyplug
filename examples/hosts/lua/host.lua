@@ -24,6 +24,7 @@ local native_loader = require('polyplug.loaders.native')
 local lua_loader = require('polyplug.loaders.lua')
 local js_loader = require('polyplug.loaders.js')
 local python_loader = require('polyplug.loaders.python')
+local dotnet_loader = require('polyplug.loaders.dotnet')
 
 --- Resolve the plugin directory from the environment or a few fallbacks.
 -- @return string Path to the directory containing plugin bundles.
@@ -98,6 +99,7 @@ local loaders = {
     { name = 'lua', register = function() lua_loader.register(rt) end },
     { name = 'js-quickjs', register = function() js_loader.register(rt) end },
     { name = 'python', register = function() python_loader.register(rt) end },
+    { name = 'dotnet', register = function() dotnet_loader.register(rt) end },
 }
 for _, loader in ipairs(loaders) do
     local ok, err = pcall(loader.register)

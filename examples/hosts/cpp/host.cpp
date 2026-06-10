@@ -3,6 +3,7 @@
 #include <polyplug_loaders_python.hpp>
 #include <polyplug_loaders_lua.hpp>
 #include <polyplug_loaders_js.hpp>
+#include <polyplug_loaders_dotnet.hpp>
 
 #include "generated/host/types.hpp"
 #include "generated/host/host_contracts.hpp"
@@ -123,6 +124,7 @@ int main() {
     polyplug::loaders::register_python(rt);
     polyplug::loaders::register_lua(rt);
     polyplug::loaders::register_js(rt);
+    polyplug::loaders::register_dotnet(rt);
 
     // Register the host.logger contract so plugins can call back into the host.
     const HostContractInterface* logger_iface =

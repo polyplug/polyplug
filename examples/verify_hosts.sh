@@ -20,17 +20,18 @@ export POLYPLUG_NATIVE_LIB="$DEPS_DIR/libpolyplug_native.so"
 export POLYPLUG_LUA_LIB="$DEPS_DIR/libpolyplug_lua.so"
 export POLYPLUG_JS_LIB="$DEPS_DIR/libpolyplug_js.so"
 export POLYPLUG_PYTHON_LIB="$DEPS_DIR/libpolyplug_python.so"
+export POLYPLUG_DOTNET_LIB="$DEPS_DIR/libpolyplug_dotnet.so"
 
 # Python host import path: host package + the standalone polyplug_abi package
 # (its parent dir, so `import polyplug_abi` resolves) + sdks/python/ (so
-# polyplug_abi/abi.py can `from abi.abi import *`) + all four loader packages
-# (native, python, lua, js) so the example can register every available loader.
-PYTHON_HOST_PATH="$WORKSPACE_DIR/sdks/python/host:$WORKSPACE_DIR/sdks/python/polyplug_abi:$WORKSPACE_DIR/sdks/python:$WORKSPACE_DIR/sdks/python/loaders/native:$WORKSPACE_DIR/sdks/python/loaders/python:$WORKSPACE_DIR/sdks/python/loaders/lua:$WORKSPACE_DIR/sdks/python/loaders/js"
+# polyplug_abi/abi.py can `from abi.abi import *`) + all five loader packages
+# (native, python, lua, js, dotnet) so the example can register every available loader.
+PYTHON_HOST_PATH="$WORKSPACE_DIR/sdks/python/host:$WORKSPACE_DIR/sdks/python/polyplug_abi:$WORKSPACE_DIR/sdks/python:$WORKSPACE_DIR/sdks/python/loaders/native:$WORKSPACE_DIR/sdks/python/loaders/python:$WORKSPACE_DIR/sdks/python/loaders/lua:$WORKSPACE_DIR/sdks/python/loaders/js:$WORKSPACE_DIR/sdks/python/loaders/dotnet"
 
 # Lua host search path: host modules + the abi modules (polyplug_abi.lua and
-# abi.lua live in sdks/lua/abi) + the four loader package dirs (native, lua, js,
-# python) + this directory's host modules.
-LUA_HOST_PATH="$WORKSPACE_DIR/sdks/lua/host/?.lua;$WORKSPACE_DIR/sdks/lua/abi/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/native/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/lua/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/js/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/python/?.lua;$SCRIPT_DIR/hosts/lua/?.lua;;"
+# abi.lua live in sdks/lua/abi) + the five loader package dirs (native, lua, js,
+# python, dotnet) + this directory's host modules.
+LUA_HOST_PATH="$WORKSPACE_DIR/sdks/lua/host/?.lua;$WORKSPACE_DIR/sdks/lua/abi/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/native/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/lua/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/js/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/python/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/dotnet/?.lua;$SCRIPT_DIR/hosts/lua/?.lua;;"
 
 echo "=== polyplug Examples Verification ==="
 echo "Library path: $WORKSPACE_DIR/target/release/deps"

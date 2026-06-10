@@ -1,3 +1,5 @@
+import type { Runtime } from "../../host/polyplug/mod.js";
+
 let _lib: Deno.DynamicLibrary<typeof DOTNET_SYMBOLS> | null = null;
 
 const DOTNET_SYMBOLS = {
@@ -15,25 +17,24 @@ function getLib(): Deno.DynamicLibrary<typeof DOTNET_SYMBOLS> {
     return _lib;
 }
 
-export function registerDotnetLoader(
-    rt: Deno.PointerValue,
-    registerFn: (rt: Deno.PointerValue, loader: Deno.PointerValue) => number,
-    runtimeVersion: string = "8.0"
-): void {
+/**
+ * Register the .NET loader with a Runtime.
+ * Opens the loader cdylib, creates the loader, then registers it through the
+ * Runtime's HostApi.register_loader path under the "dotnet" runtime name.
+ */
+export function registerDotnetLoader(rt: Runtime, minFramework: string = "10.0"): void {
     const lib = getLib();
-    const encoded = new TextEncoder().encode(runtimeVersion);
+    // PolyplugDotnetConfig is { const uint8_t* min_framework_ptr; size_t min_framework_len; }.
+    const encoded = new TextEncoder().encode(minFramework);
     const cfgBuf = new Uint8Array(16);
-    const ptr = Deno.UnsafePointer.of(encoded);
     const view = new DataView(cfgBuf.buffer);
-    view.setBigUint64(0, BigInt(Deno.UnsafePointer.value(ptr)), true);
+    const strPtr = Deno.UnsafePointer.of(encoded);
+    view.setBigUint64(0, BigInt(Deno.UnsafePointer.value(strPtr)), true);
     view.setBigUint64(8, BigInt(encoded.length), true);
     const cfgPtr = Deno.UnsafePointer.of(cfgBuf);
     const loaderPtr = lib.symbols.polyplug_dotnet_loader_create(cfgPtr);
     if (loaderPtr === null) {
         throw new Error("polyplug: dotnet loader create failed");
     }
-    const err = registerFn(rt, loaderPtr);
-    if (err !== 0) {
-        throw new Error(`polyplug: dotnet loader register failed: ${err}`);
-    }
+    rt.registerLoader("dotnet", loaderPtr);
 }

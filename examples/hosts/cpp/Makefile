@@ -5,12 +5,13 @@ INCLUDES = -I../../../sdks/cpp/host \
            -I../../../sdks/cpp/loaders/native \
            -I../../../sdks/cpp/loaders/python \
            -I../../../sdks/cpp/loaders/lua \
-           -I../../../sdks/cpp/loaders/js
+           -I../../../sdks/cpp/loaders/js \
+           -I../../../sdks/cpp/loaders/dotnet
 
 # Library paths
 LIBS_DIR = ../../../target/release/deps
 LDFLAGS = -L$(LIBS_DIR) -Wl,-rpath,$(LIBS_DIR)
-LIBS = -lpolyplug -lpolyplug_native -lpolyplug_python -lpolyplug_lua -lpolyplug_js
+LIBS = -lpolyplug -lpolyplug_native -lpolyplug_python -lpolyplug_lua -lpolyplug_js -lpolyplug_dotnet
 
 TARGET = host
 HOT_RELOAD_TARGET = hot_reload_host

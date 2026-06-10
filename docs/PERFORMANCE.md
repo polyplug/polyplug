@@ -442,14 +442,14 @@ What the grid shows:
   the scripted-app rows are the red end. Most real setups land in between, and the
   grid tells you exactly where.
 
-One column is **N/A**:
+Every one of the 36 pairings is measured — all six app languages (Rust / C++ /
+C# / Lua / Python / JS) against all six plugin languages, with no gaps.
 
-- **The C# plugin column** — there is no built C# guest bundle in
-  `examples/plugins`, and the host examples don't register the .NET loader. C#
-  works fine as an *app* (it has a full row); it just isn't wired as a *plugin* yet.
-
-Every other pairing is measured — including every app language (Rust / C++ / C# /
-Lua / Python / JS) calling a Lua, JS, or Python plugin.
+- **A C# app loading a C# plugin reuses the host's own .NET runtime.** A native
+  app (Rust / C++ / …) loads a C# plugin by spinning up a .NET runtime through the
+  loader; a C# app already *is* a .NET process, so the loader loads the plugin into
+  the runtime that's already there instead of starting a second one. That's the
+  `csharp × C#` cell — a normal in-process call, no extra runtime.
 
 > This grid measures the **whole** call (argument in, call, string back), so its
 > numbers are larger than the single-boundary charts above — the

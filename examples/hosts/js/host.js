@@ -13,6 +13,7 @@ import { registerNativeLoader } from "../../../sdks/js/loaders/native/mod.ts";
 import { registerLuaLoader } from "../../../sdks/js/loaders/lua/mod.ts";
 import { registerJsLoader } from "../../../sdks/js/loaders/js/mod.ts";
 import { registerPythonLoader } from "../../../sdks/js/loaders/python/mod.ts";
+import { registerDotnetLoader } from "../../../sdks/js/loaders/dotnet/mod.ts";
 import {
   PipelineDecoderContract,
   DataTransformerContract,
@@ -39,6 +40,7 @@ const loaders = [
   { name: "lua", register: () => registerLuaLoader(rt) },
   { name: "js-quickjs", register: () => registerJsLoader(rt) },
   { name: "python", register: () => registerPythonLoader(rt) },
+  { name: "dotnet", register: () => registerDotnetLoader(rt) },
 ];
 for (const loader of loaders) {
   try {

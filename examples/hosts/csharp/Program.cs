@@ -11,6 +11,7 @@ using Polyplug.Loaders.Native;
 using Polyplug.Loaders.Python;
 using Polyplug.Loaders.Lua;
 using Polyplug.Loaders.Js;
+using Polyplug.Loaders.Dotnet;
 
 class Program
 {
@@ -74,6 +75,7 @@ class Program
             typeof(PythonLoaderExtensions).Assembly,
             typeof(LuaLoaderExtensions).Assembly,
             typeof(JsLoaderExtensions).Assembly,
+            typeof(DotnetLoaderExtensions).Assembly,
         })
         {
             NativeLibrary.SetDllImportResolver(assembly, resolver);
@@ -142,6 +144,7 @@ class Program
         rt.RegisterPythonLoader();
         rt.RegisterLuaLoader();
         rt.RegisterJsLoader();
+        rt.RegisterDotnetLoader();
 
         var bundles = Directory.GetDirectories(pluginPath)
             .Where(dir => File.Exists(Path.Combine(dir, "manifest.toml")))

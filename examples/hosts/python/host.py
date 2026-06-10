@@ -38,6 +38,11 @@ try:
 except ImportError:
     register_js_loader = None
 
+try:
+    from polyplug_loaders_dotnet import register_dotnet_loader
+except ImportError:
+    register_dotnet_loader = None
+
 from generated.host.callers import (
     PipelineDecoderContractCaller,
     DataTransformerContractCaller,
@@ -102,6 +107,7 @@ def main():
         ("python", register_python_loader),
         ("lua", register_lua_loader),
         ("js-quickjs", register_js_loader),
+        ("dotnet", register_dotnet_loader),
     ]
     for name, register in loaders:
         if register is None:

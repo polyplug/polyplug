@@ -13,5 +13,6 @@
     <ProjectReference Include="../../../sdks/csharp/loaders/Python/Polyplug.Loaders.Python.csproj" />
     <ProjectReference Include="../../../sdks/csharp/loaders/Lua/Polyplug.Loaders.Lua.csproj" />
     <ProjectReference Include="../../../sdks/csharp/loaders/Js/Polyplug.Loaders.Js.csproj" />
+    <ProjectReference Include="../../../sdks/csharp/loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj" />
   </ItemGroup>
 </Project>

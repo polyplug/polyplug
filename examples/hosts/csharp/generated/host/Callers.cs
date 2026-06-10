@@ -156,7 +156,7 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
                 case DispatchType.Native: {
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
+                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
                     err = dispatch(_instance, argsPtr, outPtr);
                     break;
                 }
@@ -270,7 +270,7 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
                 case DispatchType.Native: {
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
+                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
                     err = dispatch(_instance, argsPtr, outPtr);
                     break;
                 }
@@ -384,7 +384,7 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
                 case DispatchType.Native: {
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
+                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
                     err = dispatch(_instance, argsPtr, outPtr);
                     break;
                 }
@@ -498,7 +498,7 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
                 case DispatchType.Native: {
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
+                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
                     err = dispatch(_instance, argsPtr, outPtr);
                     break;
                 }
@@ -612,7 +612,7 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
                 case DispatchType.Native: {
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
+                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
                     err = dispatch(_instance, argsPtr, outPtr);
                     break;
                 }

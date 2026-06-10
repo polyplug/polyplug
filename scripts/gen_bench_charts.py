@@ -502,7 +502,7 @@ def _read_matrix(path: Path) -> dict:
 
 
 # Display names + axis order for the cross-language matrix. Hosts down the rows,
-# guests across the columns; C# appears as a host but has no built guest bundle.
+# guests across the columns; every host×guest pairing is measured.
 _LANG_LABEL: dict = {
     "rust": "Rust",
     "cpp": "C++",
@@ -541,7 +541,7 @@ def chart_cross_language_matrix(data_path: Path, out: Path) -> None:
         cells,
         "Each cell is measured end to end (build the argument, call, read the returned string). "
         "Compiled hosts (Rust/C++/C#) add a small constant; scripted hosts pay per-call marshalling. "
-        "C# has no built guest bundle yet (N/A column). Local-only; see examples/hosts/roundtrip_bench.sh.",
+        "A C# app loading a C# plugin reuses the host's own .NET runtime. Local-only; see examples/hosts/roundtrip_bench.sh.",
     )
 
 

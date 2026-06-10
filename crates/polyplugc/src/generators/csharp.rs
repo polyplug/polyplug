@@ -1245,6 +1245,14 @@ fn generate_host_fn_caller(
     // C#) call the function pointer directly; VM guests (Lua, JS) route through the
     // loader's vm.call trampoline with the canonical 6-arg signature. Mirrors the
     // canonical Rust/C++ host caller's native-vs-vm branch (Rule 10).
+    //
+    // The native dispatch must NOT use `SuppressGCTransition`: a C# guest's contract
+    // entry points are `[UnmanagedCallersOnly]` methods, and when host and guest share
+    // one CLR (a .NET host loading a .NET plugin via the reused runtime), the call is
+    // managed -> managed and requires the GC transition frame — suppressing it makes the
+    // runtime reject the call ("attempted to call a UnmanagedCallersOnly method from
+    // managed code"). The transition is also needed whenever a guest calls back into the
+    // host. The cost is one GC transition per native dispatch — correctness over a micro-opt.
     out.push_str("            AbiError err;\n");
     out.push_str("            switch (_interface->DispatchType) {\n");
     out.push_str("                case DispatchType.Native: {\n");
@@ -1252,7 +1260,7 @@ fn generate_host_fn_caller(
     out.push_str(&format!(
         "                    nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
     ));
-    out.push_str("                    var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;\n");
+    out.push_str("                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;\n");
     out.push_str("                    err = dispatch(_instance, argsPtr, outPtr);\n");
     out.push_str("                    break;\n");
     out.push_str("                }\n");
