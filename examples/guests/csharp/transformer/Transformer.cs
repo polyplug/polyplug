@@ -8,7 +8,7 @@ public sealed class TransformerPlugin : IDataTransformerGuestContract
 {
     public StringView Transform(StringView input)
     {
-        string s = StringHelpers.StripPrefix(input, "DECODED:");
+        string s = StringViewHelper.StripPrefix(input, "DECODED:");
         string[] parts = s.Split('|');
         if (parts.Length >= 3 && int.TryParse(parts[2], out int count))
         {

@@ -16,12 +16,12 @@ private static AbiError host_logger_log_thunk(IntPtr implPtr, IntPtr argsPtr, In
     try {
         var impl = s_HostLogger_impl ?? throw new InvalidOperationException("implementation not set");
         var message_sv = Marshal.PtrToStructure<StringView>(argsPtr);
-        var message = StringHelpers.ToString(message_sv);
+        var message = StringViewHelper.ToString(message_sv);
         impl.Log(message);
         _ = outPtr;
         return new AbiError { Code = (uint)AbiErrorCode.Ok };
     } catch (Exception ex) {
-        var msg = StringHelpers.StaticMessage(ex.Message);
+        var msg = StringViewHelper.StaticMessage(ex.Message);
         return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
     }
 }
@@ -39,12 +39,12 @@ private static AbiError host_logger_log_with_level_thunk(IntPtr implPtr, IntPtr 
         var impl = s_HostLogger_impl ?? throw new InvalidOperationException("implementation not set");
         var packed = Marshal.PtrToStructure<HostLoggerLogWithLevelArgs>(argsPtr);
         var level = packed.Level;
-        var message = StringHelpers.ToString(packed.Message);
+        var message = StringViewHelper.ToString(packed.Message);
         impl.LogWithLevel(ref level, message);
         _ = outPtr;
         return new AbiError { Code = (uint)AbiErrorCode.Ok };
     } catch (Exception ex) {
-        var msg = StringHelpers.StaticMessage(ex.Message);
+        var msg = StringViewHelper.StaticMessage(ex.Message);
         return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
     }
 }

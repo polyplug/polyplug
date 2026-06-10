@@ -163,7 +163,7 @@ fn build_csharp_consumer(tmp_root: &Path) -> PathBuf {
          return PolyplugHost.AllocString(\"ERROR:peer-unavailable\");\n\
          }\n\
          StringView borrowed = peer.Validate(input);\n\
-         return PolyplugHost.AllocString(StringHelpers.ToString(borrowed));\n\
+         return PolyplugHost.AllocString(StringViewHelper.ToString(borrowed));\n\
          }\n\
          }\n\
          \n\

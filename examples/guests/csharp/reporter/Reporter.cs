@@ -8,7 +8,7 @@ public sealed class ReporterPlugin : IDataReporterGuestContract
 {
     public StringView Report(StringView input)
     {
-        string s = StringHelpers.StripPrefix(input, "TRANSFORMED:");
+        string s = StringViewHelper.StripPrefix(input, "TRANSFORMED:");
         string[] parts = s.Split('|');
         if (parts.Length >= 3)
         {

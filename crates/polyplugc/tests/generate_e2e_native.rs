@@ -247,7 +247,7 @@ fn csharp_generated_glue_compiles() {
          {\n\
          public StringView Decode(StringView input)\n\
          {\n\
-         string s = StringHelpers.ToString(input).Replace(',', '|');\n\
+         string s = StringViewHelper.ToString(input).Replace(',', '|');\n\
          return PolyplugHost.AllocString($\"DECODED:{s}\");\n\
          }\n\
          }\n\

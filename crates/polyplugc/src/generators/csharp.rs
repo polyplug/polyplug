@@ -787,10 +787,10 @@ fn emit_cs_guest_dispatch_body(
     }
     out.push_str("            return new AbiError { Code = (uint)AbiErrorCode.Ok };\n");
     out.push_str("        } catch (Polyplug.Guest.GuestException ex) {\n");
-    out.push_str("            var msg = StringHelpers.StaticMessage(ex.Message);\n");
+    out.push_str("            var msg = StringViewHelper.StaticMessage(ex.Message);\n");
     out.push_str("            return new AbiError { Code = ex.Code, Message = msg };\n");
     out.push_str("        } catch {\n");
-    out.push_str("            var msg = StringHelpers.StaticMessage(\"plugin panicked\");\n");
+    out.push_str("            var msg = StringViewHelper.StaticMessage(\"plugin panicked\");\n");
     out.push_str(
         "            return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };\n",
     );
@@ -2304,7 +2304,7 @@ fn generate_cs_host_thunk(
 
     out.push_str("        return new AbiError { Code = (uint)AbiErrorCode.Ok };\n");
     out.push_str("    } catch (Exception ex) {\n");
-    out.push_str("        var msg = StringHelpers.StaticMessage(ex.Message);\n");
+    out.push_str("        var msg = StringViewHelper.StaticMessage(ex.Message);\n");
     out.push_str(
         "        return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };\n",
     );
@@ -2324,7 +2324,7 @@ fn generate_cs_host_thunk_args(out: &mut String, func: &ResolvedFunction, pack_s
                     param.name
                 ));
                 out.push_str(&format!(
-                    "        var {} = StringHelpers.ToString({}_sv);\n",
+                    "        var {} = StringViewHelper.ToString({}_sv);\n",
                     param.name, param.name
                 ));
             }
@@ -2351,7 +2351,7 @@ fn generate_cs_host_thunk_args(out: &mut String, func: &ResolvedFunction, pack_s
             match &param.ty {
                 ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                     out.push_str(&format!(
-                        "        var {} = StringHelpers.ToString(packed.{});\n",
+                        "        var {} = StringViewHelper.ToString(packed.{});\n",
                         param.name,
                         pascal_case(&param.name)
                     ));

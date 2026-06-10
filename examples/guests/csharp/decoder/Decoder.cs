@@ -8,7 +8,7 @@ public sealed class DecoderPlugin : IPipelineDecoderGuestContract
 {
     public StringView Decode(StringView input)
     {
-        string s = StringHelpers.ToString(input).Replace(',', '|');
+        string s = StringViewHelper.ToString(input).Replace(',', '|');
         return PolyplugHost.AllocString($"DECODED:{s}");
     }
 }

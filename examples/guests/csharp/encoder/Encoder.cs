@@ -8,7 +8,7 @@ public sealed class EncoderPlugin : IPipelineEncoderGuestContract
 {
     public StringView Encode(StringView input)
     {
-        string s = StringHelpers.StripPrefix(input, "TRANSFORMED:");
+        string s = StringViewHelper.StripPrefix(input, "TRANSFORMED:");
         return PolyplugHost.AllocString(s.Replace('|', ','));
     }
 }

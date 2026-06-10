@@ -8,7 +8,7 @@ public sealed class ValidatorPlugin : IPipelineValidatorGuestContract
 {
     public StringView Validate(StringView input)
     {
-        string s = StringHelpers.StripPrefix(input, "DECODED:");
+        string s = StringViewHelper.StripPrefix(input, "DECODED:");
         string[] parts = s.Split('|');
         if (parts.Length == 3 && !string.IsNullOrEmpty(parts[0]) && !string.IsNullOrEmpty(parts[1]) && int.TryParse(parts[2], out _))
         {

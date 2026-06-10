@@ -29,10 +29,10 @@ public static class ValidatorInterfaces {
             *(Polyplug.Abi.StringView*)outPtr = result;
             return new AbiError { Code = (uint)AbiErrorCode.Ok };
         } catch (Polyplug.Guest.GuestException ex) {
-            var msg = StringHelpers.StaticMessage(ex.Message);
+            var msg = StringViewHelper.StaticMessage(ex.Message);
             return new AbiError { Code = ex.Code, Message = msg };
         } catch {
-            var msg = StringHelpers.StaticMessage("plugin panicked");
+            var msg = StringViewHelper.StaticMessage("plugin panicked");
             return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
         }
     }
