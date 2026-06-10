@@ -252,10 +252,8 @@ impl RuntimeLanguageBridge for LuaHostBridge {
         match call_result {
             Ok(()) => AbiError::ok(),
             Err(e) => {
-                // Print Lua error for debugging
-                eprintln!("[polyplug_lua] Lua host contract call failed: {}", e);
-
-                // Return error with message
+                // The full Lua error detail propagates to the caller in the
+                // AbiError message below; no side-channel print.
                 let message: String = format!("Lua exception: {}", e);
                 // SAFETY: We leak the message string to create a 'static StringView.
                 // This is acceptable because:

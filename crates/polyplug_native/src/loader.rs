@@ -7,12 +7,14 @@ use std::sync::Mutex;
 use polyplug::Runtime;
 use polyplug::error::{LoaderError, RuntimeError};
 use polyplug::loader::{BundleLoader, BundleSource, ManifestData};
+use polyplug::logger::RecoverPoisoned;
 use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::UnloadMode;
 use polyplug_abi::plugin::BundleInitContext;
 use polyplug_abi::types::AbiError;
 use polyplug_abi::types::AbiErrorCode;
+use polyplug_abi::types::LogLevel;
 use polyplug_utils::BundleId;
 
 use crate::config::NativeConfig;
@@ -70,10 +72,7 @@ impl NativeLoader {
         let _ = runtime.registry().invalidate_bundle(bundle_id);
         self.retired
             .lock()
-            .unwrap_or_else(|e| {
-                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            })
+            .recover_poisoned(runtime.logger(), "loader.native")
             .push(library);
     }
 }
@@ -267,18 +266,12 @@ impl BundleLoader for NativeLoader {
         let superseded: Option<libloading::Library> = self
             .libraries
             .lock()
-            .unwrap_or_else(|e| {
-                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            })
+            .recover_poisoned(runtime.logger(), "loader.native")
             .insert(bundle_id, library);
         if let Some(old_library) = superseded {
             self.retired
                 .lock()
-                .unwrap_or_else(|e| {
-                    eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-                    e.into_inner()
-                })
+                .recover_poisoned(runtime.logger(), "loader.native")
                 .push(old_library);
         }
 
@@ -440,28 +433,19 @@ impl BundleLoader for NativeLoader {
         if let Some(old_library) = self
             .libraries
             .lock()
-            .unwrap_or_else(|e| {
-                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            })
+            .recover_poisoned(runtime.logger(), "loader.native")
             .remove(&bundle_id)
         {
             self.retired
                 .lock()
-                .unwrap_or_else(|e| {
-                    eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-                    e.into_inner()
-                })
+                .recover_poisoned(runtime.logger(), "loader.native")
                 .push(old_library);
         }
 
         // ─── Step 9: Store new library ───────────────────────────────────────────────────
         self.libraries
             .lock()
-            .unwrap_or_else(|e| {
-                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            })
+            .recover_poisoned(runtime.logger(), "loader.native")
             .insert(bundle_id, new_library);
 
         Ok(())
@@ -505,10 +489,7 @@ impl BundleLoader for NativeLoader {
         let library: libloading::Library = match self
             .libraries
             .lock()
-            .unwrap_or_else(|e| {
-                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            })
+            .recover_poisoned(runtime.logger(), "loader.native")
             .remove(&bundle_id)
         {
             Some(lib) => lib,
@@ -522,10 +503,7 @@ impl BundleLoader for NativeLoader {
                 // valid for the loader's lifetime.
                 self.retired
                     .lock()
-                    .unwrap_or_else(|e| {
-                        eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-                        e.into_inner()
-                    })
+                    .recover_poisoned(runtime.logger(), "loader.native")
                     .push(library);
             }
             UnloadMode::Reclaim => {
@@ -544,16 +522,15 @@ impl BundleLoader for NativeLoader {
                 } else {
                     // Best-effort defer: an Arc holder still references this bundle's
                     // interface. Retire instead of risking a use-after-free.
-                    eprintln!(
-                        "[polyplug_native] reclaim of bundle {:#x} deferred: an interface still has an extra holder; retiring its library to avoid a use-after-free",
-                        bundle_id.id()
-                    );
+                    runtime.logger().log(LogLevel::Warn, "loader.native", || {
+                        format!(
+                            "reclaim of bundle {:#x} deferred: an interface still has an extra holder; retiring its library to avoid a use-after-free",
+                            bundle_id.id()
+                        )
+                    });
                     self.retired
                         .lock()
-                        .unwrap_or_else(|e| {
-                            eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-                            e.into_inner()
-                        })
+                        .recover_poisoned(runtime.logger(), "loader.native")
                         .push(library);
                 }
             }
@@ -569,10 +546,7 @@ impl NativeLoader {
     pub(crate) fn live_library_count(&self) -> usize {
         self.libraries
             .lock()
-            .unwrap_or_else(|e| {
-                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            })
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
     }
 
@@ -580,10 +554,7 @@ impl NativeLoader {
     pub(crate) fn retired_library_count(&self) -> usize {
         self.retired
             .lock()
-            .unwrap_or_else(|e| {
-                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            })
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
     }
 }

@@ -20,6 +20,7 @@ use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::runtime::Compatibility;
 use polyplug_abi::runtime::RuntimeConfig;
+use polyplug_abi::types::LogLevel;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 use polyplug_utils::GuestContractId;
@@ -921,4 +922,101 @@ fn lua_reload_reinitializes_contracts() {
     runtime
         .find_guest_contract(contract_id, 0)
         .expect("contract must remain resolvable after reload");
+}
+
+// ── 16. Logger — dispatch failures route through the host logger ─────────────
+
+/// A Lua plugin whose single function always raises a Lua error.
+fn failing_plugin_script() -> &'static [u8] {
+    br#"
+local function impl_fail(_args_ptr, _out_ptr)
+    error("boom from lua guest")
+end
+function polyplug_init(_registrar_ptr, _ctx_ptr)
+    _G._polyplug_handlers = {
+        ["test.loader"] = {
+            contract_version = 1,
+            plugin_name      = "test-loader-fail",
+            functions        = { [0] = impl_fail },
+        },
+    }
+end
+"#
+}
+
+/// A failed Lua guest dispatch must deliver an (Error, "loader.lua", ...) record
+/// through the host logger installed via `RuntimeBuilder::logger`: the per-VM
+/// `LuaLoaderData` carries an instance-owned copy of the runtime's handle, taken
+/// at load time, and the dispatch error path logs AFTER the per-VM dispatch lock
+/// has been released.
+#[test]
+fn dispatch_failure_is_logged_through_host_logger() {
+    let (_dir, path) = write_temp_bundle("lua_loader_dispatch_log", failing_plugin_script());
+
+    let records: Arc<std::sync::Mutex<Vec<(LogLevel, String, String)>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let records_clone: Arc<std::sync::Mutex<Vec<(LogLevel, String, String)>>> =
+        Arc::clone(&records);
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
+        .logger(move |level: LogLevel, scope: &str, msg: &str| {
+            records_clone.lock().expect("records lock").push((
+                level,
+                scope.to_owned(),
+                msg.to_owned(),
+            ));
+        })
+        .build()
+        .expect("runtime build must succeed");
+
+    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let manifest: ManifestData = make_manifest(&path, "lua_loader_dispatch_log");
+    loader
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
+        .expect("failing-function bundle must still load");
+
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
+    let handle: GuestContractHandle = runtime
+        .registry()
+        .find(GuestContractId::from_u64(contract_id), 0)
+        .expect("test.loader@1 must be registered");
+    let vtable_ptr: *const GuestContractInterface = runtime
+        .registry()
+        .resolve_guest_contract(handle)
+        .expect("handle must resolve to vtable");
+    // SAFETY: vtable_ptr is a 'static leaked GuestContractInterface from LuaLoader.
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+
+    // SAFETY: dispatch.vm.call is a valid function pointer, loader_data is valid,
+    // and the failing function never reads its (args, out) pointers.
+    let result: AbiError = unsafe {
+        (vtable.dispatch.vm.call)(
+            vtable.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            0,
+            core::ptr::null::<()>(),
+            core::ptr::null_mut::<()>(),
+            core::ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        result.code,
+        AbiErrorCode::Generic as u32,
+        "failing guest function must return Generic, got code={}",
+        result.code
+    );
+
+    let captured: Vec<(LogLevel, String, String)> = records.lock().expect("records lock").clone();
+    assert!(
+        captured.iter().any(|(level, scope, msg)| {
+            *level == LogLevel::Error
+                && scope == "loader.lua"
+                && msg.starts_with("Lua function call failed")
+                && msg.contains("boom from lua guest")
+        }),
+        "expected an (Error, \"loader.lua\", \"Lua function call failed: ...boom...\") record, got: {captured:?}"
+    );
 }

@@ -340,6 +340,16 @@ impl Runtime {
             .log(LogLevel::Warn, "runtime", || msg.to_owned());
     }
 
+    /// The runtime's logger handle.
+    ///
+    /// `LoggerHandle` is `Copy`: loaders take a copy at `load` time and store
+    /// it in their per-bundle data so dispatch-time and teardown paths can log
+    /// through the host callback. Same callback contract as
+    /// `RuntimeConfig::log` — never invoke it while holding a lock guard.
+    pub fn logger(&self) -> crate::logger::LoggerHandle {
+        self.logger
+    }
+
     /// Set the last error message for FFI error reporting.
     pub(crate) fn set_last_error(&self, msg: impl Into<String>) {
         let mut guard: RecoveringGuard<std::sync::MutexGuard<'_, String>> = self

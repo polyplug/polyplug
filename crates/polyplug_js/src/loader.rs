@@ -43,6 +43,7 @@ use polyplug_abi::StringView;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
 use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
+use polyplug_abi::types::LogLevel;
 use polyplug_abi::types::Version;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
@@ -1656,7 +1657,7 @@ impl BundleLoader for JsLoader {
     fn unload(
         &self,
         bundle_id: BundleId,
-        _runtime: &PolyplugRuntime,
+        runtime: &PolyplugRuntime,
         _reclaim_safe: bool,
     ) -> Result<(), RuntimeError> {
         let state: Vec<SendVm> = {
@@ -1679,10 +1680,12 @@ impl BundleLoader for JsLoader {
             };
 
             if in_flight {
-                eprintln!(
-                    "[polyplug_js] unload of bundle {:#x} deferred: a dispatch is in flight on this VM; retiring its state to avoid a use-after-free",
-                    bundle_id.id()
-                );
+                runtime.logger().log(LogLevel::Warn, "loader.js", || {
+                    format!(
+                        "unload of bundle {:#x} deferred: a dispatch is in flight on this VM; retiring its state to avoid a use-after-free",
+                        bundle_id.id()
+                    )
+                });
                 self.retire_vm_state(vec![data]);
             } else {
                 // Quiescent: dropping `data` drops the QuickJS Context and Runtime —

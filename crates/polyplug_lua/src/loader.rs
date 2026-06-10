@@ -22,6 +22,7 @@ use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
+use polyplug::logger::LoggerHandle;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::CallArena;
@@ -34,6 +35,7 @@ use polyplug_abi::StringView;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
 use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
+use polyplug_abi::types::LogLevel;
 use polyplug_abi::types::Version;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
@@ -124,6 +126,12 @@ pub struct LuaLoaderData {
     /// against its own thread. It lives on the per-VM `LuaLoaderData`, never
     /// globally, so it is Rule-12 compliant.
     pub dispatch_lock: Mutex<()>,
+    /// Instance-owned copy of the runtime's logger, taken at load time.
+    ///
+    /// Dispatch-time diagnostics have no `&Runtime` back-reference, so the
+    /// per-VM data carries its own `Copy` of the handle. Same callback
+    /// contract as `RuntimeConfig::log` — never invoked under a lock guard.
+    pub logger: LoggerHandle,
 }
 
 /// Owning handle to a bundle's [`LuaLoaderData`] with a stable heap address.
@@ -277,22 +285,29 @@ unsafe extern "C" fn lua_dispatch(
     // cross-thread caller blocks here, exactly the serialization mlua imposes on the
     // VM lock anyway. Poison recovery: the unit value cannot be left logically
     // corrupt, so reusing it is sound. Production code, so no unwrap.
-    let _dispatch_lock: std::sync::MutexGuard<'_, ()> = data
-        .dispatch_lock
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    // The lock scope ends with the clear: the logger callback below must run
+    // with no guard held (RuntimeConfig::log lock rule).
+    let call_result: Result<(), mlua::Error> = {
+        let _dispatch_lock: std::sync::MutexGuard<'_, ()> = data
+            .dispatch_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
 
-    let arena_i64: i64 = arena as usize as i64;
-    let _ = data._vm.globals().set(ARENA_GLOBAL, arena_i64);
+        let arena_i64: i64 = arena as usize as i64;
+        let _ = data._vm.globals().set(ARENA_GLOBAL, arena_i64);
 
-    let call_result: Result<(), mlua::Error> = lua_fn.call::<()>((args_i64, out_i64));
+        let call_result: Result<(), mlua::Error> = lua_fn.call::<()>((args_i64, out_i64));
 
-    let _ = data._vm.globals().set(ARENA_GLOBAL, 0_i64);
+        let _ = data._vm.globals().set(ARENA_GLOBAL, 0_i64);
+        call_result
+    };
 
     match call_result {
         Ok(()) => AbiError::ok(),
         Err(e) => {
-            eprintln!("[polyplug_lua] Lua function call failed: {}", e);
+            data.logger.log(LogLevel::Error, "loader.lua", || {
+                format!("Lua function call failed: {e}")
+            });
             AbiError {
                 code: AbiErrorCode::Generic as u32,
                 message: StringView::null(),
@@ -743,6 +758,7 @@ impl LuaLoader {
                 functions: lua_functions,
                 in_dispatch_threads: Mutex::new(Vec::new()),
                 dispatch_lock: Mutex::new(()),
+                logger: runtime.logger(),
             }));
 
             // The box's heap address is stable across later moves of the `LuaVm`/`Box`
@@ -955,7 +971,7 @@ impl BundleLoader for LuaLoader {
     fn unload(
         &self,
         bundle_id: BundleId,
-        _runtime: &Runtime,
+        runtime: &Runtime,
         _reclaim_safe: bool,
     ) -> Result<(), RuntimeError> {
         let state: Vec<LuaVm> = {
@@ -978,10 +994,12 @@ impl BundleLoader for LuaLoader {
             };
 
             if in_flight {
-                eprintln!(
-                    "[polyplug_lua] unload of bundle {:#x} deferred: a dispatch is in flight on this VM; retiring its state to avoid a use-after-free",
-                    bundle_id.id()
-                );
+                runtime.logger().log(LogLevel::Warn, "loader.lua", || {
+                    format!(
+                        "unload of bundle {:#x} deferred: a dispatch is in flight on this VM; retiring its state to avoid a use-after-free",
+                        bundle_id.id()
+                    )
+                });
                 self.retire_vm_state(vec![data]);
             } else {
                 // Quiescent: dropping `data` drops the cloned `Lua` handle. The VM is
@@ -1203,6 +1221,7 @@ end
             functions,
             in_dispatch_threads: Mutex::new(Vec::new()),
             dispatch_lock: Mutex::new(()),
+            logger: LoggerHandle::default_stderr(),
         });
         let ptr: *mut LuaLoaderData = Box::into_raw(boxed);
         // SAFETY: ptr was just produced by Box::into_raw and is never freed in the

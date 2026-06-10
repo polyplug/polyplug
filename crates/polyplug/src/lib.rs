@@ -5,7 +5,7 @@ pub mod error;
 pub mod ffi;
 pub mod host_bridge;
 pub mod loader;
-pub(crate) mod logger;
+pub mod logger;
 pub mod reload;
 pub mod runtime;
 pub mod runtime_builder;

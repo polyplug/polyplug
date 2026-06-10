@@ -1,6 +1,9 @@
 //! DotnetContext — CLR runtime context, cached across all plugin loads.
 
 use std::fs;
+
+use polyplug::logger::LoggerHandle;
+use polyplug_abi::types::LogLevel;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -112,6 +115,7 @@ pub(crate) static CLR_CONTEXT: OnceCell<Arc<DotnetContext>> = OnceCell::new();
 pub(crate) fn init_context(
     config: &DotnetConfig,
     bundle_dir: &std::path::Path,
+    logger: LoggerHandle,
 ) -> Result<Arc<DotnetContext>, RuntimeError> {
     // Step 1: Parse version from "net10.0" → "10.0" → "10.0.0"
     let ver_str: &str = config
@@ -190,7 +194,7 @@ pub(crate) fn init_context(
     // implementation does — and call Hostfxr::load_from_path() directly.
     let hostfxr: netcorehost::hostfxr::Hostfxr = match &config.hostfxr {
         HostfxrLocation::Auto => {
-            let fxr_path: PathBuf = find_hostfxr_auto().ok_or_else(|| {
+            let fxr_path: PathBuf = find_hostfxr_auto(logger).ok_or_else(|| {
                 RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: "<hostfxr>".to_owned(),
                     error: "CLR init failed: hostfxr not found; install .NET or set DOTNET_ROOT"
@@ -555,7 +559,7 @@ fn bridge_pdc(s: &str) -> Result<PdCString, RuntimeError> {
 ///    `/usr/share/dotnet` / `/usr/lib/dotnet` / `~/.dotnet` on Unix)
 ///
 /// Within each candidate dotnet root, picks the highest-version `host/fxr/<ver>/libhostfxr.so`.
-fn find_hostfxr_auto() -> Option<PathBuf> {
+fn find_hostfxr_auto(logger: LoggerHandle) -> Option<PathBuf> {
     // Build the list of candidate dotnet roots to search.
     let mut roots: Vec<PathBuf> = Vec::new();
 
@@ -601,7 +605,7 @@ fn find_hostfxr_auto() -> Option<PathBuf> {
     // For each root, look for host/fxr/<version>/libhostfxr.so and pick the
     // highest version found.
     for root in &roots {
-        if let Some(fxr_path) = highest_version_hostfxr(root) {
+        if let Some(fxr_path) = highest_version_hostfxr(root, logger) {
             return Some(fxr_path);
         }
     }
@@ -612,7 +616,7 @@ fn find_hostfxr_auto() -> Option<PathBuf> {
 /// Within `<dotnet_root>/host/fxr/`, enumerate version subdirectories and return
 /// the path to `libhostfxr.so` (or `hostfxr.dll` on Windows) inside the highest
 /// version found. Returns `None` if the directory does not exist or is empty.
-fn highest_version_hostfxr(dotnet_root: &std::path::Path) -> Option<PathBuf> {
+fn highest_version_hostfxr(dotnet_root: &std::path::Path, logger: LoggerHandle) -> Option<PathBuf> {
     let fxr_dir: PathBuf = dotnet_root.join("host").join("fxr");
     if !fxr_dir.is_dir() {
         return None;
@@ -621,13 +625,14 @@ fn highest_version_hostfxr(dotnet_root: &std::path::Path) -> Option<PathBuf> {
     // Collect all subdirectory names that look like version strings.
     let mut versions: Vec<(Vec<u64>, PathBuf)> = Vec::new();
     let entries: fs::ReadDir = fs::read_dir(&fxr_dir)
-        .map_err(|e| {
-            eprintln!(
-                "[polyplug_dotnet] highest_version_hostfxr: failed to read dir '{}': {}",
-                fxr_dir.display(),
-                e
-            );
-            e
+        .map_err(|e: std::io::Error| {
+            logger.log(LogLevel::Error, "loader.dotnet", || {
+                format!(
+                    "highest_version_hostfxr: failed to read dir '{}': {}",
+                    fxr_dir.display(),
+                    e
+                )
+            });
         })
         .ok()?;
     for entry in entries.flatten() {

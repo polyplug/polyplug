@@ -16,7 +16,9 @@ use polyplug::Runtime;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
+use polyplug::logger::LoggerHandle;
 use polyplug_abi::HostApi;
+use polyplug_abi::types::LogLevel;
 
 use crate::context::CLR_CONTEXT;
 use crate::context::DotnetContext;
@@ -57,8 +59,9 @@ impl DotnetLoader {
         // Dependencies have no bundle directory; the CLR probing path is irrelevant here, so
         // an empty path is passed for the (already-initialized) context lookup. The dependency
         // is loaded into `bundle_id`'s collectible ALC so it is reclaimed when that bundle is.
-        let context: Arc<DotnetContext> =
-            Arc::clone(CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, Path::new("")))?);
+        let context: Arc<DotnetContext> = Arc::clone(CLR_CONTEXT.get_or_try_init(|| {
+            init_context(&self.config, Path::new(""), LoggerHandle::default_stderr())
+        })?);
         context.preload_dependency_bytes(bundle_id, dep_bytes)
     }
 
@@ -73,6 +76,7 @@ impl DotnetLoader {
         &self,
         manifest: &polyplug::loader::ManifestData,
         bundle_dir: &Path,
+        logger: LoggerHandle,
     ) -> Result<(InitFn, String), RuntimeError> {
         let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
             manifest.path.join(&manifest.file)
@@ -93,7 +97,7 @@ impl DotnetLoader {
         }
 
         let tfm: String = crate::version::read_target_framework(&bundle_path)?;
-        check_version_compatibility(&tfm, &self.config.min_framework)?;
+        check_version_compatibility(&tfm, &self.config.min_framework, logger)?;
 
         let abs_path: std::path::PathBuf = bundle_path.canonicalize().map_err(|_| {
             RuntimeError::Loader(LoaderError::InitFailed {
@@ -105,8 +109,9 @@ impl DotnetLoader {
             })
         })?;
 
-        let context: Arc<DotnetContext> =
-            Arc::clone(CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir))?);
+        let context: Arc<DotnetContext> = Arc::clone(
+            CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir, logger))?,
+        );
 
         let stem: std::borrow::Cow<'_, str> =
             abs_path.file_stem().unwrap_or_default().to_string_lossy();
@@ -147,6 +152,7 @@ impl DotnetLoader {
         manifest: &polyplug::loader::ManifestData,
         bundle_dir: &Path,
         bytes: &[u8],
+        logger: LoggerHandle,
     ) -> Result<(InitFn, String), RuntimeError> {
         if manifest.file.is_empty() {
             return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
@@ -165,10 +171,11 @@ impl DotnetLoader {
         }
 
         let tfm: String = crate::version::target_framework_from_bytes(bytes, &bundle_name)?;
-        check_version_compatibility(&tfm, &self.config.min_framework)?;
+        check_version_compatibility(&tfm, &self.config.min_framework, logger)?;
 
-        let context: Arc<DotnetContext> =
-            Arc::clone(CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir))?);
+        let context: Arc<DotnetContext> = Arc::clone(
+            CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir, logger))?,
+        );
 
         // The bridge resolves `{name}.Plugin` directly from the byte-loaded Assembly object.
         let simple_type_name: String = format!("{bundle_name}.Plugin");
@@ -191,6 +198,7 @@ pub fn bundle_alc_alive(bundle_id: u64) -> Result<bool, RuntimeError> {
 pub(crate) fn check_version_compatibility(
     tfm: &str,
     min_framework: &str,
+    logger: LoggerHandle,
 ) -> Result<(), RuntimeError> {
     if tfm.is_empty() {
         return Ok(());
@@ -252,9 +260,9 @@ pub(crate) fn check_version_compatibility(
         }));
     }
     if found_minor > required_minor + 2 {
-        eprintln!(
-            "polyplug_dotnet: warning: assembly TFM {tfm} has higher minor version than required {min_framework}"
-        );
+        logger.log(LogLevel::Warn, "loader.dotnet", || {
+            format!("assembly TFM {tfm} has higher minor version than required {min_framework}")
+        });
     }
     Ok(())
 }
@@ -287,10 +295,10 @@ impl BundleLoader for DotnetLoader {
                 }));
             }
             polyplug::loader::BundleSource::Path(_) => {
-                self.resolve_init_from_path(manifest, bundle_dir)?
+                self.resolve_init_from_path(manifest, bundle_dir, runtime.logger())?
             }
             polyplug::loader::BundleSource::Bytes(bytes) => {
-                self.resolve_init_from_bytes(manifest, bundle_dir, bytes)?
+                self.resolve_init_from_bytes(manifest, bundle_dir, bytes, runtime.logger())?
             }
         };
 
@@ -384,19 +392,23 @@ mod tests {
     use polyplug::error::LoaderError;
     use polyplug::error::RuntimeError;
 
+    use polyplug::logger::LoggerHandle;
+
     use super::check_version_compatibility;
 
     // --- empty TFM (non-.NET DLL) is always compatible ---
 
     #[test]
     fn empty_tfm_always_ok() {
-        let result: Result<(), RuntimeError> = check_version_compatibility("", "net10.0");
+        let result: Result<(), RuntimeError> =
+            check_version_compatibility("", "net10.0", LoggerHandle::default_stderr());
         assert!(result.is_ok(), "empty TFM must be unconditionally accepted");
     }
 
     #[test]
     fn empty_tfm_empty_min_framework_ok() {
-        let result: Result<(), RuntimeError> = check_version_compatibility("", "");
+        let result: Result<(), RuntimeError> =
+            check_version_compatibility("", "", LoggerHandle::default_stderr());
         assert!(result.is_ok());
     }
 
@@ -404,24 +416,33 @@ mod tests {
 
     #[test]
     fn same_major_version_ok() {
-        let result: Result<(), RuntimeError> =
-            check_version_compatibility(".NETCoreApp,Version=v6.0", "net6.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility(
+            ".NETCoreApp,Version=v6.0",
+            "net6.0",
+            LoggerHandle::default_stderr(),
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn same_major_minor_within_window_ok() {
         // found minor (2) == required minor (0) + 2 → at the boundary → ok (not a warning trigger)
-        let result: Result<(), RuntimeError> =
-            check_version_compatibility(".NETCoreApp,Version=v6.2", "net6.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility(
+            ".NETCoreApp,Version=v6.2",
+            "net6.0",
+            LoggerHandle::default_stderr(),
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn higher_minor_beyond_window_still_ok() {
         // found minor (5) > required minor (0) + 2 → triggers eprintln warning but still Ok
-        let result: Result<(), RuntimeError> =
-            check_version_compatibility(".NETCoreApp,Version=v6.5", "net6.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility(
+            ".NETCoreApp,Version=v6.5",
+            "net6.0",
+            LoggerHandle::default_stderr(),
+        );
         assert!(
             result.is_ok(),
             "version compat still succeeds despite minor warning"
@@ -430,8 +451,11 @@ mod tests {
 
     #[test]
     fn net7_assembly_against_net6_requirement_fails() {
-        let result: Result<(), RuntimeError> =
-            check_version_compatibility(".NETCoreApp,Version=v7.0", "net6.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility(
+            ".NETCoreApp,Version=v7.0",
+            "net6.0",
+            LoggerHandle::default_stderr(),
+        );
         match result {
             Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
                 assert_eq!(bundle, "net6.0");
@@ -445,8 +469,11 @@ mod tests {
 
     #[test]
     fn net6_assembly_against_net7_requirement_fails() {
-        let result: Result<(), RuntimeError> =
-            check_version_compatibility(".NETCoreApp,Version=v6.0", "net7.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility(
+            ".NETCoreApp,Version=v6.0",
+            "net7.0",
+            LoggerHandle::default_stderr(),
+        );
         match result {
             Err(RuntimeError::Loader(LoaderError::InitFailed { .. })) => {}
             other => panic!("expected InitFailed, got {other:?}"),
@@ -455,8 +482,11 @@ mod tests {
 
     #[test]
     fn net10_assembly_against_net10_requirement_ok() {
-        let result: Result<(), RuntimeError> =
-            check_version_compatibility(".NETCoreApp,Version=v10.0", "net10.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility(
+            ".NETCoreApp,Version=v10.0",
+            "net10.0",
+            LoggerHandle::default_stderr(),
+        );
         assert!(result.is_ok());
     }
 
@@ -464,13 +494,15 @@ mod tests {
     fn tfm_without_prefix_parsed_as_raw_version() {
         // When no ".NETCoreApp,Version=v" prefix is present, the TFM is parsed directly.
         // "6.0" should parse as major=6 against net6.0 → ok.
-        let result: Result<(), RuntimeError> = check_version_compatibility("6.0", "net6.0");
+        let result: Result<(), RuntimeError> =
+            check_version_compatibility("6.0", "net6.0", LoggerHandle::default_stderr());
         assert!(result.is_ok());
     }
 
     #[test]
     fn tfm_without_prefix_major_mismatch_fails() {
-        let result: Result<(), RuntimeError> = check_version_compatibility("7.0", "net6.0");
+        let result: Result<(), RuntimeError> =
+            check_version_compatibility("7.0", "net6.0", LoggerHandle::default_stderr());
         match result {
             Err(RuntimeError::Loader(LoaderError::InitFailed { .. })) => {}
             other => panic!("expected InitFailed, got {other:?}"),
@@ -482,8 +514,11 @@ mod tests {
     #[test]
     fn invalid_min_framework_non_numeric_major_returns_error() {
         // min_framework with non-numeric major after stripping "net" prefix.
-        let result: Result<(), RuntimeError> =
-            check_version_compatibility(".NETCoreApp,Version=v6.0", "netXYZ.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility(
+            ".NETCoreApp,Version=v6.0",
+            "netXYZ.0",
+            LoggerHandle::default_stderr(),
+        );
         match result {
             Err(RuntimeError::Loader(LoaderError::InitFailed { .. })) => {}
             other => panic!("expected InitFailed, got {other:?}"),
@@ -493,8 +528,11 @@ mod tests {
     #[test]
     fn invalid_tfm_non_numeric_major_returns_error() {
         // TFM with non-numeric major after stripping ".NETCoreApp,Version=v" prefix.
-        let result: Result<(), RuntimeError> =
-            check_version_compatibility(".NETCoreApp,Version=vBAD.0", "net6.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility(
+            ".NETCoreApp,Version=vBAD.0",
+            "net6.0",
+            LoggerHandle::default_stderr(),
+        );
         match result {
             Err(RuntimeError::Loader(LoaderError::InitFailed { .. })) => {}
             other => panic!("expected InitFailed, got {other:?}"),
@@ -505,8 +543,11 @@ mod tests {
     fn min_framework_missing_major_returns_error() {
         // Empty string after stripping "net" prefix — next() returns None → error.
         // Input: "net" alone after strip_prefix gives "", split('.').next() = Some("") which parse fails.
-        let result: Result<(), RuntimeError> =
-            check_version_compatibility(".NETCoreApp,Version=v6.0", "net");
+        let result: Result<(), RuntimeError> = check_version_compatibility(
+            ".NETCoreApp,Version=v6.0",
+            "net",
+            LoggerHandle::default_stderr(),
+        );
         match result {
             Err(RuntimeError::Loader(LoaderError::InitFailed { .. })) => {}
             other => panic!("expected InitFailed, got {other:?}"),
@@ -516,16 +557,22 @@ mod tests {
     #[test]
     fn min_framework_no_minor_version_defaults_to_zero() {
         // "net6" has no minor component — minor defaults to 0.
-        let result: Result<(), RuntimeError> =
-            check_version_compatibility(".NETCoreApp,Version=v6.0", "net6");
+        let result: Result<(), RuntimeError> = check_version_compatibility(
+            ".NETCoreApp,Version=v6.0",
+            "net6",
+            LoggerHandle::default_stderr(),
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn tfm_no_minor_version_defaults_to_zero() {
         // TFM with no minor component — found minor defaults to 0.
-        let result: Result<(), RuntimeError> =
-            check_version_compatibility(".NETCoreApp,Version=v6", "net6.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility(
+            ".NETCoreApp,Version=v6",
+            "net6.0",
+            LoggerHandle::default_stderr(),
+        );
         assert!(result.is_ok());
     }
 }

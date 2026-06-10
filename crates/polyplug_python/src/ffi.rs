@@ -5,6 +5,8 @@
 use core::ffi::c_void;
 
 use polyplug::loader::BundleLoader;
+use polyplug::logger::LoggerHandle;
+use polyplug_abi::types::LogLevel;
 
 use crate::{PythonLoader, config::PythonConfig};
 
@@ -83,28 +85,28 @@ pub unsafe extern "C" fn polyplug_python_loader_free(ptr: *mut c_void) {
     };
 }
 
+/// Parse `"major.minor"`. Runs inside the C FFI loader-create entry point,
+/// BEFORE any `Runtime` (and therefore any host logger) exists — diagnostics
+/// can only go to the pre-runtime default sink (stderr, Error/Warn).
 fn parse_version(s: &str) -> Option<(u32, u32)> {
+    let logger: LoggerHandle = LoggerHandle::default_stderr();
     let mut parts = s.splitn(2, '.');
     let major_str: &str = parts.next()?;
     let major: u32 = major_str
         .parse()
-        .map_err(|e| {
-            eprintln!(
-                "[polyplug_python] parse_version: failed to parse major '{}' as u32: {}",
-                major_str, e
-            );
-            e
+        .map_err(|e: std::num::ParseIntError| {
+            logger.log(LogLevel::Error, "loader.python", || {
+                format!("parse_version: failed to parse major '{major_str}' as u32: {e}")
+            });
         })
         .ok()?;
     let minor_str: &str = parts.next()?;
     let minor: u32 = minor_str
         .parse()
-        .map_err(|e| {
-            eprintln!(
-                "[polyplug_python] parse_version: failed to parse minor '{}' as u32: {}",
-                minor_str, e
-            );
-            e
+        .map_err(|e: std::num::ParseIntError| {
+            logger.log(LogLevel::Error, "loader.python", || {
+                format!("parse_version: failed to parse minor '{minor_str}' as u32: {e}")
+            });
         })
         .ok()?;
     Some((major, minor))

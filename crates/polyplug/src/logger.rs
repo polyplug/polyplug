@@ -28,7 +28,7 @@ use polyplug_abi::types::{LogLevel, StringView};
 /// Cheap to copy into components that have no back-reference to the
 /// [`crate::runtime::Runtime`] (e.g. [`crate::runtime_store::RuntimeStore`]).
 #[derive(Clone, Copy)]
-pub(crate) struct LoggerHandle {
+pub struct LoggerHandle {
     /// Host-supplied logger callback, or `None` for the stderr default.
     callback: Option<unsafe extern "C" fn(*mut c_void, u32, StringView, StringView)>,
     /// Opaque host pointer forwarded as the callback's first argument.
@@ -51,7 +51,7 @@ unsafe impl Sync for LoggerHandle {}
 
 impl LoggerHandle {
     /// Handle with no host callback: Error/Warn go to stderr, all else dropped.
-    pub(crate) const fn default_stderr() -> LoggerHandle {
+    pub const fn default_stderr() -> LoggerHandle {
         LoggerHandle {
             callback: None,
             user_data: core::ptr::null_mut(),
@@ -94,7 +94,7 @@ impl LoggerHandle {
     /// state of its own while the runtime holds a lock is still a deadlock
     /// hazard, and the documented callback contract assumes lock-free entry.
     /// Poison-recovery sites use [`RecoveringGuard`] to satisfy this.
-    pub(crate) fn log<F>(&self, level: LogLevel, scope: &str, message: F)
+    pub fn log<F>(&self, level: LogLevel, scope: &str, message: F)
     where
         F: FnOnce() -> String,
     {
@@ -165,7 +165,7 @@ pub(crate) struct LoggerClosure(pub(crate) Box<dyn LogSink>);
 /// runtime lock, which the lock rule forbids. This wrapper records the
 /// recovery and emits the Warn-level log from `Drop`, strictly after the inner
 /// guard has been released.
-pub(crate) struct RecoveringGuard<G> {
+pub struct RecoveringGuard<G> {
     /// The recovered (or clean) lock guard. `ManuallyDrop` so `Drop` can
     /// release the lock BEFORE emitting the deferred recovery log.
     guard: ManuallyDrop<G>,
@@ -179,7 +179,7 @@ impl<G> RecoveringGuard<G> {
     /// On poison, the inner guard is extracted via `PoisonError::into_inner`
     /// and a Warn-level recovery log is scheduled for emission after the guard
     /// drops.
-    pub(crate) fn new(
+    pub fn new(
         result: Result<G, PoisonError<G>>,
         logger: LoggerHandle,
         scope: &'static str,
@@ -232,7 +232,7 @@ impl<G> Drop for RecoveringGuard<G> {
 ///
 /// Suffix-form convenience for the ubiquitous
 /// `lock().recover_poisoned(logger, scope)` acquisition pattern.
-pub(crate) trait RecoverPoisoned<G> {
+pub trait RecoverPoisoned<G> {
     /// See [`RecoveringGuard::new`].
     fn recover_poisoned(self, logger: LoggerHandle, scope: &'static str) -> RecoveringGuard<G>;
 }

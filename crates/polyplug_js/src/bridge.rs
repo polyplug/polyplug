@@ -326,10 +326,8 @@ impl RuntimeLanguageBridge for JsHostBridge {
                 message: StringView::null(),
             },
             Err(e) => {
-                // Print JS error for debugging
-                eprintln!("[polyplug_js] JS host contract call failed: {}", e);
-
-                // Return error with message
+                // The full JS error detail propagates to the caller in the
+                // AbiError message below; no side-channel print.
                 let message: String = format!("JavaScript exception: {}", e);
                 // SAFETY: We leak the message string to create a 'static StringView.
                 // This is acceptable because:
