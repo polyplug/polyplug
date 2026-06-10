@@ -576,21 +576,27 @@ fn bytes_source_loads_fixture_and_dispatches() {
     let bytes: Vec<u8> = std::fs::read(&dll).expect("failed to read fixture dll");
     let bundle_dir: &Path = dll.parent().expect("fixture dll must have a parent dir");
 
-    // The fixture is NOT self-contained: CsharpPlugin.dll references Polyplug.Abi. Pre-load
-    // that dependency from bytes into the SAME bundle's collectible ALC (keyed by bundle id)
-    // so the in-memory plugin can resolve it. CLR_CONTEXT is process-global, so this standalone
-    // loader and the runtime's loader (built below) share the same context + byte bridge.
+    // The fixture is NOT self-contained: CsharpPlugin.dll references Polyplug.Abi and
+    // Polyplug.Guest. Pre-load those dependencies from bytes into the SAME bundle's
+    // collectible ALC (keyed by bundle id) so the in-memory plugin can resolve them.
+    // CLR_CONTEXT is process-global, so this standalone loader and the runtime's loader
+    // (built below) share the same context + byte bridge.
     let manifest: ManifestData = make_csharp_fixture_manifest(bundle_dir);
-    let abi_dll: PathBuf = bundle_dir.join("Polyplug.Abi.dll");
-    if !abi_dll.exists() {
-        eprintln!("skipping: Polyplug.Abi.dll dependency not built next to fixture");
-        return;
-    }
-    let abi_bytes: Vec<u8> = std::fs::read(&abi_dll).expect("failed to read Polyplug.Abi.dll");
     let preloader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
-    preloader
-        .preload_dependency_from_bytes(manifest.id, &abi_bytes)
-        .expect("preload Polyplug.Abi dependency from bytes");
+    for dep_name in ["Polyplug.Abi.dll", "Polyplug.Guest.dll"] {
+        let dep_dll: PathBuf = bundle_dir.join(dep_name);
+        if !dep_dll.exists() {
+            eprintln!("skipping: {dep_name} dependency not built next to fixture");
+            return;
+        }
+        let dep_bytes: Vec<u8> = std::fs::read(&dep_dll)
+            .unwrap_or_else(|e: std::io::Error| panic!("failed to read {dep_name}: {e}"));
+        preloader
+            .preload_dependency_from_bytes(manifest.id, &dep_bytes)
+            .unwrap_or_else(|e: RuntimeError| {
+                panic!("preload {dep_name} dependency from bytes: {e:?}")
+            });
+    }
 
     let runtime: Arc<Runtime> = RuntimeBuilder::new()
         .loader(DotnetLoader::new(DotnetConfig::default()))
@@ -686,16 +692,20 @@ fn load_named_fixture(
     let manifest: ManifestData = make_named_fixture_manifest(bundle_dir, name);
     let bundle_id: u64 = manifest.id;
 
-    let abi_dll: PathBuf = bundle_dir.join("Polyplug.Abi.dll");
-    if !abi_dll.exists() {
-        eprintln!("skipping: Polyplug.Abi.dll dependency not built next to fixture");
-        return None;
+    // Preload the shared dependencies into THIS bundle's collectible ALC (same bundle id).
+    let preloader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
+    for dep_name in ["Polyplug.Abi.dll", "Polyplug.Guest.dll"] {
+        let dep_dll: PathBuf = bundle_dir.join(dep_name);
+        if !dep_dll.exists() {
+            eprintln!("skipping: {dep_name} dependency not built next to fixture");
+            return None;
+        }
+        let dep_bytes: Vec<u8> = std::fs::read(&dep_dll)
+            .unwrap_or_else(|e: std::io::Error| panic!("failed to read {dep_name}: {e}"));
+        preloader
+            .preload_dependency_from_bytes(bundle_id, &dep_bytes)
+            .unwrap_or_else(|e: RuntimeError| panic!("preload {dep_name} dependency: {e:?}"));
     }
-    let abi_bytes: Vec<u8> = std::fs::read(&abi_dll).expect("failed to read Polyplug.Abi.dll");
-    // Preload the shared dependency into THIS bundle's collectible ALC (same bundle id).
-    DotnetLoader::new(DotnetConfig::default())
-        .preload_dependency_from_bytes(bundle_id, &abi_bytes)
-        .expect("preload Polyplug.Abi dependency");
 
     let runtime: Arc<Runtime> = RuntimeBuilder::new()
         .loader(DotnetLoader::new(DotnetConfig::default()))

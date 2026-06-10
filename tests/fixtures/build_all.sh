@@ -109,9 +109,12 @@ for entry in "${CPP_FIXTURES[@]}"; do
 done
 
 # C# fixture. Tolerated because dotnet may be unavailable, but report clearly.
+# Debug config: tests/integration/build.rs and crates/polyplug_dotnet/tests both
+# read bin/Debug/net10.0/CsharpPlugin.dll — building any other config leaves the
+# dotnet integration tests silently skipping on a clean checkout.
 if command -v dotnet &>/dev/null; then
     echo "Building C# csharp_plugin..."
-    if ! ( cd "${SCRIPT_DIR}/csharp_plugin" && dotnet build -c Release ); then
+    if ! ( cd "${SCRIPT_DIR}/csharp_plugin" && dotnet build -c Debug ); then
         echo "  WARNING: C# csharp_plugin build failed (continuing)." >&2
     fi
 else

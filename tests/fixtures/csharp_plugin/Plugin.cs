@@ -1,8 +1,11 @@
 // C# test plugin for polyplug benchmarks and integration tests.
 // Exposes a simple "test.add" contract with add, add_primitive, version, and reset functions.
+// reset additionally logs through the guest SDK's PolyplugHost.Log so the host-side
+// integration suite can prove a real .NET guest log reaches a host-installed logger.
 
 using System.Runtime.InteropServices;
 using Polyplug.Abi;
+using Polyplug.Guest;
 
 namespace CsharpPlugin;
 
@@ -109,6 +112,10 @@ public static class Plugin
     [UnmanagedCallersOnly]
     public static AbiError Reset(nint args, nint result)
     {
+        // Deterministic guest→host log probe: routes through HostApi.Log via the
+        // host pointer stored by PolyplugInit. Non-ASCII characters prove the
+        // UTF-16 → UTF-8 boundary transcode. A no-op when no host is stored.
+        PolyplugHost.Log(LogLevel.Info, "guest.csharp_test_adder", "héllo from .NET ✓");
         return new AbiError { Code = (uint)AbiErrorCode.Ok };
     }
 
@@ -119,6 +126,8 @@ public static class Plugin
         {
             if (hostPtr == nint.Zero)
                 return 1;
+
+            RuntimeAbiStorage.StoreRuntimeAbi(hostPtr);
 
             var host = (HostApi*)hostPtr;
 

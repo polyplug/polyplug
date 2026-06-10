@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../../sdks/csharp/abi/Polyplug.Abi.csproj" />
+    <ProjectReference Include="../../../sdks/csharp/guest/Polyplug.Guest.csproj" />
   </ItemGroup>
 
   <ItemGroup>

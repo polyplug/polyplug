@@ -12,13 +12,16 @@ use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::LogLevel;
 use polyplug_abi::StringView;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
 use polyplug_utils::BundleId;
+use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 /// Path to the compiled C# fixture DLL — set by build.rs.
 /// Value is "DOTNET_NOT_AVAILABLE" if dotnet is not installed.
@@ -253,6 +256,121 @@ fn integration_dotnet_reset() {
         result.code,
         AbiErrorCode::Ok as u32,
         "reset must return AbiErrorCode::Ok"
+    );
+}
+
+/// End-to-end guest logging: the C# fixture's `reset` calls the guest SDK's
+/// `PolyplugHost.Log`, which transcodes UTF-16 → UTF-8, crosses `HostApi.log`
+/// through the host pointer stored by `RuntimeAbiStorage.StoreRuntimeAbi`
+/// during `PolyplugInit`, and lands verbatim in the host logger installed via
+/// `RuntimeBuilder::logger`.
+///
+/// The fixture is loaded as a COPY under a unique bundle name. The .NET bridge
+/// keys collectible AssemblyLoadContexts by bundle id process-wide (the CLR is
+/// once-per-process), so every test loading the shared fixture shares ONE
+/// assembly instance — and the `RuntimeAbiStorage` static is last-writer-wins
+/// across the parallel loads the sibling tests perform. A unique bundle id gets
+/// its own ALC with fresh statics, so the stored host pointer is
+/// deterministically this runtime's.
+#[test]
+fn integration_dotnet_guest_log_routes_to_host_logger() {
+    skip_if_no_dotnet!();
+
+    // Stage the bundle copy: every assembly artifact (.dll + .deps.json — the
+    // resolver needs deps.json to find Polyplug.Guest.dll / Polyplug.Abi.dll
+    // next to the main assembly) plus a manifest with a unique bundle name.
+    let fixture_dir: &std::path::Path = std::path::Path::new(CSHARP_DLL)
+        .parent()
+        .expect("fixture DLL path must have a parent directory");
+    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    for entry in std::fs::read_dir(fixture_dir).expect("read fixture dir") {
+        let entry: std::fs::DirEntry = entry.expect("fixture dir entry");
+        let path: std::path::PathBuf = entry.path();
+        let is_assembly_artifact: bool = matches!(
+            path.extension().and_then(|e: &std::ffi::OsStr| e.to_str()),
+            Some("dll") | Some("json")
+        );
+        if is_assembly_artifact {
+            std::fs::copy(&path, tmp.path().join(entry.file_name()))
+                .expect("copy fixture artifact");
+        }
+    }
+    let id_val: u64 = bundle_id("csharp_log_adder");
+    let manifest: String = format!(
+        "name = \"csharp_log_adder\"\n\
+         id = {id_val}\n\
+         version = \"1.0.0\"\n\
+         runtime = \"dotnet\"\n\
+         file = \"CsharpPlugin.dll\"\n\
+         provides = [\"test.add@1\"]\n\n\
+         [function_count]\n\
+         \"test.add@1\" = 4\n",
+    );
+    std::fs::write(tmp.path().join("manifest.toml"), manifest).expect("write manifest.toml");
+
+    let records: Arc<Mutex<Vec<(LogLevel, String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink: Arc<Mutex<Vec<(LogLevel, String, String)>>> = Arc::clone(&records);
+    let rt: Arc<Runtime> = Runtime::builder()
+        .loader(make_loader())
+        .logger(move |level: LogLevel, scope: &str, message: &str| {
+            sink.lock()
+                .expect("logger mutex must not be poisoned")
+                .push((level, scope.to_owned(), message.to_owned()));
+        })
+        .build()
+        .expect("failed to build runtime");
+    rt.load_bundle(tmp.path())
+        .expect("log fixture bundle must load");
+
+    let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
+    // SAFETY: vtable_ptr valid, CLR keeps assembly loaded.
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    assert!(
+        native_function_count(vtable) >= 4,
+        "test.add vtable must have at least 4 functions"
+    );
+    // function index 3 = reset() — logs (Info, "guest.csharp_test_adder", ...) and ignores args/out
+    // SAFETY: fn_ptr is function 3 (reset). No args; dummy out is acceptable.
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(3) };
+    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+        // SAFETY: same dispatch signature; reset ignores both args and out.
+        unsafe { core::mem::transmute(fn_ptr) };
+    let mut dummy_out: u32 = 0_u32;
+    // SAFETY: null args and dummy_out are safe because reset() ignores both.
+    let result: AbiError = unsafe {
+        dispatch_fn(
+            core::ptr::null::<()>(),
+            &mut dummy_out as *mut u32 as *mut (),
+        )
+    };
+    assert_eq!(
+        result.code,
+        AbiErrorCode::Ok as u32,
+        "reset must return AbiErrorCode::Ok"
+    );
+
+    let captured: Vec<(LogLevel, String, String)> = records
+        .lock()
+        .expect("logger mutex must not be poisoned")
+        .clone();
+    let guest_records: Vec<&(LogLevel, String, String)> = captured
+        .iter()
+        .filter(|(_, scope, _)| scope == "guest.csharp_test_adder")
+        .collect();
+    assert_eq!(
+        guest_records.len(),
+        1,
+        "exactly one guest.csharp_test_adder record expected; got: {captured:?}"
+    );
+    let (level, scope, message): &(LogLevel, String, String) = guest_records[0];
+    assert_eq!(*level, LogLevel::Info, "level must arrive verbatim");
+    assert_eq!(
+        scope, "guest.csharp_test_adder",
+        "scope must arrive verbatim"
+    );
+    assert_eq!(
+        message, "héllo from .NET ✓",
+        "message must arrive verbatim, UTF-16 → UTF-8 transcode intact"
     );
 }
 
