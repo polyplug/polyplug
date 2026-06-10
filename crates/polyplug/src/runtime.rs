@@ -13,6 +13,8 @@
 //!  - No locks in the hot path
 
 use core::str::FromStr;
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -101,6 +103,28 @@ pub struct Runtime {
     /// the outer bundle's id instead of clobbering it. Loaders push before calling
     /// `polyplug_init` and pop afterwards (including the panic path).
     pub(crate) init_bundle_stack: Mutex<HashMap<ThreadId, Vec<u64>>>,
+    /// Fast-path hint: total number of bundle ids currently pushed across all
+    /// threads' init stacks.
+    ///
+    /// Plugin init is a Phase-1 (rare) event; outside it every `find` / `find_all`
+    /// / `get_dependencies` HostApi call would otherwise lock `init_bundle_stack`
+    /// just to observe an empty stack. This counter lets `current_init_bundle_id`
+    /// short-circuit to `0` with a single `Relaxed` atomic load and skip the Mutex
+    /// entirely on that hot path.
+    ///
+    /// # Ordering rationale
+    /// This is a hint only — it never carries data, just gates whether the Mutex is
+    /// taken. When the counter is non-zero the Mutex provides the actual
+    /// synchronization of the per-thread stacks, so `Relaxed` is sufficient here: no
+    /// memory is published or consumed through this atomic. A stale `0` cannot be
+    /// observed for the calling thread's OWN init window because that thread called
+    /// `push_init_bundle_id` (a `fetch_add` plus a Mutex acquisition) earlier on the
+    /// same thread, which happens-before any `current_init_bundle_id` it later runs
+    /// during the plugin's init code — single-thread program order guarantees the
+    /// incremented value is visible to that thread. Other threads' pushes only ever
+    /// make the counter *larger* than this thread needs; the worst case is taking the
+    /// Mutex and finding no entry for this thread (returning `0`), which is correct.
+    pub(crate) active_init_count: AtomicUsize,
 }
 
 impl Runtime {
@@ -231,8 +255,8 @@ impl Runtime {
         Ok(())
     }
 
-    /// Unregister_guest_contract a host contract interface.
-    /// Returns `true` if the contract was register_guest_contracted and removed, `false` if it was not found.
+    /// Unregister a host contract interface.
+    /// Returns `true` if the contract was registered and removed, `false` if it was not found.
     pub fn unregister_host_contract(&self, contract_id: u64) -> bool {
         let mut guard: std::sync::RwLockWriteGuard<
             '_,
@@ -367,11 +391,14 @@ impl Runtime {
     /// Register an additional bundle loader into this runtime after build.
     ///
     /// `loader` must be a `Box<dyn BundleLoader>` produced by a loader cdylib compiled
-    /// against the same polyplug rlib. Ownership is transferred — the caller must not
-    /// free the loader after a successful call.
+    /// against the same polyplug rlib. Ownership is transferred UNCONDITIONALLY: the
+    /// `Box` is consumed (and, on the duplicate-loader error path, dropped) the moment
+    /// this is called. The caller must NOT retain or free the loader afterwards, on
+    /// either success or error — doing so would double-free.
     ///
     /// Returns `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))` if a
-    /// loader for the same runtime name is already register_guest_contracted.
+    /// loader for the same runtime name is already registered. The passed loader is
+    /// still consumed in that case.
     pub fn register_guest_contract_loader(
         &self,
         loader: Box<dyn BundleLoader>,
@@ -432,6 +459,10 @@ impl Runtime {
             .entry(std::thread::current().id())
             .or_default()
             .push(bundle_id);
+        // Bump the fast-path hint AFTER inserting into the stack but while still
+        // holding the Mutex, so the counter and the stack are mutated atomically
+        // with respect to other `push`/`pop` callers. See `active_init_count`.
+        self.active_init_count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Pop the most recent bundle_id from the current thread's init stack.
@@ -445,7 +476,12 @@ impl Runtime {
                 e.into_inner()
             });
         if let Some(thread_stack) = stack.get_mut(&thread_id) {
-            thread_stack.pop();
+            // Only decrement the hint when an entry was actually removed, so the
+            // counter never drifts below the real number of pushed ids. A pop with
+            // no matching entry (unbalanced caller) leaves the counter untouched.
+            if thread_stack.pop().is_some() {
+                self.active_init_count.fetch_sub(1, Ordering::Relaxed);
+            }
             if thread_stack.is_empty() {
                 stack.remove(&thread_id);
             }
@@ -457,6 +493,15 @@ impl Runtime {
     /// Returns 0 when this thread is not inside any plugin init phase (i.e. for
     /// host-side lookups outside the init window).
     pub(crate) fn current_init_bundle_id(&self) -> u64 {
+        // Fast path: no bundle is mid-init anywhere, so this thread certainly has
+        // no stack entry. A single Relaxed load avoids the Mutex on the Phase-2 hot
+        // path (every find / find_all / get_dependencies call). See the
+        // `active_init_count` ordering rationale for why Relaxed is sound: a stale 0
+        // cannot occur for this thread's own init window, and other threads' pushes
+        // only ever make the counter larger.
+        if self.active_init_count.load(Ordering::Relaxed) == 0 {
+            return 0;
+        }
         let thread_id: ThreadId = std::thread::current().id();
         let stack: std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>> =
             self.init_bundle_stack.lock().unwrap_or_else(|e| {
@@ -762,7 +807,7 @@ impl Runtime {
     /// the given [`BundleSource`], and record bundle metadata on success.
     ///
     /// [`BundleSource`]: crate::loader::BundleSource
-    fn load_manifest_with_source(
+    pub(crate) fn load_manifest_with_source(
         &self,
         manifest: ManifestData,
         source: crate::loader::BundleSource,
@@ -853,7 +898,15 @@ impl Runtime {
                 patch: 0,
             });
 
-            // Convert runtime string to RuntimeLanguage
+            // Convert runtime string to RuntimeLanguage. An unrecognized runtime
+            // string falls back to Rust (see `runtime_language_from_str`); surface
+            // that as a warning so a typo'd `runtime` field is not silently coerced.
+            if !is_known_runtime_language(&manifest.runtime) {
+                self.emit_warning(&format!(
+                    "bundle `{}`: unknown runtime `{}`; defaulting RuntimeLanguage to Rust",
+                    manifest.name, manifest.runtime
+                ));
+            }
             let runtime_lang: RuntimeLanguage = runtime_language_from_str(&manifest.runtime);
 
             // Register bundle metadata in RuntimeStore. A failure here means the
@@ -952,18 +1005,28 @@ pub(crate) fn validate_bundle_compatibility(
     compatibility: Compatibility,
     warning_cb: Option<&WarningCallback>,
 ) -> Result<(), RuntimeError> {
-    // Build provider_map: contract_name -> &ManifestData
+    // Build provider_map: bare contract_name -> &ManifestData.
+    //
+    // A `provides` entry may be `name` or `name@version`; dependencies always name
+    // the bare contract. Key the map on the bare name (strip any `@version` suffix)
+    // so a versioned provides entry still resolves a bare-named dependency. This
+    // matches the stripping that `load_manifest_with_source` already applies when
+    // building function_count keys.
     let mut provider_map: HashMap<String, &ManifestData> = HashMap::new();
     for (_path, manifest) in manifests {
         for contract in &manifest.provides {
-            provider_map.insert(contract.clone(), manifest);
+            let bare_contract: &str = match contract.split_once('@') {
+                Some((name, _)) => name,
+                None => contract.as_str(),
+            };
+            provider_map.insert(bare_contract.to_owned(), manifest);
         }
     }
 
     for (path, manifest) in manifests {
         // Check version compatibility for each dependency
-        let resolve_guest_contractd: Vec<ManifestDependency> = manifest.resolved_dependencies();
-        for dep in &resolve_guest_contractd {
+        let resolved: Vec<ManifestDependency> = manifest.resolved_dependencies();
+        for dep in &resolved {
             let (dep_contract, dep_min_version_str): (&str, &str) = match dep {
                 ManifestDependency::ByContract {
                     contract,
@@ -1025,11 +1088,18 @@ pub(crate) fn validate_bundle_compatibility(
 
         // Check function_count entries for provided contracts
         for contract in &manifest.provides {
+            // Strip any `@version` suffix from the provides entry so the
+            // function_count key is `bare_name@major`, identical to the key
+            // `load_manifest_with_source` builds and looks up.
+            let bare_contract: &str = match contract.split_once('@') {
+                Some((name, _)) => name,
+                None => contract.as_str(),
+            };
             let major_str: &str = match manifest.version.split_once('.') {
                 Some((maj, _)) => maj,
                 None => "0",
             };
-            let key: String = format!("{}@{}", contract, major_str);
+            let key: String = format!("{}@{}", bare_contract, major_str);
             if !manifest.function_count.contains_key(&key) {
                 match compatibility {
                     Compatibility::Strict => {
@@ -1107,6 +1177,10 @@ fn host_contract_version_satisfies(interface: &HostContractInterface, min_versio
 }
 
 /// Convert a runtime string from manifest.toml to RuntimeLanguage enum.
+///
+/// An unrecognized string falls back to [`RuntimeLanguage::Rust`]. Callers that want
+/// to flag a typo should first consult [`is_known_runtime_language`] and emit a
+/// warning, since this function cannot distinguish "rust" from a misspelling.
 fn runtime_language_from_str(s: &str) -> RuntimeLanguage {
     match s {
         "native" | "rust" => RuntimeLanguage::Rust,
@@ -1117,6 +1191,16 @@ fn runtime_language_from_str(s: &str) -> RuntimeLanguage {
         "cpp" => RuntimeLanguage::Cpp,
         _ => RuntimeLanguage::Rust,
     }
+}
+
+/// Returns `true` iff `s` is a runtime string [`runtime_language_from_str`] maps
+/// explicitly (i.e. NOT via its catch-all Rust fallback). Used to warn on an unknown
+/// `runtime` field before it is silently coerced to Rust.
+fn is_known_runtime_language(s: &str) -> bool {
+    matches!(
+        s,
+        "native" | "rust" | "python" | "lua" | "javascript" | "js" | "dotnet" | "csharp" | "cpp"
+    )
 }
 
 /// Convert a `StringView` to an owned, strictly-validated UTF-8 `String`.
@@ -1165,6 +1249,25 @@ pub(crate) unsafe extern "C" fn host_register_guest_contract(
             message: polyplug_abi::types::StringView::null(),
         };
     }
+    // Guard both plugin-provided pointers before any dereference. `descriptor` is
+    // read below and `interface` is dereferenced inside the registry; a null in
+    // either is a contract violation that must not become UB.
+    if descriptor.is_null() {
+        return polyplug_abi::types::AbiError {
+            code: polyplug_abi::types::AbiErrorCode::InvalidPointer as u32,
+            message: polyplug_abi::types::StringView::from_static(
+                b"register_guest_contract: descriptor pointer is null",
+            ),
+        };
+    }
+    if interface.is_null() {
+        return polyplug_abi::types::AbiError {
+            code: polyplug_abi::types::AbiErrorCode::InvalidPointer as u32,
+            message: polyplug_abi::types::StringView::from_static(
+                b"register_guest_contract: interface pointer is null",
+            ),
+        };
+    }
     // SAFETY: this is a valid HostApi pointer passed during polyplug_init.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
@@ -1173,7 +1276,8 @@ pub(crate) unsafe extern "C" fn host_register_guest_contract(
     // before calling polyplug_init).
     let bundle_id: u64 = runtime.current_init_bundle_id();
 
-    // SAFETY: descriptor is provided by the plugin's polyplug_init function
+    // SAFETY: descriptor is non-null (checked above) and provided by the plugin's
+    // polyplug_init function.
     let desc: PluginDescriptor = unsafe { *descriptor };
 
     if desc.contract_name.ptr.is_null() || desc.contract_name.len == 0 {
@@ -1312,34 +1416,40 @@ pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
         return Array::empty();
     }
 
-    // First, count matching contracts
-    let count = registry.count_guest_contracts(GuestContractId::from_u64(contract_id), min_version);
+    // Count AND collect under a SINGLE registry read guard. Splitting the count
+    // and the fill across two guards is unsound: a concurrent unload shrinking the
+    // registry between them would make the allocation size disagree with the
+    // returned `Array.len`, and the SDK-side free (`len * sizeof(T)`) would then
+    // deallocate with a layout differing from the allocation (UB). `vec.len()` is
+    // therefore the single source of truth for both the allocation and `Array.len`.
+    let handles: Vec<GuestContractHandle> =
+        registry.collect_guest_contracts(GuestContractId::from_u64(contract_id), min_version);
 
-    if count == 0 {
+    if handles.is_empty() {
         return Array::empty();
     }
 
-    // Allocate via host allocator
-    let size = count * core::mem::size_of::<GuestContractHandle>();
-    let align = core::mem::align_of::<GuestContractHandle>();
-    // SAFETY: host_alloc is safe to call from unsafe context
-    let ptr = unsafe { host_alloc(this, size, align) as *mut GuestContractHandle };
+    // Allocate via the host allocator, sized to exactly the collected handles.
+    let count: usize = handles.len();
+    let size: usize = count * core::mem::size_of::<GuestContractHandle>();
+    let align: usize = core::mem::align_of::<GuestContractHandle>();
+    // SAFETY: host_alloc is safe to call from this unsafe context.
+    let ptr: *mut GuestContractHandle =
+        unsafe { host_alloc(this, size, align) as *mut GuestContractHandle };
 
     if ptr.is_null() {
         return Array::empty();
     }
 
-    // Fill array with matching handles
+    // Copy the collected handles into the host-allocated buffer.
     // SAFETY: ptr was allocated by host_alloc with size = count * size_of::<GuestContractHandle>()
-    // and is valid for `count` elements. count > 0 is guaranteed by the empty check above.
-    let slice = unsafe { core::slice::from_raw_parts_mut(ptr, count) };
-    let actual = registry.find_all_guest_contracts_into(
-        GuestContractId::from_u64(contract_id),
-        min_version,
-        slice,
-    );
+    // and is valid for `count` elements; `handles` holds exactly `count` initialised
+    // elements; source and destination are distinct allocations (non-overlapping).
+    unsafe {
+        core::ptr::copy_nonoverlapping(handles.as_ptr(), ptr, count);
+    }
 
-    Array::new(ptr, actual)
+    Array::new(ptr, count)
 }
 
 /// HostApi.resolve_guest_contract callback — returns interface pointer for a handle.
@@ -1400,6 +1510,13 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
 
     match interface {
         Some(interface) => {
+            // `interface` is `&'static` (it was `.copied()` out of the guard), so it
+            // stays valid after the guard is dropped. Release the `host_contracts`
+            // read guard BEFORE invoking `create_instance`: that callback may itself
+            // call back into `register_host_contract`, which takes the `host_contracts`
+            // WRITE lock — holding the read guard across it would deadlock.
+            drop(host_contracts_guard);
+
             if interface.singleton {
                 // Singleton: check cache first
                 let singleton_guard = runtime.singleton_instances.read().unwrap_or_else(|e| {
@@ -1410,7 +1527,6 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
                     return instance;
                 }
                 drop(singleton_guard);
-                drop(host_contracts_guard);
 
                 // Create singleton and cache it
                 let mut singleton_guard = runtime.singleton_instances.write().unwrap_or_else(|e| {
@@ -1429,7 +1545,12 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
                         core::ptr::null(),
                     )
                 };
-                singleton_guard.insert(contract_id, instance);
+                // Never cache a NULL instance: creation failed, so leave the cache
+                // empty and let a later call retry. Caching null would poison the
+                // singleton forever.
+                if !instance.is_null() {
+                    singleton_guard.insert(contract_id, instance);
+                }
                 instance
             } else {
                 // Multi-instance: create new instance each call
@@ -1538,7 +1659,10 @@ pub(crate) unsafe extern "C" fn host_list_bundles(
 
 /// HostApi.get_dependencies callback — returns Array<DependencyInfo>.
 ///
-/// Uses TLS bundle_id to look up the calling bundle's dependencies.
+/// Looks up the calling bundle's dependencies using the bundle_id at the top of the
+/// runtime's per-thread init-bundle stack (the instance-owned replacement for the
+/// former process-global thread-local). Returns an empty array outside any init
+/// window (top-of-stack bundle_id == 0).
 ///
 /// # Safety
 /// this must be a valid HostApi pointer with valid runtime field.
@@ -1786,6 +1910,13 @@ pub(crate) unsafe extern "C" fn host_register_host_contract(
 ///
 /// Host applications register loaders for each runtime language they support.
 ///
+/// # Ownership
+/// `loader_ptr` ownership transfers to the runtime UNCONDITIONALLY. The boxed loader
+/// is reconstituted (and, on the duplicate-loader error path, dropped) before this
+/// returns, so the caller must NOT free or reuse it afterwards — on success OR error.
+/// The only path that leaves `loader_ptr` untouched is the null-pointer guard, which
+/// never dereferences or reconstitutes it.
+///
 /// # Safety
 /// - this must be a valid HostApi pointer with valid runtime field
 /// - loader_ptr must be a *mut Box<dyn BundleLoader> erased to *mut c_void by a loader cdylib
@@ -1882,6 +2013,14 @@ pub unsafe extern "C" fn host_get_error_len(this: *const HostApi) -> usize {
 /// interface while retired interfaces keep in-flight instances valid. See the
 /// `call_guest_method` field doc on [`HostApi`] for the full contract.
 ///
+/// # Ambiguous routing
+/// Routing keys solely on `instance.contract_id`, which resolves to the FIRST
+/// provider of that contract. When two or more bundles provide the same contract,
+/// an instance from one provider could be dispatched through another's interface
+/// (wrong state pointer, potential UB). To stay sound, this returns
+/// [`AbiErrorCode::DuplicateProvider`] instead of dispatching whenever more than one
+/// provider is registered for the contract. A single provider dispatches normally.
+///
 /// # Safety
 /// - `this` must be a valid HostApi pointer with valid runtime field
 /// - `instance` must be an instance produced by the target contract
@@ -1920,23 +2059,50 @@ pub(crate) unsafe extern "C" fn host_call_guest_method(
     // stays valid even across a concurrent hot-reload because retired interfaces
     // are kept alive (retire-not-drop) for the runtime lifetime.
     let contract_id: u64 = instance.contract_id.id();
-    let handle: GuestContractHandle =
-        match registry.find_guest_contract(GuestContractId::from_u64(contract_id), 0) {
-            Ok(h) => h,
-            Err(_) => {
-                runtime.set_last_error(format!(
-                    "call_guest_method: no contract found for contract_id={contract_id}"
-                ));
-                return polyplug_abi::types::AbiError {
-                    code: polyplug_abi::types::AbiErrorCode::NotFound as u32,
-                    message: polyplug_abi::types::StringView::null(),
-                };
-            }
-        };
-    let interface_ptr: *const GuestContractInterface = match registry.resolve_guest_contract(handle)
+
+    // Conservative routing guard for multi-provider contracts. Routing is keyed
+    // solely on `contract_id`, which resolves to the FIRST provider only. When two
+    // or more bundles provide the same contract, an instance created by provider B
+    // could be dispatched through provider A's interface — a wrong state pointer and
+    // potential UB. Until the ABI carries a provider discriminator, refuse the
+    // cross-call rather than risk mis-dispatch. A single provider is unambiguous and
+    // keeps today's behaviour (including post-reload re-resolution).
+    //
+    // The count, the single-provider check, and the resolve all happen under ONE
+    // registry read guard via `resolve_single_provider` (was three separate guard
+    // acquisitions: count + find + resolve). The guard is dropped before the guest
+    // dispatch below, so no registry lock is held across the call; the returned
+    // pointer stays valid even across a concurrent hot-reload because retired
+    // interfaces are kept alive (retire-not-drop) for the runtime lifetime.
+    //
+    // NOTE: the matching `call_guest_method` field doc on `HostApi` in the
+    // `polyplug_abi` crate should be updated to document this DuplicateProvider
+    // outcome (that crate is owned by another agent — follow-up).
+    let interface_ptr: *const GuestContractInterface = match registry
+        .resolve_single_provider(GuestContractId::from_u64(contract_id), 0)
     {
-        Ok(ptr) if !ptr.is_null() => ptr,
-        _ => {
+        crate::runtime_store::SingleProviderResolution::Multiple => {
+            runtime.set_last_error(format!(
+                    "call_guest_method: ambiguous cross-call routing for contract_id={contract_id}: \
+                     multiple providers are registered and routing keys only on contract_id, so the \
+                     target provider cannot be determined unambiguously"
+                ));
+            return polyplug_abi::types::AbiError {
+                code: polyplug_abi::types::AbiErrorCode::DuplicateProvider as u32,
+                message: polyplug_abi::types::StringView::null(),
+            };
+        }
+        crate::runtime_store::SingleProviderResolution::NotFound => {
+            runtime.set_last_error(format!(
+                "call_guest_method: no contract found for contract_id={contract_id}"
+            ));
+            return polyplug_abi::types::AbiError {
+                code: polyplug_abi::types::AbiErrorCode::NotFound as u32,
+                message: polyplug_abi::types::StringView::null(),
+            };
+        }
+        crate::runtime_store::SingleProviderResolution::Resolved(ptr) if !ptr.is_null() => ptr,
+        crate::runtime_store::SingleProviderResolution::Resolved(_) => {
             runtime.set_last_error(format!(
                 "call_guest_method: contract could not be resolved for contract_id={contract_id}"
             ));
@@ -2513,6 +2679,65 @@ mod tests {
         };
         assert!(err.is_ok(), "native dispatch should succeed");
         assert_eq!(output, 42);
+    }
+
+    // ─── init-stack fast path (active_init_count) ────────────────────────────
+
+    #[test]
+    fn current_init_bundle_id_zero_outside_window() {
+        // Fast path: no push has happened, so the counter is 0 and
+        // current_init_bundle_id returns 0 without consulting the stack.
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        assert_eq!(
+            runtime.active_init_count.load(Ordering::Relaxed),
+            0,
+            "fresh runtime has no active init windows"
+        );
+        assert_eq!(runtime.current_init_bundle_id(), 0);
+    }
+
+    #[test]
+    fn current_init_bundle_id_tracks_nested_push_pop() {
+        // push/push/pop/pop must restore the outer bundle id at each step and the
+        // fast-path counter must stay perfectly balanced (back to 0 at the end).
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+
+        runtime.push_init_bundle_id(0xAAAA);
+        assert_eq!(runtime.active_init_count.load(Ordering::Relaxed), 1);
+        assert_eq!(runtime.current_init_bundle_id(), 0xAAAA);
+
+        // Nested load on the SAME thread pushes its own id; the inner id wins.
+        runtime.push_init_bundle_id(0xBBBB);
+        assert_eq!(runtime.active_init_count.load(Ordering::Relaxed), 2);
+        assert_eq!(runtime.current_init_bundle_id(), 0xBBBB);
+
+        // Pop the inner window — the outer id is restored.
+        runtime.pop_init_bundle_id();
+        assert_eq!(runtime.active_init_count.load(Ordering::Relaxed), 1);
+        assert_eq!(runtime.current_init_bundle_id(), 0xAAAA);
+
+        // Pop the outer window — back to the host (no-init) state.
+        runtime.pop_init_bundle_id();
+        assert_eq!(
+            runtime.active_init_count.load(Ordering::Relaxed),
+            0,
+            "counter must return to 0 after balanced push/pop"
+        );
+        assert_eq!(runtime.current_init_bundle_id(), 0);
+    }
+
+    #[test]
+    fn pop_without_push_does_not_underflow_counter() {
+        // An unbalanced pop (no matching push) must leave the counter at 0, never
+        // wrapping below — otherwise the fast path would never short-circuit again.
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        runtime.pop_init_bundle_id();
+        assert_eq!(
+            runtime.active_init_count.load(Ordering::Relaxed),
+            0,
+            "pop with no entry must not decrement the counter"
+        );
+        assert_eq!(runtime.current_init_bundle_id(), 0);
     }
 
     #[test]

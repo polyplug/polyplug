@@ -182,6 +182,7 @@ impl RuntimeBuilder {
             singleton_instances: std::sync::RwLock::new(HashMap::new()),
             host_runtime: self.host_runtime,
             init_bundle_stack: std::sync::Mutex::new(HashMap::new()),
+            active_init_count: core::sync::atomic::AtomicUsize::new(0),
         };
 
         let runtime: Arc<Runtime> = Arc::new(runtime);
@@ -221,7 +222,16 @@ impl RuntimeBuilder {
                 bundle_map.insert(entry.1.name.clone(), entry);
             }
 
-            // Phase 5: Dispatch each bundle to its loader in topo order
+            // Phase 5: Dispatch each bundle to its loader in topo order.
+            //
+            // Route every discovered bundle through the shared explicit-load path
+            // (`Runtime::load_manifest_with_source`) so it receives the exact same
+            // treatment as a bundle loaded via `Runtime::load_bundle`: manifest
+            // validation, init-time dependency declaration (so the plugin's
+            // `polyplug_init` can resolve declared dependencies), bundle-metadata
+            // registration (non-empty descriptors), function-count validation, and
+            // the `bundle_manifests` insert. The earlier `manifests_map`
+            // pre-population is overwritten with identical data by that insert.
             for bundle_name in &load_order {
                 let (bundle_path, manifest): &(PathBuf, ManifestData) =
                     bundle_map.get(bundle_name).ok_or_else(|| {
@@ -231,18 +241,17 @@ impl RuntimeBuilder {
                         })
                     })?;
 
-                let loader: &dyn BundleLoader =
-                    runtime.loader_for(&manifest.runtime).ok_or_else(|| {
-                        RuntimeError::Loader(LoaderError::NoLoaderForRuntime {
-                            bundle: bundle_path.display().to_string(),
-                            runtime_name: manifest.runtime.clone(),
-                        })
-                    })?;
-
                 let source: crate::loader::BundleSource =
-                    crate::loader::BundleSource::Path(manifest.path.clone());
-                loader
-                    .load(manifest, &source, &runtime)
+                    crate::loader::BundleSource::Path(bundle_path.clone());
+                runtime
+                    .load_manifest_with_source(
+                        manifest.clone(),
+                        source,
+                        crate::runtime::LoadOptions {
+                            compatibility: self.compatibility,
+                            ignore_function_count_mismatch: false,
+                        },
+                    )
                     .map_err(|e: RuntimeError| match e {
                         RuntimeError::Loader(le) => RuntimeError::Loader(le),
                         other => RuntimeError::Loader(LoaderError::InitFailed {

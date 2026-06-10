@@ -84,37 +84,42 @@ pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -
 /// # Safety
 /// `host` must be a non-null pointer previously returned by `polyplug_runtime_create`.
 ///
-/// Calling this more than once for the same pointer is safe: the first call
-/// reclaims the runtime and nulls the `runtime` field, so subsequent calls
-/// observe a null field and become a no-op.
+/// Calling this more than once for the same pointer — including from multiple
+/// threads concurrently — is safe. The `runtime` field is cleared with a single
+/// atomic swap, so exactly one caller observes the non-null pointer and reclaims
+/// the `Arc`; every other caller (concurrent or repeat) observes null and becomes a
+/// no-op. There is no double-free or use-after-free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostApi) {
     std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
         if !host.is_null() {
-            // SAFETY: host is a valid HostApi pointer returned by polyplug_runtime_create.
-            // Its `runtime` field is the Arc target handed out via Arc::into_raw at creation.
-            // Reconstructing the Arc and dropping it releases the Runtime and its resources.
-            // The 'static HostApi itself remains leaked, which is intentional.
-            let runtime_ptr: *const core::ffi::c_void = unsafe { (*host).runtime };
-            if !runtime_ptr.is_null() {
-                // Null the field BEFORE dropping the Arc so a concurrent or repeat
-                // destroy observes null and skips the reclaim — making double-destroy
-                // a safe no-op instead of a double-free (use-after-free) hazard. The
-                // runtime owns its leaked 'static HostApi, so mutating this
-                // field through a shared reference is sound: no other code reads or
-                // writes it after destruction begins.
-                // SAFETY: host is a valid, properly aligned HostApi pointer; the
-                // `runtime` field is in-bounds and we hold exclusive logical ownership
-                // during destruction.
-                unsafe {
-                    let runtime_field: *mut *const core::ffi::c_void =
-                        core::ptr::addr_of!((*host).runtime) as *mut *const core::ffi::c_void;
-                    core::ptr::write(runtime_field, core::ptr::null());
-                }
-                // SAFETY: runtime_ptr was produced by Arc::into_raw in polyplug_runtime_create
-                // and the field-null above guarantees it is reclaimed at most once.
+            // Atomically take ownership of the `runtime` field. Only the thread that
+            // swaps OUT a non-null pointer is responsible for reclaiming the Arc; a
+            // concurrent or repeat destroy swaps out null and does nothing. This
+            // closes the read-then-null race where two threads could both observe a
+            // non-null pointer and each reconstruct the Arc (double-free).
+            //
+            // SAFETY: `host` is a valid, properly aligned HostApi pointer returned by
+            // polyplug_runtime_create. `AtomicPtr<c_void>` has the same size and
+            // alignment as `*mut c_void`, and the `runtime` field is exactly a
+            // `*mut c_void`, so viewing it through an `AtomicPtr` is layout-compatible.
+            // The field is in-bounds for the duration of the swap. The runtime owns its
+            // leaked 'static HostApi, so it outlives this access.
+            let runtime_field: *mut core::ffi::c_void = unsafe {
+                let field_ptr: *mut *mut core::ffi::c_void =
+                    core::ptr::addr_of!((*host).runtime) as *mut *mut core::ffi::c_void;
+                let atomic: &core::sync::atomic::AtomicPtr<core::ffi::c_void> =
+                    core::sync::atomic::AtomicPtr::from_ptr(field_ptr);
+                atomic.swap(core::ptr::null_mut(), core::sync::atomic::Ordering::AcqRel)
+            };
+
+            if !runtime_field.is_null() {
+                // SAFETY: runtime_field was produced by Arc::into_raw in
+                // polyplug_runtime_create. The atomic swap above guarantees exactly
+                // one caller observes this non-null pointer, so the Arc is
+                // reconstructed and dropped at most once.
                 let _runtime: std::sync::Arc<Runtime> =
-                    unsafe { std::sync::Arc::from_raw(runtime_ptr as *const Runtime) };
+                    unsafe { std::sync::Arc::from_raw(runtime_field as *const Runtime) };
             }
         }
     }))

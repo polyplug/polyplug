@@ -246,10 +246,22 @@ impl CapabilityGraph {
                                 capability: format!("{} (from bundle {})", contract, bundle),
                             });
                         }
-                        // Validate bundle provides the required contract
+                        // Validate bundle provides the required contract. A provides
+                        // entry may be `name` or `name@version`; the dependency names
+                        // the bare contract. Compare bare-vs-bare by stripping any
+                        // `@version` suffix from each provides entry so a versioned
+                        // provides still satisfies a bare-named ByBundle dependency.
                         let provides: bool = provides_map
                             .get(bundle)
-                            .map(|p: &Vec<String>| p.contains(contract))
+                            .map(|p: &Vec<String>| {
+                                p.iter().any(|spec: &String| {
+                                    let bare: &str = match spec.split_once('@') {
+                                        Some((name, _)) => name,
+                                        None => spec.as_str(),
+                                    };
+                                    bare == contract.as_str()
+                                })
+                            })
                             .unwrap_or(false);
                         if !provides {
                             return Err(GraphError::UnsatisfiedCapability {

@@ -2,6 +2,7 @@
 
 #![allow(clippy::expect_used)]
 
+use polyplug::error::GraphError;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
@@ -126,7 +127,11 @@ fn compatible_exact_version_strict_loads_ok() {
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
         .build();
-    assert!(result.is_ok(), "expected Ok");
+    assert!(
+        result.is_ok(),
+        "expected Ok, got: {:?}",
+        result.as_ref().err()
+    );
 }
 
 #[test]
@@ -155,7 +160,11 @@ fn compatible_superset_version_strict_loads_ok() {
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
         .build();
-    assert!(result.is_ok(), "expected Ok");
+    assert!(
+        result.is_ok(),
+        "expected Ok, got: {:?}",
+        result.as_ref().err()
+    );
 }
 
 #[test]
@@ -183,7 +192,11 @@ fn compatible_superset_version_relaxed_loads_ok() {
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
         .build();
-    assert!(result.is_ok(), "expected Ok");
+    assert!(
+        result.is_ok(),
+        "expected Ok, got: {:?}",
+        result.as_ref().err()
+    );
 }
 
 #[test]
@@ -211,7 +224,11 @@ fn compatible_superset_version_yolo_loads_ok() {
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
         .build();
-    assert!(result.is_ok(), "expected Ok");
+    assert!(
+        result.is_ok(),
+        "expected Ok, got: {:?}",
+        result.as_ref().err()
+    );
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -284,7 +301,11 @@ fn too_old_relaxed_warns_and_loads() {
             sink_clone.lock().expect("lock").push(msg.to_owned());
         })
         .build();
-    assert!(result.is_ok(), "expected Ok");
+    assert!(
+        result.is_ok(),
+        "expected Ok, got: {:?}",
+        result.as_ref().err()
+    );
     assert!(
         sink.lock()
             .expect("lock")
@@ -319,20 +340,30 @@ fn too_old_yolo_loads_silently() {
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
         .build();
-    assert!(result.is_ok(), "expected Ok");
+    assert!(
+        result.is_ok(),
+        "expected Ok, got: {:?}",
+        result.as_ref().err()
+    );
 }
 
 // ────────────────────────────────────────────────────────────────────────────
 // Tests 8–10: major version mismatch
+//
+// The MAJOR version is part of contract identity: contract_id = hash(name, major),
+// and a dependency's contract_id must match the major of its min_version (manifest
+// validation cross-checks them). A consumer requiring major 2 of a contract only
+// provided at major 1 therefore has NO provider in the capability graph — this is
+// a structural UnsatisfiedCapability in EVERY compatibility mode, not a version
+// POLICY decision Relaxed/Yolo can soften. (Minor/patch policy is covered by the
+// too_old_* tests above.)
 // ────────────────────────────────────────────────────────────────────────────
 
-#[test]
-fn major_mismatch_strict_returns_version_mismatch() {
-    let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = guest_contract_id("test.contract", 1);
-    // Provider at 1.0, consumer requires 2.0
+fn write_major_mismatch_bundles(tmp: &TempDir) {
+    // Provider provides test.contract at major 1; consumer requires major 2.
+    let cid: u64 = guest_contract_id("test.contract", 2);
     write_bundle_manifest(
-        &tmp,
+        tmp,
         "provider",
         "1.0",
         &["test.contract"],
@@ -340,13 +371,19 @@ fn major_mismatch_strict_returns_version_mismatch() {
         &[],
     );
     write_bundle_manifest(
-        &tmp,
+        tmp,
         "consumer",
         "1.0",
         &[],
         &[],
         &[("test.contract", cid, "2.0")],
     );
+}
+
+#[test]
+fn major_mismatch_strict_fails_unsatisfied_capability() {
+    let tmp: TempDir = TempDir::new().expect("tmp");
+    write_major_mismatch_bundles(&tmp);
     let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
@@ -355,79 +392,55 @@ fn major_mismatch_strict_returns_version_mismatch() {
     assert!(
         matches!(
             result,
-            Err(RuntimeError::Loader(LoaderError::VersionMismatch { .. }))
+            Err(RuntimeError::Graph(
+                GraphError::UnsatisfiedCapability { .. }
+            ))
         ),
-        "expected VersionMismatch but got an unexpected value"
+        "expected UnsatisfiedCapability, got: {:?}",
+        result.as_ref().err()
     );
 }
 
 #[test]
-fn major_mismatch_relaxed_warns_and_loads() {
-    let sink: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+fn major_mismatch_relaxed_fails_unsatisfied_capability() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = guest_contract_id("test.contract", 1);
-    // Provider at 1.0, consumer requires 2.0
-    write_bundle_manifest(
-        &tmp,
-        "provider",
-        "1.0",
-        &["test.contract"],
-        &[("test.contract@1", 2)],
-        &[],
-    );
-    write_bundle_manifest(
-        &tmp,
-        "consumer",
-        "1.0",
-        &[],
-        &[],
-        &[("test.contract", cid, "2.0")],
-    );
-    let sink_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&sink);
+    write_major_mismatch_bundles(&tmp);
     let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
-        .on_warning(move |msg: &str| {
-            sink_clone.lock().expect("lock").push(msg.to_owned());
-        })
         .build();
-    assert!(result.is_ok(), "expected Ok");
     assert!(
-        sink.lock()
-            .expect("lock")
-            .iter()
-            .any(|w: &String| w.to_lowercase().contains("version mismatch")),
-        "expected a version mismatch warning in sink"
+        matches!(
+            result,
+            Err(RuntimeError::Graph(
+                GraphError::UnsatisfiedCapability { .. }
+            ))
+        ),
+        "expected UnsatisfiedCapability, got: {:?}",
+        result.as_ref().err()
     );
 }
 
 #[test]
-fn major_mismatch_yolo_loads_silently() {
+fn major_mismatch_yolo_fails_unsatisfied_capability() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = guest_contract_id("test.contract", 1);
-    write_bundle_manifest(
-        &tmp,
-        "provider",
-        "1.0",
-        &["test.contract"],
-        &[("test.contract@1", 2)],
-        &[],
-    );
-    write_bundle_manifest(
-        &tmp,
-        "consumer",
-        "1.0",
-        &[],
-        &[],
-        &[("test.contract", cid, "2.0")],
-    );
+    write_major_mismatch_bundles(&tmp);
     let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
         .build();
-    assert!(result.is_ok(), "expected Ok");
+    assert!(
+        matches!(
+            result,
+            Err(RuntimeError::Graph(
+                GraphError::UnsatisfiedCapability { .. }
+            ))
+        ),
+        "expected UnsatisfiedCapability, got: {:?}",
+        result.as_ref().err()
+    );
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -503,7 +516,11 @@ fn function_count_mismatch_relaxed_warns_and_loads() {
             sink_clone.lock().expect("lock").push(msg.to_owned());
         })
         .build();
-    assert!(result.is_ok(), "expected Ok");
+    assert!(
+        result.is_ok(),
+        "expected Ok, got: {:?}",
+        result.as_ref().err()
+    );
     assert!(
         !sink.lock().expect("lock").is_empty(),
         "expected at least one warning in sink for function count mismatch"
@@ -536,7 +553,11 @@ fn function_count_mismatch_yolo_ignored() {
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
         .build();
-    assert!(result.is_ok(), "expected Ok");
+    assert!(
+        result.is_ok(),
+        "expected Ok, got: {:?}",
+        result.as_ref().err()
+    );
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -95,6 +95,29 @@ impl Runtime {
         let manifest: ManifestData =
             crate::loader::parse_manifest(bundle_dir).map_err(RuntimeError::Loader)?;
 
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+
+        // Validate the manifest before doing any work. This re-runs the identity
+        // tamper check (id == FNV1a-64(name), TRUST_MODEL §2) on every reload — a
+        // bundle whose on-disk manifest was swapped for one with a mismatched id must
+        // be rejected, not silently reloaded. A validation failure is a reload
+        // failure: fire the Failed callback so the host learns the active version was
+        // kept, mirroring the missing-file and init-failure paths below.
+        if let Err(e) = manifest.validate() {
+            let err: RuntimeError = RuntimeError::Loader(e);
+            if let Some(cb) = self.on_reload_cb() {
+                (cb.0)(
+                    self.config().on_reload_user_data,
+                    ReloadPhase::failed(
+                        bundle_id,
+                        string_view(&manifest.name),
+                        string_view(&err.to_string()),
+                    ),
+                );
+            }
+            return Err(err);
+        }
+
         // Find the loader (lock released before reload() runs — see `loader_for`).
         let loader: &dyn crate::loader::BundleLoader =
             self.loader_for(&manifest.runtime).ok_or_else(|| {
@@ -103,8 +126,6 @@ impl Runtime {
                     runtime_name: manifest.runtime.clone(),
                 })
             })?;
-
-        let bundle_id: BundleId = BundleId::new(&manifest.name);
 
         // Validate that the requested library file exists before doing any work.
         // A missing file is a reload failure that must fire the Failed callback so
@@ -171,9 +192,25 @@ impl Runtime {
                 // version's interfaces into fresh slots (registration never
                 // vacates the old slots). Move each new interface into its
                 // pre-reload slot and retire the duplicate new slot, atomically.
-                self.registry
-                    .apply_reload_swap(bundle_id, &slot_indices)
-                    .map_err(RuntimeError::Registry)?;
+                //
+                // A swap failure is a reload failure: fire the Failed callback (the
+                // active version is kept) before propagating, mirroring the loader
+                // failure path below — otherwise the host never learns the reload
+                // aborted.
+                if let Err(e) = self.registry.apply_reload_swap(bundle_id, &slot_indices) {
+                    let err: RuntimeError = RuntimeError::Registry(e);
+                    if let Some(cb) = self.on_reload_cb() {
+                        (cb.0)(
+                            self.config().on_reload_user_data,
+                            ReloadPhase::failed(
+                                bundle_id,
+                                string_view(&manifest.name),
+                                string_view(&err.to_string()),
+                            ),
+                        );
+                    }
+                    return Err(err);
+                }
 
                 // Mark this bundle visited before cascading so a dependency cycle
                 // (A→B→A) terminates instead of recursing forever.

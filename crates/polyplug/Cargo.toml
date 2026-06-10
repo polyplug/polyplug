@@ -26,6 +26,7 @@ default = []
 workspace = true
 
 [dev-dependencies]
+polyplug_abi = { workspace = true, features = ["tracking"] }
 criterion = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
@@ -61,5 +62,9 @@ harness = false
 
 [[bench]]
 name = "amortization"
+harness = false
+
+[[bench]]
+name = "cross_call"
 harness = false
 

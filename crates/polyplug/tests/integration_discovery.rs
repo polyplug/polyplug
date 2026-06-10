@@ -304,7 +304,10 @@ fn unknown_runtime_fails_build() {
     write_bundle_with_manifest(
         tmp.path(),
         &ManifestData {
-            id: 1,
+            // Use the canonical id so the build reaches the loader-lookup stage and
+            // fails specifically on the unknown runtime, not on manifest validation
+            // (the build path now validates manifests via the shared load path).
+            id: polyplug_utils::bundle_id("zigzag_plugin"),
             name: "zigzag_plugin".to_owned(),
             runtime: "zigzag_unknown".to_owned(),
             file: "zigzag_plugin.so".to_owned(),

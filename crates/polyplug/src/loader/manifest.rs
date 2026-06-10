@@ -302,6 +302,44 @@ impl ManifestData {
         for spec in &self.bundle_dependencies {
             validate_name_version_spec(spec, "bundle_dependencies", &self.path)?;
         }
+
+        // Cross-check each dependency's declared `contract_id` against the value
+        // derived from its `contract` name and the major component of `min_version`.
+        // A `contract_id` of 0 means "absent" and is accepted (it is filled in by the
+        // graph layer). A non-zero value that disagrees with the canonical hash is a
+        // tampered or hand-edited manifest and is rejected. The derivation mirrors the
+        // polyplugc parser: major = Version::from_str(min_version).major, default 0.
+        for dep in &self.dependencies {
+            if dep.contract_id.id() == 0 {
+                continue;
+            }
+            // The dependency `contract` field may carry an `@version` suffix
+            // (e.g. "dep.contract@1"); the canonical contract_id hashes the BARE
+            // name plus the major from `min_version`, consistent with how the
+            // capability graph and polyplugc resolve contract ids.
+            let bare_contract: &str = match dep.contract.split_once('@') {
+                Some((name, _)) => name,
+                None => dep.contract.as_str(),
+            };
+            let dep_major: u32 = Version::from_str(&dep.min_version)
+                .map(|v: Version| v.major)
+                .unwrap_or(0);
+            let expected: GuestContractId = GuestContractId::new(bare_contract, dep_major);
+            if dep.contract_id != expected {
+                return Err(crate::error::LoaderError::ManifestParse {
+                    path: self.path.display().to_string(),
+                    reason: format!(
+                        "dependency \"{}\" declares contract_id {} but the canonical id for \
+                         contract \"{}\" at major {} is {}",
+                        dep.contract,
+                        dep.contract_id.id(),
+                        bare_contract,
+                        dep_major,
+                        expected.id()
+                    ),
+                });
+            }
+        }
         Ok(())
     }
 

@@ -131,15 +131,19 @@ fn hot_reload_config() -> RuntimeConfig {
     }
 }
 
-/// Write a bundle directory with a manifest. `dep` optionally declares a
-/// `[[dependency]]` on another bundle's contract, and `needs_reinit` toggles the
-/// cascade opt-in.
+/// Write a bundle directory with a manifest. `dep_contract` optionally declares a
+/// `[[dependency]]` on that bare contract name (its `contract_id` is derived as
+/// `guest_contract_id(dep_contract, 1)`, matching `min_version = "1.0"`), and
+/// `needs_reinit` toggles the cascade opt-in.
+///
+/// The dependency `contract` name and its `contract_id` are kept consistent here so
+/// the bundle passes `ManifestData::validate`'s contract_id cross-check.
 fn write_bundle(
     temp: &tempfile::TempDir,
     bundle_name: &str,
     runtime_name: &str,
     needs_reinit: bool,
-    dep_contract_id: Option<u64>,
+    dep_contract: Option<&str>,
 ) -> PathBuf {
     let bundle_dir: PathBuf = temp.path().join(bundle_name);
     std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
@@ -154,11 +158,12 @@ fn write_bundle(
          version = \"1.0\"\n\
          needs_reinit_on_dep_reload = {needs_reinit}\n"
     );
-    if let Some(contract_id) = dep_contract_id {
+    if let Some(contract_name) = dep_contract {
+        let contract_id: u64 = polyplug_utils::guest_contract_id(contract_name, 1_u32);
         manifest.push_str(&format!(
             "\n[[dependency]]\n\
              kind = \"contract\"\n\
-             contract = \"dep.contract@1\"\n\
+             contract = \"{contract_name}\"\n\
              min_version = \"1.0\"\n\
              contract_id = {contract_id}\n"
         ));
@@ -193,7 +198,7 @@ fn cascade_reload_disabled_does_not_trigger() {
 
     let a_path: PathBuf = write_bundle(&temp, "bundle_a", "cascade-a", false, None);
     // B depends on A's contract but opts OUT of cascade reload.
-    let b_path: PathBuf = write_bundle(&temp, "bundle_b", "cascade-b", false, Some(a_contract_id));
+    let b_path: PathBuf = write_bundle(&temp, "bundle_b", "cascade-b", false, Some("dep.contract"));
 
     runtime.load_bundle(a_path.as_path()).expect("load A");
     runtime.load_bundle(b_path.as_path()).expect("load B");
@@ -232,7 +237,7 @@ fn cascade_reload_enabled_triggers_dependent() {
 
     let a_path: PathBuf = write_bundle(&temp, "bundle_a", "cascade-a", false, None);
     // B depends on A's contract and opts IN to cascade reload.
-    let b_path: PathBuf = write_bundle(&temp, "bundle_b", "cascade-b", true, Some(a_contract_id));
+    let b_path: PathBuf = write_bundle(&temp, "bundle_b", "cascade-b", true, Some("dep.contract"));
 
     runtime.load_bundle(a_path.as_path()).expect("load A");
     runtime.load_bundle(b_path.as_path()).expect("load B");
@@ -273,8 +278,8 @@ fn cascade_reload_cycle_detection() {
         .expect("runtime build should succeed");
 
     // A depends on B's contract; B depends on A's contract. Both opt in.
-    let a_path: PathBuf = write_bundle(&temp, "cycle_a", "cycle-a", true, Some(b_contract_id));
-    let b_path: PathBuf = write_bundle(&temp, "cycle_b", "cycle-b", true, Some(a_contract_id));
+    let a_path: PathBuf = write_bundle(&temp, "cycle_a", "cycle-a", true, Some("b.contract"));
+    let b_path: PathBuf = write_bundle(&temp, "cycle_b", "cycle-b", true, Some("a.contract"));
 
     runtime.load_bundle(a_path.as_path()).expect("load A");
     runtime.load_bundle(b_path.as_path()).expect("load B");

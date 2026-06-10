@@ -364,7 +364,11 @@ fn test_duplicate_registration_allowed() {
 
     let lib: libloading::Library = load_and_init_plugin();
 
-    // Try to manually register the same contract again -- should succeed (multi-impl).
+    // Register the same contract again from a DIFFERENT bundle -- should succeed
+    // (multi-impl). The harness callback registers the plugin's contracts under
+    // BundleId::from_u64(contract_id), so this second registration must use a
+    // distinct bundle id: same-bundle re-registration is now rejected as
+    // DuplicateProvider (covered by runtime_store unit tests).
     let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
 
     // Build a fake interface for the second registration.
@@ -402,13 +406,13 @@ fn test_duplicate_registration_allowed() {
             fake_descriptor,
             &fake_interface as *const GuestContractInterface,
             "test.add".to_owned(),
-            BundleId::from_u64(test_add_id.id()),
+            BundleId::new("duplicate_adder"),
         )
     });
 
     assert!(
         result.is_ok(),
-        "second registration of same contract should succeed (multi-impl allowed)"
+        "registration of same contract from a different bundle should succeed (multi-impl allowed)"
     );
 
     core::mem::forget(lib);

@@ -4,10 +4,10 @@
 //! GuestContractHandle validation checks for out-of-bounds indices only.
 //! Hosts must destroy instances before hot-reload via callback.
 //!
-//! Multi-impl support: different bundles may register_guest_contract different implementations of
+//! Multi-impl support: different bundles may register different implementations of
 //! the same contract. guest_contract_index maps contract_id -> Vec<slot_index> to support
 //! find_all_guest_contracts(). DuplicateProvider is only raised when the SAME bundle_id
-//! tries to register_guest_contract the SAME contract_id twice.
+//! tries to register the SAME contract_id twice (outside a reload window).
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -24,6 +24,30 @@ use polyplug_abi::{
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::RegistryError;
+
+/// Outcome of [`RuntimeStore::resolve_single_provider`] — the single-read-guard
+/// primitive behind the `call_guest_method` HostApi cross-dispatch path.
+///
+/// The cross-call must, under ONE read guard, (1) count live providers for the
+/// contract, (2) reject ambiguous multi-provider routing, and (3) resolve the
+/// sole provider's interface pointer. Splitting that across `count` + `find` +
+/// `resolve` took three separate read-guard acquisitions; this enum lets the
+/// store do all three under a single guard and hand the caller exactly the
+/// information it needs to reproduce the original observable behaviour.
+pub enum SingleProviderResolution {
+    /// No live provider matched the contract id at the requested version floor.
+    /// The caller maps this to the same `NotFound` outcome the former
+    /// `find_guest_contract` not-found path produced.
+    NotFound,
+    /// More than one live provider is registered for the contract. Routing keys
+    /// solely on `contract_id`, so the target is ambiguous and the caller must
+    /// refuse with `DuplicateProvider` (it never dispatches in this case).
+    Multiple,
+    /// Exactly one live provider matched; the contained pointer is its interface,
+    /// borrowed from the slot's `Arc` (valid for the runtime lifetime under the
+    /// retire-not-drop model, exactly as `resolve_guest_contract` returns).
+    Resolved(*const GuestContractInterface),
+}
 
 /// Built-in stateless `create_instance` stub.
 ///
@@ -315,10 +339,11 @@ impl RuntimeStore {
     //  The contract_id is read directly from the interface pointer.
     //
     //  Returns Err if:
-    //  - contract_id is already register_guest_contracted to a DIFFERENT contract_name (hash collision)
-    //  - contract_id is already register_guest_contracted by the SAME bundle_id (duplicate provider)
+    //  - contract_id is already registered to a DIFFERENT contract_name (hash collision)
+    //  - contract_id is already registered by the SAME bundle_id and the bundle is not
+    //    mid-reload (duplicate provider)
     //
-    //  Different bundles MAY register_guest_contract the same contract_id (multi-impl).
+    //  Different bundles MAY register the same contract_id (multi-impl).
     pub unsafe fn register_guest_contract(
         &self,
         descriptor: PluginDescriptor,
@@ -361,6 +386,13 @@ impl RuntimeStore {
                 e.into_inner()
             });
 
+        // During a reload window the bundle legitimately re-registers its own
+        // contracts into fresh (pending) slots; that is re-init, not a duplicate.
+        // Outside the window, a second registration of the SAME contract_id by the
+        // SAME bundle_id is the DuplicateProvider case the module contract promises
+        // to reject.
+        let is_reloading: bool = data.reloading_bundles.contains(&bundle_id);
+
         // Check existing slots for this contract_id
         if let Some(existing_indices) = data.guest_contract_index.get(&contract_id) {
             for &existing_idx in existing_indices.iter() {
@@ -374,8 +406,14 @@ impl RuntimeStore {
                             name_b: contract_name,
                         });
                     }
-                    // Same bundle, same contract — allowed (multi-impl support)
-                    // Different bundle, same contract — also allowed (multi-impl support)
+                    // Same bundle, same contract, NOT mid-reload — duplicate provider.
+                    if existing_entry.bundle_id == bundle_id && !is_reloading {
+                        return Err(RegistryError::DuplicateProvider {
+                            contract: contract_name,
+                            existing: existing_entry.descriptor.name.clone(),
+                        });
+                    }
+                    // Different bundle, same contract — allowed (multi-impl support).
                 }
             }
         }
@@ -472,7 +510,7 @@ impl RuntimeStore {
         // index prevents readers from transiently seeing two live slots per contract.
         // apply_reload_swap later moves the interface into the already-published old
         // slot and retires this pending slot, so the index is never double-populated.
-        let is_reloading: bool = data.reloading_bundles.contains(&bundle_id);
+        // `is_reloading` was computed above (the reload set is not mutated in between).
         if !is_reloading {
             data.guest_contract_index
                 .entry(contract_id)
@@ -510,7 +548,7 @@ impl RuntimeStore {
 
     /// Declare dependency contract_ids for a bundle.
     ///
-    /// Must be called before the bundle resolve_guest_contracts any cross-bundle contracts.
+    /// Must be called before the bundle resolves any cross-bundle contracts.
     /// Prevents undeclared dependency resolution at runtime.
     pub fn declare_bundle_dependencies(
         &self,
@@ -546,10 +584,12 @@ impl RuntimeStore {
             .is_some_and(|s| s.contains(&contract_id))
     }
 
-    /// Find any register_guest_contracted plugin satisfying the given contract_id and minimum version.
+    /// Find any registered plugin satisfying the given contract_id and minimum version.
     //
-    //  Returns the first slot whose interface.contract_version >= min_version.
-    //  Pass min_version=0 to accept any version.
+    //  `min_version` is a MAJOR-version floor: returns the first slot whose
+    //  `interface.contract_version.major >= min_version`. Pass min_version=0 to accept
+    //  any version. (The contract_id hash already pins the major; minor-level
+    //  requirements are enforced at manifest validation, not here.)
     pub fn find_guest_contract(
         &self,
         contract_id: GuestContractId,
@@ -617,8 +657,24 @@ impl RuntimeStore {
             }
         };
 
+        // While the bundle is mid-reload, freshly-registered slots are "pending":
+        // they live in `plugin_slots` but are deliberately kept out of
+        // `guest_contract_index` until `apply_reload_swap` reconciles them. Minting a
+        // handle to a pending slot would be unsound — `abort_reload` drops that slot's
+        // Arc (it was never published), so a previously-resolved raw pointer would
+        // dangle. During the window, therefore, only match slot indices that are
+        // actually published in `guest_contract_index` for this contract.
+        let is_reloading: bool = data.reloading_bundles.contains(&bundle_id);
+        let published_for_contract: Option<&Vec<u32>> = data.guest_contract_index.get(&contract_id);
+
         // Find the slot matching contract_id and version
         for &slot_idx in slot_indices.iter() {
+            if is_reloading
+                && !published_for_contract.is_some_and(|published| published.contains(&slot_idx))
+            {
+                // Pending (unpublished) slot during a reload window — skip it.
+                continue;
+            }
             let slot: &PluginSlot = &data.slots[slot_idx as usize];
             if let Some(ref entry) = slot.entry
                 && let Some(ref interface) = slot.interface
@@ -763,6 +819,123 @@ impl RuntimeStore {
         count
     }
 
+    /// Count live providers for `contract_id` (a MAJOR-version floor) and, when
+    /// exactly one exists, resolve its interface pointer — all under a SINGLE read
+    /// guard.
+    ///
+    /// This is the cross-call primitive behind the `call_guest_method` HostApi
+    /// callback. It folds what was previously three separate read-guard
+    /// acquisitions (`count_guest_contracts` + `find_guest_contract` +
+    /// `resolve_guest_contract`) into one, eliminating two lock round-trips per
+    /// cross-call while preserving the exact observable outcomes:
+    /// - **0 live providers** → [`SingleProviderResolution::NotFound`] (the same
+    ///   outcome the old `find_guest_contract` not-found path produced).
+    /// - **>1 live provider** → [`SingleProviderResolution::Multiple`]: routing keys
+    ///   only on `contract_id`, so the target is ambiguous; the caller refuses.
+    /// - **exactly 1** → [`SingleProviderResolution::Resolved`] with the sole
+    ///   provider's interface pointer, identical to resolving the handle the old
+    ///   `find_guest_contract` returned (the first live matching slot).
+    ///
+    /// The liveness + version filtering mirrors `count_guest_contracts` /
+    /// `find_guest_contract` exactly (slot entry present, interface present,
+    /// `interface.contract_version.major >= min_version`). The returned pointer is
+    /// borrowed from the slot's `Arc`; under the retire-not-drop model it stays valid
+    /// for the runtime lifetime even across a concurrent reload, matching
+    /// `resolve_guest_contract`'s guarantee.
+    pub fn resolve_single_provider(
+        &self,
+        contract_id: GuestContractId,
+        min_version: u32,
+    ) -> SingleProviderResolution {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+
+        let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
+            Some(v) => v,
+            None => return SingleProviderResolution::NotFound,
+        };
+
+        // Single pass: count live matches and remember the first one's interface
+        // pointer. `count_guest_contracts` and `find_guest_contract` (min_version=0)
+        // both walk `indices` with the same liveness + version filter, so iterating
+        // once here is behaviour-identical to running them in sequence — the first
+        // match is exactly the slot `find_guest_contract` would have returned.
+        let mut count: usize = 0;
+        let mut first_interface: *const GuestContractInterface = core::ptr::null();
+        for &slot_idx in indices.iter() {
+            let slot: &PluginSlot = &data.slots[slot_idx as usize];
+            if slot.entry.is_some()
+                && let Some(ref interface) = slot.interface
+                && interface.contract_version.major >= min_version
+            {
+                if count == 0 {
+                    first_interface = interface.as_ref() as *const GuestContractInterface;
+                }
+                count += 1;
+                if count > 1 {
+                    // Ambiguous: no need to scan further, the cross-call is refused.
+                    return SingleProviderResolution::Multiple;
+                }
+            }
+        }
+
+        if count == 1 {
+            SingleProviderResolution::Resolved(first_interface)
+        } else {
+            SingleProviderResolution::NotFound
+        }
+    }
+
+    /// Count AND collect every live provider for `contract_id` at or above
+    /// `min_version` (a MAJOR-version floor) under a SINGLE read guard.
+    ///
+    /// This is the allocation-safe primitive behind the `find_all_guest_contracts`
+    /// HostApi callback. Counting and collecting in two separate guards is unsound:
+    /// a concurrent unload that shrinks the registry between the two acquisitions
+    /// would leave the caller allocating for a stale count but filling fewer
+    /// handles, so the returned `Array.len` would disagree with the allocation
+    /// size — and the SDK-side free (`len * sizeof(T)`) would then deallocate with
+    /// a layout that differs from the allocation, which is undefined behaviour.
+    /// Collecting under one guard makes `vec.len()` the single source of truth for
+    /// both the allocation size and the `Array.len`.
+    ///
+    /// Returns an empty `Vec` when nothing matches — callers must allocate nothing
+    /// in that case.
+    pub fn collect_guest_contracts(
+        &self,
+        contract_id: GuestContractId,
+        min_version: u32,
+    ) -> Vec<GuestContractHandle> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+
+        let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
+
+        let mut collected: Vec<GuestContractHandle> = Vec::with_capacity(indices.len());
+        for &slot_idx in indices.iter() {
+            let slot: &PluginSlot = &data.slots[slot_idx as usize];
+            if slot.entry.is_some()
+                && let Some(ref interface) = slot.interface
+                && interface.contract_version.major >= min_version
+            {
+                collected.push(GuestContractHandle {
+                    index: slot_idx,
+                    generation: slot.generation,
+                });
+            }
+        }
+        collected
+    }
+
     /// Find all plugins and write handles into the provided slice.
     /// Returns the number of handles written.
     pub fn find_all_guest_contracts_into(
@@ -776,9 +949,13 @@ impl RuntimeStore {
 
     /// Find a plugin by contract_id and minimum version.
     //
-    //  Delegates to find_guest_contract(). Kept for API compatibility.
-    //  min_version encoding: (minor << 16 | patch), same as GuestContractInterface::contract_version.
-    //  Pass 0 to accept any version.
+    //  Delegates to find_guest_contract(). `min_version` is the minimum MAJOR version:
+    //  a provider matches when `interface.contract_version.major >= min_version`. The
+    //  contract_id already pins the major via its hash, and minor-level requirements are
+    //  enforced at manifest validation — there is no packed (minor/patch) encoding here.
+    //  Pass 0 to accept any version. The plain-major comparison is load-bearing: all six
+    //  code generators pass the plain major, so changing the encoding would require a
+    //  coordinated change across every generator.
     pub fn find(
         &self,
         contract_id: GuestContractId,
@@ -1044,7 +1221,15 @@ impl RuntimeStore {
                 data.retired_interfaces.push(old_interface);
             }
 
-            // Retire the now-orphaned new slot.
+            // Vacate the now-orphaned new slot. Its interface Arc was already moved
+            // out into the old slot above, so there is nothing to retire here (do NOT
+            // push to `retired_interfaces`). Bump the generation so any handle minted
+            // against this slot during the reload window — e.g. a pending handle the
+            // registration returned — is recognised as stale once the index is recycled
+            // by a later registration (ABA protection), mirroring `retire_slot`'s
+            // generation bump without the (now absent) Arc retirement.
+            data.slots[new_idx as usize].generation =
+                data.slots[new_idx as usize].generation.wrapping_add(1);
             data.slots[new_idx as usize].entry = None;
             if let Some(indices) = data.guest_contract_index.get_mut(&old_contract_id) {
                 indices.retain(|&idx| idx != new_idx);
@@ -1083,9 +1268,12 @@ impl RuntimeStore {
     ///
     /// Exposes the registry's owned copy of the plugin's `PluginDescriptor` (name,
     /// contract_name, version) for introspection. Returns `None` if the handle is
-    /// out of bounds or its slot is vacant. The returned data is owned (no borrowed
-    /// `StringView`s), so it stays valid independently of the plugin's transient
-    /// init-time buffers.
+    /// out of bounds, its slot is vacant, or the handle is stale (its generation no
+    /// longer matches the slot's). The generation check is what prevents a handle
+    /// minted against a retired slot from observing the descriptor of a later
+    /// occupant after the slot index is recycled. The returned data is owned (no
+    /// borrowed `StringView`s), so it stays valid independently of the plugin's
+    /// transient init-time buffers.
     pub fn get_guest_contract_descriptor(
         &self,
         handle: GuestContractHandle,
@@ -1099,9 +1287,14 @@ impl RuntimeStore {
             return None;
         }
         let slot_idx: usize = handle.index as usize;
-        data.slots
-            .get(slot_idx)
-            .and_then(|slot: &PluginSlot| slot.entry.as_ref())
+        let slot: &PluginSlot = data.slots.get(slot_idx)?;
+        // Reject stale handles: a recycled slot carries a bumped generation, so a
+        // handle minted against the prior occupant must not see the new one.
+        if handle.generation != slot.generation {
+            return None;
+        }
+        slot.entry
+            .as_ref()
             .map(|entry: &PluginEntry| entry.descriptor.clone())
     }
 
@@ -1539,11 +1732,12 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_provider_allowed() {
+    fn same_bundle_same_contract_is_duplicate_provider() {
         let registry: RuntimeStore = RuntimeStore::new();
         let d1: PluginDescriptor = make_descriptor("plugin_a", "image.decode");
         let d2: PluginDescriptor = make_descriptor("plugin_b", "image.decode");
         let bundle_id = BundleId::from_u64(0);
+        let other_bundle = BundleId::from_u64(1);
         let interface = mock_interface(0x1234_5678_9ABC_DEF0);
 
         // SAFETY: interface is a local value
@@ -1553,13 +1747,23 @@ mod tests {
                 .expect("first registration should succeed");
         }
 
+        // Same bundle re-registering the same contract (no reload window) is rejected.
+        let dup: PluginDescriptor = make_descriptor("plugin_a2", "image.decode");
         let result: Result<GuestContractHandle, RegistryError> =
             // SAFETY: interface is a local value
-            unsafe { registry.register_guest_contract(d2, &interface, "image.decode".to_owned(), bundle_id) };
-        // Second registration should succeed (multi-impl allowed)
+            unsafe { registry.register_guest_contract(dup, &interface, "image.decode".to_owned(), bundle_id) };
         assert!(
-            result.is_ok(),
-            "second registration should succeed (multi-impl allowed)"
+            matches!(result, Err(RegistryError::DuplicateProvider { .. })),
+            "same bundle + same contract must be DuplicateProvider, got {result:?}"
+        );
+
+        // A DIFFERENT bundle registering the same contract is still allowed (multi-impl).
+        let other: Result<GuestContractHandle, RegistryError> =
+            // SAFETY: interface is a local value
+            unsafe { registry.register_guest_contract(d2, &interface, "image.decode".to_owned(), other_bundle) };
+        assert!(
+            other.is_ok(),
+            "different bundle + same contract must be allowed (multi-impl), got {other:?}"
         );
     }
 
@@ -1919,6 +2123,146 @@ mod tests {
         assert!(
             registry.find(contract_id, 0).is_err(),
             "find must fail for a dropped contract"
+        );
+    }
+
+    /// Finding 2: during a reload window the pending (unpublished) slot must NOT
+    /// be returned by `find_guest_contract_by_bundle`, and after `abort_reload`
+    /// the previously-published handle still resolves (nothing dangles).
+    #[test]
+    fn pending_reload_slot_not_returned_by_find_by_bundle() {
+        const CID: u64 = 0x2222_0000_0000_0001_u64;
+        let registry: RuntimeStore = RuntimeStore::new();
+        let bundle_id: BundleId = BundleId::from_u64(0x7777);
+        let contract_id: GuestContractId = GuestContractId::from_u64(CID);
+
+        let iface_v1: GuestContractInterface = mock_interface(CID);
+        // SAFETY: iface_v1 is a local value valid for this test's lifetime.
+        let h1: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                make_descriptor("v1", "reload.contract"),
+                &iface_v1,
+                "reload.contract".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("v1 register");
+
+        let old_slots: Vec<u32> = registry.get_bundle_plugin_slots(bundle_id);
+        assert_eq!(old_slots.len(), 1, "one published slot before reload");
+
+        // Open the reload window and register the new version (pending slot).
+        registry.begin_reload(bundle_id);
+        let iface_v2: GuestContractInterface = mock_interface(CID);
+        // SAFETY: iface_v2 is a local value valid for this test's lifetime.
+        let _h2: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                make_descriptor("v2", "reload.contract"),
+                &iface_v2,
+                "reload.contract".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("v2 register (pending)");
+
+        // The pending slot is now in plugin_slots, but find_by_bundle must return
+        // only the PUBLISHED slot, never the pending one.
+        let found: GuestContractHandle = registry
+            .find_guest_contract_by_bundle(bundle_id, contract_id, 0)
+            .expect("must resolve to the published slot, not the pending one");
+        assert_eq!(
+            found.index, h1.index,
+            "find_by_bundle must return the published slot during a reload window"
+        );
+
+        // Abort the reload — the pending slot is purged; the published handle still
+        // resolves (nothing the caller resolved dangles).
+        registry.abort_reload(bundle_id, &old_slots);
+        let still_live: *const GuestContractInterface = registry
+            .resolve_guest_contract(h1)
+            .expect("published handle stays valid after abort");
+        assert!(!still_live.is_null());
+    }
+
+    /// Finding 2 (ABA): `apply_reload_swap` must bump the generation of the
+    /// consumed new slot so a handle that captured its pre-swap generation goes
+    /// StaleHandle once the recycled slot index is reused by a later registration.
+    #[test]
+    fn apply_reload_swap_bumps_consumed_new_slot_generation() {
+        const CID: u64 = 0x3333_0000_0000_0001_u64;
+        let registry: RuntimeStore = RuntimeStore::new();
+        let bundle_id: BundleId = BundleId::from_u64(0x8888);
+
+        let iface_v1: GuestContractInterface = mock_interface(CID);
+        // SAFETY: local value valid for this test's lifetime.
+        let _h1: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                make_descriptor("v1", "aba.contract"),
+                &iface_v1,
+                "aba.contract".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("v1 register");
+        let old_slots: Vec<u32> = registry.get_bundle_plugin_slots(bundle_id);
+
+        // Reload: register a new version into a fresh (pending) slot.
+        registry.begin_reload(bundle_id);
+        let iface_v2: GuestContractInterface = mock_interface(CID);
+        // SAFETY: local value valid for this test's lifetime.
+        let h_new: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                make_descriptor("v2", "aba.contract"),
+                &iface_v2,
+                "aba.contract".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("v2 register (pending)");
+        let consumed_slot_index: u32 = h_new.index;
+        let captured_generation: u32 = h_new.generation;
+        assert_ne!(
+            consumed_slot_index, old_slots[0],
+            "the new version registers into a distinct slot"
+        );
+
+        // Swap: the new interface moves into the old slot; the new slot is vacated.
+        registry
+            .apply_reload_swap(bundle_id, &old_slots)
+            .expect("apply_reload_swap");
+
+        // Recycle the vacated index with a brand-new registration.
+        let recycle_bundle: BundleId = BundleId::from_u64(0x8889);
+        let iface_recycle: GuestContractInterface = mock_interface(0x3333_0000_0000_0002_u64);
+        // SAFETY: local value valid for this test's lifetime.
+        let h_recycle: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                make_descriptor("recycled", "recycle.contract"),
+                &iface_recycle,
+                "recycle.contract".to_owned(),
+                recycle_bundle,
+            )
+        }
+        .expect("recycled register");
+        assert_eq!(
+            h_recycle.index, consumed_slot_index,
+            "the vacated new slot index must be recycled by the next registration"
+        );
+        assert_ne!(
+            h_recycle.generation, captured_generation,
+            "recycled slot must carry a bumped generation (ABA protection)"
+        );
+
+        // The stale handle (vacated index + captured generation) must NOT resolve.
+        let stale: GuestContractHandle = GuestContractHandle {
+            index: consumed_slot_index,
+            generation: captured_generation,
+        };
+        let result: Result<*const GuestContractInterface, RegistryError> =
+            registry.resolve_guest_contract(stale);
+        assert!(
+            matches!(result, Err(RegistryError::StaleHandle { .. })),
+            "handle capturing the pre-swap generation must resolve StaleHandle, got {result:?}"
         );
     }
 
