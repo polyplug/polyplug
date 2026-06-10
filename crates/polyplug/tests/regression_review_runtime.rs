@@ -764,3 +764,71 @@ fn validate_accepts_absent_dependency_contract_id() {
         "validate must accept a dependency with an absent (0) contract_id"
     );
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// Finding 11 — host_register_guest_contract surfaces specific error codes.
+//
+// A same-bundle duplicate registration must return
+// AbiErrorCode::DuplicateProvider (the enum documents exactly this case), not a
+// flattened Generic, and the error detail must reach get_last_error — not just
+// stderr — so hosts and guests can react programmatically.
+// ════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn register_guest_contract_duplicate_returns_duplicate_provider_code() {
+    let runtime: Arc<Runtime> = build_bare_runtime();
+    let host_abi: &'static HostApi = runtime.host_abi();
+    let contract_id: u64 = GuestContractId::new("dup.contract", 1).id();
+    let interface: &'static GuestContractInterface = leak_guest_interface(contract_id);
+    let descriptor: PluginDescriptor = PluginDescriptor {
+        name: StringView::from_static(b"dup-plugin"),
+        contract_name: StringView::from_static(b"dup.contract"),
+        version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
+    };
+
+    // Attribute both registrations to the same (non-zero) bundle id, exactly as
+    // a loader's init window would.
+    runtime.push_init_bundle_id(0xD0D0_u64);
+    // SAFETY: host_abi is valid; descriptor and interface are valid 'static refs.
+    let first: polyplug_abi::AbiError = unsafe {
+        (host_abi.register_guest_contract)(
+            host_abi as *const HostApi,
+            &descriptor as *const PluginDescriptor,
+            interface as *const GuestContractInterface,
+        )
+    };
+    assert_eq!(first.code, AbiErrorCode::Ok as u32, "first must register");
+    // SAFETY: same as above — deliberate same-bundle duplicate registration.
+    let second: polyplug_abi::AbiError = unsafe {
+        (host_abi.register_guest_contract)(
+            host_abi as *const HostApi,
+            &descriptor as *const PluginDescriptor,
+            interface as *const GuestContractInterface,
+        )
+    };
+    runtime.pop_init_bundle_id();
+
+    assert_eq!(
+        second.code,
+        AbiErrorCode::DuplicateProvider as u32,
+        "same-bundle duplicate must return DuplicateProvider, not Generic"
+    );
+
+    // The detail must be readable through get_last_error.
+    // SAFETY: host_abi is valid for both error-introspection calls.
+    let len: usize = unsafe { (host_abi.get_error_len)(host_abi as *const HostApi) };
+    assert!(len > 0, "last error must be set on registration failure");
+    let mut buf: Vec<u8> = vec![0_u8; len];
+    // SAFETY: buf is valid for len bytes.
+    let written: usize =
+        unsafe { (host_abi.get_last_error)(host_abi as *const HostApi, buf.as_mut_ptr(), len) };
+    let msg: String = String::from_utf8_lossy(&buf[..written]).into_owned();
+    assert!(
+        msg.contains("duplicate provider"),
+        "last error must carry the registry detail, got: {msg}"
+    );
+}

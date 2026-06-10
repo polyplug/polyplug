@@ -1316,8 +1316,19 @@ pub(crate) unsafe extern "C" fn host_register_guest_contract(
         Ok(_handle) => polyplug_abi::types::AbiError::ok(),
         Err(e) => {
             eprintln!("[polyplug] registration failed for bundle {bundle_id}: {e}");
+            // Surface the detail through get_last_error (stderr alone is not
+            // programmatically reachable) and map the registry error to its
+            // specific ABI code where one exists, so guests can distinguish a
+            // same-bundle duplicate from a hash collision or bad input.
+            runtime.set_last_error(e.to_string());
+            let code: polyplug_abi::types::AbiErrorCode = match e {
+                crate::error::RegistryError::DuplicateProvider { .. } => {
+                    polyplug_abi::types::AbiErrorCode::DuplicateProvider
+                }
+                _ => polyplug_abi::types::AbiErrorCode::Generic,
+            };
             polyplug_abi::types::AbiError {
-                code: polyplug_abi::types::AbiErrorCode::Generic as u32,
+                code: code as u32,
                 message: polyplug_abi::types::StringView::null(),
             }
         }
