@@ -1,0 +1,15 @@
+id = 7723004511044881367
+name = "register_fail_plugin"
+version = "1.0"
+runtime = "native"
+provides = ["regfail.add"]
+
+[file]
+linux.x86_64   = "libregister_fail_plugin.so"
+linux.aarch64  = "libregister_fail_plugin.so"
+macos.x86_64   = "libregister_fail_plugin.dylib"
+macos.aarch64  = "libregister_fail_plugin.dylib"
+windows.x86_64 = "register_fail_plugin.dll"
+
+[function_count]
+"regfail.add@1" = 1

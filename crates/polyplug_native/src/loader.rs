@@ -46,6 +46,36 @@ impl NativeLoader {
             retired: Mutex::new(Vec::new()),
         }
     }
+
+    /// Handle a `load()` failure that occurred AFTER `polyplug_init` was invoked.
+    ///
+    /// init may have already registered one or more live, resolvable interfaces
+    /// before reporting failure (or panicking). Two things must happen, in order:
+    ///
+    /// 1. Invalidate whatever the failed init registered so the runtime retires
+    ///    those interfaces (the generation bump makes any published handle stale).
+    ///    `invalidate_bundle` returns `Ok((0, _))` when nothing was registered.
+    /// 2. RETIRE the library instead of dropping it. A library whose init ran must
+    ///    never be `dlclose`d here: its 'static registration data (descriptor /
+    ///    function-pointer arrays) backs the now-retired interface, and unmapping
+    ///    its code/data pages would dangle pointers the registry still holds.
+    fn retire_failed_init(
+        &self,
+        bundle_name: &str,
+        library: libloading::Library,
+        runtime: &Runtime,
+    ) {
+        let bundle_id: BundleId = BundleId::new(bundle_name);
+        // Ignore the slot count / retired Arcs: we only need the interfaces retired.
+        let _ = runtime.registry().invalidate_bundle(bundle_id);
+        self.retired
+            .lock()
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
+            .push(library);
+    }
 }
 
 impl BundleLoader for NativeLoader {
@@ -150,12 +180,28 @@ impl BundleLoader for NativeLoader {
         };
 
         // ─── Step 4: Create BundleInitContext ────────────────────────────────────────────
-        let bundle_dir = bundle_path.parent().unwrap_or(std::path::Path::new("."));
+        // All strings crossing the ABI are UTF-8 (`StringView`). A non-UTF-8 (or WTF-8
+        // on Windows) bundle path cannot be smuggled across as "UTF-8": reject it with
+        // a clear error instead.
+        let bundle_dir: &std::path::Path =
+            bundle_path.parent().unwrap_or(std::path::Path::new("."));
+        let bundle_dir_str: &str = match bundle_dir.to_str() {
+            Some(s) => s,
+            None => {
+                return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "bundle path is not valid UTF-8: {}",
+                        bundle_dir.to_string_lossy()
+                    ),
+                }));
+            }
+        };
         let ctx: BundleInitContext = BundleInitContext {
             bundle_id: BundleId::new(&manifest.name).id(),
             bundle_path: polyplug_abi::types::StringView {
-                ptr: bundle_dir.as_os_str().as_encoded_bytes().as_ptr(),
-                len: bundle_dir.as_os_str().as_encoded_bytes().len(),
+                ptr: bundle_dir_str.as_ptr(),
+                len: bundle_dir_str.len(),
             },
         };
 
@@ -182,6 +228,10 @@ impl BundleLoader for NativeLoader {
         let init_result: AbiError = match init_outcome {
             Ok(result) => result,
             Err(_panic) => {
+                // init ran (and may have registered a live interface) before panicking:
+                // invalidate its registrations and RETIRE the library — never dlclose a
+                // library whose init ran, its statics may back a retired interface.
+                self.retire_failed_init(&manifest.name, library, runtime);
                 return Err(RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
                     error: "plugin polyplug_init panicked".to_owned(),
@@ -199,6 +249,9 @@ impl BundleLoader for NativeLoader {
                 };
                 String::from_utf8_lossy(bytes).into_owned()
             };
+            // init ran and may have registered a contract before reporting failure:
+            // invalidate those registrations and retire (do not dlclose) the library.
+            self.retire_failed_init(&manifest.name, library, runtime);
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: error_msg,
@@ -206,14 +259,28 @@ impl BundleLoader for NativeLoader {
         }
 
         // ─── Step 8: Store library handle ─────────────────────────────────────────────
+        // If a bundle with the same id was already loaded (e.g. its file was replaced
+        // on disk → a different mapping), RETIRE the superseded handle instead of
+        // dropping it: old registry slots may still resolve raw fn pointers into the
+        // prior mapping, and dlclosing it would dangle them.
         let bundle_id: BundleId = BundleId::new(&manifest.name);
-        self.libraries
+        let superseded: Option<libloading::Library> = self
+            .libraries
             .lock()
             .unwrap_or_else(|e| {
                 eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
                 e.into_inner()
             })
             .insert(bundle_id, library);
+        if let Some(old_library) = superseded {
+            self.retired
+                .lock()
+                .unwrap_or_else(|e| {
+                    eprintln!("[polyplug_native] Mutex poisoned, recovering: {}", e);
+                    e.into_inner()
+                })
+                .push(old_library);
+        }
 
         Ok(())
     }
@@ -294,12 +361,27 @@ impl BundleLoader for NativeLoader {
         };
 
         // ─── Step 4: Create BundleInitContext ──────────────────────────────────────────────
-        let bundle_dir = bundle_path.parent().unwrap_or(std::path::Path::new("."));
+        // All strings crossing the ABI are UTF-8 (`StringView`). Reject a non-UTF-8
+        // (or WTF-8 on Windows) bundle path rather than smuggling it across.
+        let bundle_dir: &std::path::Path =
+            bundle_path.parent().unwrap_or(std::path::Path::new("."));
+        let bundle_dir_str: &str = match bundle_dir.to_str() {
+            Some(s) => s,
+            None => {
+                return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "bundle path is not valid UTF-8: {}",
+                        bundle_dir.to_string_lossy()
+                    ),
+                }));
+            }
+        };
         let ctx: BundleInitContext = BundleInitContext {
             bundle_id: BundleId::new(&manifest.name).id(),
             bundle_path: polyplug_abi::types::StringView {
-                ptr: bundle_dir.as_os_str().as_encoded_bytes().as_ptr(),
-                len: bundle_dir.as_os_str().as_encoded_bytes().len(),
+                ptr: bundle_dir_str.as_ptr(),
+                len: bundle_dir_str.len(),
             },
         };
 
@@ -624,6 +706,186 @@ mod unload_tests {
             1,
             "reclaim_safe=false must retire (defer) instead of dropping"
         );
+    }
+
+    /// Locate the pre-built `register_fail_plugin` bundle directory. Its
+    /// `polyplug_init` registers one contract and THEN returns a non-Ok error,
+    /// exercising the loader's "init published an interface before failing" path.
+    fn register_fail_plugin_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("tests")
+            .join("fixtures")
+            .join("register_fail_plugin")
+    }
+
+    /// A failed `load()` whose init had already registered a contract must NOT
+    /// `dlclose` the library (its registered statics back the published, still-
+    /// resolvable interface). The loader instead retires the library and
+    /// invalidates whatever the failed init registered.
+    ///
+    /// Regression for the HIGH finding: previously the local `library` dropped on
+    /// the error return → `dlclose` while the registry still held live interfaces
+    /// whose fn pointers dangled into unmapped pages.
+    #[test]
+    #[cfg(not(miri))]
+    fn failed_load_after_register_retires_library_and_invalidates() {
+        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Retire);
+        let dir: PathBuf = register_fail_plugin_dir();
+        let manifest: ManifestData =
+            parse_manifest(&dir).expect("parse_manifest for register_fail_plugin");
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+        let source: BundleSource = BundleSource::Path(manifest.path.clone());
+        let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
+
+        let load_result: Result<(), polyplug::error::RuntimeError> =
+            loader.load(&manifest, &source, &runtime);
+        assert!(
+            load_result.is_err(),
+            "init returns a non-Ok error, so load() must fail"
+        );
+
+        // The library must be RETIRED, never dropped: its registered statics may be
+        // referenced by the (now invalidated) interface still living in the registry.
+        assert_eq!(
+            loader.live_library_count(),
+            0,
+            "no live handle after a failed load"
+        );
+        assert_eq!(
+            loader.retired_library_count(),
+            1,
+            "a library whose init ran must be retired, not dlclose'd"
+        );
+
+        // The failed init's registration must have been invalidated: re-invalidating
+        // the same bundle now reports zero slots (idempotent — nothing left to retire).
+        let (count, _retired): (
+            u32,
+            Vec<std::sync::Arc<polyplug_abi::GuestContractInterface>>,
+        ) = runtime
+            .registry()
+            .invalidate_bundle(bundle_id)
+            .expect("invalidate_bundle should succeed");
+        assert_eq!(
+            count, 0,
+            "load() must have already invalidated the failed init's registration"
+        );
+    }
+
+    /// A second `load()` that re-inserts the same `BundleId` must RETIRE the
+    /// superseded `Library` handle (push into `retired`) rather than dropping it:
+    /// old registry slots may still resolve raw fn pointers into the prior mapping,
+    /// so dlclosing the old mapping would dangle them.
+    ///
+    /// Regression for the double-load MEDIUM finding (Step 8 `insert` returning the
+    /// old handle was previously dropped).
+    ///
+    /// The runtime rejects a duplicate provider for the same contract, so between
+    /// the two loads the bundle's registration is invalidated in the registry
+    /// (simulating the contract having been unloaded while the loader still holds
+    /// the old library handle). The second `load()` then succeeds at the registry
+    /// level and re-inserts the same `BundleId`, exercising the supersede path.
+    #[test]
+    #[cfg(not(miri))]
+    fn double_load_retires_superseded_library() {
+        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Retire);
+        let dir: PathBuf = test_plugin_dir();
+        let manifest: ManifestData =
+            parse_manifest(&dir).expect("parse_manifest for test_plugin_dir");
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+        let source: BundleSource = BundleSource::Path(manifest.path.clone());
+        let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
+
+        loader
+            .load(&manifest, &source, &runtime)
+            .expect("first native load should succeed");
+        assert_eq!(loader.live_library_count(), 1);
+        assert_eq!(loader.retired_library_count(), 0);
+
+        // Drop the registry-side registration (the loader still holds the library
+        // handle) so the second load's register_guest_contract is not a duplicate.
+        runtime
+            .registry()
+            .invalidate_bundle(bundle_id)
+            .expect("invalidate_bundle should succeed");
+
+        loader
+            .load(&manifest, &source, &runtime)
+            .expect("second native load should succeed");
+
+        assert_eq!(
+            loader.live_library_count(),
+            1,
+            "the new handle replaces the old live handle"
+        );
+        assert_eq!(
+            loader.retired_library_count(),
+            1,
+            "the superseded library must be retired, not dropped"
+        );
+    }
+
+    /// A non-UTF-8 bundle path must fail cleanly with a clear "not valid UTF-8"
+    /// error instead of being smuggled across the ABI as a UTF-8 `StringView`.
+    ///
+    /// Regression for the MEDIUM finding: `as_encoded_bytes()` previously crossed
+    /// non-UTF-8 (and WTF-8 on Windows) bytes into `BundleInitContext.bundle_path`.
+    #[test]
+    #[cfg(all(unix, not(miri)))]
+    fn non_utf8_bundle_path_fails_cleanly() {
+        use std::os::unix::ffi::OsStrExt;
+
+        // Build a temp bundle dir whose name contains an invalid UTF-8 byte (0xFF),
+        // copy the test_plugin .so into it, and point a manifest at it.
+        let src_dir: PathBuf = test_plugin_dir();
+        let src_manifest: ManifestData =
+            parse_manifest(&src_dir).expect("parse_manifest for test_plugin_dir");
+        let dll_name: String = src_manifest.file.clone();
+        let src_dll: PathBuf = src_dir.join(&dll_name);
+
+        let mut name_bytes: Vec<u8> =
+            format!("polyplug_native_badutf8_{}_", std::process::id()).into_bytes();
+        name_bytes.push(0xFF);
+        let dir_name: std::ffi::OsString = std::ffi::OsStr::from_bytes(&name_bytes).to_owned();
+        let temp_dir: PathBuf = std::env::temp_dir().join(dir_name);
+        std::fs::create_dir_all(&temp_dir).expect("create non-utf8 bundle dir");
+
+        let dest_dll: PathBuf = temp_dir.join(&dll_name);
+        std::fs::copy(&src_dll, &dest_dll).expect("copy fixture dll");
+
+        let manifest_toml: String = format!(
+            "id = {}\nname = \"{}\"\nversion = \"{}\"\nruntime = \"native\"\nprovides = [\"test.add\"]\n\n[file]\nlinux.x86_64 = \"{}\"\nlinux.aarch64 = \"{}\"\nmacos.x86_64 = \"{}\"\nmacos.aarch64 = \"{}\"\n\n[function_count]\n\"test.add@1\" = 1\n",
+            src_manifest.id,
+            src_manifest.name,
+            src_manifest.version,
+            dll_name,
+            dll_name,
+            dll_name,
+            dll_name
+        );
+        std::fs::write(temp_dir.join("manifest.toml"), &manifest_toml)
+            .expect("write temp manifest");
+
+        let manifest: ManifestData =
+            parse_manifest(&temp_dir).expect("parse_manifest for non-utf8 bundle");
+        let source: BundleSource = BundleSource::Path(manifest.path.clone());
+        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Retire);
+        let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
+
+        let load_result: Result<(), polyplug::error::RuntimeError> =
+            loader.load(&manifest, &source, &runtime);
+
+        let err: polyplug::error::RuntimeError =
+            load_result.expect_err("non-UTF-8 bundle path must fail cleanly");
+        let msg: String = err.to_string();
+        assert!(
+            msg.contains("not valid UTF-8"),
+            "error must mention non-UTF-8 path, got: {msg}"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     /// On Windows, a mapped DLL holds an exclusive file lock, so `remove_file`

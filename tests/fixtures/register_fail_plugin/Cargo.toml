@@ -1,0 +1,17 @@
+[package]
+name             = "register_fail_plugin"
+version          = "0.1.0"
+edition.workspace      = true
+license.workspace      = true
+rust-version.workspace = true
+publish          = false
+
+[lib]
+name       = "register_fail_plugin"
+crate-type = ["cdylib"]
+
+[dependencies]
+polyplug_abi = { workspace = true }
+
+[lints]
+workspace = true
