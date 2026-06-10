@@ -7,20 +7,23 @@ into ``<out-dir>``. The SVGs are committed and embedded in ``docs/PERFORMANCE.md
 so the numbers are visible without anyone re-running the suite.
 
 This is a *local* tool, exactly like the benchmarks it draws from. Run it after
-a local ``cargo bench -p polyplug`` (a quiet machine gives trustworthy bars):
+a local ``cargo bench`` across the core + loader crates (a quiet machine gives
+trustworthy bars):
 
-    cargo bench -p polyplug
-    python3 ci/gen_bench_charts.py target/criterion docs/assets/benches
+    cargo bench -p polyplug -p polyplug_lua -p polyplug_js \
+        -p polyplug_python -p polyplug_dotnet
+    python3 scripts/gen_bench_charts.py target/criterion docs/assets/benches
 
-It reads ``median.point_estimate`` (nanoseconds) — the median is robust to the
-single-run scheduler noise a developer machine adds, so the bars stay stable
-between runs. Throughput metadata in ``benchmark.json`` is used to convert a
-whole-loop measurement (e.g. the 1,000,000-iteration ``counter_inc`` loop) into
-a per-call figure.
+Every bar is read live from criterion's ``median.point_estimate`` (nanoseconds)
+— the median is robust to the single-run scheduler noise a developer machine
+adds, so the bars stay stable between runs. Throughput metadata in
+``benchmark.json`` converts a whole-loop measurement (e.g. the 1,000,000-iteration
+``counter_inc`` loop) into a per-call figure.
 """
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -86,134 +89,14 @@ def _svg(width: int, height: int, body: str) -> str:
     )
 
 
-# ─── charts ───────────────────────────────────────────────────────────────────
-
 # Brand-ish palette on a dark (#0d1117) GitHub-readme background.
 _FG: str = "#c9d1d9"
 _MUTED: str = "#8b949e"
 _GRID: str = "#21262d"
-_HILITE: str = "#3fb950"  # polyplug (the product)
+_HILITE: str = "#3fb950"  # polyplug / the fast, zero-copy path
 _NEUTRAL: str = "#58a6ff"  # FFI / native reference / VM
 _FLOOR: str = "#6e7681"  # un-crossable floor
-_SLOW: str = "#d29922"  # the expensive end (Python GIL / ctypes)
-
-
-def chart_counter_inc(criterion_dir: Path, out: Path) -> None:
-    """Horizontal bar chart: per-call cost of each counter_inc mechanism."""
-    bars: list[tuple[str, str, str]] = [
-        ("native/inline_never", "direct call (floor)", _FLOOR),
-        ("ffi/by_value", "raw dlsym FFI", _NEUTRAL),
-        ("native/abi_marshalled", "ABI convention (static)", _NEUTRAL),
-        ("polyplug/dispatch", "polyplug — Rust plugin", _HILITE),
-        ("polyplug/dispatch_cpp", "polyplug — C++ plugin", _HILITE),
-    ]
-    values: list[tuple[str, str, float]] = [
-        (label, color, per_call_ns(criterion_dir, f"counter_inc_1m/{fid}"))
-        for fid, label, color in bars
-    ]
-
-    width: int = 720
-    pad_l: int = 230
-    pad_r: int = 90
-    pad_t: int = 56
-    row_h: int = 46
-    height: int = pad_t + row_h * len(values) + 30
-    plot_w: int = width - pad_l - pad_r
-    vmax: float = max(v for _, _, v in values) * 1.12
-
-    parts: list[str] = [
-        _text(24, 30, "counter_inc — per-call cost (lower is better)", 17, _FG, "start"),
-        _text(24, 47, "same 1,000,000x loop, inc reached a different way each bar", 11, _MUTED, "start"),
-    ]
-    for i, (label, color, value) in enumerate(values):
-        y: float = pad_t + i * row_h
-        bar_w: float = plot_w * value / vmax
-        parts.append(_text(pad_l - 12, y + row_h / 2 + 4, label, 12, _FG, "end"))
-        parts.append(_rect(pad_l, y + 7, bar_w, row_h - 18, color))
-        parts.append(
-            _text(pad_l + bar_w + 8, y + row_h / 2 + 4, f"{value:.2f} ns", 12, _FG, "start")
-        )
-    parts.append(_line(pad_l, pad_t - 6, pad_l, pad_t + row_h * len(values), _GRID, 1))
-
-    out.write_text(_svg(width, height, "".join(parts)))
-
-
-def chart_payload_scaling(criterion_dir: Path, out: Path) -> None:
-    """Line chart: native vs polyplug per-call cost across payload sizes."""
-    sizes: list[int] = [0, 16, 64, 256, 1024, 4096, 16384]
-    series: list[tuple[str, str, str]] = [
-        ("native_direct", "native (static)", _NEUTRAL),
-        ("polyplug_dispatch", "polyplug dispatch", _HILITE),
-    ]
-    data: dict[str, list[float]] = {
-        fid: [per_call_ns(criterion_dir, f"payload_scaling/{fid}/{n}") for n in sizes]
-        for fid, _, _ in series
-    }
-
-    width: int = 720
-    height: int = 420
-    pad_l: int = 64
-    pad_r: int = 24
-    pad_t: int = 64
-    pad_b: int = 56
-    plot_w: int = width - pad_l - pad_r
-    plot_h: int = height - pad_t - pad_b
-
-    all_values: list[float] = [v for col in data.values() for v in col]
-    # Log-y so the small-payload detail and the 16 KB tail both stay visible.
-    import math
-
-    lo: float = math.log10(min(all_values))
-    hi: float = math.log10(max(all_values))
-
-    def x_of(i: int) -> float:
-        return pad_l + plot_w * i / (len(sizes) - 1)
-
-    def y_of(v: float) -> float:
-        return pad_t + plot_h * (1 - (math.log10(v) - lo) / (hi - lo))
-
-    parts: list[str] = [
-        _text(24, 30, "payload_scaling — overhead vanishes as work grows", 17, _FG, "start"),
-        _text(24, 47, "per-call cost vs bytes written (log scale); the lines converge", 11, _MUTED, "start"),
-    ]
-    # x gridlines + labels
-    for i, n in enumerate(sizes):
-        gx: float = x_of(i)
-        parts.append(_line(gx, pad_t, gx, pad_t + plot_h, _GRID, 1))
-        parts.append(_text(gx, pad_t + plot_h + 18, str(n), 10, _MUTED, "middle"))
-    parts.append(_text(pad_l + plot_w / 2, height - 8, "payload (bytes)", 11, _MUTED, "middle"))
-    # series polylines + points
-    for fid, label, color in series:
-        pts: list[str] = []
-        for i, value in enumerate(data[fid]):
-            pts.append(f"{x_of(i):.1f},{y_of(value):.1f}")
-        parts.append(
-            f"<polyline points='{' '.join(pts)}' fill='none' stroke='{color}' stroke-width='2.5'/>"
-        )
-        for i, value in enumerate(data[fid]):
-            parts.append(f"<circle cx='{x_of(i):.1f}' cy='{y_of(value):.1f}' r='3' fill='{color}'/>")
-    # legend
-    for j, (_, label, color) in enumerate(series):
-        ly: float = pad_t + 6 + j * 18
-        parts.append(_rect(pad_l + 12, ly - 9, 14, 10, color))
-        parts.append(_text(pad_l + 32, ly, label, 11, _FG, "start"))
-
-    out.write_text(_svg(width, height, "".join(parts)))
-
-
-# ─── cross-language comparison (log-scale horizontal bars) ────────────────────
-#
-# These two charts compare the *languages* against each other, in both
-# directions of the boundary:
-#   - guest  = the runtime dispatching INTO a plugin written in language X
-#   - host   = an application written in language X calling INTO the runtime
-#
-# The native (Rust / C++) guest bars are read live from the counter_inc run so
-# they stay current. The VM-guest and host-FFI numbers are the measured figures
-# documented in docs/PERFORMANCE.md (they come from the per-loader
-# `dispatch_benchmark.rs` benches and the host FFI micro-benchmarks, which need
-# each language's runtime to reproduce). Re-run those and update the tables here
-# to refresh. All numbers are illustrative — one machine; trust the ordering.
+_SLOW: str = "#d29922"  # the expensive end (owned copy / Python GIL / ctypes)
 
 
 def _fmt_ns(value: float) -> str:
@@ -221,13 +104,43 @@ def _fmt_ns(value: float) -> str:
         return f"{value / 1000.0:.1f} µs"
     if value >= 100.0:
         return f"{value:.0f} ns"
-    return f"{value:.1f} ns"
+    if value >= 10.0:
+        return f"{value:.1f} ns"
+    return f"{value:.2f} ns"
+
+
+# ─── reusable chart layouts ───────────────────────────────────────────────────
+
+
+def _chart_hbar_linear(out: Path, title: str, subtitle: str, rows: list) -> None:
+    """Horizontal linear-scale bar chart; rows = [(label, ns, color)]."""
+    width: int = 720
+    pad_l: int = 250
+    pad_r: int = 96
+    pad_t: int = 56
+    row_h: int = 46
+    height: int = pad_t + row_h * len(rows) + 30
+    plot_w: int = width - pad_l - pad_r
+    vmax: float = max(ns for _, ns, _ in rows) * 1.12
+
+    parts: list = [
+        _text(24, 30, title, 17, _FG, "start"),
+        _text(24, 47, subtitle, 11, _MUTED, "start"),
+    ]
+    for i, (label, value, color) in enumerate(rows):
+        y: float = pad_t + i * row_h
+        bar_w: float = plot_w * value / vmax
+        parts.append(_text(pad_l - 12, y + row_h / 2 + 4, label, 12, _FG, "end"))
+        parts.append(_rect(pad_l, y + 7, max(bar_w, 1.5), row_h - 18, color))
+        parts.append(
+            _text(pad_l + bar_w + 8, y + row_h / 2 + 4, _fmt_ns(value), 12, _FG, "start")
+        )
+    parts.append(_line(pad_l, pad_t - 6, pad_l, pad_t + row_h * len(rows), _GRID, 1))
+    out.write_text(_svg(width, height, "".join(parts)))
 
 
 def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str) -> None:
     """Horizontal log-scale bar chart; rows = [(label, ns, color)]."""
-    import math
-
     width: int = 760
     pad_l: int = 250
     pad_r: int = 96
@@ -244,7 +157,7 @@ def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str)
         frac: float = max(math.log10(ns), 0.3) / axis_hi
         return pad_l + plot_w * frac
 
-    parts: list[str] = [
+    parts: list = [
         _text(24, 30, title, 17, _FG, "start"),
         _text(24, 47, subtitle, 11, _MUTED, "start"),
     ]
@@ -266,25 +179,198 @@ def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str)
     out.write_text(_svg(width, height, "".join(parts)))
 
 
-def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
-    """Per-call dispatch cost, runtime -> guest, by plugin language (log scale)."""
-    rust_ns: float = per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch")
-    cpp_ns: float = per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch_cpp")
+def _chart_lines(
+    out: Path, title: str, subtitle: str, sizes: list, series: list, data: dict, xlabel: str
+) -> None:
+    """Log-y line chart over a shared x axis; series = [(key, label, color)]."""
+    width: int = 720
+    height: int = 420
+    pad_l: int = 64
+    pad_r: int = 24
+    pad_t: int = 64
+    pad_b: int = 56
+    plot_w: int = width - pad_l - pad_r
+    plot_h: int = height - pad_t - pad_b
+
+    all_values: list = [v for col in data.values() for v in col]
+    lo: float = math.log10(min(all_values))
+    hi: float = math.log10(max(all_values))
+    span: float = hi - lo if hi > lo else 1.0
+
+    def x_of(i: int) -> float:
+        return pad_l + plot_w * i / (len(sizes) - 1)
+
+    def y_of(v: float) -> float:
+        return pad_t + plot_h * (1 - (math.log10(v) - lo) / span)
+
+    parts: list = [
+        _text(24, 30, title, 17, _FG, "start"),
+        _text(24, 47, subtitle, 11, _MUTED, "start"),
+    ]
+    for i, n in enumerate(sizes):
+        gx: float = x_of(i)
+        parts.append(_line(gx, pad_t, gx, pad_t + plot_h, _GRID, 1))
+        parts.append(_text(gx, pad_t + plot_h + 18, str(n), 10, _MUTED, "middle"))
+    parts.append(_text(pad_l + plot_w / 2, height - 8, xlabel, 11, _MUTED, "middle"))
+    for key, _, color in series:
+        pts: list = [f"{x_of(i):.1f},{y_of(v):.1f}" for i, v in enumerate(data[key])]
+        parts.append(
+            f"<polyline points='{' '.join(pts)}' fill='none' stroke='{color}' stroke-width='2.5'/>"
+        )
+        for i, v in enumerate(data[key]):
+            parts.append(f"<circle cx='{x_of(i):.1f}' cy='{y_of(v):.1f}' r='3' fill='{color}'/>")
+    for j, (_, label, color) in enumerate(series):
+        ly: float = pad_t + 6 + j * 18
+        parts.append(_rect(pad_l + 12, ly - 9, 14, 10, color))
+        parts.append(_text(pad_l + 32, ly, label, 11, _FG, "start"))
+    out.write_text(_svg(width, height, "".join(parts)))
+
+
+# ─── charts ───────────────────────────────────────────────────────────────────
+
+
+def chart_counter_inc(criterion_dir: Path, out: Path) -> None:
+    """Per-call cost of each counter_inc mechanism (linear bars)."""
+    bars: list = [
+        ("native/inline_never", "direct call (floor)", _FLOOR),
+        ("ffi/by_value", "raw dlsym FFI", _NEUTRAL),
+        ("native/abi_marshalled", "ABI convention (static)", _NEUTRAL),
+        ("polyplug/dispatch", "polyplug — Rust plugin", _HILITE),
+        ("polyplug/dispatch_cpp", "polyplug — C++ plugin", _HILITE),
+    ]
     rows: list = [
-        ("Rust (native cdylib)", rust_ns, _HILITE),
-        ("C++ (native cdylib)", cpp_ns, _HILITE),
-        (".NET (CLR, UnmanagedCallersOnly)", 8.0, _NEUTRAL),
-        ("Lua (LuaJIT)", 35.0, _NEUTRAL),
-        ("Python (GIL held, cached)", 63.0, _NEUTRAL),
-        ("JavaScript (QuickJS)", 95.0, _NEUTRAL),
+        (label, per_call_ns(criterion_dir, f"counter_inc_1m/{fid}"), color)
+        for fid, label, color in bars
+    ]
+    _chart_hbar_linear(
+        out,
+        "counter_inc — per-call cost (lower is better)",
+        "same 1,000,000x loop, inc reached a different way each bar",
+        rows,
+    )
+
+
+def chart_dispatch_by_shape(criterion_dir: Path, out: Path) -> None:
+    """Per-call dispatch cost by argument/return shape (linear bars)."""
+    bars: list = [
+        ("dispatch/struct_arg_and_return/add(42,57)", "struct arg + scalar return", _HILITE),
+        ("dispatch/noop/add(0,0)", "noop — add(0,0)", _HILITE),
+        ("dispatch/buffer_arg/fill_4096", "4 KB buffer fill", _NEUTRAL),
+        ("dispatch/cross_plugin/find+call", "cross-plugin (find+resolve+call)", _NEUTRAL),
+    ]
+    rows: list = [
+        (label, per_call_ns(criterion_dir, fid), color) for fid, label, color in bars
+    ]
+    _chart_hbar_linear(
+        out,
+        "Dispatch cost by argument shape (lower is better)",
+        "scalar args are ~free; a buffer fill and a cross-plugin lookup add real work",
+        rows,
+    )
+
+
+def chart_payload_scaling(criterion_dir: Path, out: Path) -> None:
+    """Native vs polyplug per-call cost across payload sizes (log-y lines)."""
+    sizes: list = [0, 16, 64, 256, 1024, 4096, 16384]
+    series: list = [
+        ("native_direct", "native (static)", _NEUTRAL),
+        ("polyplug_dispatch", "polyplug dispatch", _HILITE),
+    ]
+    data: dict = {
+        key: [per_call_ns(criterion_dir, f"payload_scaling/{key}/{n}") for n in sizes]
+        for key, _, _ in series
+    }
+    _chart_lines(
+        out,
+        "payload_scaling — overhead vanishes as work grows",
+        "per-call cost vs bytes written (log scale); the lines converge",
+        sizes,
+        series,
+        data,
+        "payload (bytes)",
+    )
+
+
+def chart_marshalling(criterion_dir: Path, out: Path) -> None:
+    """Borrowed view vs owned copy return cost across payload sizes (log-y lines)."""
+    sizes: list = [16, 256, 4096, 16384]
+    series: list = [
+        ("borrowed", "borrowed view (zero-copy)", _HILITE),
+        ("owned", "owned copy (host alloc + memcpy)", _SLOW),
+    ]
+    data: dict = {
+        key: [per_call_ns(criterion_dir, f"marshalling/{key}/{n}") for n in sizes]
+        for key, _, _ in series
+    }
+    _chart_lines(
+        out,
+        "Return marshalling — borrowed view vs owned copy",
+        "per-call cost vs payload bytes (log scale); borrowed is flat, owned scales",
+        sizes,
+        series,
+        data,
+        "payload (bytes)",
+    )
+
+
+def chart_amortization(criterion_dir: Path, out: Path) -> None:
+    """One-time load / resolve / reload costs (log-scale bars)."""
+    rows: list = [
+        ("find + resolve (per call)", per_call_ns(criterion_dir, "amortization/find_and_resolve"), _HILITE),
+        ("load bundle (dlopen + init)", per_call_ns(criterion_dir, "amortization/load_bundle"), _SLOW),
+        ("hot-reload swap (v1 → v2)", per_call_ns(criterion_dir, "amortization/hot_reload_swap"), _SLOW),
+    ]
+    _chart_hbar_log(
+        out,
+        "Amortized one-time costs  (pay once, not per call)",
+        "log scale — these happen at load/reload, never on the dispatch hot path",
+        rows,
+        "find+resolve is the only one a caller might repeat — and it is ~20 ns (a HashMap hit). "
+        "Load and reload are dominated by the OS dlopen/mmap, not polyplug; see PROFILING.md.",
+    )
+
+
+# ─── cross-language comparison (log-scale horizontal bars) ────────────────────
+#
+# These two charts compare the *languages* against each other, in both
+# directions of the boundary:
+#   - guest = the runtime dispatching INTO a plugin written in language X
+#   - host  = an application written in language X calling INTO the runtime
+#
+# The guest bars are read live from each loader's warm steady-state dispatch
+# bench (VM/context already created, function cached) so they stay current and
+# comparable. The host-FFI numbers are the measured figures documented in
+# docs/PERFORMANCE.md (host micro-benchmarks need each language's runtime to
+# reproduce). All numbers are illustrative — one machine; trust the ordering.
+
+
+def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
+    """Per-call dispatch cost, runtime -> guest, by plugin language (log scale).
+
+    Every bar is read live from the warm steady-state dispatch bench for that
+    language, so the chart can never drift from the measured numbers:
+      - Rust / C++  : counter_inc (native cdylib, marshalled call)
+      - .NET        : clr_dispatch/clr_init_call (warm [UnmanagedCallersOnly])
+      - Lua         : lua_dispatch/vm_dispatch_single_call (warm LuaJIT call)
+      - Python      : cached_dispatch/cached_python_single_call (GIL held, cached fn)
+      - JavaScript  : cached_dispatch/cached_context_single_call (cached QuickJS ctx)
+    """
+    rows: list = [
+        ("Rust (native cdylib)", per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch"), _HILITE),
+        ("C++ (native cdylib)", per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch_cpp"), _HILITE),
+        (".NET (CLR, UnmanagedCallersOnly)", per_call_ns(criterion_dir, "clr_dispatch/clr_init_call"), _NEUTRAL),
+        ("Lua (LuaJIT)", per_call_ns(criterion_dir, "lua_dispatch/vm_dispatch_single_call"), _NEUTRAL),
+        ("Python (GIL held, cached)", per_call_ns(criterion_dir, "cached_dispatch/cached_python_single_call"), _NEUTRAL),
+        ("JavaScript (QuickJS, cached)", per_call_ns(criterion_dir, "cached_dispatch/cached_context_single_call"), _NEUTRAL),
     ]
     _chart_hbar_log(
         out,
         "Guest dispatch by language  (runtime → plugin)",
-        "steady-state per-call cost, log scale — lower is better",
+        "warm steady-state per-call cost, log scale — lower is better",
         rows,
-        "Rust/C++ measured live (counter_inc); VM rows from per-loader benches. "
-        "Python also pays a one-time ~13 µs GIL acquire per batch.",
+        "All bars measured live: native from counter_inc; .NET/Lua/Python/JS from each loader's "
+        "warm cached-dispatch bench. Python additionally pays a one-time ~12 µs GIL acquire + compile "
+        "on a cold call (see PERFORMANCE.md).",
     )
 
 
@@ -325,9 +411,12 @@ def main() -> int:
         return 1
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    charts: list[tuple[str, object]] = [
+    charts: list = [
         ("counter_inc.svg", chart_counter_inc),
+        ("dispatch_by_shape.svg", chart_dispatch_by_shape),
         ("payload_scaling.svg", chart_payload_scaling),
+        ("marshalling.svg", chart_marshalling),
+        ("amortization.svg", chart_amortization),
         ("cross_lang_guest.svg", chart_cross_language_guest),
         ("cross_lang_host.svg", chart_cross_language_host),
     ]
@@ -337,7 +426,7 @@ def main() -> int:
             render(criterion_dir, target)
         except (FileNotFoundError, KeyError) as error:
             print(f"error: cannot render {name}: missing data ({error})", file=sys.stderr)
-            print("       run `cargo bench -p polyplug` first.", file=sys.stderr)
+            print("       run the full `cargo bench` across polyplug + loader crates first.", file=sys.stderr)
             return 1
         print(f"wrote {target}")
     return 0

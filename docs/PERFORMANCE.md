@@ -331,12 +331,14 @@ the safety boundary is free.** The pessimal "re-resolve the contract on every
 call" pattern (nobody does this in a loop) is measured separately by
 `contract_dispatch::bench_dispatch_cross_plugin`.
 
-> **Regenerating these charts.** Both SVGs are committed under
+> **Regenerating these charts.** All SVGs are committed under
 > `docs/assets/benches/` and rebuilt locally — never in CI — from a criterion
-> run:
+> run. The guest-by-language chart reads every loader's bar live, so run the
+> loader crates too:
 > ```bash
-> cargo bench -p polyplug                                   # produces target/criterion
-> python3 ci/gen_bench_charts.py target/criterion docs/assets/benches
+> cargo bench -p polyplug -p polyplug_lua -p polyplug_js \
+>     -p polyplug_python -p polyplug_dotnet            # produces target/criterion
+> python3 scripts/gen_bench_charts.py target/criterion docs/assets/benches
 > ```
 > Run benches on a quiet machine and trust the **ratios**, not the absolute ns.
 
@@ -404,6 +406,15 @@ Without the arena, every dispatch call that returns a string does one
 return path into a pointer increment, removing the allocator round trip from hot
 dispatch loops. For a 10,000-iteration echo loop the integration tests assert the
 host allocator is hit **zero** times after warmup.
+
+![borrowed view vs owned copy return cost](assets/benches/marshalling.svg)
+
+The same trade-off measured directly (native path, `contract_dispatch`'s
+`marshalling` group): returning a **borrowed view** of caller-owned bytes is flat
+at ~1.8 ns regardless of payload size, while an **owned copy** pays a host
+allocation plus a `memcpy` that grows with the payload. Borrowed zero-copy returns
+(`&str` / `string_view` / `ReadOnlySpan` / `memoryview`) are the default for
+native guests; the arena gives VM guests the same zero-allocation property.
 
 ### Lifetime rule
 
@@ -520,8 +531,10 @@ chart far above.)
 
 ![guest dispatch cost by language](assets/benches/cross_lang_guest.svg)
 
-The native bars (Rust, C++) are read live from the `counter_inc` run; the VM
-bars come from the per-loader benches below. Native dispatch is **language-blind**
+**Every bar is read live from criterion** — native from the `counter_inc` run,
+and each VM from its loader's warm steady-state dispatch bench below (`.NET`
+`clr_init_call`, `lua` `vm_dispatch_single_call`, `python` `cached_python_single_call`,
+`js` `cached_context_single_call`). Native dispatch is **language-blind**
 (~2.3–2.5 ns whether the plugin is Rust or C++); each VM then adds its own
 interpreter cost on top.
 
@@ -532,12 +545,18 @@ interpreter cost on top.
 
 | Benchmark | Time | Description |
 |-----------|------|-------------|
-| `noop` | **2.2 ns** | Trivial function call (add(0,0)) |
-| `struct_arg_and_return` | **2.2 ns** | Struct args with return value |
-| `buffer_arg` | **30 ns** | 4096-byte buffer operation |
-| `cross_plugin` | **43 ns** | find_guest_contract + resolve + dispatch |
+| `noop` | **~2 ns** | Trivial function call (add(0,0)) |
+| `struct_arg_and_return` | **~2 ns** | Struct args with return value |
+| `buffer_arg` | **~30 ns** | 4096-byte buffer operation |
+| `cross_plugin` | **~35 ns** | find_guest_contract + resolve + dispatch |
 
 **Native dispatch is essentially zero overhead** - direct function pointer calls with no VM layer.
+
+![dispatch cost by argument shape](assets/benches/dispatch_by_shape.svg)
+
+Scalar args (`noop`, `struct_arg_and_return`) are ~free; the cost only shows up
+when there is real work — filling a 4 KB buffer, or a cross-plugin call that pays
+a `find_guest_contract` + `resolve_guest_contract` registry lookup before dispatch.
 
 ### QuickJS (JS Guest Plugins)
 
@@ -565,8 +584,13 @@ interpreter cost on top.
 | `gil_acquire_and_call` | **12.7-13.8 µs** | GIL acquisition + function call |
 | `gil_acquire_and_10_calls` | 12.8-12.9 µs | GIL + 10 calls (GIL amortized) |
 | `gil_acquire_only` | 37 ns | GIL acquisition only |
-| `cached_function_single_call` | **59-67 ns** | Cached function (GIL already held) |
-| `cached_function_10_calls` | 290-335 ns | 10 cached calls (~29-34 ns/call) |
+| `cached_python_single_call` | **59-67 ns** | Cached function (GIL already held) |
+| `cached_python_10_calls` | 290-335 ns | 10 cached calls (~29-34 ns/call) |
+
+> The Python warm-dispatch arm is named `cached_python_*` (not `cached_function_*`)
+> so it does not collide with the Lua bench's identically-grouped `cached_function_*`
+> — both write to the shared `cached_dispatch` criterion group, and a shared id would
+> overwrite the other loader's data.
 
 **Key insight**: Python's GIL acquisition dominates overhead (~13 µs). Once GIL is held, cached dispatch is fast (~63 ns). For batch operations, acquire GIL once and make multiple calls.
 
@@ -574,8 +598,8 @@ interpreter cost on top.
 
 | Benchmark | Time | Description |
 |-----------|------|-------------|
-| `clr_init_call` | **7.4-8.3 ns** | Real CLR dispatch via `[UnmanagedCallersOnly]` |
-| `clr_init_10_calls` | 70-76 ns | 10 calls (~7-7.6 ns/call) |
+| `clr_init_call` | **~7-11 ns** | Real CLR dispatch via `[UnmanagedCallersOnly]` (varies with machine load) |
+| `clr_init_10_calls` | 70-115 ns | 10 calls (~7-11 ns/call) |
 | `native_function_pointer_call` | 1.3-1.5 ns | Native baseline for comparison |
 
 **.NET dispatch is near-native** - only ~5x slower than a native function pointer call. The `[UnmanagedCallersOnly]` attribute exposes native function pointers from the CLR, enabling zero-overhead interop.
@@ -585,21 +609,37 @@ interpreter cost on top.
 | Loader Type | Dispatch Overhead | Best For |
 |-------------|-------------------|----------|
 | **Native** | ~2 ns | Maximum performance |
-| **.NET** | ~8 ns | Near-native with CLR ecosystem |
+| **.NET** | ~7-11 ns | Near-native with CLR ecosystem |
 | **Lua** | ~35 ns | Fastest VM dispatch, embedded scripting |
-| **QuickJS** | ~95 ns | Fast VM dispatch, JS ecosystem |
-| **Python** | ~13 µs (GIL) / ~63 ns (cached) | Data science, ML ecosystem |
+| **QuickJS** | ~80 ns | Fast VM dispatch, JS ecosystem |
+| **Python** | ~13 µs (GIL) / ~60 ns (cached) | Data science, ML ecosystem |
 
 ### Performance Insights
 
 1. **Native is zero overhead** - Direct function pointer calls
-2. **.NET is near-native** - `[UnmanagedCallersOnly]` enables ~8 ns dispatch through CLR
+2. **.NET is near-native** - `[UnmanagedCallersOnly]` enables ~7-11 ns dispatch through CLR
 3. **Lua is the fastest VM loader** - LuaJIT's FFI provides ~35 ns dispatch
-4. **QuickJS follows closely** - ~95 ns with cached context architecture
-5. **Python's GIL is the bottleneck** - ~13 µs to acquire GIL, but only ~63 ns once held
+4. **QuickJS follows closely** - ~80 ns with cached context architecture
+5. **Python's GIL is the bottleneck** - ~13 µs to acquire GIL, but only ~60 ns once held
 6. **All VM loaders are "fast enough"** - Even Python's 13 µs is negligible for functions >100 µs
 
 ---
+
+## Amortized Costs (load / resolve / reload)
+
+Everything above is the **per-call** hot path. The one-time costs — loading a
+bundle, resolving a handle, hot-reloading — are paid once and amortized over
+every subsequent dispatch. The `amortization` bench measures them:
+
+![amortized one-time costs](assets/benches/amortization.svg)
+
+- **find + resolve (~20 ns)** is the only one a caller might repeat — and it is a
+  `HashMap` lookup plus a pointer read. Resolve once and reuse the pointer (see
+  [Optimization Tips](#optimization-tips)) and even this disappears from the loop.
+- **load bundle (~13 µs)** and **hot-reload swap (~17 µs)** are dominated by the
+  OS `dlopen`/`mmap`, not by polyplug code — a flamegraph of the load path shows
+  our own frames under 1% (see [PROFILING.md](./PROFILING.md)). The only lever is
+  doing *fewer* loads, which the retire-not-drop model already does.
 
 ## See Also
 
