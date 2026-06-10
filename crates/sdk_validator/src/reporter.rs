@@ -4,7 +4,9 @@
 //! When a method is missing, both formats name the target file(s) it is
 //! missing from.
 
-use crate::aggregator::{MethodStatus, StructReport, ValidationReport};
+use crate::aggregator::{
+    EnumMismatchKind, EnumReport, EnumVariantStatus, MethodStatus, StructReport, ValidationReport,
+};
 
 /// Reporter for generating validation reports in different formats.
 pub struct Reporter {
@@ -75,7 +77,129 @@ impl Reporter {
             ));
         }
 
+        if !report.per_enum.is_empty() {
+            output.push('\n');
+            let mut enum_names: Vec<&String> = report.per_enum.keys().collect();
+            enum_names.sort();
+            for enum_name in &enum_names {
+                let enum_report: &EnumReport = match report.per_enum.get(*enum_name) {
+                    Some(er) => er,
+                    None => continue,
+                };
+                output.push_str(&format!("{} Variants:\n", enum_name));
+                output.push_str(&self.generate_enum_table(enum_report));
+                output.push_str(&self.generate_enum_drift_details(enum_report));
+                output.push('\n');
+            }
+            output.push_str(&format!(
+                "Enums: {}/{} variant checks passed\n",
+                report.enum_checks_passed, report.enum_checks_total
+            ));
+        }
+
         output
+    }
+
+    /// Generate a table for a single enum's variants.
+    ///
+    /// `✓` = exact in every target file of the language, `✗` = drift,
+    /// `-` = language has no target file for this enum.
+    fn generate_enum_table(&self, enum_report: &EnumReport) -> String {
+        let mut output: String = String::new();
+
+        let min_width: usize = 7; // "Variant" header
+        let variant_width: usize = enum_report
+            .variants
+            .keys()
+            .map(|n| n.len())
+            .max()
+            .map_or(min_width, |max_len| core::cmp::max(min_width, max_len));
+        let value_width: usize = 5; // "Value" header
+        let lang_widths: Vec<usize> = self.calculate_language_column_widths();
+
+        output.push_str("  ");
+        output.push_str(&self.pad_right("Variant", variant_width));
+        output.push_str(" | ");
+        output.push_str(&self.pad_right("Value", value_width));
+        output.push_str(" |");
+        for (i, lang) in self.languages.iter().enumerate() {
+            output.push_str(&format!(" {} |", self.pad_center(lang, lang_widths[i])));
+        }
+        output.push('\n');
+
+        output.push_str("  ");
+        output.push_str(&"-".repeat(variant_width));
+        output.push_str("-|-");
+        output.push_str(&"-".repeat(value_width));
+        output.push_str("-|");
+        for width in &lang_widths {
+            output.push_str(&format!("-{}-|", "-".repeat(*width)));
+        }
+        output.push('\n');
+
+        let mut rows: Vec<(&String, &EnumVariantStatus)> = enum_report.variants.iter().collect();
+        rows.sort_by(|a, b| a.1.expected.cmp(&b.1.expected).then(a.0.cmp(b.0)));
+
+        for (variant, status) in rows {
+            output.push_str("  ");
+            output.push_str(&self.pad_right(variant, variant_width));
+            output.push_str(" | ");
+            output.push_str(&self.pad_right(&status.expected.to_string(), value_width));
+            output.push_str(" |");
+            for (i, lang) in self.languages.iter().enumerate() {
+                let symbol: &str = if status.found_in.contains(lang) {
+                    "✓"
+                } else if enum_report.checked_languages.contains(lang) {
+                    "✗"
+                } else {
+                    "-"
+                };
+                output.push_str(&format!(" {} |", self.pad_center(symbol, lang_widths[i])));
+            }
+            output.push('\n');
+        }
+
+        output
+    }
+
+    /// Generate per-file drift lines: mismatches with expected-vs-found
+    /// values, then stale extra variants.
+    fn generate_enum_drift_details(&self, enum_report: &EnumReport) -> String {
+        let mut lines: Vec<String> = Vec::new();
+
+        let mut rows: Vec<(&String, &EnumVariantStatus)> = enum_report.variants.iter().collect();
+        rows.sort_by(|a, b| a.1.expected.cmp(&b.1.expected).then(a.0.cmp(b.0)));
+
+        for (variant, status) in rows {
+            for mismatch in &status.mismatches {
+                let found: String = match &mismatch.kind {
+                    EnumMismatchKind::Missing => "missing".to_string(),
+                    EnumMismatchKind::WrongValue { found } => format!("found {found}"),
+                    EnumMismatchKind::MissingValue => "no explicit value".to_string(),
+                };
+                lines.push(format!(
+                    "    {} [{}] {}: expected {}, {}",
+                    variant, mismatch.language, mismatch.file, status.expected, found
+                ));
+            }
+        }
+
+        for extra in &enum_report.extra_variants {
+            let value: String = match extra.value {
+                Some(v) => format!(" = {v}"),
+                None => String::new(),
+            };
+            lines.push(format!(
+                "    extra variant {}{} [{}] {}",
+                extra.variant, value, extra.language, extra.file
+            ));
+        }
+
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!("  Drift:\n{}\n", lines.join("\n"))
+        }
     }
 
     /// Generate a table for a single struct's methods.
@@ -238,6 +362,10 @@ impl Reporter {
             "completion_percentage": completion_pct,
             "per_struct": report.per_struct,
             "per_language": report.per_language,
+            "per_enum": report.per_enum,
+            "enum_checks_total": report.enum_checks_total,
+            "enum_checks_passed": report.enum_checks_passed,
+            "enums_complete": report.enums_complete,
         });
 
         serde_json::to_string_pretty(&json_output).unwrap_or_else(|_| "{}".to_string())
@@ -253,7 +381,7 @@ impl Default for Reporter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregator::MissingDetail;
+    use crate::aggregator::{EnumExtraDetail, MissingDetail};
 
     fn create_test_report() -> ValidationReport {
         let mut report: ValidationReport = ValidationReport::new();
@@ -447,6 +575,96 @@ mod tests {
         assert_eq!(parsed["total_methods"], 0);
         assert_eq!(parsed["found_methods"], 0);
         assert_eq!(parsed["completion_percentage"], 100.0);
+        Ok(())
+    }
+
+    fn create_enum_test_report() -> ValidationReport {
+        let mut report: ValidationReport = ValidationReport::new();
+        let mut enum_report: EnumReport = EnumReport::new();
+        enum_report.checked_languages = vec!["js".to_string(), "lua".to_string()];
+
+        let mut native_status: EnumVariantStatus = EnumVariantStatus {
+            expected: 0,
+            found_in: vec!["js".to_string(), "lua".to_string()],
+            mismatches: Vec::new(),
+        };
+        native_status.found_in.sort();
+
+        let vm_status: EnumVariantStatus = EnumVariantStatus {
+            expected: 1,
+            found_in: vec!["js".to_string()],
+            mismatches: vec![crate::aggregator::EnumMismatch {
+                language: "lua".to_string(),
+                file: "sdks/lua/guest/polyplug_guest.lua".to_string(),
+                kind: EnumMismatchKind::WrongValue { found: 2 },
+            }],
+        };
+
+        enum_report
+            .variants
+            .insert("Native".to_string(), native_status);
+        enum_report
+            .variants
+            .insert("VirtualMachine".to_string(), vm_status);
+        enum_report.extra_variants.push(EnumExtraDetail {
+            language: "lua".to_string(),
+            file: "sdks/lua/guest/polyplug_guest.lua".to_string(),
+            variant: "Stale".to_string(),
+            value: Some(9),
+        });
+
+        report
+            .per_enum
+            .insert("DispatchType".to_string(), enum_report);
+        report.enum_checks_total = 4;
+        report.enum_checks_passed = 3;
+        report.enums_complete = false;
+        report.is_complete = false;
+        report
+    }
+
+    #[test]
+    fn test_generate_table_enum_section() {
+        let reporter: Reporter = Reporter::new();
+        let report: ValidationReport = create_enum_test_report();
+        let output: String = reporter.generate_table(&report);
+
+        assert!(output.contains("DispatchType Variants:"));
+        assert!(output.contains("Enums: 3/4 variant checks passed"));
+        assert!(output.contains(
+            "VirtualMachine [lua] sdks/lua/guest/polyplug_guest.lua: expected 1, found 2"
+        ));
+        assert!(output.contains("extra variant Stale = 9 [lua] sdks/lua/guest/polyplug_guest.lua"));
+    }
+
+    #[test]
+    fn test_generate_table_no_enum_section_when_unconfigured() {
+        let reporter: Reporter = Reporter::new();
+        let report: ValidationReport = ValidationReport::new();
+        let output: String = reporter.generate_table(&report);
+
+        assert!(!output.contains("Variants:"));
+        assert!(!output.contains("Enums:"));
+    }
+
+    #[test]
+    fn test_generate_json_enum_fields() -> Result<(), Box<dyn core::error::Error>> {
+        let reporter: Reporter = Reporter::new();
+        let report: ValidationReport = create_enum_test_report();
+        let output: String = reporter.generate_json(&report);
+
+        let parsed: serde_json::Value = serde_json::from_str(&output)?;
+        assert_eq!(parsed["enums_complete"], false);
+        assert_eq!(parsed["enum_checks_total"], 4);
+        assert_eq!(parsed["enum_checks_passed"], 3);
+        let vm: &serde_json::Value =
+            &parsed["per_enum"]["DispatchType"]["variants"]["VirtualMachine"];
+        assert_eq!(vm["expected"], 1);
+        assert_eq!(vm["mismatches"][0]["language"], "lua");
+        assert_eq!(vm["mismatches"][0]["kind"]["WrongValue"]["found"], 2);
+        let extra: &serde_json::Value = &parsed["per_enum"]["DispatchType"]["extra_variants"][0];
+        assert_eq!(extra["variant"], "Stale");
+        assert_eq!(extra["value"], 9);
         Ok(())
     }
 

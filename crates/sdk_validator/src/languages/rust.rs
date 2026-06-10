@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::ast_grep::{AstGrepRunner, Match};
 use crate::error::ValidatorError;
-use crate::languages::LanguageValidator;
+use crate::languages::{LanguageValidator, parse_variant_text};
 
 /// Validator for Rust SDK files.
 ///
@@ -51,6 +51,25 @@ rule:
 "#
         )
     }
+
+    /// Generate the ast-grep inline rule matching every `enum_variant` node
+    /// inside the `enum_item` named `enum_name`.
+    fn generate_enum_rule(enum_name: &str) -> String {
+        format!(
+            r#"id: enum-variants
+language: rust
+severity: hint
+rule:
+  kind: enum_variant
+  inside:
+    stopBy: end
+    kind: enum_item
+    has:
+      field: name
+      regex: ^{enum_name}$
+"#
+        )
+    }
 }
 
 impl Default for RustValidator {
@@ -74,6 +93,20 @@ impl LanguageValidator for RustValidator {
         let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
         Ok(!matches.is_empty())
     }
+
+    fn enum_variants_in_file(
+        &mut self,
+        runner: &AstGrepRunner,
+        enum_name: &str,
+        file: &Path,
+    ) -> Result<Vec<(String, Option<i64>)>, ValidatorError> {
+        let rule: String = Self::generate_enum_rule(enum_name);
+        let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
+        Ok(matches
+            .iter()
+            .map(|m| parse_variant_text(&m.text))
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -84,8 +117,11 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use crate::ast_grep::NamingConvention;
-    use crate::languages::test_support::{golden_methods, repo_path, runner};
-    use crate::languages::{ValidationResult, validate_language};
+    use crate::languages::test_support::{golden_enum, golden_methods, repo_path, runner};
+    use crate::languages::{
+        EnumValidationResult, ValidationResult, VariantCheck, VariantOutcome, validate_language,
+        validate_language_enum,
+    };
 
     fn create_temp_rust_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".rs")?;
@@ -266,6 +302,186 @@ pub fn starts_with(sv: &StringView, prefix: &str) -> bool { false }
             result.missing_methods
         );
         assert_eq!(result.found_methods.len(), 5);
+        Ok(())
+    }
+
+    fn validate_enum_file(
+        enum_name: &str,
+        file: &Path,
+    ) -> Result<EnumValidationResult, Box<dyn core::error::Error>> {
+        let mut validator: RustValidator = RustValidator::new();
+        let result: EnumValidationResult = validate_language_enum(
+            &mut validator,
+            &runner(),
+            enum_name,
+            &golden_enum(enum_name),
+            &[file.to_path_buf()],
+        )?;
+        Ok(result)
+    }
+
+    #[test]
+    fn test_enum_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+#[repr(u32)]
+pub enum DispatchType {
+    Native = 0,
+    VirtualMachine = 1,
+}
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_wrong_value_fails_with_expected_vs_found()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+pub enum DispatchType {
+    Native = 0,
+    VirtualMachine = 2,
+}
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.expected, 1);
+        assert_eq!(check.outcome, VariantOutcome::WrongValue { found: 2 });
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_missing_variant_fails() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+pub enum DispatchType {
+    Native = 0,
+}
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_extra_variant_fails() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+pub enum DispatchType {
+    Native = 0,
+    VirtualMachine = 1,
+    Stale = 2,
+}
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        assert!(!result.is_complete());
+        assert_eq!(result.extra_variants.len(), 1);
+        assert_eq!(result.extra_variants[0].variant, "Stale");
+        assert_eq!(result.extra_variants[0].value, Some(2));
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+pub enum DispatchType {
+    Native = 0,
+    // VirtualMachine = 1,
+}
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        // The commented-out line must not surface as an extra variant either.
+        assert!(result.extra_variants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_value_in_comment_or_string_does_not_count()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+// DispatchType has VirtualMachine = 1 per the ABI.
+pub const DOC: &str = "VirtualMachine = 1";
+pub enum DispatchType {
+    Native = 0,
+}
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_other_enum_in_same_file_is_not_confused() -> Result<(), Box<dyn core::error::Error>>
+    {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+pub enum Other {
+    Native = 7,
+    VirtualMachine = 8,
+}
+pub enum DispatchType {
+    Native = 0,
+    VirtualMachine = 1,
+}
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_abi_sources_match_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+        let targets: [(&str, &str); 4] = [
+            (
+                "AbiErrorCode",
+                "crates/polyplug_abi/src/types/error_code.rs",
+            ),
+            ("LogLevel", "crates/polyplug_abi/src/types/log_level.rs"),
+            (
+                "DispatchType",
+                "crates/polyplug_abi/src/dispatch/dispatch_type.rs",
+            ),
+            (
+                "ReloadPhaseType",
+                "crates/polyplug_abi/src/runtime/reload_phase.rs",
+            ),
+        ];
+        for (enum_name, relative) in targets {
+            let path: PathBuf = repo_path(relative);
+            let result: EnumValidationResult = validate_enum_file(enum_name, &path)?;
+            assert!(result.is_complete(), "{enum_name} drift: {result:?}");
+        }
         Ok(())
     }
 }

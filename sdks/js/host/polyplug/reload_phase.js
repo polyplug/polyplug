@@ -21,13 +21,15 @@ export class ReloadPhase {
     static TYPE_RELOADED = 1;
     /** Phase type constant: Reload aborted after max retries */
     static TYPE_FAILED = 2;
+    /** Phase type constant: Bundle is being unloaded */
+    static TYPE_UNLOADING = 3;
 
     /**
      * Create a new ReloadPhase instance.
      *
      * Mirrors the ABI `ReloadPhase` struct exactly — there is no retry_count
      * field in the ABI.
-     * @param {number} type - Phase type (TYPE_PREPARING, TYPE_RELOADED, or TYPE_FAILED)
+     * @param {number} type - Phase type (TYPE_PREPARING, TYPE_RELOADED, TYPE_FAILED, or TYPE_UNLOADING)
      * @param {bigint} bundleId - FNV-1a 64-bit hash of the bundle name
      * @param {string} bundleName - Human-readable bundle name
      * @param {string} [reason=""] - Error reason (only for Failed phase)

@@ -133,6 +133,119 @@ fn insert_function_name(name_node: &Node<'_>, source: &str, names: &mut HashSet<
     }
 }
 
+/// Collect `(name, value)` pairs from a table constructor assigned to a
+/// variable whose final name segment is `enum_name`
+/// (`M.AbiErrorCode = { Ok = 0, ... }`).
+///
+/// Pairs the i-th variable with the i-th value (mirroring
+/// [`collect_assigned_functions`]) and walks the matching table's `field`
+/// nodes. Comments inside the table are separate nodes and never counted.
+fn collect_enum_table_variants(
+    node: &Node<'_>,
+    source: &str,
+    enum_name: &str,
+    variants: &mut Vec<(String, Option<i64>)>,
+) {
+    if node.kind() == "assignment_statement" {
+        let mut assigned_variables: Vec<Node<'_>> = Vec::new();
+        let mut assigned_values: Vec<Node<'_>> = Vec::new();
+
+        let mut cursor: tree_sitter::TreeCursor<'_> = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "variable_list" => {
+                    let mut list_cursor: tree_sitter::TreeCursor<'_> = child.walk();
+                    assigned_variables
+                        .extend(child.children_by_field_name("name", &mut list_cursor));
+                }
+                "expression_list" => {
+                    let mut list_cursor: tree_sitter::TreeCursor<'_> = child.walk();
+                    assigned_values.extend(child.children_by_field_name("value", &mut list_cursor));
+                }
+                _ => {}
+            }
+        }
+
+        for (variable, value) in assigned_variables.iter().zip(assigned_values.iter()) {
+            if value.kind() != "table_constructor" {
+                continue;
+            }
+            let variable_text: &str = variable.utf8_text(source.as_bytes()).unwrap_or("");
+            let final_segment: &str = variable_text
+                .rsplit(['.', ':'])
+                .next()
+                .unwrap_or(variable_text);
+            if final_segment == enum_name {
+                collect_table_fields(value, source, variants);
+            }
+        }
+    }
+
+    let mut cursor: tree_sitter::TreeCursor<'_> = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_enum_table_variants(&child, source, enum_name, variants);
+    }
+}
+
+/// Record every named `field` of a table constructor as a variant entry.
+fn collect_table_fields(table: &Node<'_>, source: &str, variants: &mut Vec<(String, Option<i64>)>) {
+    let mut cursor: tree_sitter::TreeCursor<'_> = table.walk();
+    for field in table.named_children(&mut cursor) {
+        if field.kind() != "field" {
+            continue;
+        }
+        let Some(name_node) = field.child_by_field_name("name") else {
+            continue;
+        };
+        let name: &str = name_node.utf8_text(source.as_bytes()).unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        let value: Option<i64> = field
+            .child_by_field_name("value")
+            .and_then(|value_node| value_node.utf8_text(source.as_bytes()).ok())
+            .and_then(|text| text.trim().parse::<i64>().ok());
+        variants.push((name.to_string(), value));
+    }
+}
+
+/// Collect `EnumName_Variant = value,` lines from `ffi.cdef[[...]]` C enum
+/// text. tree-sitter sees the cdef body as one string literal, so this is a
+/// deliberate text-level parse — acceptable because the cdef file is
+/// generated (defense-in-depth target).
+///
+/// Only lines that BEGIN (after whitespace) with the `EnumName_` prefix
+/// count, so commented-out variants (`// EnumName_X = 1,`) and prose
+/// mentioning the enum never match.
+fn collect_cdef_variants(source: &str, enum_name: &str, variants: &mut Vec<(String, Option<i64>)>) {
+    let prefix: String = format!("{enum_name}_");
+    for line in source.lines() {
+        let trimmed: &str = line.trim();
+        let Some(rest) = trimmed.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        let name_len: usize = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .count();
+        if name_len == 0 {
+            continue;
+        }
+        let name: &str = &rest[..name_len];
+        let after_name: &str = rest[name_len..].trim_start();
+        let Some(value_text) = after_name.strip_prefix('=') else {
+            continue;
+        };
+        let value: Option<i64> = value_text
+            .trim()
+            .trim_end_matches(',')
+            .trim()
+            .parse::<i64>()
+            .ok();
+        variants.push((name.to_string(), value));
+    }
+}
+
 impl LanguageValidator for LuaValidator {
     fn language_name(&self) -> &'static str {
         "lua"
@@ -154,6 +267,33 @@ impl LanguageValidator for LuaValidator {
             .map(|names| names.contains(native_name))
             .unwrap_or(false))
     }
+
+    fn enum_variants_in_file(
+        &mut self,
+        _runner: &AstGrepRunner,
+        enum_name: &str,
+        file: &Path,
+    ) -> Result<Vec<(String, Option<i64>)>, ValidatorError> {
+        let source: String =
+            std::fs::read_to_string(file).map_err(|source| ValidatorError::FileRead {
+                path: file.to_path_buf(),
+                source,
+            })?;
+
+        let tree: Tree =
+            self.parser
+                .parse(&source, None)
+                .ok_or_else(|| ValidatorError::LuaParse {
+                    path: file.to_path_buf(),
+                })?;
+
+        let mut variants: Vec<(String, Option<i64>)> = Vec::new();
+        collect_enum_table_variants(&tree.root_node(), &source, enum_name, &mut variants);
+        if variants.is_empty() {
+            collect_cdef_variants(&source, enum_name, &mut variants);
+        }
+        Ok(variants)
+    }
 }
 
 #[cfg(test)]
@@ -163,8 +303,11 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use crate::ast_grep::NamingConvention;
-    use crate::languages::test_support::{golden_methods, repo_path, runner};
-    use crate::languages::{ValidationResult, validate_language};
+    use crate::languages::test_support::{golden_enum, golden_methods, repo_path, runner};
+    use crate::languages::{
+        EnumValidationResult, ValidationResult, VariantCheck, VariantOutcome, validate_language,
+        validate_language_enum,
+    };
 
     fn create_temp_lua_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".lua")?;
@@ -377,6 +520,253 @@ return M
             result.missing_methods
         );
         assert_eq!(result.found_methods.len(), 5);
+        Ok(())
+    }
+
+    fn validate_enum_file(
+        enum_name: &str,
+        file: &Path,
+    ) -> Result<EnumValidationResult, Box<dyn core::error::Error>> {
+        let mut validator: LuaValidator = LuaValidator::new()?;
+        let result: EnumValidationResult = validate_language_enum(
+            &mut validator,
+            &runner(),
+            enum_name,
+            &golden_enum(enum_name),
+            &[file.to_path_buf()],
+        )?;
+        Ok(result)
+    }
+
+    #[test]
+    fn test_enum_table_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local M = {}
+M.DispatchType = {
+    Native = 0,
+    VirtualMachine = 1,
+}
+return M
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_table_wrong_value_fails_with_expected_vs_found()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local M = {}
+M.DispatchType = {
+    Native = 0,
+    VirtualMachine = 6,
+}
+return M
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.expected, 1);
+        assert_eq!(check.outcome, VariantOutcome::WrongValue { found: 6 });
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_table_missing_and_extra_variants_fail() -> Result<(), Box<dyn core::error::Error>>
+    {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local M = {}
+M.DispatchType = {
+    Native = 0,
+    Stale = 2,
+}
+return M
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        assert_eq!(result.extra_variants.len(), 1);
+        assert_eq!(result.extra_variants[0].variant, "Stale");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_table_commented_out_variant_does_not_count()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+-- DispatchType has VirtualMachine = 1 per the ABI.
+local M = {}
+local doc = "VirtualMachine = 1"
+M.DispatchType = {
+    Native = 0,
+    -- VirtualMachine = 1,
+}
+return M
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        assert!(result.extra_variants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_table_other_table_is_not_confused() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local M = {}
+M.Other = {
+    Native = 7,
+    VirtualMachine = 8,
+}
+M.DispatchType = {
+    Native = 0,
+    VirtualMachine = 1,
+}
+return M
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_cdef_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local ffi = require("ffi")
+ffi.cdef[[
+    typedef enum DispatchType {
+        DispatchType_Native = 0,
+        DispatchType_VirtualMachine = 1,
+    } DispatchType;
+]]
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_cdef_wrong_value_fails_with_expected_vs_found()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local ffi = require("ffi")
+ffi.cdef[[
+    typedef enum DispatchType {
+        DispatchType_Native = 0,
+        DispatchType_VirtualMachine = 9,
+    } DispatchType;
+]]
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.expected, 1);
+        assert_eq!(check.outcome, VariantOutcome::WrongValue { found: 9 });
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_cdef_missing_and_extra_variants_fail() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local ffi = require("ffi")
+ffi.cdef[[
+    typedef enum DispatchType {
+        DispatchType_Native = 0,
+        DispatchType_Stale = 2,
+    } DispatchType;
+]]
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        assert_eq!(result.extra_variants.len(), 1);
+        assert_eq!(result.extra_variants[0].variant, "Stale");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_cdef_commented_out_variant_does_not_count()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local ffi = require("ffi")
+ffi.cdef[[
+    //  DispatchType_VirtualMachine = 1 is documented here only.
+    typedef enum DispatchType {
+        DispatchType_Native = 0,
+        // DispatchType_VirtualMachine = 1,
+    } DispatchType;
+]]
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        assert!(result.extra_variants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_abi_cdef_matches_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+        let path: PathBuf = repo_path("sdks/lua/abi/abi.lua");
+        for enum_name in [
+            "AbiErrorCode",
+            "LogLevel",
+            "DispatchType",
+            "ReloadPhaseType",
+        ] {
+            let result: EnumValidationResult = validate_enum_file(enum_name, &path)?;
+            assert!(result.is_complete(), "{enum_name} drift: {result:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_guest_tables_match_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+        let path: PathBuf = repo_path("sdks/lua/guest/polyplug_guest.lua");
+        for enum_name in ["AbiErrorCode", "DispatchType", "LogLevel"] {
+            let result: EnumValidationResult = validate_enum_file(enum_name, &path)?;
+            assert!(result.is_complete(), "{enum_name} drift: {result:?}");
+        }
         Ok(())
     }
 }

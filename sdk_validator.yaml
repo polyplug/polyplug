@@ -42,3 +42,104 @@ targets:
     - sdks/cpp/abi/polyplug/abi.hpp
   lua:
     - sdks/lua/abi/abi.lua
+
+# Golden enum set (authoritative; the Rust ABI sources are listed as targets
+# below, so yaml-vs-code disagreement fails validation and keeps this honest).
+# Variant names are PascalCase in EVERY language (no naming transform); the
+# generated Lua cdef mirror uses the C `EnumName_Variant` prefix form.
+# Per-file exactness: every variant must be present with exactly this value,
+# and any extra variant inside the same enum construct is drift.
+enums:
+  AbiErrorCode:
+    Ok: 0
+    Generic: 1
+    BufferTooSmall: 2
+    Panic: 3
+    NotFound: 4
+    StaleHandle: 5
+    FunctionNotAvailable: 6
+    DuplicateProvider: 7
+    InvalidPointer: 8
+    ReentrantCall: 9
+    HostContractNotFound: 100
+    HostContractVersionMismatch: 101
+    HostContractCallFailed: 102
+  LogLevel:
+    Error: 1
+    Warn: 2
+    Info: 3
+    Debug: 4
+    Trace: 5
+  DispatchType:
+    Native: 0
+    VirtualMachine: 1
+  ReloadPhaseType:
+    Preparing: 0
+    Reloaded: 1
+    Failed: 2
+    Unloading: 3
+
+# Enum mirror targets per language. Paths are relative to the repo root.
+# Every listed file must declare the enum with the exact golden variant set.
+enum_targets:
+  rust:
+    AbiErrorCode:
+      - crates/polyplug_abi/src/types/error_code.rs
+    LogLevel:
+      - crates/polyplug_abi/src/types/log_level.rs
+    DispatchType:
+      - crates/polyplug_abi/src/dispatch/dispatch_type.rs
+    ReloadPhaseType:
+      - crates/polyplug_abi/src/runtime/reload_phase.rs
+  csharp:
+    AbiErrorCode:
+      - sdks/csharp/abi/Abi.cs
+    LogLevel:
+      - sdks/csharp/abi/Abi.cs
+    DispatchType:
+      - sdks/csharp/abi/Abi.cs
+    ReloadPhaseType:
+      - sdks/csharp/abi/Abi.cs
+      - sdks/csharp/host/ReloadPhase.cs
+  cpp:
+    AbiErrorCode:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    LogLevel:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    DispatchType:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    ReloadPhaseType:
+      - sdks/cpp/abi/polyplug/abi.hpp
+  js:
+    AbiErrorCode:
+      - sdks/js/abi/abi.ts
+      - sdks/js/guest/polyplug_guest.js
+    LogLevel:
+      - sdks/js/abi/abi.ts
+      - sdks/js/guest/polyplug_guest.js
+    DispatchType:
+      - sdks/js/abi/abi.ts
+    ReloadPhaseType:
+      - sdks/js/abi/abi.ts
+  python:
+    AbiErrorCode:
+      - sdks/python/abi/abi.py
+    LogLevel:
+      - sdks/python/abi/abi.py
+    DispatchType:
+      - sdks/python/abi/abi.py
+    ReloadPhaseType:
+      - sdks/python/abi/abi.py
+      - sdks/python/polyplug_abi/polyplug_abi/__init__.py
+  lua:
+    AbiErrorCode:
+      - sdks/lua/abi/abi.lua
+      - sdks/lua/guest/polyplug_guest.lua
+    LogLevel:
+      - sdks/lua/abi/abi.lua
+      - sdks/lua/guest/polyplug_guest.lua
+    DispatchType:
+      - sdks/lua/abi/abi.lua
+      - sdks/lua/guest/polyplug_guest.lua
+    ReloadPhaseType:
+      - sdks/lua/abi/abi.lua

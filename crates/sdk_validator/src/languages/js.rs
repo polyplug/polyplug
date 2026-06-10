@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::ast_grep::{AstGrepRunner, Match};
 use crate::error::ValidatorError;
-use crate::languages::LanguageValidator;
+use crate::languages::{LanguageValidator, parse_variant_text};
 
 /// Validator for JavaScript/TypeScript SDK files.
 ///
@@ -52,6 +52,52 @@ rule:
 "#
         )
     }
+
+    /// Generate the ast-grep inline rule for a TypeScript enum declaration
+    /// (`export const enum X {{ Ok = 0, ... }}`). Matches both
+    /// `enum_assignment` members and bare valueless members, so stale
+    /// variants without a value are still detected.
+    fn generate_ts_enum_rule(enum_name: &str) -> String {
+        format!(
+            r#"id: enum-variants
+language: typescript
+severity: hint
+rule:
+  any:
+    - kind: enum_assignment
+    - kind: property_identifier
+      inside:
+        kind: enum_body
+  inside:
+    stopBy: end
+    kind: enum_declaration
+    has:
+      field: name
+      regex: ^{enum_name}$
+"#
+        )
+    }
+
+    /// Generate the ast-grep inline rule for a plain-JS object-literal enum
+    /// mirror (`export const X = {{ Ok: 0, ... }};`). Matches every `pair`
+    /// inside the object assigned to the const named `enum_name`.
+    fn generate_js_enum_rule(enum_name: &str) -> String {
+        format!(
+            r#"id: enum-variants
+language: javascript
+severity: hint
+rule:
+  kind: pair
+  inside:
+    kind: object
+    inside:
+      kind: variable_declarator
+      has:
+        field: name
+        regex: ^{enum_name}$
+"#
+        )
+    }
 }
 
 impl Default for JsValidator {
@@ -76,6 +122,23 @@ impl LanguageValidator for JsValidator {
         let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
         Ok(!matches.is_empty())
     }
+
+    fn enum_variants_in_file(
+        &mut self,
+        runner: &AstGrepRunner,
+        enum_name: &str,
+        file: &Path,
+    ) -> Result<Vec<(String, Option<i64>)>, ValidatorError> {
+        let rule: String = match Self::ast_grep_language(file) {
+            "typescript" => Self::generate_ts_enum_rule(enum_name),
+            _ => Self::generate_js_enum_rule(enum_name),
+        };
+        let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
+        Ok(matches
+            .iter()
+            .map(|m| parse_variant_text(&m.text))
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -86,8 +149,11 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use crate::ast_grep::NamingConvention;
-    use crate::languages::test_support::{golden_methods, repo_path, runner};
-    use crate::languages::{ValidationResult, validate_language};
+    use crate::languages::test_support::{golden_enum, golden_methods, repo_path, runner};
+    use crate::languages::{
+        EnumValidationResult, ValidationResult, VariantCheck, VariantOutcome, validate_language,
+        validate_language_enum,
+    };
 
     fn create_temp_ts_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".ts")?;
@@ -279,6 +345,217 @@ export function startsWith(sv, prefix) {
             result.missing_methods
         );
         assert_eq!(result.found_methods.len(), 5);
+        Ok(())
+    }
+
+    fn validate_enum_file(
+        enum_name: &str,
+        file: &Path,
+    ) -> Result<EnumValidationResult, Box<dyn core::error::Error>> {
+        let mut validator: JsValidator = JsValidator::new();
+        let result: EnumValidationResult = validate_language_enum(
+            &mut validator,
+            &runner(),
+            enum_name,
+            &golden_enum(enum_name),
+            &[file.to_path_buf()],
+        )?;
+        Ok(result)
+    }
+
+    #[test]
+    fn test_ts_enum_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_ts_file(
+            r#"
+export const enum DispatchType {
+    Native = 0,
+    VirtualMachine = 1,
+}
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_ts_enum_wrong_value_fails_with_expected_vs_found()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_ts_file(
+            r#"
+export const enum DispatchType {
+    Native = 0,
+    VirtualMachine = 5,
+}
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.expected, 1);
+        assert_eq!(check.outcome, VariantOutcome::WrongValue { found: 5 });
+        Ok(())
+    }
+
+    #[test]
+    fn test_ts_enum_missing_and_extra_variants_fail() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_ts_file(
+            r#"
+export const enum DispatchType {
+    Native = 0,
+    Stale,
+}
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        // A valueless stale member is still detected as extra.
+        assert_eq!(result.extra_variants.len(), 1);
+        assert_eq!(result.extra_variants[0].variant, "Stale");
+        assert_eq!(result.extra_variants[0].value, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ts_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn core::error::Error>>
+    {
+        let file: NamedTempFile = create_temp_ts_file(
+            r#"
+// DispatchType has VirtualMachine = 1 per the ABI.
+export const enum DispatchType {
+    Native = 0,
+    // VirtualMachine = 1,
+}
+const doc: string = "VirtualMachine = 1";
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        assert!(result.extra_variants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_js_object_literal_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_js_file(
+            r#"
+export const DispatchType = {
+    Native: 0,
+    VirtualMachine: 1,
+};
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_js_object_literal_wrong_value_fails_with_expected_vs_found()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_js_file(
+            r#"
+export const DispatchType = {
+    Native: 0,
+    VirtualMachine: 3,
+};
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.expected, 1);
+        assert_eq!(check.outcome, VariantOutcome::WrongValue { found: 3 });
+        Ok(())
+    }
+
+    #[test]
+    fn test_js_object_literal_missing_and_extra_variants_fail()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_js_file(
+            r#"
+export const DispatchType = {
+    Native: 0,
+    Stale: 2,
+};
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        assert_eq!(result.extra_variants.len(), 1);
+        assert_eq!(result.extra_variants[0].variant, "Stale");
+        Ok(())
+    }
+
+    #[test]
+    fn test_js_object_literal_comment_and_other_objects_do_not_count()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_js_file(
+            r#"
+// DispatchType has VirtualMachine: 1 per the ABI.
+export const Other = {
+    VirtualMachine: 1,
+};
+export const DispatchType = {
+    Native: 0,
+    // VirtualMachine: 1,
+};
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        assert!(result.extra_variants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_abi_mirror_matches_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+        let path: PathBuf = repo_path("sdks/js/abi/abi.ts");
+        for enum_name in [
+            "AbiErrorCode",
+            "LogLevel",
+            "DispatchType",
+            "ReloadPhaseType",
+        ] {
+            let result: EnumValidationResult = validate_enum_file(enum_name, &path)?;
+            assert!(result.is_complete(), "{enum_name} drift: {result:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_guest_js_matches_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+        let path: PathBuf = repo_path("sdks/js/guest/polyplug_guest.js");
+        for enum_name in ["AbiErrorCode", "LogLevel"] {
+            let result: EnumValidationResult = validate_enum_file(enum_name, &path)?;
+            assert!(result.is_complete(), "{enum_name} drift: {result:?}");
+        }
         Ok(())
     }
 }

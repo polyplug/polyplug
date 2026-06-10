@@ -54,20 +54,21 @@ from polyplug_abi.string_view_helper import (
 class ReloadPhaseType(IntEnum):
     """Type tag for ReloadPhase variants."""
 
-    PREPARING = 0
-    RELOADED = 1
-    FAILED = 2
+    Preparing = 0
+    Reloaded = 1
+    Failed = 2
+    Unloading = 3
 
 
 class ReloadPhase:
     """Python representation of hot-reload phase notification.
 
     Attributes:
-        type: The phase type (PREPARING, RELOADED, or FAILED).
+        type: The phase type (Preparing, Reloaded, Failed, or Unloading).
         bundle_id: The FNV-1a hash of the bundle name.
         bundle_name: The human-readable bundle name.
-        retry_count: Number of retry attempts (valid only for PREPARING).
-        reason: Failure reason string (valid only for FAILED).
+        retry_count: Number of retry attempts (valid only for Preparing).
+        reason: Failure reason string (valid only for Failed).
     """
 
     def __init__(
@@ -85,16 +86,20 @@ class ReloadPhase:
         self.reason: Optional[str] = reason
 
     def is_preparing(self) -> bool:
-        """Return True if this is a PREPARING phase."""
-        return self.type == ReloadPhaseType.PREPARING
+        """Return True if this is a Preparing phase."""
+        return self.type == ReloadPhaseType.Preparing
 
     def is_reloaded(self) -> bool:
-        """Return True if this is a RELOADED phase."""
-        return self.type == ReloadPhaseType.RELOADED
+        """Return True if this is a Reloaded phase."""
+        return self.type == ReloadPhaseType.Reloaded
 
     def is_failed(self) -> bool:
-        """Return True if this is a FAILED phase."""
-        return self.type == ReloadPhaseType.FAILED
+        """Return True if this is a Failed phase."""
+        return self.type == ReloadPhaseType.Failed
+
+    def is_unloading(self) -> bool:
+        """Return True if this is an Unloading phase."""
+        return self.type == ReloadPhaseType.Unloading
 
     def __repr__(self) -> str:
         return (

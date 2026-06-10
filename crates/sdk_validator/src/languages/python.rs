@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::ast_grep::{AstGrepRunner, Match};
 use crate::error::ValidatorError;
-use crate::languages::LanguageValidator;
+use crate::languages::{LanguageValidator, parse_variant_text};
 
 /// Validator for Python SDK files.
 ///
@@ -34,6 +34,33 @@ rule:
 "#
         )
     }
+
+    /// Generate the ast-grep inline rule matching class-body-level
+    /// assignments inside the `class_definition` named `enum_name`
+    /// (e.g. `class AbiErrorCode(enum.IntEnum):` with `Ok = 0` members).
+    ///
+    /// The neighbor-only `inside` chain (assignment -> expression_statement
+    /// -> block -> class_definition) excludes assignments inside method
+    /// bodies of the class.
+    fn generate_enum_rule(enum_name: &str) -> String {
+        format!(
+            r#"id: enum-variants
+language: python
+severity: hint
+rule:
+  kind: assignment
+  inside:
+    kind: expression_statement
+    inside:
+      kind: block
+      inside:
+        kind: class_definition
+        has:
+          field: name
+          regex: ^{enum_name}$
+"#
+        )
+    }
 }
 
 impl Default for PythonValidator {
@@ -57,6 +84,20 @@ impl LanguageValidator for PythonValidator {
         let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
         Ok(!matches.is_empty())
     }
+
+    fn enum_variants_in_file(
+        &mut self,
+        runner: &AstGrepRunner,
+        enum_name: &str,
+        file: &Path,
+    ) -> Result<Vec<(String, Option<i64>)>, ValidatorError> {
+        let rule: String = Self::generate_enum_rule(enum_name);
+        let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
+        Ok(matches
+            .iter()
+            .map(|m| parse_variant_text(&m.text))
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -67,8 +108,11 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use crate::ast_grep::NamingConvention;
-    use crate::languages::test_support::{golden_methods, repo_path, runner};
-    use crate::languages::{ValidationResult, validate_language};
+    use crate::languages::test_support::{golden_enum, golden_methods, repo_path, runner};
+    use crate::languages::{
+        EnumValidationResult, ValidationResult, VariantCheck, VariantOutcome, validate_language,
+        validate_language_enum,
+    };
 
     fn create_temp_python_file(
         content: &str,
@@ -201,6 +245,148 @@ def starts_with(sv, prefix):
             result.missing_methods
         );
         assert_eq!(result.found_methods.len(), 5);
+        Ok(())
+    }
+
+    fn validate_enum_file(
+        enum_name: &str,
+        file: &Path,
+    ) -> Result<EnumValidationResult, Box<dyn core::error::Error>> {
+        let mut validator: PythonValidator = PythonValidator::new();
+        let result: EnumValidationResult = validate_language_enum(
+            &mut validator,
+            &runner(),
+            enum_name,
+            &golden_enum(enum_name),
+            &[file.to_path_buf()],
+        )?;
+        Ok(result)
+    }
+
+    #[test]
+    fn test_enum_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_python_file(
+            r#"
+import enum
+
+
+class DispatchType(enum.IntEnum):
+    """Dispatch mechanism type."""
+    Native = 0
+    VirtualMachine = 1
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_wrong_value_fails_with_expected_vs_found()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_python_file(
+            r#"
+class DispatchType(enum.IntEnum):
+    Native = 0
+    VirtualMachine = 4
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.expected, 1);
+        assert_eq!(check.outcome, VariantOutcome::WrongValue { found: 4 });
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_missing_and_extra_variants_fail() -> Result<(), Box<dyn core::error::Error>> {
+        // SCREAMING_CASE members are drift: golden names are PascalCase, so
+        // NATIVE both leaves Native missing and surfaces as a stale extra.
+        let file: NamedTempFile = create_temp_python_file(
+            r#"
+class DispatchType(enum.IntEnum):
+    NATIVE = 0
+    VirtualMachine = 1
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "Native")
+            .ok_or("missing Native check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        assert_eq!(result.extra_variants.len(), 1);
+        assert_eq!(result.extra_variants[0].variant, "NATIVE");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_python_file(
+            r#"
+# DispatchType has VirtualMachine = 1 per the ABI.
+class DispatchType(enum.IntEnum):
+    """VirtualMachine = 1 is documented here only."""
+    Native = 0
+    # VirtualMachine = 1
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        assert!(result.extra_variants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_method_body_assignments_do_not_count() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_python_file(
+            r#"
+class DispatchType(enum.IntEnum):
+    Native = 0
+    VirtualMachine = 1
+
+
+class Other:
+    def __init__(self):
+        self.Stale = 9
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_abi_mirror_matches_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+        let path: PathBuf = repo_path("sdks/python/abi/abi.py");
+        for enum_name in [
+            "AbiErrorCode",
+            "LogLevel",
+            "DispatchType",
+            "ReloadPhaseType",
+        ] {
+            let result: EnumValidationResult = validate_enum_file(enum_name, &path)?;
+            assert!(result.is_complete(), "{enum_name} drift: {result:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_package_reload_phase_matches_golden_enum()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let path: PathBuf = repo_path("sdks/python/polyplug_abi/polyplug_abi/__init__.py");
+        let result: EnumValidationResult = validate_enum_file("ReloadPhaseType", &path)?;
+        assert!(result.is_complete(), "ReloadPhaseType drift: {result:?}");
         Ok(())
     }
 }

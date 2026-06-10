@@ -2,8 +2,11 @@
 //!
 //! Validates that the golden helper method set defined in
 //! `sdk_validator.yaml` is implemented in every language SDK (Rust, Python,
-//! C#, C++, JavaScript/TypeScript, and Lua). Detection is AST-based:
-//! ast-grep for five languages, tree-sitter for Lua.
+//! C#, C++, JavaScript/TypeScript, and Lua), and that every configured enum
+//! mirror matches the golden enum set exactly (no missing variants, wrong
+//! values, or stale extras). Detection is AST-based: ast-grep for five
+//! languages, tree-sitter for Lua (plus a text-level parse for the generated
+//! `ffi.cdef` C enum text, which tree-sitter sees as one string literal).
 
 use std::process::ExitCode;
 
@@ -16,7 +19,8 @@ pub mod languages;
 pub mod reporter;
 
 pub use aggregator::{
-    LanguageReport, MethodStatus, MissingDetail, StructReport, ValidationReport, aggregate_results,
+    EnumExtraDetail, EnumMismatch, EnumMismatchKind, EnumReport, EnumVariantStatus, LanguageReport,
+    MethodStatus, MissingDetail, StructReport, ValidationReport, aggregate_results,
 };
 pub use ast_grep::{AstGrepError, AstGrepRunner, Match, NamingConvention, transform_name};
 pub use config::{Config, filter_to_struct, parse_config};

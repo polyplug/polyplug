@@ -30,6 +30,7 @@ Copy `polyplug.lua` and native library to your project.
 
 ```lua
 local polyplug = require("polyplug")
+local reload_phase = require("polyplug.reload_phase")
 
 local runtime = polyplug.Runtime.new()
 runtime:load_bundle("./plugins/my_plugin")
@@ -127,18 +128,19 @@ To enable hot-reload, set `hot_reload_enabled = true` and register an `on_reload
 
 ```lua
 local polyplug = require("polyplug")
+local reload_phase = require("polyplug.reload_phase")
 
 -- Enable hot-reload
 polyplug.set_config({ hot_reload_enabled = true })
 
 -- Register callback before creating runtime
 polyplug.on_reload(function(phase)
-    if phase.type == ReloadPhase.PREPARING then
+    if phase.type == reload_phase.TYPE_PREPARING then
         -- Destroy instances for this bundle
         instances[phase.bundle_id] = nil
-    elseif phase.type == ReloadPhase.RELOADED then
+    elseif phase.type == reload_phase.TYPE_RELOADED then
         print("Reloaded: " .. phase.bundle_name)
-    elseif phase.type == ReloadPhase.FAILED then
+    elseif phase.type == reload_phase.TYPE_FAILED then
         print("Failed: " .. phase.reason)
     end
 end)
@@ -149,7 +151,7 @@ local runtime = polyplug.Runtime.new()
 **Key points:**
 - `hot_reload_enabled` defaults to `false` — must be explicitly enabled
 - Callback must be registered **before** creating the runtime
-- Host must track and destroy instances on `PREPARING` notification
+- Host must track and destroy instances on `TYPE_PREPARING` notification
 - See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
 
 ## Performance Notes

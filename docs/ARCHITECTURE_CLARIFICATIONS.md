@@ -224,7 +224,7 @@ extern "C" fn process(args: *const (), out: *mut ()) -> AbiError {
 The host must destroy all instances when receiving the `Preparing` notification:
 
 ```rust
-// Hot-reload: PREPARING phase
+// Hot-reload: Preparing phase
 // Host drops all wrappers
 drop(w1); drop(w2); drop(w3);
 
@@ -242,10 +242,10 @@ The host **must** drop all wrappers before hot-reload completes because:
 
 **Notification flow:**
 ```
-1. Runtime fires PREPARING notification
+1. Runtime fires Preparing notification
 2. Host drops all wrappers for this bundle
 3. Runtime swaps interface
-4. Runtime fires RELOADED notification
+4. Runtime fires Reloaded notification
 5. Host creates new wrappers (pointing to new interface)
 ```
 

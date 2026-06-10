@@ -130,7 +130,7 @@ QuickJS runtime adapter:
 To enable hot-reload, set `hotReloadEnabled: true` and register an `onReload` callback:
 
 ```typescript
-import { Runtime, RuntimeConfig, ReloadPhaseType } from "@polyplug/core";
+import { Runtime, RuntimeConfig, ReloadPhase } from "@polyplug/core";
 
 // Enable hot-reload
 const config: RuntimeConfig = { hotReloadEnabled: true };
@@ -139,14 +139,14 @@ Runtime.setConfig(config);
 // Register callback before creating runtime
 Runtime.onReload((phase) => {
     switch (phase.type) {
-        case ReloadPhaseType.PREPARING:
+        case ReloadPhase.TYPE_PREPARING:
             // Destroy instances for this bundle
             instances.delete(phase.bundleId);
             break;
-        case ReloadPhaseType.RELOADED:
+        case ReloadPhase.TYPE_RELOADED:
             console.log(`Reloaded: ${phase.bundleName}`);
             break;
-        case ReloadPhaseType.FAILED:
+        case ReloadPhase.TYPE_FAILED:
             console.error(`Failed: ${phase.reason}`);
             break;
     }
@@ -158,7 +158,7 @@ const runtime = Runtime.builder().build();
 **Key points:**
 - `hotReloadEnabled` defaults to `false` — must be explicitly enabled
 - Callback must be registered **before** creating the runtime
-- Host must track and destroy instances on `PREPARING` notification
+- Host must track and destroy instances on `TYPE_PREPARING` notification
 - See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
 
 ## Runtime Support

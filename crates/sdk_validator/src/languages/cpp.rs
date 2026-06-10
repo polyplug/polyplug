@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::ast_grep::{AstGrepRunner, Match};
 use crate::error::ValidatorError;
-use crate::languages::LanguageValidator;
+use crate::languages::{LanguageValidator, parse_variant_text};
 
 /// Validator for C++ SDK files.
 ///
@@ -51,6 +51,27 @@ rule:
 "#
         )
     }
+
+    /// Generate the ast-grep inline rule matching every `enumerator` inside
+    /// the `enum_specifier` named `enum_name`. Covers both `enum class X`
+    /// and plain `enum X`; a bodyless forward declaration has no enumerators
+    /// and contributes nothing.
+    fn generate_enum_rule(enum_name: &str) -> String {
+        format!(
+            r#"id: enum-variants
+language: cpp
+severity: hint
+rule:
+  kind: enumerator
+  inside:
+    stopBy: end
+    kind: enum_specifier
+    has:
+      field: name
+      regex: ^{enum_name}$
+"#
+        )
+    }
 }
 
 impl Default for CppValidator {
@@ -74,6 +95,20 @@ impl LanguageValidator for CppValidator {
         let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
         Ok(!matches.is_empty())
     }
+
+    fn enum_variants_in_file(
+        &mut self,
+        runner: &AstGrepRunner,
+        enum_name: &str,
+        file: &Path,
+    ) -> Result<Vec<(String, Option<i64>)>, ValidatorError> {
+        let rule: String = Self::generate_enum_rule(enum_name);
+        let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
+        Ok(matches
+            .iter()
+            .map(|m| parse_variant_text(&m.text))
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -84,8 +119,11 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use crate::ast_grep::NamingConvention;
-    use crate::languages::test_support::{golden_methods, repo_path, runner};
-    use crate::languages::{ValidationResult, validate_language};
+    use crate::languages::test_support::{golden_enum, golden_methods, repo_path, runner};
+    use crate::languages::{
+        EnumValidationResult, ValidationResult, VariantCheck, VariantOutcome, validate_language,
+        validate_language_enum,
+    };
 
     fn create_temp_cpp_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".hpp")?;
@@ -220,6 +258,139 @@ inline void unrelated() {}
             result.missing_methods
         );
         assert_eq!(result.found_methods.len(), 5);
+        Ok(())
+    }
+
+    fn validate_enum_file(
+        enum_name: &str,
+        file: &Path,
+    ) -> Result<EnumValidationResult, Box<dyn core::error::Error>> {
+        let mut validator: CppValidator = CppValidator::new();
+        let result: EnumValidationResult = validate_language_enum(
+            &mut validator,
+            &runner(),
+            enum_name,
+            &golden_enum(enum_name),
+            &[file.to_path_buf()],
+        )?;
+        Ok(result)
+    }
+
+    #[test]
+    fn test_enum_exact_match_passes_with_forward_declaration()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_cpp_file(
+            r#"
+enum class DispatchType : uint32_t;
+enum class DispatchType : uint32_t {
+    Native = 0,
+    VirtualMachine = 1,
+};
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_wrong_value_fails_with_expected_vs_found()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_cpp_file(
+            r#"
+enum class DispatchType : uint32_t {
+    Native = 3,
+    VirtualMachine = 1,
+};
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "Native")
+            .ok_or("missing Native check")?;
+        assert_eq!(check.expected, 0);
+        assert_eq!(check.outcome, VariantOutcome::WrongValue { found: 3 });
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_missing_and_extra_variants_fail() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_cpp_file(
+            r#"
+enum class DispatchType : uint32_t {
+    Native = 0,
+    Stale = 2,
+};
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        assert_eq!(result.extra_variants.len(), 1);
+        assert_eq!(result.extra_variants[0].variant, "Stale");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_cpp_file(
+            r#"
+// DispatchType has VirtualMachine = 1 per the ABI.
+enum class DispatchType : uint32_t {
+    Native = 0,
+    // VirtualMachine = 1,
+};
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        assert!(result.extra_variants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_value_in_string_does_not_count() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_cpp_file(
+            r#"
+inline const char* hint() { return "VirtualMachine = 1"; }
+enum class DispatchType : uint32_t {
+    Native = 0,
+};
+"#,
+        )?;
+        let result: EnumValidationResult = validate_enum_file("DispatchType", file.path())?;
+        let check: &VariantCheck = result
+            .checks
+            .iter()
+            .find(|c| c.variant == "VirtualMachine")
+            .ok_or("missing VirtualMachine check")?;
+        assert_eq!(check.outcome, VariantOutcome::Missing);
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_abi_mirror_matches_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+        let path: PathBuf = repo_path("sdks/cpp/abi/polyplug/abi.hpp");
+        for enum_name in [
+            "AbiErrorCode",
+            "LogLevel",
+            "DispatchType",
+            "ReloadPhaseType",
+        ] {
+            let result: EnumValidationResult = validate_enum_file(enum_name, &path)?;
+            assert!(result.is_complete(), "{enum_name} drift: {result:?}");
+        }
         Ok(())
     }
 }

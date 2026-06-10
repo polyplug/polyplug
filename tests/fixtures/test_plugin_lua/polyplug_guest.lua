@@ -26,6 +26,7 @@ M.AbiErrorCode = {
     FunctionNotAvailable = 6,
     DuplicateProvider = 7,
     InvalidPointer = 8,
+    ReentrantCall = 9,
     HostContractNotFound = 100,
     HostContractVersionMismatch = 101,
     HostContractCallFailed = 102,

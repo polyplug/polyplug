@@ -6,7 +6,7 @@
 //! target paths resolve relative to the config file's parent directory.
 
 use core::str::FromStr;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::ast_grep::NamingConvention;
@@ -27,6 +27,11 @@ pub struct Config {
     /// Target SDK paths: language -> list of file paths, resolved relative to
     /// the config file's parent directory.
     pub targets: HashMap<String, Vec<PathBuf>>,
+    /// Golden enum set: enum name -> variant name -> exact value.
+    pub enums: HashMap<String, BTreeMap<String, i64>>,
+    /// Enum mirror targets: language -> enum name -> list of file paths,
+    /// resolved relative to the config file's parent directory.
+    pub enum_targets: HashMap<String, HashMap<String, Vec<PathBuf>>>,
 }
 
 /// Intermediate struct for YAML deserialization.
@@ -36,6 +41,48 @@ struct ConfigYaml {
     methods: HashMap<String, Vec<String>>,
     naming: HashMap<String, String>,
     targets: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    enums: HashMap<String, VariantEntriesYaml>,
+    #[serde(default)]
+    enum_targets: HashMap<String, HashMap<String, Vec<String>>>,
+}
+
+/// Variant entries of one enum, preserving duplicates.
+///
+/// serde_yaml silently overwrites duplicate keys when deserializing into a
+/// map, so the entries are captured as a list and duplicates rejected
+/// explicitly in [`validate_enums`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VariantEntriesYaml(Vec<(String, i64)>);
+
+impl<'de> serde::Deserialize<'de> for VariantEntriesYaml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct EntriesVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for EntriesVisitor {
+            type Value = VariantEntriesYaml;
+
+            fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                formatter.write_str("a mapping of variant name to integer value")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut entries: Vec<(String, i64)> = Vec::new();
+                while let Some((variant, value)) = map.next_entry::<String, i64>()? {
+                    entries.push((variant, value));
+                }
+                Ok(VariantEntriesYaml(entries))
+            }
+        }
+
+        deserializer.deserialize_map(EntriesVisitor)
+    }
 }
 
 /// Parse and validate a YAML configuration file.
@@ -70,6 +117,9 @@ pub fn parse_config(path: &Path) -> Result<Config, ValidatorError> {
     validate_methods(&yaml.methods)?;
     validate_language_keys("targets", yaml.targets.keys())?;
     validate_language_keys("naming", yaml.naming.keys())?;
+    validate_language_keys("enum_targets", yaml.enum_targets.keys())?;
+    let enums: HashMap<String, BTreeMap<String, i64>> = validate_enums(&yaml.enums)?;
+    validate_enum_targets(&enums, &yaml.enum_targets)?;
 
     let naming: HashMap<String, NamingConvention> = parse_naming(&yaml.naming, &yaml.targets)?;
 
@@ -83,12 +133,89 @@ pub fn parse_config(path: &Path) -> Result<Config, ValidatorError> {
         })
         .collect();
 
+    let enum_targets: HashMap<String, HashMap<String, Vec<PathBuf>>> = yaml
+        .enum_targets
+        .into_iter()
+        .map(|(language, enums)| {
+            let resolved: HashMap<String, Vec<PathBuf>> = enums
+                .into_iter()
+                .map(|(enum_name, files)| {
+                    let paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(f)).collect();
+                    (enum_name, paths)
+                })
+                .collect();
+            (language, resolved)
+        })
+        .collect();
+
     Ok(Config {
         version: yaml.version,
         methods: yaml.methods,
         naming,
         targets,
+        enums,
+        enum_targets,
     })
+}
+
+/// Check that a name is a plain ASCII identifier.
+///
+/// Method, enum, and variant names are interpolated into ast-grep rules, so
+/// anything else would corrupt the rule.
+fn is_identifier(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+}
+
+/// Reject non-identifier enum/variant names and duplicate variants, and
+/// build the validated golden enum map.
+fn validate_enums(
+    enums: &HashMap<String, VariantEntriesYaml>,
+) -> Result<HashMap<String, BTreeMap<String, i64>>, ValidatorError> {
+    let mut validated: HashMap<String, BTreeMap<String, i64>> = HashMap::new();
+    for (enum_name, entries) in enums {
+        if !is_identifier(enum_name) {
+            return Err(ValidatorError::InvalidEnumName {
+                enum_name: enum_name.clone(),
+            });
+        }
+        let mut variants: BTreeMap<String, i64> = BTreeMap::new();
+        for (variant, value) in &entries.0 {
+            if !is_identifier(variant) {
+                return Err(ValidatorError::InvalidVariantName {
+                    enum_name: enum_name.clone(),
+                    variant: variant.clone(),
+                });
+            }
+            if variants.insert(variant.clone(), *value).is_some() {
+                return Err(ValidatorError::DuplicateVariant {
+                    enum_name: enum_name.clone(),
+                    variant: variant.clone(),
+                });
+            }
+        }
+        validated.insert(enum_name.clone(), variants);
+    }
+    Ok(validated)
+}
+
+/// Reject `enum_targets:` entries referencing enums absent from `enums:`.
+fn validate_enum_targets(
+    enums: &HashMap<String, BTreeMap<String, i64>>,
+    enum_targets: &HashMap<String, HashMap<String, Vec<String>>>,
+) -> Result<(), ValidatorError> {
+    for (language, targets) in enum_targets {
+        for enum_name in targets.keys() {
+            if !enums.contains_key(enum_name) {
+                return Err(ValidatorError::UnknownEnum {
+                    language: language.clone(),
+                    enum_name: enum_name.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Reject duplicate and non-identifier method names.
@@ -105,12 +232,7 @@ fn validate_methods(methods: &HashMap<String, Vec<String>>) -> Result<(), Valida
                     method: method.clone(),
                 });
             }
-            let is_identifier: bool = !method.is_empty()
-                && method
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
-                && !method.starts_with(|c: char| c.is_ascii_digit());
-            if !is_identifier {
+            if !is_identifier(method) {
                 return Err(ValidatorError::InvalidMethodName {
                     struct_name: struct_name.clone(),
                     method: method.clone(),
@@ -187,6 +309,8 @@ pub fn filter_to_struct(config: &Config, struct_name: Option<&str>) -> Config {
                 methods,
                 naming: config.naming.clone(),
                 targets: config.targets.clone(),
+                enums: config.enums.clone(),
+                enum_targets: config.enum_targets.clone(),
             }
         }
     }
@@ -453,6 +577,8 @@ methods:
             methods,
             naming: HashMap::new(),
             targets: HashMap::new(),
+            enums: HashMap::new(),
+            enum_targets: HashMap::new(),
         }
     }
 
@@ -476,5 +602,144 @@ methods:
         let config: Config = create_test_config();
         let filtered: Config = filter_to_struct(&config, Some("NonExistent"));
         assert!(filtered.methods.is_empty());
+    }
+
+    const VALID_ENUM_YAML: &str = r#"
+version: 1
+methods:
+  StringView:
+    - to_str
+naming:
+  rust: snake_case
+  lua: snake_case
+targets:
+  rust:
+    - sdks/rust/guest/src/lib.rs
+enums:
+  DispatchType:
+    Native: 0
+    VirtualMachine: 1
+enum_targets:
+  rust:
+    DispatchType:
+      - crates/polyplug_abi/src/dispatch/dispatch_type.rs
+  lua:
+    DispatchType:
+      - sdks/lua/abi/abi.lua
+"#;
+
+    #[test]
+    fn test_parse_config_enums() -> Result<(), Box<dyn core::error::Error>> {
+        let dir: tempfile::TempDir = tempfile::tempdir()?;
+        let config_path: PathBuf = dir.path().join("cfg.yaml");
+        std::fs::write(&config_path, VALID_ENUM_YAML)?;
+
+        let config: Config = parse_config(&config_path)?;
+        let dispatch: &BTreeMap<String, i64> = config
+            .enums
+            .get("DispatchType")
+            .ok_or("missing DispatchType golden enum")?;
+        assert_eq!(dispatch.get("Native"), Some(&0));
+        assert_eq!(dispatch.get("VirtualMachine"), Some(&1));
+
+        let rust_targets: &HashMap<String, Vec<PathBuf>> = config
+            .enum_targets
+            .get("rust")
+            .ok_or("missing rust enum targets")?;
+        let files: &Vec<PathBuf> = rust_targets
+            .get("DispatchType")
+            .ok_or("missing DispatchType files")?;
+        assert_eq!(
+            files[0],
+            dir.path()
+                .join("crates/polyplug_abi/src/dispatch/dispatch_type.rs")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_missing_enum_sections_default_empty()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_config(VALID_YAML)?;
+        let config: Config = parse_config(file.path())?;
+        assert!(config.enums.is_empty());
+        assert!(config.enum_targets.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_unknown_enum_target_language() -> Result<(), Box<dyn core::error::Error>> {
+        let yaml: String = VALID_ENUM_YAML.replace("  lua:\n", "  lau:\n");
+        let file: NamedTempFile = create_temp_config(&yaml)?;
+        match parse_config(file.path()) {
+            Err(ValidatorError::UnknownLanguage { section, language }) => {
+                assert_eq!(section, "enum_targets");
+                assert_eq!(language, "lau");
+            }
+            other => panic!("expected UnknownLanguage error, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_enum_target_references_unknown_enum()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let yaml: String =
+            VALID_ENUM_YAML.replace("  lua:\n    DispatchType:", "  lua:\n    LogLevel:");
+        let file: NamedTempFile = create_temp_config(&yaml)?;
+        match parse_config(file.path()) {
+            Err(ValidatorError::UnknownEnum {
+                language,
+                enum_name,
+            }) => {
+                assert_eq!(language, "lua");
+                assert_eq!(enum_name, "LogLevel");
+            }
+            other => panic!("expected UnknownEnum error, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_duplicate_variant_is_fatal() -> Result<(), Box<dyn core::error::Error>> {
+        let yaml: String = VALID_ENUM_YAML.replace("    Native: 0", "    Native: 0\n    Native: 7");
+        let file: NamedTempFile = create_temp_config(&yaml)?;
+        match parse_config(file.path()) {
+            Err(ValidatorError::DuplicateVariant { enum_name, variant }) => {
+                assert_eq!(enum_name, "DispatchType");
+                assert_eq!(variant, "Native");
+            }
+            other => panic!("expected DuplicateVariant error, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_invalid_variant_name() -> Result<(), Box<dyn core::error::Error>> {
+        let yaml: String = VALID_ENUM_YAML.replace("    Native: 0", "    \"Na tive\": 0");
+        let file: NamedTempFile = create_temp_config(&yaml)?;
+        match parse_config(file.path()) {
+            Err(ValidatorError::InvalidVariantName { enum_name, variant }) => {
+                assert_eq!(enum_name, "DispatchType");
+                assert_eq!(variant, "Na tive");
+            }
+            other => panic!("expected InvalidVariantName error, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_invalid_enum_name() -> Result<(), Box<dyn core::error::Error>> {
+        // Replace only the `enums:` key (2-space indent), not the
+        // `enum_targets:` reference (4-space indent).
+        let yaml: String = VALID_ENUM_YAML.replace("\n  DispatchType:", "\n  \"Dispatch Type\":");
+        let file: NamedTempFile = create_temp_config(&yaml)?;
+        match parse_config(file.path()) {
+            Err(ValidatorError::InvalidEnumName { enum_name }) => {
+                assert_eq!(enum_name, "Dispatch Type");
+            }
+            other => panic!("expected InvalidEnumName error, got {other:?}"),
+        }
+        Ok(())
     }
 }

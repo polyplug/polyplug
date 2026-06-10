@@ -90,6 +90,47 @@ pub enum ValidatorError {
         value: String,
     },
 
+    /// An `enum_targets:` entry references an enum absent from `enums:`.
+    #[error(
+        "unknown enum '{enum_name}' in enum_targets for language '{language}' (add it to the `enums:` section)"
+    )]
+    UnknownEnum {
+        /// The language whose targets reference the enum.
+        language: String,
+        /// The enum name missing from `enums:`.
+        enum_name: String,
+    },
+
+    /// An enum name in `enums:` is not a plain identifier (it is
+    /// interpolated into ast-grep rules, so anything else would corrupt the
+    /// rule).
+    #[error("invalid enum name '{enum_name}': must be a PascalCase identifier")]
+    InvalidEnumName {
+        /// The offending enum name.
+        enum_name: String,
+    },
+
+    /// The same variant is listed twice for one enum (serde_yaml silently
+    /// overwrites duplicate mapping keys, so this is detected explicitly).
+    #[error("duplicate variant '{variant}' found in enum '{enum_name}'")]
+    DuplicateVariant {
+        /// The enum containing the duplicate.
+        enum_name: String,
+        /// The duplicated variant name.
+        variant: String,
+    },
+
+    /// A variant name in `enums:` is not a plain identifier.
+    #[error(
+        "invalid variant name '{variant}' in enum '{enum_name}': must be a PascalCase identifier"
+    )]
+    InvalidVariantName {
+        /// The enum containing the variant.
+        enum_name: String,
+        /// The offending variant name.
+        variant: String,
+    },
+
     /// A configured target file does not exist on disk.
     #[error("target file for language '{language}' does not exist: {path}")]
     TargetFileMissing {

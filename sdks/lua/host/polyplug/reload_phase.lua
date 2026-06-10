@@ -7,10 +7,11 @@ local M = {}
 M.TYPE_PREPARING = 0  -- Before interface swap, host should cleanup instances
 M.TYPE_RELOADED = 1   -- After interface swap, instances can be re-resolved
 M.TYPE_FAILED = 2     -- Reload aborted after max retries
+M.TYPE_UNLOADING = 3  -- Bundle is being unloaded
 
 --- Create a new ReloadPhase instance.
 --- Mirrors the ABI `ReloadPhase` struct exactly — there is no retry_count field.
---- @param phase_type number Phase type (TYPE_PREPARING, TYPE_RELOADED, or TYPE_FAILED)
+--- @param phase_type number Phase type (TYPE_PREPARING, TYPE_RELOADED, TYPE_FAILED, or TYPE_UNLOADING)
 --- @param bundle_id number FNV-1a 64-bit hash of the bundle name
 --- @param bundle_name string Human-readable bundle name
 --- @param reason string Error reason (only for Failed phase)
@@ -45,6 +46,13 @@ function M.is_failed(phase)
     return phase.type == M.TYPE_FAILED
 end
 
+--- Check if this phase is Unloading.
+--- @param phase table ReloadPhase instance
+--- @return boolean
+function M.is_unloading(phase)
+    return phase.type == M.TYPE_UNLOADING
+end
+
 --- Get string representation of phase type.
 --- @param phase_type number Phase type constant
 --- @return string Human-readable phase name
@@ -53,6 +61,7 @@ function M.phase_type_name(phase_type)
         [M.TYPE_PREPARING] = "Preparing",
         [M.TYPE_RELOADED] = "Reloaded",
         [M.TYPE_FAILED] = "Failed",
+        [M.TYPE_UNLOADING] = "Unloading",
     }
     return names[phase_type] or ("Unknown(" .. tostring(phase_type) .. ")")
 end

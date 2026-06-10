@@ -21,6 +21,11 @@ public enum ReloadPhaseType : uint
     /// Reload aborted after max retries.
     /// </summary>
     Failed = 2,
+
+    /// <summary>
+    /// Bundle is being unloaded.
+    /// </summary>
+    Unloading = 3,
 }
 
 /// <summary>
@@ -32,7 +37,7 @@ public enum ReloadPhaseType : uint
 public sealed class ReloadPhase
 {
     /// <summary>
-    /// Phase type (Preparing, Reloaded, or Failed).
+    /// Phase type (Preparing, Reloaded, Failed, or Unloading).
     /// </summary>
     public ReloadPhaseType Type { get; }
 
@@ -87,6 +92,11 @@ public sealed class ReloadPhase
     /// Returns true if this is a Failed phase.
     /// </summary>
     public bool IsFailed() => Type == ReloadPhaseType.Failed;
+
+    /// <summary>
+    /// Check if this phase is Unloading.
+    /// </summary>
+    public bool IsUnloading() => Type == ReloadPhaseType.Unloading;
 
     /// <inheritdoc />
     public override string ToString()
