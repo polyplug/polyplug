@@ -9,6 +9,7 @@
 //! retired interface) and must invalidate whatever the failed init registered.
 
 use polyplug_abi::*;
+use polyplug_utils::GuestContractId;
 
 // ─── regfail.add contract types ──────────────────────────────────────────────
 

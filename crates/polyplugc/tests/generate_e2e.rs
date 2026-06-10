@@ -60,10 +60,17 @@ fn example_api_toml() -> PathBuf {
     repo_root().join("examples").join("api.toml")
 }
 
-/// Absolute path to the in-tree ABI crate (the only dependency the generated
-/// host glue needs).
+/// Absolute path to the in-tree ABI crate (a dependency the generated host
+/// glue needs).
 fn polyplug_abi_path() -> PathBuf {
     repo_root().join("crates").join("polyplug_abi")
+}
+
+/// Absolute path to the in-tree utils crate. The generated host glue imports
+/// `polyplug_utils::HostContractId` directly (it never re-exports through the
+/// ABI crate), so the driver must declare this dependency.
+fn polyplug_utils_path() -> PathBuf {
+    repo_root().join("crates").join("polyplug_utils")
 }
 
 /// Run the `polyplugc` binary with `args`, returning the captured output.
@@ -369,8 +376,13 @@ fn host_thunk_empty_stringview_round_trips() {
          name = \"driver\"\n\
          path = \"src/main.rs\"\n\n\
          [dependencies]\n\
-         polyplug_abi = {{ path = \"{}\" }}\n",
+         polyplug_abi = {{ path = \"{}\" }}\n\
+         polyplug_utils = {{ path = \"{}\" }}\n",
         polyplug_abi_path()
+            .display()
+            .to_string()
+            .replace('\\', "\\\\"),
+        polyplug_utils_path()
             .display()
             .to_string()
             .replace('\\', "\\\\")

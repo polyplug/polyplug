@@ -437,6 +437,7 @@ name = "cross_caller_plugin"
 version = "0.1.0"
 dependencies = [
  "polyplug_abi",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -444,6 +445,7 @@ name = "cross_target_plugin"
 version = "0.1.0"
 dependencies = [
  "polyplug_abi",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -451,6 +453,7 @@ name = "cross_target_plugin_v2"
 version = "0.1.0"
 dependencies = [
  "polyplug_abi",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -537,6 +540,7 @@ name = "depender_plugin"
 version = "0.1.0"
 dependencies = [
  "polyplug_abi",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -716,6 +720,7 @@ name = "error_plugin"
 version = "0.1.0"
 dependencies = [
  "polyplug_abi",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -1213,6 +1218,7 @@ name = "memory_plugin"
 version = "0.1.0"
 dependencies = [
  "polyplug_abi",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -1377,6 +1383,7 @@ dependencies = [
  "polyplug_lua",
  "polyplug_native",
  "polyplug_python",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -1460,6 +1467,7 @@ dependencies = [
  "polyplug_lua",
  "polyplug_native",
  "polyplug_python",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -1824,6 +1832,7 @@ name = "register_fail_plugin"
 version = "0.1.0"
 dependencies = [
  "polyplug_abi",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -1840,6 +1849,7 @@ name = "reload_plugin_v1"
 version = "0.1.0"
 dependencies = [
  "polyplug_abi",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -1847,6 +1857,7 @@ name = "reload_plugin_v2"
 version = "0.2.0"
 dependencies = [
  "polyplug_abi",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -2186,6 +2197,7 @@ name = "test_plugin"
 version = "0.1.0"
 dependencies = [
  "polyplug_abi",
+ "polyplug_utils",
 ]
 
 [[package]]

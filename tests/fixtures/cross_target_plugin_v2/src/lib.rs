@@ -10,6 +10,7 @@
 
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
+use polyplug_utils::GuestContractId;
 
 /// Delta applied by V2 so its behaviour is distinguishable from V1.
 const V2_DELTA: u32 = 1000;

@@ -48,8 +48,8 @@ use criterion::criterion_main;
 use polyplug::Runtime;
 use polyplug::RuntimeConfig;
 use polyplug_abi::GuestContractHandle;
-use polyplug_abi::GuestContractId;
 use polyplug_abi::GuestContractInterface;
+use polyplug_utils::GuestContractId;
 
 // The integration tests' native loader. `polyplug` is loader-agnostic, so a
 // native bundle needs a registered loader; this mirrors `NativeLoader` using

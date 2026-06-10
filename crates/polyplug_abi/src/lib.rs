@@ -41,10 +41,6 @@ pub use types::{abi_error_ok, string_view_from_static, string_view_null};
 
 pub use guest::{GuestContractInstance, GuestContractInterface};
 
-// ─── ID type re-exports (from polyplug_utils) ──────────────────────────────────
-
-pub use polyplug_utils::{GuestContractId, HostContractId};
-
 // ─── New exports from host module ────────────────────────────────────────────
 
 pub use host::{HostApi, HostContractInstance, HostContractInterface};

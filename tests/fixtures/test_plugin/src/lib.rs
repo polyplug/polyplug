@@ -4,6 +4,7 @@
 //! It implements the "test.add" contract: add(a: u32, b: u32) -> u32.
 
 use polyplug_abi::*;
+use polyplug_utils::GuestContractId;
 
 // ─── test.add contract types ─────────────────────────────────────────────────
 

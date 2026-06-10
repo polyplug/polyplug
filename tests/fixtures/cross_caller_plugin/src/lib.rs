@@ -13,6 +13,7 @@
 
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
+use polyplug_utils::GuestContractId;
 
 // ─── Cross-call wire types ────────────────────────────────────────────────────
 

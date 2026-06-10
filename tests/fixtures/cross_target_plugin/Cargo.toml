@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 polyplug_abi = { workspace = true }
+polyplug_utils = { workspace = true }
 
 [lints]
 workspace = true

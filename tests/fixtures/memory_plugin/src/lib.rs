@@ -9,6 +9,7 @@
 use core::mem::align_of;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
+use polyplug_utils::GuestContractId;
 
 // ─── memory.test contract argument/result types ───────────────────────────────
 

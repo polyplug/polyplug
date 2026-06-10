@@ -13,10 +13,11 @@ use std::sync::Arc;
 
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
-    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractId, GuestContractInterface,
-    HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
+    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInterface, HostApi,
+    NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::BundleId;
+use polyplug_utils::GuestContractId;
 
 // ─── Static interfaces for testing ─────────────────────────────────────────────
 

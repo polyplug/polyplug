@@ -24,10 +24,10 @@ use polyplug::runtime::Runtime;
 use polyplug::runtime_builder::RuntimeBuilder;
 use polyplug_abi::AbiError;
 use polyplug_abi::GuestContractHandle;
-use polyplug_abi::GuestContractId;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::dispatch::DispatchType;
 use polyplug_python::PythonLoader;
+use polyplug_utils::GuestContractId;
 use polyplug_utils::bundle_id;
 
 /// A self-contained Python plugin (ctypes only) that registers one VM-dispatch

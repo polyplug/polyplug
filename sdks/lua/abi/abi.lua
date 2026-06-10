@@ -371,6 +371,13 @@ ffi.cdef[[
         //  valid. The caller therefore always reaches the current implementation
         //  without invalidating outstanding instances.
         // 
+        //  # Multiple providers
+        //  Routing keys solely on `instance.contract_id`. If more than one live
+        //  provider is registered for that `contract_id`, the target is ambiguous:
+        //  the call returns `AbiErrorCode::DuplicateProvider` and does NOT dispatch
+        //  (see `host_call_guest_method` in `polyplug`). Resolution requires exactly
+        //  one registered provider for the contract.
+        // 
         //  # Arena semantics
         //  `arena` is forwarded unchanged to VM dispatch as its variable-size return
         //  buffer. Native dispatch function pointers carry no arena slot in their

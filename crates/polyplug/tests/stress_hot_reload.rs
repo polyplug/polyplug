@@ -22,10 +22,11 @@ use polyplug::error::RuntimeError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
-    DispatchMechanisms, DispatchType, GuestContractId, GuestContractInterface, HostApi,
-    NativeDispatch, PluginDescriptor, ReloadPhaseType, StringView, Version,
+    DispatchMechanisms, DispatchType, GuestContractInterface, HostApi, NativeDispatch,
+    PluginDescriptor, ReloadPhaseType, StringView, Version,
 };
 use polyplug_utils::BundleId;
+use polyplug_utils::GuestContractId;
 
 mod common;
 

@@ -24,10 +24,11 @@ use polyplug::error::RegistryError;
 use polyplug::runtime_store::RuntimeStore;
 use polyplug::{Runtime, RuntimeConfig};
 use polyplug_abi::{
-    Array, DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractId,
-    GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
+    Array, DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInterface, HostApi,
+    NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::BundleId;
+use polyplug_utils::GuestContractId;
 
 const MOCK_FUNCTIONS: [*const (); 0] = [];
 

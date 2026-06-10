@@ -8,6 +8,7 @@ use core::sync::atomic::AtomicU32;
 use core::sync::atomic::Ordering;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
+use polyplug_utils::GuestContractId;
 
 // ─── Function pointer wrapper for Sync ─────────────────────────────────────────
 

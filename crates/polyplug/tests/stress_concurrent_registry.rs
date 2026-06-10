@@ -9,10 +9,11 @@ use std::sync::Barrier;
 use polyplug::error::RegistryError;
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
-    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractId, GuestContractInterface,
-    HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
+    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInterface, HostApi,
+    NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::BundleId;
+use polyplug_utils::GuestContractId;
 
 const THREADS: usize = 8_usize;
 const RESOLVER_THREADS: usize = 6_usize;

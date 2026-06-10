@@ -16,7 +16,6 @@ use polyplug_abi::DispatchMechanisms;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::HostApi;
-use polyplug_abi::HostContractId;
 use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::NativeDispatch;
@@ -26,6 +25,7 @@ use polyplug_abi::VmDispatch;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::abi_error_ok;
 use polyplug_abi::string_view_from_static;
+use polyplug_utils::HostContractId;
 
 /// Create a host contract interface for `host.logger` with NATIVE dispatch.
 ///

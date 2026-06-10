@@ -1981,7 +1981,7 @@ fn generate_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("use polyplug_abi::abi_error_ok;\n");
     out.push_str("use polyplug_abi::string_view_from_static;\n");
     out.push_str("use polyplug_abi::Version;\n");
-    out.push_str("use polyplug_abi::HostContractId;\n");
+    out.push_str("use polyplug_utils::HostContractId;\n");
     out.push_str("use core::ffi::c_void;\n");
     out.push_str("use super::host_contracts::*;\n");
     out.push_str("use super::types::*;\n\n");

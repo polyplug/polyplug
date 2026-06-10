@@ -26,10 +26,11 @@ use std::thread;
 
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
-    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractId, GuestContractInstance,
+    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
     GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::BundleId;
+use polyplug_utils::GuestContractId;
 
 const CONTRACT_ID: u64 = 0xCAFE_F00D_0000_0001_u64;
 const READER_THREADS: usize = 8;

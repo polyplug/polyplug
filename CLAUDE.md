@@ -25,12 +25,12 @@ polyplug is a universal, blazing-fast, cross-language plugin runtime platform wr
 | `polyplug` | Core runtime: `Runtime`, `RuntimeStore`, loader, reload, FFI entry points |
 | `polyplug_abi` | Frozen ABI types: `HostApi`, `BundleInitContext`, `GuestContractInterface`, `AbiError`, etc. |
 | `polyplug_utils` | Shared hash utilities (`fnv1a_64`, `bundle_id`, `contract_id`) |
-| `polyplug_native` | Loader for native (`cdylib`) bundles — the only loader that supports hot-reload |
+| `polyplug_native` | Loader for native (`cdylib`) bundles — supports hot-reload (as do the Lua and JS loaders; Python and .NET do not) |
 | `polyplug_python` | Loader for Python bundles |
 | `polyplug_lua` | Loader for Lua bundles |
 | `polyplug_js` | Loader for JavaScript (QuickJS) bundles |
 | `polyplug_dotnet` | Loader for .NET/C# bundles |
-| `polyplug_guest` | Guest-side Rust helper (links into plugin dylibs) |
+| `polyplug_guest` | Guest-side Rust helper (links into plugin dylibs); lives at `sdks/rust/guest`, not under `crates/` |
 | `polyplug_codegen` | ABI-SDK code-generation library; its `languages/` emitters are driven by `polyplug_abi`'s build script. `polyplugc` consumes only its shared `data`/`error`/config types |
 | `polyplugc` | CLI tool: parses contract `.toml`, generates host/guest bindings |
 | `sdk_validator` | Validates SDK correctness against the ABI |
@@ -94,7 +94,7 @@ sdks/
 
 ### Hot-Reload
 
-Only native (`cdylib`) bundles support hot-reload. Python, .NET, Lua, and JS loaders return `RuntimeError::HotReloadDisabled` from `reload()`. The retire-not-drop model keeps superseded interfaces and libraries alive for the runtime lifetime so previously resolved pointers stay valid.
+Native (`cdylib`), Lua, and JS (QuickJS) bundles support hot-reload — their `reload()` re-reads the on-disk source and swaps the live interface (gated on `hot_reload_enabled`). Python and .NET loaders return `RuntimeError::HotReloadDisabled` from `reload()` unconditionally. The retire-not-drop model keeps superseded interfaces and libraries alive for the runtime lifetime so previously resolved pointers stay valid.
 
 ### Runtime Isolation Known Limitations
 
@@ -744,7 +744,6 @@ polyplug/
 │   │   └── src/  config.rs, ffi.rs, lib.rs, loader.rs
 │   ├── polyplug_dotnet/             .NET/C# loader
 │   │   └── src/  config.rs, ffi.rs, lib.rs, loader.rs
-│   ├── polyplug_guest/              guest-side Rust helper
 │   ├── polyplug_codegen/            codegen library
 │   │   └── src/
 │   │       ├── lib.rs

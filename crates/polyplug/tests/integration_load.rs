@@ -8,11 +8,11 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::GuestContractHandle;
-use polyplug_abi::GuestContractId;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
+use polyplug_utils::GuestContractId;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");

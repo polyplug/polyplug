@@ -399,10 +399,7 @@ impl Runtime {
     /// Returns `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))` if a
     /// loader for the same runtime name is already registered. The passed loader is
     /// still consumed in that case.
-    pub fn register_guest_contract_loader(
-        &self,
-        loader: Box<dyn BundleLoader>,
-    ) -> Result<(), RuntimeError> {
+    pub fn register_loader(&self, loader: Box<dyn BundleLoader>) -> Result<(), RuntimeError> {
         let name: String = loader.runtime_name().to_string();
         let mut loaders: std::sync::RwLockWriteGuard<'_, HashMap<String, Box<dyn BundleLoader>>> =
             self.loaders.write().unwrap_or_else(|e| {
@@ -1944,7 +1941,7 @@ pub(crate) unsafe extern "C" fn host_register_loader(
         };
     }
     // SAFETY: this is a valid HostApi pointer. (*this).runtime contains a valid
-    // pointer to Runtime. A shared reference is sufficient — `register_guest_contract_loader`
+    // pointer to Runtime. A shared reference is sufficient — `register_loader`
     // takes `&self` and uses the interior `RwLock` to mutate `loaders`. Forging a
     // `&mut Runtime` from the Arc-shared pointer would be aliasing UB (other live
     // `&Runtime` exist), so we never do that.
@@ -1955,7 +1952,7 @@ pub(crate) unsafe extern "C" fn host_register_loader(
     let loader: Box<dyn BundleLoader> =
         unsafe { *Box::from_raw(loader_ptr as *mut Box<dyn BundleLoader>) };
 
-    match runtime.register_guest_contract_loader(loader) {
+    match runtime.register_loader(loader) {
         Ok(()) => AbiError::ok(),
         Err(e) => {
             runtime.set_last_error(e.to_string());
