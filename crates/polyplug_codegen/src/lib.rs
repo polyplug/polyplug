@@ -3,6 +3,7 @@ pub mod data;
 pub mod error;
 pub mod generator;
 pub mod languages;
+pub mod reserved;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

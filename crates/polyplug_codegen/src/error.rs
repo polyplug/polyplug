@@ -136,6 +136,26 @@ pub enum PolyplugcError {
         /// Optional note pointing at where the function was first declared.
         first_defined_at: Option<SourceLocation>,
     },
+
+    /// An identifier collides with a reserved keyword in one or more target
+    /// languages (or a polyplug-reserved name). Such a name would flow verbatim
+    /// into generated source and produce uncompilable output, so it is rejected
+    /// at parse time rather than escaped/renamed in the generators.
+    ReservedIdentifier {
+        /// What kind of name this is: "function", "field", "contract", "enum",
+        /// "enum variant", "type", "parameter".
+        kind: String,
+        /// The offending name.
+        name: String,
+        /// Where the name appeared (e.g. the contract/enum/type name).
+        context: String,
+        /// Human-readable list of the language(s) that reserve this name, e.g.
+        /// "Python, C++" or "polyplug".
+        languages: String,
+        /// Source location of the reserved name, if known. Boxed to keep the
+        /// `PolyplugcError` enum under clippy's `result_large_err` threshold.
+        location: Option<Box<SourceLocation>>,
+    },
 }
 
 impl fmt::Display for PolyplugcError {
@@ -328,6 +348,23 @@ impl fmt::Display for PolyplugcError {
                     write!(f, " (first defined at {loc})")?;
                 }
                 Ok(())
+            }
+
+            PolyplugcError::ReservedIdentifier {
+                kind,
+                name,
+                context,
+                languages,
+                location,
+            } => {
+                if let Some(loc) = location {
+                    write!(f, "{loc} — ")?;
+                }
+                write!(
+                    f,
+                    "{kind} name `{name}` in `{context}` is a reserved keyword in: {languages} — \
+                     it would produce uncompilable generated code; rename it"
+                )
             }
         }
     }

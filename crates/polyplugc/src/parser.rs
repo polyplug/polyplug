@@ -578,6 +578,26 @@ fn is_valid_identifier(name: &str) -> bool {
     chars.all(|c: char| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Reject `name` if it is a reserved keyword in any target language (or a
+/// polyplug-reserved name). Such names flow verbatim into generated source and
+/// would produce uncompilable output, so they must be caught at parse time.
+fn validate_not_reserved(
+    name: &str,
+    kind: &str,
+    context: &str,
+) -> core::result::Result<(), PolyplugcError> {
+    match polyplug_codegen::reserved::reserved_in(name) {
+        Some(languages) => Err(PolyplugcError::ReservedIdentifier {
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+            context: context.to_owned(),
+            languages,
+            location: None,
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Validate a plain identifier (function/param name). Names flow verbatim into
 /// generated source, so invalid identifiers must be rejected before codegen.
 fn validate_identifier(
@@ -585,31 +605,34 @@ fn validate_identifier(
     kind: &str,
     context: &str,
 ) -> core::result::Result<(), PolyplugcError> {
-    if is_valid_identifier(name) {
-        Ok(())
-    } else {
-        Err(PolyplugcError::InvalidIdentifier {
+    if !is_valid_identifier(name) {
+        return Err(PolyplugcError::InvalidIdentifier {
             kind: kind.to_owned(),
             name: name.to_owned(),
             context: context.to_owned(),
             location: None,
-        })
+        });
     }
+    validate_not_reserved(name, kind, context)
 }
 
 /// Validate a (possibly dotted) contract name. Each dot-separated segment must
 /// be a valid identifier — e.g. `pipeline.Decoder`, `host.fs.reader`.
 fn validate_contract_name(name: &str, kind: &str) -> core::result::Result<(), PolyplugcError> {
-    if !name.is_empty() && name.split('.').all(is_valid_identifier) {
-        Ok(())
-    } else {
-        Err(PolyplugcError::InvalidIdentifier {
+    if name.is_empty() || !name.split('.').all(is_valid_identifier) {
+        return Err(PolyplugcError::InvalidIdentifier {
             kind: kind.to_owned(),
             name: name.to_owned(),
             context: name.to_owned(),
             location: None,
-        })
+        });
     }
+    // Each dot-separated segment becomes an identifier in generated code (module
+    // path, class name, function prefix), so no segment may be a reserved word.
+    for segment in name.split('.') {
+        validate_not_reserved(segment, kind, name)?;
+    }
+    Ok(())
 }
 
 /// Validate names within a contract: the contract name itself, every function
@@ -663,8 +686,10 @@ fn lower_api(
 
     let mut resolved_types: Vec<ResolvedType> = Vec::new();
     for raw_type in &raw.types {
+        validate_identifier(&raw_type.name, "type", &raw_type.name)?;
         let mut fields: Vec<ResolvedField> = Vec::new();
         for field in &raw_type.fields {
+            validate_identifier(&field.name, "field", &raw_type.name)?;
             let ty: ResolvedTypeRef = resolve_type_ref_spanned(
                 &field.ty,
                 &raw_type.name,
@@ -685,6 +710,7 @@ fn lower_api(
 
     let mut resolved_enums: Vec<EnumDef> = Vec::new();
     for raw_enum in &raw.r#enum {
+        validate_identifier(&raw_enum.name, "enum", &raw_enum.name)?;
         let repr: ReprType = match ReprType::parse(&raw_enum.repr) {
             Some(r) => r,
             None => {
@@ -699,6 +725,7 @@ fn lower_api(
         let mut declared: Vec<String> = Vec::new();
         let mut variants: Vec<EnumVariant> = Vec::new();
         for raw_variant in &raw_enum.variants {
+            validate_identifier(&raw_variant.name, "enum variant", &raw_enum.name)?;
             validate_enum_value_expr(
                 &raw_variant.value,
                 &raw_enum.name,
@@ -1257,6 +1284,125 @@ mod tests {
             matches!(result, Err(PolyplugcError::ValidationFailed { .. })),
             "expected ValidationFailed for version overflow, got {result:?}",
         );
+    }
+
+    // ─── Reserved-word rejection ────────────────────────────────────────────
+
+    #[test]
+    fn parse_function_named_reserved_keyword_rejected() {
+        // `class` is a keyword in Python and C++ — generated code would not compile.
+        let toml: &str = concat!(
+            "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n",
+            "[[plugin_contract.functions]]\nname = \"class\"\n"
+        );
+        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        match result {
+            Err(PolyplugcError::ReservedIdentifier {
+                ref kind,
+                ref name,
+                ref languages,
+                ..
+            }) => {
+                assert_eq!(name, "class");
+                assert_eq!(kind, "function");
+                assert!(
+                    languages.contains("Python") || languages.contains("C++"),
+                    "languages should mention Python/C++, got: {languages}"
+                );
+            }
+            other => panic!("expected ReservedIdentifier for `class`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_field_named_reserved_keyword_rejected() {
+        // `end` is a Lua keyword.
+        let toml: &str = concat!(
+            "[[types]]\nname = \"Frame\"\n",
+            "[[types.fields]]\nname = \"end\"\ntype = \"u32\"\n"
+        );
+        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        match result {
+            Err(PolyplugcError::ReservedIdentifier {
+                ref kind,
+                ref name,
+                ref languages,
+                ..
+            }) => {
+                assert_eq!(name, "end");
+                assert_eq!(kind, "field");
+                assert!(
+                    languages.contains("Lua"),
+                    "languages should mention Lua, got: {languages}"
+                );
+            }
+            other => panic!("expected ReservedIdentifier for `end`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_enum_variant_named_reserved_keyword_rejected() {
+        // `def` is a Python keyword.
+        let toml: &str = concat!(
+            "[[enum]]\nname = \"Kind\"\nrepr = \"u32\"\n\n",
+            "[[enum.variants]]\nname = \"def\"\nvalue = \"0\"\n"
+        );
+        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        match result {
+            Err(PolyplugcError::ReservedIdentifier {
+                ref kind,
+                ref name,
+                ref languages,
+                ..
+            }) => {
+                assert_eq!(name, "def");
+                assert_eq!(kind, "enum variant");
+                assert!(
+                    languages.contains("Python"),
+                    "languages should mention Python, got: {languages}"
+                );
+            }
+            other => panic!("expected ReservedIdentifier for `def`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_contract_segment_named_reserved_keyword_rejected() {
+        // A dotted contract segment that is reserved (`int` is a C++ keyword).
+        let toml: &str = "[[plugin_contract]]\nname = \"image.int\"\nversion = \"1.0.0\"\n";
+        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        assert!(
+            matches!(result, Err(PolyplugcError::ReservedIdentifier { ref name, .. }) if name == "int"),
+            "expected ReservedIdentifier for `int`, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn parse_polyplug_prefixed_function_rejected() {
+        let toml: &str = concat!(
+            "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n",
+            "[[plugin_contract.functions]]\nname = \"polyplug_init\"\n"
+        );
+        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        assert!(
+            matches!(result, Err(PolyplugcError::ReservedIdentifier { ref name, ref languages, .. }) if name == "polyplug_init" && languages.contains("polyplug")),
+            "expected ReservedIdentifier for `polyplug_init`, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn parse_normal_names_still_pass() {
+        // Control: ordinary names must continue to parse cleanly.
+        let toml: &str = concat!(
+            "[[types]]\nname = \"Frame\"\n",
+            "[[types.fields]]\nname = \"width\"\ntype = \"u32\"\n\n",
+            "[[enum]]\nname = \"LogLevel\"\nrepr = \"u32\"\n\n",
+            "[[enum.variants]]\nname = \"Debug\"\nvalue = \"0\"\n\n",
+            "[[plugin_contract]]\nname = \"pipeline.Decoder\"\nversion = \"1.0.0\"\n\n",
+            "[[plugin_contract.functions]]\nname = \"decode\"\n"
+        );
+        let ir: ValidatedIr = parse_api_str(toml).expect("normal names must parse");
+        assert_eq!(ir.contracts.len(), 1);
     }
 
     // ─── Diagnostic helpers unit tests ──────────────────────────────────────

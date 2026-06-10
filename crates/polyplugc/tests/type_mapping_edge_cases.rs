@@ -220,7 +220,7 @@ name = "EventKind"
 repr = "u64"
 
 [[enum.variants]]
-name = "None"
+name = "Empty"
 value = "0"
 
 [[enum.variants]]

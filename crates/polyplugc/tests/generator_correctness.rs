@@ -348,7 +348,7 @@ fn signature_primitive_params_match_contract() {
 #[test]
 fn signature_void_function_matches_contract() {
     let fns: Vec<ResolvedFunction> = vec![make_fn("reset", 0, vec![], None)];
-    let ir: ValidatedIr = make_ir("void.check", 1, fns);
+    let ir: ValidatedIr = make_ir("voidret.check", 1, fns);
     let contracts: String = generate_guest_contracts(ir, "sig_void_fn");
 
     assert!(
@@ -484,7 +484,7 @@ fn fns_array_size_equals_declared_function_count() {
 #[test]
 fn single_function_contract_has_exactly_one_fns_entry() {
     let fns: Vec<ResolvedFunction> = vec![make_fn("ping", 0, vec![], None)];
-    let ir: ValidatedIr = make_ir("single.fn", 1, fns);
+    let ir: ValidatedIr = make_ir("single.func", 1, fns);
     let interfaces: String = generate_guest_interfaces(ir, "single_fn_one_fns_entry");
 
     // Count array entries specifically: lines that are indented FnPtr calls
