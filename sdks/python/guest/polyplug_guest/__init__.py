@@ -41,6 +41,7 @@ from polyplug_abi import (
     LogLevel,
     StringView,
     DispatchType,
+    bytes_as_view,
     to_str,
 )
 
@@ -121,28 +122,16 @@ def log(level: int, scope: str, message: str) -> None:
     # field, so the encoded bytes objects must be kept alive explicitly. These
     # two locals are the owners: they live until this function returns, which
     # outlives the synchronous host.log call below. (The classic footgun is
-    # building the view from a temporary — `_str_view(s.encode())` — where the
-    # bytes are collected before the call.)
+    # building the view from a temporary — `bytes_as_view(s.encode("utf-8"))`
+    # inline — where the bytes are collected before the call.)
     scope_bytes: bytes = scope.encode("utf-8")
     message_bytes: bytes = message.encode("utf-8")
-    scope_view: StringView = _bytes_as_view(scope_bytes)
-    message_view: StringView = _bytes_as_view(message_bytes)
+    scope_view: StringView = bytes_as_view(scope_bytes)
+    message_view: StringView = bytes_as_view(message_bytes)
     host: HostApi = HostApi.from_address(host_ptr)
     # Self-passing convention: log(this, level, scope, message). The host reads
     # both views only for the duration of the call; null/empty views are legal.
     host.log(host_ptr, int(level), scope_view, message_view)
-
-
-def _bytes_as_view(data: bytes) -> StringView:
-    """Build a borrowed ``StringView`` over a bytes object's internal buffer.
-
-    The caller MUST keep ``data`` alive for as long as the view is read —
-    ctypes does not root ``data`` through the view's raw pointer field.
-    """
-    if not data:
-        return StringView(ptr=None, len=0)
-    addr: int = ctypes.cast(ctypes.c_char_p(data), ctypes.c_void_p).value or 0
-    return StringView(ptr=addr, len=len(data))
 
 
 def register_contract(

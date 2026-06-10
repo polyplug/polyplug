@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import ctypes
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from polyplug_abi.abi import StringView
+from polyplug_abi.abi import StringView
 
 
 def to_str(sv: StringView) -> str:
@@ -79,38 +77,23 @@ def split(sv: StringView, delimiter: str) -> list[str]:
     return to_str(sv).split(delimiter)
 
 
-def str_as_view(s: str) -> StringView:
-    """Create StringView from Python str (borrowed).
+def bytes_as_view(data: bytes) -> StringView:
+    """Build a borrowed ``StringView`` over a bytes object's internal buffer.
 
-    Warning: The StringView is only valid while the Python string exists.
-
-    Args:
-        s: Python string
-
-    Returns:
-        StringView pointing to Python string memory
-    """
-    from polyplug_abi.abi import StringView
-
-    data: bytes = s.encode("utf-8")
-    return StringView(ctypes.cast(data, ctypes.POINTER(ctypes.c_uint8)), len(data))
-
-
-def str_as_view_owned(s: str) -> StringView:
-    """Create StringView from Python str (owned copy).
-
-    The returned StringView points to allocated memory that must be freed.
+    The caller MUST keep ``data`` alive for as long as the view is read —
+    ctypes does not root ``data`` through the view's raw pointer field. Bind
+    the bytes to a local (or other owner) that outlives every read of the
+    view; never build a view over a temporary such as ``s.encode("utf-8")``
+    passed inline. Empty bytes produce a null view (``ptr=None, len=0``),
+    which is legal at the ABI boundary.
 
     Args:
-        s: Python string
+        data: caller-owned UTF-8 bytes backing the view.
 
     Returns:
-        StringView pointing to allocated memory
+        StringView borrowing ``data``'s buffer (null view for empty bytes).
     """
-    from polyplug_abi.abi import StringView
-
-    data: bytes = s.encode("utf-8")
-    ptr: ctypes.POINTER(ctypes.c_uint8) = ctypes.cast(
-        ctypes.create_string_buffer(data, len(data)), ctypes.POINTER(ctypes.c_uint8)
-    )
-    return StringView(ptr, len(data))
+    if not data:
+        return StringView(ptr=None, len=0)
+    addr: int = ctypes.cast(ctypes.c_char_p(data), ctypes.c_void_p).value or 0
+    return StringView(ptr=addr, len=len(data))

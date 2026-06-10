@@ -465,9 +465,12 @@ fn vendor_current_python_sdk(bundle_dir: &Path) {
     .expect("vendor polyplug/abi/abi.py");
 }
 
-/// Write a python bundle whose single contract function calls the guest SDK's
-/// `log()` helper, plus a module-top-level `log()` probe that runs BEFORE
-/// `polyplug_init` stores the host (must be a graceful no-op).
+/// Write a python bundle whose single contract function round-trips the ABI
+/// SDK's `bytes_as_view` helper (view over caller-held bytes must read back
+/// verbatim; empty bytes must yield a null view) and then calls the guest
+/// SDK's `log()` helper with the round-tripped string, plus a module-top-level
+/// `log()` probe that runs BEFORE `polyplug_init` stores the host (must be a
+/// graceful no-op).
 fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
     let dir: PathBuf = tmp.join("log_demo_python");
     std::fs::create_dir_all(&dir).expect("create log demo bundle dir");
@@ -487,7 +490,8 @@ fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
     );
     std::fs::write(dir.join("manifest.toml"), manifest).expect("write manifest.toml");
 
-    let plugin_py: &str = "from polyplug_guest import LogLevel, log, register_contract, store_host_interface\n\
+    let plugin_py: &str = "from polyplug_abi import bytes_as_view, to_str\n\
+         from polyplug_guest import LogLevel, log, register_contract, store_host_interface\n\
          \n\
          # Module top level runs BEFORE polyplug_init stores the host: log() must\n\
          # be a graceful no-op here, never a crash or a delivered record.\n\
@@ -495,7 +499,16 @@ fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
          \n\
          \n\
          def _do_log(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:\n\
-         \x20   log(LogLevel.Info, \"guest.logdemo\", \"héllo from python ✓\")\n\
+         \x20   # bytes_as_view round-trip: the view borrows the caller-held bytes\n\
+         \x20   # local, so reading it back through to_str must be verbatim.\n\
+         \x20   payload = \"héllo from python ✓\".encode(\"utf-8\")\n\
+         \x20   view = bytes_as_view(payload)\n\
+         \x20   if to_str(view) != \"héllo from python ✓\":\n\
+         \x20       raise RuntimeError(\"bytes_as_view round-trip mismatch\")\n\
+         \x20   empty = bytes_as_view(b\"\")\n\
+         \x20   if empty.ptr or empty.len != 0:\n\
+         \x20       raise RuntimeError(\"bytes_as_view(b'') must be a null view\")\n\
+         \x20   log(LogLevel.Info, \"guest.logdemo\", to_str(view))\n\
          \n\
          \n\
          def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n\
@@ -515,7 +528,11 @@ fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
 /// End-to-end guest logging: a python guest calls the SDK `log()` helper, which
 /// crosses `HostApi.log` and lands verbatim in the host logger installed via
 /// `RuntimeBuilder::logger`. Also proves the pre-init no-op (the bundle logs once
-/// at module top level before `polyplug_init` — that record must NOT appear).
+/// at module top level before `polyplug_init` — that record must NOT appear) and
+/// the `bytes_as_view` round-trip: the logged message is built by reading a
+/// `bytes_as_view` view back through `to_str`, so a verbatim arrival proves the
+/// borrowed view reads the caller-held bytes intact (the guest also asserts the
+/// empty-bytes → null-view contract before logging).
 #[test]
 fn integration_python_guest_log_routes_to_host_logger() {
     let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
