@@ -53,6 +53,19 @@ fn example_bundle_toml() -> PathBuf {
         .join("bundle.toml")
 }
 
+/// Absolute path to the representative `api.toml`, which declares the
+/// `host.logger` host contract whose `log(message: StringView)` thunk exercises
+/// the host-side StringView param-unpack path.
+fn example_api_toml() -> PathBuf {
+    repo_root().join("examples").join("api.toml")
+}
+
+/// Absolute path to the in-tree ABI crate (the only dependency the generated
+/// host glue needs).
+fn polyplug_abi_path() -> PathBuf {
+    repo_root().join("crates").join("polyplug_abi")
+}
+
 /// Run the `polyplugc` binary with `args`, returning the captured output.
 fn run_polyplugc(args: &[&std::ffi::OsStr]) -> std::process::Output {
     let bin: &str = env!("CARGO_BIN_EXE_polyplugc");
@@ -297,5 +310,145 @@ fn validate_bundle_dir_rejects_tampered_id() {
     assert!(
         stderr.contains("tamper") || stderr.contains("id") || stderr.contains("expected"),
         "error must signal an id/tamper mismatch, got:\n{stderr}",
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Empty-string round-trip: EXECUTION proof for the host-thunk StringView guard.
+//
+// The host-side thunk (interface_factories.rs) unpacks a `StringView` arg into a
+// `&str` before calling the host-contract impl. A `StringView::null()` (ptr=null,
+// len=0) is a legal ABI value, and building a slice from a null pointer is UB even
+// at len==0. The generated thunk now routes through the null-safe `as_str()`.
+//
+// This test generates the host glue, then BUILDS AND RUNS a driver that:
+//   1. constructs the generated `host.logger` interface around a tiny impl,
+//   2. reaches the generated `log` thunk via the interface's native dispatch
+//      table and calls it with a `StringView::null()` argument,
+//   3. asserts the impl received the empty string and the thunk returned Ok.
+// Under the pre-fix code this dispatch was undefined behaviour; passing here
+// proves the guard executes, not merely that the text was emitted.
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn host_thunk_empty_stringview_round_trips() {
+    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("driver");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    std::fs::create_dir_all(project_dir.join("src")).expect("create src dir");
+
+    // Generate the HOST glue (includes host/interface_factories.rs with the thunk).
+    let output: std::process::Output = run_polyplugc(&[
+        "generate".as_ref(),
+        "--api".as_ref(),
+        example_api_toml().as_os_str(),
+        "--lang".as_ref(),
+        "rust".as_ref(),
+        "--out".as_ref(),
+        gen_dir.as_os_str(),
+    ]);
+    assert!(
+        output.status.success(),
+        "polyplugc generate --api --lang rust failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        gen_dir.join("host/interface_factories.rs").exists(),
+        "generated host/interface_factories.rs must exist at {}",
+        gen_dir.join("host/interface_factories.rs").display()
+    );
+
+    let cargo_toml: String = format!(
+        "[package]\n\
+         name = \"driver\"\n\
+         version = \"0.1.0\"\n\
+         edition = \"2024\"\n\n\
+         [[bin]]\n\
+         name = \"driver\"\n\
+         path = \"src/main.rs\"\n\n\
+         [dependencies]\n\
+         polyplug_abi = {{ path = \"{}\" }}\n",
+        polyplug_abi_path()
+            .display()
+            .to_string()
+            .replace('\\', "\\\\")
+    );
+    std::fs::write(project_dir.join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+
+    // The only hand-written file. It includes the generated host glue verbatim,
+    // builds the logger interface, fetches the `log` thunk from the native
+    // dispatch table, and invokes it with a NULL StringView. The impl records
+    // what it received; the driver exits non-zero on any mismatch so a build that
+    // links the pre-fix (UB) thunk cannot silently pass.
+    let main_rs: &str = "#[path = \"../gen/mod.rs\"]\n\
+         mod generated;\n\
+         \n\
+         use core::ffi::c_void;\n\
+         use core::sync::atomic::{AtomicBool, Ordering};\n\
+         use generated::host::host_contracts::HostLogger;\n\
+         use generated::host::interface_factories::create_host_logger_interface;\n\
+         use polyplug_abi::{AbiError, AbiErrorCode, HostContractInterface, StringView};\n\
+         \n\
+         static GOT_EMPTY: AtomicBool = AtomicBool::new(false);\n\
+         static GOT_CALL: AtomicBool = AtomicBool::new(false);\n\
+         \n\
+         struct RecordingLogger;\n\
+         impl HostLogger for RecordingLogger {\n\
+         fn log(&self, message: &str) {\n\
+         GOT_CALL.store(true, Ordering::SeqCst);\n\
+         GOT_EMPTY.store(message.is_empty(), Ordering::SeqCst);\n\
+         }\n\
+         fn log_with_level(&self, _level: &generated::host::types::LogLevel, _message: &str) {}\n\
+         }\n\
+         \n\
+         fn main() {\n\
+         let interface: &'static HostContractInterface =\n\
+         create_host_logger_interface(Box::new(RecordingLogger));\n\
+         // The thunk's first arg is the impl pointer the create_instance stub\n\
+         // derives from user_data. Reach it the same way the host runtime would.\n\
+         let impl_ptr: *const c_void = interface.user_data as *const c_void;\n\
+         // SAFETY: native dispatch is active; functions[0] is the `log` thunk.\n\
+         let log_thunk: unsafe extern \"C\" fn(*const c_void, *const (), *mut ()) -> AbiError = unsafe {\n\
+         let fns: *const *const () = interface.dispatch.native.functions;\n\
+         core::mem::transmute(*fns.add(0))\n\
+         };\n\
+         // The crux: pass a NULL StringView (ptr=null, len=0) as the `message` arg.\n\
+         let arg: StringView = StringView::null();\n\
+         // SAFETY: impl_ptr is the interface's impl; arg points to a valid (null) StringView.\n\
+         let err: AbiError = unsafe {\n\
+         log_thunk(\n\
+         impl_ptr,\n\
+         &arg as *const StringView as *const (),\n\
+         core::ptr::null_mut(),\n\
+         )\n\
+         };\n\
+         assert_eq!(err.code, AbiErrorCode::Ok as u32, \"thunk must return Ok for a null StringView\");\n\
+         assert!(GOT_CALL.load(Ordering::SeqCst), \"impl.log must have been called\");\n\
+         assert!(GOT_EMPTY.load(Ordering::SeqCst), \"null StringView must decode to an empty &str\");\n\
+         println!(\"OK: null StringView round-tripped to empty &str\");\n\
+         }\n";
+    std::fs::write(project_dir.join("src/main.rs"), main_rs).expect("write src/main.rs");
+
+    let target_dir: PathBuf = tmp.path().join("target");
+    let run: std::process::Output = Command::new(env!("CARGO"))
+        .arg("run")
+        .arg("--manifest-path")
+        .arg(project_dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("failed to spawn cargo run for the host-thunk driver");
+    assert!(
+        run.status.success(),
+        "host-thunk empty-StringView driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("OK: null StringView round-tripped"),
+        "driver must report the empty round-trip succeeded, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
     );
 }

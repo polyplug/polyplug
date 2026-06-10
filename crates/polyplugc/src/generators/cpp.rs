@@ -2116,11 +2116,16 @@ fn cpp_guest_caller_return_expr(ty: &ResolvedTypeRef) -> String {
     match ty {
         ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
             // Borrowed view into host-owned memory, valid until the next call on this caller.
-            "std::string_view(reinterpret_cast<const char*>(out.ptr), out.len)".to_owned()
+            // A null/empty StringView (ptr=null, len=0) is a legal ABI return; constructing a
+            // std::string_view from a null pointer is UB before C++26, so route through the
+            // SDK's null-safe polyplug::to_string_view helper.
+            "polyplug::to_string_view(out)".to_owned()
         }
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
             // Borrowed view into host-owned memory, valid until the next call on this caller.
-            "std::span<const std::uint8_t>(out.ptr, out.len)".to_owned()
+            // A null/empty Buffer (ptr=null, len=0) is a legal ABI return; guard the null
+            // pointer explicitly rather than constructing a span from it.
+            "out.ptr ? std::span<const std::uint8_t>(out.ptr, out.len) : std::span<const std::uint8_t>{}".to_owned()
         }
         _ => "out".to_owned(),
     }
@@ -3611,6 +3616,27 @@ mod tests {
         assert_eq!(
             cpp_guest_caller_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
             "MyStruct"
+        );
+    }
+
+    #[test]
+    fn cpp_guest_caller_return_expr_is_null_safe() {
+        // A null/empty StringView/Buffer return is legal at the ABI boundary; constructing a
+        // std::string_view from a null pointer is UB before C++26, so the emitted return must
+        // route through the SDK's null-safe to_string_view, and the span must guard the pointer.
+        let sv_expr: String =
+            cpp_guest_caller_return_expr(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView));
+        assert_eq!(sv_expr, "polyplug::to_string_view(out)");
+        assert!(
+            !sv_expr.contains("std::string_view(reinterpret_cast"),
+            "StringView return must not build string_view from raw ptr (UB on null): {sv_expr}"
+        );
+
+        let buf_expr: String =
+            cpp_guest_caller_return_expr(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer));
+        assert!(
+            buf_expr.contains("out.ptr ?"),
+            "Buffer return must guard the null pointer before building a span: {buf_expr}"
         );
     }
 

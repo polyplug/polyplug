@@ -53,12 +53,8 @@ pub fn create_host_logger_interface(
             let impl_ref: &dyn HostLogger = unsafe { &**fat_ptr };
             // SAFETY: args is a valid *const StringView per ABI contract.
             let message_sv: StringView = unsafe { *(args as *const StringView) };
-            let message: &str = unsafe {
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                    message_sv.ptr,
-                    message_sv.len,
-                ))
-            };
+            // SAFETY: as_str handles null/empty; UTF-8 trusted per TRUST_MODEL.
+            let message: &str = unsafe { message_sv.as_str() };
             impl_ref.log(message);
             let _ = out;
             abi_error_ok()
@@ -84,12 +80,8 @@ pub fn create_host_logger_interface(
             let packed: &HostLoggerLogWithLevelArgs =
                 unsafe { &*(args as *const HostLoggerLogWithLevelArgs) };
             let level: &LogLevel = &packed.level;
-            let message: &str = unsafe {
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                    packed.message.ptr,
-                    packed.message.len,
-                ))
-            };
+            // SAFETY: as_str handles null/empty; UTF-8 trusted per TRUST_MODEL.
+            let message: &str = unsafe { packed.message.as_str() };
             impl_ref.log_with_level(level, message);
             let _ = out;
             abi_error_ok()

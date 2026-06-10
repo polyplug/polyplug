@@ -2342,23 +2342,23 @@ fn generate_host_thunk_args(out: &mut String, func: &ResolvedFunction, trait_nam
                     "            let {name}_sv: StringView = unsafe {{ *(args as *const StringView) }};\n",
                     name = param.name
                 ));
+                // SAFETY (emitted): StringView::as_str handles the null/empty case (ptr=null,
+                // len=0) without dereferencing — that is a legal ABI value. For a non-empty view
+                // the host guarantees `len` live, valid-UTF-8 bytes per TRUST_MODEL.
                 out.push_str(&format!(
-                    "            let {name}: &str = unsafe {{\n",
+                    "            // SAFETY: as_str handles null/empty; UTF-8 trusted per TRUST_MODEL.\n            let {name}: &str = unsafe {{ {name}_sv.as_str() }};\n",
                     name = param.name
                 ));
-                out.push_str(&format!(
-                    "                core::str::from_utf8_unchecked(core::slice::from_raw_parts({name}_sv.ptr, {name}_sv.len))\n",
-                    name = param.name
-                ));
-                out.push_str("            };\n");
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
                 out.push_str(&format!(
                     "            let {name}_buf: polyplug_abi::Buffer = unsafe {{ *(args as *const polyplug_abi::Buffer) }};\n",
                     name = param.name
                 ));
+                // SAFETY (emitted): Buffer::as_slice handles the null/empty case without
+                // dereferencing; otherwise the host guarantees `len` live bytes per TRUST_MODEL.
                 out.push_str(&format!(
-                    "            let {name}: &[u8] = unsafe {{ core::slice::from_raw_parts({name}_buf.ptr, {name}_buf.len) }};\n",
+                    "            // SAFETY: as_slice handles null/empty; host owns the bytes per TRUST_MODEL.\n            let {name}: &[u8] = unsafe {{ {name}_buf.as_slice() }};\n",
                     name = param.name
                 ));
             }
@@ -2390,19 +2390,18 @@ fn generate_host_thunk_args(out: &mut String, func: &ResolvedFunction, trait_nam
         for param in &func.params {
             match &param.ty {
                 ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                    // SAFETY (emitted): StringView::as_str handles null/empty without deref;
+                    // non-empty bytes are trusted UTF-8 per TRUST_MODEL.
                     out.push_str(&format!(
-                        "            let {name}: &str = unsafe {{\n",
+                        "            // SAFETY: as_str handles null/empty; UTF-8 trusted per TRUST_MODEL.\n            let {name}: &str = unsafe {{ packed.{name}.as_str() }};\n",
                         name = param.name
                     ));
-                    out.push_str(&format!(
-                        "                core::str::from_utf8_unchecked(core::slice::from_raw_parts(packed.{name}.ptr, packed.{name}.len))\n",
-                        name = param.name
-                    ));
-                    out.push_str("            };\n");
                 }
                 ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                    // SAFETY (emitted): Buffer::as_slice handles null/empty without deref;
+                    // host owns the bytes per TRUST_MODEL.
                     out.push_str(&format!(
-                        "            let {name}: &[u8] = unsafe {{ core::slice::from_raw_parts(packed.{name}.ptr, packed.{name}.len) }};\n",
+                        "            // SAFETY: as_slice handles null/empty; host owns the bytes per TRUST_MODEL.\n            let {name}: &[u8] = unsafe {{ packed.{name}.as_slice() }};\n",
                         name = param.name
                     ));
                 }
@@ -2799,25 +2798,42 @@ fn generate_guest_host_contract_method(
 
     match &func.returns {
         Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) => {
+            // A null/empty StringView (ptr=null, len=0) is a legal ABI return; constructing a
+            // slice from a null pointer is UB even at len==0, so the empty case is guarded
+            // explicitly. The non-empty branch keeps the raw construction because its lifetime
+            // is tied to &mut self (the arena memory), not to the local out_val — calling
+            // out_val.as_str() would borrow the local and not compile against the return type.
             out.push_str(
                 "        // SAFETY: out_val.ptr points to host-owned memory that the contract guarantees\n\
                  \x20       // stays valid until the next arena-backed call on this caller. The returned &str\n\
                  \x20       // borrows &mut self, so the borrow checker forbids another call (which would reset\n\
-                 \x20       // the arena and invalidate this memory) while the view is alive. The bytes are\n\
-                 \x20       // valid UTF-8 per the StringView ABI contract.\n\
-                 \x20       let result: &str = unsafe {\n\
-                 \x20           let slice: &[u8] = core::slice::from_raw_parts(out_val.ptr, out_val.len);\n\
-                 \x20           core::str::from_utf8_unchecked(slice)\n\
+                 \x20       // the arena and invalidate this memory) while the view is alive. A null/empty view\n\
+                 \x20       // never dereferences the pointer; non-empty bytes are valid UTF-8 per TRUST_MODEL.\n\
+                 \x20       let result: &str = if out_val.ptr.is_null() || out_val.len == 0 {\n\
+                 \x20           \"\"\n\
+                 \x20       } else {\n\
+                 \x20           unsafe {\n\
+                 \x20               let slice: &[u8] = core::slice::from_raw_parts(out_val.ptr, out_val.len);\n\
+                 \x20               core::str::from_utf8_unchecked(slice)\n\
+                 \x20           }\n\
                  \x20       };\n\
                  \x20       Ok(result)\n",
             );
         }
         Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)) => {
+            // A null/empty Buffer (ptr=null, len=0) is a legal ABI return; from_raw_parts on a
+            // null pointer is UB even at len==0, so the empty case is guarded explicitly. The
+            // non-empty branch keeps the raw construction because its lifetime is tied to
+            // &mut self, not to the local out_val.
             out.push_str(
                 "        // SAFETY: out_val.ptr points to host-owned memory valid until the next arena-backed\n\
                  \x20       // call on this caller; the returned &[u8] borrows &mut self, so no second call can\n\
-                 \x20       // invalidate it while the view is alive.\n\
-                 \x20       let result: &[u8] = unsafe { core::slice::from_raw_parts(out_val.ptr, out_val.len) };\n\
+                 \x20       // invalidate it while the view is alive. A null/empty buffer never dereferences.\n\
+                 \x20       let result: &[u8] = if out_val.ptr.is_null() || out_val.len == 0 {\n\
+                 \x20           &[]\n\
+                 \x20       } else {\n\
+                 \x20           unsafe { core::slice::from_raw_parts(out_val.ptr, out_val.len) }\n\
+                 \x20       };\n\
                  \x20       Ok(result)\n",
             );
         }
@@ -3933,8 +3949,12 @@ mod tests {
             "StringView return must emit Result<&str, HostContractError>: {out}"
         );
         assert!(
+            out.contains("if out_val.ptr.is_null() || out_val.len == 0"),
+            "StringView return must guard the null/empty view (UB on null ptr even at len==0): {out}"
+        );
+        assert!(
             out.contains("core::str::from_utf8_unchecked(slice)"),
-            "StringView return must build &str from raw parts: {out}"
+            "non-empty StringView return must build &str from raw parts: {out}"
         );
         assert!(
             out.contains("// SAFETY:"),
@@ -3969,12 +3989,100 @@ mod tests {
             "Buffer return must emit Result<&[u8], HostContractError>: {out}"
         );
         assert!(
+            out.contains("if out_val.ptr.is_null() || out_val.len == 0"),
+            "Buffer return must guard the null/empty buffer (UB on null ptr even at len==0): {out}"
+        );
+        assert!(
             out.contains("core::slice::from_raw_parts(out_val.ptr, out_val.len)"),
-            "Buffer return must build &[u8] from raw parts: {out}"
+            "non-empty Buffer return must build &[u8] from raw parts: {out}"
         );
         assert!(
             out.contains("// SAFETY:"),
             "Buffer unsafe block must have a SAFETY comment: {out}"
+        );
+    }
+
+    #[test]
+    fn host_thunk_single_param_stringview_uses_null_safe_accessor() {
+        // A StringView arg may be the null/empty view (ptr=null, len=0); building a
+        // slice from a null pointer is UB even at len==0. The generated thunk must use
+        // the null-safe StringView::as_str accessor, not a raw from_raw_parts.
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "log".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "message".to_owned(),
+                ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+            }],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        generate_host_thunk(&mut out, &func, "host.logger", "HostLogger");
+        assert!(
+            out.contains("message_sv.as_str()"),
+            "single StringView param must unpack via null-safe as_str(): {out}"
+        );
+        assert!(
+            !out.contains("from_utf8_unchecked(core::slice::from_raw_parts(message_sv.ptr"),
+            "single StringView param must NOT build str from raw parts (UB on null): {out}"
+        );
+    }
+
+    #[test]
+    fn host_thunk_single_param_buffer_uses_null_safe_accessor() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "write".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "data".to_owned(),
+                ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
+            }],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        generate_host_thunk(&mut out, &func, "host.store", "HostStore");
+        assert!(
+            out.contains("data_buf.as_slice()"),
+            "single Buffer param must unpack via null-safe as_slice(): {out}"
+        );
+        assert!(
+            !out.contains("core::slice::from_raw_parts(data_buf.ptr"),
+            "single Buffer param must NOT build slice from raw parts (UB on null): {out}"
+        );
+    }
+
+    #[test]
+    fn host_thunk_packed_params_use_null_safe_accessors() {
+        // Multi-param path uses an arg-pack struct; each StringView/Buffer field must
+        // also unpack via the null-safe accessor.
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "emit".to_owned(),
+            function_id: 0,
+            params: vec![
+                ResolvedParam {
+                    name: "tag".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                },
+                ResolvedParam {
+                    name: "payload".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
+                },
+            ],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        generate_host_thunk(&mut out, &func, "host.bus", "HostBus");
+        assert!(
+            out.contains("packed.tag.as_str()"),
+            "packed StringView param must unpack via null-safe as_str(): {out}"
+        );
+        assert!(
+            out.contains("packed.payload.as_slice()"),
+            "packed Buffer param must unpack via null-safe as_slice(): {out}"
+        );
+        assert!(
+            !out.contains("from_raw_parts(packed."),
+            "packed params must NOT build slices from raw parts (UB on null): {out}"
         );
     }
 
