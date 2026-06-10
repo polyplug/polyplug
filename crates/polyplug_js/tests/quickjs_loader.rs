@@ -1135,6 +1135,53 @@ fn js_reload_reinitializes_contracts() {
     assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
 }
 
+/// After a successful load, the contract must be attributed to the bundle's REAL
+/// id in the registry — not bundle 0. The JS `register_guest_contract` call runs
+/// after `polyplug_init` stashes its registration data, so the init-bundle window
+/// must stay open across that call for `host_register_guest_contract` to attribute
+/// it correctly. Invalidating by the real id must then remove it.
+#[test]
+fn registrations_attributed_to_real_bundle_id() {
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.attribution.contract", 1);
+    let bundle: String = make_bundle_js(contract_id, 1, "test.attribution.contract");
+    let (dir, _path) = write_temp_bundle_with_name(&bundle, "test.attribution.contract");
+    let bundle_id: u64 = polyplug_utils::bundle_id("test.attribution.contract");
+
+    let runtime: Arc<Runtime> = make_runtime();
+    runtime
+        .load_bundle(dir.path())
+        .expect("initial load must succeed");
+
+    // The contract must be findable under the REAL bundle id.
+    let by_real: Result<GuestContractHandle, polyplug::error::RegistryError> =
+        runtime.find_guest_contract_by_bundle(bundle_id, contract_id, 0);
+    assert!(
+        by_real.is_ok(),
+        "contract must be attributed to the real bundle id {bundle_id}, not bundle 0"
+    );
+
+    // And it must NOT be attributed to bundle 0.
+    let by_zero: Result<GuestContractHandle, polyplug::error::RegistryError> =
+        runtime.find_guest_contract_by_bundle(0, contract_id, 0);
+    assert!(
+        by_zero.is_err(),
+        "contract must not be attributed to bundle 0"
+    );
+
+    // Invalidating by the real bundle id must remove the contract from the registry.
+    runtime
+        .registry()
+        .invalidate_bundle(polyplug_utils::BundleId::from_u64(bundle_id))
+        .expect("invalidate by real bundle id must succeed");
+    let after: Result<GuestContractHandle, polyplug::error::RegistryError> = runtime
+        .registry()
+        .find(GuestContractId::from_u64(contract_id), 0);
+    assert!(
+        after.is_err(),
+        "contract must be gone after invalidating the real bundle id"
+    );
+}
+
 // ── BundleSource::Code / Bytes ──────────────────────────────────────────────────
 
 /// Absolute path to the shared JS fixture's `bundle.js` at the workspace root.
@@ -1276,4 +1323,286 @@ fn load_bytes_source_invalid_utf8_returns_structured_error() {
         ),
         "invalid UTF-8 bytes must yield InvalidSourceEncoding: {result:?}"
     );
+}
+
+// ── callHostContract from JS: instance lifecycle + bounds checks ───────────────
+
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
+
+// The counting host contract's create/destroy callbacks are plain `extern "C"`
+// functions and cannot capture per-test state, so they share these process-wide
+// counters. The tests that observe exact counts therefore serialize on TEST_LOCK
+// (held for the whole test body) and reset the counters under it.
+static CREATE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static DESTROY_COUNT: AtomicUsize = AtomicUsize::new(0);
+static COUNTER_LOCK: Mutex<()> = Mutex::new(());
+
+/// Counting create_instance: bumps CREATE_COUNT and returns a unique non-null
+/// instance pointer (the running count, +1 so it is never null).
+///
+/// # Safety
+/// Matches the `HostContractInterface::create_instance` ABI signature.
+unsafe extern "C" fn counting_create_instance(
+    _this: *const HostContractInterface,
+    _args: *const (),
+) -> HostContractInstance {
+    let n: usize = CREATE_COUNT.fetch_add(1, Ordering::SeqCst);
+    HostContractInstance {
+        data: (n + 1) as *mut core::ffi::c_void,
+    }
+}
+
+/// Counting destroy_instance: bumps DESTROY_COUNT. No real memory to free (the
+/// "instance" is just an integer used as a pointer).
+///
+/// # Safety
+/// Matches the `HostContractInterface::destroy_instance` ABI signature.
+unsafe extern "C" fn counting_destroy_instance(
+    _this: *const HostContractInterface,
+    _instance: HostContractInstance,
+) {
+    DESTROY_COUNT.fetch_add(1, Ordering::SeqCst);
+}
+
+/// A no-op native host-contract function: `(state, args, out) -> AbiError::ok()`.
+///
+/// # Safety
+/// Matches the native dispatch signature `(state, args, out) -> AbiError`.
+unsafe extern "C" fn host_noop_fn(
+    _state: *const core::ffi::c_void,
+    _args: *const core::ffi::c_void,
+    _out: *mut core::ffi::c_void,
+) -> polyplug_abi::AbiError {
+    polyplug_abi::AbiError::ok()
+}
+
+/// `Sync` wrapper around a 'static read-only function-pointer table so it can live
+/// in a `static`. Function pointers are safe to share across threads.
+#[repr(transparent)]
+struct HostFnTable([*const (); 1]);
+// SAFETY: the table holds only 'static read-only function pointers; sharing them
+// across threads is sound (the functions handle their own synchronization).
+unsafe impl Sync for HostFnTable {}
+
+// A single 'static native function table for the counting host contract.
+static HOST_NOOP_FNS: HostFnTable = HostFnTable([host_noop_fn as *const ()]);
+
+/// Build and leak a non-singleton counting host contract interface with one
+/// native function. `Box::leak` gives the required `&'static` lifetime.
+fn leak_counting_host_contract(contract_id: u64, major: u32) -> &'static HostContractInterface {
+    Box::leak(Box::new(HostContractInterface {
+        contract_id: polyplug_utils::HostContractId::from(contract_id),
+        contract_version: polyplug_abi::types::Version {
+            major,
+            minor: 0,
+            patch: 0,
+        },
+        singleton: false,
+        dispatch_type: DispatchType::Native,
+        runtime: core::ptr::null_mut(),
+        user_data: core::ptr::null_mut(),
+        create_instance: counting_create_instance,
+        destroy_instance: counting_destroy_instance,
+        dispatch: polyplug_abi::DispatchMechanisms {
+            native: polyplug_abi::NativeDispatch {
+                function_count: 1,
+                functions: HOST_NOOP_FNS.0.as_ptr(),
+            },
+        },
+    }))
+}
+
+/// Inline JS bundle whose single guest function calls
+/// `polyplug.callHostContract(lo, hi, minVer, fnId, argsPtr, outPtr)` and returns
+/// the host call's AbiError code. The guest contract id / name are parameterised
+/// so each test registers a distinct contract.
+fn host_caller_bundle_source(
+    guest_contract_id: u64,
+    guest_name: &str,
+    host_contract_id: u64,
+    host_fn_id: u32,
+) -> String {
+    let guest_lo: u32 = (guest_contract_id & 0xFFFF_FFFF) as u32;
+    let guest_hi: u32 = (guest_contract_id >> 32) as u32;
+    let host_lo: u32 = (host_contract_id & 0xFFFF_FFFF) as u32;
+    let host_hi: u32 = (host_contract_id >> 32) as u32;
+    format!(
+        r#"
+function callHost(argsPtr, outPtr) {{
+    // callHostContract(contractLo, contractHi, minVersion, fnId, argsPtr, outPtr).
+    // minVersion is the PACKED version (major << 16 | minor); major 1 -> 0x10000.
+    return polyplug.callHostContract({host_lo}, {host_hi}, 0x10000, {host_fn_id}, argsPtr, outPtr);
+}}
+
+function polyplug_init(rt_ctx, host_vtable, ctx) {{
+    var vtable = {{
+        contractLo: {guest_lo} >>> 0,
+        contractHi: {guest_hi} >>> 0,
+        fnCount: 1,
+        contractName: "{guest_name}",
+        version: 0x10000,
+        functions: [callHost]
+    }};
+    polyplug.registerVtable(
+        vtable.contractLo, vtable.contractHi, vtable,
+        vtable.fnCount, vtable.contractName, vtable.version
+    );
+    return {{ code: 0, message: null }};
+}}
+"#
+    )
+}
+
+/// Dispatch the guest's single function (fn_id 0), which calls callHostContract
+/// and RETURNS that host call's AbiError code. `js_dispatch` surfaces the JS
+/// return value as the dispatch's `AbiError.code`, so the returned code IS the
+/// host-call result code (Ok on success, FunctionNotAvailable on a rejected fn_id).
+fn dispatch_host_caller(runtime: &Runtime, guest_contract_id: u64) -> u32 {
+    let handle: GuestContractHandle = runtime
+        .registry()
+        .find(GuestContractId::from_u64(guest_contract_id), 0)
+        .expect("guest contract must be registered");
+    let vtable_ptr: *const GuestContractInterface = runtime
+        .registry()
+        .resolve_guest_contract(handle)
+        .expect("resolve must succeed");
+    // SAFETY: vtable_ptr is a valid pointer returned by resolve.
+    let vtable_ref: &GuestContractInterface = unsafe { &*vtable_ptr };
+    let mut out: i32 = 0;
+    // SAFETY: dispatch.vm.call is js_dispatch; the guest fn forwards the (unused)
+    // args/out pointers straight into callHostContract.
+    let result: polyplug_abi::AbiError = unsafe {
+        (vtable_ref.dispatch.vm.call)(
+            vtable_ref.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            0,
+            core::ptr::null::<()>(),
+            &mut out as *mut i32 as *mut (),
+            core::ptr::null_mut(),
+        )
+    };
+    result.code
+}
+
+/// B5 regression: calling a NON-singleton host contract from JS must destroy the
+/// freshly-minted instance after each dispatch. Calling twice must yield exactly
+/// two creates and two destroys — previously the instance leaked every call.
+#[test]
+fn callhostcontract_destroys_non_singleton_instance_each_call() {
+    // Serialize with the other counter-observing test; reset counters under the lock.
+    let _guard: std::sync::MutexGuard<'_, ()> =
+        COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    CREATE_COUNT.store(0, Ordering::SeqCst);
+    DESTROY_COUNT.store(0, Ordering::SeqCst);
+
+    let guest_name: &str = "jstest.hostcaller_lifecycle";
+    let guest_id: u64 = polyplug_utils::guest_contract_id(guest_name, 1);
+    let host_name: &str = "jstest.counting_host_lifecycle";
+    let host_id: u64 = polyplug_utils::host_contract_id(host_name, 1);
+
+    let runtime: Arc<Runtime> = make_runtime();
+    runtime
+        .register_host_contract(host_id, leak_counting_host_contract(host_id, 1))
+        .expect("host contract registration must succeed");
+
+    let source: String = host_caller_bundle_source(guest_id, guest_name, host_id, 0);
+    let manifest: ManifestData = make_manifest_named(guest_name);
+    runtime
+        .load_bundle_from_source(manifest, BundleSource::Code(source))
+        .expect("guest bundle load must succeed");
+
+    let code1: u32 = dispatch_host_caller(&runtime, guest_id);
+    assert_eq!(
+        code1,
+        polyplug_abi::AbiErrorCode::Ok as u32,
+        "first host call must succeed"
+    );
+    let code2: u32 = dispatch_host_caller(&runtime, guest_id);
+    assert_eq!(
+        code2,
+        polyplug_abi::AbiErrorCode::Ok as u32,
+        "second host call must succeed"
+    );
+
+    assert_eq!(
+        CREATE_COUNT.load(Ordering::SeqCst),
+        2,
+        "two calls must mint two instances"
+    );
+    assert_eq!(
+        DESTROY_COUNT.load(Ordering::SeqCst),
+        2,
+        "each non-singleton instance must be destroyed after its dispatch (no leak)"
+    );
+}
+
+/// B4 regression: calling callHostContract with an out-of-range fn_id must return
+/// FunctionNotAvailable instead of indexing past the host function table (UB /
+/// crash). The bounds check must also destroy the non-singleton instance it took.
+#[test]
+fn callhostcontract_out_of_range_fn_id_returns_function_not_available() {
+    // Serialize with the other counter-observing test; reset counters under the lock.
+    let _guard: std::sync::MutexGuard<'_, ()> =
+        COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    CREATE_COUNT.store(0, Ordering::SeqCst);
+    DESTROY_COUNT.store(0, Ordering::SeqCst);
+
+    let guest_name: &str = "jstest.hostcaller_bounds";
+    let guest_id: u64 = polyplug_utils::guest_contract_id(guest_name, 1);
+    let host_name: &str = "jstest.counting_host_bounds";
+    let host_id: u64 = polyplug_utils::host_contract_id(host_name, 1);
+
+    let runtime: Arc<Runtime> = make_runtime();
+    runtime
+        .register_host_contract(host_id, leak_counting_host_contract(host_id, 1))
+        .expect("host contract registration must succeed");
+
+    // The host contract has exactly one function (fn_id 0); ask for fn_id 5.
+    let source: String = host_caller_bundle_source(guest_id, guest_name, host_id, 5);
+    let manifest: ManifestData = make_manifest_named(guest_name);
+    runtime
+        .load_bundle_from_source(manifest, BundleSource::Code(source))
+        .expect("guest bundle load must succeed");
+
+    let code: u32 = dispatch_host_caller(&runtime, guest_id);
+    assert_eq!(
+        code,
+        polyplug_abi::AbiErrorCode::FunctionNotAvailable as u32,
+        "out-of-range fn_id must yield FunctionNotAvailable, not a crash"
+    );
+
+    // The bounds-check path still took (and must release) a non-singleton instance.
+    assert_eq!(
+        CREATE_COUNT.load(Ordering::SeqCst),
+        1,
+        "one call mints one instance even when the fn_id is rejected"
+    );
+    assert_eq!(
+        DESTROY_COUNT.load(Ordering::SeqCst),
+        1,
+        "the instance must be destroyed even on the bounds-check bail-out (no leak)"
+    );
+}
+
+/// Build a ManifestData for an in-memory JS guest bundle with the given contract
+/// name (used as bundle name; provides one function).
+fn make_manifest_named(name: &str) -> ManifestData {
+    let mut function_count: HashMap<String, u32> = HashMap::new();
+    function_count.insert(format!("{name}@1"), 1);
+    ManifestData {
+        id: polyplug_utils::bundle_id(name),
+        name: name.to_owned(),
+        runtime: "js-quickjs".to_owned(),
+        file: "bundle.js".to_owned(),
+        path: std::path::PathBuf::new(),
+        version: "1.0.0".to_owned(),
+        provides: vec![format!("{name}@1")],
+        function_count,
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+        bundle_dependencies: Vec::new(),
+    }
 }

@@ -314,6 +314,58 @@ fn vtable_is_registered_after_load() {
     assert_function_count(vtable, 1);
 }
 
+/// After a successful load, the contract must be attributed to the bundle's REAL
+/// id in the registry — not bundle 0. The registration runs after Lua
+/// `polyplug_init` populates `_polyplug_handlers`, so the init-bundle window must
+/// stay open across the registration loop for `host_register_guest_contract` to
+/// attribute it correctly. Invalidating by the real id must then remove it.
+#[test]
+fn registrations_attributed_to_real_bundle_id() {
+    let (_dir, path) = write_temp_bundle("lua_loader_attribution", valid_plugin_script());
+    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let runtime: Arc<Runtime> = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "lua_loader_attribution");
+    let bundle_id: u64 = manifest.id;
+    loader
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
+        .expect("valid bundle must load");
+
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
+
+    // The contract must be findable under the REAL bundle id.
+    let by_real: Result<GuestContractHandle, polyplug::error::RegistryError> =
+        runtime.find_guest_contract_by_bundle(bundle_id, contract_id, 0);
+    assert!(
+        by_real.is_ok(),
+        "contract must be attributed to the real bundle id {bundle_id}, not bundle 0"
+    );
+
+    // And it must NOT be attributed to bundle 0.
+    let by_zero: Result<GuestContractHandle, polyplug::error::RegistryError> =
+        runtime.find_guest_contract_by_bundle(0, contract_id, 0);
+    assert!(
+        by_zero.is_err(),
+        "contract must not be attributed to bundle 0"
+    );
+
+    // Invalidating by the real bundle id must remove the contract from the registry.
+    runtime
+        .registry()
+        .invalidate_bundle(polyplug_utils::BundleId::from_u64(bundle_id))
+        .expect("invalidate by real bundle id must succeed");
+    let after: Result<GuestContractHandle, polyplug::error::RegistryError> = runtime
+        .registry()
+        .find(GuestContractId::from_u64(contract_id), 0);
+    assert!(
+        after.is_err(),
+        "contract must be gone after invalidating the real bundle id"
+    );
+}
+
 /// Verify a VM-dispatch vtable exposes exactly `expected` functions by probing
 /// fn_ids: indices `0..expected` must return `Ok`, and index `expected` must
 /// return `FunctionNotAvailable`.

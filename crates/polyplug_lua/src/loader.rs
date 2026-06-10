@@ -44,6 +44,36 @@ const GUEST_LUA_DIR: &str = env!("POLYPLUG_GUEST_LUA_DIR");
 /// The path to the abi/lua/ directory, set at compile time by build.rs.
 const ABI_LUA_DIR: &str = env!("POLYPLUG_ABI_LUA_DIR");
 
+/// RAII guard that keeps the runtime's per-thread init-bundle window open for the
+/// duration of `load_inner`'s init **and** registration phases.
+///
+/// `host_register_guest_contract` attributes each registration to the bundle id at
+/// the top of the runtime's init-bundle stack (`current_init_bundle_id`). The Lua
+/// `polyplug_init` only populates `_G._polyplug_handlers`; the actual
+/// `register_guest_contract` calls happen later in `load_inner`. The window must
+/// therefore stay open across BOTH phases, and `pop` must run on EVERY exit path —
+/// including the many `?` early-returns between init and the end of the registration
+/// loop. Dropping this guard pops exactly once, whether the function returns Ok,
+/// returns Err via `?`, or unwinds, so the stack never leaks an entry.
+struct InitBundleGuard<'r> {
+    runtime: &'r Runtime,
+}
+
+impl<'r> InitBundleGuard<'r> {
+    /// Push `bundle_id` onto the runtime's init-bundle stack and return a guard that
+    /// pops it on drop.
+    fn enter(runtime: &'r Runtime, bundle_id: u64) -> Self {
+        runtime.push_init_bundle_id(bundle_id);
+        Self { runtime }
+    }
+}
+
+impl Drop for InitBundleGuard<'_> {
+    fn drop(&mut self) {
+        self.runtime.pop_init_bundle_id();
+    }
+}
+
 // ─── Lua Loader Data for VM Dispatch ───────────────────────────────────────────
 
 /// Loader-specific data for Lua plugin dispatch.
@@ -78,6 +108,22 @@ pub struct LuaLoaderData {
     /// `LuaLoaderData`, never globally, so it is Rule-12 compliant. Contention is
     /// trivial: the vec holds 0..N concurrent caller threads and never duplicates.
     pub in_dispatch_threads: Mutex<Vec<ThreadId>>,
+    /// Per-VM serialization of the arena publish→call→clear span in [`lua_dispatch`].
+    ///
+    /// The arena pointer is published as the `_polyplug_arena` VM global, the guest
+    /// is called, and the global is cleared — three SEPARATE mlua operations. mlua's
+    /// internal `send` lock serializes each individual operation but NOT the
+    /// sequence, so without this lock a CROSS-thread concurrent dispatch could
+    /// overwrite the global between this thread's publish and its guest call (the
+    /// guest then allocates from the wrong arena), or clear the global to 0
+    /// mid-call (the guest then falls back to `host->alloc` and leaks). Holding this
+    /// lock across the whole span makes both impossible: a cross-thread caller
+    /// blocks here until the in-flight call finishes, exactly the serialization mlua
+    /// would impose on the VM lock anyway. Same-thread nested reentrancy is refused
+    /// (`ReentrantCall`) BEFORE this lock is taken, so the lock can never deadlock
+    /// against its own thread. It lives on the per-VM `LuaLoaderData`, never
+    /// globally, so it is Rule-12 compliant.
+    pub dispatch_lock: Mutex<()>,
 }
 
 /// Owning handle to a bundle's [`LuaLoaderData`] with a stable heap address.
@@ -221,9 +267,21 @@ unsafe extern "C" fn lua_dispatch(
     let out_i64: i64 = out as usize as i64;
 
     // Publish the per-call arena pointer so the _polyplug_arena_alloc bridge can
-    // serve allocations from it. The mlua call below runs single-threaded on this
-    // VM, so the global cannot be observed concurrently. The pointer is cleared
-    // after the call so a stale arena is never reachable.
+    // serve allocations from it. The publish→call→clear span is THREE separate mlua
+    // operations; mlua's internal `send` lock serializes each one but not the
+    // sequence, so the per-VM `dispatch_lock` is held across the whole span. Without
+    // it, a cross-thread concurrent dispatch could overwrite the global between this
+    // publish and the guest call (wrong arena), or clear it to 0 mid-call (the guest
+    // would fall back to host->alloc and leak). Same-thread reentrancy was already
+    // refused above, so this lock cannot deadlock against its own thread; a
+    // cross-thread caller blocks here, exactly the serialization mlua imposes on the
+    // VM lock anyway. Poison recovery: the unit value cannot be left logically
+    // corrupt, so reusing it is sound. Production code, so no unwrap.
+    let _dispatch_lock: std::sync::MutexGuard<'_, ()> = data
+        .dispatch_lock
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+
     let arena_i64: i64 = arena as usize as i64;
     let _ = data._vm.globals().set(ARENA_GLOBAL, arena_i64);
 
@@ -555,10 +613,14 @@ impl LuaLoader {
         // dispatch happens later, so registering here is sufficient.
         Self::register_arena_alloc(&lua, &bundle_name, host_interface)?;
 
-        // Push bundle_id onto the runtime's per-thread init stack for dependency
-        // enforcement during init. The matching pop MUST run on every exit path
-        // (success and error) so the stack never leaks an entry.
-        runtime.push_init_bundle_id(bundle_id);
+        // Open the init-bundle window for BOTH the init call and the registration
+        // loop below: `host_register_guest_contract` attributes each registration to
+        // the bundle id on top of this stack, and the `register_guest_contract` calls
+        // happen later in this function (after init only populates _G._polyplug_handlers).
+        // The guard's Drop pops once on every exit path — including the `?`
+        // early-returns between here and the end of the registration loop — so the
+        // stack never leaks an entry and registrations carry the real bundle id.
+        let _init_window: InitBundleGuard<'_> = InitBundleGuard::enter(runtime, bundle_id);
 
         // Call polyplug_init — it populates _G._polyplug_handlers.
         // New signature: polyplug_init(host, ctx) - self-passing pattern.
@@ -578,10 +640,6 @@ impl LuaLoader {
         let ctx_ptr: i64 = &ctx as *const polyplug_abi::BundleInitContext as i64;
         let init_result: Result<(), mlua::Error> =
             init_fn.call::<()>((host_interface_i64, ctx_ptr));
-
-        // Pop bundle_id from the init stack after init completes (always, including
-        // the error path) so the stack does not leak an entry.
-        runtime.pop_init_bundle_id();
 
         init_result.map_err(|e: mlua::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
@@ -684,6 +742,7 @@ impl LuaLoader {
                 _vm: lua.clone(),
                 functions: lua_functions,
                 in_dispatch_threads: Mutex::new(Vec::new()),
+                dispatch_lock: Mutex::new(()),
             }));
 
             // The box's heap address is stable across later moves of the `LuaVm`/`Box`
@@ -1059,6 +1118,12 @@ end
             loader
                 .unload(bundle_id, &runtime, true)
                 .expect("unload must succeed");
+            // Driving the loader directly bypasses `Runtime::unload_bundle`'s registry
+            // invalidation, so the test mirrors it explicitly.
+            runtime
+                .registry()
+                .invalidate_bundle(bundle_id)
+                .expect("invalidate must succeed");
             assert_eq!(
                 loader.live_vm_count(bundle_id),
                 0,
@@ -1137,6 +1202,7 @@ end
             _vm: vm,
             functions,
             in_dispatch_threads: Mutex::new(Vec::new()),
+            dispatch_lock: Mutex::new(()),
         });
         let ptr: *mut LuaLoaderData = Box::into_raw(boxed);
         // SAFETY: ptr was just produced by Box::into_raw and is never freed in the
@@ -1392,6 +1458,168 @@ end
                 .is_empty(),
             "thread tracking must be empty after both dispatches return"
         );
+    }
+
+    /// Concurrency regression for the racy arena publish→call→clear span in
+    /// `lua_dispatch`.
+    ///
+    /// `lua_dispatch` publishes the per-call arena as the `_polyplug_arena` VM
+    /// global, calls the guest (which allocates its return buffer through the
+    /// `_polyplug_arena_alloc` bridge reading that global), then clears the global
+    /// to 0 — THREE separate mlua operations. mlua's internal `send` lock serializes
+    /// each individual operation but NOT the sequence, so the lock is briefly free
+    /// between A's publish and A's call, and between A's call and A's clear. In
+    /// those gaps a concurrent dispatch B can publish its OWN arena (so A's guest
+    /// allocates from B's arena) or clear the global to 0 mid-span (so A's guest
+    /// falls back to host->alloc). Both corrupt A's arena-backed return.
+    ///
+    /// This test hammers two threads dispatching into the SAME VM with DISTINCT
+    /// per-thread arenas for many iterations. Each guest fn allocates from the
+    /// bridge and reports the address; the Rust side verifies the address lands in
+    /// the buffer of the arena THAT THREAD dispatched with. A single misattributed
+    /// allocation (the bug) lands in the other thread's buffer or is null, failing
+    /// the per-iteration assertion. With the per-VM `dispatch_lock` holding the
+    /// whole publish→call→clear span atomic, every allocation is correctly
+    /// attributed. The two buffers are deliberately disjoint so a cross-arena
+    /// allocation is unambiguously detectable.
+    #[test]
+    fn lua_dispatch_concurrent_arena_returns_stay_isolated() {
+        // SAFETY: test-only VM; no untrusted scripts are executed here.
+        let lua: Lua = unsafe { Lua::unsafe_new() };
+
+        // Register the production arena bridge with a null host: with a real arena
+        // active the bridge bumps the arena; if the global is wrongly cleared to 0
+        // the bridge falls back to host->alloc, which with a null host yields 0.
+        LuaLoader::register_arena_alloc(&lua, "concurrent-arena-test", core::ptr::null())
+            .expect("register_arena_alloc must succeed");
+
+        // Both worker functions are identical: allocate 64 bytes via the bridge and
+        // write the returned address into the out slot. fn_id selects which thread.
+        let make_alloc_fn = |lua: &Lua| -> Function {
+            lua.create_function(
+                |lua_ctx: &Lua, (_a, out_ptr): (i64, i64)| -> mlua::Result<()> {
+                    let alloc: Function =
+                        lua_ctx.globals().get::<Function>("_polyplug_arena_alloc")?;
+                    let addr: i64 = alloc.call::<i64>(64_u32)?;
+                    let out: *mut i64 = out_ptr as usize as *mut i64;
+                    // SAFETY: out_ptr is a valid local i64 supplied by the test.
+                    unsafe { *out = addr };
+                    Ok(())
+                },
+            )
+            .expect("create_function should succeed")
+        };
+        let fn0: Function = make_alloc_fn(&lua);
+        let fn1: Function = make_alloc_fn(&lua);
+
+        let (vm_loader_data, _data_ref): (VmLoaderData, &'static LuaLoaderData) =
+            make_loader_data(lua, vec![fn0, fn1]);
+        let data_addr: usize = vm_loader_data.data as usize;
+
+        // Per-thread disjoint 4 KiB buffers + arenas, leaked so their addresses stay
+        // valid across the worker threads. Null host: 64-byte allocs fit the primary
+        // region (no overflow), and each iteration resets its arena.
+        let buf_a: &'static mut [u8] = Box::leak(vec![0_u8; 4096].into_boxed_slice());
+        let buf_b: &'static mut [u8] = Box::leak(vec![0_u8; 4096].into_boxed_slice());
+        let a_lo: usize = buf_a.as_ptr() as usize;
+        let a_hi: usize = a_lo + buf_a.len();
+        let b_lo: usize = buf_b.as_ptr() as usize;
+        let b_hi: usize = b_lo + buf_b.len();
+        let arena_a: &'static mut CallArena =
+            Box::leak(Box::new(CallArena::new(buf_a, core::ptr::null())));
+        let arena_b: &'static mut CallArena =
+            Box::leak(Box::new(CallArena::new(buf_b, core::ptr::null())));
+        let arena_a_addr: usize = arena_a as *mut CallArena as usize;
+        let arena_b_addr: usize = arena_b as *mut CallArena as usize;
+
+        const ITERS: usize = 2_000;
+        let start: Arc<Barrier> = Arc::new(Barrier::new(2));
+        let start_a: Arc<Barrier> = Arc::clone(&start);
+        let start_b: Arc<Barrier> = Arc::clone(&start);
+
+        // Worker A: fn_id 0, arena_a, buffer [a_lo, a_hi). Each iteration resets its
+        // arena, dispatches, and verifies the allocation landed in its own buffer.
+        let handle_a: std::thread::JoinHandle<Result<(), String>> = std::thread::spawn(move || {
+            start_a.wait();
+            for i in 0..ITERS {
+                // SAFETY: arena_a_addr is the live leaked CallArena for this
+                // worker; only this worker resets/uses it (fn_id 0).
+                let arena: &mut CallArena = unsafe { &mut *(arena_a_addr as *mut CallArena) };
+                arena.reset();
+                let mut out: i64 = 0;
+                let vm: VmLoaderData = VmLoaderData {
+                    data: data_addr as *mut core::ffi::c_void,
+                };
+                // SAFETY: data_addr is the live leaked LuaLoaderData; out is a
+                // valid local; arena_a_addr is a valid CallArena.
+                let err: AbiError = unsafe {
+                    lua_dispatch(
+                        vm,
+                        GuestContractInstance::null(),
+                        0,
+                        core::ptr::null(),
+                        &mut out as *mut i64 as *mut (),
+                        arena_a_addr as *mut CallArena,
+                    )
+                };
+                if !err.is_ok() {
+                    return Err(format!("A iter {i}: dispatch failed code={}", err.code));
+                }
+                let p: usize = out as usize;
+                if !(p >= a_lo && p < a_hi) {
+                    return Err(format!(
+                        "A iter {i}: allocation {p:#x} escaped arena A buffer [{a_lo:#x}, {a_hi:#x}) — racy publish/clear misattributed it"
+                    ));
+                }
+            }
+            Ok(())
+        });
+
+        // Worker B: fn_id 1, arena_b, buffer [b_lo, b_hi).
+        let handle_b: std::thread::JoinHandle<Result<(), String>> = std::thread::spawn(move || {
+            start_b.wait();
+            for i in 0..ITERS {
+                // SAFETY: arena_b_addr is the live leaked CallArena for this
+                // worker; only this worker resets/uses it (fn_id 1).
+                let arena: &mut CallArena = unsafe { &mut *(arena_b_addr as *mut CallArena) };
+                arena.reset();
+                let mut out: i64 = 0;
+                let vm: VmLoaderData = VmLoaderData {
+                    data: data_addr as *mut core::ffi::c_void,
+                };
+                // SAFETY: data_addr is the live leaked LuaLoaderData; out is a
+                // valid local; arena_b_addr is a valid CallArena.
+                let err: AbiError = unsafe {
+                    lua_dispatch(
+                        vm,
+                        GuestContractInstance::null(),
+                        1,
+                        core::ptr::null(),
+                        &mut out as *mut i64 as *mut (),
+                        arena_b_addr as *mut CallArena,
+                    )
+                };
+                if !err.is_ok() {
+                    return Err(format!("B iter {i}: dispatch failed code={}", err.code));
+                }
+                let p: usize = out as usize;
+                if !(p >= b_lo && p < b_hi) {
+                    return Err(format!(
+                        "B iter {i}: allocation {p:#x} escaped arena B buffer [{b_lo:#x}, {b_hi:#x}) — racy publish/clear misattributed it"
+                    ));
+                }
+            }
+            Ok(())
+        });
+
+        let a_outcome: Result<(), String> = handle_a.join().expect("thread A must not panic");
+        let b_outcome: Result<(), String> = handle_b.join().expect("thread B must not panic");
+        if let Err(e) = a_outcome {
+            panic!("{e}");
+        }
+        if let Err(e) = b_outcome {
+            panic!("{e}");
+        }
     }
 
     /// Regression test for the package.path code-injection vulnerability.

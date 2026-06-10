@@ -367,6 +367,31 @@ fn get_host_interface_from_globals<'js>(ctx: &Ctx<'js>) -> Option<*const HostApi
     }
 }
 
+/// Destroy a host-contract instance obtained from `get_host_contract` when the
+/// contract is NOT a singleton.
+///
+/// `get_host_contract` mints a fresh instance per call for multi-instance
+/// contracts; the caller owns it and must destroy it or it leaks. Singleton
+/// contracts return a runtime-cached instance that must never be destroyed here.
+///
+/// # Safety
+/// `iface` must be the valid, non-null `HostContractInterface` pointer that produced
+/// `instance`; `instance` must be the value just returned by `get_host_contract` for
+/// this `iface`.
+unsafe fn destroy_host_instance_if_needed(
+    iface: *const HostContractInterface,
+    singleton: bool,
+    instance: HostContractInstance,
+) {
+    if singleton {
+        return;
+    }
+    // SAFETY: iface is a valid non-null HostContractInterface pointer (checked by the
+    // caller); destroy_instance follows the self-passing ABI (its first argument is the
+    // interface pointer), and `instance` is the value get_host_contract returned for it.
+    unsafe { ((*iface).destroy_instance)(iface, instance) };
+}
+
 fn register_host_functions<'js>(
     ctx: &Ctx<'js>,
     polyplug_obj: &Object<'js>,
@@ -1033,15 +1058,34 @@ fn register_host_functions<'js>(
                 unsafe { ((*hvt).get_host_contract)(hvt, contract_id, min_version) };
             let args: *const core::ffi::c_void = args_ptr as usize as *const core::ffi::c_void;
             let out: *mut core::ffi::c_void = out_ptr as usize as *mut core::ffi::c_void;
-            // SAFETY: iface is non-null (checked above); dispatch_type is a plain u32 field
-            // that is safe to read once we have a valid non-null pointer.
+            // SAFETY: iface is non-null (checked above); `singleton` is a plain bool
+            // field that is safe to read through a valid non-null pointer.
+            let singleton: bool = unsafe { (*iface).singleton };
+            // SAFETY: iface is non-null (checked above); `dispatch_type` is a plain field
+            // that is safe to read through a valid non-null pointer.
             let dt: DispatchType = unsafe { (*iface).dispatch_type };
-            match dt {
+            let code: u32 = match dt {
                 DispatchType::Native => {
-                    // SAFETY: iface is non-null (checked); fn_id is a valid index supplied by the
-                    // generated caller for this contract; functions table is populated by the host.
-                    let fn_ptr: *const () =
-                        unsafe { *(*iface).dispatch.native.functions.add(fn_id as usize) };
+                    // SAFETY: iface is non-null (checked); dispatch_type == Native guarantees
+                    // the `native` union variant is active, so reading it is sound.
+                    let native: polyplug_abi::NativeDispatch = unsafe { (*iface).dispatch.native };
+                    // Bounds- and null-check the host function table before indexing it,
+                    // mirroring host_call_guest_method in crates/polyplug/src/runtime.rs.
+                    if native.functions.is_null() || fn_id >= native.function_count {
+                        // SAFETY: iface produced `instance`; the helper only destroys a
+                        // non-singleton instance, releasing it before we bail out.
+                        unsafe { destroy_host_instance_if_needed(iface, singleton, instance) };
+                        return AbiErrorCode::FunctionNotAvailable as u32;
+                    }
+                    // SAFETY: fn_id < function_count and functions is non-null, so the slot
+                    // at fn_id is within the host's static function-pointer array.
+                    let fn_ptr: *const () = unsafe { *native.functions.add(fn_id as usize) };
+                    if fn_ptr.is_null() {
+                        // SAFETY: iface produced `instance`; the helper only destroys a
+                        // non-singleton instance, releasing it before we bail out.
+                        unsafe { destroy_host_instance_if_needed(iface, singleton, instance) };
+                        return AbiErrorCode::FunctionNotAvailable as u32;
+                    }
                     // SAFETY: fn_ptr came from the host's native dispatch table and has the documented
                     // (state, args, out) -> AbiError C signature; instance.data is the contract state.
                     let dispatch_fn: unsafe extern "C" fn(
@@ -1073,7 +1117,14 @@ fn register_host_functions<'js>(
                     };
                     err.code
                 }
-            }
+            };
+            // A non-singleton host contract mints a fresh instance per get_host_contract;
+            // the caller owns it and must destroy it after the dispatch, or it leaks.
+            // Singleton contracts are cached by the runtime — leave them untouched.
+            // SAFETY: iface produced `instance` via get_host_contract above; the helper
+            // destroys it only for non-singleton contracts.
+            unsafe { destroy_host_instance_if_needed(iface, singleton, instance) };
+            code
         },
     )
     .map_err(|e: rquickjs::Error| {
@@ -1143,6 +1194,38 @@ fn register_host_functions<'js>(
         })?;
 
     Ok(())
+}
+
+// ─── Init-bundle window guard ────────────────────────────────────────────────
+
+/// RAII guard that keeps the runtime's per-thread init-bundle window open for the
+/// duration of `load_inner`'s init **and** registration phases.
+///
+/// `host_register_guest_contract` attributes each registration to the bundle id at
+/// the top of the runtime's init-bundle stack (`current_init_bundle_id`). The JS
+/// `polyplug_init` only stashes a `JsRegistrationData` in userdata; the actual
+/// `register_guest_contract` call happens later in `load_inner`. The window must
+/// therefore stay open across BOTH phases, and `pop` must run on EVERY exit path —
+/// including the `?` early-returns between init and the registration call. Dropping
+/// this guard pops exactly once, whether the function returns Ok, returns Err via
+/// `?`, or unwinds, so the stack never leaks an entry.
+struct InitBundleGuard<'r> {
+    runtime: &'r PolyplugRuntime,
+}
+
+impl<'r> InitBundleGuard<'r> {
+    /// Push `bundle_id` onto the runtime's init-bundle stack and return a guard that
+    /// pops it on drop.
+    fn enter(runtime: &'r PolyplugRuntime, bundle_id: u64) -> Self {
+        runtime.push_init_bundle_id(bundle_id);
+        Self { runtime }
+    }
+}
+
+impl Drop for InitBundleGuard<'_> {
+    fn drop(&mut self) {
+        self.runtime.pop_init_bundle_id();
+    }
 }
 
 // ─── JsLoader ────────────────────────────────────────────────────────────────
@@ -1235,10 +1318,14 @@ impl JsLoader {
         // This interface already has the runtime pointer set internally.
         let host_interface: *const HostApi = runtime.as_context_ptr();
 
-        // Push bundle_id onto the runtime's per-thread init stack for dependency
-        // enforcement during init. The matching pop MUST run on every exit path
-        // (success and error) so the stack never leaks an entry.
-        runtime.push_init_bundle_id(bundle_id);
+        // Open the init-bundle window for BOTH the init call and the registration
+        // call below: `host_register_guest_contract` attributes the registration to
+        // the bundle id on top of this stack, and `register_guest_contract` runs later
+        // in this function (init only stashes JsRegistrationData in userdata). The
+        // guard's Drop pops once on every exit path — including the `?` early-returns
+        // between here and the registration call — so the stack never leaks an entry
+        // and the registration carries the real bundle id.
+        let _init_window: InitBundleGuard<'_> = InitBundleGuard::enter(runtime, bundle_id);
 
         // In-memory sources (Code/Bytes) carry no bundle directory, so bundlePath
         // and BundleInitContext.bundle_path are empty for them.
@@ -1347,10 +1434,6 @@ impl JsLoader {
 
             Ok::<(), RuntimeError>(())
         });
-
-        // Pop bundle_id from the init stack after init completes (always, including
-        // the error path) so the stack does not leak an entry.
-        runtime.pop_init_bundle_id();
 
         init_outcome?;
 
@@ -1738,6 +1821,12 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
             loader
                 .unload(bundle_id, &runtime, true)
                 .expect("unload must succeed");
+            // Driving the loader directly bypasses `Runtime::unload_bundle`'s registry
+            // invalidation, so the test mirrors it explicitly.
+            runtime
+                .registry()
+                .invalidate_bundle(bundle_id)
+                .expect("invalidate must succeed");
             assert_eq!(
                 loader.live_vm_count(bundle_id),
                 0,
