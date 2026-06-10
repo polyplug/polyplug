@@ -315,11 +315,12 @@ pub unsafe fn strip_prefix<'a>(sv: &'a StringView, prefix: &str) -> &'a str {
     }
 }
 
-/// Split a `StringView` by a delimiter.
+/// Split a `StringView` by a literal delimiter, keeping empty segments.
 ///
-/// Returns a vector of string slices borrowing for the lifetime of `sv`. Empty
-/// input returns an empty vector. Consecutive delimiters produce empty strings
-/// in the output.
+/// Returns a vector of string slices borrowing for the lifetime of `sv`. A
+/// null or empty view returns an empty vector; an empty delimiter returns the
+/// whole string as a single element. Leading, trailing, and consecutive
+/// delimiters produce empty strings in the output.
 ///
 /// # Safety
 /// Same contract as [`to_str`]: `sv` must point to valid, live UTF-8 bytes for
@@ -340,6 +341,9 @@ pub unsafe fn split<'a>(sv: &'a StringView, delimiter: &str) -> Vec<&'a str> {
     let s: &'a str = unsafe { to_str(sv) };
     if s.is_empty() {
         return Vec::new();
+    }
+    if delimiter.is_empty() {
+        return vec![s];
     }
     s.split(delimiter).collect()
 }
@@ -407,5 +411,78 @@ pub mod ffi {
     /// Returns null if called before polyplug_init completes.
     pub fn get_host_vtable() -> *const polyplug_abi::HostApi {
         crate::get_host_vtable()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use polyplug_abi::StringView;
+
+    fn view(bytes: &[u8]) -> StringView {
+        StringView {
+            ptr: bytes.as_ptr(),
+            len: bytes.len(),
+        }
+    }
+
+    #[test]
+    fn to_str_null_view_is_empty() {
+        let sv = StringView {
+            ptr: core::ptr::null(),
+            len: 5,
+        };
+        // SAFETY: a null view is explicitly legal input for to_str.
+        assert_eq!(unsafe { crate::to_str(&sv) }, "");
+    }
+
+    #[test]
+    fn to_str_zero_len_view_is_empty() {
+        let sv: StringView = view(b"x");
+        let sv = StringView { len: 0, ..sv };
+        // SAFETY: the view borrows a live byte slice for the duration of the call.
+        assert_eq!(unsafe { crate::to_str(&sv) }, "");
+    }
+
+    #[test]
+    fn split_keeps_consecutive_empty_segments() {
+        let sv: StringView = view(b"a||b");
+        // SAFETY: the view borrows a live byte slice for the duration of the call.
+        let parts: Vec<&str> = unsafe { crate::split(&sv, "|") };
+        assert_eq!(parts, vec!["a", "", "b"]);
+    }
+
+    #[test]
+    fn split_keeps_leading_and_trailing_empty_segments() {
+        let sv: StringView = view(b"|a|");
+        // SAFETY: the view borrows a live byte slice for the duration of the call.
+        let parts: Vec<&str> = unsafe { crate::split(&sv, "|") };
+        assert_eq!(parts, vec!["", "a", ""]);
+    }
+
+    #[test]
+    fn split_empty_view_is_empty_list() {
+        let sv = StringView {
+            ptr: core::ptr::null(),
+            len: 0,
+        };
+        // SAFETY: a null view is explicitly legal input for split.
+        let parts: Vec<&str> = unsafe { crate::split(&sv, "|") };
+        assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn split_empty_delimiter_returns_whole_string() {
+        let sv: StringView = view(b"ab");
+        // SAFETY: the view borrows a live byte slice for the duration of the call.
+        let parts: Vec<&str> = unsafe { crate::split(&sv, "") };
+        assert_eq!(parts, vec!["ab"]);
+    }
+
+    #[test]
+    fn split_multibyte_literal_delimiter() {
+        let sv: StringView = view(b"a::b::c");
+        // SAFETY: the view borrows a live byte slice for the duration of the call.
+        let parts: Vec<&str> = unsafe { crate::split(&sv, "::") };
+        assert_eq!(parts, vec!["a", "b", "c"]);
     }
 }

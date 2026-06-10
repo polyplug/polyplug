@@ -1162,19 +1162,21 @@ function M.split(sv, delimiter)
     if s == "" then
         return {}
     end
-
-    delimiter = delimiter or "%s+"
-    local result = {}
-    local pattern = "(.-)" .. delimiter .. "()"
-    local last_pos = 1
-
-    for part, pos in s:gmatch(pattern) do
-        table.insert(result, part)
-        last_pos = pos
+    if delimiter == nil or delimiter == "" then
+        return { s }
     end
 
-    -- Add the remaining part after the last delimiter
-    table.insert(result, s:sub(last_pos))
+    local result = {}
+    local start = 1
+    while true do
+        local i, j = string.find(s, delimiter, start, true)
+        if i == nil then
+            table.insert(result, s:sub(start))
+            break
+        end
+        table.insert(result, s:sub(start, i - 1))
+        start = j + 1
+    end
 
     return result
 end

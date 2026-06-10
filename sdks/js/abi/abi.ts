@@ -1325,14 +1325,34 @@ export const POLYPLUG_ABI_VERSION: number = 1;
 
 /**
  * Convert a StringView to a JavaScript string.
+ *
+ * Reads the viewed bytes through Deno's FFI pointer view (this abi mirror runs
+ * in the Deno host environment) and decodes them as UTF-8.
  * @param sv - The StringView to convert.
- * @returns The JavaScript string, or empty string if null/empty.
+ * @returns The decoded string, or empty string for a null/zero-length view.
+ * @throws Error when no Deno FFI environment is available — never silently
+ *          returns '' for a readable view.
  */
 export function stringViewToString(sv: StringView | null | undefined): string {
     if (!sv || sv.ptr === 0n || sv.len === 0) return '';
-    // Note: Actual implementation requires FFI access to read memory.
-    // This is a placeholder - the host/guest libraries provide actual implementation.
-    return '';
+    const deno = (globalThis as {
+        Deno?: {
+            UnsafePointer: { create(value: bigint): unknown };
+            UnsafePointerView: new (pointer: unknown) => {
+                getArrayBuffer(byteLength: number): ArrayBuffer;
+            };
+        };
+    }).Deno;
+    if (deno === undefined) {
+        throw new Error(
+            'stringViewToString: no Deno FFI environment is available to read StringView memory ' +
+            '(Deno.UnsafePointerView is required; refusing to silently return an empty string)',
+        );
+    }
+    const pointer: unknown = deno.UnsafePointer.create(sv.ptr);
+    if (pointer === null) return '';
+    const bytes: ArrayBuffer = new deno.UnsafePointerView(pointer).getArrayBuffer(Number(sv.len));
+    return new TextDecoder().decode(bytes);
 }
 
 /**
@@ -1381,13 +1401,15 @@ export function toStr(sv: StringView | null | undefined): string {
 }
 
 /**
- * Split a string by a delimiter.
+ * Split a string by a literal delimiter, keeping empty segments.
  * @param sv - The input StringView or string.
- * @param delimiter - The delimiter to split by.
- * @returns An array of strings.
+ * @param delimiter - The literal delimiter to split by.
+ * @returns An array of strings: [] for a null/empty input, [s] for an empty delimiter.
  */
 export function split(sv: StringView | string, delimiter: string): string[] {
     const s: string = typeof sv === 'string' ? sv : stringViewToString(sv);
+    if (s.length === 0) return [];
+    if (delimiter.length === 0) return [s];
     return s.split(delimiter);
 }
 

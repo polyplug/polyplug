@@ -1174,22 +1174,31 @@ inline bool ends_with(StringView sv, std::string_view suffix) noexcept {
     return s.substr(s.size() - suffix.size()) == suffix;
 }
 
-/// Split string by delimiter.
+/// Split string by a literal delimiter, keeping empty segments.
 /// @param sv The input StringView.
-/// @param delimiter The delimiter character.
-/// @return Vector of string_views.
-inline std::vector<std::string_view> split(StringView sv, char delimiter) {
+/// @param delimiter The literal delimiter string.
+/// @return Vector of string_views: {} for a null/empty view, {s} for an empty
+///         delimiter, otherwise the segments around every occurrence (empties kept).
+inline std::vector<std::string_view> split(StringView sv, std::string_view delimiter) {
     auto s = to_string_view(sv);
     std::vector<std::string_view> result;
-    size_t start = 0;
+    if (s.empty()) {
+        return result;
+    }
+    if (delimiter.empty()) {
+        result.push_back(s);
+        return result;
+    }
 
-    for (size_t i = 0; i <= s.size(); ++i) {
-        if (i == s.size() || s[i] == delimiter) {
-            if (i > start) {
-                result.push_back(s.substr(start, i - start));
-            }
-            start = i + 1;
+    size_t start = 0;
+    while (true) {
+        size_t pos = s.find(delimiter, start);
+        if (pos == std::string_view::npos) {
+            result.push_back(s.substr(start));
+            break;
         }
+        result.push_back(s.substr(start, pos - start));
+        start = pos + delimiter.size();
     }
 
     return result;

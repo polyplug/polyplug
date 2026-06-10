@@ -8,6 +8,7 @@ version: 1
 
 # Golden method set (authoritative, NOT extracted from code).
 # Every language SDK must implement these StringView helper methods.
+# Per-method semantics (split/null-view rules, hot-path guarantee): docs/SDK_HELPERS.md
 methods:
   StringView:
     - to_str

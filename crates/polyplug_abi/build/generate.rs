@@ -421,28 +421,32 @@ function M.strip_prefix(sv, prefix)
     return s
 end
 
---- Split StringView by delimiter.
+--- Split StringView by a literal delimiter, keeping empty segments.
+-- The delimiter is matched literally (plain find), never as a Lua pattern.
 -- @param sv StringView from polyplug ABI
--- @param delimiter string Delimiter string to split by (default: whitespace)
--- @return table Array of strings resulting from the split
+-- @param delimiter string Literal delimiter string to split by
+-- @return table {} for a nil/empty view, { s } for a nil/empty delimiter,
+--         otherwise the segments around every occurrence (empties kept)
 function M.split(sv, delimiter)
     local s = M.to_str(sv)
     if s == "" then
         return {}
     end
-
-    delimiter = delimiter or "%s+"
-    local result = {}
-    local pattern = "(.-)" .. delimiter .. "()"
-    local last_pos = 1
-
-    for part, pos in s:gmatch(pattern) do
-        table.insert(result, part)
-        last_pos = pos
+    if delimiter == nil or delimiter == "" then
+        return { s }
     end
 
-    -- Add the remaining part after the last delimiter
-    table.insert(result, s:sub(last_pos))
+    local result = {}
+    local start = 1
+    while true do
+        local i, j = string.find(s, delimiter, start, true)
+        if i == nil then
+            table.insert(result, s:sub(start))
+            break
+        end
+        table.insert(result, s:sub(start, i - 1))
+        start = j + 1
+    end
 
     return result
 end
@@ -453,14 +457,34 @@ end
 const HELPER_JS: &str = r#"
 /**
  * Convert a StringView to a JavaScript string.
+ *
+ * Reads the viewed bytes through Deno's FFI pointer view (this abi mirror runs
+ * in the Deno host environment) and decodes them as UTF-8.
  * @param sv - The StringView to convert.
- * @returns The JavaScript string, or empty string if null/empty.
+ * @returns The decoded string, or empty string for a null/zero-length view.
+ * @throws Error when no Deno FFI environment is available — never silently
+ *          returns '' for a readable view.
  */
 export function stringViewToString(sv: StringView | null | undefined): string {
     if (!sv || sv.ptr === 0n || sv.len === 0) return '';
-    // Note: Actual implementation requires FFI access to read memory.
-    // This is a placeholder - the host/guest libraries provide actual implementation.
-    return '';
+    const deno = (globalThis as {
+        Deno?: {
+            UnsafePointer: { create(value: bigint): unknown };
+            UnsafePointerView: new (pointer: unknown) => {
+                getArrayBuffer(byteLength: number): ArrayBuffer;
+            };
+        };
+    }).Deno;
+    if (deno === undefined) {
+        throw new Error(
+            'stringViewToString: no Deno FFI environment is available to read StringView memory ' +
+            '(Deno.UnsafePointerView is required; refusing to silently return an empty string)',
+        );
+    }
+    const pointer: unknown = deno.UnsafePointer.create(sv.ptr);
+    if (pointer === null) return '';
+    const bytes: ArrayBuffer = new deno.UnsafePointerView(pointer).getArrayBuffer(Number(sv.len));
+    return new TextDecoder().decode(bytes);
 }
 
 /**
@@ -509,13 +533,15 @@ export function toStr(sv: StringView | null | undefined): string {
 }
 
 /**
- * Split a string by a delimiter.
+ * Split a string by a literal delimiter, keeping empty segments.
  * @param sv - The input StringView or string.
- * @param delimiter - The delimiter to split by.
- * @returns An array of strings.
+ * @param delimiter - The literal delimiter to split by.
+ * @returns An array of strings: [] for a null/empty input, [s] for an empty delimiter.
  */
 export function split(sv: StringView | string, delimiter: string): string[] {
     const s: string = typeof sv === 'string' ? sv : stringViewToString(sv);
+    if (s.length === 0) return [];
+    if (delimiter.length === 0) return [s];
     return s.split(delimiter);
 }
 "#;
@@ -576,22 +602,31 @@ inline bool ends_with(StringView sv, std::string_view suffix) noexcept {
     return s.substr(s.size() - suffix.size()) == suffix;
 }
 
-/// Split string by delimiter.
+/// Split string by a literal delimiter, keeping empty segments.
 /// @param sv The input StringView.
-/// @param delimiter The delimiter character.
-/// @return Vector of string_views.
-inline std::vector<std::string_view> split(StringView sv, char delimiter) {
+/// @param delimiter The literal delimiter string.
+/// @return Vector of string_views: {} for a null/empty view, {s} for an empty
+///         delimiter, otherwise the segments around every occurrence (empties kept).
+inline std::vector<std::string_view> split(StringView sv, std::string_view delimiter) {
     auto s = to_string_view(sv);
     std::vector<std::string_view> result;
-    size_t start = 0;
+    if (s.empty()) {
+        return result;
+    }
+    if (delimiter.empty()) {
+        result.push_back(s);
+        return result;
+    }
 
-    for (size_t i = 0; i <= s.size(); ++i) {
-        if (i == s.size() || s[i] == delimiter) {
-            if (i > start) {
-                result.push_back(s.substr(start, i - start));
-            }
-            start = i + 1;
+    size_t start = 0;
+    while (true) {
+        size_t pos = s.find(delimiter, start);
+        if (pos == std::string_view::npos) {
+            result.push_back(s.substr(start));
+            break;
         }
+        result.push_back(s.substr(start, pos - start));
+        start = pos + delimiter.size();
     }
 
     return result;

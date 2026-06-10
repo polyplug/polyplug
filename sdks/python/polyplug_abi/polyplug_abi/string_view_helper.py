@@ -65,16 +65,22 @@ def ends_with(sv: StringView, suffix: str) -> bool:
 
 
 def split(sv: StringView, delimiter: str) -> list[str]:
-    """Split StringView by delimiter.
+    """Split StringView by a literal delimiter, keeping empty segments.
 
     Args:
         sv: StringView from polyplug ABI
-        delimiter: Delimiter string to split by
+        delimiter: Literal delimiter string to split by
 
     Returns:
-        List of strings resulting from the split
+        [] for a null/empty view, [s] for an empty delimiter, otherwise the
+        segments around every occurrence of the delimiter (empties kept)
     """
-    return to_str(sv).split(delimiter)
+    s: str = to_str(sv)
+    if not s:
+        return []
+    if not delimiter:
+        return [s]
+    return s.split(delimiter)
 
 
 def bytes_as_view(data: bytes) -> StringView:

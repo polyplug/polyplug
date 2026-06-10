@@ -180,7 +180,7 @@ inline bool starts_with(StringView sv, std::string_view prefix) noexcept {
     fn test_detects_templated_return_type() -> Result<(), Box<dyn core::error::Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
-inline std::vector<std::string_view> split(StringView sv, char delimiter) {
+inline std::vector<std::string_view> split(StringView sv, std::string_view delimiter) {
     return {};
 }
 "#,

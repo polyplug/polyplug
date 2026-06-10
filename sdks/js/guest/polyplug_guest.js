@@ -357,6 +357,9 @@ export function toStr(sv) {
     }
     // Reconstruct the 64-bit pointer from the QuickJS hi/lo split.
     const ptr = (BigInt(sv.ptr_hi) << 32n) + BigInt(sv.ptr_lo);
+    if (ptr === 0n) {
+        return '';
+    }
     // Read bytes and decode as UTF-8 (TextDecoder is absent in QuickJS).
     const bytes = readBytes(ptr, sv.len);
     if (typeof TextDecoder !== 'undefined') {
@@ -415,17 +418,24 @@ export function stripPrefix(sv, prefix) {
 }
 
 /**
- * Split a StringView (or string) by a delimiter.
+ * Split a StringView (or string) by a literal delimiter, keeping empty segments.
  *
  * @param {StringView|string} sv - StringView from polyplug ABI, or a plain JS string
- * @param {string} delimiter - The delimiter to split by
- * @returns {string[]} Array of substrings
+ * @param {string} delimiter - The literal delimiter to split by
+ * @returns {string[]} [] for a null/empty input, [s] for an empty delimiter,
+ *                     otherwise the segments around every occurrence (empties kept)
  *
  * @example
  * const parts = split(stringView, ',');
  */
 export function split(sv, delimiter) {
     const s = typeof sv === 'string' ? sv : toStr(sv);
+    if (s.length === 0) {
+        return [];
+    }
+    if (delimiter.length === 0) {
+        return [s];
+    }
     return s.split(delimiter);
 }
 
