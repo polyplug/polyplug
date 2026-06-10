@@ -9,7 +9,7 @@ import type * as contracts from './contracts';
 // ABI error codes (match polyplug_abi.AbiErrorCode)
 const AbiErrorCode = {
     Ok: 0,
-    Panic: 5,
+    Panic: 3,
 };
 
 /** Create a host contract interface for `host.logger` with NATIVE dispatch. */

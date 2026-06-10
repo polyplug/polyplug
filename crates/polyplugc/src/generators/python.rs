@@ -885,12 +885,16 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     out.push_str("        # SAFETY: the interface pointer is valid for the wrapper lifetime.\n");
     out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
     out.push_str("        interface: GuestContractInterface = iface_ptr.contents\n");
-    out.push_str(&format!(
-        "        if {fn_id} >= interface.dispatch.native.function_count:\n"
-    ));
-    out.push_str("            raise RuntimeError(\"function not available in interface\")\n");
     out.push_str("        err: Any\n");
     out.push_str("        if interface.dispatch_type == DispatchType.Native:\n");
+    // Function-id bounds check inside the Native arm only: on a VM interface
+    // dispatch.native.function_count aliases bits of dispatch.vm.call through
+    // the union (garbage). The VM-side loader enforces its own bounds
+    // (FunctionNotAvailable).
+    out.push_str(&format!(
+        "            if {fn_id} >= interface.dispatch.native.function_count:\n"
+    ));
+    out.push_str("                raise ContractError(\"function not available in interface\", AbiErrorCode.FunctionNotAvailable)\n");
     out.push_str("            functions_ptr: int = interface.dispatch.native.functions\n");
     out.push_str(&format!(
         "            fn_ptr: int = ctypes.cast(functions_ptr + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
@@ -933,7 +937,10 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
         ));
     }
     out.push_str("        if err.code != AbiErrorCode.Ok:\n");
-    out.push_str("            raise RuntimeError(\"polyplug call failed\")\n");
+    // Carry the ABI error code instead of discarding it in a bare RuntimeError.
+    out.push_str(
+        "            raise ContractError(f\"polyplug call failed (code {err.code})\", err.code)\n",
+    );
     if has_return_value(&func.returns) {
         out.push_str("        return out_val\n\n");
     } else {
@@ -1968,21 +1975,37 @@ fn generate_python_guest_host_contract_caller(out: &mut String, contract: &Resol
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("class {}:\n", class_name));
-    out.push_str("    def __init__(self, interface: int) -> None:\n");
-    out.push_str("        self._interface: int = interface\n\n");
+    out.push_str(
+        "    def __init__(self, interface: int, instance: HostContractInstance) -> None:\n",
+    );
+    out.push_str("        self._interface: int = interface\n");
+    out.push_str("        self._instance: HostContractInstance = instance\n\n");
 
+    // Mirrors the canonical rust.rs caller flow: resolve_host_contract_interface
+    // yields the interface (dispatch metadata), get_host_contract yields the
+    // per-instance state whose .data is the native dispatch's first argument.
     out.push_str("    @classmethod\n");
     out.push_str("    def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None:\n");
     out.push_str("        if host_ptr == 0:\n");
     out.push_str("            return None\n");
     out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))\n");
+    out.push_str(
+        "        # Resolve the contract vtable — the source of dispatch metadata, NOT the instance.\n",
+    );
     out.push_str(&format!(
-        "        interface: int = host.contents.get_host_contract(host_ptr, 0x{:016X}, min_version)\n",
+        "        interface: int | None = host.contents.resolve_host_contract_interface(host_ptr, 0x{:016X}, min_version)\n",
         contract.contract_id
     ));
-    out.push_str("        if interface == 0:\n");
+    out.push_str("        if not interface:\n");
     out.push_str("            return None\n");
-    out.push_str("        return cls(interface)\n\n");
+    out.push_str(
+        "        # Per-instance state; native dispatch functions receive instance.data first.\n",
+    );
+    out.push_str(&format!(
+        "        instance: HostContractInstance = host.contents.get_host_contract(host_ptr, 0x{:016X}, min_version)\n",
+        contract.contract_id
+    ));
+    out.push_str("        return cls(interface, instance)\n\n");
 
     out.push_str("    def is_valid(self) -> bool:\n");
     out.push_str("        return self._interface != 0\n\n");
@@ -2035,16 +2058,26 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
 
     out.push_str("        err: AbiError\n");
     out.push_str("        if dispatch_type == DispatchType.Native:\n");
+    // Function-id bounds check inside the Native arm only: on a VM interface
+    // dispatch.native.function_count aliases bits of dispatch.vm.call through
+    // the union (garbage).
+    out.push_str(&format!(
+        "            if {fn_id} >= iface.dispatch.native.function_count:\n"
+    ));
+    if has_return {
+        out.push_str("                return None\n");
+    } else {
+        out.push_str("                return\n");
+    }
     out.push_str(&format!(
         "            fn_ptr: int = ctypes.cast(iface.dispatch.native.functions + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
     ));
     out.push_str(
-        "            impl_ptr: int = ctypes.cast(iface.dispatch.native.impl_ptr, ctypes.c_void_p).value\n"
-    );
-    out.push_str(
         "            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
     );
-    out.push_str("            err = dispatch_fn(impl_ptr, args_ptr, out_ptr)\n");
+    // The native thunk receives the per-instance state (instance.data) as its
+    // first argument — mirrors rust.rs `dispatch_fn(self.instance.data, ...)`.
+    out.push_str("            err = dispatch_fn(self._instance.data, args_ptr, out_ptr)\n");
     out.push_str("        elif dispatch_type == DispatchType.VirtualMachine:\n");
     // The VM dispatch ABI signature is call(loader_data, instance, fn_id, args, out,
     // arena). Host contracts carry no guest instance, so a null GuestContractInstance
@@ -2199,7 +2232,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Self\n");
-    out.push_str("from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, GuestContractInstance, HostContractInterface, HostApi, StringView\n\n");
+    out.push_str("from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, GuestContractInstance, HostContractInstance, HostContractInterface, HostApi, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_guest_host_contract_type_imports(ir);
     if !type_imports.is_empty() {
@@ -2253,6 +2286,7 @@ fn generate_guest_host_contracts_stub(ir: &ValidatedIr) -> String {
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
     out.push_str("from typing import Any, Self\n");
+    out.push_str("from polyplug_abi import HostContractInstance\n");
 
     out.push('\n');
 
@@ -2265,7 +2299,9 @@ fn generate_guest_host_contracts_stub(ir: &ValidatedIr) -> String {
     for contract in &ir.host_contracts {
         let class_name: String = host_contract_name_to_python_caller(&contract.name);
         out.push_str(&format!("class {}:\n", class_name));
-        out.push_str("    def __init__(self, interface: int) -> None: ...\n");
+        out.push_str(
+            "    def __init__(self, interface: int, instance: HostContractInstance) -> None: ...\n",
+        );
         out.push_str("    @classmethod\n");
         out.push_str(
             "    def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None: ...\n",
@@ -2514,7 +2550,9 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
         generate_python_host_thunk(out, func, &contract.name, &class_name);
     }
 
-    // Static function pointer array
+    // Function pointer array: the thunks are already CFUNCTYPE instances (the
+    // decorator wraps them), so each is cast to c_void_p and packed into a real
+    // ctypes array — a plain Python list cannot be ctypes.cast (ArgumentError).
     out.push_str("    functions = [\n");
     for func in &contract.functions {
         let thunk_name: String = format!(
@@ -2523,10 +2561,13 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
             func.name
         );
         out.push_str(&format!(
-            "        ctypes.cast(ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)({thunk_name}), ctypes.c_void_p),\n"
+            "        ctypes.cast({thunk_name}, ctypes.c_void_p),\n"
         ));
     }
-    out.push_str("    ]\n\n");
+    out.push_str("    ]\n");
+    out.push_str(&format!(
+        "    functions_array = (ctypes.c_void_p * {fn_count})(*functions)\n\n"
+    ));
 
     // Create the interface using the real ABI struct
     out.push_str("    interface = HostContractInterface()\n");
@@ -2536,7 +2577,10 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     out.push_str(&format!(
         "    interface.contract_version = Version(major={major}, minor={minor}, patch=0)\n"
     ));
-    out.push_str(&format!("    interface.singleton = {singleton}\n"));
+    out.push_str(&format!(
+        "    interface.singleton = {singleton}\n",
+        singleton = python_bool(singleton)
+    ));
     out.push_str("    interface.dispatch_type = DispatchType.Native\n");
     out.push_str("    interface.runtime = 0  # Set by runtime during registration\n");
     out.push_str("    # The managed implementation lives in a module global (Python objects\n");
@@ -2552,8 +2596,11 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
         "    interface.dispatch.native.function_count = {fn_count}\n"
     ));
     out.push_str(
-        "    interface.dispatch.native.functions = ctypes.cast(functions, ctypes.c_void_p)\n\n",
+        "    interface.dispatch.native.functions = ctypes.cast(functions_array, ctypes.c_void_p)\n",
     );
+    out.push_str("    # Anchor the function-pointer array on the interface object so it\n");
+    out.push_str("    # outlives this factory call (ctypes does not keep it alive).\n");
+    out.push_str("    interface._keepalive = (functions_array,)\n\n");
     out.push_str("    return interface\n\n");
 
     // Global implementation storage
@@ -2585,7 +2632,10 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     out.push_str(&format!(
         "    interface.contract_version = Version(major={major}, minor={minor}, patch=0)\n"
     ));
-    out.push_str(&format!("    interface.singleton = {singleton}\n"));
+    out.push_str(&format!(
+        "    interface.singleton = {singleton}\n",
+        singleton = python_bool(singleton)
+    ));
     out.push_str("    interface.dispatch_type = DispatchType.VirtualMachine\n");
     out.push_str("    interface.runtime = 0  # Set by runtime during registration\n");
     out.push_str(
@@ -2597,9 +2647,20 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     out.push_str(
         "    interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))\n",
     );
-    out.push_str("    interface.dispatch.vm.call = ctypes.cast(dispatch_fn, type(interface.dispatch.vm.call))\n");
-    out.push_str("    interface.dispatch.vm.loader_data = VmDispatch().loader_data\n\n");
+    // A plain Python callable cannot be ctypes.cast (ArgumentError); it must be
+    // wrapped in a CFUNCTYPE instance, which is anchored on the interface object
+    // so it outlives this factory call.
+    out.push_str("    vm_call_cfunc = type(interface.dispatch.vm.call)(dispatch_fn)\n");
+    out.push_str("    interface.dispatch.vm.call = vm_call_cfunc\n");
+    out.push_str("    interface.dispatch.vm.loader_data = VmDispatch().loader_data\n");
+    out.push_str("    interface._keepalive = (vm_call_cfunc,)\n\n");
     out.push_str("    return interface\n\n");
+}
+
+/// Render a Rust bool as a Python literal (`True` / `False`); Rust's
+/// `Display` for bool would emit lowercase `false`, a Python NameError.
+fn python_bool(value: bool) -> &'static str {
+    if value { "True" } else { "False" }
 }
 
 /// Generate a thunk function for a host contract function.
@@ -3149,7 +3210,8 @@ fn generate_peer_caller_method(out: &mut String, func: &ResolvedFunction, contra
         ));
     }
     out.push_str("        if err.code != AbiErrorCode.Ok:\n");
-    out.push_str("            raise RuntimeError(\"peer call failed\")\n");
+    // Carry the ABI error code instead of discarding it.
+    out.push_str("            raise RuntimeError(f\"peer call failed (code {err.code})\")\n");
     if has_return_value(&func.returns) {
         out.push_str("        return out_val\n\n");
     } else {
@@ -3545,12 +3607,37 @@ mod tests {
             "missing class def: {out}"
         );
         assert!(
-            out.contains("def __init__(self, interface: int) -> None:"),
+            out.contains(
+                "def __init__(self, interface: int, instance: HostContractInstance) -> None:"
+            ),
             "missing __init__: {out}"
         );
         assert!(
             out.contains("def from_host(cls, host_ptr: int, min_version: int = 0)"),
             "missing from_host: {out}"
+        );
+        // from_host must resolve the INTERFACE via resolve_host_contract_interface
+        // and the per-instance state via get_host_contract (rust.rs parity) —
+        // never treat get_host_contract's returned struct as an interface pointer.
+        assert!(
+            out.contains("host.contents.resolve_host_contract_interface(host_ptr,"),
+            "from_host must resolve the interface: {out}"
+        );
+        assert!(
+            out.contains(
+                "instance: HostContractInstance = host.contents.get_host_contract(host_ptr,"
+            ),
+            "from_host must obtain the instance: {out}"
+        );
+        // The native dispatch passes instance.data first; NativeDispatch has no
+        // impl_ptr field.
+        assert!(
+            out.contains("err = dispatch_fn(self._instance.data, args_ptr, out_ptr)"),
+            "native dispatch must pass instance.data: {out}"
+        );
+        assert!(
+            !out.contains("impl_ptr"),
+            "must not read the nonexistent NativeDispatch.impl_ptr: {out}"
         );
         assert!(
             out.contains("def is_valid(self) -> bool:"),
@@ -3669,7 +3756,9 @@ mod tests {
         };
         let result: String = generate_guest_host_contracts_stub(&ir);
         assert!(result.contains("class HostLoggerContract:"));
-        assert!(result.contains("def __init__(self, interface: int) -> None: ..."));
+        assert!(result.contains(
+            "def __init__(self, interface: int, instance: HostContractInstance) -> None: ..."
+        ));
         assert!(result.contains(
             "def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None: ..."
         ));

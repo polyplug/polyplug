@@ -468,7 +468,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                 "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
             );
             out.push_str(&format!(
-                "    private static GuestContractInstance {upper}_CreateInstanceStub(IntPtr rtCtx, IntPtr args) {{\n"
+                "    private static GuestContractInstance {upper}_CreateInstanceStub(IntPtr host, IntPtr args) {{\n"
             ));
             out.push_str("        // Default stub returns null instance - users override for stateful plugins.\n");
             out.push_str("        return new GuestContractInstance { Data = IntPtr.Zero };\n");
@@ -477,7 +477,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                 "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
             );
             out.push_str(&format!(
-                "    private static void {upper}_DestroyInstanceStub(IntPtr rtCtx, GuestContractInstance instance) {{\n"
+                "    private static void {upper}_DestroyInstanceStub(IntPtr host, GuestContractInstance instance) {{\n"
             ));
             out.push_str("        // Default stub is no-op - users override for cleanup before hot-reload.\n");
             out.push_str("    }\n\n");
@@ -620,7 +620,7 @@ fn generate_cs_guest_plugin_interface(
     // Instance lifecycle stubs
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
-        "    private static GuestContractInstance {upper}_CreateInstanceStub(IntPtr rtCtx, IntPtr args) {{\n",
+        "    private static GuestContractInstance {upper}_CreateInstanceStub(IntPtr host, IntPtr args) {{\n",
         upper = plugin_upper
     ));
     out.push_str(
@@ -630,7 +630,7 @@ fn generate_cs_guest_plugin_interface(
     out.push_str("    }\n\n");
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
-        "    private static void {upper}_DestroyInstanceStub(IntPtr rtCtx, GuestContractInstance instance) {{\n",
+        "    private static void {upper}_DestroyInstanceStub(IntPtr host, GuestContractInstance instance) {{\n",
         upper = plugin_upper
     ));
     out.push_str(
@@ -1197,15 +1197,6 @@ fn generate_host_fn_caller(
     }
 
     out.push_str("        {\n");
-    // Function-id bounds check against the native dispatch table. FunctionCount
-    // overlays the same offset for both dispatch variants in the union.
-    out.push_str(&format!(
-        "            if ({fn_id}u >= _interface->Dispatch.Native.FunctionCount) {{\n"
-    ));
-    out.push_str(
-        "                throw new InvalidOperationException(\"function not available\");\n",
-    );
-    out.push_str("            }\n");
 
     if func.params.is_empty() {
         out.push_str("            nint argsPtr = nint.Zero;\n");
@@ -1256,6 +1247,17 @@ fn generate_host_fn_caller(
     out.push_str("            AbiError err;\n");
     out.push_str("            switch (_interface->DispatchType) {\n");
     out.push_str("                case DispatchType.Native: {\n");
+    // Function-id bounds check against the native dispatch table. Valid only in
+    // the Native arm: reading Dispatch.Native.FunctionCount through the union on
+    // a VM interface would read garbage bits of Dispatch.Vm.Call. The VM-side
+    // loader enforces its own bounds (FunctionNotAvailable).
+    out.push_str(&format!(
+        "                    if ({fn_id}u >= _interface->Dispatch.Native.FunctionCount) {{\n"
+    ));
+    out.push_str(
+        "                        throw new InvalidOperationException(\"function not available\");\n",
+    );
+    out.push_str("                    }\n");
     out.push_str("                    nint funcsArray = _interface->Dispatch.Native.Functions;\n");
     out.push_str(&format!(
         "                    nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
@@ -1544,21 +1546,9 @@ fn generate_cs_guest_host_contract_method(
     }
     out.push_str("        }\n\n");
 
-    // Get interface and check function count
+    // Get interface
     out.push_str("        unsafe {\n");
     out.push_str("            var contract = (HostContractInterface*)_interface;\n");
-    out.push_str(&format!(
-        "            if ({fn_id}u >= contract->Dispatch.Native.FunctionCount) {{\n"
-    ));
-    if has_return {
-        out.push_str(&format!(
-            "                return default({});\n",
-            return_type
-        ));
-    } else {
-        out.push_str("                return;\n");
-    }
-    out.push_str("            }\n\n");
 
     // Build args_ptr setup
     emit_cs_guest_host_contract_args_setup(out, func, class_name);
@@ -1570,6 +1560,21 @@ fn generate_cs_guest_host_contract_method(
     out.push_str("            AbiError err;\n");
     out.push_str("            switch (contract->DispatchType) {\n");
     out.push_str("                case DispatchType.Native: {\n");
+    // Function-id bounds check belongs to the Native arm only: on a VM interface
+    // Dispatch.Native.FunctionCount aliases bits of Dispatch.Vm.Call (union).
+    // The VM-side loader enforces its own bounds (FunctionNotAvailable).
+    out.push_str(&format!(
+        "                    if ({fn_id}u >= contract->Dispatch.Native.FunctionCount) {{\n"
+    ));
+    if has_return {
+        out.push_str(&format!(
+            "                        return default({});\n",
+            return_type
+        ));
+    } else {
+        out.push_str("                        return;\n");
+    }
+    out.push_str("                    }\n");
     out.push_str(&format!(
         "                    var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[{fn_id}u];\n"
     ));

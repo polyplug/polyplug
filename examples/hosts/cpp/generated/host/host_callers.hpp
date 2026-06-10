@@ -251,17 +251,17 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 17}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0U >= interface_->dispatch.native.function_count) {
-            static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
-        }
         AbiError err{};
         switch (interface_->dispatch_type) {
             case DispatchType::Native: {
+                if (0U >= interface_->dispatch.native.function_count) {
+                    static constexpr const char* err_msg = "function not available in interface";
+                    polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 35}});
+                }
                 auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
                 // SAFETY: instance_ is the token returned by create_instance and is valid.
                 // args_ptr/out_ptr match the ABI contract for this function.
@@ -408,17 +408,17 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 17}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0U >= interface_->dispatch.native.function_count) {
-            static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
-        }
         AbiError err{};
         switch (interface_->dispatch_type) {
             case DispatchType::Native: {
+                if (0U >= interface_->dispatch.native.function_count) {
+                    static constexpr const char* err_msg = "function not available in interface";
+                    polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 35}});
+                }
                 auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
                 // SAFETY: instance_ is the token returned by create_instance and is valid.
                 // args_ptr/out_ptr match the ABI contract for this function.
@@ -565,17 +565,17 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 17}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0U >= interface_->dispatch.native.function_count) {
-            static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
-        }
         AbiError err{};
         switch (interface_->dispatch_type) {
             case DispatchType::Native: {
+                if (0U >= interface_->dispatch.native.function_count) {
+                    static constexpr const char* err_msg = "function not available in interface";
+                    polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 35}});
+                }
                 auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
                 // SAFETY: instance_ is the token returned by create_instance and is valid.
                 // args_ptr/out_ptr match the ABI contract for this function.
@@ -722,17 +722,17 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 17}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0U >= interface_->dispatch.native.function_count) {
-            static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
-        }
         AbiError err{};
         switch (interface_->dispatch_type) {
             case DispatchType::Native: {
+                if (0U >= interface_->dispatch.native.function_count) {
+                    static constexpr const char* err_msg = "function not available in interface";
+                    polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 35}});
+                }
                 auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
                 // SAFETY: instance_ is the token returned by create_instance and is valid.
                 // args_ptr/out_ptr match the ABI contract for this function.
@@ -879,17 +879,17 @@ public:
         // SAFETY: interface_ is valid for the lifetime of this wrapper.
         if (!interface_) {
             static constexpr const char* err_msg = "interface is null";
-            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 17}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0U >= interface_->dispatch.native.function_count) {
-            static constexpr const char* err_msg = "function not available in interface";
-            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
-        }
         AbiError err{};
         switch (interface_->dispatch_type) {
             case DispatchType::Native: {
+                if (0U >= interface_->dispatch.native.function_count) {
+                    static constexpr const char* err_msg = "function not available in interface";
+                    polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 35}});
+                }
                 auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
                 // SAFETY: instance_ is the token returned by create_instance and is valid.
                 // args_ptr/out_ptr match the ABI contract for this function.

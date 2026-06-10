@@ -144,9 +144,6 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
             CallArenaOps.Reset(arenaResetPtr);
         }
         {
-            if (0u >= _interface->Dispatch.Native.FunctionCount) {
-                throw new InvalidOperationException("function not available");
-            }
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
@@ -154,6 +151,9 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
             AbiError err;
             switch (_interface->DispatchType) {
                 case DispatchType.Native: {
+                    if (0u >= _interface->Dispatch.Native.FunctionCount) {
+                        throw new InvalidOperationException("function not available");
+                    }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
                     var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
@@ -258,9 +258,6 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
             CallArenaOps.Reset(arenaResetPtr);
         }
         {
-            if (0u >= _interface->Dispatch.Native.FunctionCount) {
-                throw new InvalidOperationException("function not available");
-            }
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
@@ -268,6 +265,9 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
             AbiError err;
             switch (_interface->DispatchType) {
                 case DispatchType.Native: {
+                    if (0u >= _interface->Dispatch.Native.FunctionCount) {
+                        throw new InvalidOperationException("function not available");
+                    }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
                     var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
@@ -372,9 +372,6 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
             CallArenaOps.Reset(arenaResetPtr);
         }
         {
-            if (0u >= _interface->Dispatch.Native.FunctionCount) {
-                throw new InvalidOperationException("function not available");
-            }
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
@@ -382,6 +379,9 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
             AbiError err;
             switch (_interface->DispatchType) {
                 case DispatchType.Native: {
+                    if (0u >= _interface->Dispatch.Native.FunctionCount) {
+                        throw new InvalidOperationException("function not available");
+                    }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
                     var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
@@ -486,9 +486,6 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
             CallArenaOps.Reset(arenaResetPtr);
         }
         {
-            if (0u >= _interface->Dispatch.Native.FunctionCount) {
-                throw new InvalidOperationException("function not available");
-            }
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
@@ -496,6 +493,9 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
             AbiError err;
             switch (_interface->DispatchType) {
                 case DispatchType.Native: {
+                    if (0u >= _interface->Dispatch.Native.FunctionCount) {
+                        throw new InvalidOperationException("function not available");
+                    }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
                     var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
@@ -600,9 +600,6 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
             CallArenaOps.Reset(arenaResetPtr);
         }
         {
-            if (0u >= _interface->Dispatch.Native.FunctionCount) {
-                throw new InvalidOperationException("function not available");
-            }
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
@@ -610,6 +607,9 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
             AbiError err;
             switch (_interface->DispatchType) {
                 case DispatchType.Native: {
+                    if (0u >= _interface->Dispatch.Native.FunctionCount) {
+                        throw new InvalidOperationException("function not available");
+                    }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
                     var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;

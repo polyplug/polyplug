@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Self
-from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, GuestContractInstance, HostContractInterface, HostApi, StringView
+from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, GuestContractInstance, HostContractInstance, HostContractInterface, HostApi, StringView
 
 from guest.types import LogLevel
 
@@ -13,18 +13,22 @@ _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p
 
 # Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 class HostLoggerContract:
-    def __init__(self, interface: int) -> None:
+    def __init__(self, interface: int, instance: HostContractInstance) -> None:
         self._interface: int = interface
+        self._instance: HostContractInstance = instance
 
     @classmethod
     def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None:
         if host_ptr == 0:
             return None
         host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))
-        interface: int = host.contents.get_host_contract(host_ptr, 0xF53EB5F2845853BB, min_version)
-        if interface == 0:
+        # Resolve the contract vtable — the source of dispatch metadata, NOT the instance.
+        interface: int | None = host.contents.resolve_host_contract_interface(host_ptr, 0xF53EB5F2845853BB, min_version)
+        if not interface:
             return None
-        return cls(interface)
+        # Per-instance state; native dispatch functions receive instance.data first.
+        instance: HostContractInstance = host.contents.get_host_contract(host_ptr, 0xF53EB5F2845853BB, min_version)
+        return cls(interface, instance)
 
     def is_valid(self) -> bool:
         return self._interface != 0
@@ -40,10 +44,11 @@ class HostLoggerContract:
         out_ptr: ctypes.c_void_p = ctypes.c_void_p()
         err: AbiError
         if dispatch_type == DispatchType.Native:
+            if 0 >= iface.dispatch.native.function_count:
+                return
             fn_ptr: int = ctypes.cast(iface.dispatch.native.functions + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
-            impl_ptr: int = ctypes.cast(iface.dispatch.native.impl_ptr, ctypes.c_void_p).value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-            err = dispatch_fn(impl_ptr, args_ptr, out_ptr)
+            err = dispatch_fn(self._instance.data, args_ptr, out_ptr)
         elif dispatch_type == DispatchType.VirtualMachine:
             err = iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), 0, args_ptr, out_ptr, None)
         else:
@@ -69,10 +74,11 @@ class HostLoggerContract:
         out_ptr: ctypes.c_void_p = ctypes.c_void_p()
         err: AbiError
         if dispatch_type == DispatchType.Native:
+            if 1 >= iface.dispatch.native.function_count:
+                return
             fn_ptr: int = ctypes.cast(iface.dispatch.native.functions + 1 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
-            impl_ptr: int = ctypes.cast(iface.dispatch.native.impl_ptr, ctypes.c_void_p).value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-            err = dispatch_fn(impl_ptr, args_ptr, out_ptr)
+            err = dispatch_fn(self._instance.data, args_ptr, out_ptr)
         elif dispatch_type == DispatchType.VirtualMachine:
             err = iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), 1, args_ptr, out_ptr, None)
         else:

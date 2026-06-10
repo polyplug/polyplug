@@ -42,13 +42,13 @@ public static class EncoderInterfaces {
     public static GuestContractInterface ENCODER_INTERFACE;
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static GuestContractInstance ENCODER_CreateInstanceStub(IntPtr rtCtx, IntPtr args) {
+    private static GuestContractInstance ENCODER_CreateInstanceStub(IntPtr host, IntPtr args) {
         // Default stub returns null instance - users override for stateful plugins.
         return new GuestContractInstance { Data = IntPtr.Zero };
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void ENCODER_DestroyInstanceStub(IntPtr rtCtx, GuestContractInstance instance) {
+    private static void ENCODER_DestroyInstanceStub(IntPtr host, GuestContractInstance instance) {
         // Default stub is no-op - users override for cleanup before hot-reload.
     }
 

@@ -1506,13 +1506,17 @@ fn generate_host_fn_caller(
         "        // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.\n",
     );
     out.push_str("        let err: AbiError = unsafe {\n");
+    out.push_str("            match interface.dispatch_type {\n");
+    // The function-id bounds check lives INSIDE the Native arm: reading
+    // dispatch.native.function_count on a VM interface would alias bits of
+    // dispatch.vm.call through the union (garbage). The VM-side loader
+    // enforces its own bounds (FunctionNotAvailable).
+    out.push_str("                DispatchType::Native => {\n");
     out.push_str(&format!(
-        "            if {fn_id}_u32 >= interface.dispatch.native.function_count {{\n"
+        "                    if {fn_id}_u32 >= interface.dispatch.native.function_count {{\n"
     ));
-    out.push_str("                AbiError { code: AbiErrorCode::FunctionNotAvailable as u32, message: polyplug_abi::string_view_from_static(b\"function not available in interface\") }\n");
-    out.push_str("            } else {\n");
-    out.push_str("                match interface.dispatch_type {\n");
-    out.push_str("                    DispatchType::Native => {\n");
+    out.push_str("                        AbiError { code: AbiErrorCode::FunctionNotAvailable as u32, message: polyplug_abi::string_view_from_static(b\"function not available in interface\") }\n");
+    out.push_str("                    } else {\n");
     out.push_str(&format!(
         "                        let fn_ptr: *const () = *interface.dispatch.native.functions.add({fn_id}_usize);\n"
     ));
@@ -1523,24 +1527,24 @@ fn generate_host_fn_caller(
     out.push_str("                        let dispatch_fn: unsafe extern \"C\" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
     out.push_str("                        dispatch_fn(self.instance, args_ptr, out_ptr)\n");
     out.push_str("                    }\n");
-    out.push_str("                    DispatchType::VirtualMachine => {\n");
-    out.push_str("                        (interface.dispatch.vm.call)(\n");
-    out.push_str("                            interface.dispatch.vm.loader_data,\n");
-    out.push_str("                            self.instance,  // instance parameter\n");
-    out.push_str(&format!("                            {fn_id}_u32,\n"));
-    out.push_str("                            args_ptr,\n");
-    out.push_str("                            out_ptr,\n");
+    out.push_str("                }\n");
+    out.push_str("                DispatchType::VirtualMachine => {\n");
+    out.push_str("                    (interface.dispatch.vm.call)(\n");
+    out.push_str("                        interface.dispatch.vm.loader_data,\n");
+    out.push_str("                        self.instance,  // instance parameter\n");
+    out.push_str(&format!("                        {fn_id}_u32,\n"));
+    out.push_str("                        args_ptr,\n");
+    out.push_str("                        out_ptr,\n");
     if needs_arena {
         // The guest writes its variable-size return into this per-caller arena;
         // the returned view is valid until the caller's next arena-backed call.
-        out.push_str("                            &mut self.arena as *mut CallArena,\n");
+        out.push_str("                        &mut self.arena as *mut CallArena,\n");
     } else {
         // No variable-size output: a null arena makes the bridge fall back to
         // per-value host allocation.
-        out.push_str("                            core::ptr::null_mut(),\n");
+        out.push_str("                        core::ptr::null_mut(),\n");
     }
-    out.push_str("                        )\n");
-    out.push_str("                    }\n");
+    out.push_str("                    )\n");
     out.push_str("                }\n");
     out.push_str("            }\n");
     out.push_str("        };\n");
@@ -2727,17 +2731,6 @@ fn generate_guest_host_contract_method(
         "        let interface: &HostContractInterface = unsafe { &*self.interface };\n\n",
     );
 
-    // SAFETY: interface.dispatch is a union; accessing .native requires unsafe block.
-    // The dispatch_type field indicates which union variant is active.
-    out.push_str(
-        "        let fn_count: u32 = unsafe { interface.dispatch.native.function_count };",
-    );
-    out.push_str(&format!("\n        if fn_count < {fn_id}_u32 + 1 {{\n"));
-    out.push_str(
-        "            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));\n",
-    );
-    out.push_str("        }\n\n");
-
     emit_guest_host_contract_args_setup(out, func, caller_name);
 
     emit_guest_host_contract_out_setup(out, &func.returns);
@@ -2745,6 +2738,17 @@ fn generate_guest_host_contract_method(
     out.push_str("        let err: AbiError = unsafe {\n");
     out.push_str("            match interface.dispatch_type {\n");
     out.push_str("                DispatchType::Native => {\n");
+    // The function-id bounds check lives INSIDE the Native arm: reading
+    // dispatch.native.function_count on a VM interface would alias bits of
+    // dispatch.vm.call through the union (garbage). The VM-side loader
+    // enforces its own bounds.
+    out.push_str(&format!(
+        "                    if interface.dispatch.native.function_count < {fn_id}_u32 + 1 {{\n"
+    ));
+    out.push_str(
+        "                        return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));\n",
+    );
+    out.push_str("                    }\n");
     out.push_str(&format!(
         "                    let fn_ptr: *const () = *interface.dispatch.native.functions.add({fn_id}_usize);\n"
     ));

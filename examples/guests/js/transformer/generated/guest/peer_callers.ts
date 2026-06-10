@@ -27,7 +27,7 @@ export class ValidatorPeer {
             return null;
         }
         const handle = polyplug.findByContract(0x9EEC57C5, 0x45173A95, 1);
-        if (handle === null || handle === undefined || handle === 0) {
+        if (handle === null || handle === undefined) {
             return null;
         }
         return new ValidatorPeer();
@@ -57,7 +57,7 @@ export class ValidatorPeer {
         polyplug.writeU32(outPtr + 12, 0);
         const errCode: number = polyplug.callGuestMethod(0x9EEC57C5, 0x45173A95, 1, 0, argsPtr, outPtr);
         if (errCode !== 0) {
-            return null as any;
+            throw new Error(`peer call validate failed (code ${errCode})`);
         }
         const result = { ptr_lo: polyplug.readU32(outPtr), ptr_hi: polyplug.readU32(outPtr + 4), len: polyplug.readU32(outPtr + 8) };
         return result;

@@ -6,8 +6,6 @@ local ffi = require("ffi")
 local polyplug_abi = require("polyplug_abi")
 local polyplug_guest = require("polyplug_guest")
 
-local AbiErrorCode = { Ok = 0, NotFound = 3, Generic = 1 }
-
 local M = {}
 
 -- Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
@@ -47,9 +45,6 @@ function PipelineValidatorPeer:validate(input)
         return nil
     end
     local interface = ffi.cast("GuestContractInterface*", self._interface)
-    if 0 >= interface.dispatch.native.function_count then
-        return nil
-    end
     local dispatch_type = interface.dispatch_type
     local input_bytes = tostring(input)
     local input_view = ffi.new("StringView")
@@ -60,6 +55,9 @@ function PipelineValidatorPeer:validate(input)
     local out_ptr = ffi.cast("void*", out_val)
     local err
     if dispatch_type == 0 then
+        if 0 >= interface.dispatch.native.function_count then
+            return nil
+        end
         err = self._host.call_guest_method(self._host, self._instance, 0, args_ptr, out_ptr, nil)
     elseif dispatch_type == 1 then
         err = self._host.call_guest_method(self._host, self._instance, 0, args_ptr, out_ptr, nil)

@@ -176,10 +176,10 @@ class PipelineDecoderContractCaller:
         # SAFETY: the interface pointer is valid for the wrapper lifetime.
         iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
         interface: GuestContractInterface = iface_ptr.contents
-        if 0 >= interface.dispatch.native.function_count:
-            raise RuntimeError("function not available in interface")
         err: Any
         if interface.dispatch_type == DispatchType.Native:
+            if 0 >= interface.dispatch.native.function_count:
+                raise ContractError("function not available in interface", AbiErrorCode.FunctionNotAvailable)
             functions_ptr: int = interface.dispatch.native.functions
             fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
@@ -191,7 +191,7 @@ class PipelineDecoderContractCaller:
             # are valid per the ABI contract. The arena was reset at call start.
             err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
         if err.code != AbiErrorCode.Ok:
-            raise RuntimeError("polyplug call failed")
+            raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
 
 
@@ -309,10 +309,10 @@ class DataTransformerContractCaller:
         # SAFETY: the interface pointer is valid for the wrapper lifetime.
         iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
         interface: GuestContractInterface = iface_ptr.contents
-        if 0 >= interface.dispatch.native.function_count:
-            raise RuntimeError("function not available in interface")
         err: Any
         if interface.dispatch_type == DispatchType.Native:
+            if 0 >= interface.dispatch.native.function_count:
+                raise ContractError("function not available in interface", AbiErrorCode.FunctionNotAvailable)
             functions_ptr: int = interface.dispatch.native.functions
             fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
@@ -324,7 +324,7 @@ class DataTransformerContractCaller:
             # are valid per the ABI contract. The arena was reset at call start.
             err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
         if err.code != AbiErrorCode.Ok:
-            raise RuntimeError("polyplug call failed")
+            raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
 
 
@@ -442,10 +442,10 @@ class PipelineEncoderContractCaller:
         # SAFETY: the interface pointer is valid for the wrapper lifetime.
         iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
         interface: GuestContractInterface = iface_ptr.contents
-        if 0 >= interface.dispatch.native.function_count:
-            raise RuntimeError("function not available in interface")
         err: Any
         if interface.dispatch_type == DispatchType.Native:
+            if 0 >= interface.dispatch.native.function_count:
+                raise ContractError("function not available in interface", AbiErrorCode.FunctionNotAvailable)
             functions_ptr: int = interface.dispatch.native.functions
             fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
@@ -457,7 +457,7 @@ class PipelineEncoderContractCaller:
             # are valid per the ABI contract. The arena was reset at call start.
             err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
         if err.code != AbiErrorCode.Ok:
-            raise RuntimeError("polyplug call failed")
+            raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
 
 
@@ -575,10 +575,10 @@ class DataReporterContractCaller:
         # SAFETY: the interface pointer is valid for the wrapper lifetime.
         iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
         interface: GuestContractInterface = iface_ptr.contents
-        if 0 >= interface.dispatch.native.function_count:
-            raise RuntimeError("function not available in interface")
         err: Any
         if interface.dispatch_type == DispatchType.Native:
+            if 0 >= interface.dispatch.native.function_count:
+                raise ContractError("function not available in interface", AbiErrorCode.FunctionNotAvailable)
             functions_ptr: int = interface.dispatch.native.functions
             fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
@@ -590,7 +590,7 @@ class DataReporterContractCaller:
             # are valid per the ABI contract. The arena was reset at call start.
             err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
         if err.code != AbiErrorCode.Ok:
-            raise RuntimeError("polyplug call failed")
+            raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
 
 
@@ -708,10 +708,10 @@ class PipelineValidatorContractCaller:
         # SAFETY: the interface pointer is valid for the wrapper lifetime.
         iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
         interface: GuestContractInterface = iface_ptr.contents
-        if 0 >= interface.dispatch.native.function_count:
-            raise RuntimeError("function not available in interface")
         err: Any
         if interface.dispatch_type == DispatchType.Native:
+            if 0 >= interface.dispatch.native.function_count:
+                raise ContractError("function not available in interface", AbiErrorCode.FunctionNotAvailable)
             functions_ptr: int = interface.dispatch.native.functions
             fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
@@ -723,7 +723,7 @@ class PipelineValidatorContractCaller:
             # are valid per the ABI contract. The arena was reset at call start.
             err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
         if err.code != AbiErrorCode.Ok:
-            raise RuntimeError("polyplug call failed")
+            raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
 
 

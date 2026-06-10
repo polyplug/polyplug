@@ -491,18 +491,21 @@ fn generate_host_caller_method(
     emit_lua_host_args_setup(out, func, contract_prefix);
     emit_lua_host_out_setup(out, &func.returns);
 
-    out.push_str(&format!(
-        "        if {fn_id} >= self._interface.dispatch.native.function_count then\n"
-    ));
-    out.push_str("            error(\"function not available in interface\", 2)\n");
-    out.push_str("        end\n");
-
     // Dispatch on the interface's dispatch_type. Native guests (C++/Rust/native
     // Python) call the function pointer directly; VM guests (Lua, JS) route
     // through the loader's vm.call trampoline. Both return an AbiError by value.
     // DispatchType: 0 == Native, 1 == VirtualMachine.
     out.push_str("        local err\n");
     out.push_str("        if self._interface.dispatch_type == 0 then\n");
+    // Function-id bounds check inside the Native arm only: on a VM interface
+    // dispatch.native.function_count aliases bits of dispatch.vm.call through
+    // the union (garbage). The VM-side loader enforces its own bounds
+    // (FunctionNotAvailable).
+    out.push_str(&format!(
+        "            if {fn_id} >= self._interface.dispatch.native.function_count then\n"
+    ));
+    out.push_str("                error(\"function not available in interface\", 2)\n");
+    out.push_str("            end\n");
     out.push_str(&format!(
         "            local fn_ptr = self._interface.dispatch.native.functions[{fn_id}]\n"
     ));
@@ -630,7 +633,12 @@ fn emit_lua_guest_handler_body(
     idx: usize,
 ) {
     out.push_str(&format!("        local impl = {plugin_var}_IMPLS[{idx}]\n"));
-    out.push_str("        if impl == nil then return end\n");
+    // A missing impl must NOT fall through to success (the loader treats a
+    // normal return as Ok, leaving a zeroed out-slot). Raising makes the
+    // loader return AbiErrorCode.Generic to the caller.
+    out.push_str(&format!(
+        "        if impl == nil then error(\"polyplug: no implementation registered for function {idx}\") end\n"
+    ));
 
     // Marshal a single StringView input (the common pipeline shape). Other
     // input shapes pass the raw args pointer through for the impl to read.
@@ -663,6 +671,14 @@ fn emit_lua_guest_handler_body(
             "            local out_sv = ffi.cast(\"StringView*\", ffi.cast(\"uintptr_t\", out_ptr))\n",
         );
         out.push_str("            out_sv[0] = result\n");
+        out.push_str("        end\n");
+        // A nil result for a StringView-returning function must NOT fall
+        // through to success with a zeroed out-slot; raising makes the loader
+        // return AbiErrorCode.Generic to the caller.
+        out.push_str("        if out_ptr ~= 0 and result == nil then\n");
+        out.push_str(
+            "            error(\"polyplug: implementation returned nil for a StringView-returning function\")\n",
+        );
         out.push_str("        end\n");
     }
 }
@@ -1334,23 +1350,26 @@ fn generate_lua_guest_host_contract_method(
     // no `HostContractVTable`/`header` wrapper in the ABI. Read dispatch metadata
     // directly from the struct, mirroring the canonical Rust host-contract caller.
     out.push_str("    local interface = ffi.cast(\"HostContractInterface*\", self._interface)\n");
-    out.push_str(&format!(
-        "    if {fn_id} >= interface.dispatch.native.function_count then\n"
-    ));
-    if has_return {
-        out.push_str("        return nil\n");
-    } else {
-        out.push_str("        return\n");
-    }
-    out.push_str("    end\n");
-
     out.push_str("    local dispatch_type = interface.dispatch_type\n");
 
-    emit_lua_guest_host_contract_args_setup(out, func);
+    emit_lua_guest_host_contract_args_setup(out, func, class_name);
     emit_lua_guest_host_contract_out_setup(out, &func.returns);
 
     out.push_str("    local err\n");
     out.push_str("    if dispatch_type == 0 then\n");
+    // Function-id bounds check inside the Native arm only: on a VM interface
+    // dispatch.native.function_count aliases bits of dispatch.vm.call through
+    // the union (garbage). The VM-side loader enforces its own bounds
+    // (FunctionNotAvailable).
+    out.push_str(&format!(
+        "        if {fn_id} >= interface.dispatch.native.function_count then\n"
+    ));
+    if has_return {
+        out.push_str("            return nil\n");
+    } else {
+        out.push_str("            return\n");
+    }
+    out.push_str("        end\n");
     // Native dispatch: the thunk receives the per-instance state pointer as its
     // first argument (the `this`/impl pointer), exactly as the canonical Rust
     // caller passes `self.instance.data`.
@@ -1395,7 +1414,14 @@ fn generate_lua_guest_host_contract_method(
 }
 
 /// Emit the args_ptr setup for a Lua guest host contract method.
-fn emit_lua_guest_host_contract_args_setup(out: &mut String, func: &ResolvedFunction) {
+///
+/// `pack_prefix` names the caller class owning the per-function argument-pack
+/// struct (cdef'd at file top for multi-param functions).
+fn emit_lua_guest_host_contract_args_setup(
+    out: &mut String,
+    func: &ResolvedFunction,
+    pack_prefix: &str,
+) {
     if func.params.is_empty() {
         out.push_str("    local args_ptr = nil\n");
         return;
@@ -1466,17 +1492,20 @@ fn emit_lua_guest_host_contract_args_setup(out: &mut String, func: &ResolvedFunc
         return;
     }
 
-    // Multiple params: pack into inline struct
-    out.push_str("    local args_val = {}\n");
+    // Multiple params: pack into the cdef'd per-function argument-pack struct.
+    // A plain Lua table cannot be ffi.cast to a pointer (it always raises), so
+    // the pack is an ffi.new struct, mirroring the host-caller pack path.
+    let pack_struct: String = arg_pack_struct_name(pack_prefix, &func.name);
+    out.push_str(&format!(
+        "    local args_val = ffi.new(\"{pack_struct}\")\n"
+    ));
     for param in &func.params {
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                // The {name}_bytes local anchors the Lua string for the call's
+                // duration so the StringView's ptr stays valid.
                 out.push_str(&format!(
                     "    local {name}_bytes = tostring({name})\n",
-                    name = param.name
-                ));
-                out.push_str(&format!(
-                    "    args_val.{name} = ffi.new(\"StringView\")\n",
                     name = param.name
                 ));
                 out.push_str(&format!(
@@ -1489,10 +1518,6 @@ fn emit_lua_guest_host_contract_args_setup(out: &mut String, func: &ResolvedFunc
                 ));
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
-                out.push_str(&format!(
-                    "    args_val.{name} = ffi.new(\"Buffer\")\n",
-                    name = param.name
-                ));
                 out.push_str(&format!(
                     "    args_val.{name}.ptr = ffi.cast(\"void*\", {name})\n",
                     name = param.name
@@ -1610,9 +1635,23 @@ fn generate_lua_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedCont
     out.push_str("local polyplug_abi = require(\"polyplug_abi\")\n");
     out.push_str("local polyplug_guest = require(\"polyplug_guest\")\n\n");
 
-    // AbiErrorCode inline table — matches AbiErrorCode enum.
-    // Using a local table avoids depending on polyplug_abi exporting it directly.
-    out.push_str("local AbiErrorCode = { Ok = 0, NotFound = 3, Generic = 1 }\n\n");
+    // cdef the per-function argument-pack structs (multi-param functions only).
+    // Guarded: another generated module may have declared the same packs.
+    let mut pack_cdefs: String = String::new();
+    for contract in peers {
+        let class_name: String = contract_name_to_lua_peer_class(&contract.name);
+        for func in &contract.functions {
+            if needs_arg_pack(&func.params) {
+                emit_lua_arg_pack_struct(&mut pack_cdefs, &class_name, func);
+            }
+        }
+    }
+    if !pack_cdefs.is_empty() {
+        out.push_str(cdef_guarded_block());
+        out.push_str("cdef_guarded([[\n");
+        out.push_str(&pack_cdefs);
+        out.push_str("]])\n\n");
+    }
 
     out.push_str("local M = {}\n\n");
 
@@ -1747,26 +1786,29 @@ fn generate_lua_guest_peer_method(out: &mut String, func: &ResolvedFunction, cla
     // Cast the stored interface pointer to GuestContractInterface so we can read
     // dispatch_type and the native/VM union — mirrors the host-caller path.
     out.push_str("    local interface = ffi.cast(\"GuestContractInterface*\", self._interface)\n");
-    out.push_str(&format!(
-        "    if {fn_id} >= interface.dispatch.native.function_count then\n"
-    ));
-    if has_return {
-        out.push_str("        return nil\n");
-    } else {
-        out.push_str("        return\n");
-    }
-    out.push_str("    end\n");
-
     out.push_str("    local dispatch_type = interface.dispatch_type\n");
 
     // Args and out setup — reuse the same helpers as the host-contract caller so
     // marshalling is identical (no extra tostring() layer = avoids the a3-parity
     // double-conversion Lua footgun).
-    emit_lua_guest_host_contract_args_setup(out, func);
+    emit_lua_guest_host_contract_args_setup(out, func, class_name);
     emit_lua_guest_host_contract_out_setup(out, &func.returns);
 
     out.push_str("    local err\n");
     out.push_str("    if dispatch_type == 0 then\n");
+    // Function-id bounds check inside the Native arm only: on a VM interface
+    // dispatch.native.function_count aliases bits of dispatch.vm.call through
+    // the union (garbage). The host-mediated call_guest_method path enforces
+    // its own bounds (FunctionNotAvailable).
+    out.push_str(&format!(
+        "        if {fn_id} >= interface.dispatch.native.function_count then\n"
+    ));
+    if has_return {
+        out.push_str("            return nil\n");
+    } else {
+        out.push_str("            return\n");
+    }
+    out.push_str("        end\n");
     // Native dispatch path: call_guest_method routes through the host-mediated ABI.
     // Pass nil for the arena — a Lua peer caller has no per-caller CallArena; the
     // bridge falls back to host->alloc (same convention as the host caller's nil
@@ -1812,6 +1854,24 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     // GuestContractInstance cdefs this module casts to are declared. Without this
     // require the ffi.cast(\"HostContractInterface*\", ...) below would fail at load.
     out.push_str("local polyplug_abi = require(\"polyplug_abi\")\n\n");
+
+    // cdef the per-function argument-pack structs (multi-param functions only).
+    // Guarded: another generated module may have declared the same packs.
+    let mut pack_cdefs: String = String::new();
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_lua_caller(&contract.name);
+        for func in &contract.functions {
+            if needs_arg_pack(&func.params) {
+                emit_lua_arg_pack_struct(&mut pack_cdefs, &class_name, func);
+            }
+        }
+    }
+    if !pack_cdefs.is_empty() {
+        out.push_str(cdef_guarded_block());
+        out.push_str("cdef_guarded([[\n");
+        out.push_str(&pack_cdefs);
+        out.push_str("]])\n\n");
+    }
 
     out.push_str("local M = {}\n\n");
 
@@ -1860,7 +1920,7 @@ fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("-- ABI error codes (match polyplug_abi.AbiErrorCode)\n");
     out.push_str("local AbiErrorCode = {\n");
     out.push_str("    Ok = 0,\n");
-    out.push_str("    Panic = 5,\n");
+    out.push_str("    Panic = 3,\n");
     out.push_str("}\n\n");
 
     out.push_str("local M = {}\n\n");

@@ -17,12 +17,15 @@ function M._register_TRANSFORMER()
     local functions = {}
     functions[0] = function(args_ptr, out_ptr)
         local impl = TRANSFORMER_IMPLS[0]
-        if impl == nil then return end
+        if impl == nil then error("polyplug: no implementation registered for function 0") end
         local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
         local result = impl(args_sv[0])
         if out_ptr ~= 0 and result ~= nil then
             local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
             out_sv[0] = result
+        end
+        if out_ptr ~= 0 and result == nil then
+            error("polyplug: implementation returned nil for a StringView-returning function")
         end
     end
     _G._polyplug_handlers = _G._polyplug_handlers or {}

@@ -125,7 +125,7 @@ class PipelineValidatorPeer:
         host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))
         err: Any = host.contents.call_guest_method(self._host_ptr, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
         if err.code != AbiErrorCode.Ok:
-            raise RuntimeError("peer call failed")
+            raise RuntimeError(f"peer call failed (code {err.code})")
         return out_val
 
 

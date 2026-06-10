@@ -5,13 +5,37 @@
 #include "polyplug/guest.hpp"
 #include "polyplug/abi.hpp"
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <memory>
 #include <optional>
 
 namespace polyplug_plugin {
 
 using namespace polyplug_generated;
+
+#ifndef POLYPLUG_GENERATED_LOG_CALL_FAILURE
+#define POLYPLUG_GENERATED_LOG_CALL_FAILURE
+namespace detail {
+
+/// Log a failed cross-boundary call through the host logging funnel
+/// (level 1 = Error) before the caller returns its default value.
+inline void log_call_failure(const HostApi* host, const char* scope, const char* what, uint32_t code) noexcept {
+    if (host == nullptr) {
+        return;
+    }
+    char message[96];
+    const int written = std::snprintf(message, sizeof(message), "%s failed: code=%u", what, code);
+    const std::size_t length = written > 0 ? static_cast<std::size_t>(written) : 0U;
+    host->log(host, 1U,
+              StringView{reinterpret_cast<const uint8_t*>(scope), std::strlen(scope)},
+              StringView{reinterpret_cast<const uint8_t*>(message), length});
+}
+
+}  // namespace detail
+#endif  // POLYPLUG_GENERATED_LOG_CALL_FAILURE
 
 /// Size of each caller's inline call-arena buffer.
 ///
@@ -247,6 +271,7 @@ public:
         // the ABI contract for this function.
         AbiError err = host_->call_guest_method(host_, instance_, 0U, args_ptr, out_ptr, &arena_);
         if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
+            detail::log_call_failure(host_, "guest.peer_caller", "PipelineValidatorContractPeer.validate", err.code);
             return StringView{};
         }
         return out;

@@ -61,11 +61,11 @@ local PipelineDecoderContract_methods = {
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        if 0 >= self._interface.dispatch.native.function_count then
-            error("function not available in interface", 2)
-        end
         local err
         if self._interface.dispatch_type == 0 then
+            if 0 >= self._interface.dispatch.native.function_count then
+                error("function not available in interface", 2)
+            end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             err = fn(self._instance, args_ptr, out_ptr)
@@ -141,11 +141,11 @@ local DataTransformerContract_methods = {
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        if 0 >= self._interface.dispatch.native.function_count then
-            error("function not available in interface", 2)
-        end
         local err
         if self._interface.dispatch_type == 0 then
+            if 0 >= self._interface.dispatch.native.function_count then
+                error("function not available in interface", 2)
+            end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             err = fn(self._instance, args_ptr, out_ptr)
@@ -221,11 +221,11 @@ local PipelineEncoderContract_methods = {
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        if 0 >= self._interface.dispatch.native.function_count then
-            error("function not available in interface", 2)
-        end
         local err
         if self._interface.dispatch_type == 0 then
+            if 0 >= self._interface.dispatch.native.function_count then
+                error("function not available in interface", 2)
+            end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             err = fn(self._instance, args_ptr, out_ptr)
@@ -301,11 +301,11 @@ local DataReporterContract_methods = {
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        if 0 >= self._interface.dispatch.native.function_count then
-            error("function not available in interface", 2)
-        end
         local err
         if self._interface.dispatch_type == 0 then
+            if 0 >= self._interface.dispatch.native.function_count then
+                error("function not available in interface", 2)
+            end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             err = fn(self._instance, args_ptr, out_ptr)
@@ -381,11 +381,11 @@ local PipelineValidatorContract_methods = {
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        if 0 >= self._interface.dispatch.native.function_count then
-            error("function not available in interface", 2)
-        end
         local err
         if self._interface.dispatch_type == 0 then
+            if 0 >= self._interface.dispatch.native.function_count then
+                error("function not available in interface", 2)
+            end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             err = fn(self._instance, args_ptr, out_ptr)

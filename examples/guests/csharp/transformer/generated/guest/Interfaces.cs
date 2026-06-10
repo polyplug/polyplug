@@ -42,13 +42,13 @@ public static class TransformerInterfaces {
     public static GuestContractInterface TRANSFORMER_INTERFACE;
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static GuestContractInstance TRANSFORMER_CreateInstanceStub(IntPtr rtCtx, IntPtr args) {
+    private static GuestContractInstance TRANSFORMER_CreateInstanceStub(IntPtr host, IntPtr args) {
         // Default stub returns null instance - users override for stateful plugins.
         return new GuestContractInstance { Data = IntPtr.Zero };
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void TRANSFORMER_DestroyInstanceStub(IntPtr rtCtx, GuestContractInstance instance) {
+    private static void TRANSFORMER_DestroyInstanceStub(IntPtr host, GuestContractInstance instance) {
         // Default stub is no-op - users override for cleanup before hot-reload.
     }
 

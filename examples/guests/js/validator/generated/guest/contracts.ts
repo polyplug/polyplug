@@ -17,15 +17,6 @@ export const VALIDATOR_INTERFACE = {
     contractLo: 0x9EEC57C5,
     contractHi: 0x45173A95,
     dispatchType: DispatchType.VirtualMachine,
-    // Default create_instance stub for validator - returns null instance.
-    createInstance: function(rtCtxLo: number, rtCtxHi: number, argsLo: number, argsHi: number): { dataLo: number; dataHi: number } {
-        // Default stub returns null instance - users override for stateful plugins.
-        return { dataLo: 0, dataHi: 0 };  // Null GuestContractInstance.
-    },
-    // Default destroy_instance stub for validator - no-op.
-    destroyInstance: function(rtCtxLo: number, rtCtxHi: number, instanceDataLo: number, instanceDataHi: number): void {
-        // Default stub is no-op - users override for cleanup before hot-reload.
-    },
     fnCount: 1,
     functions: [] as ((args_ptr: number, out_ptr: number) => number)[],
     contractName: "pipeline.Validator@1",

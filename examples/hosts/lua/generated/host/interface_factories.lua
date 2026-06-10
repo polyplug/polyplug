@@ -7,7 +7,7 @@ local ffi = require("ffi")
 -- ABI error codes (match polyplug_abi.AbiErrorCode)
 local AbiErrorCode = {
     Ok = 0,
-    Panic = 5,
+    Panic = 3,
 }
 
 local M = {}

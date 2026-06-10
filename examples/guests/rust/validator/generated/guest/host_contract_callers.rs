@@ -93,11 +93,6 @@ impl HostLoggerCaller {
         // HostContractInterface produced by resolve_host_contract_interface.
         let interface: &HostContractInterface = unsafe { &*self.interface };
 
-        let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
-        if fn_count < 0_u32 + 1 {
-            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));
-        }
-
         let message_view: StringView =
             alloc_string(&message).unwrap_or_else(|_| string_view_null());
         let args_ptr: *const () = &message_view as *const StringView as *const ();
@@ -105,6 +100,9 @@ impl HostLoggerCaller {
         let err: AbiError = unsafe {
             match interface.dispatch_type {
                 DispatchType::Native => {
+                    if interface.dispatch.native.function_count < 0_u32 + 1 {
+                        return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));
+                    }
                     let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                     // SAFETY: Transmuting *const () to a function pointer is sound because:
                     // - Function pointers have the same size and alignment as data pointers
@@ -166,11 +164,6 @@ impl HostLoggerCaller {
         // HostContractInterface produced by resolve_host_contract_interface.
         let interface: &HostContractInterface = unsafe { &*self.interface };
 
-        let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
-        if fn_count < 1_u32 + 1 {
-            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));
-        }
-
         let args_val: HostLoggerLogWithLevelArgs = HostLoggerLogWithLevelArgs {
             level,
             message: alloc_string(&message).unwrap_or_else(|_| string_view_null()),
@@ -180,6 +173,9 @@ impl HostLoggerCaller {
         let err: AbiError = unsafe {
             match interface.dispatch_type {
                 DispatchType::Native => {
+                    if interface.dispatch.native.function_count < 1_u32 + 1 {
+                        return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));
+                    }
                     let fn_ptr: *const () = *interface.dispatch.native.functions.add(1_usize);
                     // SAFETY: Transmuting *const () to a function pointer is sound because:
                     // - Function pointers have the same size and alignment as data pointers

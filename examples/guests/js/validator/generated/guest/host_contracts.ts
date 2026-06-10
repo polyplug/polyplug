@@ -48,7 +48,7 @@ export class HostLoggerContract {
         const outPtr = 0;
         const errCode: number = polyplug.callHostContract(0x845853BB, 0xF53EB5F2, this._minVersion, 0, argsPtr, outPtr);
         if (errCode !== 0) {
-            return;
+            throw new Error(`host contract call log failed (code ${errCode})`);
         }
     }
 
@@ -72,7 +72,7 @@ export class HostLoggerContract {
         const outPtr = 0;
         const errCode: number = polyplug.callHostContract(0x845853BB, 0xF53EB5F2, this._minVersion, 1, argsPtr, outPtr);
         if (errCode !== 0) {
-            return;
+            throw new Error(`host contract call log_with_level failed (code ${errCode})`);
         }
     }
 

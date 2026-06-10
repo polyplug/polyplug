@@ -4,11 +4,12 @@
 
 from __future__ import annotations
 from typing import Any, Self
+from polyplug_abi import HostContractInstance
 
 from guest.types import LogLevel
 
 class HostLoggerContract:
-    def __init__(self, interface: int) -> None: ...
+    def __init__(self, interface: int, instance: HostContractInstance) -> None: ...
     @classmethod
     def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None: ...
     def is_valid(self) -> bool: ...

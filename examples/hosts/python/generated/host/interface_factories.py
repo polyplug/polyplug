@@ -65,14 +65,15 @@ def create_host_logger_interface(impl: HostLogger) -> HostContractInterface:
             return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))
 
     functions = [
-        ctypes.cast(ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(_host_logger_log_thunk), ctypes.c_void_p),
-        ctypes.cast(ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(_host_logger_log_with_level_thunk), ctypes.c_void_p),
+        ctypes.cast(_host_logger_log_thunk, ctypes.c_void_p),
+        ctypes.cast(_host_logger_log_with_level_thunk, ctypes.c_void_p),
     ]
+    functions_array = (ctypes.c_void_p * 2)(*functions)
 
     interface = HostContractInterface()
     interface.contract_id = 0xF53EB5F2845853BB
     interface.contract_version = Version(major=1, minor=0, patch=0)
-    interface.singleton = false
+    interface.singleton = False
     interface.dispatch_type = DispatchType.Native
     interface.runtime = 0  # Set by runtime during registration
     # The managed implementation lives in a module global (Python objects
@@ -81,7 +82,10 @@ def create_host_logger_interface(impl: HostLogger) -> HostContractInterface:
     interface.create_instance = ctypes.cast(None, type(interface.create_instance))
     interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))
     interface.dispatch.native.function_count = 2
-    interface.dispatch.native.functions = ctypes.cast(functions, ctypes.c_void_p)
+    interface.dispatch.native.functions = ctypes.cast(functions_array, ctypes.c_void_p)
+    # Anchor the function-pointer array on the interface object so it
+    # outlives this factory call (ctypes does not keep it alive).
+    interface._keepalive = (functions_array,)
 
     return interface
 
@@ -103,14 +107,16 @@ def create_host_logger_interface_vm(
     interface = HostContractInterface()
     interface.contract_id = 0xF53EB5F2845853BB
     interface.contract_version = Version(major=1, minor=0, patch=0)
-    interface.singleton = false
+    interface.singleton = False
     interface.dispatch_type = DispatchType.VirtualMachine
     interface.runtime = 0  # Set by runtime during registration
     interface.user_data = 0  # VM dispatch routes through dispatch.vm.loader_data
     interface.create_instance = ctypes.cast(None, type(interface.create_instance))
     interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))
-    interface.dispatch.vm.call = ctypes.cast(dispatch_fn, type(interface.dispatch.vm.call))
+    vm_call_cfunc = type(interface.dispatch.vm.call)(dispatch_fn)
+    interface.dispatch.vm.call = vm_call_cfunc
     interface.dispatch.vm.loader_data = VmDispatch().loader_data
+    interface._keepalive = (vm_call_cfunc,)
 
     return interface
 

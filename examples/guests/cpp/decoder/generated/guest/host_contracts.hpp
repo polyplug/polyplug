@@ -3,14 +3,38 @@
 #pragma once
 #include "types.hpp"
 #include "polyplug/abi.hpp"
+#include "polyplug/guest.hpp"
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <optional>
-#include <span>
 #include <string_view>
 
 namespace polyplug_plugin {
 
 using namespace polyplug_generated;
+
+#ifndef POLYPLUG_GENERATED_LOG_CALL_FAILURE
+#define POLYPLUG_GENERATED_LOG_CALL_FAILURE
+namespace detail {
+
+/// Log a failed cross-boundary call through the host logging funnel
+/// (level 1 = Error) before the caller returns its default value.
+inline void log_call_failure(const HostApi* host, const char* scope, const char* what, uint32_t code) noexcept {
+    if (host == nullptr) {
+        return;
+    }
+    char message[96];
+    const int written = std::snprintf(message, sizeof(message), "%s failed: code=%u", what, code);
+    const std::size_t length = written > 0 ? static_cast<std::size_t>(written) : 0U;
+    host->log(host, 1U,
+              StringView{reinterpret_cast<const uint8_t*>(scope), std::strlen(scope)},
+              StringView{reinterpret_cast<const uint8_t*>(message), length});
+}
+
+}  // namespace detail
+#endif  // POLYPLUG_GENERATED_LOG_CALL_FAILURE
 
 /// Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 /// Plugins use this class to call host-provided functionality.
@@ -41,19 +65,20 @@ public:
     /// Call host contract function `log` (function_id=0)
     void log(std::string_view message) noexcept {
         if (interface_ == nullptr) {
-            return;
-        }
-
-        if (0U >= interface_->dispatch.native.function_count) {
+            detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));
             return;
         }
 
         StringView message_view{ reinterpret_cast<const uint8_t*>(message.data()), message.size() };
         const void* args_ptr = &message_view;
         void* out_ptr = nullptr;
-        AbiError err;
+        AbiError err{};
         switch (interface_->dispatch_type) {
             case DispatchType::Native: {
+                if (0U >= interface_->dispatch.native.function_count) {
+                    detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));
+                    return;
+                }
                 auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
                 err = fn_(instance_, args_ptr, out_ptr);
                 break;
@@ -65,6 +90,7 @@ public:
         }
 
         if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
+            detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log", err.code);
             return;
         }
 
@@ -73,10 +99,7 @@ public:
     /// Call host contract function `log_with_level` (function_id=1)
     void log_with_level(const LogLevel& level, std::string_view message) noexcept {
         if (interface_ == nullptr) {
-            return;
-        }
-
-        if (1U >= interface_->dispatch.native.function_count) {
+            detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log_with_level", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));
             return;
         }
 
@@ -84,9 +107,13 @@ public:
         HostLoggerContractLog_with_levelArgs args_val{ level, StringView{ reinterpret_cast<const uint8_t*>(message.data()), message.size() } };
         const void* args_ptr = &args_val;
         void* out_ptr = nullptr;
-        AbiError err;
+        AbiError err{};
         switch (interface_->dispatch_type) {
             case DispatchType::Native: {
+                if (1U >= interface_->dispatch.native.function_count) {
+                    detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log_with_level", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));
+                    return;
+                }
                 auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[1U]);
                 err = fn_(instance_, args_ptr, out_ptr);
                 break;
@@ -98,6 +125,7 @@ public:
         }
 
         if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
+            detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log_with_level", err.code);
             return;
         }
 

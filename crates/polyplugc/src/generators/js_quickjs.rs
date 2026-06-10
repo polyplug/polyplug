@@ -331,28 +331,9 @@ fn render_plugin_interface_quickjs(
     out.push_str(&format!("    contractLo: 0x{:08X},\n", contract_lo));
     out.push_str(&format!("    contractHi: 0x{:08X},\n", contract_hi));
     out.push_str("    dispatchType: DispatchType.VirtualMachine,\n");
-    // Instance lifecycle stubs
-    out.push_str(&format!(
-        "    // Default create_instance stub for {} - returns null instance.\n",
-        plugin_name
-    ));
-    out.push_str("    createInstance: function(rtCtxLo: number, rtCtxHi: number, argsLo: number, argsHi: number): { dataLo: number; dataHi: number } {\n");
-    out.push_str(
-        "        // Default stub returns null instance - users override for stateful plugins.\n",
-    );
-    out.push_str("        return { dataLo: 0, dataHi: 0 };  // Null GuestContractInstance.\n");
-    out.push_str("    },\n");
-    out.push_str(&format!(
-        "    // Default destroy_instance stub for {} - no-op.\n",
-        plugin_name
-    ));
-    out.push_str(
-        "    destroyInstance: function(rtCtxLo: number, rtCtxHi: number, instanceDataLo: number, instanceDataHi: number): void {\n",
-    );
-    out.push_str(
-        "        // Default stub is no-op - users override for cleanup before hot-reload.\n",
-    );
-    out.push_str("    },\n");
+    // No createInstance/destroyInstance stubs: the loader's registerVtable
+    // extracts only `functions` and substitutes its own instance lifecycle —
+    // stubs here would be dead code with a misleading "override" promise.
     out.push_str(&format!("    fnCount: {function_count},\n"));
     out.push_str("    functions: [] as ((args_ptr: number, out_ptr: number) => number)[],\n");
     out.push_str(&format!("    contractName: \"{contract_name_full}\",\n"));
@@ -1376,12 +1357,13 @@ fn generate_ts_guest_host_contract_method(
         "        const errCode: number = polyplug.callHostContract(0x{:08X}, 0x{:08X}, this._minVersion, {}, argsPtr, outPtr);\n",
         contract_id_lo, contract_id_hi, fn_id
     ));
+    // Throw with the ABI error code (JS host SDK convention) instead of
+    // silently returning null and discarding the code.
     out.push_str("        if (errCode !== 0) {\n");
-    if has_return {
-        out.push_str("            return null as any;\n");
-    } else {
-        out.push_str("            return;\n");
-    }
+    out.push_str(&format!(
+        "            throw new Error(`host contract call {} failed (code ${{errCode}})`);\n",
+        func.name
+    ));
     out.push_str("        }\n");
 
     if has_return {
@@ -1396,7 +1378,10 @@ fn generate_ts_guest_host_contract_method(
 fn abi_sizeof(ty: &ResolvedTypeRef) -> usize {
     match ty {
         ResolvedTypeRef::Primitive(p) => {
-            if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
+            if matches!(
+                p,
+                PrimitiveType::U64 | PrimitiveType::I64 | PrimitiveType::F64
+            ) {
                 8
             } else {
                 4
@@ -1577,6 +1562,26 @@ fn emit_ts_guest_host_contract_args_setup(out: &mut String, func: &crate::ir::Re
                         "        polyplug.writeU32(argsPtr + 4, {}.hi);\n",
                         param.name
                     ));
+                } else if matches!(p, PrimitiveType::F64) {
+                    // Floats must keep their bit pattern: writeU32 would
+                    // integer-truncate the value (and undersize f64 as 4 bytes).
+                    out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str(
+                        "        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n",
+                    );
+                    out.push_str(&format!(
+                        "        polyplug.writeF64(argsPtr, {});\n",
+                        param.name
+                    ));
+                } else if matches!(p, PrimitiveType::F32) {
+                    out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str(
+                        "        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n",
+                    );
+                    out.push_str(&format!(
+                        "        polyplug.writeF32(argsPtr, {});\n",
+                        param.name
+                    ));
                 } else {
                     out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
                     out.push_str(
@@ -1653,6 +1658,20 @@ fn emit_ts_guest_host_contract_args_setup(out: &mut String, func: &crate::ir::Re
                         param.name
                     ));
                     offset += 8;
+                } else if matches!(p, PrimitiveType::F64) {
+                    // Floats keep their bit pattern (writeU32 would truncate)
+                    // and f64 occupies a full 8-byte slot in the args pack.
+                    out.push_str(&format!(
+                        "        polyplug.writeF64(argsPtr + {}, {});\n",
+                        offset, param.name
+                    ));
+                    offset += 8;
+                } else if matches!(p, PrimitiveType::F32) {
+                    out.push_str(&format!(
+                        "        polyplug.writeF32(argsPtr + {}, {});\n",
+                        offset, param.name
+                    ));
+                    offset += 4;
                 } else {
                     out.push_str(&format!(
                         "        polyplug.writeU32(argsPtr + {}, {});\n",
@@ -1879,7 +1898,7 @@ fn generate_js_host_interface_factories_ts(ir: &ValidatedIr) -> String {
     out.push_str("// ABI error codes (match polyplug_abi.AbiErrorCode)\n");
     out.push_str("const AbiErrorCode = {\n");
     out.push_str("    Ok: 0,\n");
-    out.push_str("    Panic: 5,\n");
+    out.push_str("    Panic: 3,\n");
     out.push_str("};\n\n");
 
     for contract in &ir.host_contracts {
@@ -2284,7 +2303,10 @@ fn generate_ts_peer_caller_class(out: &mut String, contract: &ResolvedContract, 
         "        const handle = polyplug.findByContract(0x{:08X}, 0x{:08X}, {});\n",
         contract_id_lo, contract_id_hi, min_version
     ));
-    out.push_str("        if (handle === null || handle === undefined || handle === 0) {\n");
+    // Only null/undefined mean "not found": the loader's pack_handle already
+    // returns null for the null handle, and slot 0 generation 0 legitimately
+    // packs to 0 — testing `=== 0` would falsely reject a valid handle.
+    out.push_str("        if (handle === null || handle === undefined) {\n");
     out.push_str("            return null;\n");
     out.push_str("        }\n");
     out.push_str(&format!("        return new {}();\n", class_name));
@@ -2357,12 +2379,13 @@ fn generate_ts_peer_caller_method(
         "        const errCode: number = polyplug.callGuestMethod(0x{:08X}, 0x{:08X}, {}, {}, argsPtr, outPtr);\n",
         contract_id_lo, contract_id_hi, min_version, fn_id
     ));
+    // Throw with the ABI error code (JS host SDK convention) instead of
+    // silently returning null and discarding the code.
     out.push_str("        if (errCode !== 0) {\n");
-    if has_return {
-        out.push_str("            return null as any;\n");
-    } else {
-        out.push_str("            return;\n");
-    }
+    out.push_str(&format!(
+        "            throw new Error(`peer call {} failed (code ${{errCode}})`);\n",
+        func.name
+    ));
     out.push_str("        }\n");
 
     if has_return {

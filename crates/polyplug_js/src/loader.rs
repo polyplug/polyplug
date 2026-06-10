@@ -1256,6 +1256,62 @@ fn register_host_functions<'js>(
             })
         })?;
 
+    // Write counterparts of readF64/readF32: preserve the full float bit pattern
+    // instead of routing through writeU32 (which integer-truncates and loses the
+    // f32 encoding). Pointer arrives as f64 for the same sign-extension reason
+    // as writeU32.
+    let write_f64_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64, value: f64| {
+        let ptr: *mut f64 = (ptr_num as u64) as usize as *mut f64;
+        if ptr.is_null() {
+            return;
+        }
+        // SAFETY: ptr is a valid host-provided pointer to an 8-byte f64 slot.
+        unsafe {
+            *ptr = value;
+        }
+    })
+    .map_err(|e: rquickjs::Error| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: writeF64 function creation failed: {e}"),
+        })
+    })?;
+
+    polyplug_obj
+        .set("writeF64", write_f64_fn)
+        .map_err(|e: rquickjs::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: writeF64 set failed: {e}"),
+            })
+        })?;
+
+    let write_f32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64, value: f64| {
+        let ptr: *mut f32 = (ptr_num as u64) as usize as *mut f32;
+        if ptr.is_null() {
+            return;
+        }
+        // SAFETY: ptr is a valid host-provided pointer to a 4-byte f32 slot.
+        unsafe {
+            *ptr = value as f32;
+        }
+    })
+    .map_err(|e: rquickjs::Error| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: writeF32 function creation failed: {e}"),
+        })
+    })?;
+
+    polyplug_obj
+        .set("writeF32", write_f32_fn)
+        .map_err(|e: rquickjs::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: writeF32 set failed: {e}"),
+            })
+        })?;
+
     Ok(())
 }
 
@@ -1957,6 +2013,96 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
             1,
             "non-quiescent unload must RETIRE the state (deferred reclaim), not drop it"
         );
+    }
+
+    /// f64 params and returns must round-trip through a REAL loaded VM with
+    /// full bit-pattern fidelity: the guest reads its argument with
+    /// `polyplug.readF64` and writes its result with `polyplug.writeF64`.
+    /// Before the writeF64/writeF32 bridge functions existed, the guest had no
+    /// way to emit a float result (writeU32 integer-truncates), so this test
+    /// is RED on the pre-fix loader.
+    #[test]
+    fn js_guest_f64_param_and_return_round_trip() {
+        let loader: JsLoader = JsLoader::new(JsConfig {});
+        let runtime: Arc<PolyplugRuntime> = polyplug::runtime::RuntimeBuilder::new()
+            .loader(JsLoader::new(JsConfig {}))
+            .build()
+            .expect("runtime build must succeed");
+
+        let contract_id: u64 = polyplug_utils::guest_contract_id("test.float", 1);
+        let contract_lo: u32 = contract_id as u32;
+        let contract_hi: u32 = (contract_id >> 32) as u32;
+        let bundle_js: String = format!(
+            r#"
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
+    var vtable = {{ functions: [ function(args_ptr, out_ptr) {{
+        var v = polyplug.readF64(args_ptr);
+        polyplug.writeF64(out_ptr, v * 2.0 + 0.25);
+        return 0;
+    }} ] }};
+    polyplug.registerVtable({contract_lo}, {contract_hi}, vtable, 1, "test.float@1", 0x00010000);
+}}
+"#
+        );
+        let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("bundle.js"), bundle_js).expect("write bundle.js");
+        let manifest: ManifestData = ManifestData {
+            id: polyplug_utils::bundle_id("js_f64_round_trip"),
+            name: "js_f64_round_trip".to_owned(),
+            runtime: "js-quickjs".to_owned(),
+            file: "bundle.js".to_owned(),
+            path: dir.path().to_path_buf(),
+            version: String::new(),
+            provides: Vec::new(),
+            function_count: HashMap::new(),
+            dependencies: Vec::new(),
+            needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
+        };
+
+        loader
+            .load(
+                &manifest,
+                &BundleSource::Path(manifest.path.clone()),
+                &runtime,
+            )
+            .expect("load must succeed");
+
+        let handle: GuestContractHandle = runtime
+            .find_guest_contract(contract_id, 0)
+            .expect("contract must be registered");
+        let iface: *const GuestContractInterface = runtime
+            .resolve_guest_contract(handle)
+            .expect("interface must resolve");
+        assert!(!iface.is_null(), "resolved interface must be non-null");
+
+        let arg: f64 = 1234.5625;
+        let mut out_val: f64 = 0.0;
+        // SAFETY: iface is non-null and was just resolved; the JS loader always
+        // registers VirtualMachine dispatch, so the vm union variant is active.
+        // arg/out_val are valid for the duration of the call; a null arena is
+        // the documented host->alloc fallback.
+        let err: AbiError = unsafe {
+            assert_eq!((*iface).dispatch_type, DispatchType::VirtualMachine);
+            ((*iface).dispatch.vm.call)(
+                (*iface).dispatch.vm.loader_data,
+                GuestContractInstance::null(),
+                0,
+                &arg as *const f64 as *const (),
+                &mut out_val as *mut f64 as *mut (),
+                core::ptr::null_mut(),
+            )
+        };
+        assert_eq!(
+            err.code,
+            AbiErrorCode::Ok as u32,
+            "f64 dispatch must succeed"
+        );
+        // 1234.5625 * 2.0 + 0.25 = 2469.375 — exact in binary floating point,
+        // so equality (not epsilon) proves the bit pattern survived both
+        // directions. The pre-fix writeU32 path would have produced 2469.0
+        // (integer truncation) or thrown (missing bridge fn).
+        assert_eq!(out_val, 2469.375, "f64 must round-trip exactly");
     }
 
     /// Build a leaked JsLoaderData holding the given runtime/context and the

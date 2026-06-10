@@ -705,12 +705,14 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     // polyplug_init
     out.push_str("extern \"C\" AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {\n");
     out.push_str("    if (!host || !ctx) {\n");
-    out.push_str(
-        "        static constexpr const char* err_msg = \"null parameter in polyplug_init\";\n",
-    );
-    out.push_str(
-        "        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};\n",
-    );
+    let init_err_msg: &str = "null parameter in polyplug_init";
+    out.push_str(&format!(
+        "        static constexpr const char* err_msg = \"{init_err_msg}\";\n",
+    ));
+    out.push_str(&format!(
+        "        return AbiError{{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{{reinterpret_cast<const uint8_t*>(err_msg), {len}}}}};\n",
+        len = init_err_msg.len()
+    ));
     out.push_str("    }\n\n");
     out.push_str(
         "    // Store host interface for later access via polyplug::get_host_interface()\n",
@@ -1534,10 +1536,16 @@ fn generate_cpp_host_function(
     );
 
     // SAFETY: Check interface validity
+    let null_iface_msg: &str = "interface is null";
     out.push_str("        // SAFETY: interface_ is valid for the lifetime of this wrapper.\n");
     out.push_str("        if (!interface_) {\n");
-    out.push_str("            static constexpr const char* err_msg = \"interface is null\";\n");
-    out.push_str("            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});\n");
+    out.push_str(&format!(
+        "            static constexpr const char* err_msg = \"{null_iface_msg}\";\n"
+    ));
+    out.push_str(&format!(
+        "            polyplug::check_abi_error(AbiError{{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{{reinterpret_cast<const uint8_t*>(err_msg), {len}}}}});\n",
+        len = null_iface_msg.len()
+    ));
     out.push_str("        }\n");
 
     let out_ptr_expr: &str = if is_void_return {
@@ -1549,22 +1557,30 @@ fn generate_cpp_host_function(
         "out_ptr"
     };
 
-    // Function-id bounds check against the native dispatch table. The function
-    // count lives in `dispatch.native.function_count` — there is no top-level
-    // `function_count` field on GuestContractInterface.
-    out.push_str(&format!(
-        "        if ({}U >= interface_->dispatch.native.function_count) {{\n",
-        fn_id
-    ));
-    out.push_str("            static constexpr const char* err_msg = \"function not available in interface\";\n");
-    out.push_str("            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});\n");
-    out.push_str("        }\n");
-
     // Dispatch via the resolved interface, branching on its dispatch type so
     // native and VM-backed guests are both supported (ABI parity with rust.rs).
     out.push_str("        AbiError err{};\n");
     out.push_str("        switch (interface_->dispatch_type) {\n");
     out.push_str("            case DispatchType::Native: {\n");
+    // Function-id bounds check against the native dispatch table — emitted
+    // inside the Native arm only: on a VM interface `dispatch.native.function_count`
+    // aliases bits of `dispatch.vm.call` through the union (garbage). The VM-side
+    // loader enforces its own bounds (FunctionNotAvailable). The count lives in
+    // `dispatch.native.function_count` — there is no top-level `function_count`
+    // field on GuestContractInterface.
+    let fn_unavailable_msg: &str = "function not available in interface";
+    out.push_str(&format!(
+        "                if ({}U >= interface_->dispatch.native.function_count) {{\n",
+        fn_id
+    ));
+    out.push_str(&format!(
+        "                    static constexpr const char* err_msg = \"{fn_unavailable_msg}\";\n"
+    ));
+    out.push_str(&format!(
+        "                    polyplug::check_abi_error(AbiError{{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{{reinterpret_cast<const uint8_t*>(err_msg), {len}}}}});\n",
+        len = fn_unavailable_msg.len()
+    ));
+    out.push_str("                }\n");
     out.push_str(&format!(
         "                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[{}U]);\n",
         fn_id
@@ -1906,6 +1922,38 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("};\n\n");
 }
 
+/// Emit the shared `detail::log_call_failure` helper used by guest-side
+/// noexcept callers (guest→host and peer) to funnel call failures through the
+/// host logging funnel (`HostApi::log`) before returning a default value.
+///
+/// The emitted text is byte-identical wherever it appears (ODR-clean across
+/// translation units) and wrapped in a preprocessor guard so a TU including
+/// BOTH generated headers sees exactly one definition.
+fn emit_cpp_log_call_failure_helper(out: &mut String) {
+    out.push_str("#ifndef POLYPLUG_GENERATED_LOG_CALL_FAILURE\n");
+    out.push_str("#define POLYPLUG_GENERATED_LOG_CALL_FAILURE\n");
+    out.push_str("namespace detail {\n\n");
+    out.push_str("/// Log a failed cross-boundary call through the host logging funnel\n");
+    out.push_str("/// (level 1 = Error) before the caller returns its default value.\n");
+    out.push_str("inline void log_call_failure(const HostApi* host, const char* scope, const char* what, uint32_t code) noexcept {\n");
+    out.push_str("    if (host == nullptr) {\n");
+    out.push_str("        return;\n");
+    out.push_str("    }\n");
+    out.push_str("    char message[96];\n");
+    out.push_str("    const int written = std::snprintf(message, sizeof(message), \"%s failed: code=%u\", what, code);\n");
+    out.push_str(
+        "    const std::size_t length = written > 0 ? static_cast<std::size_t>(written) : 0U;\n",
+    );
+    out.push_str("    host->log(host, 1U,\n");
+    out.push_str(
+        "              StringView{reinterpret_cast<const uint8_t*>(scope), std::strlen(scope)},\n",
+    );
+    out.push_str("              StringView{reinterpret_cast<const uint8_t*>(message), length});\n");
+    out.push_str("}\n\n");
+    out.push_str("}  // namespace detail\n");
+    out.push_str("#endif  // POLYPLUG_GENERATED_LOG_CALL_FAILURE\n\n");
+}
+
 /// Generate one method for a guest-side host contract caller.
 fn generate_cpp_guest_host_contract_method(
     out: &mut String,
@@ -1937,24 +1985,20 @@ fn generate_cpp_guest_host_contract_method(
         return_type, func.name, params_str
     ));
 
-    // Null interface check
-    out.push_str("        if (interface_ == nullptr) {\n");
-    if func.returns.is_some() {
-        out.push_str(&format!("            return {}{{}};\n", return_type));
+    let what: String = format!("{}.{}", class_name, func.name);
+    let default_return: String = if func.returns.is_some() {
+        format!("return {}{{}};", return_type)
     } else {
-        out.push_str("            return;\n");
-    }
-    out.push_str("        }\n\n");
+        "return;".to_owned()
+    };
 
-    // Get function count directly from interface (no header wrapper)
+    // Null interface check — log the failure through the host funnel before
+    // returning the default (the caller is noexcept, so we cannot throw).
+    out.push_str("        if (interface_ == nullptr) {\n");
     out.push_str(&format!(
-        "        if ({fn_id}U >= interface_->dispatch.native.function_count) {{\n"
+        "            detail::log_call_failure(polyplug::get_host_interface(), \"guest.host_caller\", \"{what}\", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));\n"
     ));
-    if func.returns.is_some() {
-        out.push_str(&format!("            return {}{{}};\n", return_type));
-    } else {
-        out.push_str("            return;\n");
-    }
+    out.push_str(&format!("            {default_return}\n"));
     out.push_str("        }\n\n");
 
     // Build args_ptr setup
@@ -1964,9 +2008,20 @@ fn generate_cpp_guest_host_contract_method(
     emit_cpp_guest_host_contract_out_setup(out, &func.returns);
 
     // Dispatch call
-    out.push_str("        AbiError err;\n");
+    out.push_str("        AbiError err{};\n");
     out.push_str("        switch (interface_->dispatch_type) {\n");
     out.push_str("            case DispatchType::Native: {\n");
+    // Function-id bounds check belongs to the Native arm only: on a VM interface
+    // `dispatch.native.function_count` aliases bits of `dispatch.vm.call` through
+    // the union. The VM-side loader enforces its own bounds (FunctionNotAvailable).
+    out.push_str(&format!(
+        "                if ({fn_id}U >= interface_->dispatch.native.function_count) {{\n"
+    ));
+    out.push_str(&format!(
+        "                    detail::log_call_failure(polyplug::get_host_interface(), \"guest.host_caller\", \"{what}\", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));\n"
+    ));
+    out.push_str(&format!("                    {default_return}\n"));
+    out.push_str("                }\n");
     out.push_str(&format!(
         "                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[{fn_id}U]);\n"
     ));
@@ -1984,13 +2039,14 @@ fn generate_cpp_guest_host_contract_method(
     out.push_str("            }\n");
     out.push_str("        }\n\n");
 
-    // Error handling - for now, just return default on error
+    // Error handling — funnel the failure through the host logging funnel
+    // (with the error code) before returning the default; the caller is
+    // noexcept, so we cannot throw.
     out.push_str("        if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {\n");
-    if func.returns.is_some() {
-        out.push_str(&format!("            return {}{{}};\n", return_type));
-    } else {
-        out.push_str("            return;\n");
-    }
+    out.push_str(&format!(
+        "            detail::log_call_failure(polyplug::get_host_interface(), \"guest.host_caller\", \"{what}\", err.code);\n"
+    ));
+    out.push_str(&format!("            {default_return}\n"));
     out.push_str("        }\n\n");
 
     // Return result
@@ -2153,11 +2209,15 @@ fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("#pragma once\n");
     out.push_str("#include \"types.hpp\"\n");
     out.push_str("#include \"polyplug/abi.hpp\"\n");
+    out.push_str("#include \"polyplug/guest.hpp\"\n");
+    out.push_str("#include <cstddef>\n");
     out.push_str("#include <cstdint>\n");
+    out.push_str("#include <cstdio>\n");
+    out.push_str("#include <cstring>\n");
     out.push_str("#include <optional>\n");
-    out.push_str("#include <span>\n");
     out.push_str("#include <string_view>\n\n");
     out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
+    emit_cpp_log_call_failure_helper(&mut out);
 
     for contract in &ir.host_contracts {
         generate_cpp_guest_host_contract_caller(&mut out, contract);
@@ -2333,7 +2393,8 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
         "        +[](const HostContractInterface* self, const void* /*args*/) noexcept -> HostContractInstance {\n",
     );
     out.push_str("        // Return the registrant-owned user_data as the instance; the thunks\n");
-    out.push_str("        // recover the implementation from it (no static state).\n");
+    out.push_str("        // recover the implementation from it (no mutable static state — the\n");
+    out.push_str("        // interface itself is heap-allocated per factory call).\n");
     out.push_str("        return HostContractInstance{self->user_data};\n");
     out.push_str("    };\n\n");
 
@@ -2354,8 +2415,11 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     }
     out.push_str("    };\n\n");
 
-    // Static interface with inline fields (matches HostContractInterface ABI layout)
-    out.push_str("    static HostContractInterface s_interface = {\n");
+    // Heap-allocated interface, intentionally leaked (Box::leak semantics): the
+    // registered interface must stay valid for the program lifetime, and a fresh
+    // allocation per call keeps the factory re-entrant — a `static` here would
+    // silently alias every registration after the first onto the first impl.
+    out.push_str("    auto* iface = new HostContractInterface{\n");
     out.push_str(&format!(
         "        0x{contract_id:016X}ULL,  // contract_id\n"
     ));
@@ -2376,8 +2440,8 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     out.push_str(
         "    // Route the implementation through user_data; create_instance reads it via `this`.\n",
     );
-    out.push_str("    s_interface.user_data = static_cast<void*>(impl_ptr);\n");
-    out.push_str("    return &s_interface;\n");
+    out.push_str("    iface->user_data = static_cast<void*>(impl_ptr);\n");
+    out.push_str("    return iface;\n");
     out.push_str("}\n\n");
 
     // VM dispatch factory
@@ -2421,8 +2485,10 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     out.push_str("        // VM dispatch: instance managed by VM loader, no-op here\n");
     out.push_str("    };\n\n");
 
-    // Static interface with inline fields (matches HostContractInterface ABI layout)
-    out.push_str("    static HostContractInterface s_interface = {\n");
+    // Heap-allocated interface, intentionally leaked (Box::leak semantics): a
+    // `static` local here would bind to the FIRST call's `loader_data` /
+    // `dispatch_fn` forever and silently alias every later registration.
+    out.push_str("    auto* iface = new HostContractInterface{\n");
     out.push_str(&format!(
         "        0x{contract_id:016X}ULL,  // contract_id\n"
     ));
@@ -2442,7 +2508,7 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     out.push_str("            VmLoaderData{loader_data},  // loader_data\n");
     out.push_str("        } },  // dispatch.vm\n");
     out.push_str("    };  // dispatch\n");
-    out.push_str("    return &s_interface;\n");
+    out.push_str("    return iface;\n");
     out.push_str("}\n\n");
 }
 
@@ -2706,11 +2772,15 @@ fn generate_cpp_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract])
     out.push_str("#include \"polyplug/guest.hpp\"\n");
     out.push_str("#include \"polyplug/abi.hpp\"\n");
     out.push_str("#include <array>\n");
+    out.push_str("#include <cstddef>\n");
     out.push_str("#include <cstdint>\n");
+    out.push_str("#include <cstdio>\n");
+    out.push_str("#include <cstring>\n");
     out.push_str("#include <memory>\n");
     out.push_str("#include <optional>\n\n");
     out.push_str("namespace polyplug_plugin {\n\n");
     out.push_str("using namespace polyplug_generated;\n\n");
+    emit_cpp_log_call_failure_helper(&mut out);
 
     // Emit arena helpers only when at least one peer contract needs the arena.
     let any_needs_arena: bool = peers
@@ -3038,9 +3108,14 @@ fn generate_cpp_peer_fn_caller(out: &mut String, class_name: &str, func: &Resolv
         fn_id, arena_arg
     ));
 
-    // Error handling — return default on ABI error (mirrors host caller's check_abi_error path
-    // but for guest-side peer callers we cannot throw, so we return a zero-initialised value).
+    // Error handling — guest-side peer callers cannot throw (noexcept), so the
+    // failure is funnelled through the host logging funnel (with the error code)
+    // before returning a zero-initialised value.
     out.push_str("        if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {\n");
+    out.push_str(&format!(
+        "            detail::log_call_failure(host_, \"guest.peer_caller\", \"{class_name}.{fn_name}\", err.code);\n",
+        fn_name = func.name
+    ));
     if func.returns.is_some() {
         out.push_str(&format!("            return {}{{}};\n", return_type));
     } else {
@@ -3260,10 +3335,19 @@ mod tests {
         );
 
         // Function-id bounds check must read the native dispatch table's count
-        // (there is no top-level function_count field on GuestContractInterface).
+        // (there is no top-level function_count field on GuestContractInterface)
+        // and must live INSIDE the Native dispatch arm: on a VM interface,
+        // dispatch.native.function_count aliases bits of dispatch.vm.call
+        // through the union, so a pre-branch check reads garbage.
+        let native_arm_pos: usize = out
+            .find("case DispatchType::Native: {")
+            .expect("missing Native dispatch arm");
+        let bounds_check_pos: usize = out
+            .find("interface_->dispatch.native.function_count")
+            .expect("bounds check must use dispatch.native.function_count");
         assert!(
-            out.contains("interface_->dispatch.native.function_count"),
-            "bounds check must use dispatch.native.function_count: {out}"
+            bounds_check_pos > native_arm_pos,
+            "bounds check must be inside the Native dispatch arm, not before the branch: {out}"
         );
 
         // Dispatch must branch on the interface's dispatch type for ABI parity.
@@ -3954,12 +4038,23 @@ mod tests {
             "implementation must be released into a local, not a static: {out}"
         );
         assert!(
-            out.contains("s_interface.user_data = static_cast<void*>(impl_ptr);"),
+            out.contains("iface->user_data = static_cast<void*>(impl_ptr);"),
             "implementation must be routed through user_data, not a static: {out}"
         );
         assert!(
             !out.contains("s_impl"),
             "host factory must not hold the implementation in a static: {out}"
+        );
+        // The interface must be heap-allocated per call (Box::leak semantics):
+        // a `static HostContractInterface` would alias every registration after
+        // the first onto the first call's impl/loader_data.
+        assert!(
+            out.contains("auto* iface = new HostContractInterface{"),
+            "factory must heap-allocate the interface per call: {out}"
+        );
+        assert!(
+            !out.contains("static HostContractInterface s_interface"),
+            "factory must not hold the interface in a static: {out}"
         );
         assert!(
             out.contains("static void* const FUNCTIONS"),

@@ -5,6 +5,20 @@
 local ffi = require("ffi")
 local polyplug_abi = require("polyplug_abi")
 
+local function cdef_guarded(decl)
+	local ok, err = pcall(ffi.cdef, decl)
+	if not ok and not string.find(err, "already defined", 1, true) then
+		error(err, 2)
+	end
+end
+
+cdef_guarded([[
+    typedef struct {
+        LogLevel level;
+        StringView message;
+    } HostLoggerContractLogWithLevelArgs;
+]])
+
 local M = {}
 
 -- Cached FFI types for hot path performance
@@ -43,9 +57,6 @@ function HostLoggerContract:log(message)
         return
     end
     local interface = ffi.cast("HostContractInterface*", self._interface)
-    if 0 >= interface.dispatch.native.function_count then
-        return
-    end
     local dispatch_type = interface.dispatch_type
     local message_bytes = tostring(message)
     local message_view = ffi.new("StringView")
@@ -55,6 +66,9 @@ function HostLoggerContract:log(message)
     local out_ptr = nil
     local err
     if dispatch_type == 0 then
+        if 0 >= interface.dispatch.native.function_count then
+            return
+        end
         local fn_ptr = interface.dispatch.native.functions[0]
         local impl_ptr = nil
         if self._instance ~= nil then impl_ptr = self._instance.data end
@@ -76,20 +90,19 @@ function HostLoggerContract:log_with_level(level, message)
         return
     end
     local interface = ffi.cast("HostContractInterface*", self._interface)
-    if 1 >= interface.dispatch.native.function_count then
-        return
-    end
     local dispatch_type = interface.dispatch_type
-    local args_val = {}
+    local args_val = ffi.new("HostLoggerContractLogWithLevelArgs")
     args_val.level = level
     local message_bytes = tostring(message)
-    args_val.message = ffi.new("StringView")
     args_val.message.ptr = ffi.cast("const char*", message_bytes)
     args_val.message.len = #message_bytes
     local args_ptr = ffi.cast("const void*", args_val)
     local out_ptr = nil
     local err
     if dispatch_type == 0 then
+        if 1 >= interface.dispatch.native.function_count then
+            return
+        end
         local fn_ptr = interface.dispatch.native.functions[1]
         local impl_ptr = nil
         if self._instance ~= nil then impl_ptr = self._instance.data end

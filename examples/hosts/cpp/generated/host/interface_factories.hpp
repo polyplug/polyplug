@@ -67,7 +67,8 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
     static constexpr HostContractInterface_create_instance_fn create_instance_stub =
         +[](const HostContractInterface* self, const void* /*args*/) noexcept -> HostContractInstance {
         // Return the registrant-owned user_data as the instance; the thunks
-        // recover the implementation from it (no static state).
+        // recover the implementation from it (no mutable static state — the
+        // interface itself is heap-allocated per factory call).
         return HostContractInstance{self->user_data};
     };
 
@@ -77,7 +78,7 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
         // Multi-instance: not supported in host-side factory, use custom factory
     };
 
-    static HostContractInterface s_interface = {
+    auto* iface = new HostContractInterface{
         0xF53EB5F2845853BBULL,  // contract_id
         Version{1U, 0U, 0U},  // contract_version
         false,  // singleton
@@ -93,8 +94,8 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
     };  // dispatch
 
     // Route the implementation through user_data; create_instance reads it via `this`.
-    s_interface.user_data = static_cast<void*>(impl_ptr);
-    return &s_interface;
+    iface->user_data = static_cast<void*>(impl_ptr);
+    return iface;
 }
 
 /// Create a host contract interface for `host.logger` with VM dispatch.
@@ -124,7 +125,7 @@ const HostContractInterface* create_host_logger_interface_vm(
         // VM dispatch: instance managed by VM loader, no-op here
     };
 
-    static HostContractInterface s_interface = {
+    auto* iface = new HostContractInterface{
         0xF53EB5F2845853BBULL,  // contract_id
         Version{1U, 0U, 0U},  // contract_version
         false,  // singleton
@@ -138,7 +139,7 @@ const HostContractInterface* create_host_logger_interface_vm(
             VmLoaderData{loader_data},  // loader_data
         } },  // dispatch.vm
     };  // dispatch
-    return &s_interface;
+    return iface;
 }
 
 }  // namespace polyplug_host

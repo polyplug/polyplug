@@ -143,16 +143,16 @@ impl PipelineDecoderContract {
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
-            if 0_u32 >= interface.dispatch.native.function_count {
-                AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable as u32,
-                    message: polyplug_abi::string_view_from_static(
-                        b"function not available in interface",
-                    ),
-                }
-            } else {
-                match interface.dispatch_type {
-                    DispatchType::Native => {
+            match interface.dispatch_type {
+                DispatchType::Native => {
+                    if 0_u32 >= interface.dispatch.native.function_count {
+                        AbiError {
+                            code: AbiErrorCode::FunctionNotAvailable as u32,
+                            message: polyplug_abi::string_view_from_static(
+                                b"function not available in interface",
+                            ),
+                        }
+                    } else {
                         let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
@@ -165,16 +165,16 @@ impl PipelineDecoderContract {
                         ) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
-                    DispatchType::VirtualMachine => {
-                        (interface.dispatch.vm.call)(
-                            interface.dispatch.vm.loader_data,
-                            self.instance, // instance parameter
-                            0_u32,
-                            args_ptr,
-                            out_ptr,
-                            &mut self.arena as *mut CallArena,
-                        )
-                    }
+                }
+                DispatchType::VirtualMachine => {
+                    (interface.dispatch.vm.call)(
+                        interface.dispatch.vm.loader_data,
+                        self.instance, // instance parameter
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                        &mut self.arena as *mut CallArena,
+                    )
                 }
             }
         };
@@ -316,16 +316,16 @@ impl DataTransformerContract {
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
-            if 0_u32 >= interface.dispatch.native.function_count {
-                AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable as u32,
-                    message: polyplug_abi::string_view_from_static(
-                        b"function not available in interface",
-                    ),
-                }
-            } else {
-                match interface.dispatch_type {
-                    DispatchType::Native => {
+            match interface.dispatch_type {
+                DispatchType::Native => {
+                    if 0_u32 >= interface.dispatch.native.function_count {
+                        AbiError {
+                            code: AbiErrorCode::FunctionNotAvailable as u32,
+                            message: polyplug_abi::string_view_from_static(
+                                b"function not available in interface",
+                            ),
+                        }
+                    } else {
                         let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
@@ -338,16 +338,16 @@ impl DataTransformerContract {
                         ) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
-                    DispatchType::VirtualMachine => {
-                        (interface.dispatch.vm.call)(
-                            interface.dispatch.vm.loader_data,
-                            self.instance, // instance parameter
-                            0_u32,
-                            args_ptr,
-                            out_ptr,
-                            &mut self.arena as *mut CallArena,
-                        )
-                    }
+                }
+                DispatchType::VirtualMachine => {
+                    (interface.dispatch.vm.call)(
+                        interface.dispatch.vm.loader_data,
+                        self.instance, // instance parameter
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                        &mut self.arena as *mut CallArena,
+                    )
                 }
             }
         };
@@ -489,16 +489,16 @@ impl PipelineEncoderContract {
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
-            if 0_u32 >= interface.dispatch.native.function_count {
-                AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable as u32,
-                    message: polyplug_abi::string_view_from_static(
-                        b"function not available in interface",
-                    ),
-                }
-            } else {
-                match interface.dispatch_type {
-                    DispatchType::Native => {
+            match interface.dispatch_type {
+                DispatchType::Native => {
+                    if 0_u32 >= interface.dispatch.native.function_count {
+                        AbiError {
+                            code: AbiErrorCode::FunctionNotAvailable as u32,
+                            message: polyplug_abi::string_view_from_static(
+                                b"function not available in interface",
+                            ),
+                        }
+                    } else {
                         let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
@@ -511,16 +511,16 @@ impl PipelineEncoderContract {
                         ) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
-                    DispatchType::VirtualMachine => {
-                        (interface.dispatch.vm.call)(
-                            interface.dispatch.vm.loader_data,
-                            self.instance, // instance parameter
-                            0_u32,
-                            args_ptr,
-                            out_ptr,
-                            &mut self.arena as *mut CallArena,
-                        )
-                    }
+                }
+                DispatchType::VirtualMachine => {
+                    (interface.dispatch.vm.call)(
+                        interface.dispatch.vm.loader_data,
+                        self.instance, // instance parameter
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                        &mut self.arena as *mut CallArena,
+                    )
                 }
             }
         };
@@ -662,16 +662,16 @@ impl DataReporterContract {
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
-            if 0_u32 >= interface.dispatch.native.function_count {
-                AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable as u32,
-                    message: polyplug_abi::string_view_from_static(
-                        b"function not available in interface",
-                    ),
-                }
-            } else {
-                match interface.dispatch_type {
-                    DispatchType::Native => {
+            match interface.dispatch_type {
+                DispatchType::Native => {
+                    if 0_u32 >= interface.dispatch.native.function_count {
+                        AbiError {
+                            code: AbiErrorCode::FunctionNotAvailable as u32,
+                            message: polyplug_abi::string_view_from_static(
+                                b"function not available in interface",
+                            ),
+                        }
+                    } else {
                         let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
@@ -684,16 +684,16 @@ impl DataReporterContract {
                         ) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
-                    DispatchType::VirtualMachine => {
-                        (interface.dispatch.vm.call)(
-                            interface.dispatch.vm.loader_data,
-                            self.instance, // instance parameter
-                            0_u32,
-                            args_ptr,
-                            out_ptr,
-                            &mut self.arena as *mut CallArena,
-                        )
-                    }
+                }
+                DispatchType::VirtualMachine => {
+                    (interface.dispatch.vm.call)(
+                        interface.dispatch.vm.loader_data,
+                        self.instance, // instance parameter
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                        &mut self.arena as *mut CallArena,
+                    )
                 }
             }
         };
@@ -835,16 +835,16 @@ impl PipelineValidatorContract {
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
-            if 0_u32 >= interface.dispatch.native.function_count {
-                AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable as u32,
-                    message: polyplug_abi::string_view_from_static(
-                        b"function not available in interface",
-                    ),
-                }
-            } else {
-                match interface.dispatch_type {
-                    DispatchType::Native => {
+            match interface.dispatch_type {
+                DispatchType::Native => {
+                    if 0_u32 >= interface.dispatch.native.function_count {
+                        AbiError {
+                            code: AbiErrorCode::FunctionNotAvailable as u32,
+                            message: polyplug_abi::string_view_from_static(
+                                b"function not available in interface",
+                            ),
+                        }
+                    } else {
                         let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
@@ -857,16 +857,16 @@ impl PipelineValidatorContract {
                         ) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
-                    DispatchType::VirtualMachine => {
-                        (interface.dispatch.vm.call)(
-                            interface.dispatch.vm.loader_data,
-                            self.instance, // instance parameter
-                            0_u32,
-                            args_ptr,
-                            out_ptr,
-                            &mut self.arena as *mut CallArena,
-                        )
-                    }
+                }
+                DispatchType::VirtualMachine => {
+                    (interface.dispatch.vm.call)(
+                        interface.dispatch.vm.loader_data,
+                        self.instance, // instance parameter
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                        &mut self.arena as *mut CallArena,
+                    )
                 }
             }
         };

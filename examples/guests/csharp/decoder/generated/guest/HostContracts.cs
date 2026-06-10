@@ -54,10 +54,6 @@ public sealed class HostLoggerContract {
 
         unsafe {
             var contract = (HostContractInterface*)_interface;
-            if (0u >= contract->Dispatch.Native.FunctionCount) {
-                return;
-            }
-
             using var message_pin = new PinnedUtf8(message);
             var message_view = message_pin.View;
             var argsPtr = (IntPtr)(&message_view);
@@ -66,6 +62,9 @@ public sealed class HostLoggerContract {
             AbiError err;
             switch (contract->DispatchType) {
                 case DispatchType.Native: {
+                    if (0u >= contract->Dispatch.Native.FunctionCount) {
+                        return;
+                    }
                     var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[0u];
                     var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)fnPtr;
                     err = fn_(_instance, argsPtr, outPtr);
@@ -95,10 +94,6 @@ public sealed class HostLoggerContract {
 
         unsafe {
             var contract = (HostContractInterface*)_interface;
-            if (1u >= contract->Dispatch.Native.FunctionCount) {
-                return;
-            }
-
             using var message_pin = new PinnedUtf8(message);
             var args = new HostLoggerContractLogWithLevelArgs {
                 Level = level,
@@ -110,6 +105,9 @@ public sealed class HostLoggerContract {
             AbiError err;
             switch (contract->DispatchType) {
                 case DispatchType.Native: {
+                    if (1u >= contract->Dispatch.Native.FunctionCount) {
+                        return;
+                    }
                     var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[1u];
                     var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)fnPtr;
                     err = fn_(_instance, argsPtr, outPtr);
