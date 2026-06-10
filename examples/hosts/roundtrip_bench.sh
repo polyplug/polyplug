@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# roundtrip_bench.sh — measure the full cross-language round trip:
-#   host language → runtime (FFI) → NATIVE guest plugin → return data → host.
+# roundtrip_bench.sh — measure the full cross-language round trip as a MATRIX:
+#   every HOST language → runtime (FFI) → a GUEST plugin of language Y → return.
 #
-# This is the end-to-end companion to the per-direction charts in PERFORMANCE.md
-# (host-call overhead and guest dispatch). It times each host calling the native
-# `decoder` plugin's `decode("name,value,42")` in a loop and reads the string
-# back. The guest is held constant (a native Rust cdylib) so the only thing that
-# varies between bars is the HOST language's binding cost — an honest comparison.
+# Each cell is one host language calling the same `decode("name,value,42")`
+# contract, where the guest is implemented in language Y. Sweeping host × guest
+# gives the full picture: "if I write my app in Rust and my plugin in Lua, what
+# does a call cost?" — every combination, not just one axis.
 #
-# Local-only, like every benchmark here. Writes `<lang> <ns_per_call>` lines to
-# docs/assets/benches/roundtrip.txt, then renders cross_lang_roundtrip.svg from
-# them in the same run (scripts/gen_bench_charts.py --roundtrip-only).
+#   hosts  : rust, cpp, csharp, python, lua, js   (examples/hosts/*)
+#   guests : rust, cpp, lua, js, python           (examples/plugins/<lang>_*)
+#            (no C# guest: there is no built dotnet guest bundle and the host
+#             examples do not register the .NET loader — that column is N/A.)
+#
+# Local-only, like every benchmark here. The measured numbers are piped straight
+# into scripts/gen_bench_charts.py, which renders cross_lang_matrix.svg. Nothing
+# is committed except the SVG — there is no intermediate data file in the repo.
 #
 # Each host enters a timed loop only when POLYPLUG_BENCH_ITERS is set, so normal
 # (parity) runs are unaffected.
@@ -22,20 +26,13 @@ WORKSPACE_DIR="$(cd "$EXAMPLES_DIR/.." && pwd)"
 cd "$EXAMPLES_DIR"
 
 DEPS_DIR="$WORKSPACE_DIR/target/release/deps"
-ITERS="${POLYPLUG_BENCH_ITERS:-500000}"
-OUT="$WORKSPACE_DIR/docs/assets/benches/roundtrip.txt"
+ITERS="${POLYPLUG_BENCH_ITERS:-200000}"
 
-# A native-guest-only plugin set: copy the rust_* example bundles into a fresh
-# dir so find_guest_contract always resolves the NATIVE decoder (the full
-# examples/plugins dir has 5 implementations of each contract).
-NATIVE_PLUGINS="$(mktemp -d)"
-for d in "$EXAMPLES_DIR"/plugins/rust_*; do
-    cp -rL "$d" "$NATIVE_PLUGINS/"
-done
-trap 'rm -rf "$NATIVE_PLUGINS"' EXIT
+# Guest languages that ship a built `*_decoder` bundle in examples/plugins.
+GUEST_LANGS=(rust cpp lua js python)
 
-export POLYPLUG_PLUGIN_PATH="$NATIVE_PLUGINS"
-export POLYPLUG_BENCH_ITERS="$ITERS"
+# Shared environment every host needs to find the core lib + loader cdylibs and
+# the language SDKs. Mirrors examples/verify_hosts.sh.
 export LD_LIBRARY_PATH="$DEPS_DIR:${LD_LIBRARY_PATH:-}"
 export POLYPLUG_LIB="$DEPS_DIR/libpolyplug.so"
 export POLYPLUG_NATIVE_LIB="$DEPS_DIR/libpolyplug_native.so"
@@ -43,58 +40,76 @@ export POLYPLUG_LUA_LIB="$DEPS_DIR/libpolyplug_lua.so"
 export POLYPLUG_JS_LIB="$DEPS_DIR/libpolyplug_js.so"
 export POLYPLUG_PYTHON_LIB="$DEPS_DIR/libpolyplug_python.so"
 export PYTHONFAULTHANDLER=1
+export POLYPLUG_BENCH_ITERS="$ITERS"
 
-PYTHON_HOST_PATH="$WORKSPACE_DIR/sdks/python/host:$WORKSPACE_DIR/sdks/python/polyplug_abi:$WORKSPACE_DIR/sdks/python:$WORKSPACE_DIR/sdks/python/loaders/native"
+PYTHON_HOST_PATH="$WORKSPACE_DIR/sdks/python/host:$WORKSPACE_DIR/sdks/python/polyplug_abi:$WORKSPACE_DIR/sdks/python:$WORKSPACE_DIR/sdks/python/loaders/native:$WORKSPACE_DIR/sdks/python/loaders/python:$WORKSPACE_DIR/sdks/python/loaders/lua:$WORKSPACE_DIR/sdks/python/loaders/js"
 LUA_HOST_PATH="$WORKSPACE_DIR/sdks/lua/host/?.lua;$WORKSPACE_DIR/sdks/lua/abi/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/native/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/lua/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/js/?.lua;$WORKSPACE_DIR/sdks/lua/loaders/python/?.lua;$SCRIPT_DIR/lua/?.lua;;"
 
-echo "round-trip bench: $ITERS iters/host, native guest, $DEPS_DIR" >&2
-: > "$OUT"
+# Matrix data, written as `<host> <guest> <ns>` lines. A fresh temp file each
+# run — never committed; the chart is the only artifact that lands in the repo.
+MATRIX="$(mktemp)"
+trap 'rm -f "$MATRIX"' EXIT
 
-emit() {  # emit <raw host output>
-    grep -oE 'ROUNDTRIP_NS=[0-9.]+ LANG=[a-z]+' | while read -r line; do
-        ns="${line#ROUNDTRIP_NS=}"; ns="${ns%% *}"
-        lang="${line##*LANG=}"
-        printf '%s %s\n' "$lang" "$ns" | tee -a "$OUT" >&2
+echo "round-trip matrix: $ITERS iters/cell, hosts × guests, $DEPS_DIR" >&2
+
+# run_host <host> — run one host against the current POLYPLUG_PLUGIN_PATH and
+# echo its raw stdout (which includes a `ROUNDTRIP_NS=<n> LANG=<host>` line when
+# the host reaches its timed loop). Returns non-zero if the host is unavailable.
+run_host() {
+    case "$1" in
+        rust)
+            [ -x "$WORKSPACE_DIR/target/release/pipeline_host" ] || return 1
+            "$WORKSPACE_DIR/target/release/pipeline_host" 2>/dev/null ;;
+        cpp)
+            [ -x "$SCRIPT_DIR/cpp/host" ] || return 1
+            "$SCRIPT_DIR/cpp/host" 2>/dev/null ;;
+        python)
+            command -v python3 >/dev/null || return 1
+            env PYTHONPATH="$PYTHON_HOST_PATH" python3 "$SCRIPT_DIR/python/host.py" 2>/dev/null ;;
+        lua)
+            command -v luajit >/dev/null || return 1
+            env LUA_PATH="$LUA_HOST_PATH" luajit "$SCRIPT_DIR/lua/host.lua" 2>/dev/null ;;
+        js)
+            command -v deno >/dev/null || return 1
+            deno run --allow-read --allow-ffi --allow-env "$SCRIPT_DIR/js/host.js" 2>/dev/null ;;
+        csharp)
+            command -v dotnet >/dev/null && [ -f "$SCRIPT_DIR/csharp/Host.csproj" ] || return 1
+            ( cd "$SCRIPT_DIR/csharp" && dotnet run -c Release 2>/dev/null ) ;;
+        *) return 1 ;;
+    esac
+}
+
+HOSTS=(rust cpp csharp python lua js)
+
+for guest in "${GUEST_LANGS[@]}"; do
+    # Build a plugin set containing ONLY this guest language's bundles, so the
+    # contract resolves deterministically to the language under test. Real copies
+    # (cp -rL) because the Deno scanner does not follow symlinked plugin dirs.
+    guest_dir="$(mktemp -d)"
+    for d in "$EXAMPLES_DIR"/plugins/"${guest}"_*; do
+        [ -d "$d" ] && cp -rL "$d" "$guest_dir/"
     done
-}
+    export POLYPLUG_PLUGIN_PATH="$guest_dir"
 
-run() {  # run <label> <command...>
-    echo "--- $1 ---" >&2
-    "${@:2}" 2>/dev/null | emit || echo "  $1: failed/unavailable" >&2
-}
+    echo "--- guest=$guest ---" >&2
+    for host in "${HOSTS[@]}"; do
+        ns="$(run_host "$host" | grep -oE 'ROUNDTRIP_NS=[0-9.]+' | head -1 | cut -d= -f2)"
+        if [ -n "$ns" ]; then
+            printf '%s %s %s\n' "$host" "$guest" "$ns" | tee -a "$MATRIX" >&2
+        else
+            echo "  $host × $guest: failed/unavailable" >&2
+        fi
+    done
 
-# Rust (pipeline_host binary, bench mode)
-[ -x "$WORKSPACE_DIR/target/release/pipeline_host" ] && \
-    run rust "$WORKSPACE_DIR/target/release/pipeline_host"
-
-# Python
-command -v python3 >/dev/null && \
-    run python env PYTHONPATH="$PYTHON_HOST_PATH" python3 "$SCRIPT_DIR/python/host.py"
-
-# Lua (LuaJIT)
-command -v luajit >/dev/null && \
-    run lua env LUA_PATH="$LUA_HOST_PATH" luajit "$SCRIPT_DIR/lua/host.lua"
-
-# JavaScript (Deno)
-command -v deno >/dev/null && \
-    run js deno run --allow-read --allow-ffi --allow-env "$SCRIPT_DIR/js/host.js"
-
-# C++ (prebuilt host binary, bench mode)
-[ -x "$SCRIPT_DIR/cpp/host" ] && run cpp "$SCRIPT_DIR/cpp/host"
-
-# C# (dotnet run)
-if command -v dotnet >/dev/null && [ -f "$SCRIPT_DIR/csharp/Host.csproj" ]; then
-    run csharp bash -c "cd '$SCRIPT_DIR/csharp' && dotnet run -c Release"
-fi
+    rm -rf "$guest_dir"
+done
 
 echo "" >&2
-echo "wrote $OUT:" >&2
-cat "$OUT" >&2
-
-# Render the SVG from the freshly-measured numbers so this is a single command.
-# --roundtrip-only skips the criterion charts (no cargo bench needed here).
-if command -v python3 >/dev/null; then
-    echo "" >&2
-    python3 "$WORKSPACE_DIR/scripts/gen_bench_charts.py" --roundtrip-only \
+if command -v python3 >/dev/null && [ -s "$MATRIX" ]; then
+    # criterion_dir is unused in --matrix mode but the positional is required.
+    python3 "$WORKSPACE_DIR/scripts/gen_bench_charts.py" --matrix "$MATRIX" \
         "$WORKSPACE_DIR/target/criterion" "$WORKSPACE_DIR/docs/assets/benches" >&2
+else
+    echo "no matrix data collected (no hosts available?)" >&2
+    exit 1
 fi

@@ -80,11 +80,12 @@ use polyplug_utils::BundleId;
 
 const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 
-/// Payload sizes swept, in bytes. 0 isolates pure overhead; 16384 buries it.
-const SIZES: [usize; 7] = [0, 16, 64, 256, 1024, 4096, 16384];
+/// Payload sizes swept, in bytes. 0 isolates pure overhead; by 1 MiB the fixed
+/// per-call cost is buried under three-plus orders of magnitude of real work.
+const SIZES: [usize; 10] = [0, 16, 64, 256, 1024, 4096, 16384, 65536, 262_144, 1_048_576];
 
 /// Largest payload — the one buffer allocated up front and reused for every size.
-const MAX_SIZE: usize = 16384;
+const MAX_SIZE: usize = 1_048_576;
 
 /// Mirror of `memory_plugin`'s `FillArgs` (fn 0): pre-allocated buffer + fill byte.
 #[repr(C)]

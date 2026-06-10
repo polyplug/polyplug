@@ -649,9 +649,11 @@ fn bench_marshalling(c: &mut Criterion) {
     // Host table so the owned path can allocate through the host allocator.
     let host_interface: HostApi = bench_host_api();
 
-    // Backing payload of valid bytes; each size borrows a prefix of it.
-    let payload: Vec<u8> = vec![b'a'; 16384];
-    let sizes: [usize; 4] = [16, 256, 4096, 16384];
+    // Backing payload of valid bytes; each size borrows a prefix of it. The sweep
+    // runs 16 B → 1 MiB so the chart shows the borrowed line staying flat while the
+    // owned line climbs across three orders of magnitude.
+    let payload: Vec<u8> = vec![b'a'; 1_048_576];
+    let sizes: [usize; 9] = [16, 64, 256, 1024, 4096, 16384, 65536, 262_144, 1_048_576];
 
     let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
         c.benchmark_group("marshalling");

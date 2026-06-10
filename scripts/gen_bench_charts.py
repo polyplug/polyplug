@@ -100,6 +100,8 @@ _SLOW: str = "#d29922"  # the expensive end (owned copy / Python GIL / ctypes)
 
 
 def _fmt_ns(value: float) -> str:
+    if value >= 1_000_000.0:
+        return f"{value / 1_000_000.0:.1f} ms"
     if value >= 1000.0:
         return f"{value / 1000.0:.1f} µs"
     if value >= 100.0:
@@ -107,6 +109,14 @@ def _fmt_ns(value: float) -> str:
     if value >= 10.0:
         return f"{value:.1f} ns"
     return f"{value:.2f} ns"
+
+
+def _fmt_bytes(n: int) -> str:
+    if n >= 1_048_576:
+        return f"{n // 1_048_576} MB"
+    if n >= 1024:
+        return f"{n // 1024} KB"
+    return str(n)
 
 
 # ─── reusable chart layouts ───────────────────────────────────────────────────
@@ -226,6 +236,83 @@ def _chart_lines(
     out.write_text(_svg(width, height, "".join(parts)))
 
 
+def _lerp_color(c0: str, c1: str, t: float) -> str:
+    """Linear blend between two ``#rrggbb`` colors; t in [0, 1]."""
+    r0, g0, b0 = int(c0[1:3], 16), int(c0[3:5], 16), int(c0[5:7], 16)
+    r1, g1, b1 = int(c1[1:3], 16), int(c1[3:5], 16), int(c1[5:7], 16)
+    r: int = round(r0 + (r1 - r0) * t)
+    g: int = round(g0 + (g1 - g0) * t)
+    b: int = round(b0 + (b1 - b0) * t)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _heat_color(t: float) -> str:
+    """Speed ramp: t=0 (fastest) green → amber → t=1 (slowest) red."""
+    if t < 0.5:
+        return _lerp_color("#2ea043", "#d29922", t / 0.5)
+    return _lerp_color("#d29922", "#f85149", (t - 0.5) / 0.5)
+
+
+def _chart_heatmap(
+    out: Path, title: str, subtitle: str, col_labels: list, row_labels: list, cells: dict, note: str
+) -> None:
+    """Grid heatmap; cells = {(row_label, col_label): ns or None}. Color = speed."""
+    n_rows: int = len(row_labels)
+    n_cols: int = len(col_labels)
+    cell_w: int = 96
+    cell_h: int = 46
+    pad_l: int = 132
+    pad_t: int = 104
+    width: int = pad_l + cell_w * n_cols + 24
+    height: int = pad_t + cell_h * n_rows + 78
+
+    present: list = [v for v in cells.values() if v is not None]
+    lo: float = math.log10(min(present))
+    hi: float = math.log10(max(present))
+    span: float = hi - lo if hi > lo else 1.0
+
+    parts: list = [
+        _text(24, 30, title, 17, _FG, "start"),
+        _text(24, 47, subtitle, 11, _MUTED, "start"),
+    ]
+    # Axis captions: guest across the top, host down the left (rotated).
+    parts.append(
+        _text(pad_l + n_cols * cell_w / 2, pad_t - 34, "GUEST — plugin language  →", 11, _MUTED, "middle")
+    )
+    left_x: float = 22.0
+    mid_y: float = pad_t + n_rows * cell_h / 2
+    parts.append(
+        f"<text x='{left_x:.1f}' y='{mid_y:.1f}' font-size='11' fill='{_MUTED}' "
+        f"text-anchor='middle' transform='rotate(-90 {left_x:.1f} {mid_y:.1f})' {_FONT}>"
+        f"HOST — app language  ↓</text>"
+    )
+    for j, col in enumerate(col_labels):
+        cx: float = pad_l + j * cell_w + cell_w / 2
+        parts.append(_text(cx, pad_t - 12, col, 12, _FG, "middle"))
+    for i, row in enumerate(row_labels):
+        ry: float = pad_t + i * cell_h
+        parts.append(_text(pad_l - 12, ry + cell_h / 2 + 4, row, 12, _FG, "end"))
+        for j, col in enumerate(col_labels):
+            cx = pad_l + j * cell_w
+            value = cells.get((row, col))
+            if value is None:
+                parts.append(_rect(cx + 2, ry + 2, cell_w - 4, cell_h - 4, _GRID))
+                parts.append(_text(cx + cell_w / 2, ry + cell_h / 2 + 4, "N/A", 10, _MUTED, "middle"))
+            else:
+                t: float = (math.log10(value) - lo) / span
+                parts.append(_rect(cx + 2, ry + 2, cell_w - 4, cell_h - 4, _heat_color(t)))
+                parts.append(_text(cx + cell_w / 2, ry + cell_h / 2 + 4, _fmt_ns(value), 11, "#0d1117", "middle"))
+    # Color legend (fast → slow).
+    leg_y: float = height - 30
+    for k in range(40):
+        lx: float = pad_l + k * 4
+        parts.append(_rect(lx, leg_y, 4, 10, _heat_color(k / 39)))
+    parts.append(_text(pad_l - 8, leg_y + 9, "faster", 9, _MUTED, "end"))
+    parts.append(_text(pad_l + 40 * 4 + 8, leg_y + 9, "slower", 9, _MUTED, "start"))
+    parts.append(_text(24, height - 10, note, 9, _MUTED, "start"))
+    out.write_text(_svg(width, height, "".join(parts)))
+
+
 # ─── charts ───────────────────────────────────────────────────────────────────
 
 
@@ -244,8 +331,8 @@ def chart_counter_inc(criterion_dir: Path, out: Path) -> None:
     ]
     _chart_hbar_linear(
         out,
-        "counter_inc — per-call cost (lower is better)",
-        "same 1,000,000x loop, inc reached a different way each bar",
+        "What does a safe plugin call cost?",
+        "counter_inc — the same 1,000,000-call loop, reaching the function a different way each bar (lower is better)",
         rows,
     )
 
@@ -263,15 +350,15 @@ def chart_dispatch_by_shape(criterion_dir: Path, out: Path) -> None:
     ]
     _chart_hbar_linear(
         out,
-        "Dispatch cost by argument shape (lower is better)",
-        "scalar args are ~free; a buffer fill and a cross-plugin lookup add real work",
+        "What you pass changes the cost",
+        "a plain number is almost free; a 4 KB buffer or a fresh plugin lookup adds real work (lower is better)",
         rows,
     )
 
 
 def chart_payload_scaling(criterion_dir: Path, out: Path) -> None:
     """Native vs polyplug per-call cost across payload sizes (log-y lines)."""
-    sizes: list = [0, 16, 64, 256, 1024, 4096, 16384]
+    sizes: list = [0, 16, 64, 256, 1024, 4096, 16384, 65536, 262_144, 1_048_576]
     series: list = [
         ("native_direct", "native (static)", _NEUTRAL),
         ("polyplug_dispatch", "polyplug dispatch", _HILITE),
@@ -282,18 +369,18 @@ def chart_payload_scaling(criterion_dir: Path, out: Path) -> None:
     }
     _chart_lines(
         out,
-        "payload_scaling — overhead vanishes as work grows",
-        "per-call cost vs bytes written (log scale); the lines converge",
-        sizes,
+        "The more work a call does, the less the call cost matters",
+        "per-call cost vs bytes the plugin writes (log scale) — the two lines meet as the payload grows",
+        [_fmt_bytes(n) for n in sizes],
         series,
         data,
-        "payload (bytes)",
+        "payload written per call",
     )
 
 
 def chart_marshalling(criterion_dir: Path, out: Path) -> None:
     """Borrowed view vs owned copy return cost across payload sizes (log-y lines)."""
-    sizes: list = [16, 256, 4096, 16384]
+    sizes: list = [16, 64, 256, 1024, 4096, 16384, 65536, 262_144, 1_048_576]
     series: list = [
         ("borrowed", "borrowed view (zero-copy)", _HILITE),
         ("owned", "owned copy (host alloc + memcpy)", _SLOW),
@@ -304,12 +391,12 @@ def chart_marshalling(criterion_dir: Path, out: Path) -> None:
     }
     _chart_lines(
         out,
-        "Return marshalling — borrowed view vs owned copy",
-        "per-call cost vs payload bytes (log scale); borrowed is flat, owned scales",
-        sizes,
+        "Returning data: borrow it (free) or copy it (grows)",
+        "return cost vs payload bytes, 16 B → 1 MB (log scale) — a borrowed view is flat; an owned copy scales with size",
+        [_fmt_bytes(n) for n in sizes],
         series,
         data,
-        "payload (bytes)",
+        "data returned per call",
     )
 
 
@@ -323,15 +410,16 @@ def chart_native_round_trip(criterion_dir: Path, out: Path) -> None:
     cached); the only thing that grows the cost is copying data out.
     """
     rows: list = [
-        ("scalar return (u32) — the inc() round trip", per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch"), _HILITE),
+        ("scalar return (a number)", per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch"), _HILITE),
         ("borrowed view return (256 B)", per_call_ns(criterion_dir, "marshalling/borrowed/256"), _HILITE),
+        ("borrowed view return (1 MB)", per_call_ns(criterion_dir, "marshalling/borrowed/1048576"), _HILITE),
         ("owned copy return (256 B)", per_call_ns(criterion_dir, "marshalling/owned/256"), _SLOW),
-        ("owned copy return (16 KB)", per_call_ns(criterion_dir, "marshalling/owned/16384"), _SLOW),
+        ("owned copy return (1 MB)", per_call_ns(criterion_dir, "marshalling/owned/1048576"), _SLOW),
     ]
     _chart_hbar_log(
         out,
-        "Native round trip  (host → guest → return)",
-        "Rust host, pre-resolved interface; cost by what the guest returns (log scale)",
+        "A full call-and-return, by what comes back",
+        "Rust app, plugin already looked up — cost depends only on what the plugin hands back (log scale)",
         rows,
         "The round trip itself is ~2 ns — resolve is cached, dispatch is one indirect call. "
         "The only thing that grows the cost is copying data out: borrowed zero-copy views stay "
@@ -348,8 +436,8 @@ def chart_amortization(criterion_dir: Path, out: Path) -> None:
     ]
     _chart_hbar_log(
         out,
-        "Amortized one-time costs  (pay once, not per call)",
-        "log scale — these happen at load/reload, never on the dispatch hot path",
+        "One-time setup costs (paid once, not per call)",
+        "loading / looking up / hot-reloading a plugin — log scale; none of these touch the per-call hot path",
         rows,
         "find+resolve is the only one a caller might repeat — and it is ~20 ns (a HashMap hit). "
         "Load and reload are dominated by the OS dlopen/mmap, not polyplug; see PROFILING.md.",
@@ -391,8 +479,8 @@ def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
     ]
     _chart_hbar_log(
         out,
-        "Guest dispatch by language  (runtime → plugin)",
-        "warm steady-state per-call cost, log scale — lower is better",
+        "Calling into a plugin, by plugin language",
+        "warm per-call cost the runtime pays to run a plugin written in each language (log scale, lower is better)",
         rows,
         "All bars measured live: native from counter_inc; .NET/Lua/Python/JS from each loader's "
         "warm cached-dispatch bench. Python additionally pays a one-time ~12 µs GIL acquire + compile "
@@ -400,50 +488,60 @@ def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
     )
 
 
-def _read_roundtrip(path: Path) -> dict:
-    """Parse `<lang> <ns>` lines written by examples/hosts/roundtrip_bench.sh."""
+def _read_matrix(path: Path) -> dict:
+    """Parse `<host> <guest> <ns>` lines from examples/hosts/roundtrip_bench.sh."""
     data: dict = {}
-    if path.exists():
-        for line in path.read_text().splitlines():
-            parts: list = line.split()
-            if len(parts) == 2:
-                try:
-                    data[parts[0]] = float(parts[1])
-                except ValueError:
-                    continue
+    for line in path.read_text().splitlines():
+        parts: list = line.split()
+        if len(parts) == 3:
+            try:
+                data[(parts[0], parts[1])] = float(parts[2])
+            except ValueError:
+                continue
     return data
 
 
-def chart_cross_language_roundtrip(criterion_dir: Path, out: Path) -> None:
-    """Full end-to-end round trip (host -> runtime -> native guest -> return), by host language.
+# Display names + axis order for the cross-language matrix. Hosts down the rows,
+# guests across the columns; C# appears as a host but has no built guest bundle.
+_LANG_LABEL: dict = {
+    "rust": "Rust",
+    "cpp": "C++",
+    "csharp": "C#",
+    "lua": "Lua",
+    "js": "JavaScript",
+    "python": "Python",
+}
+_MATRIX_HOSTS: list = ["rust", "cpp", "csharp", "python", "lua", "js"]
+_MATRIX_GUESTS: list = ["rust", "cpp", "csharp", "lua", "js", "python"]
 
-    Reads measured numbers from roundtrip.txt next to the SVG (produced by
-    examples/hosts/roundtrip_bench.sh). If that file is absent, the existing
-    committed SVG is left untouched so a criterion-only `bench-charts` run does
-    not blank it.
+
+def chart_cross_language_matrix(data_path: Path, out: Path) -> None:
+    """Full host × guest round-trip heatmap, measured end to end.
+
+    Reads `<host> <guest> <ns>` rows produced by examples/hosts/roundtrip_bench.sh.
+    Each cell is one host language calling a guest plugin of another language and
+    reading the result back — every combination, color-coded by speed.
     """
-    data: dict = _read_roundtrip(out.parent / "roundtrip.txt")
-    spec: list = [
-        ("rust", "Rust (links the crate)", _HILITE),
-        ("cpp", "C++ (native)", _HILITE),
-        ("csharp", "C# (CLR)", _HILITE),
-        ("lua", "Lua (LuaJIT FFI)", _NEUTRAL),
-        ("python", "Python (ctypes)", _SLOW),
-        ("js", "JavaScript (Deno FFI)", _SLOW),
-    ]
-    rows: list = [(label, data[key], color) for key, label, color in spec if key in data]
-    if not rows:
-        print(f"  skip {out.name}: no roundtrip.txt (run examples/hosts/roundtrip_bench.sh)", file=sys.stderr)
+    raw: dict = _read_matrix(data_path)
+    row_labels: list = [_LANG_LABEL[h] for h in _MATRIX_HOSTS]
+    col_labels: list = [_LANG_LABEL[g] for g in _MATRIX_GUESTS]
+    cells: dict = {}
+    for host in _MATRIX_HOSTS:
+        for guest in _MATRIX_GUESTS:
+            cells[(_LANG_LABEL[host], _LANG_LABEL[guest])] = raw.get((host, guest))
+    if not any(v is not None for v in cells.values()):
+        print(f"  skip {out.name}: no matrix data in {data_path}", file=sys.stderr)
         return
-    rows.sort(key=lambda r: r[1])
-    _chart_hbar_log(
+    _chart_heatmap(
         out,
-        "Cross-language round trip  (host → guest → return)",
-        "each host language calls a native guest's decode() and reads the string back — log scale",
-        rows,
-        "Full end-to-end round trip per HOST language, native guest held constant — so the only "
-        "variable is the host's binding cost. Compiled hosts (Rust/C++/C#) are ~80-100 ns; dynamic "
-        "hosts pay their per-call marshalling. Local-only; see examples/hosts/roundtrip_bench.sh.",
+        "Call cost: any app language × any plugin language",
+        "one host calls one plugin's decode() and reads the string back — full round trip, lower is better",
+        col_labels,
+        row_labels,
+        cells,
+        "Each cell is measured end to end (build the argument, call, read the returned string). "
+        "Compiled hosts (Rust/C++/C#) add a small constant; scripted hosts pay per-call marshalling. "
+        "C# has no built guest bundle yet (N/A column). Local-only; see examples/hosts/roundtrip_bench.sh.",
     )
 
 
@@ -459,8 +557,8 @@ def chart_cross_language_host(criterion_dir: Path, out: Path) -> None:
     ]
     _chart_hbar_log(
         out,
-        "Host call overhead by language  (host → runtime)",
-        "per-call FFI cost to reach the runtime, log scale — lower is better",
+        "Reaching the runtime, by app language",
+        "per-call cost for an app in each language to cross into the runtime (log scale, lower is better)",
         rows,
         "A Rust host links libpolyplug directly — there is no FFI boundary, so it is "
         "the floor. C++/Lua/JS are the fast FFI end; Python's dynamic FFI is the cost "
@@ -476,20 +574,28 @@ def main() -> int:
     parser.add_argument("criterion_dir", type=Path, help="target/criterion")
     parser.add_argument("out_dir", type=Path, help="directory to write SVGs into")
     parser.add_argument(
-        "--roundtrip-only",
-        action="store_true",
-        help="render only the cross-language round-trip chart from roundtrip.txt "
-        "(no criterion data required — used by examples/hosts/roundtrip_bench.sh)",
+        "--matrix",
+        type=Path,
+        metavar="DATAFILE",
+        help="render ONLY the cross-language matrix from a `<host> <guest> <ns>` "
+        "data file (no criterion data required — used by examples/hosts/roundtrip_bench.sh)",
     )
     args = parser.parse_args()
 
     criterion_dir: Path = args.criterion_dir
     out_dir: Path = args.out_dir
-    roundtrip_only: bool = args.roundtrip_only
-    if not roundtrip_only and not criterion_dir.is_dir():
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Matrix mode: the data comes from a live host×guest sweep, not criterion, so
+    # it renders on its own and never touches the criterion-sourced charts.
+    if args.matrix is not None:
+        chart_cross_language_matrix(args.matrix, out_dir / "cross_lang_matrix.svg")
+        print(f"wrote {out_dir / 'cross_lang_matrix.svg'}")
+        return 0
+
+    if not criterion_dir.is_dir():
         print(f"error: {criterion_dir} is not a directory (run cargo bench first)", file=sys.stderr)
         return 1
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     charts: list = [
         ("counter_inc.svg", chart_counter_inc),
@@ -500,10 +606,7 @@ def main() -> int:
         ("amortization.svg", chart_amortization),
         ("cross_lang_guest.svg", chart_cross_language_guest),
         ("cross_lang_host.svg", chart_cross_language_host),
-        ("cross_lang_roundtrip.svg", chart_cross_language_roundtrip),
     ]
-    if roundtrip_only:
-        charts = [("cross_lang_roundtrip.svg", chart_cross_language_roundtrip)]
     for name, render in charts:
         target: Path = out_dir / name
         try:

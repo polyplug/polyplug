@@ -605,11 +605,12 @@ bench-check threshold="1.5":
 bench-all: bench bench-charts
     @echo "=== Benchmarks + charts refreshed ==="
 
-# Measure the cross-language round trip (host -> runtime -> native guest -> return)
-# for every available host language, then refresh cross_lang_roundtrip.svg.
-# Requires the workspace + example plugins built (just build-examples).
-bench-roundtrip iters="500000":
-    @echo "=== Cross-language round-trip bench ({{iters}} iters/host) ==="
+# Measure the cross-language round-trip MATRIX (every host language × every guest
+# plugin language: host -> runtime -> guest -> return) and refresh
+# cross_lang_matrix.svg. Requires the workspace + example plugins built
+# (just build-examples). 30 cells; lower iters keeps the sweep quick.
+bench-roundtrip iters="200000":
+    @echo "=== Cross-language round-trip matrix ({{iters}} iters/cell) ==="
     POLYPLUG_BENCH_ITERS={{iters}} bash examples/hosts/roundtrip_bench.sh
 
 # Flamegraph-profile a single benchmark (requires cargo-flamegraph + perf).

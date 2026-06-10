@@ -49,22 +49,52 @@ by **two separate charts** that must not be added together bar-for-bar:
 
 | Boundary | Direction | What it costs | Chart |
 |---|---|---|---|
-| **Host call overhead** | host language → runtime | the FFI entry an app pays to *reach* the runtime (zero for a Rust host that links the crate) | [Host Call Overhead by Language](#host-call-overhead-by-language) |
-| **Guest dispatch** | runtime → guest plugin | the runtime *dispatching into* a plugin written in language Y (native indirect call, or a VM hop) | [Guest Dispatch by Language](#guest-dispatch-by-language) |
+| **Reaching the runtime** | your app → runtime | the cost for an app to *call into* the runtime (zero for a Rust app that links the crate) | [Reaching the runtime](#reaching-the-runtime-host-call-overhead) |
+| **Calling into a plugin** | runtime → plugin | the cost for the runtime to *run* a plugin written in language Y (a direct call, or a hop into a language VM) | [Calling into a plugin](#calling-into-a-plugin-guest-dispatch) |
 
-They are named differently on purpose: the host side pays a per-call **FFI
-overhead** to cross into native code, while the runtime side performs the actual
-**dispatch** into the plugin. The end-to-end round trip = host overhead + dispatch
-+ whatever it costs to return the result (see [Native Round Trip](#native-round-trip)).
+The two are different on purpose: your app pays a small cost to cross into the
+runtime, and the runtime pays a separate cost to call the plugin. A full
+"call a plugin and get the answer back" = reach the runtime + call the plugin +
+hand the result back (see [A full call and return](#a-full-call-and-return-native-round-trip)).
+The complete picture for every language combination is the
+[cross-language matrix](#call-cost-for-any-language-combination).
 
 ---
 
-## Host Call Overhead by Language
+## How to read these charts
 
-This is the **host → runtime** direction: how much it costs an application
-written in each language to *call into* the runtime over FFI.
+If you only remember one thing: **lower is better — every number is the time one
+call takes.** A few extra pointers so nothing here is mysterious:
 
-![host call overhead by language](assets/benches/cross_lang_host.svg)
+- **The units.** `ns` is a *nanosecond* — a billionth of a second. `µs` is a
+  *microsecond* = 1,000 ns. `ms` is a *millisecond* = 1,000 µs. For scale: a
+  ~2 ns call means **~500 million calls per second**; a ~13 µs call is still
+  ~75,000 per second.
+- **"Lower is better."** Bars and cells show how long a call takes, so a shorter
+  bar (or a greener cell) is faster.
+- **What is a *log scale*?** Some charts span a huge range — native calls are
+  ~2 ns while a Python call is ~13,000 ns. On a normal (*linear*) axis, equal
+  steps mean equal *amounts* (10, 20, 30…), so the fast bars would shrink to
+  invisible slivers next to the slow ones. A **log scale** makes equal steps mean
+  equal *multiples* instead (1 → 10 → 100 → 1,000…), so everything is readable at
+  once. The catch: a bar that *looks* twice as long is **10× slower, not 2×** —
+  so read the number printed on the bar, and treat the axis as "orders of
+  magnitude," not "twice as far = twice as slow."
+- **Trust the ratios, not the exact nanoseconds.** Every number here is from one
+  developer machine. The *ordering* and the *gaps* between bars are stable; the
+  absolute ns will shift on your hardware. Re-run on a quiet machine to get your
+  own numbers (each section says how).
+
+---
+
+## Reaching the runtime (host call overhead)
+
+This is the **your app → runtime** direction: how much it costs an application
+written in each language to *call into* the runtime. (The technical name is
+"host call overhead" — the per-call FFI cost to cross into the runtime's native
+code.)
+
+![reaching the runtime — per-call cost by app language](assets/benches/cross_lang_host.svg)
 
 | Language | Backend | Call Overhead | Speedup vs Python ctypes |
 |----------|---------|---------------|--------------------------|
@@ -79,11 +109,10 @@ A Rust host is the floor: it links `libpolyplug` as a normal crate and calls its
 methods directly, so there is **no FFI boundary to cross** — the only cost is the
 operation itself. Every other language reaches the runtime through the C ABI.
 
-> The **other** direction — the runtime *dispatching into* a guest plugin
-> written in each language — is charted under
-> [Guest Dispatch by Language](#guest-dispatch-by-language) below. Host-call and
-> guest-dispatch are different boundaries; don't compare a bar from one chart to
-> a bar from the other.
+> The **other** direction — the runtime *calling into* a plugin written in each
+> language — is charted under
+> [Calling into a plugin](#calling-into-a-plugin-guest-dispatch) below. These are
+> different boundaries; don't compare a bar from one chart to a bar from the other.
 
 ### Why the Differences?
 
@@ -347,70 +376,95 @@ call" pattern (nobody does this in a loop) is measured separately by
 `contract_dispatch::bench_dispatch_cross_plugin`.
 
 > **Regenerating these charts.** All SVGs are committed under
-> `docs/assets/benches/` and rebuilt locally — never in CI — from a criterion
-> run. The guest-by-language chart reads every loader's bar live, so run the
-> loader crates too:
+> `docs/assets/benches/` and rebuilt locally — never in CI. Most are drawn from a
+> criterion run; the guest-by-language chart reads every loader's bar live, so run
+> the loader crates too:
 > ```bash
 > cargo bench -p polyplug -p polyplug_lua -p polyplug_js \
 >     -p polyplug_python -p polyplug_dotnet            # produces target/criterion
 > python3 scripts/gen_bench_charts.py target/criterion docs/assets/benches
 > ```
-> Run benches on a quiet machine and trust the **ratios**, not the absolute ns.
+> The one exception is the [cross-language matrix](#call-cost-for-any-language-combination),
+> which is measured by running the host examples rather than criterion. Refresh it
+> with `just bench-roundtrip` (it renders `cross_lang_matrix.svg` straight from the
+> live run — no committed data file). Run benches on a quiet machine and trust the
+> **ratios**, not the absolute ns.
 
 ---
 
-## Native Round Trip
+## A full call and return (native round trip)
 
-`counter_inc` above measures the flat scalar round trip — a Rust host, interface
-already resolved, dispatching `inc()` into a native guest and reading a `u32`
-back, ~2 ns/call. The picture extends cleanly to calls that **return data**:
+`counter_inc` above measures the simplest round trip — a Rust app, plugin already
+looked up, calling `inc()` and reading a number back, ~2 ns/call. The picture
+extends cleanly to calls that **return data**:
 
-![native round trip by return type](assets/benches/native_round_trip.svg)
+![a full call and return, by what comes back](assets/benches/native_round_trip.svg)
 
-The round trip itself stays ~2 ns — `resolve` is cached (retire-not-drop) and
-dispatch is one indirect call. What grows the cost is **what you return**:
+The round trip itself stays ~2 ns — the plugin is already looked up, and the call
+is one jump. What grows the cost is **what comes back**:
 
-- **scalar / borrowed view** — flat ~2 ns. A borrowed `StringView` (`&str` /
-  `string_view` / `ReadOnlySpan` / `memoryview`) aliases the guest's own memory,
-  so there is nothing to allocate or copy regardless of size.
-- **owned copy** — a host allocation plus a `memcpy` that scales with the payload
-  (~11 ns at 256 B → ~158 ns at 16 KB).
+- **a number, or a borrowed view** — flat ~2 ns, *regardless of size*. A borrowed
+  view points straight at the plugin's own memory, so there is nothing to allocate
+  or copy. (In each language that view is `&str`/`&[u8]` in Rust, `string_view`
+  in C++, `ReadOnlySpan` in C#, `memoryview` in Python — see the
+  [borrow-vs-copy](#returning-data-borrow-vs-copy) section.)
+- **an owned copy** — a fresh allocation plus a byte-copy that grows with the
+  payload (~12 ns at 256 B, climbing to ~20 µs at 1 MB).
 
-So for a native host, "call a plugin and get data back" is ~2 ns plus the cost of
-*owning* the result — and you only pay that when you ask for an owned copy.
+So for a native app, "call a plugin and get data back" is ~2 ns plus the cost of
+*owning* the result — and you only pay that when you ask for your own copy.
 
-### Cross-language round trip (measured)
+---
 
-The full picture, measured end to end: each **host** language calls the same
-native `decoder` guest's `decode("name,value,42")` in a loop and reads the
-string back. The guest is held constant (a native Rust cdylib), so the only thing
-that varies between bars is the host language's binding cost.
+## Call cost for any language combination
 
-![cross-language round trip by host language](assets/benches/cross_lang_roundtrip.svg)
+The headline question: **if I write my app in language X and my plugin in language
+Y, what does one call cost?** This grid measures every combination end to end —
+each cell is one host language calling a plugin of one guest language, building the
+argument, making the call, and reading the returned string back.
 
-| Host language | Round trip | What dominates |
-|---|---|---|
-| **Rust** | ~80 ns | links `libpolyplug`, no FFI; the floor |
-| **C++** | ~85 ns | native call through the generated caller |
-| **C#** | ~105 ns | CLR interop + marshalling |
-| **Lua** | ~1.6 µs | LuaJIT FFI + generated caller |
-| **Python** | ~5.2 µs | ctypes per-call marshalling |
-| **JavaScript** | ~13 µs | Deno FFI + V8 marshalling per call |
+![call cost for any app language × any plugin language](assets/benches/cross_lang_matrix.svg)
 
-The compiled hosts (Rust / C++ / C#) land within a small constant of each other —
-~80–105 ns for a *real string-returning contract call* through the generated
-caller (more than the ~2 ns bare dispatch above, because this is a full
-caller + dispatch + string-return path, not a single indirect call). The dynamic
-hosts pay their per-call marshalling, which dwarfs the dispatch itself.
+**How to read it:** rows are the **app** (host) language, columns are the **plugin**
+(guest) language. Each cell is the time for one full call-and-return — greener is
+faster, redder is slower (the scale spans nanoseconds to microseconds, so cells are
+colored by order of magnitude). Find your app language down the left, your plugin
+language across the top, and read the cell where they meet.
 
-> These numbers are **larger** than the [Host Call Overhead](#host-call-overhead-by-language)
-> chart's: that one isolates a *single bare FFI call*, while this is the *whole
-> contract round trip* (build the arg, dispatch, read the returned string). Both
-> are honest — they just measure different things.
+What the grid shows:
 
-Reproduce locally with `examples/hosts/roundtrip_bench.sh` — it builds a
-native-only plugin set, runs each available host in a timed loop, and writes
-`docs/assets/benches/roundtrip.txt` for `scripts/gen_bench_charts.py`.
+- **The app language sets the floor.** Compiled apps (Rust / C++ / C#) add only a
+  small constant per call; scripted apps (Lua / Python / JS) pay their own per-call
+  marshalling, which dominates everything else in the row.
+- **A native plugin (Rust / C++) is the fastest column** — a direct call with no
+  language VM. Lua / JS / Python plugins add their interpreter's cost on top.
+- **The two effects stack.** A Rust app calling a Rust plugin is the green corner;
+  the scripted-app rows are the red end. Most real setups land in between, and the
+  grid tells you exactly where.
+
+Two sets of cells are **N/A**, for two different reasons:
+
+- **The C# plugin column** — there is no built C# guest bundle in
+  `examples/plugins`, and the host examples don't register the .NET loader. C#
+  works fine as an *app* (it has a full row); it just isn't wired as a *plugin* yet.
+- **The JS app × VM-plugin cells** (JS app calling a Lua / JS / Python plugin) —
+  the plugin *loads*, but the JavaScript (Deno) host SDK can currently only call
+  **native** plugins; it does not yet route a call into a VM-language plugin
+  through the runtime. Every other app language (Rust / C++ / C# / Lua / Python)
+  calls VM plugins fine, so this is a gap in the JS host SDK, not the runtime.
+
+> This grid measures the **whole** call (argument in, call, string back), so its
+> numbers are larger than the single-boundary charts above — the
+> [reaching-the-runtime](#reaching-the-runtime-host-call-overhead) chart isolates
+> one bare FFI call, and [calling-into-a-plugin](#calling-into-a-plugin-guest-dispatch)
+> isolates one dispatch. This grid is both of those plus the string return, for
+> every pairing. All three are honest; they just measure different slices.
+
+Reproduce locally with `just bench-roundtrip` (or
+`examples/hosts/roundtrip_bench.sh`): for each guest language it builds a
+single-language plugin set, runs every available host against it in a timed loop,
+and renders `cross_lang_matrix.svg` directly — there is no committed data file, the
+chart is regenerated from the live run.
 
 ---
 
@@ -453,6 +507,46 @@ If your hot path is truly performance-critical, consider C++ or Lua.
 
 ---
 
+## Returning data: borrow vs copy
+
+When a plugin hands data back, there are two ways to do it, and they cost very
+different amounts:
+
+- **Borrow it (zero-copy).** The plugin returns a *view* that points straight at
+  its own memory — nothing is allocated, nothing is copied. This is **flat ~2 ns
+  no matter how big the data is**, because the bytes never move.
+- **Copy it (owned).** The plugin allocates fresh memory and copies the bytes in,
+  so the caller gets its own independent copy. That allocation + byte-copy **grows
+  with the size** — cheap for a few bytes, real work for a megabyte.
+
+![returning data: borrow it (free) or copy it (grows)](assets/benches/marshalling.svg)
+
+The borrowed line is flat across the whole sweep (16 B → 1 MB); the owned line
+climbs with the payload. Borrowed views are the default for returns in every
+language — you only pay the copy cost when you explicitly ask to own the data.
+
+### "Borrowed view", in each language
+
+A *borrowed view* is the same idea — a pointer + length aliasing the plugin's
+bytes — surfaced as each language's own zero-copy type. There are two underlying
+ABI shapes: `StringView` for UTF-8 text and `Buffer` for raw bytes. They are not
+six different things; they are one borrow, named six ways:
+
+| ABI shape | Rust | C++ | C# | Python | JavaScript |
+|---|---|---|---|---|---|
+| `StringView` (UTF-8 text) | `&str` | `std::string_view` | `ReadOnlySpan<byte>` | `memoryview` | `Uint8Array` view |
+| `Buffer` (raw bytes) | `&[u8]` | `span` / pointer+len | `ReadOnlySpan<byte>` | `memoryview` | `Uint8Array` view |
+
+> **`memoryview` vs `Buffer` are not two different costs.** `Buffer` is the
+> ABI-level type (a pointer + length); `memoryview` is simply *Python's* zero-copy
+> window onto that same `Buffer`. Same memory, no copy — just Python's name for
+> borrowing it. The cost is the flat "borrowed" line above, in every language.
+
+The mechanism that lets *VM* plugins (JS / Lua) return data with the same
+zero-allocation property is the **call arena**, below.
+
+---
+
 ## Call Arena (zero-allocation returns for VM guests)
 
 ### What it is
@@ -477,14 +571,10 @@ return path into a pointer increment, removing the allocator round trip from hot
 dispatch loops. For a 10,000-iteration echo loop the integration tests assert the
 host allocator is hit **zero** times after warmup.
 
-![borrowed view vs owned copy return cost](assets/benches/marshalling.svg)
-
-The same trade-off measured directly (native path, `contract_dispatch`'s
-`marshalling` group): returning a **borrowed view** of caller-owned bytes is flat
-at ~1.8 ns regardless of payload size, while an **owned copy** pays a host
-allocation plus a `memcpy` that grows with the payload. Borrowed zero-copy returns
-(`&str` / `string_view` / `ReadOnlySpan` / `memoryview`) are the default for
-native guests; the arena gives VM guests the same zero-allocation property.
+This is what gives *VM* plugins the same flat, zero-allocation return cost shown in
+[Returning data: borrow vs copy](#returning-data-borrow-vs-copy) above: native
+plugins borrow their own memory directly, and the arena lets a JS or Lua plugin
+write its return into a caller-owned region instead of allocating per value.
 
 ### Lifetime rule
 
@@ -592,14 +682,15 @@ Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
 
 ---
 
-## Guest Dispatch by Language
+## Calling into a plugin (guest dispatch)
 
-This is the **runtime → guest** direction: how much it costs the runtime to
-*dispatch into* a plugin written in each language. (The reverse direction —
-host calling into the runtime — is [Host Call Overhead by Language](#host-call-overhead-by-language)
-far above.)
+This is the **runtime → plugin** direction: how much it costs the runtime to
+*run* a plugin written in each language. (The technical name is "guest dispatch."
+The reverse direction — your app calling into the runtime — is
+[Reaching the runtime](#reaching-the-runtime-host-call-overhead) far above. And the *whole* call, for every language pairing, is the
+[cross-language matrix](#call-cost-for-any-language-combination).)
 
-![guest dispatch cost by language](assets/benches/cross_lang_guest.svg)
+![calling into a plugin — per-call cost by plugin language](assets/benches/cross_lang_guest.svg)
 
 **Every bar is read live from criterion** — native from the `counter_inc` run,
 and each VM from its loader's warm steady-state dispatch bench below (`.NET`
@@ -695,21 +786,24 @@ a `find_guest_contract` + `resolve_guest_contract` registry lookup before dispat
 
 ---
 
-## Amortized Costs (load / resolve / reload)
+## One-time setup costs (paid once)
 
-Everything above is the **per-call** hot path. The one-time costs — loading a
-bundle, resolving a handle, hot-reloading — are paid once and amortized over
-every subsequent dispatch. The `amortization` bench measures them:
+Everything above is the **per-call** cost. The setup costs — loading a plugin,
+looking it up, hot-reloading — happen *once* and are then spread across every
+later call, so they never touch the hot path. (The technical name for "spread a
+one-time cost across many calls" is *amortization*; that's what the `amortization`
+bench measures.)
 
-![amortized one-time costs](assets/benches/amortization.svg)
+![one-time setup costs, paid once](assets/benches/amortization.svg)
 
-- **find + resolve (~20 ns)** is the only one a caller might repeat — and it is a
-  `HashMap` lookup plus a pointer read. Resolve once and reuse the pointer (see
+- **look up a plugin (~20 ns)** is the only one a caller might repeat — and it is a
+  `HashMap` lookup plus a pointer read. Look it up once and reuse the result (see
   [Optimization Tips](#optimization-tips)) and even this disappears from the loop.
-- **load bundle (~13 µs)** and **hot-reload swap (~17 µs)** are dominated by the
-  OS `dlopen`/`mmap`, not by polyplug code — a flamegraph of the load path shows
-  our own frames under 1% (see [PROFILING.md](./PROFILING.md)). The only lever is
-  doing *fewer* loads, which the retire-not-drop model already does.
+- **load a plugin (~13 µs)** and **hot-reload swap (~17 µs)** are dominated by the
+  operating system loading the shared library (`dlopen`/`mmap`), not by polyplug
+  code — a flamegraph of the load path shows our own frames under 1% (see
+  [PROFILING.md](./PROFILING.md)). The only lever is doing *fewer* loads, which the
+  retire-not-drop model already does.
 
 ## See Also
 

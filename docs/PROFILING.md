@@ -24,8 +24,8 @@ optimizing lives elsewhere.
 | Path | Bench to profile | Expected flamegraph shape | Optimization headroom |
 |---|---|---|---|
 | **Native dispatch** (the hot path) | `counter_inc`, `contract_dispatch` | A *thin tower*: ~3 instructions (load args ptr, indirect call, write out ptr). Almost all time is the `black_box` loop itself. | **Near zero.** ~2.3 ns/call, within an L1 hit of raw FFI. Don't optimize this without a workload proving it matters. |
-| **Marshalling / payload** | `payload_scaling` | The byte-fill loop dominates; the dispatch frame is a sliver on top. | Low — the boundary cost is fixed and already vanishes under real work. |
-| **Load / resolve / reload** | `amortization` | Wide: `dlopen`, symbol resolution, `polyplug_init`, manifest parse, registry insert. **This is where the area is** (~14 µs load). | **Highest.** One-time, but the biggest single cost in the system. |
+| **Passing / returning data** (marshalling) | `payload_scaling`, `contract_dispatch` (`marshalling` group) | The byte-fill / copy loop dominates; the dispatch frame is a sliver on top. | Low — the boundary cost is fixed and already vanishes under real work. |
+| **One-time setup** (load / look-up / reload) | `amortization` | Wide: `dlopen`, symbol resolution, `polyplug_init`, manifest parse, registry insert. **This is where the area is** (~14 µs load). | **Highest.** One-time, but the biggest single cost in the system. |
 | **VM dispatch** | `dispatch_benchmark` in `polyplug_lua` / `_js` / `_python` / `_dotnet` | Dominated by the embedded VM (GIL acquire, context restore, JS call). polyplug's own frames are tiny. | Medium — but most of it is the VM, not us. Measure before assuming we can move it. |
 | **Cross-call (plugin → plugin)** | `contract_dispatch::cross_plugin` | `find_guest_contract` + `resolve_guest_contract` + dispatch, per call. | Low–medium — registry lookup is a `HashMap` hit (~20 ns); only matters if a caller re-resolves in a loop (which it shouldn't). |
 
