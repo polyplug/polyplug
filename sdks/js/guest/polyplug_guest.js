@@ -3,7 +3,8 @@
  * @description Guest library for polyplug JavaScript/TypeScript plugins.
  * 
  * This module provides ABI types and helpers for writing polyplug guest plugins
- * in JavaScript. It works with both QuickJS (js-quickjs) and Deno (js-deno) runtimes.
+ * in JavaScript. Plugins run inside the QuickJS VM embedded by the polyplug JS
+ * loader; all host access goes through the injected `globalThis.polyplug` bridge.
  * 
  * @module polyplug-guest
  */
@@ -46,33 +47,21 @@ export const LogLevel = {
     Trace: 5,
 };
 
-let _hostVtableLo = 0;
-let _hostVtableHi = 0;
-
-export function storeHostVtable(lo, hi) {
-    _hostVtableLo = lo;
-    _hostVtableHi = hi;
-}
-
-export function getHostVtable() {
-    return { lo: _hostVtableLo, hi: _hostVtableHi };
-}
-
 /**
  * A read-only view into a UTF-8 string in the host's address space.
- * 
+ *
  * @typedef {Object} StringView
- * @property {number} ptr_lo - Low 32 bits of the pointer (QuickJS) OR ptr: bigint (Deno)
- * @property {number} ptr_hi - High 32 bits of the pointer (QuickJS only)
+ * @property {number} ptr_lo - Low 32 bits of the pointer
+ * @property {number} ptr_hi - High 32 bits of the pointer
  * @property {number} len - Length in bytes
  */
 
 /**
  * A byte buffer owned by the host allocator.
- * 
+ *
  * @typedef {Object} Buffer
- * @property {number} ptr_lo - Low 32 bits of the pointer (QuickJS) OR ptr: bigint (Deno)
- * @property {number} ptr_hi - High 32 bits of the pointer (QuickJS only)
+ * @property {number} ptr_lo - Low 32 bits of the pointer
+ * @property {number} ptr_hi - High 32 bits of the pointer
  * @property {number} len - Used length in bytes
  * @property {number} cap - Allocated capacity in bytes
  */
@@ -154,44 +143,6 @@ export class DependencyNotFoundError extends Error {
 }
 
 /**
- * Helper class for working with StringView.
- */
-export class StringViewHelper {
-    /**
-     * Create a StringView from a JavaScript string.
-     * 
-     * @param {string} str - The JavaScript string
-     * @returns {StringView} StringView pointing to encoded bytes
-     * 
-     * @example
-     * const sv = StringViewHelper.fromString("hello");
-     */
-    static fromString(str) {
-        const encoder = new TextEncoder();
-        const bytes = encoder.encode(str);
-        return {
-            ptr_lo: bytes,
-            ptr_hi: 0,
-            len: bytes.length
-        };
-    }
-
-    /**
-     * Convert a StringView to a JavaScript string.
-     * 
-     * @param {StringView} sv - The StringView to convert
-     * @returns {string} JavaScript string
-     * 
-     * @example
-     * const str = StringViewHelper.toString(sv);
-     */
-    static toString(sv) {
-        if (!sv || sv.len === 0) return '';
-        return '';
-    }
-}
-
-/**
  * Send a log record to the host's logging funnel (RuntimeConfig log callback,
  * or the host's stderr default).
  *
@@ -226,7 +177,6 @@ export default {
     AbiErrorCode,
     LogLevel,
     DependencyNotFoundError,
-    StringViewHelper,
     log,
     readBytes,
     writeBytes,
@@ -404,22 +354,9 @@ export function toStr(sv) {
     if (!sv || sv.len === 0) {
         return '';
     }
-    // QuickJS: ptr is split into ptr_lo/ptr_hi
-    // Deno: ptr is a bigint
-    let ptr;
-    if (typeof sv.ptr === 'bigint') {
-        // Deno FFI - only use if Deno is available
-        ptr = sv.ptr;
-        if (typeof Deno !== 'undefined' && Deno.UnsafePointerView) {
-            const ptrNum = Number(ptr);
-            return new Deno.UnsafePointerView(ptrNum).getUtf8String(sv.len);
-        }
-        // Fallback to byte-by-byte read if Deno FFI not available
-    } else {
-        // QuickJS: reconstruct 64-bit pointer from hi/lo split
-        ptr = (BigInt(sv.ptr_hi) << 32n) + BigInt(sv.ptr_lo);
-    }
-    // Read bytes and decode as UTF-8 (without TextDecoder for QuickJS compatibility)
+    // Reconstruct the 64-bit pointer from the QuickJS hi/lo split.
+    const ptr = (BigInt(sv.ptr_hi) << 32n) + BigInt(sv.ptr_lo);
+    // Read bytes and decode as UTF-8 (TextDecoder is absent in QuickJS).
     const bytes = readBytes(ptr, sv.len);
     if (typeof TextDecoder !== 'undefined') {
         return new TextDecoder().decode(bytes);

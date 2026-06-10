@@ -5,7 +5,10 @@
 -- to prevent "already defined" errors when a second plugin calls require().
 
 local ffi = require("ffi")
-local abi = require("polyplug_abi")
+-- Load-bearing: registers the ABI ffi.cdef definitions (StringView, HostApi,
+-- AbiError, ...) that every ffi.new/ffi.cast below depends on. StringView
+-- helpers (to_str, starts_with, ...) also live there — see sdk_validator.yaml.
+require("polyplug_abi")
 
 local M = {}
 
@@ -43,8 +46,6 @@ M.LogLevel = {
     Trace = 5,
 }
 
-M.bundle_id = abi.bundle_id
-
 local _host_interface_ptr = nil
 
 function M.store_host_interface(ptr)
@@ -67,27 +68,8 @@ function M.string_view(s)
     return ffi.new("StringView", { ptr = ffi.cast("const uint8_t*", s), len = #s })
 end
 
--- Decode a StringView (passed by value or as a pointer) into a Lua string.
--- Accepts a StringView cdata or nil (null view). Raises on any other type —
--- most often a Lua string that was already converted (double-conversion), which
--- would otherwise silently yield "" because a Lua string has no `.ptr` field.
-function M.to_str(sv)
-    if sv == nil then
-        return ""
-    end
-    if type(sv) ~= "cdata" then
-        error("polyplug_guest.to_str: expected a StringView cdata (or nil), got a " ..
-            type(sv) .. " — did you already convert it to a Lua string? " ..
-            "Pass the original StringView, not its to_str() result.", 2)
-    end
-    if sv.ptr == nil or sv.len == 0 then
-        return ""
-    end
-    return ffi.string(sv.ptr, sv.len)
-end
-
 -- Allocate a string in HOST memory and return a StringView pointing at it.
--- Cross-boundary data MUST use the host allocator (see AGENTS.md memory rules),
+-- Cross-boundary data MUST use the host allocator (CLAUDE.md rule 8),
 -- so the returned bytes outlive this call and may be handed back to the host.
 function M.alloc_string(s)
     local host_ptr = _host_interface_ptr
@@ -168,11 +150,6 @@ end
 
 function M.err(code, message)
     return ffi.new("AbiError", { code = code, message = M.string_view(message) })
-end
-
-function M.bundle_path_str(ctx)
-    local sv = ctx.bundle_path
-    return ffi.string(sv.ptr, sv.len)
 end
 
 return M

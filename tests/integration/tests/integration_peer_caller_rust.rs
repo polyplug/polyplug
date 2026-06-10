@@ -54,10 +54,11 @@ fn provider_lua_src() -> &'static str {
     r#"
 local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
+local polyplug_abi = require("polyplug_abi")
 
 local function impl_echo(args_ptr, out_ptr)
     local in_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
-    local s = polyplug_guest.to_str(in_sv[0])
+    local s = polyplug_abi.to_str(in_sv[0])
     local result = "PEER:" .. s
     local out_view = polyplug_guest.alloc_string_arena(result)
     local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))

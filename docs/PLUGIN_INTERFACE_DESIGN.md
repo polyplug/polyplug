@@ -60,7 +60,7 @@ VM loaders used **static trampolines** + **global registries**:
 │  }                                                                           │
 │                                                                              │
 │  Issues:                                                                     │
-│  - Global state violates AGENTS.md                                          │
+│  - Global state violates CLAUDE.md                                          │
 │  - Multiple runtimes corrupt each other                                     │
 │  - Registry lookup adds overhead                                            │
 │  - 64 trampoline slots limit                                                │

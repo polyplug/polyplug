@@ -1,9 +1,10 @@
 local ffi = require('ffi')
 local polyplug = require('polyplug_guest')
+local polyplug_abi = require('polyplug_abi')
 local contracts = require('generated.guest.contracts')
 
 local function transform(input)
-    local s = polyplug.to_str(input)
+    local s = polyplug_abi.to_str(input)
     if s:sub(1, 8) == 'DECODED:' then s = s:sub(9) end
     local name, value, count = s:match('^([^|]*)|([^|]*)|([^|]*)$')
     if name and count and tonumber(count) then

@@ -91,10 +91,11 @@ fn provider_src(contract: &str, prefix: &str) -> String {
         r#"
 local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
+local polyplug_abi = require("polyplug_abi")
 
 local function impl_echo(args_ptr, out_ptr)
     local in_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
-    local s = polyplug_guest.to_str(in_sv[0])
+    local s = polyplug_abi.to_str(in_sv[0])
     local out_view = polyplug_guest.alloc_string_arena("{prefix}" .. s)
     local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
     out_sv[0] = out_view
@@ -122,6 +123,7 @@ fn consumer_src(contract: &str, prefix: &str, peer_id: u64, min_version: u32) ->
         r#"
 local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
+local polyplug_abi = require("polyplug_abi")
 
 local PEER_ID = 0x{peer_id:016X}ULL
 
@@ -149,7 +151,7 @@ local function impl_call(args_ptr, out_ptr)
         out_sv[0] = polyplug_guest.alloc_string_arena("{prefix}ERR")
         return
     end
-    local peer_result = polyplug_guest.to_str(peer_out[0])
+    local peer_result = polyplug_abi.to_str(peer_out[0])
     out_sv[0] = polyplug_guest.alloc_string_arena("{prefix}" .. peer_result)
 end
 

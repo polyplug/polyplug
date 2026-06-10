@@ -17,8 +17,9 @@ Per-call state (args, out, arena) is passed explicitly through each dispatch
 call. The one piece of bundle-lifetime state is the ``HostApi`` pointer: it is
 stored once at ``polyplug_init`` time via :func:`store_host_interface` so that
 guest→guest peer callers can resolve a peer through the host without threading
-the pointer through every ``str``-level impl method — exactly as the Lua, JS,
-and C++ guest SDKs do (``get_host_interface`` / ``polyplug::get_host_interface``).
+the pointer through every ``str``-level impl method — exactly as the Lua and
+C++ guest SDKs do (``get_host_interface`` / ``polyplug::get_host_interface``;
+the generated JS init module stores the host vtable the same way).
 This is module-level storage; it is consistent within a single runtime (one
 shared ``HostApi``) and shares the CPython-once-per-process isolation limit the
 Python loader already documents. CLAUDE.md Rule 12 governs *host Runtime* state,

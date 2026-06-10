@@ -624,7 +624,7 @@ fn build_guest_call_expr(contract_lower: &str, func: &ResolvedFunction) -> Strin
     let struct_name: String = format!("{}Args", func_name_cap);
 
     let mut code: String = String::new();
-    // SAFETY comments for generated code are required per AGENTS.md for all unsafe operations
+    // SAFETY comments for generated code are required per CLAUDE.md rule 6 for all unsafe operations
     code.push_str("        // SAFETY: args is a valid const void* pointing to a packed struct layout per ABI contract.\n");
     code.push_str("        // The host guarantees proper alignment and size matching the struct definition below.\n");
     // Inline struct definition

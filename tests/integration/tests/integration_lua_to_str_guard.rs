@@ -1,13 +1,14 @@
-//! Integration test: the Lua guest SDK's `to_str` fails loudly on misuse.
+//! Integration test: the validated Lua `to_str` helper fails loudly on misuse.
 //!
 //! Regression guard for the A3 footgun: `to_str`/`strip_prefix`/`split` used to
 //! silently return `""` when handed an already-converted Lua string instead of a
 //! `StringView` cdata (a Lua string has no `.ptr` field). That silent failure hid
-//! a real bug in three example guests (they returned `INVALID:*`). The SDK now
-//! raises a clear error on non-cdata input.
+//! a real bug in three example guests (they returned `INVALID:*`). The validated
+//! helper (`sdks/lua/abi/abi.lua`, per `sdk_validator.yaml`) now raises a clear
+//! error on non-cdata input.
 //!
 //! This test loads a Lua guest whose function `probe()` `pcall`s
-//! `polyplug_guest.to_str("plain string")` and returns `"RAISED:<msg>"` if it
+//! `polyplug_abi.to_str("plain string")` and returns `"RAISED:<msg>"` if it
 //! errored or `"SILENT:<value>"` if it did not — then asserts the result is
 //! `RAISED:` and names a StringView, proving the loud-failure behavior.
 //!
@@ -37,10 +38,11 @@ fn probe_lua_src() -> &'static str {
     r#"
 local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
+local polyplug_abi = require("polyplug_abi")
 
 local function impl_probe(args_ptr, out_ptr)
     -- Misuse on purpose: a Lua string is NOT a StringView cdata.
-    local ok, err = pcall(polyplug_guest.to_str, "already a Lua string")
+    local ok, err = pcall(polyplug_abi.to_str, "already a Lua string")
     local result
     if ok then
         result = "SILENT:" .. tostring(err)
@@ -104,7 +106,8 @@ fn build_probe_bundle(tmp: &Path) -> PathBuf {
         dir.join("polyplug_abi.lua"),
     )
     .expect("copy polyplug_abi.lua");
-    // Vendor the CURRENT guest SDK (with the hardened to_str), not a stale copy.
+    // Vendor the CURRENT guest SDK (store_host_interface / alloc_string_arena);
+    // the hardened to_str itself lives in the vendored abi module above.
     std::fs::copy(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()

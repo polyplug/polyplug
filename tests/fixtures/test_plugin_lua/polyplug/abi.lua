@@ -34,6 +34,7 @@ ffi.cdef[[
     typedef enum UnloadMode UnloadMode;
     typedef enum RuntimeLanguage RuntimeLanguage;
     typedef enum AbiErrorCode AbiErrorCode;
+    typedef enum LogLevel LogLevel;
     typedef enum ParseVersionError ParseVersionError;
     typedef union DispatchMechanisms DispatchMechanisms;
 
@@ -119,6 +120,7 @@ ffi.cdef[[
     typedef size_t (*HostApi_get_error_len_fn)(const HostApi*);
     typedef AbiError (*HostApi_call_guest_method_fn)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
     typedef AbiError (*HostApi_unload_bundle_fn)(const HostApi*, uint64_t);
+    typedef void (*HostApi_log_fn)(const HostApi*, uint32_t, StringView, StringView);
     //  Host Interface — function table passed to guests during initialization.
     // 
     //  Contains an opaque runtime pointer and function pointers for guest calls.
@@ -371,6 +373,13 @@ ffi.cdef[[
         //  valid. The caller therefore always reaches the current implementation
         //  without invalidating outstanding instances.
         // 
+        //  # Multiple providers
+        //  Routing keys solely on `instance.contract_id`. If more than one live
+        //  provider is registered for that `contract_id`, the target is ambiguous:
+        //  the call returns `AbiErrorCode::DuplicateProvider` and does NOT dispatch
+        //  (see `host_call_guest_method` in `polyplug`). Resolution requires exactly
+        //  one registered provider for the contract.
+        // 
         //  # Arena semantics
         //  `arena` is forwarded unchanged to VM dispatch as its variable-size return
         //  buffer. Native dispatch function pointers carry no arena slot in their
@@ -381,7 +390,7 @@ ffi.cdef[[
         //  # Trust model
         //  There is zero per-call authorization. Trust is established once, at load
         //  time, by declared-dependency verification (a bundle may only resolve the
-        //  contracts it declared) per `TRUST_MODEL.md`. Once a guest legitimately
+        //  contracts it declared) per `docs/TRUST_MODEL.md`. Once a guest legitimately
         //  holds an `instance`, cross-calling it is unrestricted.
         // 
         //  # Arguments
@@ -421,10 +430,32 @@ ffi.cdef[[
         //  `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
         //  or a still-loaded bundle declared a dependency on a contract this bundle provides).
         HostApi_unload_bundle_fn unload_bundle;
+        //  Log a guest diagnostic into the host's logging funnel.
+        // 
+        //  Routes to the same sink as `RuntimeConfig::log`: the host-installed
+        //  callback when one is set, otherwise the stderr default (Error/Warn
+        //  visibility only). `level` is a `LogLevel` discriminant; unknown values
+        //  are clamped to `LogLevel::Error`. `scope` is a short stable tag — guest
+        //  plugins should use `"guest.<plugin-name>"` or similar.
+        // 
+        //  The runtime always provides this function — guests may call it
+        //  unconditionally via the self-passing pattern:
+        //  `host->log(host, level, scope, message)`.
+        // 
+        //  # Ownership
+        //  `scope` and `message` are borrowed views, read only for the duration of
+        //  the call; the runtime copies what it needs. Null/empty views are legal.
+        // 
+        //  # Arguments
+        //  - `this`: HostApi pointer (self-passing)
+        //  - `level`: `LogLevel` discriminant (`1 = Error` .. `5 = Trace`)
+        //  - `scope`: short UTF-8 subsystem tag
+        //  - `message`: UTF-8 log message
+        HostApi_log_fn log;
         //  Reserved. Producers must set this to null; consumers must not read it.
         const void* reserved;
     } HostApi;
-    // Expected size: 160 bytes
+    // Expected size: 168 bytes
 
     //  Opaque handle to a host contract instance.
     // 
@@ -519,14 +550,22 @@ ffi.cdef[[
     // 
     //  Overflow blocks form a singly linked list rooted at `CallArena.first_overflow`.
     //  Each block stores the total `capacity` it was allocated with (including this
-    //  header) so `reset()` can free it with the exact size/align the host expects.
+    //  header) so the arena can free it with the exact size/align the host expects.
+    //  Blocks are **retained across resets** and reused by rewinding `used` back to the
+    //  header size; they are freed only when the arena is dropped.
     typedef struct ArenaOverflowBlock {
         //  Next overflow block in the chain, or null for the last block.
         ArenaOverflowBlock* next;
         //  Total allocated size of this block in bytes, including this header.
         size_t capacity;
+        //  Offset of the next free byte within this block, measured from the block
+        //  start (including this header). Initialized to the header size when the
+        //  block is created; advanced as values are bump-allocated from the block;
+        //  rewound to the header size by [`CallArena::reset`] so the block's capacity
+        //  is reused on the next call without a fresh host allocation.
+        size_t used;
     } ArenaOverflowBlock;
-    // Expected size: 16 bytes
+    // Expected size: 24 bytes
 
     //  Per-call bump allocator handed to a VM dispatch call.
     // 
@@ -534,8 +573,9 @@ ffi.cdef[[
     // 
     //  `#[repr(C)]` with five pointer-sized fields (40 bytes, align 8). The first
     //  three fields define the primary bump region `[base, end)` with `cur` as the
-    //  next free byte. When the primary region is exhausted, `alloc` requests a fresh
-    //  block from `host->alloc`, chains it onto `first_overflow`, and serves from it.
+    //  next free byte. When the primary region is exhausted, `alloc` walks the
+    //  retained overflow chain for a block with spare room; if none fits, it requests
+    //  a fresh block from `host->alloc`, chains it, and serves from it.
     // 
     //  A null `CallArena*` passed to a dispatch function means "no arena": the bridge
     //  falls back to per-value `host->alloc`.
@@ -709,6 +749,23 @@ ffi.cdef[[
         AbiErrorCode_HostContractCallFailed = 102,
     } AbiErrorCode;
 
+    //  Log severity levels for the host-supplied logger callback (`RuntimeConfig::log`).
+    // 
+    //  Numeric ordering is significant: lower values are more severe. A message is
+    //  delivered to the callback only when `level as u32 <= RuntimeConfig::log_max_level`.
+    typedef enum LogLevel {
+        //  Unrecoverable or host-visible failures (e.g. rejected registrations).
+        LogLevel_Error = 1,
+        //  Recoverable anomalies the host should know about (e.g. lock poison recovery).
+        LogLevel_Warn = 2,
+        //  High-level lifecycle events.
+        LogLevel_Info = 3,
+        //  Detailed diagnostic information.
+        LogLevel_Debug = 4,
+        //  Very fine-grained tracing.
+        LogLevel_Trace = 5,
+    } LogLevel;
+
     typedef enum ParseVersionError {
         ParseVersionError_InvalidFormat = 0,
         ParseVersionError_InvalidInt = 1,
@@ -790,6 +847,7 @@ ffi.cdef[[
     // Expected size: 48 bytes
 
     typedef void (*RuntimeConfig_on_reload_fn)(void*, ReloadPhase);
+    typedef void (*RuntimeConfig_log_fn)(void*, uint32_t, StringView, StringView);
     //  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
     // 
     //  # OWNERSHIP
@@ -813,8 +871,42 @@ ffi.cdef[[
         //  Owned by the host that supplies the callback. The runtime never reads,
         //  writes, or frees the pointee — it only forwards the pointer.
         void* on_reload_user_data;
+        //  Optional logger callback, or null for the default behaviour.
+        // 
+        //  The runtime routes every diagnostic message through this callback as
+        //  `(log_user_data, level, scope, message)`, where `level` is a
+        //  [`LogLevel`] discriminant and `scope` is a short stable subsystem tag
+        //  (examples: `"registry"`, `"loader.lua"`, `"reload"`).
+        // 
+        //  # Default (null callback)
+        //  Messages at [`LogLevel::Error`] and [`LogLevel::Warn`] are written to
+        //  stderr; all other levels are dropped. Hosts wanting full silence must
+        //  install a no-op callback.
+        // 
+        //  # Callback contract
+        //  - May be invoked from any thread.
+        //  - Must NOT re-enter the runtime (calling any HostApi / runtime function
+        //    from inside the callback may deadlock).
+        //  - The `scope` and `message` `StringView`s are valid only for the
+        //    duration of the call — copy the bytes to retain them.
+        RuntimeConfig_log_fn log;
+        //  Opaque user-data pointer forwarded to `log` as its first argument.
+        // 
+        //  # Ownership
+        //  Owned by the host that supplies the callback. The runtime never reads,
+        //  writes, or frees the pointee — it only forwards the pointer. The host
+        //  must keep the pointee valid (and safe to use from any thread) for the
+        //  runtime's entire lifetime.
+        void* log_user_data;
+        //  Maximum [`LogLevel`] (as `u32`) delivered to the `log` callback.
+        // 
+        //  Messages with a level value greater than this are skipped before any
+        //  formatting work is performed (zero cost for disabled levels). Ignored
+        //  when `log` is null — the stderr default is always capped at
+        //  [`LogLevel::Warn`].
+        uint32_t log_max_level;
     } RuntimeConfig;
-    // Expected size: 32 bytes
+    // Expected size: 56 bytes
 
     //  ABI error — returned by value from all ABI calls.
     // 
@@ -1030,7 +1122,15 @@ M.POLYPLUG_ABI_VERSION = ffi.cast("uint32_t", 1)
 -- ─── Helper Methods (preserved from helper files) ───
 
 function M.to_str(sv)
-    if not sv or not sv.ptr or sv.len == 0 then
+    if sv == nil then
+        return ""
+    end
+    if type(sv) ~= "cdata" then
+        error("polyplug.to_str: expected a StringView cdata (or nil), got a " ..
+            type(sv) .. " — did you already convert it to a Lua string? " ..
+            "Pass the original StringView, not its to_str() result.", 2)
+    end
+    if sv.ptr == nil or sv.len == 0 then
         return ""
     end
     return ffi.string(sv.ptr, sv.len)

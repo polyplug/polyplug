@@ -5,7 +5,10 @@
 -- to prevent "already defined" errors when a second plugin calls require().
 
 local ffi = require("ffi")
-local abi = require("polyplug_abi")
+-- Load-bearing: registers the ABI ffi.cdef definitions (StringView, HostApi,
+-- AbiError, ...) that every ffi.new/ffi.cast below depends on. StringView
+-- helpers (to_str, starts_with, ...) also live there — see sdk_validator.yaml.
+require("polyplug_abi")
 
 local M = {}
 
@@ -33,7 +36,15 @@ M.DispatchType = {
     VirtualMachine = 1,
 }
 
-M.bundle_id = abi.bundle_id
+-- Log severity levels for M.log, mirroring the ABI LogLevel enum
+-- (LogLevel_Error .. LogLevel_Trace in abi.lua). Lower values are more severe.
+M.LogLevel = {
+    Error = 1,
+    Warn  = 2,
+    Info  = 3,
+    Debug = 4,
+    Trace = 5,
+}
 
 local _host_interface_ptr = nil
 
@@ -57,20 +68,8 @@ function M.string_view(s)
     return ffi.new("StringView", { ptr = ffi.cast("const uint8_t*", s), len = #s })
 end
 
--- Decode a StringView (passed by value or as a pointer) into a Lua string.
--- Accepts either a StringView cdata or its address as an integer/pointer.
-function M.to_str(sv)
-    if sv == nil then
-        return ""
-    end
-    if sv.len == 0 then
-        return ""
-    end
-    return ffi.string(sv.ptr, sv.len)
-end
-
 -- Allocate a string in HOST memory and return a StringView pointing at it.
--- Cross-boundary data MUST use the host allocator (see AGENTS.md memory rules),
+-- Cross-boundary data MUST use the host allocator (CLAUDE.md rule 8),
 -- so the returned bytes outlive this call and may be handed back to the host.
 function M.alloc_string(s)
     local host_ptr = _host_interface_ptr
@@ -127,17 +126,30 @@ function M.alloc_string_arena(s)
     return view
 end
 
+-- Send a log record to the host's logging funnel (RuntimeConfig log callback,
+-- or the host's stderr default).
+--
+-- `level` is one of M.LogLevel (unknown values are clamped to Error by the
+-- loader), `scope` is a short stable tag chosen by the guest — the suggested
+-- convention is "guest.<plugin-name>" — and `message` is delivered verbatim.
+--
+-- The `_polyplug_log` bridge is injected into the VM by the polyplug Lua
+-- loader; outside a polyplug VM (e.g. plain LuaJIT unit tests of plugin code)
+-- it is absent and this helper degrades to a no-op.
+function M.log(level, scope, message)
+    local log_fn = _G._polyplug_log
+    if log_fn == nil then
+        return
+    end
+    log_fn(level, scope, message)
+end
+
 function M.ok()
     return ffi.new("AbiError", { code = 0 })
 end
 
 function M.err(code, message)
     return ffi.new("AbiError", { code = code, message = M.string_view(message) })
-end
-
-function M.bundle_path_str(ctx)
-    local sv = ctx.bundle_path
-    return ffi.string(sv.ptr, sv.len)
 end
 
 return M
