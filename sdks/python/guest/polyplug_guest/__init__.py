@@ -158,23 +158,29 @@ def alloc_string(host_ptr: int, s: str) -> StringView:
     return StringView(ptr=ptr, len=len(encoded))
 
 
-def alloc_string_arena(arena_alloc: Callable[[int], int], s: str) -> StringView:
-    """Allocate a per-call return ``StringView`` from the active CallArena.
+def alloc_string_arena(
+    arena_alloc: Callable[[int, int], int], arena_ptr: int, s: str
+) -> StringView:
+    """Allocate a per-call return ``StringView`` from THIS call's CallArena.
 
     Use this for strings RETURNED from a contract function: the bytes are served
     from the host's per-call arena and stay valid until the caller's next
     arena-backed call, so the guest never frees them. For data that must outlive
     the call, use :func:`alloc_string` instead.
 
-    The loader injects a module-level ``_polyplug_arena_alloc(size: int) -> int``
-    callable into the plugin module and publishes the active arena before each
-    dispatch, so it always targets the arena for the current call (falling back
-    to ``host->alloc`` when no arena is active). The plugin passes that callable
-    here — the SDK does not bump the raw ``CallArena`` from Python, because the
-    bridge already performs the bump and host fallback on the Rust side.
+    The loader injects a module-level
+    ``_polyplug_arena_alloc(size: int, arena: int) -> int`` callable into the
+    plugin module. The arena pointer is NOT read from any shared state: it is the
+    ``arena`` int the dispatch passed to the guest callable as its third argument,
+    forwarded here as ``arena_ptr`` and on to the bridge. The bridge bumps exactly
+    that arena (or falls back to ``host->alloc`` when ``arena_ptr`` is 0). Threading
+    the arena explicitly — rather than through a shared cell — is what makes
+    concurrent and same-thread reentrant dispatch correct: each call's arena
+    travels with its own call frame.
 
     Args:
         arena_alloc: the plugin module's ``_polyplug_arena_alloc`` callable.
+        arena_ptr: the ``arena`` int this call received as its third argument.
         s: the Python string to allocate.
 
     Returns:
@@ -183,7 +189,7 @@ def alloc_string_arena(arena_alloc: Callable[[int], int], s: str) -> StringView:
     encoded: bytes = s.encode("utf-8")
     if not encoded:
         return StringView(ptr=None, len=0)
-    addr: int = arena_alloc(len(encoded))
+    addr: int = arena_alloc(len(encoded), arena_ptr)
     if not addr:
         raise MemoryError("alloc_string_arena: arena allocation failed")
     ctypes.memmove(addr, encoded, len(encoded))

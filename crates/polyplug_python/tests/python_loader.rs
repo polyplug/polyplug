@@ -148,6 +148,48 @@ unsafe fn dispatch(
     }
 }
 
+/// Like [`dispatch`], but passes a real per-call `arena` pointer through to the
+/// guest callable (the third dispatch argument). Used by the arena-isolation
+/// tests to verify each call's allocations come from its OWN arena.
+///
+/// # Safety
+/// `args`/`out` must be valid for the callable; `arena` must point at a valid,
+/// caller-reset [`CallArena`] for this call.
+unsafe fn dispatch_with_arena(
+    runtime: &Runtime,
+    contract_id: u64,
+    fn_id: u32,
+    args: *const (),
+    out: *mut (),
+    arena: *mut polyplug_abi::CallArena,
+) -> AbiError {
+    let cid: GuestContractId = GuestContractId::from_u64(contract_id);
+    let handle: GuestContractHandle = runtime
+        .registry()
+        .find(cid, 0)
+        .expect("contract must be registered");
+    let interface_ptr: *const polyplug_abi::GuestContractInterface = runtime
+        .registry()
+        .resolve_guest_contract(handle)
+        .expect("contract must resolve to an interface");
+    // SAFETY: resolved interface is a non-null, runtime-owned interface.
+    let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
+    // SAFETY: Python contracts always register VM dispatch.
+    let vm: polyplug_abi::dispatch::vm_dispatch::VmDispatch = unsafe { interface.dispatch.vm };
+    // SAFETY: loader_data wraps a live leaked PythonLoaderData; args/out/arena are
+    // caller-provided and valid for this call.
+    unsafe {
+        (vm.call)(
+            vm.loader_data,
+            GuestContractInstance::null(),
+            fn_id,
+            args,
+            out,
+            arena,
+        )
+    }
+}
+
 // ─── Plugin sources (VM dispatch / _polyplug_registrations) ─────────────────────
 
 /// A plugin that registers one contract whose function 0 writes 0x2A into the
@@ -721,17 +763,17 @@ def polyplug_init(_host_interface: int, ctx_addr: int) -> None:
 /// module — load + register + dispatch must all work.
 #[test]
 fn test_split_module_registrations_via_init_globals() {
-    // The helper's callable calls `_polyplug_arena_alloc(16)` during dispatch.
-    // The bridge must resolve from the helper module's globals (where the ABI
-    // functions are defined), not only from the entry module — this locks the
-    // injection point at polyplug_init.__globals__. The dispatch passes a null
+    // The helper's callable calls `_polyplug_arena_alloc(16, arena_ptr)` during
+    // dispatch. The bridge must resolve from the helper module's globals (where
+    // the ABI functions are defined), not only from the entry module — this locks
+    // the injection point at polyplug_init.__globals__. The dispatch passes a null
     // arena, so the bridge takes the host-alloc fallback and must return a
     // nonzero address; the callable writes that address (truthiness) into `out`.
     let helper_src: &str = r#"
 import ctypes
 
 def _fn0(args_ptr, out_ptr, arena_ptr):
-    buf = _polyplug_arena_alloc(16)
+    buf = _polyplug_arena_alloc(16, arena_ptr)
     if buf == 0:
         raise RuntimeError("_polyplug_arena_alloc returned 0")
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = 0x2A
@@ -916,4 +958,281 @@ fn unload_retire_keeps_bundle_modules_in_sys_modules() {
         after, before,
         "Retire unload must keep the bundle's re-keyed sys.modules entries"
     );
+}
+
+// ─── Arena isolation (parameterized-arena protocol) ─────────────────────────────
+
+/// Plugin for the nested-reentrancy arena test.
+///
+/// fn_id 0 (OUTER) re-enters the SAME bundle through `python_vm_dispatch` to run
+/// fn_id 1 (INNER) — a genuine same-thread nested dispatch — by calling the
+/// test-injected builtin `__polyplug_test_nested_dispatch()` (a Rust closure that
+/// resolves this contract and calls its VM dispatch with a NULL arena). After the
+/// nested call returns, OUTER allocates a 64-byte buffer from its OWN `arena_ptr`
+/// via `_polyplug_arena_alloc(size, arena)` and writes the address into `out_ptr`.
+/// fn_id 1 (INNER) allocates from its own (null) arena and ignores `out`.
+///
+/// Going through a real `python_vm_dispatch` reentry — rather than a plain Python
+/// call — is what would have triggered the old shared-cell bug: the INNER call's
+/// exit-time clear-to-0 wiped the cell, so OUTER's post-nested allocation (reading
+/// the cell) fell back to host->alloc and escaped the outer arena. With the arena
+/// threaded as an explicit argument, OUTER always uses its own `arena_ptr`.
+///
+/// The nested re-entry is driven from Rust (no ctypes struct-return calls, which
+/// are UB on some targets) so the test exercises the loader's actual dispatch path.
+const NESTED_ARENA_PLUGIN_SRC: &str = r#"
+import ctypes
+
+def _inner(args_ptr, out_ptr, arena_ptr):
+    _polyplug_arena_alloc(16, arena_ptr)
+
+def _outer(args_ptr, out_ptr, arena_ptr):
+    # Real nested dispatch into fn_id 1 via the test-injected Rust trampoline.
+    __polyplug_test_nested_dispatch()
+    # After the nested call returned, allocate from the OUTER arena_ptr and report.
+    addr = _polyplug_arena_alloc(64, arena_ptr)
+    ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int64))[0] = addr
+
+def polyplug_init(host_interface: int, ctx: int) -> None:
+    global _polyplug_registrations
+    _polyplug_registrations = [
+        {"contract": "nestedarena@1", "functions": [_outer, _inner]},
+    ]
+"#;
+
+fn nestedarena_contract_id() -> u64 {
+    GuestContractId::new("nestedarena", 1).id()
+}
+
+/// Nested same-thread cross-call must NOT corrupt the outer call's arena.
+///
+/// The outer guest fn re-enters the same bundle (a real `python_vm_dispatch`
+/// nested dispatch of fn_id 1 via a Rust trampoline injected into `builtins`),
+/// then allocates from its OWN `arena_ptr`. With the arena threaded explicitly
+/// (not via a shared cell), the post-nested allocation lands inside the OUTER
+/// arena's buffer. Under the old shared-cell protocol the nested call's
+/// clear-to-0 wiped the cell and the outer allocation fell back to host->alloc
+/// (outside the arena buffer) — the bug this test pins.
+#[test]
+fn test_nested_dispatch_preserves_outer_arena() {
+    let contract_id: u64 = nestedarena_contract_id();
+    let (_dir, path) = write_bundle("nested_arena", NESTED_ARENA_PLUGIN_SRC);
+    let loader: PythonLoader = PythonLoader::default();
+    let runtime: Arc<Runtime> = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "nested_arena");
+    loader
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
+        .expect("load must succeed");
+
+    // Inject a builtin `__polyplug_test_nested_dispatch()` that performs a real
+    // nested VM dispatch of fn_id 1 (null arena) from Rust. Putting it in
+    // `builtins` makes it reachable from the bundle module without touching the
+    // bundle's re-keyed sys.modules entry. The runtime pointer is captured as a
+    // usize (raw pointers are not Send, but it stays valid for the test).
+    let runtime_addr: usize = Arc::as_ptr(&runtime) as usize;
+    Python::attach(|py: Python<'_>| {
+        let trampoline = pyo3::types::PyCFunction::new_closure(
+            py,
+            None,
+            None,
+            move |_args: &pyo3::Bound<'_, pyo3::types::PyTuple>,
+                  _kwargs: Option<&pyo3::Bound<'_, PyDict>>|
+                  -> i64 {
+                // SAFETY: runtime_addr is the live Runtime for the test's lifetime.
+                let rt: &Runtime = unsafe { &*(runtime_addr as *const Runtime) };
+                // SAFETY: fn_id 1 (inner) only allocates from its (null) arena.
+                let err: AbiError = unsafe {
+                    dispatch_with_arena(
+                        rt,
+                        contract_id,
+                        1,
+                        core::ptr::null(),
+                        core::ptr::null_mut(),
+                        core::ptr::null_mut(),
+                    )
+                };
+                err.code as i64
+            },
+        )
+        .expect("trampoline creation must succeed");
+        let builtins: pyo3::Bound<'_, PyModule> =
+            PyModule::import(py, "builtins").expect("builtins import");
+        builtins
+            .setattr("__polyplug_test_nested_dispatch", trampoline)
+            .expect("inject trampoline builtin");
+    });
+
+    // Outer arena over a 4 KiB buffer (null host: 64-byte alloc fits the primary
+    // region, so no overflow / host needed). The buffer must outlive the dispatch.
+    let mut buf: Vec<u8> = vec![0_u8; 4096];
+    let lo: usize = buf.as_ptr() as usize;
+    let hi: usize = lo + buf.len();
+    let mut arena: polyplug_abi::CallArena =
+        polyplug_abi::CallArena::new(&mut buf, core::ptr::null());
+
+    let mut out: i64 = 0;
+    // SAFETY: out is a valid local i64; arena is a valid CallArena over `buf`,
+    // which outlives this call; the guest writes the allocated address into out.
+    let err: AbiError = unsafe {
+        dispatch_with_arena(
+            &runtime,
+            contract_id,
+            0,
+            core::ptr::null(),
+            &mut out as *mut i64 as *mut (),
+            &mut arena as *mut polyplug_abi::CallArena,
+        )
+    };
+    assert!(
+        err.is_ok(),
+        "outer dispatch must succeed: code={}",
+        err.code
+    );
+
+    let p: usize = out as usize;
+    assert!(
+        p >= lo && p < hi,
+        "outer allocation {p:#x} must land inside the OUTER arena buffer [{lo:#x}, {hi:#x}); a value outside means the nested call's clear wiped the outer arena (shared-cell bug)"
+    );
+}
+
+/// Plugin for the two-thread arena test: one fn that allocates 64 bytes from its
+/// `arena_ptr` and writes the address into `out_ptr`.
+const ARENA_ECHO_PLUGIN_SRC: &str = r#"
+import ctypes
+
+def _fn0(args_ptr, out_ptr, arena_ptr):
+    addr = _polyplug_arena_alloc(64, arena_ptr)
+    ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int64))[0] = addr
+
+def polyplug_init(host_interface: int, ctx: int) -> None:
+    global _polyplug_registrations
+    _polyplug_registrations = [
+        {"contract": "arenaecho@1", "functions": [_fn0]},
+    ]
+"#;
+
+fn arenaecho_contract_id() -> u64 {
+    GuestContractId::new("arenaecho", 1).id()
+}
+
+/// Two threads dispatching into the SAME bundle with DISTINCT arenas must each
+/// allocate from their OWN arena.
+///
+/// CPython's GIL serializes Python execution, so the threads do not truly run the
+/// guest body in parallel; the invariant this pins is that allocation reads the
+/// arena from the per-call ARGUMENT (which differs per thread) and never from a
+/// shared cell that the other thread could have overwritten. Each thread runs
+/// many iterations resetting its own arena and asserts every allocation lands in
+/// its own buffer. The two buffers are disjoint so a misattribution is detectable.
+#[test]
+fn test_concurrent_dispatch_distinct_arenas_isolated() {
+    let contract_id: u64 = arenaecho_contract_id();
+    let (_dir, path) = write_bundle("arena_echo", ARENA_ECHO_PLUGIN_SRC);
+    let loader: PythonLoader = PythonLoader::default();
+    let runtime: Arc<Runtime> = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "arena_echo");
+    loader
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
+        .expect("load must succeed");
+
+    // Two disjoint 4 KiB buffers + arenas, leaked so their addresses are valid
+    // across both worker threads (null host: 64-byte allocs fit the primary region).
+    let buf_a: &'static mut [u8] = Box::leak(vec![0_u8; 4096].into_boxed_slice());
+    let buf_b: &'static mut [u8] = Box::leak(vec![0_u8; 4096].into_boxed_slice());
+    let a_lo: usize = buf_a.as_ptr() as usize;
+    let a_hi: usize = a_lo + buf_a.len();
+    let b_lo: usize = buf_b.as_ptr() as usize;
+    let b_hi: usize = b_lo + buf_b.len();
+    let arena_a: &'static mut polyplug_abi::CallArena = Box::leak(Box::new(
+        polyplug_abi::CallArena::new(buf_a, core::ptr::null()),
+    ));
+    let arena_b: &'static mut polyplug_abi::CallArena = Box::leak(Box::new(
+        polyplug_abi::CallArena::new(buf_b, core::ptr::null()),
+    ));
+    let arena_a_addr: usize = arena_a as *mut polyplug_abi::CallArena as usize;
+    let arena_b_addr: usize = arena_b as *mut polyplug_abi::CallArena as usize;
+
+    const ITERS: usize = 500;
+    let runtime_a: Arc<Runtime> = Arc::clone(&runtime);
+    let runtime_b: Arc<Runtime> = Arc::clone(&runtime);
+
+    let handle_a: std::thread::JoinHandle<Result<(), String>> = std::thread::spawn(move || {
+        for i in 0..ITERS {
+            // SAFETY: arena_a_addr is the live leaked arena for this worker.
+            let arena: &mut polyplug_abi::CallArena =
+                unsafe { &mut *(arena_a_addr as *mut polyplug_abi::CallArena) };
+            arena.reset();
+            let mut out: i64 = 0;
+            // SAFETY: out is a valid local; arena_a is valid; contract is loaded.
+            let err: AbiError = unsafe {
+                dispatch_with_arena(
+                    &runtime_a,
+                    contract_id,
+                    0,
+                    core::ptr::null(),
+                    &mut out as *mut i64 as *mut (),
+                    arena_a_addr as *mut polyplug_abi::CallArena,
+                )
+            };
+            if !err.is_ok() {
+                return Err(format!("A iter {i}: dispatch failed code={}", err.code));
+            }
+            let p: usize = out as usize;
+            if !(p >= a_lo && p < a_hi) {
+                return Err(format!(
+                    "A iter {i}: allocation {p:#x} escaped arena A buffer [{a_lo:#x}, {a_hi:#x})"
+                ));
+            }
+        }
+        Ok(())
+    });
+
+    let handle_b: std::thread::JoinHandle<Result<(), String>> = std::thread::spawn(move || {
+        for i in 0..ITERS {
+            // SAFETY: arena_b_addr is the live leaked arena for this worker.
+            let arena: &mut polyplug_abi::CallArena =
+                unsafe { &mut *(arena_b_addr as *mut polyplug_abi::CallArena) };
+            arena.reset();
+            let mut out: i64 = 0;
+            // SAFETY: out is a valid local; arena_b is valid; contract is loaded.
+            let err: AbiError = unsafe {
+                dispatch_with_arena(
+                    &runtime_b,
+                    contract_id,
+                    0,
+                    core::ptr::null(),
+                    &mut out as *mut i64 as *mut (),
+                    arena_b_addr as *mut polyplug_abi::CallArena,
+                )
+            };
+            if !err.is_ok() {
+                return Err(format!("B iter {i}: dispatch failed code={}", err.code));
+            }
+            let p: usize = out as usize;
+            if !(p >= b_lo && p < b_hi) {
+                return Err(format!(
+                    "B iter {i}: allocation {p:#x} escaped arena B buffer [{b_lo:#x}, {b_hi:#x})"
+                ));
+            }
+        }
+        Ok(())
+    });
+
+    let a_outcome: Result<(), String> = handle_a.join().expect("thread A must not panic");
+    let b_outcome: Result<(), String> = handle_b.join().expect("thread B must not panic");
+    if let Err(e) = a_outcome {
+        panic!("{e}");
+    }
+    if let Err(e) = b_outcome {
+        panic!("{e}");
+    }
 }

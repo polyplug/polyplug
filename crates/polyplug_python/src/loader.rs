@@ -65,28 +65,31 @@
 //!
 //! # Arena bridge
 //!
-//! The loader injects a module-level callable **`_polyplug_arena_alloc(size)
-//! -> int`** before `polyplug_init` runs — into the namespace of the module that
-//! *defines* `polyplug_init` (its `__globals__`) AND the entry module. This is
-//! the same single rule that governs registrations collection: the guest's ABI
-//! functions that call `_polyplug_arena_alloc` live in the module defining
-//! `polyplug_init`, so the bridge must be reachable from that module's globals.
-//! In the split-module generated layout the entry file only
+//! The loader injects a module-level callable **`_polyplug_arena_alloc(size,
+//! arena) -> int`** before `polyplug_init` runs — into the namespace of the
+//! module that *defines* `polyplug_init` (its `__globals__`) AND the entry
+//! module. This is the same single rule that governs registrations collection:
+//! the guest's ABI functions that call `_polyplug_arena_alloc` live in the module
+//! defining `polyplug_init`, so the bridge must be reachable from that module's
+//! globals. In the split-module generated layout the entry file only
 //! `from … import polyplug_init`, so its own namespace is not where the ABI
 //! functions resolve names — `__globals__` is. The dual injection is
 //! belt-and-braces: in the single-file hand-written layout the two targets are
 //! the same dict; if `polyplug_init` is not a plain Python function (no
 //! `__globals__`, e.g. a C callable), only the entry-module injection applies —
-//! the same fallback as registrations collection. Because the bridge reads its
-//! `__globals__` at *call* time, injection must happen after `polyplug_init` is
-//! located but before it (and any dispatch) runs.
+//! the same fallback as registrations collection. Injection must happen after
+//! `polyplug_init` is located but before it (and any dispatch) runs.
 //!
-//! During a dispatch call the loader publishes the active [`CallArena`] pointer
-//! on the per-bundle [`PythonLoaderData`]; `_polyplug_arena_alloc` serves the
-//! guest's per-call return buffers from that arena, falling back to
-//! `host->alloc` when no arena is active (pointer 0). The arena pointer is the
-//! third int argument to every guest callable and is also reachable through the
-//! bridge — both routes hit the same active arena.
+//! The arena pointer is threaded EXPLICITLY: every guest callable receives the
+//! active [`CallArena`] pointer as its third `int` argument and forwards it to
+//! `_polyplug_arena_alloc(size, arena)`. The bridge serves the guest's per-call
+//! return buffers from exactly that arena, falling back to `host->alloc` when the
+//! caller has no arena (pointer 0). There is NO shared per-bundle cell: allocation
+//! correctness never depends on any published state, so neither a concurrent
+//! dispatch on another thread nor a same-thread nested dispatch can perturb the
+//! arena seen by an in-flight call (an earlier shared-cell design was racy — a
+//! concurrent attach could overwrite the cell mid-call, and a nested call's
+//! exit-time clear would wipe the outer call's arena).
 //!
 //! # Reentrancy
 //!
@@ -95,10 +98,10 @@
 //! explicit reentrancy guard — CPython's `PyGILState`/pyo3 `Python::attach` is
 //! reentrant on the same thread: a nested attach from a plugin→plugin
 //! cross-call simply re-enters the held GIL without deadlocking. No reentrancy
-//! guard is needed or used here.
-
-use core::sync::atomic::AtomicUsize;
-use core::sync::atomic::Ordering;
+//! guard is needed or used here. Nested dispatch is also arena-safe: because each
+//! call carries its own arena pointer through its own call frame (not a shared
+//! cell), the inner call's arena and the outer call's arena never alias or clear
+//! one another.
 
 use pyo3::Bound;
 use pyo3::Py;
@@ -138,36 +141,24 @@ pub(crate) const ARENA_ALLOC_ATTR: &str = "_polyplug_arena_alloc";
 
 /// Loader-specific data for one Python contract's VM dispatch.
 ///
-/// Holds the contract's callables (ordered by `fn_id`) and a pointer to the
-/// bundle-level active-arena cell. The arena pointer lives on the per-bundle
-/// cell — never globally — so it is Rule-12 compliant.
-///
-/// `active_arena` points at a single per-bundle [`AtomicUsize`] (0 == "no
-/// arena") shared by every contract of the bundle and by the injected
-/// `_polyplug_arena_alloc` bridge. [`python_vm_dispatch`] writes the active
-/// [`CallArena`] pointer to it under the GIL (`Python::attach`) at the start of a
-/// dispatch and clears it after; the bridge — which also runs only under the GIL
-/// — reads the same cell. CPython's GIL serializes all Python execution, so the
-/// publish/call/clear window is atomic with respect to any other thread's
-/// dispatch into this bundle. A single shared cell is correct because all
-/// contracts of a bundle share one module namespace (and thus one bridge), and
-/// only one dispatch runs at a time under the GIL.
+/// Holds the contract's callables (ordered by `fn_id`). The active per-call
+/// arena pointer is NOT stored here: it is threaded explicitly as the third
+/// argument of every guest callable (`callable(args, out, arena)`) and forwarded
+/// by the guest to `_polyplug_arena_alloc(size, arena)`, so allocation never
+/// depends on any shared cell. This is what makes concurrent and same-thread
+/// reentrant dispatch correct: each call's arena travels with its own call frame
+/// rather than through a cell another dispatch could overwrite or clear.
 pub struct PythonLoaderData {
     /// Callables ordered by `fn_id`. `callables[i]` handles `fn_id == i`.
     pub callables: Vec<Py<PyAny>>,
-    /// Pointer to the bundle-level active-arena cell. Never null; points at a
-    /// leaked [`AtomicUsize`] that outlives the interpreter (retire-not-drop).
-    pub active_arena: *const AtomicUsize,
 }
 
 // SAFETY: PythonLoaderData is shared across threads via the leaked raw pointer in
 // VmLoaderData. `callables` (Py<PyAny>) is Send/Sync when access is GIL-guarded,
 // which python_vm_dispatch guarantees (every access is inside Python::attach).
-// `active_arena` is a pointer to a leaked AtomicUsize, which is itself Sync.
 unsafe impl Send for PythonLoaderData {}
 // SAFETY: see the Send impl above — every access to `callables` is GIL-guarded
-// (inside Python::attach) and `active_arena` points at a Sync AtomicUsize, so the
-// type is safe to share across threads.
+// (inside Python::attach), so the type is safe to share across threads.
 unsafe impl Sync for PythonLoaderData {}
 
 // ─── Instance lifecycle stubs ──────────────────────────────────────────────────
@@ -199,11 +190,14 @@ unsafe extern "C" fn python_destroy_instance(
 /// VM dispatch function for Python plugins.
 ///
 /// Acquires the GIL via pyo3 (correct from any host thread), looks up the
-/// callable for `fn_id` in the per-contract [`PythonLoaderData`], publishes the
-/// arena pointer for the bridge, and invokes
-/// `callable(args_ptr_int, out_ptr_int, arena_ptr_int)`. A normal return maps to
-/// [`AbiError::ok`]; a Python exception maps to [`AbiErrorCode::Generic`]; an
-/// out-of-range `fn_id` maps to [`AbiErrorCode::FunctionNotAvailable`].
+/// callable for `fn_id` in the per-contract [`PythonLoaderData`], and invokes
+/// `callable(args_ptr_int, out_ptr_int, arena_ptr_int)`. The arena pointer is
+/// passed straight to the guest as the third argument — there is no shared cell —
+/// so the guest forwards it to `_polyplug_arena_alloc(size, arena)` and a
+/// concurrent or nested dispatch cannot perturb this call's arena. A normal
+/// return maps to [`AbiError::ok`]; a Python exception maps to
+/// [`AbiErrorCode::Generic`]; an out-of-range `fn_id` maps to
+/// [`AbiErrorCode::FunctionNotAvailable`].
 ///
 /// # Safety
 /// - `loader_data` must wrap a valid pointer to a [`PythonLoaderData`] created by
@@ -238,22 +232,14 @@ unsafe extern "C" fn python_vm_dispatch(
     let out_int: i64 = out as usize as i64;
     let arena_int: i64 = arena as usize as i64;
 
-    // SAFETY: active_arena points at a leaked per-bundle AtomicUsize that outlives
-    // the interpreter; it is never null (set by the loader at registration).
-    let arena_cell: &AtomicUsize = unsafe { &*data.active_arena };
-
     Python::attach(|py: Python<'_>| {
-        // Publish the active arena pointer for the _polyplug_arena_alloc bridge.
-        // Held only across this single Python call under the GIL, then cleared so
-        // a stale arena is never reachable. The GIL serializes Python execution,
-        // so no other thread observes this window concurrently.
-        arena_cell.store(arena as usize, Ordering::Release);
-
+        // The arena pointer travels as the third call argument; the guest forwards
+        // it to `_polyplug_arena_alloc(size, arena)`. No shared cell is published,
+        // so a concurrent or same-thread nested dispatch cannot overwrite or clear
+        // this call's arena.
         let bound: Bound<'_, PyAny> = callable.bind(py).clone();
         let call_result: Result<Bound<'_, PyAny>, pyo3::PyErr> =
             bound.call((args_int, out_int, arena_int), None);
-
-        arena_cell.store(0, Ordering::Release);
 
         match call_result {
             Ok(_) => AbiError::ok(),
@@ -478,7 +464,6 @@ pub(crate) fn collect_registrations(
 pub(crate) fn register_contracts(
     registrations: Vec<ContractRegistration>,
     host_interface: *const HostApi,
-    arena_cell: *const AtomicUsize,
     bundle_name: &str,
 ) -> Result<u32, RuntimeError> {
     let mut registered: u32 = 0_u32;
@@ -488,7 +473,6 @@ pub(crate) fn register_contracts(
 
         let loader_data: Box<PythonLoaderData> = Box::new(PythonLoaderData {
             callables: reg.callables,
-            active_arena: arena_cell,
         });
         let loader_data_ptr: *mut PythonLoaderData = Box::into_raw(loader_data);
 
@@ -577,34 +561,26 @@ pub(crate) fn register_contracts(
     Ok(registered)
 }
 
-/// Build the `_polyplug_arena_alloc(size) -> int` bridge callable bound to the
-/// bundle-level active-arena cell.
+/// Build the `_polyplug_arena_alloc(size, arena) -> int` bridge callable.
 ///
-/// The bridge serves the guest's per-call return buffers from the active
-/// [`CallArena`] published by [`python_vm_dispatch`] on `arena_cell`. When no
-/// arena is active (the published pointer is 0) it falls back to `host->alloc`,
-/// preserving per-value allocation behaviour. Returns the allocated address as a
-/// Python `int` (0 on failure).
+/// The arena pointer is supplied EXPLICITLY by the caller as the second argument:
+/// it is the `arena` int the guest received as the third argument of its dispatch
+/// callable. There is no shared cell — allocation correctness does not depend on
+/// any published state, so concurrent and same-thread reentrant dispatch are both
+/// sound. When `arena` is 0 (the caller has no per-call arena) the bridge falls
+/// back to `host->alloc`, preserving per-value allocation behaviour. Returns the
+/// allocated address as a Python `int` (0 on failure).
 ///
-/// One bridge is built per bundle, reading the single bundle-level `arena_cell`
-/// that every contract's [`python_vm_dispatch`] publishes to. Only one dispatch
-/// runs at a time under the GIL, so the cell always reflects the contract
-/// currently mid-call. The caller injects the returned callable into the relevant
-/// module namespaces via [`inject_arena_bridge`].
+/// One bridge is built per bundle; the caller injects it into the relevant module
+/// namespaces via [`inject_arena_bridge`].
 fn build_arena_bridge<'py>(
     py: Python<'py>,
-    arena_cell: *const AtomicUsize,
     host_interface: *const HostApi,
     bundle_name: &str,
 ) -> Result<Bound<'py, PyAny>, RuntimeError> {
-    let arena_cell_addr: usize = arena_cell as usize;
     let host_addr: usize = host_interface as usize;
 
-    let closure = move |size: u32| -> i64 {
-        // SAFETY: arena_cell_addr is the address of an AtomicUsize that outlives
-        // the interpreter (leaked per-bundle). Reading it under the GIL is sound.
-        let cell: &AtomicUsize = unsafe { &*(arena_cell_addr as *const AtomicUsize) };
-        let arena_addr: usize = cell.load(Ordering::Acquire);
+    let closure = move |size: u32, arena_addr: usize| -> i64 {
         let arena: *mut CallArena = arena_addr as *mut CallArena;
         let ptr: *mut u8 = if arena.is_null() {
             let host: *const HostApi = host_addr as *const HostApi;
@@ -616,9 +592,9 @@ fn build_arena_bridge<'py>(
                 unsafe { ((*host).alloc)(host, size as usize, 1) }
             }
         } else {
-            // SAFETY: `arena` is the valid per-call CallArena published by
-            // python_vm_dispatch under the GIL; alloc bumps within it or chains a
-            // host-allocated overflow block.
+            // SAFETY: `arena` is the per-call CallArena the dispatching call passed
+            // to the guest as its third argument and the guest forwarded here;
+            // alloc bumps within it or chains a host-allocated overflow block.
             unsafe { (*arena).alloc(size as usize, 1) }
         };
         ptr as usize as i64
@@ -632,7 +608,8 @@ fn build_arena_bridge<'py>(
               _kwargs: Option<&Bound<'_, pyo3::types::PyDict>>|
               -> pyo3::PyResult<i64> {
             let size: u32 = args.get_item(0)?.extract::<u32>()?;
-            Ok(closure(size))
+            let arena_addr: usize = args.get_item(1)?.extract::<usize>()?;
+            Ok(closure(size, arena_addr))
         },
     )
     .map(|f: Bound<'_, pyo3::types::PyCFunction>| f.into_any())
@@ -673,11 +650,10 @@ pub(crate) fn inject_arena_bridge(
     py: Python<'_>,
     module: &Bound<'_, PyAny>,
     init_fn: &Bound<'_, PyAny>,
-    arena_cell: *const AtomicUsize,
     host_interface: *const HostApi,
     bundle_name: &str,
 ) -> Result<(), RuntimeError> {
-    let bridge: Bound<'_, PyAny> = build_arena_bridge(py, arena_cell, host_interface, bundle_name)?;
+    let bridge: Bound<'_, PyAny> = build_arena_bridge(py, host_interface, bundle_name)?;
 
     // Inject into the entry module's namespace (covers single-file plugins, where
     // the entry module is also the module defining polyplug_init).

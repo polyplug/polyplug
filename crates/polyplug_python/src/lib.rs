@@ -23,7 +23,6 @@ pub use bridge::PythonHostBridge;
 pub use config::PythonConfig;
 pub use loader::PythonLoaderData;
 
-use core::sync::atomic::AtomicUsize;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::path::Path;
@@ -128,21 +127,6 @@ fn synthetic_module_name(bundle_name: &str) -> String {
     name
 }
 
-/// Allocate the bundle-level active-arena cell and leak it for the runtime
-/// lifetime.
-///
-/// Every contract of one bundle shares this single [`AtomicUsize`] (0 == "no
-/// arena"); [`loader::python_vm_dispatch`] publishes the active [`CallArena`]
-/// pointer to it under the GIL, and the injected `_polyplug_arena_alloc` bridge
-/// reads it. It is leaked because the VM-dispatch interfaces and their
-/// `PythonLoaderData` are leaked too (retire-not-drop): a resolved dispatch
-/// pointer may run long after this load returns, so the cell must outlive it.
-///
-/// [`CallArena`]: polyplug_abi::CallArena
-fn leak_arena_cell() -> *const AtomicUsize {
-    Box::into_raw(Box::new(AtomicUsize::new(0))) as *const AtomicUsize
-}
-
 impl PythonLoader {
     /// After `polyplug_init` has run and populated `_polyplug_registrations`,
     /// inject the arena bridge, collect the guest's registration data, and
@@ -155,19 +139,17 @@ impl PythonLoader {
     /// [`loader::collect_registrations`] can resolve that namespace (falling back
     /// to the entry module for non-Python `polyplug_init` callables).
     ///
-    /// Shared by the on-disk and in-memory load paths. The `arena_cell` must be a
-    /// leaked, bundle-level [`AtomicUsize`] (see [`leak_arena_cell`]).
+    /// Shared by the on-disk and in-memory load paths.
     fn collect_and_register(
         py: Python<'_>,
         init_fn: &Bound<'_, PyAny>,
         module: &Bound<'_, PyAny>,
         host_interface: *const HostApi,
-        arena_cell: *const AtomicUsize,
         bundle_name: &str,
     ) -> Result<(), RuntimeError> {
         let registrations: Vec<ContractRegistration> =
             loader::collect_registrations(py, init_fn, module, bundle_name)?;
-        loader::register_contracts(registrations, host_interface, arena_cell, bundle_name)?;
+        loader::register_contracts(registrations, host_interface, bundle_name)?;
         Ok(())
     }
 
@@ -242,8 +224,6 @@ impl PythonLoader {
         // path-based load for the full rationale).
         let _load_guard: std::sync::MutexGuard<'_, ()> = crate::context::acquire_load_lock();
 
-        let arena_cell: *const AtomicUsize = leak_arena_cell();
-
         let result: Result<String, RuntimeError> = Python::attach(|py| {
             // Snapshot sys.modules before executing so the isolation pass can scope
             // exactly the modules this bundle introduced.
@@ -281,7 +261,6 @@ impl PythonLoader {
                 py,
                 &module_any_bridge,
                 &init_fn,
-                arena_cell,
                 host_interface,
                 &bundle_name,
             )?;
@@ -311,14 +290,7 @@ impl PythonLoader {
             // Collect the guest's registration data and register every contract
             // with VM dispatch.
             let module_any: Bound<'_, PyAny> = module.as_any().clone();
-            Self::collect_and_register(
-                py,
-                &init_fn,
-                &module_any,
-                host_interface,
-                arena_cell,
-                &bundle_name,
-            )?;
+            Self::collect_and_register(py, &init_fn, &module_any, host_interface, &bundle_name)?;
 
             // Isolate this bundle's freshly imported modules. With no bundle
             // directory ("") no imported module is classified as in-bundle, so this
@@ -429,8 +401,6 @@ impl BundleLoader for PythonLoader {
         // otherwise interleave their sys.modules mutations and corrupt each
         // other's per-bundle isolation. Held for the whole `Python::attach`.
         let _load_guard: std::sync::MutexGuard<'_, ()> = crate::context::acquire_load_lock();
-
-        let arena_cell: *const AtomicUsize = leak_arena_cell();
 
         // Step 3: Load the Python module and call polyplug_init.
         let prefix: String = Python::attach(|py| {
@@ -560,7 +530,6 @@ impl BundleLoader for PythonLoader {
                 py,
                 &module_from_spec,
                 &init_fn,
-                arena_cell,
                 host_interface,
                 &bundle_name,
             )?;
@@ -597,7 +566,6 @@ impl BundleLoader for PythonLoader {
                 &init_fn,
                 &module_from_spec,
                 host_interface,
-                arena_cell,
                 &bundle_name,
             )?;
 

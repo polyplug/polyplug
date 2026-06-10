@@ -1238,7 +1238,16 @@ fn emit_guest_function_callables(
         if !has_params {
             out.push_str("    _ = args_ptr\n");
         }
-        out.push_str("    _ = arena_ptr\n");
+        // `arena_ptr` is forwarded to `alloc_string_arena` only for StringView
+        // returns; every other shape ignores it, so silence the unused binding
+        // exactly when the body never reads it.
+        let uses_arena: bool = matches!(
+            &func.returns,
+            Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
+        );
+        if !uses_arena {
+            out.push_str("    _ = arena_ptr\n");
+        }
         emit_guest_abi_args_unpack(out, func, fn_prefix, struct_name);
         emit_guest_abi_call(out, func);
         emit_guest_abi_return(out, func, fn_prefix);
@@ -1380,7 +1389,7 @@ fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction, fn_prefix: &
     // arena-backed call. Copy the resulting StringView into the caller's out slot.
     if matches!(returns, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
         out.push_str(
-            "    out_view: StringView = alloc_string_arena(_polyplug_arena_alloc, result)\n",
+            "    out_view: StringView = alloc_string_arena(_polyplug_arena_alloc, arena_ptr, result)\n",
         );
         out.push_str(
             "    ctypes.memmove(out_ptr, ctypes.addressof(out_view), ctypes.sizeof(out_view))\n",

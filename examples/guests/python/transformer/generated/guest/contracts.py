@@ -26,10 +26,9 @@ def transformer_transform_abi(args_ptr: int, out_ptr: int, arena_ptr: int) -> No
         raise RuntimeError("null args pointer")
     if not out_ptr:
         raise RuntimeError("null out pointer")
-    _ = arena_ptr
     input: str = to_str(StringView.from_address(args_ptr))
     result = impl.transform(input)
-    out_view: StringView = alloc_string_arena(_polyplug_arena_alloc, result)
+    out_view: StringView = alloc_string_arena(_polyplug_arena_alloc, arena_ptr, result)
     ctypes.memmove(out_ptr, ctypes.addressof(out_view), ctypes.sizeof(out_view))
 
 def polyplug_abi_version() -> int:
