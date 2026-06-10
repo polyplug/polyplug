@@ -313,6 +313,32 @@ def chart_marshalling(criterion_dir: Path, out: Path) -> None:
     )
 
 
+def chart_native_round_trip(criterion_dir: Path, out: Path) -> None:
+    """End-to-end native round trip (host -> guest -> return), by return type.
+
+    Composed from existing criterion data: a Rust host with a pre-resolved
+    interface dispatches into a native guest and reads the result back. The flat
+    scalar case is the `counter_inc` `inc()` loop; the data cases are the
+    `marshalling` group. The story: the round trip itself is ~2 ns (resolve is
+    cached); the only thing that grows the cost is copying data out.
+    """
+    rows: list = [
+        ("scalar return (u32) — the inc() round trip", per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch"), _HILITE),
+        ("borrowed view return (256 B)", per_call_ns(criterion_dir, "marshalling/borrowed/256"), _HILITE),
+        ("owned copy return (256 B)", per_call_ns(criterion_dir, "marshalling/owned/256"), _SLOW),
+        ("owned copy return (16 KB)", per_call_ns(criterion_dir, "marshalling/owned/16384"), _SLOW),
+    ]
+    _chart_hbar_log(
+        out,
+        "Native round trip  (host → guest → return)",
+        "Rust host, pre-resolved interface; cost by what the guest returns (log scale)",
+        rows,
+        "The round trip itself is ~2 ns — resolve is cached, dispatch is one indirect call. "
+        "The only thing that grows the cost is copying data out: borrowed zero-copy views stay "
+        "flat, owned copies pay a host alloc + memcpy that scales with the payload.",
+    )
+
+
 def chart_amortization(criterion_dir: Path, out: Path) -> None:
     """One-time load / resolve / reload costs (log-scale bars)."""
     rows: list = [
@@ -416,6 +442,7 @@ def main() -> int:
         ("dispatch_by_shape.svg", chart_dispatch_by_shape),
         ("payload_scaling.svg", chart_payload_scaling),
         ("marshalling.svg", chart_marshalling),
+        ("native_round_trip.svg", chart_native_round_trip),
         ("amortization.svg", chart_amortization),
         ("cross_lang_guest.svg", chart_cross_language_guest),
         ("cross_lang_host.svg", chart_cross_language_host),

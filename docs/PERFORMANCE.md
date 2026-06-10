@@ -42,9 +42,24 @@ The resolved pointer stays valid for the runtime's lifetime under the
 a caller may cache it across calls. To observe a *new* version after a hot-reload,
 re-`find_guest_contract` + re-`resolve_guest_contract`.
 
+### Two boundaries, two charts
+
+A complete user-facing call crosses **two** ABI boundaries, and they are measured
+by **two separate charts** that must not be added together bar-for-bar:
+
+| Boundary | Direction | What it costs | Chart |
+|---|---|---|---|
+| **Host call overhead** | host language → runtime | the FFI entry an app pays to *reach* the runtime (zero for a Rust host that links the crate) | [Host Call Overhead by Language](#host-call-overhead-by-language) |
+| **Guest dispatch** | runtime → guest plugin | the runtime *dispatching into* a plugin written in language Y (native indirect call, or a VM hop) | [Guest Dispatch by Language](#guest-dispatch-by-language) |
+
+They are named differently on purpose: the host side pays a per-call **FFI
+overhead** to cross into native code, while the runtime side performs the actual
+**dispatch** into the plugin. The end-to-end round trip = host overhead + dispatch
++ whatever it costs to return the result (see [Native Round Trip](#native-round-trip)).
+
 ---
 
-## Host Library Performance Comparison
+## Host Call Overhead by Language
 
 This is the **host → runtime** direction: how much it costs an application
 written in each language to *call into* the runtime over FFI.
@@ -66,7 +81,7 @@ operation itself. Every other language reaches the runtime through the C ABI.
 
 > The **other** direction — the runtime *dispatching into* a guest plugin
 > written in each language — is charted under
-> [Loader Dispatch Benchmarks](#loader-dispatch-benchmarks) below. Host-call and
+> [Guest Dispatch by Language](#guest-dispatch-by-language) below. Host-call and
 > guest-dispatch are different boundaries; don't compare a bar from one chart to
 > a bar from the other.
 
@@ -344,6 +359,31 @@ call" pattern (nobody does this in a loop) is measured separately by
 
 ---
 
+## Native Round Trip
+
+`counter_inc` above measures the flat scalar round trip — a Rust host, interface
+already resolved, dispatching `inc()` into a native guest and reading a `u32`
+back, ~2 ns/call. The picture extends cleanly to calls that **return data**:
+
+![native round trip by return type](assets/benches/native_round_trip.svg)
+
+The round trip itself stays ~2 ns — `resolve` is cached (retire-not-drop) and
+dispatch is one indirect call. What grows the cost is **what you return**:
+
+- **scalar / borrowed view** — flat ~2 ns. A borrowed `StringView` (`&str` /
+  `string_view` / `ReadOnlySpan` / `memoryview`) aliases the guest's own memory,
+  so there is nothing to allocate or copy regardless of size.
+- **owned copy** — a host allocation plus a `memcpy` that scales with the payload
+  (~11 ns at 256 B → ~158 ns at 16 KB).
+
+So for a native host, "call a plugin and get data back" is ~2 ns plus the cost of
+*owning* the result — and you only pay that when you ask for an owned copy. A
+**cross-language** host (Python / Lua / JS reaching a guest) additionally pays
+that language's [host call overhead](#host-call-overhead-by-language) on top of
+this round trip.
+
+---
+
 ## Optimization Tips
 
 ### 1. Batch Operations
@@ -522,12 +562,12 @@ Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
 
 ---
 
-## Loader Dispatch Benchmarks
+## Guest Dispatch by Language
 
 This is the **runtime → guest** direction: how much it costs the runtime to
 *dispatch into* a plugin written in each language. (The reverse direction —
-host calling into the runtime — is the [Call Overhead by Language](#call-overhead-by-language)
-chart far above.)
+host calling into the runtime — is [Host Call Overhead by Language](#host-call-overhead-by-language)
+far above.)
 
 ![guest dispatch cost by language](assets/benches/cross_lang_guest.svg)
 
