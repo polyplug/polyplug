@@ -68,3 +68,11 @@ harness = false
 name = "cross_call"
 harness = false
 
+[[bench]]
+name = "contention"
+harness = false
+
+[[bench]]
+name = "call_arena"
+harness = false
+

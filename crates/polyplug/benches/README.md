@@ -280,6 +280,89 @@ trampoline cost.
 Contract lookup across **various slot counts**, so you can see how lookup scales
 as a host loads more contracts.
 
+### `contention` — multi-threaded dispatch throughput (the scaling sentinel)
+
+Every other bench here is single-threaded, so none of them would notice if a
+registry hot path stopped scaling — a read lock quietly becoming a write lock, or
+a new `Mutex` landing on the resolve chain. This one runs **N threads (1, 2, 4,
+8)** all hammering the *same* `Runtime`: each iteration does the full uncached
+hot path — `find_guest_contract` (a registry read-lock) + a `call_guest_method`
+cross-call (the count + resolve chain, more read-locks) + the native dispatch.
+The provider is registered **once**; only the per-call resolve-and-dispatch is
+timed.
+
+**Methodology (criterion + threads is awkward).** Criterion times a closure on
+one thread and has no notion of "N threads ran in parallel," so this bench uses
+`iter_custom` with a reused, barrier-started thread pool: workers are spawned
+once *outside* the timed region and park on a channel; each measurement hands
+every worker its share of the iteration budget, releases them simultaneously
+through a `Barrier`, and times the wall-clock span until the last worker
+finishes. `Throughput::Elements(N)` is reported per criterion iteration so the
+throughput line reads as **aggregate calls/sec across all threads**
+(per-thread = aggregate / N). Sample count is trimmed (`sample_size(30)`) so a
+full run stays in the low seconds per thread count.
+
+**How to read it.** The signal is the **shape of the 1→8 curve**, not any single
+number. A clean read-only path should scale up: aggregate throughput at 8
+threads approaching some multiple of the 1-thread figure. If aggregate
+throughput **flattens or collapses** as threads rise, contention has crept onto
+the resolve path — that is the regression this bench exists to catch.
+
+> **Honest finding (one developer machine).** Today the curve does **not** scale
+> up — aggregate throughput *falls* from ~20 M/s at 1 thread to ~6.7 M/s at 8:
+>
+> | Threads | ~time / round | aggregate ~throughput |
+> |---|---|---|
+> | 1 | ~49 ns | ~20 M/s |
+> | 2 | ~191 ns | ~10.5 M/s |
+> | 4 | ~536 ns | ~7.5 M/s |
+> | 8 | ~1.19 µs | ~6.7 M/s |
+>
+> This is **not** a write-lock bug (the whole hot path — `find_guest_contract`,
+> `count`, `resolve_single_provider`, `resolve_guest_contract` — takes `read()`
+> locks, verified in `runtime_store.rs`). It is `std::sync::RwLock`'s shared
+> reader counter: every `read()` acquire/release is an atomic RMW on one
+> cache line, and an uncached dispatch takes **several** acquire/release cycles
+> per call (find, then count + resolve inside `call_guest_method`). Eight cores
+> bouncing that line serialize on it, so more threads buy *less* aggregate
+> throughput. The realistic mitigation is the documented cache-the-handle
+> pattern (`counter_inc/polyplug` resolves once, then dispatches with **zero**
+> lock traffic) — which is exactly why this bench measures the *pessimal*
+> uncached path. Treat the table as a baseline: a future change that pushed a
+> *write* onto this path would turn the gentle decay into a cliff.
+
+### `call_arena` — the per-call bump allocator (`CallArena`)
+
+`CallArena` is the host-owned bump allocator handed to a VM dispatch call so a
+guest can write variable-size returns without a `host->alloc` round trip per
+value. The retain-and-rewind work (#49) changed three of its paths but benched
+none of them; this microbench covers each:
+
+- `primary/alloc_64` — a warm 64-byte bump from the primary block (align + add),
+  resetting each iteration so it never overflows. The floor (~2.7 ns locally).
+- `reset/primary_only` — `reset()` with no overflow chain: just rewinding `cur`
+  to `base` (~0.46 ns locally — effectively free).
+- `overflow/cold_first_block` — an alloc that spills past the primary region,
+  with the overflow block **freed every iteration** (fresh arena, dropped in the
+  timed body) so each call pays a host `malloc`. ~40 ns locally.
+- `overflow/warm_reuse` — the **same** overflowing alloc, but the arena is reused
+  and `reset()` **retains** the block (retain-and-rewind), so every iteration
+  after the first reuses it with no host call. ~4 ns locally.
+- `per_call/{64,65536}` — a realistic per-call shape: `reset()` + a header
+  (16 B) + payload + trailer (32 B), at a primary-resident size (64 B) and an
+  overflow size (64 KiB). Both land near ~8–9 ns because the 64 KiB arm hits the
+  *warm retained block*, not a fresh malloc.
+
+**How to read it.** The headline is `overflow/cold_first_block` **vs**
+`overflow/warm_reuse` — the ~10× gap (~40 ns → ~4 ns locally) is exactly what
+retain-and-rewind buys: after the first call that overflows, every later call
+reuses the retained block instead of mallocing again. That `per_call/65536` sits
+right next to `per_call/64` (rather than 10× higher) is the same win in the
+realistic pattern. The arena is constructed once per benchmark function and kept
+alive across iterations; its `Drop` frees every retained overflow block at
+teardown, so the bench does not leak (the `drop_frees_all_blocks` unit test in
+`polyplug_abi` proves the teardown path).
+
 ---
 
 ## Future benchmark ideas (documented, not yet built)
@@ -300,6 +383,8 @@ aren't lost. **Priority: benches for what we currently ship come first.**
 | Idea | What it would show | The caveat ("it can be argued against") |
 |---|---|---|
 | **vs sandboxed alternatives** | Call overhead vs a WASM boundary (wasmtime) and vs subprocess/IPC, to quantify what "trusted, same-process, native speed" buys. | Apples-to-oranges on *safety guarantees* — WASM/IPC give isolation we don't. It's a speed-vs-isolation trade, not a strict win; frame it as "here's the cost of isolation you may not need." Also pulls in a heavy `wasmtime` dev-dependency. |
+| **guest→host / peer-caller marshalling** | The generated-caller overhead *on top of* the ABI entry point — what a plugin pays to call back into the host or call a peer contract through generated glue, vs the raw `call_guest_method` figure `cross_call` already measures. | Needs per-language **generated** caller fixtures, so any number conflates the language runtime (QuickJS, CPython, CLR…) with polyplug's marshalling. The native rows would be honest; the VM rows mostly measure the interpreter — same two-tier caveat as the dispatch matrix. |
+| **unload/load churn soak** | Time drift across many `load → unload → load` loops, to surface retired-resource accumulation (the retire-not-drop model keeps superseded interfaces/libs alive for the runtime lifetime). | It's a **leak detector dressed as a bench** — the signal is *time stability* across iterations, not speed. A flat line means "no creeping cost," which reads as a non-result to anyone expecting a throughput number; it needs a drift/regression lens (or a memory probe), not a median-ns headline. |
 
 If you build any of these, keep them **local-only** (this folder), keep the
 payload-isolation discipline above, and state the caveat next to the number so
