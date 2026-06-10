@@ -364,4 +364,67 @@ export function toStr(sv) {
     return _decodeUtf8(bytes);
 }
 
+/**
+ * Check if a StringView (or string) starts with the given prefix.
+ *
+ * @param {StringView|string} sv - StringView from polyplug ABI, or a plain JS string
+ * @param {string} prefix - The prefix to check
+ * @returns {boolean} True if the string starts with prefix
+ *
+ * @example
+ * const ok = startsWith(stringView, 'hello');
+ */
+export function startsWith(sv, prefix) {
+    const s = typeof sv === 'string' ? sv : toStr(sv);
+    return s.startsWith(prefix);
+}
+
+/**
+ * Check if a StringView (or string) ends with the given suffix.
+ *
+ * @param {StringView|string} sv - StringView from polyplug ABI, or a plain JS string
+ * @param {string} suffix - The suffix to check
+ * @returns {boolean} True if the string ends with suffix
+ *
+ * @example
+ * const ok = endsWith(stringView, 'world');
+ */
+export function endsWith(sv, suffix) {
+    const s = typeof sv === 'string' ? sv : toStr(sv);
+    return s.endsWith(suffix);
+}
+
+/**
+ * Strip a prefix from a StringView (or string).
+ * Returns the original string unchanged if the prefix is not present.
+ *
+ * @param {StringView|string} sv - StringView from polyplug ABI, or a plain JS string
+ * @param {string} prefix - The prefix to remove
+ * @returns {string} The string with prefix removed, or the original string
+ *
+ * @example
+ * const stripped = stripPrefix(stringView, 'hello_');
+ */
+export function stripPrefix(sv, prefix) {
+    const s = typeof sv === 'string' ? sv : toStr(sv);
+    if (s.startsWith(prefix)) {
+        return s.slice(prefix.length);
+    }
+    return s;
+}
+
+/**
+ * Split a StringView (or string) by a delimiter.
+ *
+ * @param {StringView|string} sv - StringView from polyplug ABI, or a plain JS string
+ * @param {string} delimiter - The delimiter to split by
+ * @returns {string[]} Array of substrings
+ *
+ * @example
+ * const parts = split(stringView, ',');
+ */
+export function split(sv, delimiter) {
+    const s = typeof sv === 'string' ? sv : toStr(sv);
+    return s.split(delimiter);
+}
 

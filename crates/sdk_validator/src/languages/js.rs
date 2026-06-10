@@ -24,11 +24,24 @@ impl JsValidator {
         Self
     }
 
+    /// Determine the ast-grep language name from the file extension.
+    ///
+    /// ast-grep uses the file extension to select the parser, so `.js` files
+    /// must declare `language: javascript` while `.ts` / `.tsx` files use
+    /// `language: typescript`.  Using the wrong language causes ast-grep to
+    /// silently return no matches.
+    fn ast_grep_language(file: &Path) -> &'static str {
+        match file.extension().and_then(|e| e.to_str()) {
+            Some("ts") | Some("tsx") => "typescript",
+            _ => "javascript",
+        }
+    }
+
     /// Generate the ast-grep inline rule for a JS/TS function definition.
-    fn generate_rule(method_name: &str) -> String {
+    fn generate_rule(method_name: &str, language: &str) -> String {
         format!(
             r#"id: find-function
-language: typescript
+language: {language}
 severity: hint
 rule:
   any:
@@ -58,7 +71,8 @@ impl LanguageValidator for JsValidator {
         native_name: &str,
         file: &Path,
     ) -> Result<bool, ValidatorError> {
-        let rule: String = Self::generate_rule(native_name);
+        let language: &str = Self::ast_grep_language(file);
+        let rule: String = Self::generate_rule(native_name, language);
         let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
         Ok(!matches.is_empty())
     }
@@ -77,6 +91,13 @@ mod tests {
 
     fn create_temp_ts_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".ts")?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        Ok(file)
+    }
+
+    fn create_temp_js_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+        let mut file: NamedTempFile = NamedTempFile::with_suffix(".js")?;
         file.write_all(content.as_bytes())?;
         file.flush()?;
         Ok(file)
@@ -114,7 +135,7 @@ export function toStr(sv: StringView | null | undefined): string {
 
     #[test]
     fn test_detects_unannotated_function() -> Result<(), Box<dyn core::error::Error>> {
-        // Plain-JS form (a future target file is plain JS).
+        // Plain-JS form — no type annotations, `.ts` extension used here.
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export function toStr(sv) {
@@ -212,12 +233,49 @@ export function toStr(sv: StringView | null | undefined): string {
     }
 
     #[test]
+    fn test_detects_plain_js_function() -> Result<(), Box<dyn core::error::Error>> {
+        // Validates that `.js` files are parsed with `language: javascript`, not
+        // `language: typescript` — the two parsers are distinct in ast-grep and
+        // the wrong choice silently produces zero matches.
+        let file: NamedTempFile = create_temp_js_file(
+            r#"
+export function toStr(sv) {
+    return '';
+}
+export function startsWith(sv, prefix) {
+    return sv.startsWith(prefix);
+}
+"#,
+        )?;
+        let result: ValidationResult = validate_file(
+            &["to_str".to_string(), "starts_with".to_string()],
+            file.path(),
+        )?;
+        assert!(result.found_methods.contains(&"to_str".to_string()));
+        assert!(result.found_methods.contains(&"starts_with".to_string()));
+        Ok(())
+    }
+
+    #[test]
     fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn core::error::Error>> {
         let sdk_path: PathBuf = repo_path("sdks/js/abi/abi.ts");
         let result: ValidationResult = validate_file(&golden_methods(), &sdk_path)?;
         assert!(
             result.is_complete(),
             "js SDK missing methods: {:?}",
+            result.missing_methods
+        );
+        assert_eq!(result.found_methods.len(), 5);
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_guest_js_has_all_golden_methods() -> Result<(), Box<dyn core::error::Error>> {
+        let sdk_path: PathBuf = repo_path("sdks/js/guest/polyplug_guest.js");
+        let result: ValidationResult = validate_file(&golden_methods(), &sdk_path)?;
+        assert!(
+            result.is_complete(),
+            "js guest SDK missing methods: {:?}",
             result.missing_methods
         );
         assert_eq!(result.found_methods.len(), 5);

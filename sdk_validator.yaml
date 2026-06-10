@@ -37,6 +37,7 @@ targets:
     - sdks/csharp/abi/Abi.cs
   js:
     - sdks/js/abi/abi.ts
+    - sdks/js/guest/polyplug_guest.js
   cpp:
     - sdks/cpp/abi/polyplug/abi.hpp
   lua:
