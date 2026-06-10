@@ -31,7 +31,6 @@ using polyplug_generated::PIPELINE_VALIDATOR_CONTRACT_ID;
 using polyplug_generated::PipelineDecoderContract;
 using polyplug_generated::PipelineEncoderContract;
 using polyplug_generated::PipelineValidatorContract;
-using polyplug_generated::LogLevel;
 using polyplug_host::HostLogger;
 using polyplug_host::create_host_logger_interface;
 
@@ -44,13 +43,15 @@ public:
                   << "\n";
     }
 
-    void log_with_level(const LogLevel& level, StringView message) override {
+    // The contract-defined enum is referenced fully qualified: an unqualified
+    // `LogLevel` would be ambiguous with the ABI's global `::LogLevel`.
+    void log_with_level(const polyplug_generated::LogLevel& level, StringView message) override {
         const char* level_str = "INFO";
         switch (level) {
-            case LogLevel::Debug: level_str = "DEBUG"; break;
-            case LogLevel::Info:  level_str = "INFO";  break;
-            case LogLevel::Warn:  level_str = "WARN";  break;
-            case LogLevel::Error: level_str = "ERROR"; break;
+            case polyplug_generated::LogLevel::Debug: level_str = "DEBUG"; break;
+            case polyplug_generated::LogLevel::Info:  level_str = "INFO";  break;
+            case polyplug_generated::LogLevel::Warn:  level_str = "WARN";  break;
+            case polyplug_generated::LogLevel::Error: level_str = "ERROR"; break;
         }
         std::cout << "[plugin][" << level_str << "] "
                   << std::string_view(reinterpret_cast<const char*>(message.ptr), message.len)
@@ -135,6 +136,12 @@ int main() {
                     std::cerr << "[HOT-RELOAD] Failed: " << name
                               << " (bundle_id=0x" << std::hex << phase.bundle_id << std::dec
                               << ") - " << reason << "\n";
+                    break;
+                }
+                case ReloadPhaseType::Unloading: {
+                    std::string name = polyplug::abi::to_string(phase.bundle_name);
+                    std::cerr << "[HOT-RELOAD] Unloading: " << name
+                              << " (bundle_id=0x" << std::hex << phase.bundle_id << std::dec << ")\n";
                     break;
                 }
             }

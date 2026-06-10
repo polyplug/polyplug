@@ -490,3 +490,8 @@ tests/integration/cpp/hot_reload_test
 flamegraph-*.svg
 perf.data
 perf.data.old
+
+# C++ example host build artifacts (built by examples/hosts/cpp/Makefile)
+examples/hosts/cpp/host
+examples/hosts/cpp/hot_reload_host
+examples/hosts/cpp/*.d

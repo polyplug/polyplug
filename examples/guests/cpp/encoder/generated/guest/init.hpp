@@ -7,8 +7,6 @@
 
 namespace polyplug_plugin {
 
-using namespace polyplug_generated;
-
 PipelineEncoderGuestContract* g_encoder_impl = nullptr;
 
 }  // namespace polyplug_plugin

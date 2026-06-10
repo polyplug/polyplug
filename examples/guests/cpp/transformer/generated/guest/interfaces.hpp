@@ -9,8 +9,6 @@
 
 namespace polyplug_plugin {
 
-using namespace polyplug_generated;
-
 // Plugin: transformer
 extern DataTransformerGuestContract* g_transformer_impl;
 

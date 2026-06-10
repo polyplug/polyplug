@@ -7,8 +7,6 @@
 
 namespace polyplug_plugin {
 
-using namespace polyplug_generated;
-
 DataReporterGuestContract* g_reporter_impl = nullptr;
 
 }  // namespace polyplug_plugin

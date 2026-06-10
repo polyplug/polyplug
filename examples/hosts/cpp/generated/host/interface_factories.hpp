@@ -8,8 +8,6 @@
 
 namespace polyplug_host {
 
-using namespace polyplug_generated;
-
 /// Create a host contract interface for `host.logger` with NATIVE dispatch.
 ///
 /// Takes ownership of the implementation and creates a 'static interface.
@@ -44,11 +42,11 @@ const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> imp
         }
         try {
             struct LOG_WITH_LEVELArgs {
-                LogLevel level;
+                polyplug_generated::LogLevel level;
                 StringView message;
             };
             const LOG_WITH_LEVELArgs* packed = static_cast<const LOG_WITH_LEVELArgs*>(args);
-            LogLevel level = packed->level;
+            polyplug_generated::LogLevel level = packed->level;
             StringView message = packed->message;
             impl->log_with_level(level, message);
             (void)out;

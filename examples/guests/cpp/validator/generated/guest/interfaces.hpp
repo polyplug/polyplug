@@ -9,8 +9,6 @@
 
 namespace polyplug_plugin {
 
-using namespace polyplug_generated;
-
 // Plugin: validator
 extern PipelineValidatorGuestContract* g_validator_impl;
 

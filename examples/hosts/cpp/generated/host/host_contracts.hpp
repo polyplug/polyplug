@@ -7,15 +7,13 @@
 
 namespace polyplug_host {
 
-using namespace polyplug_generated;
-
 /// Host abstract class for contract `host.logger` (id=0xF53EB5F2845853BB)
 /// Hosts implement this class to provide functionality to plugins.
 class HostLogger {
 public:
     virtual ~HostLogger() = default;
     virtual void log(StringView message) = 0;
-    virtual void log_with_level(const LogLevel& level, StringView message) = 0;
+    virtual void log_with_level(const polyplug_generated::LogLevel& level, StringView message) = 0;
 };
 
 /// Contract ID constant for `host.logger` (FNV-1a of "host_contract:host.logger@1")

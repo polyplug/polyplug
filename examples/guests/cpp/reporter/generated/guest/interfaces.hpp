@@ -9,8 +9,6 @@
 
 namespace polyplug_plugin {
 
-using namespace polyplug_generated;
-
 // Plugin: reporter
 extern DataReporterGuestContract* g_reporter_impl;
 

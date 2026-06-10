@@ -9,8 +9,6 @@
 
 namespace polyplug_plugin {
 
-using namespace polyplug_generated;
-
 // Plugin: decoder
 extern PipelineDecoderGuestContract* g_decoder_impl;
 

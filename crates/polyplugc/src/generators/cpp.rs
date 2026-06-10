@@ -196,7 +196,7 @@ fn generate_contracts_hpp(ir: &ValidatedIr) -> String {
     out.push_str("#pragma once\n");
     out.push_str("#include \"types.hpp\"\n");
     out.push_str("#include <cstdint>\n\n");
-    out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
+    out.push_str("namespace polyplug_plugin {\n\n");
     out.push_str("struct RuntimeError { uint32_t code; };\n\n");
 
     for contract in &ir.contracts {
@@ -263,7 +263,7 @@ fn generate_interfaces_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("#include <cstdint>\n");
     out.push_str("#include <cstring>\n");
     out.push_str("#include <exception>\n\n");
-    out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
+    out.push_str("namespace polyplug_plugin {\n\n");
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -599,11 +599,12 @@ fn build_guest_call_expr(contract_lower: &str, func: &ResolvedFunction) -> Strin
         match &param.ty {
             ResolvedTypeRef::UserDefined(type_name) => {
                 // Single user-defined struct param — dereference args directly
+                let qualified_name: String = qualified_user_type(type_name);
                 return format!(
-                    "        // SAFETY: args is a valid const void* pointing to a {type_name} per ABI contract.\n\
+                    "        // SAFETY: args is a valid const void* pointing to a {qualified_name} per ABI contract.\n\
              // The host guarantees proper alignment and size before calling this wrapper.\n\
              {}g_{}_impl->{}(*static_cast<const {}*>(args));\n",
-                    result_prefix, contract_lower, func.name, type_name
+                    result_prefix, contract_lower, func.name, qualified_name
                 );
             }
             ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => {
@@ -668,7 +669,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("#include \"polyplug/abi.hpp\"\n");
     out.push_str("#include \"polyplug/guest.hpp\"\n\n");
 
-    out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
+    out.push_str("namespace polyplug_plugin {\n\n");
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
             let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
@@ -1042,7 +1043,7 @@ fn generate_cpp_type(out: &mut String, ty: &ResolvedType) {
     for field in &ty.fields {
         out.push_str(&format!(
             "    {} {};\n",
-            cpp_type_name(&field.ty),
+            cpp_types_hpp_type_name(&field.ty),
             field.name
         ));
     }
@@ -1669,6 +1670,19 @@ fn build_args_ptr_code(class_name: &str, func: &ResolvedFunction) -> String {
 
 // ─── Utility helpers ──────────────────────────────────────────────────────────
 
+/// Fully qualified C++ spelling for a contract-defined type.
+///
+/// Every generated file other than `types.hpp` references contract-defined
+/// types through this spelling so an unqualified name can never become
+/// ambiguous with a global declared by `polyplug/abi.hpp` (e.g. a contract
+/// `LogLevel` enum vs the ABI's global `::LogLevel`).
+fn qualified_user_type(name: &str) -> String {
+    format!("polyplug_generated::{name}")
+}
+
+/// C++ type name with contract-defined types fully qualified as
+/// `polyplug_generated::<Type>`. Used everywhere except `types.hpp` field
+/// emission (see `cpp_types_hpp_type_name`).
 fn cpp_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
         ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
@@ -1676,7 +1690,17 @@ fn cpp_type_name(ty: &ResolvedTypeRef) -> String {
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => qualified_user_type(name),
+    }
+}
+
+/// C++ type name as spelled inside `namespace polyplug_generated` itself
+/// (`types.hpp` struct fields only): contract-defined types stay unqualified
+/// because they are declared as siblings in the same namespace.
+fn cpp_types_hpp_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
         ResolvedTypeRef::UserDefined(name) => name.clone(),
+        ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => cpp_type_name(ty),
     }
 }
 
@@ -1761,7 +1785,7 @@ fn cpp_host_param_type_name(ty: &ResolvedTypeRef) -> String {
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => name.clone(),
+        ResolvedTypeRef::UserDefined(name) => qualified_user_type(name),
     }
 }
 
@@ -1773,7 +1797,7 @@ fn cpp_host_return_type_name(ty: &ResolvedTypeRef) -> String {
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => name.clone(),
+        ResolvedTypeRef::UserDefined(name) => qualified_user_type(name),
     }
 }
 
@@ -1825,7 +1849,7 @@ fn host_contract_name_to_cpp_caller(name: &str) -> String {
 /// For guest callers, we use ergonomic C++ types:
 /// - StringView -> std::string_view (borrowed view)
 /// - Buffer -> Buffer (ABI type, passed by value)
-/// - UserDefined -> const TypeName& (passed by const reference)
+/// - UserDefined -> const polyplug_generated::TypeName& (passed by const reference)
 /// - Primitives -> T (passed by value)
 fn cpp_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
@@ -1834,7 +1858,7 @@ fn cpp_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => format!("const {name}&"),
+        ResolvedTypeRef::UserDefined(name) => format!("const {}&", qualified_user_type(name)),
     }
 }
 
@@ -1842,7 +1866,7 @@ fn cpp_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
 /// Returns ergonomic borrowed-view types for host-owned memory:
 /// - StringView -> std::string_view (borrowed view into host-owned memory)
 /// - Buffer -> std::span<const std::uint8_t> (borrowed view into host-owned memory)
-/// - UserDefined -> TypeName (by value)
+/// - UserDefined -> polyplug_generated::TypeName (by value)
 /// - Primitives -> T (by value)
 fn cpp_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
@@ -1851,7 +1875,7 @@ fn cpp_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "std::span<const std::uint8_t>".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => name.clone(),
+        ResolvedTypeRef::UserDefined(name) => qualified_user_type(name),
     }
 }
 
@@ -2150,7 +2174,7 @@ fn cpp_guest_caller_abi_type_name(ty: &ResolvedTypeRef) -> String {
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => name.clone(),
+        ResolvedTypeRef::UserDefined(name) => qualified_user_type(name),
     }
 }
 
@@ -2216,7 +2240,7 @@ fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("#include <cstring>\n");
     out.push_str("#include <optional>\n");
     out.push_str("#include <string_view>\n\n");
-    out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
+    out.push_str("namespace polyplug_plugin {\n\n");
     emit_cpp_log_call_failure_helper(&mut out);
 
     for contract in &ir.host_contracts {
@@ -2277,7 +2301,7 @@ fn generate_cpp_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("#include \"types.hpp\"\n");
     out.push_str("#include \"polyplug/abi.hpp\"\n");
     out.push_str("#include <cstdint>\n\n");
-    out.push_str("namespace polyplug_host {\n\nusing namespace polyplug_generated;\n\n");
+    out.push_str("namespace polyplug_host {\n\n");
 
     for contract in &ir.host_contracts {
         generate_cpp_host_contract_trait(&mut out, contract);
@@ -2312,7 +2336,7 @@ fn generate_cpp_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("#include \"polyplug/abi.hpp\"\n");
     out.push_str("#include <cstdint>\n");
     out.push_str("#include <memory>\n\n");
-    out.push_str("namespace polyplug_host {\n\nusing namespace polyplug_generated;\n\n");
+    out.push_str("namespace polyplug_host {\n\n");
 
     for contract in &ir.host_contracts {
         generate_cpp_host_interface_factory(&mut out, contract);
@@ -2699,7 +2723,7 @@ fn cpp_host_abi_type_name(ty: &ResolvedTypeRef) -> String {
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => name.clone(),
+        ResolvedTypeRef::UserDefined(name) => qualified_user_type(name),
     }
 }
 
@@ -2779,7 +2803,6 @@ fn generate_cpp_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract])
     out.push_str("#include <memory>\n");
     out.push_str("#include <optional>\n\n");
     out.push_str("namespace polyplug_plugin {\n\n");
-    out.push_str("using namespace polyplug_generated;\n\n");
     emit_cpp_log_call_failure_helper(&mut out);
 
     // Emit arena helpers only when at least one peer contract needs the arena.
@@ -3459,7 +3482,7 @@ mod tests {
         );
         assert_eq!(
             cpp_host_param_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
-            "MyStruct"
+            "polyplug_generated::MyStruct"
         );
     }
 
@@ -3479,7 +3502,7 @@ mod tests {
         );
         assert_eq!(
             cpp_host_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
-            "MyStruct"
+            "polyplug_generated::MyStruct"
         );
     }
 
@@ -3679,7 +3702,7 @@ mod tests {
         );
         assert_eq!(
             cpp_guest_caller_param_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
-            "const MyStruct&"
+            "const polyplug_generated::MyStruct&"
         );
     }
 
@@ -3699,7 +3722,7 @@ mod tests {
         );
         assert_eq!(
             cpp_guest_caller_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
-            "MyStruct"
+            "polyplug_generated::MyStruct"
         );
     }
 
@@ -4228,6 +4251,258 @@ mod tests {
         assert!(
             !names.contains(&"guest/peer_callers.hpp".to_owned()),
             "must NOT emit peer_callers.hpp without a bundle: {names:?}"
+        );
+    }
+
+    /// Build an IR whose contract defines a `LogLevel` enum colliding with the
+    /// global `::LogLevel` declared by `polyplug/abi.hpp`, plus a struct
+    /// embedding it, a guest contract and a host contract using it, and a
+    /// bundle dependency — so every generated file kind is exercised.
+    fn collision_ir() -> ValidatedIr {
+        ValidatedIr {
+            types: vec![crate::ir::ResolvedType {
+                name: "LogMessage".to_owned(),
+                fields: vec![crate::ir::ResolvedField {
+                    name: "level".to_owned(),
+                    ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                }],
+            }],
+            enums: vec![EnumDef {
+                name: "LogLevel".to_owned(),
+                repr: ReprType::U32,
+                bitflag: false,
+                variants: vec![
+                    EnumVariant {
+                        name: "Debug".to_owned(),
+                        value: "0".to_owned(),
+                    },
+                    EnumVariant {
+                        name: "Error".to_owned(),
+                        value: "1".to_owned(),
+                    },
+                ],
+            }],
+            contracts: vec![ResolvedContract {
+                name: "pipeline.decoder".to_owned(),
+                contract_id: 0x1111_2222_3333_4444_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "describe".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "level".to_owned(),
+                        ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                    }],
+                    returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+                }],
+            }],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x5555_6666_7777_8888_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                singleton: true,
+                functions: vec![ResolvedFunction {
+                    name: "log_with_level".to_owned(),
+                    function_id: 0,
+                    params: vec![
+                        ResolvedParam {
+                            name: "level".to_owned(),
+                            ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                        },
+                        ResolvedParam {
+                            name: "message".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        },
+                    ],
+                    returns: None,
+                }],
+            }],
+            bundle: Some(crate::ir::ResolvedBundle {
+                name: "decoder_bundle".to_owned(),
+                bundle_id: 0x9999_AAAA_BBBB_CCCC_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                runtime: "native".to_owned(),
+                file: polyplug_codegen::ResolvedBundleFile::Single("test.so".to_owned()),
+                plugins: vec![crate::ir::ResolvedPlugin {
+                    name: "decoder".to_owned(),
+                    version: Version {
+                        major: 1,
+                        minor: 0,
+                        patch: 0,
+                    },
+                    implements: vec!["pipeline.decoder@1.0".to_owned()],
+                    optional: vec![],
+                }],
+                dependencies: vec![ResolvedDependency::ByContract {
+                    contract: "pipeline.decoder".to_owned(),
+                    contract_id: 0x1111_2222_3333_4444_u64,
+                    min_version: 1,
+                }],
+                needs_reinit_on_dep_reload: false,
+            }),
+        }
+    }
+
+    /// Find one generated file's content by path.
+    fn file_content<'a>(files: &'a GeneratedFiles, name: &str) -> &'a str {
+        files
+            .files
+            .iter()
+            .find(|f: &&GeneratedFile| f.path.to_string_lossy() == name)
+            .map(|f: &GeneratedFile| f.content.as_str())
+            .expect("generated file missing")
+    }
+
+    /// Defect: a blanket `using namespace polyplug_generated;` made unqualified
+    /// contract-type references ambiguous against globals declared by
+    /// `polyplug/abi.hpp` (contract `LogLevel` vs the ABI's `::LogLevel`), so
+    /// every TU including a generated header failed to compile. No generated
+    /// file may ever blanket-import the generated namespace.
+    #[test]
+    fn generated_files_never_blanket_import_polyplug_generated() {
+        let generator: CppGenerator = CppGenerator;
+        let ir: ValidatedIr = collision_ir();
+
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_host(&ir, &mut files)
+            .expect("generate_host");
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        // The collision IR must exercise every generated file kind.
+        for expected in [
+            "host/types.hpp",
+            "host/host_callers.hpp",
+            "host/host_contracts.hpp",
+            "host/interface_factories.hpp",
+            "guest/types.hpp",
+            "guest/contracts.hpp",
+            "guest/interfaces.hpp",
+            "guest/init.hpp",
+            "guest/host_contracts.hpp",
+            "guest/peer_callers.hpp",
+        ] {
+            assert!(
+                names.contains(&expected.to_owned()),
+                "collision IR must produce {expected}: {names:?}"
+            );
+        }
+
+        for file in &files.files {
+            assert!(
+                !file.content.contains("using namespace polyplug_generated"),
+                "{} must not blanket-import polyplug_generated:\n{}",
+                file.path.display(),
+                file.content
+            );
+        }
+    }
+
+    /// Contract-defined types must be referenced fully qualified
+    /// (`polyplug_generated::<Type>`) in every generated file, so unqualified
+    /// names can never collide with `polyplug/abi.hpp` globals. Only the type
+    /// DEFINITIONS in `types.hpp` (inside `namespace polyplug_generated`)
+    /// stay unqualified.
+    #[test]
+    fn contract_types_emitted_fully_qualified() {
+        let generator: CppGenerator = CppGenerator;
+        let ir: ValidatedIr = collision_ir();
+
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_host(&ir, &mut files)
+            .expect("generate_host");
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+
+        // types.hpp IS namespace polyplug_generated — definitions stay unqualified.
+        let types_hpp: &str = file_content(&files, "host/types.hpp");
+        assert!(
+            types_hpp.contains("enum class LogLevel : uint32_t"),
+            "missing enum definition in types.hpp:\n{types_hpp}"
+        );
+        assert!(
+            types_hpp.contains("    LogLevel level;\n"),
+            "struct field inside polyplug_generated must stay unqualified:\n{types_hpp}"
+        );
+        assert!(
+            !types_hpp.contains("polyplug_generated::LogLevel"),
+            "types.hpp must not self-qualify its own definitions:\n{types_hpp}"
+        );
+
+        // Host-side abstract class (namespace polyplug_host).
+        let host_contracts: &str = file_content(&files, "host/host_contracts.hpp");
+        assert!(
+            host_contracts.contains(
+                "virtual void log_with_level(const polyplug_generated::LogLevel& level, StringView message) = 0;"
+            ),
+            "host trait method must qualify contract types:\n{host_contracts}"
+        );
+
+        // Host-side thunks (namespace polyplug_host).
+        let factories: &str = file_content(&files, "host/interface_factories.hpp");
+        assert!(
+            factories.contains("polyplug_generated::LogLevel"),
+            "host thunk arg extraction must qualify contract types:\n{factories}"
+        );
+
+        // Host callers (namespace polyplug_generated — qualified for parity).
+        let host_callers: &str = file_content(&files, "host/host_callers.hpp");
+        assert!(
+            host_callers.contains("polyplug_generated::LogLevel level"),
+            "host caller params must qualify contract types:\n{host_callers}"
+        );
+
+        // Guest-side host-contract caller (namespace polyplug_plugin).
+        let guest_host_contracts: &str = file_content(&files, "guest/host_contracts.hpp");
+        assert!(
+            guest_host_contracts.contains("const polyplug_generated::LogLevel& level"),
+            "guest caller params must qualify contract types:\n{guest_host_contracts}"
+        );
+        assert!(
+            guest_host_contracts.contains(" polyplug_generated::LogLevel level;"),
+            "guest caller packed-args fields must qualify contract types:\n{guest_host_contracts}"
+        );
+
+        // Guest abstract contract classes (namespace polyplug_plugin).
+        let contracts_hpp: &str = file_content(&files, "guest/contracts.hpp");
+        assert!(
+            contracts_hpp.contains("const polyplug_generated::LogLevel& level"),
+            "guest abstract method params must qualify contract types:\n{contracts_hpp}"
+        );
+
+        // Guest ABI wrappers (namespace polyplug_plugin).
+        let interfaces_hpp: &str = file_content(&files, "guest/interfaces.hpp");
+        assert!(
+            interfaces_hpp.contains("static_cast<const polyplug_generated::LogLevel*>(args)"),
+            "guest ABI wrapper casts must qualify contract types:\n{interfaces_hpp}"
+        );
+
+        // Peer callers (namespace polyplug_plugin).
+        let peer_callers: &str = file_content(&files, "guest/peer_callers.hpp");
+        assert!(
+            peer_callers.contains("polyplug_generated::LogLevel level"),
+            "peer caller params must qualify contract types:\n{peer_callers}"
         );
     }
 }

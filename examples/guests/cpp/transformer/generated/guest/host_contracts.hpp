@@ -13,8 +13,6 @@
 
 namespace polyplug_plugin {
 
-using namespace polyplug_generated;
-
 #ifndef POLYPLUG_GENERATED_LOG_CALL_FAILURE
 #define POLYPLUG_GENERATED_LOG_CALL_FAILURE
 namespace detail {
@@ -97,13 +95,13 @@ public:
     }
 
     /// Call host contract function `log_with_level` (function_id=1)
-    void log_with_level(const LogLevel& level, std::string_view message) noexcept {
+    void log_with_level(const polyplug_generated::LogLevel& level, std::string_view message) noexcept {
         if (interface_ == nullptr) {
             detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log_with_level", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));
             return;
         }
 
-        struct HostLoggerContractLog_with_levelArgs { LogLevel level; StringView message; };
+        struct HostLoggerContractLog_with_levelArgs { polyplug_generated::LogLevel level; StringView message; };
         HostLoggerContractLog_with_levelArgs args_val{ level, StringView{ reinterpret_cast<const uint8_t*>(message.data()), message.size() } };
         const void* args_ptr = &args_val;
         void* out_ptr = nullptr;

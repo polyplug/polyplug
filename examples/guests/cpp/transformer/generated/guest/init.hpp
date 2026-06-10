@@ -7,8 +7,6 @@
 
 namespace polyplug_plugin {
 
-using namespace polyplug_generated;
-
 DataTransformerGuestContract* g_transformer_impl = nullptr;
 
 }  // namespace polyplug_plugin

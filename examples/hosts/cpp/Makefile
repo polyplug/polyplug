@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -O2
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -MMD -MP
 INCLUDES = -I../../../sdks/cpp/host \
            -I../../../sdks/cpp/abi \
            -I../../../sdks/cpp/loaders/native \
@@ -18,15 +18,21 @@ HOT_RELOAD_TARGET = hot_reload_host
 SRC = host.cpp
 HOT_RELOAD_SRC = main.cpp
 
-all: $(TARGET)
+# Compiler-generated dependency files (-MMD -MP) so header changes
+# (generated headers, SDK headers, abi.hpp) trigger a rebuild.
+DEPFILES = $(TARGET).d $(HOT_RELOAD_TARGET).d
+
+all: $(TARGET) $(HOT_RELOAD_TARGET)
 
 $(TARGET): $(SRC)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $< $(LIBS)
+	$(CXX) $(CXXFLAGS) -MF $(TARGET).d $(INCLUDES) $(LDFLAGS) -o $@ $< $(LIBS)
 
 $(HOT_RELOAD_TARGET): $(HOT_RELOAD_SRC)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $< $(LIBS)
+	$(CXX) $(CXXFLAGS) -MF $(HOT_RELOAD_TARGET).d $(INCLUDES) $(LDFLAGS) -o $@ $< $(LIBS)
 
 clean:
-	rm -f $(TARGET) $(HOT_RELOAD_TARGET)
+	rm -f $(TARGET) $(HOT_RELOAD_TARGET) $(DEPFILES)
+
+-include $(DEPFILES)
 
 .PHONY: all clean

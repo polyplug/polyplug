@@ -7,8 +7,6 @@
 
 namespace polyplug_plugin {
 
-using namespace polyplug_generated;
-
 PipelineValidatorGuestContract* g_validator_impl = nullptr;
 
 }  // namespace polyplug_plugin

@@ -14,8 +14,6 @@
 
 namespace polyplug_plugin {
 
-using namespace polyplug_generated;
-
 #ifndef POLYPLUG_GENERATED_LOG_CALL_FAILURE
 #define POLYPLUG_GENERATED_LOG_CALL_FAILURE
 namespace detail {
