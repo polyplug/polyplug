@@ -9,7 +9,9 @@
 #include "generated/host/interface_factories.hpp"
 #include "generated/host/host_callers.hpp"
 
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -218,6 +220,32 @@ int main() {
         if (auto validator = PipelineValidatorContract::create(validator_h, host)) {
             StringView out = validator->validate(as_view(decoded));
             std::cout << "[validator] validate(\"" << decoded << "\") = \"" << to_string(out) << "\"\n";
+        }
+    }
+
+    // Round-trip micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS): times the full
+    // host → runtime → native guest → return path (C++ host calling the native
+    // decoder plugin and getting a StringView back). Point POLYPLUG_PLUGIN_PATH at
+    // native guests only so the resolved decoder is the native cdylib.
+    if (const char* iters_env = std::getenv("POLYPLUG_BENCH_ITERS")) {
+        const long iters = std::atol(iters_env);
+        GuestContractHandle bench_h = rt.find_guest_contract(PIPELINE_DECODER_CONTRACT_ID, 0);
+        if (iters > 0 && polyplug::is_valid(bench_h)) {
+            if (auto bench_decoder = PipelineDecoderContract::create(bench_h, host)) {
+                const StringView sv = as_view(input);
+                const long warmup = iters < 10000 ? iters : 10000;
+                for (long i = 0; i < warmup; ++i) {
+                    bench_decoder->decode(sv);
+                }
+                const auto start = std::chrono::steady_clock::now();
+                for (long i = 0; i < iters; ++i) {
+                    bench_decoder->decode(sv);
+                }
+                const auto elapsed = std::chrono::steady_clock::now() - start;
+                const double ns =
+                    std::chrono::duration<double, std::nano>(elapsed).count() / static_cast<double>(iters);
+                std::cout << "ROUNDTRIP_NS=" << ns << " LANG=cpp\n";
+            }
         }
     }
 

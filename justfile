@@ -605,6 +605,14 @@ bench-check threshold="1.5":
 bench-all: bench bench-charts
     @echo "=== Benchmarks + charts refreshed ==="
 
+# Measure the cross-language round trip (host -> runtime -> native guest -> return)
+# for every available host language, then refresh cross_lang_roundtrip.svg.
+# Requires the workspace + example plugins built (just build-examples).
+bench-roundtrip iters="500000":
+    @echo "=== Cross-language round-trip bench ({{iters}} iters/host) ==="
+    POLYPLUG_BENCH_ITERS={{iters}} bash examples/hosts/roundtrip_bench.sh
+    python3 scripts/gen_bench_charts.py target/criterion docs/assets/benches
+
 # Flamegraph-profile a single benchmark (requires cargo-flamegraph + perf).
 # Usage: just flamegraph [bench] [package]
 # Examples:

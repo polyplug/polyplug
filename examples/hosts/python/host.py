@@ -154,7 +154,35 @@ def main():
         result = to_str(validator.validate(str_view(decoded, keepalive)))
         print(f'[validator] validate("{decoded}") = "{result}"')
 
+    # Round-trip micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS). Times the full
+    # host → runtime → native guest → return path: a Python host calling the native
+    # decoder plugin and getting a StringView back. The decoder is a native cdylib
+    # guest, so its return is a borrowed zero-copy view (no per-call alloc to leak).
+    bench_iters: str = os.environ.get("POLYPLUG_BENCH_ITERS", "")
+    if bench_iters:
+        run_roundtrip_bench(rt, int(bench_iters))
+
     print("\ndone.")
+
+
+def run_roundtrip_bench(rt, iters: int) -> None:
+    """Time `decoder.decode(input)` over `iters` calls; print ROUNDTRIP_NS=<ns/call>."""
+    import time
+
+    decoder = make_caller(PipelineDecoderContractCaller, rt, PIPELINE_DECODER_CONTRACT_ID)
+    if decoder is None:
+        print("ROUNDTRIP_NS=nan LANG=python  # decoder unavailable", file=sys.stderr)
+        return
+    keepalive: list = []
+    sv: StringView = str_view("name,value,42", keepalive)
+    warmup: int = min(iters, 10000)
+    for _ in range(warmup):
+        decoder.decode(sv)
+    start: int = time.perf_counter_ns()
+    for _ in range(iters):
+        decoder.decode(sv)
+    elapsed: int = time.perf_counter_ns() - start
+    print(f"ROUNDTRIP_NS={elapsed / iters:.2f} LANG=python")
 
 
 if __name__ == "__main__":

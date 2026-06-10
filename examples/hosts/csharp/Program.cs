@@ -218,6 +218,27 @@ class Program
             }
         }
 
+        // Round-trip micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS): times the full
+        // host → runtime → native guest → return path (C# host calling the native
+        // decoder plugin and getting a StringView back). Point POLYPLUG_PLUGIN_PATH at
+        // native guests only so the resolved decoder is the native cdylib.
+        var benchIters = Environment.GetEnvironmentVariable("POLYPLUG_BENCH_ITERS");
+        if (benchIters != null && int.TryParse(benchIters, out var iters) && iters > 0
+            && PipelineDecoderContractCaller.Create(rt) is { } benchDecoder)
+        {
+            using (benchDecoder)
+            using (var input = new PinnedStringView(inputStr))
+            {
+                int warmup = Math.Min(iters, 10000);
+                for (int i = 0; i < warmup; i++) benchDecoder.Decode(input.View);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                for (int i = 0; i < iters; i++) benchDecoder.Decode(input.View);
+                sw.Stop();
+                double ns = sw.Elapsed.TotalNanoseconds / iters;
+                Console.WriteLine($"ROUNDTRIP_NS={ns:F2} LANG=csharp");
+            }
+        }
+
         Console.WriteLine("\ndone.");
     }
 }

@@ -198,6 +198,36 @@ fn run() -> Result<(), String> {
         println!("[validator] validate(\"{}\") = \"{}\"", decoded, result);
     }
 
+    // Round-trip micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS): times the full
+    // host → runtime → native guest → return path (Rust host calling the native
+    // decoder plugin and reading a StringView back). Point POLYPLUG_PLUGIN_PATH at
+    // native guests only so the resolved decoder is the native cdylib.
+    if let Ok(iters_str) = env::var("POLYPLUG_BENCH_ITERS") {
+        if let Ok(iters) = iters_str.parse::<u64>() {
+            if let Some(mut bench_decoder) =
+                find_contract::<PipelineDecoderContract>(runtime, PIPELINE_DECODER_CONTRACT_ID)
+            {
+                let sv: StringView = StringView {
+                    ptr: input.as_ptr(),
+                    len: input.len(),
+                };
+                let warmup: u64 = iters.min(10_000);
+                for _ in 0..warmup {
+                    let _ = bench_decoder.decode(sv);
+                }
+                let start: std::time::Instant = std::time::Instant::now();
+                for _ in 0..iters {
+                    let _ = bench_decoder.decode(sv);
+                }
+                let elapsed_ns: u128 = start.elapsed().as_nanos();
+                println!(
+                    "ROUNDTRIP_NS={:.2} LANG=rust",
+                    elapsed_ns as f64 / iters as f64
+                );
+            }
+        }
+    }
+
     println!("\ndone.");
     Ok(())
 }

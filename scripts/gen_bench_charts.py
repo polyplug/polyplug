@@ -400,6 +400,53 @@ def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
     )
 
 
+def _read_roundtrip(path: Path) -> dict:
+    """Parse `<lang> <ns>` lines written by examples/hosts/roundtrip_bench.sh."""
+    data: dict = {}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            parts: list = line.split()
+            if len(parts) == 2:
+                try:
+                    data[parts[0]] = float(parts[1])
+                except ValueError:
+                    continue
+    return data
+
+
+def chart_cross_language_roundtrip(criterion_dir: Path, out: Path) -> None:
+    """Full end-to-end round trip (host -> runtime -> native guest -> return), by host language.
+
+    Reads measured numbers from roundtrip.txt next to the SVG (produced by
+    examples/hosts/roundtrip_bench.sh). If that file is absent, the existing
+    committed SVG is left untouched so a criterion-only `bench-charts` run does
+    not blank it.
+    """
+    data: dict = _read_roundtrip(out.parent / "roundtrip.txt")
+    spec: list = [
+        ("rust", "Rust (links the crate)", _HILITE),
+        ("cpp", "C++ (native)", _HILITE),
+        ("csharp", "C# (CLR)", _HILITE),
+        ("lua", "Lua (LuaJIT FFI)", _NEUTRAL),
+        ("python", "Python (ctypes)", _SLOW),
+        ("js", "JavaScript (Deno FFI)", _SLOW),
+    ]
+    rows: list = [(label, data[key], color) for key, label, color in spec if key in data]
+    if not rows:
+        print(f"  skip {out.name}: no roundtrip.txt (run examples/hosts/roundtrip_bench.sh)", file=sys.stderr)
+        return
+    rows.sort(key=lambda r: r[1])
+    _chart_hbar_log(
+        out,
+        "Cross-language round trip  (host → guest → return)",
+        "each host language calls a native guest's decode() and reads the string back — log scale",
+        rows,
+        "Full end-to-end round trip per HOST language, native guest held constant — so the only "
+        "variable is the host's binding cost. Compiled hosts (Rust/C++/C#) are ~80-100 ns; dynamic "
+        "hosts pay their per-call marshalling. Local-only; see examples/hosts/roundtrip_bench.sh.",
+    )
+
+
 def chart_cross_language_host(criterion_dir: Path, out: Path) -> None:
     """Per-call FFI overhead, host -> runtime, by host language (log scale)."""
     rows: list = [
@@ -446,6 +493,7 @@ def main() -> int:
         ("amortization.svg", chart_amortization),
         ("cross_lang_guest.svg", chart_cross_language_guest),
         ("cross_lang_host.svg", chart_cross_language_host),
+        ("cross_lang_roundtrip.svg", chart_cross_language_roundtrip),
     ]
     for name, render in charts:
         target: Path = out_dir / name

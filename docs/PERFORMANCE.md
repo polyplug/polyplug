@@ -377,10 +377,40 @@ dispatch is one indirect call. What grows the cost is **what you return**:
   (~11 ns at 256 B → ~158 ns at 16 KB).
 
 So for a native host, "call a plugin and get data back" is ~2 ns plus the cost of
-*owning* the result — and you only pay that when you ask for an owned copy. A
-**cross-language** host (Python / Lua / JS reaching a guest) additionally pays
-that language's [host call overhead](#host-call-overhead-by-language) on top of
-this round trip.
+*owning* the result — and you only pay that when you ask for an owned copy.
+
+### Cross-language round trip (measured)
+
+The full picture, measured end to end: each **host** language calls the same
+native `decoder` guest's `decode("name,value,42")` in a loop and reads the
+string back. The guest is held constant (a native Rust cdylib), so the only thing
+that varies between bars is the host language's binding cost.
+
+![cross-language round trip by host language](assets/benches/cross_lang_roundtrip.svg)
+
+| Host language | Round trip | What dominates |
+|---|---|---|
+| **Rust** | ~80 ns | links `libpolyplug`, no FFI; the floor |
+| **C++** | ~85 ns | native call through the generated caller |
+| **C#** | ~105 ns | CLR interop + marshalling |
+| **Lua** | ~1.6 µs | LuaJIT FFI + generated caller |
+| **Python** | ~5.2 µs | ctypes per-call marshalling |
+| **JavaScript** | ~13 µs | Deno FFI + V8 marshalling per call |
+
+The compiled hosts (Rust / C++ / C#) land within a small constant of each other —
+~80–105 ns for a *real string-returning contract call* through the generated
+caller (more than the ~2 ns bare dispatch above, because this is a full
+caller + dispatch + string-return path, not a single indirect call). The dynamic
+hosts pay their per-call marshalling, which dwarfs the dispatch itself.
+
+> These numbers are **larger** than the [Host Call Overhead](#host-call-overhead-by-language)
+> chart's: that one isolates a *single bare FFI call*, while this is the *whole
+> contract round trip* (build the arg, dispatch, read the returned string). Both
+> are honest — they just measure different things.
+
+Reproduce locally with `examples/hosts/roundtrip_bench.sh` — it builds a
+native-only plugin set, runs each available host in a timed loop, and writes
+`docs/assets/benches/roundtrip.txt` for `scripts/gen_bench_charts.py`.
 
 ---
 

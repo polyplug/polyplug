@@ -186,4 +186,21 @@ if validator then
     print(string.format('[validator] validate("%s") = "%s"', decoded, result))
 end
 
+-- Round-trip micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS): times the full
+-- host → runtime → native guest → return path (Lua host calling the native decoder
+-- plugin and getting a string back). Point POLYPLUG_PLUGIN_PATH at native guests only.
+local bench_iters = os.getenv('POLYPLUG_BENCH_ITERS')
+if bench_iters then
+    local n = tonumber(bench_iters)
+    local bench_decoder = callers.PipelineDecoderContract_create(rt, host)
+    if bench_decoder then
+        local warmup = math.min(n, 10000)
+        for _ = 1, warmup do bench_decoder:decode(input_str) end
+        local t0 = os.clock()
+        for _ = 1, n do bench_decoder:decode(input_str) end
+        local t1 = os.clock()
+        print(string.format('ROUNDTRIP_NS=%.2f LANG=lua', (t1 - t0) * 1e9 / n))
+    end
+end
+
 print('\ndone.')

@@ -164,4 +164,22 @@ if (validator) {
   validator.destroy();
 }
 
+// Round-trip micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS): times the full
+// host → runtime → native guest → return path (JS host calling the native decoder
+// plugin and getting a string back). Point POLYPLUG_PLUGIN_PATH at native guests only.
+const benchIters = Deno.env.get("POLYPLUG_BENCH_ITERS");
+if (benchIters) {
+  const n = parseInt(benchIters, 10);
+  const benchDecoder = PipelineDecoderContract.create(rt);
+  if (benchDecoder) {
+    const warmup = Math.min(n, 10000);
+    for (let i = 0; i < warmup; i++) benchDecoder.decode(inputStr);
+    const t0 = performance.now();
+    for (let i = 0; i < n; i++) benchDecoder.decode(inputStr);
+    const t1 = performance.now();
+    console.log(`ROUNDTRIP_NS=${(((t1 - t0) * 1e6) / n).toFixed(2)} LANG=js`);
+    benchDecoder.destroy();
+  }
+}
+
 console.log("\ndone.");
