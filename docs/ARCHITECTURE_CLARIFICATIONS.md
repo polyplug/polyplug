@@ -53,15 +53,23 @@ pub fn set_validator_impl(impl_: Box<dyn PipelineValidatorPlugin>) -> Result<(),
 What the generated code creates are **caller wrappers**, not plugin instances:
 
 ```rust
-// examples/hosts/rust/src/generated/host/host_callers.rs:415-420
+// examples/hosts/rust/generated/host/host_callers.rs
 pub struct PipelineValidatorContract {
-    guard: PluginGuard,  // Holds reference to interface
+    interface: *const GuestContractInterface,  // resolved interface pointer
+    instance: GuestContractInstance,           // create_instance() dispatch token
+    host: *const HostApi,
 }
 
 impl PipelineValidatorContract {
-    pub fn new(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
-        let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
-        Some(PipelineValidatorContract { guard })  // New wrapper, SAME interface
+    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
+        // Resolve the interface from the handle via the HostApi method.
+        let interface: *const GuestContractInterface =
+            unsafe { ((*host).resolve_guest_contract)(host, handle) };
+        if interface.is_null() {
+            return None;  // No implementation registered for this handle
+        }
+        let instance = unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        Some(PipelineValidatorContract { interface, instance, host })  // SAME interface
     }
 }
 ```
@@ -69,9 +77,9 @@ impl PipelineValidatorContract {
 **What's actually happening:**
 ```rust
 // Host creates THREE wrappers
-let wrapper1 = PipelineValidatorContract::new(handle, runtime)?;  // wrapper 1
-let wrapper2 = PipelineValidatorContract::new(handle, runtime)?;  // wrapper 2
-let wrapper3 = PipelineValidatorContract::new(handle, runtime)?;  // wrapper 3
+let wrapper1 = PipelineValidatorContract::new(handle, host)?;  // wrapper 1
+let wrapper2 = PipelineValidatorContract::new(handle, host)?;  // wrapper 2
+let wrapper3 = PipelineValidatorContract::new(handle, host)?;  // wrapper 3
 
 // All three call the SAME singleton implementation
 wrapper1.validate(input)?;  // → VALIDATOR_IMPL (singleton)
@@ -79,21 +87,23 @@ wrapper2.validate(input)?;  // → VALIDATOR_IMPL (same singleton)
 wrapper3.validate(input)?;  // → VALIDATOR_IMPL (same singleton)
 ```
 
-### The `PluginGuard`: Reference to Interface
+### The Resolved Interface Pointer
 
 ```rust
-// crates/polyplug/src/registry.rs:43-62
-pub struct PluginGuard {
-    pub(crate) slot: Arc<InterfaceSlot>,  // Reference to shared interface
-    _not_send: PhantomData<Cell<()>>,  // Intentionally !Send
-}
+// the wrapper stores the raw pointer returned by resolve_guest_contract
+interface: *const GuestContractInterface,
 ```
 
+The wrapper holds the `*const GuestContractInterface` that `resolve_guest_contract`
+returned — there is no RAII guard type. The retire-not-drop model keeps every
+resolved interface (and its backing library) alive for the runtime's lifetime,
+so the stored pointer stays valid even across a hot-reload.
+
 **Purpose:**
-- Holds reference to keep interface accessible during call
+- Keeps the interface reachable for the duration of the wrapper's calls
 - **NOT** a per-instance state container
 - **NOT** creating new plugin instances
-- Just a reference-counted pointer wrapper
+- Just a raw pointer into the registry's retained interface
 
 ---
 
@@ -278,7 +288,7 @@ wrapper_v2.validate(data)?;  // → validator_v2 (different!)
 | **Plugin Instance** | This term is misleading - avoid it | N/A |
 | **Singleton Implementation** | ONE `OnceLock<Box<dyn Trait>>` per contract | NOT per-wrapper |
 | **Factory Method** | Creates caller wrapper, checks if plugin exists | NOT creating instances |
-| **PluginGuard** | Reference keeper for interface access | NOT instance state |
+| **Resolved interface pointer** | `*const GuestContractInterface` from `resolve_guest_contract` | NOT instance state |
 | **Hot-Reload** | Interface swap via callback coordination | NOT instance migration |
 
 ---

@@ -28,7 +28,7 @@ The runtime notifies the host before and after interface swap, plus failure case
 
 ### 2. Hidden Implementation
 
-The generated caller wrappers hide `PluginGuard` and `GuestContractInterface` from the application developer. They only see:
+The generated caller wrappers hide the resolved `GuestContractInterface` pointer from the application developer. They only see:
 
 ```cpp
 auto decoder = PipelineDecoder::create(rt, contract_id);  // Creates wrapper

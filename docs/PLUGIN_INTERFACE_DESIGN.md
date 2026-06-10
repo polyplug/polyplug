@@ -292,13 +292,6 @@ struct JsLoaderData {
     functions: Vec<StoredJsFunction>,
 }
 
-// JS/Deno: Store V8 globals (no channels!)
-struct DenoLoaderData {
-    isolate: *mut v8::Isolate,
-    context: v8::Global<v8::Context>,
-    functions: Vec<v8::Global<v8::Function>>,
-}
-
 // Python: Store Py<PyAny> callables
 struct PythonLoaderData {
     functions: Vec<Py<PyAny>>,
@@ -333,18 +326,16 @@ unsafe extern "C" fn lua_dispatch(
         .unwrap_or(AbiError::new(AbiErrorCode::Generic))
 }
 
-// Deno dispatch - ALL V8 logic here (no channels!)
-unsafe extern "C" fn deno_dispatch(
+// QuickJS dispatch - ALL JS logic here (no channels!)
+unsafe extern "C" fn js_dispatch(
     loader_data: *mut c_void,
     fn_id: u32,
     args: *const (),
     out: *mut (),
 ) -> AbiError {
-    let data = &*(loader_data as *const DenoLoaderData);
-    let scope = &mut v8::HandleScope::new(data.isolate);
-    let ctx = data.context.get(scope);
-    let func = data.functions[fn_id as usize].get(scope);
-    func.call(scope, ctx, &[]);
+    let data = &*(loader_data as *const JsLoaderData);
+    let func = &data.functions[fn_id as usize];
+    func.call((args as i64, out as i64));
     AbiError::ok()
 }
 ```

@@ -170,7 +170,7 @@ ffi.copy(buffer, utf8_str, #utf8_str)
 Some operations must cross the FFI boundary:
 - **Host allocation**: Memory must come from host allocator for ABI consistency
 - **Plugin calls**: The actual plugin function invocation
-- **Extension lookups**: Runtime services
+- **Host contract calls**: Reaching host-provided services (the host-contract direction)
 
 The strategy: minimize FFI crossings, not eliminate them.
 

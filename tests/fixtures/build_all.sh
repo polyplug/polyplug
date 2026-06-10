@@ -154,7 +154,4 @@ echo "  -> tests/fixtures/test_plugin_lua/{polyplug_guest.lua,polyplug_abi.lua,p
 # js-quickjs fixture: bundle.js is hand-written and self-contained, no build needed.
 echo "js-quickjs bundle.js is hand-written."
 
-# js-deno fixture: index.ts loaded natively by deno_core, no build needed.
-echo "js-deno index.ts is loaded natively by deno_core."
-
 echo "Done."
