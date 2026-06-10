@@ -299,25 +299,11 @@ unsafe extern "C" fn bench_free(_this: *const HostApi, ptr: *mut u8, size: usize
 
 // ─── Setup helpers ────────────────────────────────────────────────────────────
 
-/// Load a plugin cdylib and call `polyplug_init`, registering into BENCH_REGISTRY.
-/// After this call, LAST_INTERFACE holds the interface pointer of the plugin just loaded.
-fn load_and_init_plugin(path: &str) -> libloading::Library {
-    // SAFETY: path is a valid compiled cdylib built by build.rs.
-    let library: libloading::Library =
-        unsafe { libloading::Library::new(path).expect("failed to load plugin") };
-
-    // SAFETY: polyplug_init matches the expected 2-arg ABI:
-    // unsafe extern "C" fn(host: *const HostApi, ctx: *const BundleInitContext) -> AbiError
-    let init_fn: libloading::Symbol<
-        '_,
-        unsafe extern "C" fn(*const HostApi, *const polyplug_abi::BundleInitContext) -> AbiError,
-    > = unsafe {
-        library
-            .get(b"polyplug_init\0")
-            .expect("polyplug_init not found")
-    };
-
-    let host_interface: HostApi = HostApi {
+/// Build a `HostApi` whose function pointers are all backed by the thread-local
+/// `BENCH_REGISTRY` stubs above. Every benchmark that needs to hand a plugin a
+/// host table (to register, resolve, or allocate) uses this single definition.
+fn bench_host_api() -> HostApi {
+    HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: bench_register_callback,
         alloc: bench_alloc,
@@ -338,7 +324,28 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
         call_guest_method: bench_call_guest_method,
         reserved: core::ptr::null(),
         unload_bundle: bench_unload_bundle,
+    }
+}
+
+/// Load a plugin cdylib and call `polyplug_init`, registering into BENCH_REGISTRY.
+/// After this call, LAST_INTERFACE holds the interface pointer of the plugin just loaded.
+fn load_and_init_plugin(path: &str) -> libloading::Library {
+    // SAFETY: path is a valid compiled cdylib built by build.rs.
+    let library: libloading::Library =
+        unsafe { libloading::Library::new(path).expect("failed to load plugin") };
+
+    // SAFETY: polyplug_init matches the expected 2-arg ABI:
+    // unsafe extern "C" fn(host: *const HostApi, ctx: *const BundleInitContext) -> AbiError
+    let init_fn: libloading::Symbol<
+        '_,
+        unsafe extern "C" fn(*const HostApi, *const polyplug_abi::BundleInitContext) -> AbiError,
+    > = unsafe {
+        library
+            .get(b"polyplug_init\0")
+            .expect("polyplug_init not found")
     };
+
+    let host_interface: HostApi = bench_host_api();
 
     let plugin_ctx: polyplug_abi::BundleInitContext = polyplug_abi::BundleInitContext {
         bundle_path: StringView::null(),
@@ -543,28 +550,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     );
 
     // Build a HostApi backed by the thread-local BENCH_REGISTRY.
-    let host_interface: HostApi = HostApi {
-        runtime: core::ptr::null_mut(),
-        register_guest_contract: bench_register_callback,
-        alloc: bench_alloc,
-        free: bench_free,
-        find_guest_contract: bench_find_guest_contract,
-        find_all_guest_contracts: bench_find_all_guest_contracts,
-        resolve_guest_contract: bench_resolve_guest_contract,
-        get_host_contract: bench_get_host_contract,
-        resolve_host_contract_interface: bench_resolve_host_contract_interface,
-        list_bundles: bench_list_bundles,
-        get_dependencies: bench_get_dependencies,
-        load_bundle: bench_load_bundle,
-        reload_bundle: bench_reload_bundle,
-        register_host_contract: bench_register_host_contract,
-        register_loader: bench_register_loader,
-        get_last_error: bench_get_last_error,
-        get_error_len: bench_get_error_len,
-        call_guest_method: bench_call_guest_method,
-        reserved: core::ptr::null(),
-        unload_bundle: bench_unload_bundle,
-    };
+    let host_interface: HostApi = bench_host_api();
 
     // Input StringView pointing to a static byte string — no allocation needed.
     let sv: StringView = StringView {
@@ -630,6 +616,103 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     core::mem::forget(_memory_lib);
 }
 
+// ─── Benchmark 5 — marshalling: borrowed view vs owned copy by size ───────────
+
+/// Arguments to `memory_return_owned` (memory_plugin fn 5).
+#[repr(C)]
+struct CopyArgs {
+    host: *const HostApi,
+    sv: StringView,
+}
+
+/// Measures the cost of returning data across the ABI two ways, across payload
+/// sizes:
+///   - **borrowed** (fn 4): the plugin returns a `StringView` that aliases the
+///     caller's bytes — zero allocation, zero copy, size-independent.
+///   - **owned** (fn 5): the plugin host-allocates `len` bytes and copies the
+///     input in — an allocation plus a `memcpy` that scales with the payload.
+///
+/// This is the cost behind borrowed-view returns (`&str` / `string_view` /
+/// `ReadOnlySpan` / `memoryview`) versus owned native `String` / `bytes`.
+fn bench_marshalling(c: &mut Criterion) {
+    // Reset registry for a clean slate.
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+        *cell.borrow_mut() = Some(RuntimeStore::new());
+    });
+
+    let _library: libloading::Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
+    // fn 4 = memory_return_borrowed(StringView) -> StringView
+    // fn 5 = memory_return_owned(CopyArgs) -> Buffer
+    let borrowed_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = get_interface_fn(4);
+    let owned_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = get_interface_fn(5);
+
+    // Host table so the owned path can allocate through the host allocator.
+    let host_interface: HostApi = bench_host_api();
+
+    // Backing payload of valid bytes; each size borrows a prefix of it.
+    let payload: Vec<u8> = vec![b'a'; 16384];
+    let sizes: [usize; 4] = [16, 256, 4096, 16384];
+
+    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
+        c.benchmark_group("marshalling");
+    group.throughput(Throughput::Elements(1));
+
+    for &size in &sizes {
+        let sv: StringView = StringView {
+            ptr: payload.as_ptr(),
+            len: size,
+        };
+
+        group.bench_with_input(BenchmarkId::new("borrowed", size), &sv, |b, sv| {
+            let mut out: StringView = StringView::null();
+            b.iter(|| {
+                // SAFETY: sv points to a valid StringView; out points to a valid StringView.
+                // memory_plugin fn 4 echoes the view back without touching the bytes.
+                let result: AbiError = unsafe {
+                    borrowed_fn(
+                        black_box(sv as *const StringView as *const ()),
+                        black_box(&mut out as *mut StringView as *mut ()),
+                    )
+                };
+                black_box(result);
+                black_box(out);
+            });
+        });
+
+        let copy_args: CopyArgs = CopyArgs {
+            host: &host_interface as *const HostApi,
+            sv,
+        };
+        group.bench_with_input(BenchmarkId::new("owned", size), &copy_args, |b, args| {
+            let mut out: Buffer = Buffer {
+                ptr: core::ptr::null_mut(),
+                len: 0,
+                cap: 0,
+            };
+            b.iter(|| {
+                // SAFETY: args points to a valid CopyArgs (valid host + sv); out points to a
+                // valid Buffer. memory_plugin fn 5 host-allocs `sv.len` bytes and copies in.
+                let result: AbiError = unsafe {
+                    owned_fn(
+                        black_box(args as *const CopyArgs as *const ()),
+                        black_box(&mut out as *mut Buffer as *mut ()),
+                    )
+                };
+                black_box(result);
+                // Free the owned buffer each iteration so the loop does not leak/grow.
+                if !out.ptr.is_null() {
+                    // SAFETY: out.ptr was allocated by the plugin via bench_alloc
+                    // (polyplug_host_alloc) with align 1 and `out.len` bytes.
+                    unsafe { polyplug_host_free(out.ptr, out.len, 1) };
+                }
+            });
+        });
+    }
+
+    group.finish();
+    core::mem::forget(_library);
+}
+
 // ─── criterion_group / criterion_main ────────────────────────────────────────
 
 criterion_group!(
@@ -638,5 +721,6 @@ criterion_group!(
     bench_dispatch_buffer_arg,
     bench_dispatch_struct_arg_and_return,
     bench_dispatch_cross_plugin,
+    bench_marshalling,
 );
 criterion_main!(benches);

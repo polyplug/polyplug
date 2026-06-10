@@ -194,7 +194,11 @@ fn bench_cached_dispatch(c: &mut Criterion) {
         noop_fn.unbind()
     });
 
-    group.bench_function("cached_function_single_call", |b| {
+    // NOTE: function ids are loader-unique (cached_python_*) so they do NOT
+    // collide with the Lua bench's cached_function_* and the JS bench's
+    // cached_context_* — all three write to the shared `cached_dispatch`
+    // criterion group, so identical ids would overwrite each other.
+    group.bench_function("cached_python_single_call", |b| {
         b.iter(|| {
             Python::attach(|py| {
                 let noop_fn = cached_fn.bind(py);
@@ -207,7 +211,7 @@ fn bench_cached_dispatch(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("cached_function_10_calls", |b| {
+    group.bench_function("cached_python_10_calls", |b| {
         b.iter(|| {
             Python::attach(|py| {
                 let noop_fn = cached_fn.bind(py);
