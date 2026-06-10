@@ -7,8 +7,8 @@
 #![allow(clippy::identity_op)]
 
 use super::types::*;
+use polyplug_abi::StringView;
 use polyplug_guest::GuestError;
-use polyplug_guest::StringView;
 
 /// Guest trait for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
 pub trait PipelineDecoderGuestContract: Send + Sync {

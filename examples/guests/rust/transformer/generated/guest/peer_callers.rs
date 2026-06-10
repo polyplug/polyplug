@@ -7,14 +7,14 @@
 #![allow(clippy::identity_op)]
 
 use super::types::*;
-use polyplug_guest::AbiError;
-use polyplug_guest::AbiErrorCode;
-use polyplug_guest::CallArena;
-use polyplug_guest::GuestContractHandle;
-use polyplug_guest::GuestContractInstance;
-use polyplug_guest::GuestContractInterface;
-use polyplug_guest::HostApi;
-use polyplug_guest::StringView;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
+use polyplug_abi::CallArena;
+use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
+use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostApi;
+use polyplug_abi::StringView;
 
 const CALL_ARENA_BUF_LEN: usize = 512;
 
@@ -91,7 +91,7 @@ impl PipelineValidatorContractPeer {
         // (null contract_id). The host-mediated path keys routing on contract_id.
         let instance: GuestContractInstance = GuestContractInstance {
             data: created.data,
-            contract_id: polyplug_guest::GuestContractId::from_u64(0x45173A959EEC57C5_u64),
+            contract_id: polyplug_utils::GuestContractId::from_u64(0x45173A959EEC57C5_u64),
         };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.

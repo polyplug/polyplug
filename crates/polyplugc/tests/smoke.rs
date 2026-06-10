@@ -79,8 +79,11 @@ fn run_polyplugc_cpp(bundle_toml: &Path, out_dir: &Path) -> Output {
         .expect("failed to spawn polyplugc")
 }
 
-/// Write a `Cargo.toml` for a cdylib crate that depends on `polyplug_guest`.
+/// Write a `Cargo.toml` for a cdylib crate that depends on `polyplug_abi`,
+/// `polyplug_guest`, and `polyplug_utils`.
 fn write_plugin_cargo_toml(crate_dir: &Path, guest_lib_path: &Path) {
+    let abi_lib_path: PathBuf = workspace_root().join("crates").join("polyplug_abi");
+    let utils_lib_path: PathBuf = workspace_root().join("crates").join("polyplug_utils");
     let content: String = format!(
         r#"[package]
 name    = "smoke_rust_test_plugin"
@@ -92,13 +95,17 @@ name      = "smoke_rust_test_plugin"
 crate-type = ["cdylib"]
 
 [dependencies]
+polyplug_abi = {{ path = "{}" }}
 polyplug_guest = {{ path = "{}" }}
+polyplug_utils = {{ path = "{}" }}
 
 [workspace]
 "#,
         // Backslashes are invalid TOML escape sequences; forward slashes are valid
         // path separators on every platform (including Windows).
-        guest_lib_path.to_string_lossy().replace('\\', "/")
+        abi_lib_path.to_string_lossy().replace('\\', "/"),
+        guest_lib_path.to_string_lossy().replace('\\', "/"),
+        utils_lib_path.to_string_lossy().replace('\\', "/")
     );
     let cargo_toml_path: PathBuf = crate_dir.join("Cargo.toml");
     std::fs::write(&cargo_toml_path, content).expect("failed to write plugin Cargo.toml");
@@ -116,14 +123,14 @@ mod guest {
 }
 
 #[allow(unused_imports)]
-use polyplug_guest::AbiErrorCode;
-use polyplug_guest::AbiError;
-use polyplug_guest::PluginDescriptor;
+use polyplug_abi::AbiErrorCode;
+use polyplug_abi::AbiError;
+use polyplug_abi::PluginDescriptor;
 use polyplug_guest::GuestError;
-use polyplug_guest::HostApi;
-use polyplug_guest::BundleInitContext;
-use polyplug_guest::StringView;
-use polyplug_guest::Version;
+use polyplug_abi::HostApi;
+use polyplug_abi::BundleInitContext;
+use polyplug_abi::StringView;
+use polyplug_abi::Version;
 use guest::contracts::TestAddGuestContract;
 use guest::types::AddArgs;
 use guest::interfaces::TEST_ADDER_INTERFACE;

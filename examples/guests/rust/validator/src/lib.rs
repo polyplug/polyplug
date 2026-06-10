@@ -1,4 +1,5 @@
-use polyplug_guest::{GuestError, StringView, alloc_string, to_str};
+use polyplug_abi::StringView;
+use polyplug_guest::{GuestError, alloc_string, to_str};
 
 #[path = "../generated/guest/mod.rs"]
 mod generated;
@@ -36,7 +37,7 @@ fn init() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
-    polyplug_guest::POLYPLUG_ABI_VERSION
+    polyplug_abi::POLYPLUG_ABI_VERSION
 }
 
 #[unsafe(no_mangle)]

@@ -125,8 +125,18 @@ fn rust_generated_glue_compiles() {
          [lib]\n\
          crate-type = [\"cdylib\"]\n\n\
          [dependencies]\n\
-         polyplug_guest = {{ path = \"{}\" }}\n",
+         polyplug_abi = {{ path = \"{}\" }}\n\
+         polyplug_guest = {{ path = \"{}\" }}\n\
+         polyplug_utils = {{ path = \"{}\" }}\n",
+        polyplug_abi_path()
+            .display()
+            .to_string()
+            .replace('\\', "\\\\"),
         rust_guest_sdk_path()
+            .display()
+            .to_string()
+            .replace('\\', "\\\\"),
+        polyplug_utils_path()
             .display()
             .to_string()
             .replace('\\', "\\\\")
@@ -147,7 +157,7 @@ fn rust_generated_glue_compiles() {
          \n\
          #[unsafe(no_mangle)]\n\
          pub extern \"C\" fn polyplug_abi_version() -> u32 {\n\
-         polyplug_guest::POLYPLUG_ABI_VERSION\n\
+         polyplug_abi::POLYPLUG_ABI_VERSION\n\
          }\n";
     std::fs::write(project_dir.join("src/lib.rs"), lib_rs).expect("write src/lib.rs");
 

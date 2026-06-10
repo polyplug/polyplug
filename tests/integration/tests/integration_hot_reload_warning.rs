@@ -16,8 +16,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::ReloadPhase;
 use polyplug::runtime::Runtime;
+use polyplug_abi::runtime::ReloadPhase;
 use polyplug_abi::runtime::ReloadPhaseType;
 use polyplug_abi::types::LogLevel;
 use polyplug_native::{NativeConfig, NativeLoader};
@@ -40,10 +40,10 @@ fn v2_so_path() -> PathBuf {
     PathBuf::from(RELOAD_V2_DIR).join(filename)
 }
 
-fn hot_reload_config() -> polyplug::RuntimeConfig {
-    polyplug::RuntimeConfig {
+fn hot_reload_config() -> polyplug_abi::runtime::RuntimeConfig {
+    polyplug_abi::runtime::RuntimeConfig {
         hot_reload_enabled: true,
-        ..polyplug::RuntimeConfig::default()
+        ..polyplug_abi::runtime::RuntimeConfig::default()
     }
 }
 

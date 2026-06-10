@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::ReloadPhase;
-use polyplug::RuntimeConfig;
 use polyplug::error::RuntimeError;
 use polyplug::runtime::Runtime;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::runtime::ReloadPhase;
+use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_native::NativeLoader;
 
 fn v1_so_path() -> PathBuf {

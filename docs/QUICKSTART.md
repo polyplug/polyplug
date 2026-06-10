@@ -118,12 +118,14 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+polyplug_abi = { path = "path/to/polyplug/crates/polyplug_abi" }
 polyplug_guest = { path = "path/to/polyplug/sdks/rust/guest" }
+polyplug_utils = { path = "path/to/polyplug/crates/polyplug_utils" }
 ```
 
-> When shipping a real plugin the `polyplug_guest` crate will be available as a
-> crates.io dependency. In a checkout of this repository, point `path` at
-> `sdks/rust/guest`.
+> When shipping a real plugin the `polyplug_abi`, `polyplug_guest`, and
+> `polyplug_utils` crates will be available as crates.io dependencies. In a
+> checkout of this repository, point `path` at the in-repo crates as above.
 
 ---
 
@@ -134,7 +136,8 @@ the contract (`GreeterHelloGuestContract` for `greeter.Hello`). Implement that
 trait on any struct, then register it with `set_my_greeter_impl`:
 
 ```rust
-use polyplug_guest::{GuestError, StringView, alloc_string, to_str};
+use polyplug_abi::StringView;
+use polyplug_guest::{GuestError, alloc_string, to_str};
 
 #[path = "../generated/guest/mod.rs"]
 mod generated;
@@ -161,7 +164,7 @@ fn init() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
-    polyplug_guest::POLYPLUG_ABI_VERSION
+    polyplug_abi::POLYPLUG_ABI_VERSION
 }
 
 #[unsafe(no_mangle)]
@@ -253,7 +256,7 @@ The caller struct is named after the contract (`GreeterHelloContract` for
 A minimal host that loads and calls the plugin:
 
 ```rust
-use polyplug::RuntimeConfig;
+use polyplug_abi::runtime::RuntimeConfig;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
 use polyplug_abi::{Compatibility, GuestContractHandle, UnloadMode};

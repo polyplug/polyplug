@@ -9,17 +9,17 @@
 use super::interfaces::VALIDATOR_CONTRACT_ID;
 use super::interfaces::VALIDATOR_INTERFACE;
 use core::ffi::c_void;
-use polyplug_guest::AbiError;
-use polyplug_guest::AbiErrorCode;
-use polyplug_guest::BundleInitContext;
-use polyplug_guest::GuestContractInterface;
-use polyplug_guest::HostApi;
-use polyplug_guest::PluginDescriptor;
-use polyplug_guest::StringView;
-use polyplug_guest::Version;
-use polyplug_guest::abi_error_ok;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
+use polyplug_abi::BundleInitContext;
+use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostApi;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::StringView;
+use polyplug_abi::Version;
+use polyplug_abi::abi_error_ok;
+use polyplug_abi::string_view_from_static;
 use polyplug_guest::store_host_vtable;
-use polyplug_guest::string_view_from_static;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:

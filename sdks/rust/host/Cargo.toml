@@ -7,7 +7,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-polyplug_abi = { workspace = true }
 polyplug = { workspace = true }
 
 [dev-dependencies]

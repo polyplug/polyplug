@@ -6,7 +6,7 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_guest::StringView;
+use polyplug_abi::StringView;
 
 /// Enum `LogLevel` (repr u32)
 #[repr(u32)]

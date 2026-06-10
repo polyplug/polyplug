@@ -8,17 +8,17 @@
 
 use super::types::*;
 use core::ffi::c_void;
-use polyplug_guest::AbiError;
-use polyplug_guest::AbiErrorCode;
-use polyplug_guest::Buffer;
-use polyplug_guest::DispatchType;
-use polyplug_guest::GuestContractInstance;
-use polyplug_guest::HostApi;
-use polyplug_guest::HostContractInstance;
-use polyplug_guest::HostContractInterface;
-use polyplug_guest::StringView;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
+use polyplug_abi::Buffer;
+use polyplug_abi::DispatchType;
+use polyplug_abi::GuestContractInstance;
+use polyplug_abi::HostApi;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
+use polyplug_abi::StringView;
+use polyplug_abi::string_view_null;
 use polyplug_guest::alloc_string;
-use polyplug_guest::string_view_null;
 
 /// Error type for host contract calls from guest.
 #[derive(Debug)]

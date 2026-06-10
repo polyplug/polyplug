@@ -1,4 +1,5 @@
-use polyplug_guest::{GuestError, StringView, alloc_string, to_str};
+use polyplug_abi::StringView;
+use polyplug_guest::{GuestError, alloc_string, to_str};
 
 #[path = "../generated/guest/mod.rs"]
 mod generated;
@@ -22,7 +23,7 @@ impl DataTransformerGuestContract for Plugin {
             alloc_string(&format!("TRANSFORMED:{}|{}|{}", name, value, count + 1))
         } else {
             Err(GuestError {
-                code: polyplug_guest::AbiErrorCode::Generic,
+                code: polyplug_abi::AbiErrorCode::Generic,
                 message: "invalid format".into(),
             })
         }
@@ -38,7 +39,7 @@ fn init() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
-    polyplug_guest::POLYPLUG_ABI_VERSION
+    polyplug_abi::POLYPLUG_ABI_VERSION
 }
 
 #[unsafe(no_mangle)]

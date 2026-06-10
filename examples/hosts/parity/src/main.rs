@@ -1,8 +1,8 @@
-use polyplug::RuntimeConfig;
 use polyplug::runtime::Runtime;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_dotnet::{DotnetConfig, DotnetLoader, HostfxrLocation};
 use polyplug_js::{JsConfig, JsLoader};
 use polyplug_lua::{LuaConfig, LuaLoader};

@@ -526,7 +526,9 @@ dependencies = [
 name = "decoder"
 version = "1.0.0"
 dependencies = [
+ "polyplug_abi",
  "polyplug_guest",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -676,7 +678,9 @@ checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 name = "encoder"
 version = "1.0.0"
 dependencies = [
+ "polyplug_abi",
  "polyplug_guest",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -1560,7 +1564,6 @@ name = "polyplug_guest"
 version = "0.1.0"
 dependencies = [
  "polyplug_abi",
- "polyplug_utils",
 ]
 
 [[package]]
@@ -1568,7 +1571,6 @@ name = "polyplug_host"
 version = "0.1.0"
 dependencies = [
  "polyplug",
- "polyplug_abi",
  "tempfile",
 ]
 
@@ -1637,7 +1639,6 @@ dependencies = [
  "polyplug",
  "polyplug_abi",
  "polyplug_codegen",
- "polyplug_guest",
  "polyplug_utils",
  "serde",
  "tempfile",
@@ -1864,7 +1865,9 @@ dependencies = [
 name = "reporter"
 version = "1.0.0"
 dependencies = [
+ "polyplug_abi",
  "polyplug_guest",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -2314,7 +2317,9 @@ checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 name = "transformer"
 version = "1.0.0"
 dependencies = [
+ "polyplug_abi",
  "polyplug_guest",
+ "polyplug_utils",
 ]
 
 [[package]]
@@ -2455,7 +2460,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 name = "validator"
 version = "1.0.0"
 dependencies = [
+ "polyplug_abi",
  "polyplug_guest",
+ "polyplug_utils",
 ]
 
 [[package]]

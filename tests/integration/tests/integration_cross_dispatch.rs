@@ -21,13 +21,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use polyplug::RuntimeConfig;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
+use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 use polyplug_native::NativeConfig;

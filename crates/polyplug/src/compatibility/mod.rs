@@ -1,8 +1,5 @@
 //! Compatibility module.
 
-// Import Compatibility from polyplug_abi (moved in Phase 01-03)
-pub use polyplug_abi::runtime::Compatibility;
-
 mod bundle_node;
 pub mod capability_graph;
 mod contract_capability;

@@ -152,7 +152,8 @@ The plugin accesses the host contract through the generated caller:
 // Plugin implementation (Rust)
 use generated::contracts::ExampleWorkerPlugin;
 use generated::host_contract_callers::HostLoggerCaller;
-use polyplug_guest::{StringView, GuestError};
+use polyplug_abi::StringView;
+use polyplug_guest::GuestError;
 
 struct WorkerPlugin;
 

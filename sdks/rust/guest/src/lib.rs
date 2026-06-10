@@ -76,6 +76,8 @@
 
 use std::sync::OnceLock;
 
+use polyplug_abi::{AbiErrorCode, HostApi, StringView};
+
 /// Wrapper for host interface pointer that implements Send + Sync.
 /// The host interface is 'static and immutable, safe to share across threads.
 #[repr(transparent)]
@@ -104,127 +106,12 @@ unsafe impl Sync for HostVtablePtr {}
 /// CLR loaders).
 static HOST_VTABLE: OnceLock<HostVtablePtr> = OnceLock::new();
 
-// ─── ABI Constants ────────────────────────────────────────────────────────────
-
-/// ABI version sentinel — all plugins must export `polyplug_abi_version() -> u32`
-/// returning this value. The loader rejects plugins with a different version.
-pub use polyplug_abi::POLYPLUG_ABI_VERSION;
-
-/// ABI error codes — use `AbiErrorCode::Ok`, `AbiErrorCode::Generic`, etc.
-pub use polyplug_abi::AbiErrorCode;
-
 // ─── Helper Functions ─────────────────────────────────────────────────────────
-
-/// Create an AbiError success response.
-pub use polyplug_abi::abi_error_ok;
-
-/// Create a null/empty StringView.
-pub use polyplug_abi::string_view_null;
-
-/// Create a StringView from static bytes.
-pub use polyplug_abi::string_view_from_static;
 
 /// Create an AbiError panic response.
 pub fn abi_error_panic_caught() -> polyplug_abi::AbiError {
     polyplug_abi::AbiError::panic_caught()
 }
-
-// ─── ABI Types ────────────────────────────────────────────────────────────────
-
-/// Non-owning UTF-8 string view. Never null-terminated.
-///
-/// OWNERSHIP: borrowed reference. `ptr` must remain valid for the duration
-/// of the call. Never freed by the receiver.
-pub use polyplug_abi::types::StringView;
-
-/// Owning byte buffer allocated via the host allocator.
-///
-/// OWNERSHIP: `ptr` is always allocated via the host allocator (`host.alloc`).
-/// Owner calls `host.free(host, ptr, cap, align)` when done.
-pub use polyplug_abi::types::Buffer;
-
-/// ABI error returned by value from all ABI calls.
-///
-/// OWNERSHIP: `message` is always a static or runtime-owned string. The
-/// receiver must NEVER free it. Rich, allocated error detail is retrieved
-/// separately via `get_last_error`. `code` is a raw `u32`; interpret it with
-/// `AbiErrorCode::from_u32` because plugins are untrusted and may return any
-/// value.
-pub use polyplug_abi::types::AbiError;
-
-/// Semantic version (major.minor.patch).
-pub use polyplug_abi::types::Version;
-
-/// Opaque handle to a guest contract instance.
-///
-/// Created by `GuestContractInterface::create_instance`, destroyed by `destroy_instance`.
-/// For stateless plugins, use `GuestContractInstance::null()`.
-pub use polyplug_abi::guest::GuestContractInstance;
-
-/// Opaque handle to a loaded guest contract — validated on every use.
-pub use polyplug_abi::GuestContractHandle;
-
-/// Guest Contract Interface — one per contract implemented by a plugin.
-///
-/// OWNERSHIP: Must be `'static` or intentionally leaked.
-pub use polyplug_abi::GuestContractInterface;
-
-/// Dispatch type for plugin interfaces.
-pub use polyplug_abi::dispatch::dispatch_type::DispatchType;
-
-/// Native dispatch mechanism.
-pub use polyplug_abi::dispatch::native_dispatch::NativeDispatch;
-
-/// VM dispatch mechanism.
-pub use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
-
-/// Union of dispatch mechanisms.
-pub use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
-
-/// Host contract interface for calling host-provided contracts (`HostContractInterface`).
-///
-/// Use this type when declaring host contract interfaces in guest code.
-/// The code generator produces `register_guest_contract` functions that populate this.
-pub use polyplug_abi::HostContractInterface;
-
-/// Host contract instance - opaque handle to a host contract.
-pub use polyplug_abi::HostContractInstance;
-
-/// Host capabilities passed to every plugin at init time.
-///
-/// Accessed via `HostApi`. Provides allocation, plugin lookup,
-/// and guest/host contract resolution.
-pub use polyplug_abi::HostApi;
-
-/// Per-call bump arena for variable-size return values (strings, buffers).
-///
-/// Peer callers that return `StringView` or `Buffer` hold one arena and reset
-/// it at the start of every such call; the returned view borrows arena memory
-/// and is valid until the next arena-backed call on the same caller.
-pub use polyplug_abi::types::CallArena;
-
-/// Metadata about a plugin within a bundle.
-///
-/// OWNERSHIP: value type passed by pointer during init. The `name` and
-/// `contract_name` StringViews are borrowed from the plugin's static memory.
-pub use polyplug_abi::PluginDescriptor;
-
-/// Context passed to every guest `polyplug_init()` function.
-///
-/// Contains `bundle_path` — the absolute path to the bundle directory.
-/// **Plugin must not store the raw pointer** — copy the string value if persistence is needed.
-pub use polyplug_abi::BundleInitContext;
-
-// ─── Hash Utilities ───────────────────────────────────────────────────────────
-
-/// Bundle ID type for computing bundle identifiers.
-pub use polyplug_utils::BundleId;
-
-/// Guest contract ID type for computing guest contract identifiers.
-pub use polyplug_utils::GuestContractId;
-
-/// Host contract ID type for computing host contract identifiers.
-pub use polyplug_utils::HostContractId;
 
 // ─── Helper Types ─────────────────────────────────────────────────────────────
 
@@ -289,7 +176,8 @@ impl core::error::Error for GuestError {}
 ///
 /// # Example
 /// ```rust
-/// use polyplug_guest::{StringView, to_str};
+/// use polyplug_abi::StringView;
+/// use polyplug_guest::to_str;
 ///
 /// let sv = StringView { ptr: b"hello".as_ptr(), len: 5 };
 /// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
@@ -319,7 +207,8 @@ pub unsafe fn to_str(sv: &StringView) -> &str {
 ///
 /// # Example
 /// ```rust,ignore
-/// use polyplug_guest::{alloc_string, StringView};
+/// use polyplug_abi::StringView;
+/// use polyplug_guest::alloc_string;
 ///
 /// let sv: StringView = alloc_string("hello").unwrap();
 /// // sv.ptr points to host-allocated memory
@@ -361,7 +250,8 @@ pub fn alloc_string(s: &str) -> Result<StringView, GuestError> {
 ///
 /// # Example
 /// ```rust
-/// use polyplug_guest::{StringView, starts_with};
+/// use polyplug_abi::StringView;
+/// use polyplug_guest::starts_with;
 ///
 /// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
 /// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
@@ -382,7 +272,8 @@ pub unsafe fn starts_with(sv: &StringView, prefix: &str) -> bool {
 ///
 /// # Example
 /// ```rust
-/// use polyplug_guest::{StringView, ends_with};
+/// use polyplug_abi::StringView;
+/// use polyplug_guest::ends_with;
 ///
 /// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
 /// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
@@ -407,7 +298,8 @@ pub unsafe fn ends_with(sv: &StringView, suffix: &str) -> bool {
 ///
 /// # Example
 /// ```rust
-/// use polyplug_guest::{StringView, strip_prefix};
+/// use polyplug_abi::StringView;
+/// use polyplug_guest::strip_prefix;
 ///
 /// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
 /// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
@@ -435,7 +327,8 @@ pub unsafe fn strip_prefix<'a>(sv: &'a StringView, prefix: &str) -> &'a str {
 ///
 /// # Example
 /// ```rust
-/// use polyplug_guest::{StringView, split};
+/// use polyplug_abi::StringView;
+/// use polyplug_guest::split;
 ///
 /// let sv = StringView { ptr: b"a,b,c".as_ptr(), len: 5 };
 /// // SAFETY: `sv` borrows a live byte slice for the duration of this call.

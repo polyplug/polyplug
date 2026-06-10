@@ -5,11 +5,6 @@
 
 use polyplug_codegen::PolyplugcError;
 
-// Re-export hash functions from polyplug_utils with legacy names for backward compatibility
-pub use polyplug_utils::bundle_id as compute_bundle_id;
-pub use polyplug_utils::guest_contract_id as compute_contract_id;
-pub use polyplug_utils::host_contract_id as compute_host_contract_id;
-
 // ─── Version ─────────────────────────────────────────────────────────────
 
 /// Semantic version with major.minor.patch components.
@@ -371,6 +366,8 @@ pub fn resolve_type_ref(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+    use polyplug_utils::{bundle_id, guest_contract_id};
+
     use super::*;
 
     #[test]
@@ -436,12 +433,12 @@ mod tests {
 
     #[test]
     fn contract_id_uses_fnv1a() {
-        let id1: u64 = compute_contract_id("image.decode", 1);
-        let id2: u64 = compute_contract_id("image.decode", 1);
+        let id1: u64 = guest_contract_id("image.decode", 1);
+        let id2: u64 = guest_contract_id("image.decode", 1);
         assert_eq!(id1, id2);
         assert_ne!(
-            compute_contract_id("image.decode", 1),
-            compute_contract_id("image.decode", 2)
+            guest_contract_id("image.decode", 1),
+            guest_contract_id("image.decode", 2)
         );
     }
 
@@ -450,47 +447,47 @@ mod tests {
         // Golden values for "guest_contract:name@version" FNV-1a hash
         // These match polyplug_utils::GuestContractId::new()
         assert_eq!(
-            compute_contract_id("image.decode", 1),
+            guest_contract_id("image.decode", 1),
             18154885241241252316_u64
         );
         assert_eq!(
-            compute_contract_id("audio.encode", 2),
+            guest_contract_id("audio.encode", 2),
             6632138859905976100_u64
         );
     }
 
     #[test]
     fn codegen_contract_id_deterministic() {
-        // compute_contract_id must produce consistent results
-        let id1: u64 = compute_contract_id("image.decode", 1);
-        let id2: u64 = compute_contract_id("image.decode", 1);
+        // guest_contract_id must produce consistent results
+        let id1: u64 = guest_contract_id("image.decode", 1);
+        let id2: u64 = guest_contract_id("image.decode", 1);
         assert_eq!(id1, id2);
     }
 
     #[test]
     fn bundle_id_uses_fnv1a() {
         // FNV-1a of "test-bundle" must be deterministic and non-zero
-        let id: u64 = compute_bundle_id("test-bundle");
+        let id: u64 = bundle_id("test-bundle");
         assert_ne!(id, 0);
         // Same input → same output
-        assert_eq!(id, compute_bundle_id("test-bundle"));
+        assert_eq!(id, bundle_id("test-bundle"));
         // Different inputs → different outputs (basic collision check)
-        assert_ne!(compute_bundle_id("bundle-a"), compute_bundle_id("bundle-b"));
+        assert_ne!(bundle_id("bundle-a"), bundle_id("bundle-b"));
     }
 
     #[test]
     fn bundle_id_golden_values() {
         // Golden: FNV-1a of "my-bundle"
-        assert_eq!(compute_bundle_id("my-bundle"), 0xfe6226876e3a35b2_u64);
+        assert_eq!(bundle_id("my-bundle"), 0xfe6226876e3a35b2_u64);
         // Golden: FNV-1a of "polyplug-core"
-        assert_eq!(compute_bundle_id("polyplug-core"), 0x6ef4aee714f5f991_u64);
+        assert_eq!(bundle_id("polyplug-core"), 0x6ef4aee714f5f991_u64);
     }
 
     #[test]
     fn codegen_bundle_id_deterministic() {
-        // compute_bundle_id must produce consistent results
-        let id1: u64 = compute_bundle_id("my-bundle");
-        let id2: u64 = compute_bundle_id("my-bundle");
+        // bundle_id must produce consistent results
+        let id1: u64 = bundle_id("my-bundle");
+        let id2: u64 = bundle_id("my-bundle");
         assert_eq!(id1, id2);
     }
 

@@ -23,14 +23,14 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use crate::ir::Version;
-use crate::ir::compute_bundle_id;
-use crate::ir::compute_contract_id;
-use crate::ir::compute_host_contract_id;
 use crate::ir::resolve_type_ref;
 use polyplug_codegen::PlatformKey;
 use polyplug_codegen::PolyplugcError;
 use polyplug_codegen::ResolvedBundleFile;
 use polyplug_codegen::error::SourceLocation;
+use polyplug_utils::bundle_id;
+use polyplug_utils::guest_contract_id;
+use polyplug_utils::host_contract_id;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawApiSchema {
@@ -763,7 +763,7 @@ fn lower_api(
     for raw_contract in &raw.plugin_contract {
         validate_contract_members(&raw_contract.name, "contract", &raw_contract.functions)?;
         let version: Version = parse_version_spanned(&raw_contract.version, file, source)?;
-        let contract_id: u64 = compute_contract_id(&raw_contract.name, version.major);
+        let contract_id: u64 = guest_contract_id(&raw_contract.name, version.major);
 
         let mut functions: Vec<ResolvedFunction> = Vec::new();
         for (function_id, raw_fn) in raw_contract.functions.iter().enumerate() {
@@ -823,7 +823,7 @@ fn lower_api(
             &raw_host_contract.functions,
         )?;
         let version: Version = parse_version_spanned(&raw_host_contract.version, file, source)?;
-        let contract_id: u64 = compute_host_contract_id(&raw_host_contract.name, version.major);
+        let contract_id: u64 = host_contract_id(&raw_host_contract.name, version.major);
 
         let mut functions: Vec<ResolvedFunction> = Vec::new();
         for (function_id, raw_fn) in raw_host_contract.functions.iter().enumerate() {
@@ -930,19 +930,19 @@ fn lower_bundle(
             optional: raw_plugin.optional.clone(),
         });
     }
-    let dep_bundle_id: u64 = compute_bundle_id(&raw.bundle.name);
+    let dep_bundle_id: u64 = bundle_id(&raw.bundle.name);
     let mut resolved_deps: Vec<ResolvedDependency> = Vec::new();
     for dep in &raw.dependencies {
         // The contract_id must use the same major version the API schema uses when it
-        // resolves the same contract (compute_contract_id encodes major in the hash).
+        // resolves the same contract (guest_contract_id encodes major in the hash).
         // Use min_version.major so the dep's contract_id matches the resolved contract.
         let dep_major: u32 = Version::parse(&dep.min_version)
             .map(|v| v.major)
             .unwrap_or(0);
-        let contract_id_val: u64 = compute_contract_id(&dep.contract, dep_major);
+        let contract_id_val: u64 = guest_contract_id(&dep.contract, dep_major);
         let resolved: ResolvedDependency = if dep.kind == "bundle" {
             let bundle_name: String = dep.bundle.clone().unwrap_or_default();
-            let bundle_id_val: u64 = compute_bundle_id(&bundle_name);
+            let bundle_id_val: u64 = bundle_id(&bundle_name);
             ResolvedDependency::ByBundle {
                 bundle: bundle_name,
                 bundle_id: bundle_id_val,

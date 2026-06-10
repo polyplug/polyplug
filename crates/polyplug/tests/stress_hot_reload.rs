@@ -17,10 +17,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::ReloadPhase;
 use polyplug::error::RuntimeError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime_store::RuntimeStore;
+use polyplug_abi::runtime::ReloadPhase;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractInterface, HostApi, NativeDispatch,
     PluginDescriptor, ReloadPhaseType, StringView, Version,
@@ -152,10 +152,10 @@ fn v2_so_path() -> PathBuf {
     PathBuf::from(RELOAD_V2_DIR).join(filename)
 }
 
-fn hot_reload_config() -> polyplug::RuntimeConfig {
-    polyplug::RuntimeConfig {
-        compatibility: polyplug::Compatibility::Strict,
-        unload_mode: polyplug::UnloadMode::Retire,
+fn hot_reload_config() -> polyplug_abi::runtime::RuntimeConfig {
+    polyplug_abi::runtime::RuntimeConfig {
+        compatibility: polyplug_abi::runtime::Compatibility::Strict,
+        unload_mode: polyplug_abi::runtime::UnloadMode::Retire,
         hot_reload_enabled: true,
         on_reload: None,
         on_reload_user_data: core::ptr::null_mut(),
@@ -474,9 +474,9 @@ fn stress_reload_callback_fires_on_every_cycle() {
     let events_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&events);
 
     let rt: Arc<Runtime> = Runtime::builder()
-        .config(polyplug::RuntimeConfig {
+        .config(polyplug_abi::runtime::RuntimeConfig {
             hot_reload_enabled: true,
-            ..polyplug::RuntimeConfig::default()
+            ..polyplug_abi::runtime::RuntimeConfig::default()
         })
         .loader(TestNativeLoader::new())
         .on_reload(move |_user_data: *mut core::ffi::c_void, ev: ReloadPhase| {

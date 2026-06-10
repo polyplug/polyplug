@@ -20,7 +20,6 @@ serde = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
-polyplug_guest = { workspace = true }
 tempfile = { workspace = true }
 libloading = { workspace = true }
 

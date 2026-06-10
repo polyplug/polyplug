@@ -7,22 +7,22 @@
 #![allow(clippy::identity_op)]
 
 use super::types::*;
-use polyplug_guest::AbiError;
-use polyplug_guest::AbiErrorCode;
-use polyplug_guest::DispatchMechanisms;
-use polyplug_guest::DispatchType;
-use polyplug_guest::GuestContractId;
-use polyplug_guest::GuestContractInstance;
-use polyplug_guest::GuestContractInterface;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
+use polyplug_abi::DispatchMechanisms;
+use polyplug_abi::DispatchType;
+use polyplug_abi::GuestContractInstance;
+use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostApi;
+use polyplug_abi::NativeDispatch;
+use polyplug_abi::StringView;
+use polyplug_abi::Version;
+use polyplug_abi::abi_error_ok;
+use polyplug_abi::string_view_from_static;
+use polyplug_abi::string_view_null;
 use polyplug_guest::GuestError;
-use polyplug_guest::HostApi;
-use polyplug_guest::NativeDispatch;
-use polyplug_guest::StringView;
-use polyplug_guest::Version;
-use polyplug_guest::abi_error_ok;
 use polyplug_guest::alloc_string;
-use polyplug_guest::string_view_from_static;
-use polyplug_guest::string_view_null;
+use polyplug_utils::GuestContractId;
 use std::sync::OnceLock;
 /// Convert a GuestError to an AbiError, allocating the message via host_alloc.
 /// Falls back to a null message if allocation fails.

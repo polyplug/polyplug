@@ -15,8 +15,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use polyplug::RuntimeConfig;
 use polyplug::runtime::Runtime;
+use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_abi::types::{LogLevel, StringView};
 use tempfile::TempDir;
 

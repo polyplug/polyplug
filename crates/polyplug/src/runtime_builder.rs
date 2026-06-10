@@ -1,12 +1,12 @@
 use core::ffi::c_void;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
 use polyplug_abi::types::{LogLevel, StringView};
 use polyplug_abi::{HostApi, RuntimeLanguage};
 
 use crate::{
-    RuntimeConfig,
-    compatibility::{CapabilityGraph, Compatibility},
+    compatibility::CapabilityGraph,
     error::{GraphError, LoaderError, RuntimeError},
     loader::{BundleLoader, ManifestData},
     logger::{LoggerClosure, LoggerHandle},

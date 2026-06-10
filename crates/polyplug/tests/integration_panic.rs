@@ -268,10 +268,12 @@ fn test_panic_returns_abi_error_panic() {
     );
 
     // -- Step 4: Write Cargo.toml for the cdylib crate --
-    // Only depend on polyplug_guest; polyplug is an indirect dep.
+    // Only depend on polyplug_abi/polyplug_guest/polyplug_utils; polyplug is an indirect dep.
     // We do NOT add polyplug as a direct dep to avoid duplicate
     // `polyplug_abi_version` symbol (it is defined in polyplug/src/lib.rs).
     let guest_lib_path: PathBuf = workspace_root.join("sdks").join("rust").join("guest");
+    let abi_lib_path: PathBuf = workspace_root.join("crates").join("polyplug_abi");
+    let utils_lib_path: PathBuf = workspace_root.join("crates").join("polyplug_utils");
     let cargo_toml_content: String = format!(
         "[package]\n\
          name = \"panic_plugin\"\n\
@@ -283,10 +285,14 @@ fn test_panic_returns_abi_error_panic() {
          crate-type = [\"cdylib\"]\n\
          \n\
          [dependencies]\n\
-         polyplug_guest = {{ path = \"{}\" }}\n",
+         polyplug_abi = {{ path = \"{}\" }}\n\
+         polyplug_guest = {{ path = \"{}\" }}\n\
+         polyplug_utils = {{ path = \"{}\" }}\n",
         // Backslashes are invalid TOML escape sequences; forward slashes are valid
         // path separators on every platform (including Windows).
-        guest_lib_path.to_string_lossy().replace('\\', "/")
+        abi_lib_path.to_string_lossy().replace('\\', "/"),
+        guest_lib_path.to_string_lossy().replace('\\', "/"),
+        utils_lib_path.to_string_lossy().replace('\\', "/")
     );
     std::fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml_content).expect("write Cargo.toml");
 
@@ -305,14 +311,14 @@ fn test_panic_returns_abi_error_panic() {
         "    pub mod interfaces;\n",
         "}\n",
         "\n",
-        "use polyplug_guest::AbiError;\n",
-        "use polyplug_guest::HostApi;\n",
-        "use polyplug_guest::BundleInitContext;\n",
-        "use polyplug_guest::PluginDescriptor;\n",
+        "use polyplug_abi::AbiError;\n",
+        "use polyplug_abi::HostApi;\n",
+        "use polyplug_abi::BundleInitContext;\n",
+        "use polyplug_abi::PluginDescriptor;\n",
         "use polyplug_guest::GuestError;\n",
-        "use polyplug_guest::GuestContractInterface;\n",
-        "use polyplug_guest::StringView;\n",
-        "use polyplug_guest::AbiErrorCode;\n",
+        "use polyplug_abi::GuestContractInterface;\n",
+        "use polyplug_abi::StringView;\n",
+        "use polyplug_abi::AbiErrorCode;\n",
         "use guest::interfaces::PANIC_PLUGIN_IMPL;\n",
         "use guest::interfaces::PANIC_PLUGIN_INTERFACE;\n",
         "use guest::contracts::TestPanicGuestContract;\n",
@@ -352,7 +358,7 @@ fn test_panic_returns_abi_error_panic() {
         "            ptr: b\"test.panic\".as_ptr(),\n",
         "            len: 10_usize,\n",
         "        },\n",
-        "        version: polyplug_guest::Version { major: 1, minor: 0, patch: 0 },\n",
+        "        version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },\n",
         "    };\n",
         "    // SAFETY: desc and interface are valid for the duration of the call.\n",
         "    unsafe {\n",

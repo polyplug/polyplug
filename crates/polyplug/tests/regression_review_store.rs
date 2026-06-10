@@ -20,9 +20,10 @@
 
 use std::sync::Arc;
 
+use polyplug::Runtime;
 use polyplug::error::RegistryError;
 use polyplug::runtime_store::RuntimeStore;
-use polyplug::{Runtime, RuntimeConfig};
+use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_abi::{
     Array, DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInterface, HostApi,
     NativeDispatch, PluginDescriptor, StringView, Version,

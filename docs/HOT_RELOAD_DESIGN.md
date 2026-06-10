@@ -163,7 +163,7 @@ rt.reload_bundle(path)?;  // Returns Err(RuntimeError::HotReloadDisabled)
 ### Example: Enabling Hot-Reload
 
 ```rust
-use polyplug::RuntimeConfig;
+use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_abi::runtime::{Compatibility, ReloadPhaseType, UnloadMode};
 
 let config = RuntimeConfig {

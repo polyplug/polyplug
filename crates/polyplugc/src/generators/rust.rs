@@ -243,7 +243,7 @@ impl CodeGenerator for RustGenerator {
         // ── types.rs ──────────────────────────────────────────────────────────
         let mut types_out: String = String::new();
         types_out.push_str(header);
-        types_out.push_str("use polyplug_guest::StringView;\n\n");
+        types_out.push_str("use polyplug_abi::StringView;\n\n");
         // Emit enums before struct types
         for e in &ir.enums {
             generate_rust_enum(&mut types_out, e);
@@ -279,8 +279,8 @@ impl CodeGenerator for RustGenerator {
         // ── contracts.rs ──────────────────────────────────────────────────────
         let mut contracts_out: String = String::new();
         contracts_out.push_str(header);
+        contracts_out.push_str("use polyplug_abi::StringView;\n");
         contracts_out.push_str("use polyplug_guest::GuestError;\n");
-        contracts_out.push_str("use polyplug_guest::StringView;\n");
         contracts_out.push_str("use super::types::*;\n\n");
 
         for contract in &ir.contracts {
@@ -542,22 +542,22 @@ fn generate_guest_interfaces_file(
 ) -> Result<(), PolyplugcError> {
     // Shared imports
     out.push_str("use std::sync::OnceLock;\n");
-    out.push_str("use polyplug_guest::AbiError;\n");
-    out.push_str("use polyplug_guest::AbiErrorCode;\n");
-    out.push_str("use polyplug_guest::GuestContractId;\n");
-    out.push_str("use polyplug_guest::GuestContractInterface;\n");
-    out.push_str("use polyplug_guest::GuestContractInstance;\n");
-    out.push_str("use polyplug_guest::HostApi;\n");
-    out.push_str("use polyplug_guest::DispatchType;\n");
-    out.push_str("use polyplug_guest::NativeDispatch;\n");
-    out.push_str("use polyplug_guest::DispatchMechanisms;\n");
-    out.push_str("use polyplug_guest::StringView;\n");
-    out.push_str("use polyplug_guest::Version;\n");
+    out.push_str("use polyplug_abi::AbiError;\n");
+    out.push_str("use polyplug_abi::AbiErrorCode;\n");
+    out.push_str("use polyplug_abi::GuestContractInterface;\n");
+    out.push_str("use polyplug_abi::GuestContractInstance;\n");
+    out.push_str("use polyplug_abi::HostApi;\n");
+    out.push_str("use polyplug_abi::DispatchType;\n");
+    out.push_str("use polyplug_abi::NativeDispatch;\n");
+    out.push_str("use polyplug_abi::DispatchMechanisms;\n");
+    out.push_str("use polyplug_abi::StringView;\n");
+    out.push_str("use polyplug_abi::Version;\n");
+    out.push_str("use polyplug_abi::string_view_null;\n");
+    out.push_str("use polyplug_abi::string_view_from_static;\n");
+    out.push_str("use polyplug_abi::abi_error_ok;\n");
     out.push_str("use polyplug_guest::GuestError;\n");
     out.push_str("use polyplug_guest::alloc_string;\n");
-    out.push_str("use polyplug_guest::string_view_null;\n");
-    out.push_str("use polyplug_guest::string_view_from_static;\n");
-    out.push_str("use polyplug_guest::abi_error_ok;\n");
+    out.push_str("use polyplug_utils::GuestContractId;\n");
     out.push_str("use super::types::*;\n");
 
     // Helper function to convert GuestError to AbiError with message allocation
@@ -1025,16 +1025,16 @@ fn emit_guest_wrapper_call(out: &mut String, func: &ResolvedFunction, contract_s
 
 /// Generate the init.rs file content.
 fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
-    out.push_str("use polyplug_guest::AbiError;\n");
-    out.push_str("use polyplug_guest::AbiErrorCode;\n");
-    out.push_str("use polyplug_guest::string_view_from_static;\n");
-    out.push_str("use polyplug_guest::abi_error_ok;\n");
-    out.push_str("use polyplug_guest::PluginDescriptor;\n");
-    out.push_str("use polyplug_guest::HostApi;\n");
-    out.push_str("use polyplug_guest::GuestContractInterface;\n");
-    out.push_str("use polyplug_guest::StringView;\n");
-    out.push_str("use polyplug_guest::Version;\n");
-    out.push_str("use polyplug_guest::BundleInitContext;\n");
+    out.push_str("use polyplug_abi::AbiError;\n");
+    out.push_str("use polyplug_abi::AbiErrorCode;\n");
+    out.push_str("use polyplug_abi::string_view_from_static;\n");
+    out.push_str("use polyplug_abi::abi_error_ok;\n");
+    out.push_str("use polyplug_abi::PluginDescriptor;\n");
+    out.push_str("use polyplug_abi::HostApi;\n");
+    out.push_str("use polyplug_abi::GuestContractInterface;\n");
+    out.push_str("use polyplug_abi::StringView;\n");
+    out.push_str("use polyplug_abi::Version;\n");
+    out.push_str("use polyplug_abi::BundleInitContext;\n");
     out.push_str("use polyplug_guest::store_host_vtable;\n");
     out.push_str("use core::ffi::c_void;\n");
     if let Some(bundle) = &ir.bundle {
@@ -2492,19 +2492,19 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
         .iter()
         .any(|c: &ResolvedHostContract| c.functions.iter().any(fn_needs_arena));
 
-    out.push_str("use polyplug_guest::HostApi;\n");
-    out.push_str("use polyplug_guest::HostContractInterface;\n");
-    out.push_str("use polyplug_guest::HostContractInstance;\n");
-    out.push_str("use polyplug_guest::GuestContractInstance;\n");
-    out.push_str("use polyplug_guest::DispatchType;\n");
-    out.push_str("use polyplug_guest::StringView;\n");
-    out.push_str("use polyplug_guest::Buffer;\n");
-    out.push_str("use polyplug_guest::AbiError;\n");
-    out.push_str("use polyplug_guest::AbiErrorCode;\n");
+    out.push_str("use polyplug_abi::HostApi;\n");
+    out.push_str("use polyplug_abi::HostContractInterface;\n");
+    out.push_str("use polyplug_abi::HostContractInstance;\n");
+    out.push_str("use polyplug_abi::GuestContractInstance;\n");
+    out.push_str("use polyplug_abi::DispatchType;\n");
+    out.push_str("use polyplug_abi::StringView;\n");
+    out.push_str("use polyplug_abi::Buffer;\n");
+    out.push_str("use polyplug_abi::AbiError;\n");
+    out.push_str("use polyplug_abi::AbiErrorCode;\n");
+    out.push_str("use polyplug_abi::string_view_null;\n");
     out.push_str("use polyplug_guest::alloc_string;\n");
-    out.push_str("use polyplug_guest::string_view_null;\n");
     if any_needs_arena {
-        out.push_str("use polyplug_guest::CallArena;\n");
+        out.push_str("use polyplug_abi::CallArena;\n");
     }
     out.push_str("use core::ffi::c_void;\n");
     out.push_str("use super::types::*;\n\n");
@@ -3048,19 +3048,19 @@ fn generate_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> 
     let mut out: String = String::new();
     out.push_str(header);
 
-    out.push_str("use polyplug_guest::HostApi;\n");
-    out.push_str("use polyplug_guest::GuestContractHandle;\n");
-    out.push_str("use polyplug_guest::GuestContractInterface;\n");
-    out.push_str("use polyplug_guest::GuestContractInstance;\n");
-    out.push_str("use polyplug_guest::StringView;\n");
-    out.push_str("use polyplug_guest::AbiError;\n");
-    out.push_str("use polyplug_guest::AbiErrorCode;\n");
+    out.push_str("use polyplug_abi::HostApi;\n");
+    out.push_str("use polyplug_abi::GuestContractHandle;\n");
+    out.push_str("use polyplug_abi::GuestContractInterface;\n");
+    out.push_str("use polyplug_abi::GuestContractInstance;\n");
+    out.push_str("use polyplug_abi::StringView;\n");
+    out.push_str("use polyplug_abi::AbiError;\n");
+    out.push_str("use polyplug_abi::AbiErrorCode;\n");
     // Import CallArena when any peer contract needs the arena (returns StringView/Buffer/UserDefined).
     let any_needs_arena: bool = peers
         .iter()
         .any(|c: &&ResolvedContract| contract_needs_arena(c));
     if any_needs_arena {
-        out.push_str("use polyplug_guest::CallArena;\n");
+        out.push_str("use polyplug_abi::CallArena;\n");
     }
     out.push_str("use super::types::*;\n\n");
 
@@ -3192,7 +3192,7 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
     out.push_str(&format!(
         "        let instance: GuestContractInstance = GuestContractInstance {{\n\
          \x20           data: created.data,\n\
-         \x20           contract_id: polyplug_guest::GuestContractId::from_u64(0x{:016X}_u64),\n\
+         \x20           contract_id: polyplug_utils::GuestContractId::from_u64(0x{:016X}_u64),\n\
          \x20       }};\n",
         contract.contract_id
     ));
