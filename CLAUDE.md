@@ -472,6 +472,8 @@ pub struct Runtime {
 - Re-exporting from the same crate (e.g., `pub use crate::module::Type`)
 - Creating a convenient facade for a module's own types
 
+**The entire workspace must be cross-crate-re-export free: no local crate (including every crate under `sdks/`) may `pub use` items from another local crate — no facade exceptions, renamed re-exports (`pub use foo::bar as baz`) included.**
+
 **FORBIDDEN — re-exporting from another crate (even public APIs):**
 ```rust
 // FORBIDDEN — polyplug_codegen re-exporting polyplug_abi's types
