@@ -442,16 +442,14 @@ What the grid shows:
   the scripted-app rows are the red end. Most real setups land in between, and the
   grid tells you exactly where.
 
-Two sets of cells are **N/A**, for two different reasons:
+One column is **N/A**:
 
 - **The C# plugin column** — there is no built C# guest bundle in
   `examples/plugins`, and the host examples don't register the .NET loader. C#
   works fine as an *app* (it has a full row); it just isn't wired as a *plugin* yet.
-- **The JS app × VM-plugin cells** (JS app calling a Lua / JS / Python plugin) —
-  the plugin *loads*, but the JavaScript (Deno) host SDK can currently only call
-  **native** plugins; it does not yet route a call into a VM-language plugin
-  through the runtime. Every other app language (Rust / C++ / C# / Lua / Python)
-  calls VM plugins fine, so this is a gap in the JS host SDK, not the runtime.
+
+Every other pairing is measured — including every app language (Rust / C++ / C# /
+Lua / Python / JS) calling a Lua, JS, or Python plugin.
 
 > This grid measures the **whole** call (argument in, call, string back), so its
 > numbers are larger than the single-boundary charts above — the
