@@ -1,24 +1,20 @@
 //! Validation result reporting.
 //!
-//! This module provides functionality to generate human-readable and machine-readable
-//! reports from validation results.
+//! Generates human-readable (table) and machine-readable (JSON) reports.
+//! When a method is missing, both formats name the target file(s) it is
+//! missing from.
 
 use crate::aggregator::{MethodStatus, StructReport, ValidationReport};
 
 /// Reporter for generating validation reports in different formats.
-///
-/// Supports two output formats:
-/// - **Table**: Human-readable ASCII table for terminal output
-/// - **JSON**: Machine-readable JSON for CI/programmatic use
 pub struct Reporter {
     /// Ordered list of languages to display in table columns.
     languages: Vec<String>,
 }
 
 impl Reporter {
-    /// Create a new reporter with default language ordering.
-    ///
-    /// The default order is: Rust, Python, C#, C++, JS, Lua.
+    /// Create a new reporter with the default language ordering:
+    /// Rust, Python, C#, C++, JS, Lua.
     pub fn new() -> Self {
         Self {
             languages: vec![
@@ -32,36 +28,16 @@ impl Reporter {
         }
     }
 
-    /// Create a reporter with custom language ordering.
-    ///
-    /// # Arguments
-    ///
-    /// * `languages` - The ordered list of language names to display.
-    #[allow(dead_code)]
-    pub fn with_languages(languages: Vec<String>) -> Self {
-        Self { languages }
-    }
-
     /// Generate a human-readable table report.
     ///
-    /// The table shows each struct with its methods and a ✓/✗ indicator
-    /// for each language indicating whether the method is implemented.
-    ///
-    /// # Arguments
-    ///
-    /// * `report` - The validation report to format.
-    ///
-    /// # Returns
-    ///
-    /// A formatted string containing the ASCII table.
+    /// Shows each struct's methods with a ✓/✗ per language, followed by a
+    /// per-file breakdown of every missing method.
     pub fn generate_table(&self, report: &ValidationReport) -> String {
         let mut output: String = String::new();
 
-        // Header
         output.push_str("SDK Validation Report\n");
         output.push_str("=====================\n\n");
 
-        // Per-struct tables
         let mut struct_names: Vec<&String> = report.per_struct.keys().collect();
         struct_names.sort();
 
@@ -73,10 +49,10 @@ impl Reporter {
 
             output.push_str(&format!("{} Methods:\n", struct_name));
             output.push_str(&self.generate_struct_table(struct_report));
+            output.push_str(&self.generate_missing_details(struct_report));
             output.push('\n');
         }
 
-        // Summary
         let completion_pct: f64 = if report.total_methods == 0 {
             100.0
         } else {
@@ -91,7 +67,6 @@ impl Reporter {
             completion_pct
         ));
 
-        // List methods missing in all languages
         let missing_all: Vec<String> = self.find_methods_missing_everywhere(report);
         if !missing_all.is_empty() {
             output.push_str(&format!(
@@ -107,11 +82,9 @@ impl Reporter {
     fn generate_struct_table(&self, struct_report: &StructReport) -> String {
         let mut output: String = String::new();
 
-        // Calculate column widths
         let method_width: usize = self.calculate_method_column_width(struct_report);
         let lang_widths: Vec<usize> = self.calculate_language_column_widths();
 
-        // Header row
         output.push_str("  ");
         output.push_str(&self.pad_right("Method", method_width));
         output.push_str(" |");
@@ -121,7 +94,6 @@ impl Reporter {
         }
         output.push('\n');
 
-        // Separator row
         output.push_str("  ");
         output.push_str(&"-".repeat(method_width));
         output.push_str("-|");
@@ -130,7 +102,6 @@ impl Reporter {
         }
         output.push('\n');
 
-        // Method rows (sorted alphabetically)
         let mut method_names: Vec<&String> = struct_report.methods.keys().collect();
         method_names.sort();
 
@@ -158,6 +129,43 @@ impl Reporter {
         output
     }
 
+    /// Generate per-file breakdown lines for every missing method.
+    fn generate_missing_details(&self, struct_report: &StructReport) -> String {
+        let mut lines: Vec<String> = Vec::new();
+
+        let mut method_names: Vec<&String> = struct_report.methods.keys().collect();
+        method_names.sort();
+
+        for method_name in method_names {
+            let status: &MethodStatus = match struct_report.methods.get(method_name) {
+                Some(s) => s,
+                None => continue,
+            };
+
+            let mut details: Vec<&crate::aggregator::MissingDetail> =
+                status.missing_in.iter().collect();
+            details.sort_by(|a, b| a.language.cmp(&b.language));
+
+            for detail in details {
+                let files: String = if detail.files.is_empty() {
+                    "(no target files configured)".to_string()
+                } else {
+                    detail.files.join(", ")
+                };
+                lines.push(format!(
+                    "    {} [{}]: {}",
+                    method_name, detail.language, files
+                ));
+            }
+        }
+
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!("  Missing from:\n{}\n", lines.join("\n"))
+        }
+    }
+
     /// Calculate the width needed for the method name column.
     fn calculate_method_column_width(&self, struct_report: &StructReport) -> usize {
         let min_width: usize = 7; // "Method" header
@@ -174,7 +182,7 @@ impl Reporter {
     fn calculate_language_column_widths(&self) -> Vec<usize> {
         self.languages
             .iter()
-            .map(|lang| core::cmp::max(lang.len(), 1)) // At least 1 for ✓/✗
+            .map(|lang| core::cmp::max(lang.len(), 1))
             .collect()
     }
 
@@ -212,21 +220,10 @@ impl Reporter {
 
     /// Generate a JSON report for programmatic use.
     ///
-    /// The JSON output includes:
-    /// - Overall completion status
-    /// - Total and found method counts
-    /// - Per-struct breakdown with method statuses
-    /// - Per-language breakdown with struct results
-    ///
-    /// # Arguments
-    ///
-    /// * `report` - The validation report to serialize.
-    ///
-    /// # Returns
-    ///
-    /// A JSON string representation of the report.
+    /// `per_struct[*].methods[*].missing_in` is an array of
+    /// `{language, files}` objects naming the file(s) each missing method is
+    /// absent from.
     pub fn generate_json(&self, report: &ValidationReport) -> String {
-        // Create a serializable version with completion_percentage at top level
         let completion_pct: f64 = if report.total_methods == 0 {
             100.0
         } else {
@@ -256,40 +253,70 @@ impl Default for Reporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aggregator::MissingDetail;
 
     fn create_test_report() -> ValidationReport {
         let mut report: ValidationReport = ValidationReport::new();
 
-        // Add StringView struct
         let mut string_view_report: StructReport = StructReport::new();
 
         let mut to_str_status: MethodStatus = MethodStatus::new();
         to_str_status.found_in = vec!["rust".to_string(), "python".to_string()];
         to_str_status.missing_in = vec![
-            "csharp".to_string(),
-            "cpp".to_string(),
-            "js".to_string(),
-            "lua".to_string(),
+            MissingDetail {
+                language: "csharp".to_string(),
+                files: vec!["sdks/csharp/abi/Abi.cs".to_string()],
+            },
+            MissingDetail {
+                language: "cpp".to_string(),
+                files: vec!["sdks/cpp/abi/polyplug/abi.hpp".to_string()],
+            },
+            MissingDetail {
+                language: "js".to_string(),
+                files: Vec::new(),
+            },
+            MissingDetail {
+                language: "lua".to_string(),
+                files: vec!["sdks/lua/abi/abi.lua".to_string()],
+            },
         ];
 
         let mut starts_with_status: MethodStatus = MethodStatus::new();
-        starts_with_status.found_in = vec!["python".to_string(), "cpp".to_string()];
-        starts_with_status.missing_in = vec![
-            "rust".to_string(),
-            "csharp".to_string(),
-            "js".to_string(),
-            "lua".to_string(),
-        ];
-
-        let mut ends_with_status: MethodStatus = MethodStatus::new();
-        ends_with_status.found_in = vec![];
-        ends_with_status.missing_in = vec![
+        starts_with_status.found_in = vec![
             "rust".to_string(),
             "python".to_string(),
             "csharp".to_string(),
             "cpp".to_string(),
             "js".to_string(),
             "lua".to_string(),
+        ];
+
+        let mut ends_with_status: MethodStatus = MethodStatus::new();
+        ends_with_status.missing_in = vec![
+            MissingDetail {
+                language: "rust".to_string(),
+                files: vec!["sdks/rust/guest/src/lib.rs".to_string()],
+            },
+            MissingDetail {
+                language: "python".to_string(),
+                files: Vec::new(),
+            },
+            MissingDetail {
+                language: "csharp".to_string(),
+                files: Vec::new(),
+            },
+            MissingDetail {
+                language: "cpp".to_string(),
+                files: Vec::new(),
+            },
+            MissingDetail {
+                language: "js".to_string(),
+                files: Vec::new(),
+            },
+            MissingDetail {
+                language: "lua".to_string(),
+                files: Vec::new(),
+            },
         ];
 
         string_view_report
@@ -307,7 +334,7 @@ mod tests {
             .per_struct
             .insert("StringView".to_string(), string_view_report);
         report.total_methods = 3;
-        report.found_methods = 4; // 2 + 2 + 0
+        report.found_methods = 8; // 2 + 6 + 0
         report.is_complete = false;
 
         report
@@ -319,13 +346,6 @@ mod tests {
         assert_eq!(reporter.languages.len(), 6);
         assert_eq!(reporter.languages[0], "rust");
         assert_eq!(reporter.languages[5], "lua");
-    }
-
-    #[test]
-    fn test_reporter_with_languages() {
-        let reporter: Reporter =
-            Reporter::with_languages(vec!["rust".to_string(), "python".to_string()]);
-        assert_eq!(reporter.languages.len(), 2);
     }
 
     #[test]
@@ -344,22 +364,28 @@ mod tests {
         let report: ValidationReport = create_test_report();
         let output: String = reporter.generate_table(&report);
 
-        // Check struct header
         assert!(output.contains("StringView Methods:"));
-
-        // Check method names appear
         assert!(output.contains("to_str"));
         assert!(output.contains("starts_with"));
         assert!(output.contains("ends_with"));
-
-        // Check language headers
         assert!(output.contains("rust"));
         assert!(output.contains("python"));
         assert!(output.contains("csharp"));
-
-        // Check summary
         assert!(output.contains("Summary:"));
-        assert!(output.contains("4/18 method implementations found"));
+        assert!(output.contains("8/18 method implementations found"));
+    }
+
+    #[test]
+    fn test_generate_table_names_missing_files() {
+        let reporter: Reporter = Reporter::new();
+        let report: ValidationReport = create_test_report();
+        let output: String = reporter.generate_table(&report);
+
+        assert!(output.contains("Missing from:"));
+        assert!(output.contains("to_str [lua]: sdks/lua/abi/abi.lua"));
+        assert!(output.contains("to_str [csharp]: sdks/csharp/abi/Abi.cs"));
+        assert!(output.contains("to_str [js]: (no target files configured)"));
+        assert!(output.contains("ends_with [rust]: sdks/rust/guest/src/lib.rs"));
     }
 
     #[test]
@@ -368,7 +394,6 @@ mod tests {
         let report: ValidationReport = create_test_report();
         let output: String = reporter.generate_table(&report);
 
-        // ends_with is missing in all languages
         assert!(output.contains("Missing in all languages:"));
         assert!(output.contains("StringView.ends_with"));
     }
@@ -379,39 +404,34 @@ mod tests {
         let report: ValidationReport = create_test_report();
         let output: String = reporter.generate_json(&report);
 
-        // Parse the JSON to verify structure
         let parsed: serde_json::Value = serde_json::from_str(&output)?;
 
         assert_eq!(parsed["is_complete"], false);
         assert_eq!(parsed["total_methods"], 3);
-        assert_eq!(parsed["found_methods"], 4);
+        assert_eq!(parsed["found_methods"], 8);
         assert!(parsed["completion_percentage"].is_number());
-        assert!(parsed["per_struct"].is_object());
         assert!(parsed["per_struct"]["StringView"].is_object());
         Ok(())
     }
 
     #[test]
-    fn test_generate_json_method_status() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_generate_json_names_missing_files() -> Result<(), Box<dyn core::error::Error>> {
         let reporter: Reporter = Reporter::new();
         let report: ValidationReport = create_test_report();
         let output: String = reporter.generate_json(&report);
 
         let parsed: serde_json::Value = serde_json::from_str(&output)?;
+        let missing_in: &serde_json::Value =
+            &parsed["per_struct"]["StringView"]["methods"]["to_str"]["missing_in"];
+        assert!(missing_in.is_array());
 
-        // Check to_str method status
-        let to_str: &serde_json::Value = &parsed["per_struct"]["StringView"]["methods"]["to_str"];
-        assert!(to_str["found_in"].is_array());
-        assert!(to_str["missing_in"].is_array());
-
-        let found_in: Vec<String> = to_str["found_in"]
+        let lua_entry: &serde_json::Value = missing_in
             .as_array()
-            .ok_or("found_in must be an array")?
+            .ok_or("missing_in must be an array")?
             .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-        assert!(found_in.contains(&"rust".to_string()));
-        assert!(found_in.contains(&"python".to_string()));
+            .find(|e| e["language"] == "lua")
+            .ok_or("expected lua entry")?;
+        assert_eq!(lua_entry["files"][0], "sdks/lua/abi/abi.lua");
         Ok(())
     }
 
@@ -453,11 +473,5 @@ mod tests {
 
         assert_eq!(missing.len(), 1);
         assert!(missing.contains(&"StringView.ends_with".to_string()));
-    }
-
-    #[test]
-    fn test_default_reporter() {
-        let reporter: Reporter = Reporter::default();
-        assert_eq!(reporter.languages.len(), 6);
     }
 }

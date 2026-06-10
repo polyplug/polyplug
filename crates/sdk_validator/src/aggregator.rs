@@ -1,28 +1,40 @@
 //! Result aggregation for SDK validation.
 //!
-//! This module provides functionality to aggregate validation results from
-//! all language validators into a comprehensive report.
+//! Runs every language validator against the config and aggregates the
+//! per-file results into a comprehensive report. Tool failures, missing
+//! target files, and Lua parser init failures are fatal — they propagate as
+//! errors instead of being silently counted as "missing".
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::ast_grep::AstGrepRunner;
+use crate::ast_grep::{AstGrepRunner, NamingConvention};
 use crate::config::Config;
+use crate::error::ValidatorError;
 use crate::languages::{
     CSharpValidator, CppValidator, JsValidator, LanguageValidator, LuaValidator, PythonValidator,
-    RustValidator, ValidationResult,
+    RustValidator, ValidationResult, validate_language,
 };
 
+/// A language missing a method, with the target files it is missing from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MissingDetail {
+    /// The language missing the method.
+    pub language: String,
+    /// The target files that do not implement it (empty when the language
+    /// has no target files configured).
+    pub files: Vec<String>,
+}
+
 /// Status of a method across all language SDKs.
-///
-/// Tracks which language SDKs have implemented the method and which are missing it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MethodStatus {
-    /// Languages where the method was found.
+    /// Languages where the method was found in every target file.
     pub found_in: Vec<String>,
-    /// Languages where the method is missing.
-    pub missing_in: Vec<String>,
+    /// Languages (with files) where the method is missing.
+    pub missing_in: Vec<MissingDetail>,
 }
 
 impl MethodStatus {
@@ -38,17 +50,6 @@ impl MethodStatus {
     pub fn is_complete(&self) -> bool {
         self.missing_in.is_empty()
     }
-
-    /// Get the completion percentage (0-100).
-    #[allow(dead_code)]
-    pub fn completion_percentage(&self) -> u8 {
-        let total: usize = self.found_in.len() + self.missing_in.len();
-        if total == 0 {
-            return 100;
-        }
-        let found: usize = self.found_in.len();
-        ((found * 100) / total) as u8
-    }
 }
 
 impl Default for MethodStatus {
@@ -58,8 +59,6 @@ impl Default for MethodStatus {
 }
 
 /// Report for a single struct across all language SDKs.
-///
-/// Contains the status of each method and the overall completion percentage.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StructReport {
     /// Method name -> status across languages.
@@ -79,17 +78,11 @@ impl StructReport {
 
     /// Calculate the completion percentage from the method statuses.
     pub fn calculate_completion(&mut self) {
-        if self.methods.is_empty() {
-            self.completion_percentage = 100.0;
-            return;
-        }
-
         let total_found: usize = self
             .methods
             .values()
             .map(|status| status.found_in.len())
             .sum();
-
         let total_missing: usize = self
             .methods
             .values()
@@ -112,8 +105,6 @@ impl Default for StructReport {
 }
 
 /// Report for a single language SDK across all structs.
-///
-/// Contains the validation results for each struct and the overall completion percentage.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LanguageReport {
     /// Struct name -> validation result.
@@ -133,17 +124,11 @@ impl LanguageReport {
 
     /// Calculate the completion percentage from the struct results.
     pub fn calculate_completion(&mut self) {
-        if self.structs.is_empty() {
-            self.completion_percentage = 100.0;
-            return;
-        }
-
         let total_found: usize = self
             .structs
             .values()
             .map(|result| result.found_methods.len())
             .sum();
-
         let total_missing: usize = self
             .structs
             .values()
@@ -166,8 +151,6 @@ impl Default for LanguageReport {
 }
 
 /// Aggregated validation report across all language SDKs.
-///
-/// Contains overall status, per-struct reports, and per-language reports.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ValidationReport {
     /// Whether all methods are implemented in all languages.
@@ -203,148 +186,92 @@ impl Default for ValidationReport {
 
 /// Aggregate validation results from all language validators.
 ///
-/// This function runs all 6 language validators (Rust, Python, C#, C++, JS, Lua)
-/// and aggregates their results into a comprehensive `ValidationReport`.
+/// Runs all 6 language validators (Rust, Python, C#, C++, JS, Lua). A
+/// language with no configured target files is reported as missing every
+/// method; a configured target file that does not exist is a fatal error.
 ///
-/// # Arguments
+/// # Errors
 ///
-/// * `config` - The configuration containing methods, naming conventions, and target files.
-/// * `runner` - The ast-grep runner to use for validation.
-///
-/// # Returns
-///
-/// A `ValidationReport` containing:
-/// - Overall completion status
-/// - Per-struct reports with method statuses
-/// - Per-language reports with struct results
-pub fn aggregate_results(config: &Config, runner: &AstGrepRunner) -> ValidationReport {
+/// Returns a [`ValidatorError`] if:
+/// - the Lua tree-sitter parser cannot be initialized
+/// - a configured target file does not exist
+/// - a target language has no naming convention configured
+/// - ast-grep execution or output parsing fails
+pub fn aggregate_results(
+    config: &Config,
+    runner: &AstGrepRunner,
+) -> Result<ValidationReport, ValidatorError> {
     let mut report: ValidationReport = ValidationReport::new();
 
-    // Initialize validators
-    let rust_validator: RustValidator = RustValidator::new();
-    let python_validator: PythonValidator = PythonValidator::new();
-    let csharp_validator: CSharpValidator = CSharpValidator::new();
-    let cpp_validator: CppValidator = CppValidator::new();
-    let js_validator: JsValidator = JsValidator::new();
+    let mut validators: Vec<Box<dyn LanguageValidator>> = vec![
+        Box::new(RustValidator::new()),
+        Box::new(PythonValidator::new()),
+        Box::new(CSharpValidator::new()),
+        Box::new(CppValidator::new()),
+        Box::new(JsValidator::new()),
+        Box::new(LuaValidator::new()?),
+    ];
 
-    // Lua validator requires initialization, handle gracefully
-    let mut lua_validator: Option<LuaValidator> = LuaValidator::new().ok();
-
-    // Collect all language names for tracking
-    let language_names: Vec<&str> = vec!["rust", "python", "csharp", "cpp", "js", "lua"];
-
-    // Initialize per-language reports
-    for lang in &language_names {
+    for validator in &validators {
         report
             .per_language
-            .insert((*lang).to_string(), LanguageReport::new());
+            .insert(validator.language_name().to_string(), LanguageReport::new());
     }
 
-    // Process each struct from the config
     for (struct_name, methods) in &config.methods {
         let mut struct_report: StructReport = StructReport::new();
-
-        // Count total methods
         report.total_methods += methods.len();
 
-        // Initialize method statuses
         for method_name in methods {
             struct_report
                 .methods
                 .insert(method_name.clone(), MethodStatus::new());
         }
 
-        // Validate with Rust
-        let rust_targets: Vec<String> = config.targets.get("rust").cloned().unwrap_or_default();
+        for validator in validators.iter_mut() {
+            let language: &'static str = validator.language_name();
+            let files: &[PathBuf] = config
+                .targets
+                .get(language)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
 
-        let rust_result: ValidationResult =
-            rust_validator.validate(runner, struct_name, methods, &rust_targets);
-
-        update_struct_report(&mut struct_report, &rust_result, "rust");
-        update_language_report(&mut report.per_language, struct_name, rust_result, "rust");
-
-        // Validate with Python
-        let python_targets: Vec<String> = config.targets.get("python").cloned().unwrap_or_default();
-
-        let python_result: ValidationResult =
-            python_validator.validate(runner, struct_name, methods, &python_targets);
-
-        update_struct_report(&mut struct_report, &python_result, "python");
-        update_language_report(
-            &mut report.per_language,
-            struct_name,
-            python_result,
-            "python",
-        );
-
-        // Validate with C#
-        let csharp_targets: Vec<String> = config.targets.get("csharp").cloned().unwrap_or_default();
-
-        let csharp_result: ValidationResult =
-            csharp_validator.validate(runner, struct_name, methods, &csharp_targets);
-
-        update_struct_report(&mut struct_report, &csharp_result, "csharp");
-        update_language_report(
-            &mut report.per_language,
-            struct_name,
-            csharp_result,
-            "csharp",
-        );
-
-        // Validate with C++
-        let cpp_targets: Vec<String> = config.targets.get("cpp").cloned().unwrap_or_default();
-
-        let cpp_result: ValidationResult =
-            cpp_validator.validate(runner, struct_name, methods, &cpp_targets);
-
-        update_struct_report(&mut struct_report, &cpp_result, "cpp");
-        update_language_report(&mut report.per_language, struct_name, cpp_result, "cpp");
-
-        // Validate with JS/TypeScript
-        let js_targets: Vec<String> = config.targets.get("js").cloned().unwrap_or_default();
-
-        let js_result: ValidationResult =
-            js_validator.validate(runner, struct_name, methods, &js_targets);
-
-        update_struct_report(&mut struct_report, &js_result, "js");
-        update_language_report(&mut report.per_language, struct_name, js_result, "js");
-
-        // Validate with Lua (if available)
-        match &mut lua_validator {
-            Some(lua_val) => {
-                let lua_targets: Vec<String> =
-                    config.targets.get("lua").cloned().unwrap_or_default();
-
-                let lua_result: ValidationResult =
-                    lua_val.validate(struct_name, methods, &lua_targets);
-
-                update_struct_report(&mut struct_report, &lua_result, "lua");
-                update_language_report(&mut report.per_language, struct_name, lua_result, "lua");
-            }
-            None => {
-                // Lua validator not available, mark all methods as missing
-                for method_name in methods {
-                    if let Some(status) = struct_report.methods.get_mut(method_name) {
-                        status.missing_in.push("lua".to_string());
-                    }
+            let naming: NamingConvention = match config.naming.get(language) {
+                Some(convention) => *convention,
+                // No naming needed when there is nothing to probe; the
+                // language is reported as missing everything.
+                None if files.is_empty() => NamingConvention::Snake,
+                None => {
+                    return Err(ValidatorError::MissingNamingConvention {
+                        language: language.to_string(),
+                    });
                 }
-            }
+            };
+
+            let result: ValidationResult = validate_language(
+                validator.as_mut(),
+                runner,
+                naming,
+                struct_name,
+                methods,
+                files,
+            )?;
+
+            update_struct_report(&mut struct_report, &result, language);
+            update_language_report(&mut report.per_language, struct_name, result, language);
         }
 
-        // Calculate struct completion
         struct_report.calculate_completion();
         report.per_struct.insert(struct_name.clone(), struct_report);
     }
 
-    // Calculate per-language completion percentages
     for lang_report in report.per_language.values_mut() {
         lang_report.calculate_completion();
     }
 
-    // Calculate overall statistics
     calculate_overall_stats(&mut report);
 
-    report
+    Ok(report)
 }
 
 /// Update a struct report with validation results from a language.
@@ -359,9 +286,12 @@ fn update_struct_report(
         }
     }
 
-    for method_name in &result.missing_methods {
-        if let Some(status) = struct_report.methods.get_mut(method_name) {
-            status.missing_in.push(language.to_string());
+    for missing in &result.missing_methods {
+        if let Some(status) = struct_report.methods.get_mut(&missing.method) {
+            status.missing_in.push(MissingDetail {
+                language: language.to_string(),
+                files: missing.missing_files.clone(),
+            });
         }
     }
 }
@@ -399,6 +329,20 @@ fn calculate_overall_stats(report: &mut ValidationReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    use crate::languages::MissingMethod;
+    use crate::languages::test_support::runner;
+
+    fn empty_config() -> Config {
+        Config {
+            version: 1,
+            methods: HashMap::new(),
+            naming: HashMap::new(),
+            targets: HashMap::new(),
+        }
+    }
 
     #[test]
     fn test_method_status_new() {
@@ -406,64 +350,25 @@ mod tests {
         assert!(status.found_in.is_empty());
         assert!(status.missing_in.is_empty());
         assert!(status.is_complete());
-        assert_eq!(status.completion_percentage(), 100);
     }
 
     #[test]
-    fn test_method_status_with_found() {
-        let mut status: MethodStatus = MethodStatus::new();
-        status.found_in.push("rust".to_string());
-        status.found_in.push("python".to_string());
-
-        assert!(status.is_complete());
-        assert_eq!(status.completion_percentage(), 100);
-    }
-
-    #[test]
-    fn test_method_status_with_missing() {
-        let mut status: MethodStatus = MethodStatus::new();
-        status.found_in.push("rust".to_string());
-        status.missing_in.push("python".to_string());
-
-        assert!(!status.is_complete());
-        assert_eq!(status.completion_percentage(), 50);
-    }
-
-    #[test]
-    fn test_method_status_default() {
-        let status: MethodStatus = MethodStatus::default();
-        assert!(status.is_complete());
-    }
-
-    #[test]
-    fn test_struct_report_new() {
-        let report: StructReport = StructReport::new();
-        assert!(report.methods.is_empty());
-        assert_eq!(report.completion_percentage, 100.0);
-    }
-
-    #[test]
-    fn test_struct_report_calculate_completion_empty() {
-        let mut report: StructReport = StructReport::new();
-        report.calculate_completion();
-        assert_eq!(report.completion_percentage, 100.0);
-    }
-
-    #[test]
-    fn test_struct_report_calculate_completion_with_methods() {
+    fn test_struct_report_completion() {
         let mut report: StructReport = StructReport::new();
 
         let mut status1: MethodStatus = MethodStatus::new();
         status1.found_in.push("rust".to_string());
         status1.found_in.push("python".to_string());
-        status1.missing_in.push("csharp".to_string());
+        status1.missing_in.push(MissingDetail {
+            language: "csharp".to_string(),
+            files: vec!["a.cs".to_string()],
+        });
 
         let mut status2: MethodStatus = MethodStatus::new();
         status2.found_in.push("rust".to_string());
 
         report.methods.insert("to_str".to_string(), status1);
         report.methods.insert("starts_with".to_string(), status2);
-
         report.calculate_completion();
 
         // 3 found, 1 missing = 75%
@@ -471,234 +376,132 @@ mod tests {
     }
 
     #[test]
-    fn test_struct_report_default() {
-        let report: StructReport = StructReport::default();
-        assert!(report.methods.is_empty());
-    }
-
-    #[test]
-    fn test_language_report_new() {
-        let report: LanguageReport = LanguageReport::new();
-        assert!(report.structs.is_empty());
-        assert_eq!(report.completion_percentage, 100.0);
-    }
-
-    #[test]
-    fn test_language_report_calculate_completion() {
+    fn test_language_report_completion() {
         let mut report: LanguageReport = LanguageReport::new();
 
         let mut result1: ValidationResult =
             ValidationResult::new("StringView".to_string(), "rust".to_string());
         result1.found_methods.push("to_str".to_string());
-        result1.missing_methods.push("starts_with".to_string());
-
-        let mut result2: ValidationResult =
-            ValidationResult::new("BufferView".to_string(), "rust".to_string());
-        result2.found_methods.push("as_slice".to_string());
-        result2.found_methods.push("as_mut_slice".to_string());
+        result1.missing_methods.push(MissingMethod {
+            method: "starts_with".to_string(),
+            missing_files: vec!["lib.rs".to_string()],
+        });
 
         report.structs.insert("StringView".to_string(), result1);
-        report.structs.insert("BufferView".to_string(), result2);
-
         report.calculate_completion();
 
-        // 3 found, 1 missing = 75%
-        assert_eq!(report.completion_percentage, 75.0);
+        assert_eq!(report.completion_percentage, 50.0);
     }
 
     #[test]
-    fn test_language_report_default() {
-        let report: LanguageReport = LanguageReport::default();
-        assert!(report.structs.is_empty());
-    }
-
-    #[test]
-    fn test_validation_report_new() {
-        let report: ValidationReport = ValidationReport::new();
-        assert!(report.is_complete);
-        assert_eq!(report.total_methods, 0);
-        assert_eq!(report.found_methods, 0);
-        assert!(report.per_struct.is_empty());
-        assert!(report.per_language.is_empty());
-    }
-
-    #[test]
-    fn test_validation_report_default() {
-        let report: ValidationReport = ValidationReport::default();
-        assert!(report.is_complete);
-    }
-
-    #[test]
-    fn test_aggregate_results_empty_config() {
-        let config: Config = Config {
-            version: 1,
-            methods: HashMap::new(),
-            naming: HashMap::new(),
-            targets: HashMap::new(),
-        };
-
-        let runner: AstGrepRunner = AstGrepRunner::new();
-        let report: ValidationReport = aggregate_results(&config, &runner);
+    fn test_aggregate_results_empty_config() -> Result<(), Box<dyn core::error::Error>> {
+        let config: Config = empty_config();
+        let report: ValidationReport = aggregate_results(&config, &runner())?;
 
         assert!(report.is_complete);
         assert_eq!(report.total_methods, 0);
         assert_eq!(report.found_methods, 0);
         assert!(report.per_struct.is_empty());
         assert_eq!(report.per_language.len(), 6);
+        Ok(())
     }
 
     #[test]
-    fn test_aggregate_results_single_struct() -> Result<(), Box<dyn core::error::Error>> {
-        let mut methods: HashMap<String, Vec<String>> = HashMap::new();
-        methods.insert(
+    fn test_aggregate_results_no_targets_marks_all_missing()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let mut config: Config = empty_config();
+        config.methods.insert(
             "StringView".to_string(),
             vec!["to_str".to_string(), "starts_with".to_string()],
         );
 
-        let mut targets: HashMap<String, Vec<String>> = HashMap::new();
-        targets.insert("rust".to_string(), vec!["/nonexistent.rs".to_string()]);
-        targets.insert("python".to_string(), vec!["/nonexistent.py".to_string()]);
-        targets.insert("csharp".to_string(), vec!["/nonexistent.cs".to_string()]);
-        targets.insert("cpp".to_string(), vec!["/nonexistent.hpp".to_string()]);
-        targets.insert("js".to_string(), vec!["/nonexistent.ts".to_string()]);
-        targets.insert("lua".to_string(), vec!["/nonexistent.lua".to_string()]);
+        let report: ValidationReport = aggregate_results(&config, &runner())?;
 
-        let config: Config = Config {
-            version: 1,
-            methods,
-            naming: HashMap::new(),
-            targets,
-        };
-
-        let runner: AstGrepRunner = AstGrepRunner::new();
-        let report: ValidationReport = aggregate_results(&config, &runner);
-
-        // All methods should be missing since files don't exist
         assert!(!report.is_complete);
         assert_eq!(report.total_methods, 2);
         assert_eq!(report.found_methods, 0);
 
-        // Check per-struct report
-        assert!(report.per_struct.contains_key("StringView"));
         let struct_report: &StructReport = report
             .per_struct
             .get("StringView")
             .ok_or("missing StringView struct report")?;
-        assert_eq!(struct_report.methods.len(), 2);
-
-        // Check per-language reports
-        assert_eq!(report.per_language.len(), 6);
-        for lang_report in report.per_language.values() {
-            assert!(lang_report.structs.contains_key("StringView"));
-        }
+        let to_str_status: &MethodStatus = struct_report
+            .methods
+            .get("to_str")
+            .ok_or("missing to_str status")?;
+        assert_eq!(to_str_status.missing_in.len(), 6);
         Ok(())
     }
 
     #[test]
-    fn test_update_struct_report() -> Result<(), Box<dyn core::error::Error>> {
-        let mut struct_report: StructReport = StructReport::new();
-        struct_report
+    fn test_aggregate_results_missing_target_file_is_fatal()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let mut config: Config = empty_config();
+        config
             .methods
-            .insert("to_str".to_string(), MethodStatus::new());
-        struct_report
-            .methods
-            .insert("starts_with".to_string(), MethodStatus::new());
+            .insert("StringView".to_string(), vec!["to_str".to_string()]);
+        config
+            .naming
+            .insert("rust".to_string(), crate::ast_grep::NamingConvention::Snake);
+        config.targets.insert(
+            "rust".to_string(),
+            vec![PathBuf::from("/nonexistent/lib.rs")],
+        );
 
-        let mut result: ValidationResult =
-            ValidationResult::new("StringView".to_string(), "rust".to_string());
-        result.found_methods.push("to_str".to_string());
-        result.missing_methods.push("starts_with".to_string());
+        let result: Result<ValidationReport, ValidatorError> =
+            aggregate_results(&config, &runner());
+        assert!(matches!(
+            result,
+            Err(ValidatorError::TargetFileMissing { .. })
+        ));
+        Ok(())
+    }
 
-        update_struct_report(&mut struct_report, &result, "rust");
+    #[test]
+    fn test_aggregate_results_reports_missing_file_per_method()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let mut lua_file: NamedTempFile = NamedTempFile::with_suffix(".lua")?;
+        lua_file.write_all(b"function to_str(sv)\n    return \"\"\nend\n")?;
+        lua_file.flush()?;
+
+        let mut config: Config = empty_config();
+        config.methods.insert(
+            "StringView".to_string(),
+            vec!["to_str".to_string(), "ends_with".to_string()],
+        );
+        config
+            .naming
+            .insert("lua".to_string(), crate::ast_grep::NamingConvention::Snake);
+        config
+            .targets
+            .insert("lua".to_string(), vec![lua_file.path().to_path_buf()]);
+
+        let report: ValidationReport = aggregate_results(&config, &runner())?;
+
+        let struct_report: &StructReport = report
+            .per_struct
+            .get("StringView")
+            .ok_or("missing StringView struct report")?;
 
         let to_str_status: &MethodStatus = struct_report
             .methods
             .get("to_str")
-            .ok_or("missing to_str method status")?;
-        assert!(to_str_status.found_in.contains(&"rust".to_string()));
-        assert!(to_str_status.missing_in.is_empty());
+            .ok_or("missing to_str status")?;
+        assert!(to_str_status.found_in.contains(&"lua".to_string()));
 
-        let starts_with_status: &MethodStatus = struct_report
+        let ends_with_status: &MethodStatus = struct_report
             .methods
-            .get("starts_with")
-            .ok_or("missing starts_with method status")?;
-        assert!(starts_with_status.found_in.is_empty());
-        assert!(starts_with_status.missing_in.contains(&"rust".to_string()));
+            .get("ends_with")
+            .ok_or("missing ends_with status")?;
+        let lua_detail: &MissingDetail = ends_with_status
+            .missing_in
+            .iter()
+            .find(|d| d.language == "lua")
+            .ok_or("expected lua missing detail")?;
+        assert_eq!(
+            lua_detail.files,
+            vec![lua_file.path().display().to_string()]
+        );
         Ok(())
-    }
-
-    #[test]
-    fn test_update_language_report() -> Result<(), Box<dyn core::error::Error>> {
-        let mut per_language: HashMap<String, LanguageReport> = HashMap::new();
-        per_language.insert("rust".to_string(), LanguageReport::new());
-
-        let result: ValidationResult =
-            ValidationResult::new("StringView".to_string(), "rust".to_string());
-
-        update_language_report(&mut per_language, "StringView", result, "rust");
-
-        let rust_report: &LanguageReport = per_language
-            .get("rust")
-            .ok_or("missing rust language report")?;
-        assert!(rust_report.structs.contains_key("StringView"));
-        Ok(())
-    }
-
-    #[test]
-    fn test_calculate_overall_stats() {
-        let mut report: ValidationReport = ValidationReport::new();
-
-        let mut struct_report: StructReport = StructReport::new();
-
-        let mut status1: MethodStatus = MethodStatus::new();
-        status1.found_in.push("rust".to_string());
-        status1.found_in.push("python".to_string());
-
-        let mut status2: MethodStatus = MethodStatus::new();
-        status2.found_in.push("rust".to_string());
-        status2.missing_in.push("python".to_string());
-
-        struct_report.methods.insert("to_str".to_string(), status1);
-        struct_report
-            .methods
-            .insert("starts_with".to_string(), status2);
-
-        report
-            .per_struct
-            .insert("StringView".to_string(), struct_report);
-
-        calculate_overall_stats(&mut report);
-
-        assert_eq!(report.found_methods, 3);
-        assert!(!report.is_complete);
-    }
-
-    #[test]
-    fn test_calculate_overall_stats_complete() {
-        let mut report: ValidationReport = ValidationReport::new();
-
-        let mut struct_report: StructReport = StructReport::new();
-
-        let mut status1: MethodStatus = MethodStatus::new();
-        status1.found_in.push("rust".to_string());
-        status1.found_in.push("python".to_string());
-
-        let mut status2: MethodStatus = MethodStatus::new();
-        status2.found_in.push("rust".to_string());
-        status2.found_in.push("python".to_string());
-
-        struct_report.methods.insert("to_str".to_string(), status1);
-        struct_report
-            .methods
-            .insert("starts_with".to_string(), status2);
-
-        report
-            .per_struct
-            .insert("StringView".to_string(), struct_report);
-
-        calculate_overall_stats(&mut report);
-
-        assert_eq!(report.found_methods, 4);
-        assert!(report.is_complete);
     }
 }

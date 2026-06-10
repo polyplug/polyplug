@@ -1,16 +1,17 @@
 //! Rust SDK validator using ast-grep CLI.
 
-use std::path::PathBuf;
+use std::path::Path;
 
-use crate::ast_grep::{AstGrepRunner, Language, NamingConvention};
-use crate::languages::{LanguageValidator, ValidationResult};
+use crate::ast_grep::{AstGrepRunner, Match};
+use crate::error::ValidatorError;
+use crate::languages::LanguageValidator;
 
 /// Validator for Rust SDK files.
 ///
-/// Detects functions in Rust SDK files using ast-grep CLI. Handles:
-/// - Public functions: `pub fn name() { }`, `pub fn name() -> Ret { }`
-/// - Private functions: `fn name() { }`, `fn name() -> Ret { }`
-/// - Functions with visibility modifiers: `pub(crate) fn name() { }`
+/// Detects function definitions via an ast-grep inline-rules `any:` covering
+/// private/`pub`/`pub(crate)` visibility, `unsafe`, `const`, generics
+/// (including lifetime-only generics like `strip_prefix<'a>`), and optional
+/// return types. Call sites and comments do not match.
 pub struct RustValidator;
 
 impl RustValidator {
@@ -19,35 +20,34 @@ impl RustValidator {
         Self
     }
 
-    /// Generate an ast-grep YAML rule for detecting a Rust function.
-    ///
-    /// Rust functions can have various forms:
-    /// 1. `fn name() { }` - private, no return type
-    /// 2. `fn name() -> Ret { }` - private, with return type
-    /// 3. `pub fn name() { }` - public, no return type
-    /// 4. `pub fn name() -> Ret { }` - public, with return type
-    /// 5. `pub(crate) fn name() { }` - restricted visibility
-    /// 6. `pub unsafe fn name() -> Ret { }` - unsafe (raw-pointer SDK helpers)
-    ///
-    /// We use an `any` rule to match all these variants.
-    fn generate_function_rule(method_name: &str) -> String {
+    /// Generate the ast-grep inline rule for a Rust function definition.
+    fn generate_rule(method_name: &str) -> String {
         format!(
             r#"id: find-function
 language: rust
+severity: hint
 rule:
   any:
     - pattern: fn {method_name}($$$) {{ $$$ }}
     - pattern: fn {method_name}($$$) -> $RET {{ $$$ }}
+    - pattern: fn {method_name}<$$$>($$$) {{ $$$ }}
+    - pattern: fn {method_name}<$$$>($$$) -> $RET {{ $$$ }}
     - pattern: pub fn {method_name}($$$) {{ $$$ }}
     - pattern: pub fn {method_name}($$$) -> $RET {{ $$$ }}
+    - pattern: pub fn {method_name}<$$$>($$$) {{ $$$ }}
+    - pattern: pub fn {method_name}<$$$>($$$) -> $RET {{ $$$ }}
     - pattern: pub($$$) fn {method_name}($$$) {{ $$$ }}
     - pattern: pub($$$) fn {method_name}($$$) -> $RET {{ $$$ }}
     - pattern: unsafe fn {method_name}($$$) {{ $$$ }}
     - pattern: unsafe fn {method_name}($$$) -> $RET {{ $$$ }}
     - pattern: pub unsafe fn {method_name}($$$) {{ $$$ }}
     - pattern: pub unsafe fn {method_name}($$$) -> $RET {{ $$$ }}
-    - pattern: pub fn {method_name}<$$$>($$$) -> $RET {{ $$$ }}
     - pattern: pub unsafe fn {method_name}<$$$>($$$) -> $RET {{ $$$ }}
+    - pattern: const fn {method_name}($$$) {{ $$$ }}
+    - pattern: const fn {method_name}($$$) -> $RET {{ $$$ }}
+    - pattern: pub const fn {method_name}($$$) {{ $$$ }}
+    - pattern: pub const fn {method_name}($$$) -> $RET {{ $$$ }}
+    - pattern: pub const unsafe fn {method_name}($$$) -> $RET {{ $$$ }}
 "#
         )
     }
@@ -64,58 +64,15 @@ impl LanguageValidator for RustValidator {
         "rust"
     }
 
-    fn ast_grep_language(&self) -> Language {
-        Language::Rust
-    }
-
-    fn naming_convention(&self) -> NamingConvention {
-        NamingConvention::Snake
-    }
-
-    fn validate(
-        &self,
+    fn method_in_file(
+        &mut self,
         runner: &AstGrepRunner,
-        struct_name: &str,
-        required_methods: &[String],
-        target_files: &[String],
-    ) -> ValidationResult {
-        let mut result: ValidationResult =
-            ValidationResult::new(struct_name.to_string(), self.language_name().to_string());
-
-        for method_name in required_methods {
-            let rule: String = Self::generate_function_rule(method_name);
-            let mut found: bool = false;
-
-            for file_path in target_files {
-                let path: PathBuf = PathBuf::from(file_path);
-                if !path.exists() {
-                    continue;
-                }
-
-                match runner.run_with_rule(&rule, &path) {
-                    Ok(matches) => {
-                        if !matches.is_empty() {
-                            found = true;
-                            break;
-                        }
-                    }
-                    Err(_) => {
-                        continue;
-                    }
-                }
-            }
-
-            if found {
-                result.found_methods.push(method_name.clone());
-            } else {
-                result.missing_methods.push(method_name.clone());
-            }
-        }
-
-        result.found_methods.sort();
-        result.missing_methods.sort();
-
-        result
+        native_name: &str,
+        file: &Path,
+    ) -> Result<bool, ValidatorError> {
+        let rule: String = Self::generate_rule(native_name);
+        let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
+        Ok(!matches.is_empty())
     }
 }
 
@@ -123,7 +80,12 @@ impl LanguageValidator for RustValidator {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::PathBuf;
     use tempfile::NamedTempFile;
+
+    use crate::ast_grep::NamingConvention;
+    use crate::languages::test_support::{golden_methods, repo_path, runner};
+    use crate::languages::{ValidationResult, validate_language};
 
     fn create_temp_rust_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".rs")?;
@@ -132,154 +94,47 @@ mod tests {
         Ok(file)
     }
 
-    #[test]
-    fn test_rust_validator_new() {
-        let validator: RustValidator = RustValidator::new();
-        assert_eq!(validator.language_name(), "rust");
-        assert_eq!(validator.ast_grep_language(), Language::Rust);
-        assert_eq!(validator.naming_convention(), NamingConvention::Snake);
+    fn validate_file(
+        methods: &[String],
+        file: &Path,
+    ) -> Result<ValidationResult, Box<dyn core::error::Error>> {
+        let mut validator: RustValidator = RustValidator::new();
+        let result: ValidationResult = validate_language(
+            &mut validator,
+            &runner(),
+            NamingConvention::Snake,
+            "StringView",
+            methods,
+            &[file.to_path_buf()],
+        )?;
+        Ok(result)
     }
 
     #[test]
-    fn test_rust_validator_default() {
-        let validator: RustValidator = RustValidator;
-        assert_eq!(validator.language_name(), "rust");
-    }
-
-    #[test]
-    fn test_generate_function_rule() {
-        let rule: String = RustValidator::generate_function_rule("to_str");
-        assert!(rule.contains("to_str"));
-        assert!(rule.contains("fn"));
-        assert!(rule.contains("any:"));
-
-        let rule: String = RustValidator::generate_function_rule("starts_with");
-        assert!(rule.contains("starts_with"));
-    }
-
-    #[test]
-    fn test_validation_result_new() {
-        let result: ValidationResult =
-            ValidationResult::new("StringView".to_string(), "rust".to_string());
-        assert_eq!(result.struct_name, "StringView");
-        assert_eq!(result.language, "rust");
-        assert!(result.found_methods.is_empty());
-        assert!(result.missing_methods.is_empty());
-        assert!(result.is_complete());
-        assert_eq!(result.completion_percentage(), 100);
-    }
-
-    #[test]
-    fn test_validation_result_with_methods() {
-        let mut result: ValidationResult =
-            ValidationResult::new("StringView".to_string(), "rust".to_string());
-        result.found_methods.push("to_str".to_string());
-        result.missing_methods.push("starts_with".to_string());
-
-        assert!(!result.is_complete());
-        assert_eq!(result.completion_percentage(), 50);
-    }
-
-    #[test]
-    fn test_rust_validator_detects_to_str() -> Result<(), Box<dyn core::error::Error>> {
-        let rust_code: &str = r#"
-//! polyplug guest library
-
+    fn test_detects_pub_fn() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
 pub fn to_str(sv: StringView) -> &'static str {
-    if sv.ptr.is_null() || sv.len == 0 {
-        return "";
-    }
-    unsafe { core::str::from_utf8(core::slice::from_raw_parts(sv.ptr, sv.len)).unwrap_or("") }
+    ""
 }
-"#;
-
-        let file: NamedTempFile = create_temp_rust_file(rust_code)?;
-        let runner: AstGrepRunner = AstGrepRunner::new();
-
-        if !runner.is_available() {
-            panic!(
-                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
-            );
-        }
-
-        let validator: RustValidator = RustValidator::new();
-        let required_methods: Vec<String> = vec!["to_str".to_string()];
-        let target_files: Vec<String> = vec![file.path().to_string_lossy().to_string()];
-
-        let result: ValidationResult =
-            validator.validate(&runner, "StringView", &required_methods, &target_files);
-
+"#,
+        )?;
+        let result: ValidationResult = validate_file(&["to_str".to_string()], file.path())?;
         assert!(result.found_methods.contains(&"to_str".to_string()));
-        assert!(result.missing_methods.is_empty());
         Ok(())
     }
 
     #[test]
-    fn test_rust_validator_detects_alloc_string() -> Result<(), Box<dyn core::error::Error>> {
-        let rust_code: &str = r#"
-//! polyplug guest library
-
-pub fn alloc_string(s: &str) -> Result<StringView, GuestError> {
-    let bytes: &[u8] = s.as_bytes();
-    let ptr: *mut u8 = polyplug_host_alloc(bytes.len(), 1);
-    if ptr.is_null() {
-        return Err(GuestError {
-            code: AbiErrorCode::Generic,
-            message: "allocation failed".to_string(),
-        });
-    }
-    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
-    Ok(StringView {
-        ptr,
-        len: bytes.len(),
-    })
-}
-"#;
-
-        let file: NamedTempFile = create_temp_rust_file(rust_code)?;
-        let runner: AstGrepRunner = AstGrepRunner::new();
-
-        if !runner.is_available() {
-            panic!(
-                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
-            );
-        }
-
-        let validator: RustValidator = RustValidator::new();
-        let required_methods: Vec<String> = vec!["alloc_string".to_string()];
-        let target_files: Vec<String> = vec![file.path().to_string_lossy().to_string()];
-
-        let result: ValidationResult =
-            validator.validate(&runner, "StringView", &required_methods, &target_files);
-
-        assert!(result.found_methods.contains(&"alloc_string".to_string()));
-        Ok(())
-    }
-
-    #[test]
-    fn test_rust_validator_detects_private_function() -> Result<(), Box<dyn core::error::Error>> {
-        let rust_code: &str = r#"
+    fn test_detects_private_fn() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
 fn internal_helper(x: i32) -> i32 {
     x * 2
 }
-"#;
-
-        let file: NamedTempFile = create_temp_rust_file(rust_code)?;
-        let runner: AstGrepRunner = AstGrepRunner::new();
-
-        if !runner.is_available() {
-            panic!(
-                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
-            );
-        }
-
-        let validator: RustValidator = RustValidator::new();
-        let required_methods: Vec<String> = vec!["internal_helper".to_string()];
-        let target_files: Vec<String> = vec![file.path().to_string_lossy().to_string()];
-
+"#,
+        )?;
         let result: ValidationResult =
-            validator.validate(&runner, "StringView", &required_methods, &target_files);
-
+            validate_file(&["internal_helper".to_string()], file.path())?;
         assert!(
             result
                 .found_methods
@@ -289,104 +144,128 @@ fn internal_helper(x: i32) -> i32 {
     }
 
     #[test]
-    fn test_rust_validator_reports_missing() -> Result<(), Box<dyn core::error::Error>> {
-        let rust_code: &str = r#"
-//! polyplug guest library
-
-pub fn to_str(sv: StringView) -> &'static str {
+    fn test_detects_lifetime_generic_unsafe_fn() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+pub unsafe fn strip_prefix<'a>(sv: &'a StringView, prefix: &str) -> &'a str {
     ""
 }
-"#;
-
-        let file: NamedTempFile = create_temp_rust_file(rust_code)?;
-        let runner: AstGrepRunner = AstGrepRunner::new();
-
-        if !runner.is_available() {
-            panic!(
-                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
-            );
-        }
-
-        let validator: RustValidator = RustValidator::new();
-        let required_methods: Vec<String> = vec![
-            "to_str".to_string(),
-            "starts_with".to_string(),
-            "ends_with".to_string(),
-        ];
-        let target_files: Vec<String> = vec![file.path().to_string_lossy().to_string()];
-
-        let result: ValidationResult =
-            validator.validate(&runner, "StringView", &required_methods, &target_files);
-
-        assert!(result.found_methods.contains(&"to_str".to_string()));
-        assert!(result.missing_methods.contains(&"starts_with".to_string()));
-        assert!(result.missing_methods.contains(&"ends_with".to_string()));
-        assert!(!result.is_complete());
+"#,
+        )?;
+        let result: ValidationResult = validate_file(&["strip_prefix".to_string()], file.path())?;
+        assert!(result.found_methods.contains(&"strip_prefix".to_string()));
         Ok(())
     }
 
     #[test]
-    fn test_rust_validator_missing_file() {
-        let runner: AstGrepRunner = AstGrepRunner::new();
-
-        if !runner.is_available() {
-            panic!(
-                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
-            );
-        }
-
-        let validator: RustValidator = RustValidator::new();
-        let required_methods: Vec<String> = vec!["to_str".to_string()];
-        let target_files: Vec<String> = vec!["/nonexistent/file.rs".to_string()];
-
-        let result: ValidationResult =
-            validator.validate(&runner, "StringView", &required_methods, &target_files);
-
-        assert!(result.found_methods.is_empty());
-        assert!(result.missing_methods.contains(&"to_str".to_string()));
+    fn test_detects_const_fn() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+pub const fn to_str(sv: &StringView) -> &str {
+    ""
+}
+const fn starts_with(sv: &StringView) -> bool {
+    true
+}
+"#,
+        )?;
+        let result: ValidationResult = validate_file(
+            &["to_str".to_string(), "starts_with".to_string()],
+            file.path(),
+        )?;
+        assert!(result.found_methods.contains(&"to_str".to_string()));
+        assert!(result.found_methods.contains(&"starts_with".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_rust_validator_multiple_files() -> Result<(), Box<dyn core::error::Error>> {
-        let rust_code1: &str = r#"
-pub fn to_str(sv: StringView) -> &'static str {
+    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+pub unsafe fn to_str2(sv: &StringView) -> &str {
     ""
 }
-"#;
+"#,
+        )?;
+        let result: ValidationResult = validate_file(&["to_str".to_string()], file.path())?;
+        assert!(result.found_methods.is_empty());
+        assert_eq!(result.missing_methods[0].method, "to_str");
+        Ok(())
+    }
 
-        let rust_code2: &str = r#"
-pub fn starts_with(sv: StringView, prefix: &str) -> bool {
-    false
+    #[test]
+    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+pub fn other(sv: &StringView) -> bool {
+    let s = to_str(sv);
+    s.is_empty()
 }
-"#;
+"#,
+        )?;
+        let result: ValidationResult = validate_file(&["to_str".to_string()], file.path())?;
+        assert!(result.found_methods.is_empty());
+        Ok(())
+    }
 
-        let file1: NamedTempFile = create_temp_rust_file(rust_code1)?;
-        let file2: NamedTempFile = create_temp_rust_file(rust_code2)?;
-        let runner: AstGrepRunner = AstGrepRunner::new();
+    #[test]
+    fn test_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_rust_file(
+            r#"
+// to_str(sv) is documented here but not defined
+// pub fn to_str(sv: &StringView) -> &str { "" }
+"#,
+        )?;
+        let result: ValidationResult = validate_file(&["to_str".to_string()], file.path())?;
+        assert!(result.found_methods.is_empty());
+        Ok(())
+    }
 
-        if !runner.is_available() {
-            panic!(
-                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
-            );
-        }
+    #[test]
+    fn test_per_file_semantics_method_must_be_in_all_files()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file1: NamedTempFile = create_temp_rust_file(
+            r#"
+pub fn to_str(sv: &StringView) -> &str { "" }
+"#,
+        )?;
+        let file2: NamedTempFile = create_temp_rust_file(
+            r#"
+pub fn starts_with(sv: &StringView, prefix: &str) -> bool { false }
+"#,
+        )?;
 
-        let validator: RustValidator = RustValidator::new();
-        let required_methods: Vec<String> = vec![
-            "to_str".to_string(),
-            "starts_with".to_string(),
-            "ends_with".to_string(),
-        ];
-        let target_files: Vec<String> = vec![
-            file1.path().to_string_lossy().to_string(),
-            file2.path().to_string_lossy().to_string(),
-        ];
+        let mut validator: RustValidator = RustValidator::new();
+        let result: ValidationResult = validate_language(
+            &mut validator,
+            &runner(),
+            NamingConvention::Snake,
+            "StringView",
+            &["to_str".to_string()],
+            &[file1.path().to_path_buf(), file2.path().to_path_buf()],
+        )?;
 
-        let result: ValidationResult =
-            validator.validate(&runner, "StringView", &required_methods, &target_files);
+        // to_str is only in file1, so it must be reported missing in file2.
+        assert!(result.found_methods.is_empty());
+        assert_eq!(result.missing_methods.len(), 1);
+        assert_eq!(result.missing_methods[0].method, "to_str");
+        assert_eq!(
+            result.missing_methods[0].missing_files,
+            vec![file2.path().display().to_string()]
+        );
+        Ok(())
+    }
 
-        assert!(result.found_methods.contains(&"to_str".to_string()));
-        assert!(result.found_methods.contains(&"starts_with".to_string()));
-        assert!(result.missing_methods.contains(&"ends_with".to_string()));
+    #[test]
+    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn core::error::Error>> {
+        let sdk_path: PathBuf = repo_path("sdks/rust/guest/src/lib.rs");
+        let result: ValidationResult = validate_file(&golden_methods(), &sdk_path)?;
+        assert!(
+            result.is_complete(),
+            "rust SDK missing methods: {:?}",
+            result.missing_methods
+        );
+        assert_eq!(result.found_methods.len(), 5);
         Ok(())
     }
 }
