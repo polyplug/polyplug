@@ -201,9 +201,9 @@ fn arena_host_api() -> HostApi {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     }
 }
 

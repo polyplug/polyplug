@@ -283,9 +283,9 @@ fn build_host_interface() -> HostApi {
         get_last_error: bench_get_last_error,
         get_error_len: bench_get_error_len,
         call_guest_method: bench_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: bench_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     }
 }
 

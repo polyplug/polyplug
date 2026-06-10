@@ -2412,9 +2412,9 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            reserved: core::ptr::null(),
-            log: stub_host_log,
             unload_bundle: host_unload_bundle,
+            log: stub_host_log,
+            reserved: core::ptr::null(),
         };
 
         // SAFETY: host_interface is valid with runtime pointer; init bundle_id is set
@@ -3566,9 +3566,9 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            reserved: core::ptr::null(),
-            log: stub_host_log,
             unload_bundle: host_unload_bundle,
+            log: stub_host_log,
+            reserved: core::ptr::null(),
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -3609,9 +3609,9 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            reserved: core::ptr::null(),
-            log: stub_host_log,
             unload_bundle: host_unload_bundle,
+            log: stub_host_log,
+            reserved: core::ptr::null(),
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -3724,9 +3724,9 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            reserved: core::ptr::null(),
-            log: stub_host_log,
             unload_bundle: host_unload_bundle,
+            log: stub_host_log,
+            reserved: core::ptr::null(),
         };
 
         // First call - creates instance
@@ -3813,9 +3813,9 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            reserved: core::ptr::null(),
-            log: stub_host_log,
             unload_bundle: host_unload_bundle,
+            log: stub_host_log,
+            reserved: core::ptr::null(),
         };
 
         // First call - creates instance (counter becomes 101)
@@ -3913,9 +3913,9 @@ mod tests {
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
             call_guest_method: host_call_guest_method,
-            reserved: core::ptr::null(),
-            log: stub_host_log,
             unload_bundle: host_unload_bundle,
+            log: stub_host_log,
+            reserved: core::ptr::null(),
         };
 
         // Call singleton twice - should get same instance

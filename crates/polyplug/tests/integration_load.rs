@@ -286,9 +286,9 @@ fn test_init_registers_interface() {
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: noop_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
 
     // Clear thread-locals before calling init.

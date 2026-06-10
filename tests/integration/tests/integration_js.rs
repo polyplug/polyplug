@@ -263,9 +263,9 @@ fn counting_host() -> HostApi {
         get_last_error: arena_stub_get_last_error,
         get_error_len: arena_stub_get_len,
         call_guest_method: arena_stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: arena_stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     }
 }
 

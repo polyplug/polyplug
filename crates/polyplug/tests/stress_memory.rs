@@ -338,9 +338,9 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -734,9 +734,9 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
 
     let args: AllocArgs = AllocArgs {

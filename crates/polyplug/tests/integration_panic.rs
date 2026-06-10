@@ -433,9 +433,9 @@ fn test_panic_returns_abi_error_panic() {
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: noop_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
 
     let ctx: BundleInitContext = BundleInitContext {

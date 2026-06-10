@@ -354,9 +354,9 @@ fn test_rust_host_rust_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -448,9 +448,9 @@ fn test_cpp_host_rust_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -542,9 +542,9 @@ fn test_csharp_host_rust_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -636,9 +636,9 @@ fn test_python_host_rust_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -730,9 +730,9 @@ fn test_lua_host_rust_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -824,9 +824,9 @@ fn test_js_host_rust_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -924,9 +924,9 @@ fn test_rust_host_cpp_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1018,9 +1018,9 @@ fn test_cpp_host_cpp_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1112,9 +1112,9 @@ fn test_csharp_host_cpp_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1206,9 +1206,9 @@ fn test_python_host_cpp_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1300,9 +1300,9 @@ fn test_lua_host_cpp_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1394,9 +1394,9 @@ fn test_js_host_cpp_guest() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),

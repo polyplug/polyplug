@@ -456,9 +456,9 @@ fn smoke_rust_codegen_dispatch() {
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
         call_guest_method: stub_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: stub_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
 
     // SAFETY: init_fn is valid; host_abi lives for the duration of the call.

@@ -345,9 +345,9 @@ fn make_host_interface() -> HostApi {
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: noop_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     }
 }
 
@@ -577,9 +577,9 @@ fn stress_error_chain_b_errors_a_propagates() {
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
         call_guest_method: noop_call_guest_method,
-        reserved: core::ptr::null(),
-        log: stub_host_log,
         unload_bundle: noop_unload_bundle,
+        log: stub_host_log,
+        reserved: core::ptr::null(),
     };
 
     // error.test contract_id is FNV-1a("error.test@1").
