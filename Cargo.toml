@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/*",
 
-    "sdks/rust/host",
     "sdks/rust/guest",
 
     "tests/fixtures/test_plugin",
@@ -45,7 +44,6 @@ polyplug_lua = { version = "0.1.0", path = "crates/polyplug_lua" }
 polyplug_python = { version = "0.1.0", path = "crates/polyplug_python" }
 polyplug_native = { version = "0.1.0", path = "crates/polyplug_native" }
 polyplugc = { version = "0.1.0", path = "crates/polyplugc" }
-polyplug_host = { version = "0.1.0", path = "sdks/rust/host" }
 polyplug_guest = { version = "0.1.0", path = "sdks/rust/guest" }
 
 # Serialization

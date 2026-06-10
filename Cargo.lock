@@ -1567,14 +1567,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "polyplug_host"
-version = "0.1.0"
-dependencies = [
- "polyplug",
- "tempfile",
-]
-
-[[package]]
 name = "polyplug_js"
 version = "0.1.0"
 dependencies = [
