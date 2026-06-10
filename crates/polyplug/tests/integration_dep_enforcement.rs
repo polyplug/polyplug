@@ -1,6 +1,6 @@
 //! Integration test: declared-dependency enforcement during the init window.
 //!
-//! Proves the three guarantees TRUST_MODEL.md §3/§4 describes:
+//! Proves the three guarantees docs/TRUST_MODEL.md §3/§4 describes:
 //!   (a) A bundle CAN resolve a contract it declared as a dependency while its
 //!       `polyplug_init` is running (the enforcement window).
 //!   (b) A bundle CANNOT resolve a contract it did NOT declare during init —

@@ -1015,7 +1015,7 @@ impl BundleLoader for LuaLoader {
     /// is therefore not guaranteed to be visible in `in_dispatch_threads` here. So,
     /// exactly like hot-reload, the host MUST NOT call a bundle's contracts
     /// concurrently with unloading it (see [`crate`]'s `Runtime::unload_bundle` doc and
-    /// the trusted-same-process model in TRUST_MODEL.md). `in_dispatch_threads` is a
+    /// the trusted-same-process model in docs/TRUST_MODEL.md). `in_dispatch_threads` is a
     /// best-effort defense-in-depth, not a complete guarantee.
     ///
     /// For each `LuaLoaderData` owned by the bundle:

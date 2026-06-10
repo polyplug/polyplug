@@ -33,7 +33,7 @@ pub struct NativeLoader {
     /// unmapping its code pages would turn that pointer into a dangling one
     /// (SIGSEGV). Retaining the handle keeps the code pages mapped, honoring the
     /// documented guarantee that the old vtable stays alive until all in-flight
-    /// calls complete (TRUST_MODEL.md §Hot-Reload Safety Guarantees).
+    /// calls complete (docs/TRUST_MODEL.md §Hot-Reload Safety Guarantees).
     retired: Mutex<Vec<libloading::Library>>,
 }
 

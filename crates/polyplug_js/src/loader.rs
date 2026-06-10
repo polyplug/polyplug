@@ -1700,7 +1700,7 @@ impl BundleLoader for JsLoader {
     /// is therefore not guaranteed to be visible in `in_dispatch_threads` here. So,
     /// exactly like hot-reload, the host MUST NOT call a bundle's contracts
     /// concurrently with unloading it (see `Runtime::unload_bundle` and the
-    /// trusted-same-process model in TRUST_MODEL.md). `in_dispatch_threads` is a
+    /// trusted-same-process model in docs/TRUST_MODEL.md). `in_dispatch_threads` is a
     /// best-effort defense-in-depth, not a complete guarantee.
     ///
     /// For each `JsLoaderData` owned by the bundle:

@@ -163,4 +163,4 @@ to trim.
 
 - [`crates/polyplug/benches/README.md`](../crates/polyplug/benches/README.md) — what each benchmark measures
 - [`PERFORMANCE.md`](./PERFORMANCE.md) — measured numbers and the architecture behind them
-- [`TRUST_MODEL.md`](../TRUST_MODEL.md) — the guarantees any optimization must preserve
+- [`TRUST_MODEL.md`](TRUST_MODEL.md) — the guarantees any optimization must preserve

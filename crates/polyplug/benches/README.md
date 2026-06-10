@@ -368,7 +368,7 @@ teardown, so the bench does not leak (the `drop_frees_all_blocks` unit test in
 ## Future benchmark ideas (documented, not yet built)
 
 These are worth building, but each has a caveat that keeps it from being a clean
-"polyplug wins" headline — recorded here and in `ROADMAP.md` (Lane C) so they
+"polyplug wins" headline — recorded here and in `docs/ROADMAP.md` (Lane C) so they
 aren't lost. **Priority: benches for what we currently ship come first.**
 
 > **Already built** (kept off this list, documented in their own sections above):

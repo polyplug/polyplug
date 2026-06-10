@@ -576,7 +576,7 @@ impl Runtime {
     /// resolves an interface and then dispatches WITHOUT holding the registry lock (for
     /// concurrency/reentrancy), so a call racing an unload from another thread is the
     /// host's responsibility to prevent — the same trusted-same-process posture
-    /// `TRUST_MODEL.md` and the reload `Preparing` callback already assume. VM loaders
+    /// `docs/TRUST_MODEL.md` and the reload `Preparing` callback already assume. VM loaders
     /// additionally defer reclaim (retire instead of free) if a dispatch is *visibly*
     /// in flight, as best-effort defense-in-depth, but this is not a substitute for the
     /// contract.
@@ -865,7 +865,7 @@ impl Runtime {
         // plugin may resolve its declared dependencies via `find_guest_contract`.
         // Dependency enforcement (host_find_guest_contract) consults this set, so
         // it must be populated before init runs — otherwise even declared lookups
-        // would be denied. See TRUST_MODEL.md §3/§4.
+        // would be denied. See docs/TRUST_MODEL.md §3/§4.
         let declared_contract_ids: Vec<GuestContractId> = manifest
             .dependencies
             .iter()

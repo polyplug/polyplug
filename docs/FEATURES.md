@@ -37,7 +37,7 @@ Key ABI facts (verified in `crates/polyplug_abi/src/host/host_api.rs`):
   `host->register_guest_contract(host, &descriptor, &interface)`.
 - **ABI freeze policy:** the ABI freezes at v1.0; the project is pre-1.0 today, so
   ABI-visible changes are permitted **only with explicit owner approval**, never
-  unilaterally (CLAUDE.md Rule 7; [`../TRUST_MODEL.md`](../TRUST_MODEL.md) §7).
+  unilaterally (CLAUDE.md Rule 7; [`TRUST_MODEL.md`](TRUST_MODEL.md) §7).
 
 See CLAUDE.md (Architecture) for the crate map and loader list.
 
@@ -146,7 +146,7 @@ raw pointer handed out before a reload stays valid for the runtime's lifetime.
   overwrite-in-place reload does not apply.
 
 Full design and flow: [`HOT_RELOAD_DESIGN.md`](./HOT_RELOAD_DESIGN.md);
-safety guarantees: [`../TRUST_MODEL.md`](../TRUST_MODEL.md) (Hot-Reload Safety).
+safety guarantees: [`TRUST_MODEL.md`](TRUST_MODEL.md) (Hot-Reload Safety).
 
 ---
 
@@ -234,7 +234,7 @@ without holding a raw interface pointer of its own.
   made after a reload routes to the live (swapped-in) interface while the
   retire-not-drop guarantees keep any previously resolved pointer valid.
 - **Arena threading:** the `arena` argument is forwarded to VM dispatch (Lua, JS)
-  exactly like the per-call arena in §4 of [`../ROADMAP.md`](../ROADMAP.md); native
+  exactly like the per-call arena in §4 of [`ROADMAP.md`](ROADMAP.md); native
   dispatch ignores it (native function pointers carry no arena slot). A **null
   arena** means "no arena" — the guest bridge falls back to `host->alloc`.
 - **Re-entrancy guard:** a cross-call that would re-enter a VM already executing a
@@ -244,7 +244,7 @@ without holding a raw interface pointer of its own.
   locking; cross-VM calls (e.g. a Lua plugin calling a JS plugin) are fine.
 - **Trust:** there is **zero per-call authorization**. Trust is established once at
   load time through declared-dependency verification — see
-  [`../TRUST_MODEL.md`](../TRUST_MODEL.md) (Cross-call dispatch).
+  [`TRUST_MODEL.md`](TRUST_MODEL.md) (Cross-call dispatch).
 
 ---
 
@@ -254,7 +254,7 @@ Multiple `Runtime` instances can coexist in one process, each owning its own
 `RuntimeStore`, loaded bundles, and configuration. No globals or thread-locals
 hold runtime state (CLAUDE.md Rule 12). The init-window `INIT_BUNDLE_ID` is a
 per-thread cell by design — it is transient, re-entrant, per-thread phase state,
-not durable runtime data (see [`../TRUST_MODEL.md`](../TRUST_MODEL.md) §4).
+not durable runtime data (see [`TRUST_MODEL.md`](TRUST_MODEL.md) §4).
 
 **Documented external exceptions** (interpreter/CLR constraints, not polyplug
 choices):
@@ -278,7 +278,7 @@ its own VM. For full isolation with Python or .NET, use separate processes.
 | macOS (x86_64 / aarch64) | Full |
 | Windows (x86_64) | In progress — see below |
 
-Windows status (honest, per [`../ROADMAP.md`](../ROADMAP.md) Platform Support):
+Windows status (honest, per [`ROADMAP.md`](ROADMAP.md) Platform Support):
 
 - The workspace is **Windows-correct at the source level**. All shared-library
   naming uses the real cdylib convention per OS (`<name>.dll` with no `lib`
@@ -309,7 +309,7 @@ rejects a mismatch with `LoaderError::BundleTampered { bundle, expected, found }
 so a hand-edited manifest cannot impersonate another bundle. Plugins run
 in-process with full host privileges — a plugin crash takes down the host by
 design, and there is no protection against malicious memory access (use OS-level
-isolation for untrusted code). Full detail: [`../TRUST_MODEL.md`](../TRUST_MODEL.md).
+isolation for untrusted code). Full detail: [`TRUST_MODEL.md`](TRUST_MODEL.md).
 
 ---
 

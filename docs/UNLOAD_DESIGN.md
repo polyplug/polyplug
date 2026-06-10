@@ -736,7 +736,7 @@ Two unload-area items remain deliberately deferred (recorded here, not abandoned
 
 - [HOT_RELOAD_DESIGN.md](./HOT_RELOAD_DESIGN.md) — the `Preparing`/`Reloaded`/`Failed`
   callback contract this design reuses for unload coordination
-- [TRUST_MODEL.md](../TRUST_MODEL.md) — §5 handle validation & the generational-index
+- [TRUST_MODEL.md](TRUST_MODEL.md) — §5 handle validation & the generational-index
   inconsistency this design closes; §7 ABI freeze timing; Hot-Reload Safety Guarantees
 - [PERFORMANCE.md](./PERFORMANCE.md) — zero-overhead hot-path rationale (why Option A is
   rejected as default)

@@ -206,7 +206,7 @@ struct RuntimeStoreData {
     /// reader still dereferences that pointer — a use-after-free. Retaining the
     /// old `Arc` here keeps the interface memory valid for any in-flight reader.
     /// This mirrors the documented hot-reload guarantee that the old vtable is
-    /// held alive until all in-flight calls complete (TRUST_MODEL.md §Hot-Reload
+    /// held alive until all in-flight calls complete (docs/TRUST_MODEL.md §Hot-Reload
     /// Safety Guarantees).
     retired_interfaces: Vec<Arc<GuestContractInterface>>,
     /// Bundles currently inside a hot-reload's re-init phase.

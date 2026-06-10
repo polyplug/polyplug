@@ -518,7 +518,7 @@ export interface HostApi {
      *  # Trust model
      *  There is zero per-call authorization. Trust is established once, at load
      *  time, by declared-dependency verification (a bundle may only resolve the
-     *  contracts it declared) per `TRUST_MODEL.md`. Once a guest legitimately
+     *  contracts it declared) per `docs/TRUST_MODEL.md`. Once a guest legitimately
      *  holds an `instance`, cross-calling it is unrestricted.
      * 
      *  # Arguments
