@@ -9,6 +9,7 @@
   </Folder>
   <Folder Name="/guest/">
     <Project Path="guest\Polyplug.Guest.csproj" />
+    <Project Path="guest.tests\Polyplug.Guest.Tests.csproj" />
   </Folder>
   <Folder Name="/loaders/">
     <Project Path="loaders\Native\Polyplug.Loaders.Native.csproj" />

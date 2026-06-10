@@ -11,10 +11,14 @@ use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::LogLevel;
 use polyplug_abi::StringView;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 const PYTHON_PLUGIN: &str = env!("TEST_PYTHON_PLUGIN");
 const SKIP_PYTHON: bool = {
@@ -411,4 +415,175 @@ provides = ["test.version@1"]
 fn integration_python_runtime_name_is_python() {
     let loader: PythonLoader = PythonLoader::new(PythonConfig::default());
     assert_eq!(loader.runtime_name(), "python");
+}
+
+// ─── Guest logging (HostApi.log via the python guest SDK) ───────────────────────
+
+/// Vendor the CURRENT python guest SDK (`polyplug_guest` + `polyplug_abi` + the
+/// canonical generated ABI module) into `<bundle>/site-packages/`, mirroring
+/// `integration_peer_caller_python.rs`. The fixture's vendored copy is NOT used:
+/// it can lag the live SDK, and this test must exercise the current `log` helper.
+fn vendor_current_python_sdk(bundle_dir: &Path) {
+    let workspace_root: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("parent of tests/integration")
+        .parent()
+        .expect("workspace root")
+        .to_path_buf();
+    let sdk_root: PathBuf = workspace_root.join("sdks").join("python");
+    let site: PathBuf = bundle_dir.join("site-packages");
+
+    let guest_dst: PathBuf = site.join("polyplug_guest");
+    std::fs::create_dir_all(&guest_dst).expect("create polyplug_guest dir");
+    std::fs::copy(
+        sdk_root
+            .join("guest")
+            .join("polyplug_guest")
+            .join("__init__.py"),
+        guest_dst.join("__init__.py"),
+    )
+    .expect("vendor polyplug_guest");
+
+    let abi_src: PathBuf = sdk_root.join("polyplug_abi").join("polyplug_abi");
+    let abi_dst: PathBuf = site.join("polyplug_abi");
+    std::fs::create_dir_all(&abi_dst).expect("create polyplug_abi dir");
+    for name in ["__init__.py", "abi.py", "string_view_helper.py"] {
+        std::fs::copy(abi_src.join(name), abi_dst.join(name))
+            .unwrap_or_else(|e| panic!("vendor polyplug_abi/{name}: {e}"));
+    }
+
+    // polyplug_abi.abi falls back to `from polyplug.abi.abi import *`, so the
+    // canonical generated ABI module must be reachable as the `polyplug` package.
+    let polyplug_abi_pkg: PathBuf = site.join("polyplug").join("abi");
+    std::fs::create_dir_all(&polyplug_abi_pkg).expect("create polyplug/abi dir");
+    std::fs::write(site.join("polyplug").join("__init__.py"), b"").expect("polyplug __init__");
+    std::fs::write(polyplug_abi_pkg.join("__init__.py"), b"").expect("polyplug/abi __init__");
+    std::fs::copy(
+        sdk_root.join("abi").join("abi.py"),
+        polyplug_abi_pkg.join("abi.py"),
+    )
+    .expect("vendor polyplug/abi/abi.py");
+}
+
+/// Write a python bundle whose single contract function calls the guest SDK's
+/// `log()` helper, plus a module-top-level `log()` probe that runs BEFORE
+/// `polyplug_init` stores the host (must be a graceful no-op).
+fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
+    let dir: PathBuf = tmp.join("log_demo_python");
+    std::fs::create_dir_all(&dir).expect("create log demo bundle dir");
+
+    let id_val: u64 = polyplug_utils::bundle_id("log_demo_python");
+    let manifest: String = format!(
+        "name = \"log_demo_python\"\n\
+         id = {id_val}\n\
+         bundle_name = \"log_demo_python\"\n\
+         version = \"1.0.0\"\n\
+         runtime = \"python\"\n\
+         file = \"logdemo.py\"\n\
+         provides = [\"test.logdemo@1\"]\n\
+         needs_reinit_on_dep_reload = false\n\n\
+         [function_count]\n\
+         \"test.logdemo@1\" = 1\n",
+    );
+    std::fs::write(dir.join("manifest.toml"), manifest).expect("write manifest.toml");
+
+    let plugin_py: &str = "from polyplug_guest import LogLevel, log, register_contract, store_host_interface\n\
+         \n\
+         # Module top level runs BEFORE polyplug_init stores the host: log() must\n\
+         # be a graceful no-op here, never a crash or a delivered record.\n\
+         log(LogLevel.Error, \"guest.logdemo\", \"before-init must not be delivered\")\n\
+         \n\
+         \n\
+         def _do_log(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:\n\
+         \x20   log(LogLevel.Info, \"guest.logdemo\", \"héllo from python ✓\")\n\
+         \n\
+         \n\
+         def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n\
+         \x20   store_host_interface(host_ptr)\n\
+         \x20   register_contract(\n\
+         \x20       globals(),\n\
+         \x20       contract=\"test.logdemo@1\",\n\
+         \x20       functions=[_do_log],\n\
+         \x20       plugin_name=\"logdemo\",\n\
+         \x20   )\n";
+    std::fs::write(dir.join("logdemo.py"), plugin_py).expect("write logdemo.py");
+
+    vendor_current_python_sdk(&dir);
+    dir
+}
+
+/// End-to-end guest logging: a python guest calls the SDK `log()` helper, which
+/// crosses `HostApi.log` and lands verbatim in the host logger installed via
+/// `RuntimeBuilder::logger`. Also proves the pre-init no-op (the bundle logs once
+/// at module top level before `polyplug_init` — that record must NOT appear).
+#[test]
+fn integration_python_guest_log_routes_to_host_logger() {
+    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let bundle_dir: PathBuf = write_log_demo_bundle(tmp.path());
+
+    let records: Arc<Mutex<Vec<(LogLevel, String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink: Arc<Mutex<Vec<(LogLevel, String, String)>>> = Arc::clone(&records);
+    let rt: Arc<Runtime> = Runtime::builder()
+        .loader(make_loader())
+        .logger(move |level: LogLevel, scope: &str, message: &str| {
+            sink.lock()
+                .expect("logger mutex must not be poisoned")
+                .push((level, scope.to_owned(), message.to_owned()));
+        })
+        .build()
+        .expect("failed to build runtime");
+
+    rt.load_bundle(&bundle_dir).expect("log bundle must load");
+
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.logdemo", 1);
+    let handle: GuestContractHandle = rt
+        .find_guest_contract(contract_id, 0)
+        .expect("test.logdemo must be registered after load");
+    let vtable_ptr: *const GuestContractInterface = rt
+        .resolve_guest_contract(handle)
+        .expect("handle must be valid");
+    // SAFETY: vtable_ptr is non-null and stays valid for the runtime lifetime
+    // (retire-not-drop keeps resolved interfaces alive).
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+
+    let args: u32 = 0;
+    let mut out: u32 = 0;
+    // SAFETY: fn_id 0 is declared by the manifest's function_count; `_do_log`
+    // reads neither args nor out, and both pointers reference live stack
+    // buffers that outlive the synchronous call.
+    let err: AbiError = unsafe {
+        call_vm_function(
+            vtable,
+            0,
+            &args as *const u32 as *const (),
+            &mut out as *mut u32 as *mut (),
+        )
+    };
+    assert_eq!(
+        err.code,
+        AbiErrorCode::Ok as u32,
+        "log dispatch must return Ok; got code={}",
+        err.code
+    );
+
+    let captured: Vec<(LogLevel, String, String)> = records
+        .lock()
+        .expect("logger mutex must not be poisoned")
+        .clone();
+    let guest_records: Vec<&(LogLevel, String, String)> = captured
+        .iter()
+        .filter(|(_, scope, _)| scope == "guest.logdemo")
+        .collect();
+    assert_eq!(
+        guest_records.len(),
+        1,
+        "exactly one guest.logdemo record expected (the pre-init log must be a no-op); got: {captured:?}"
+    );
+    let (level, scope, message): &(LogLevel, String, String) = guest_records[0];
+    assert_eq!(*level, LogLevel::Info, "level must arrive verbatim");
+    assert_eq!(scope, "guest.logdemo", "scope must arrive verbatim");
+    assert_eq!(
+        message, "héllo from python ✓",
+        "message must arrive verbatim, UTF-8 intact"
+    );
 }

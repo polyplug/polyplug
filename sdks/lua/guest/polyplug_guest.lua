@@ -33,6 +33,16 @@ M.DispatchType = {
     VirtualMachine = 1,
 }
 
+-- Log severity levels for M.log, mirroring the ABI LogLevel enum
+-- (LogLevel_Error .. LogLevel_Trace in abi.lua). Lower values are more severe.
+M.LogLevel = {
+    Error = 1,
+    Warn  = 2,
+    Info  = 3,
+    Debug = 4,
+    Trace = 5,
+}
+
 M.bundle_id = abi.bundle_id
 
 local _host_interface_ptr = nil
@@ -132,6 +142,24 @@ function M.alloc_string_arena(s)
     view.ptr = buf
     view.len = len
     return view
+end
+
+-- Send a log record to the host's logging funnel (RuntimeConfig log callback,
+-- or the host's stderr default).
+--
+-- `level` is one of M.LogLevel (unknown values are clamped to Error by the
+-- loader), `scope` is a short stable tag chosen by the guest — the suggested
+-- convention is "guest.<plugin-name>" — and `message` is delivered verbatim.
+--
+-- The `_polyplug_log` bridge is injected into the VM by the polyplug Lua
+-- loader; outside a polyplug VM (e.g. plain LuaJIT unit tests of plugin code)
+-- it is absent and this helper degrades to a no-op.
+function M.log(level, scope, message)
+    local log_fn = _G._polyplug_log
+    if log_fn == nil then
+        return
+    end
+    log_fn(level, scope, message)
 end
 
 function M.ok()

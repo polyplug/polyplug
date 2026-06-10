@@ -38,6 +38,7 @@ from polyplug_abi import (
     GuestContractHandle,
     BundleInitContext,
     HostApi,
+    LogLevel,
     StringView,
     DispatchType,
     to_str,
@@ -51,6 +52,7 @@ __all__ = [
     "GuestContractHandle",
     "BundleInitContext",
     "HostApi",
+    "LogLevel",
     "StringView",
     "DispatchType",
     "to_str",
@@ -59,6 +61,7 @@ __all__ = [
     "alloc_string_arena",
     "store_host_interface",
     "get_host_interface",
+    "log",
 ]
 
 # The module-level attribute the loader reads after polyplug_init. Must match
@@ -91,6 +94,55 @@ def get_host_interface() -> int:
     Peer callers use this as the default host source for ``resolve()``.
     """
     return _HOST_INTERFACE_PTR
+
+
+def log(level: int, scope: str, message: str) -> None:
+    """Send a guest diagnostic to the host's logging funnel (``HostApi.log``).
+
+    Routes to the same sink as ``RuntimeConfig::log``: the host-installed
+    callback when one is set, otherwise the host's stderr default (Error/Warn
+    visibility only). The host delivers ``(level, scope, message)`` verbatim and
+    copies what it needs before returning — nothing here outlives the call.
+
+    No-op until ``polyplug_init`` has stored the host via
+    :func:`store_host_interface` (the generated init does so), so plugins may
+    call this unconditionally, including from module top level before init.
+
+    Args:
+        level: a :class:`polyplug_abi.LogLevel` value (``Error = 1`` ..
+            ``Trace = 5``); the host clamps unknown values to ``Error``.
+        scope: short stable tag — use ``"guest.<plugin-name>"`` by convention.
+        message: the log message.
+    """
+    host_ptr: int = _HOST_INTERFACE_PTR
+    if not host_ptr:
+        return
+    # ctypes does NOT root Python objects through a StringView's raw `ptr`
+    # field, so the encoded bytes objects must be kept alive explicitly. These
+    # two locals are the owners: they live until this function returns, which
+    # outlives the synchronous host.log call below. (The classic footgun is
+    # building the view from a temporary — `_str_view(s.encode())` — where the
+    # bytes are collected before the call.)
+    scope_bytes: bytes = scope.encode("utf-8")
+    message_bytes: bytes = message.encode("utf-8")
+    scope_view: StringView = _bytes_as_view(scope_bytes)
+    message_view: StringView = _bytes_as_view(message_bytes)
+    host: HostApi = HostApi.from_address(host_ptr)
+    # Self-passing convention: log(this, level, scope, message). The host reads
+    # both views only for the duration of the call; null/empty views are legal.
+    host.log(host_ptr, int(level), scope_view, message_view)
+
+
+def _bytes_as_view(data: bytes) -> StringView:
+    """Build a borrowed ``StringView`` over a bytes object's internal buffer.
+
+    The caller MUST keep ``data`` alive for as long as the view is read —
+    ctypes does not root ``data`` through the view's raw pointer field.
+    """
+    if not data:
+        return StringView(ptr=None, len=0)
+    addr: int = ctypes.cast(ctypes.c_char_p(data), ctypes.c_void_p).value or 0
+    return StringView(ptr=addr, len=len(data))
 
 
 def register_contract(

@@ -23,8 +23,4 @@ export {
     loadNativeLibrary,
     openNativeLibrary,
 } from "./host/polyplug/native-loader.ts";
-export {
-    DependencyNotFoundError,
-    getExtension,
-    EXT_TRACE_ID,
-} from "./guest/polyplug_guest.js";
+export { DependencyNotFoundError } from "./guest/polyplug_guest.js";

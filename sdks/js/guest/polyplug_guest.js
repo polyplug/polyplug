@@ -34,11 +34,17 @@ export const AbiErrorCode = {
 };
 
 /**
- * Extension ID for the trace extension.
- * Value: fnv1a_32("trace") = 0xC4EB9AEE
- * @type {number}
+ * Log severity levels for {@link log}, mirroring the ABI LogLevel enum
+ * (`LogLevel` in abi.ts). Lower values are more severe.
+ * @enum {number}
  */
-export const EXT_TRACE_ID = 0xC4EB9AEE;
+export const LogLevel = {
+    Error: 1,
+    Warn: 2,
+    Info: 3,
+    Debug: 4,
+    Trace: 5,
+};
 
 let _hostVtableLo = 0;
 let _hostVtableHi = 0;
@@ -186,28 +192,42 @@ export class StringViewHelper {
 }
 
 /**
- * Get extension by ID.
- * 
- * @param {number} extensionId - Extension identifier
- * @returns {*} Extension interface pointer or null
- * 
+ * Send a log record to the host's logging funnel (RuntimeConfig log callback,
+ * or the host's stderr default).
+ *
+ * `level` is one of {@link LogLevel} (unknown values are clamped to Error by
+ * the loader), `scope` is a short stable tag chosen by the guest — the
+ * suggested convention is `"guest.<plugin-name>"` — and `message` is delivered
+ * verbatim.
+ *
+ * The `polyplug.log` bridge is injected into the VM by the polyplug JS loader;
+ * outside a polyplug VM (e.g. plain unit tests of plugin code) it is absent
+ * and this helper degrades to a no-op.
+ *
+ * @param {number} level - One of {@link LogLevel}.
+ * @param {string} scope - Short stable tag, e.g. "guest.my-plugin".
+ * @param {string} message - Log message, delivered verbatim.
+ * @returns {void}
+ *
  * @example
- * const traceVtable = polyplug.getExtension(EXT_TRACE_ID);
+ * log(LogLevel.Info, "guest.decoder", "frame decoded");
  */
-export function getExtension(extensionId) {
-    // Implementation provided by host runtime
-    // This is a placeholder for the interface
-    return null;
+export function log(level, scope, message) {
+    const bridge = globalThis.polyplug;
+    if (!bridge || typeof bridge.log !== 'function') {
+        return;
+    }
+    bridge.log(level, scope, message);
 }
 
 // Module exports
 export default {
     POLYPLUG_ABI_VERSION,
     AbiErrorCode,
-    EXT_TRACE_ID,
+    LogLevel,
     DependencyNotFoundError,
     StringViewHelper,
-    getExtension,
+    log,
     readBytes,
     writeBytes,
     allocString,

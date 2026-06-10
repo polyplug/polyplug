@@ -16,12 +16,15 @@ use polyplug::loader::BundleSource;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Compatibility;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::RuntimeConfig;
+use polyplug_abi::types::LogLevel;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
 use polyplug_utils::GuestContractId;
@@ -1606,4 +1609,119 @@ fn make_manifest_named(name: &str) -> ManifestData {
         needs_reinit_on_dep_reload: false,
         bundle_dependencies: Vec::new(),
     }
+}
+
+// ── Guest logging — the injected `polyplug.log` bridge ───────────────────────
+
+/// A guest calling the loader-injected `polyplug.log(level, scope, message)`
+/// bridge mid-dispatch must deliver (level, scope, message) verbatim through
+/// the host logger installed via `RuntimeBuilder::logger`, and an out-of-range
+/// level must clamp to `LogLevel::Error`. The bridge runs inside `js_dispatch`'s
+/// `Context::with` (the QuickJS VM lock is held by the calling thread) — this
+/// test also proves that path is deadlock-free.
+#[test]
+fn guest_log_bridge_delivers_records_and_clamps_level() {
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.guest.log", 1);
+    let contract_lo: u32 = contract_id as u32;
+    let contract_hi: u32 = (contract_id >> 32) as u32;
+    let bundle: String = format!(
+        r#"
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
+    var vtable = {{
+        contractLo: {contract_lo},
+        contractHi: {contract_hi},
+        fnCount: 1,
+        contractName: "test.guest.log",
+        version: 0x00010000,
+        functions: [
+            function(args, out) {{
+                polyplug.log(3, "guest.test-log", "hello from js guest");
+                polyplug.log(99, "guest.test-log", "out of range level");
+                return 0;
+            }}
+        ]
+    }};
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName,
+        vtable.version
+    );
+}}
+"#
+    );
+    let (_dir, path) = write_temp_bundle(&bundle);
+
+    let records: Arc<Mutex<Vec<(LogLevel, String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let records_clone: Arc<Mutex<Vec<(LogLevel, String, String)>>> = Arc::clone(&records);
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
+        .logger(move |level: LogLevel, scope: &str, msg: &str| {
+            records_clone.lock().expect("records lock").push((
+                level,
+                scope.to_owned(),
+                msg.to_owned(),
+            ));
+        })
+        .build()
+        .expect("runtime build must succeed");
+
+    let loader: JsLoader = JsLoader::new(JsConfig {});
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    loader
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
+        .expect("logging bundle must load");
+
+    let handle: GuestContractHandle = runtime
+        .registry()
+        .find(GuestContractId::from_u64(contract_id), 0)
+        .expect("test.guest.log@1 must be registered");
+    let vtable_ptr: *const GuestContractInterface = runtime
+        .registry()
+        .resolve_guest_contract(handle)
+        .expect("handle must resolve to vtable");
+    // SAFETY: vtable_ptr is a valid GuestContractInterface owned by the registry.
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+
+    // SAFETY: dispatch.vm.call is js_dispatch, loader_data is valid, and the
+    // logging function never reads its (args, out) pointers.
+    let result: AbiError = unsafe {
+        (vtable.dispatch.vm.call)(
+            vtable.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            0,
+            core::ptr::null::<()>(),
+            core::ptr::null_mut::<()>(),
+            core::ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        result.code,
+        AbiErrorCode::Ok as u32,
+        "logging guest function must dispatch Ok, got code={}",
+        result.code
+    );
+
+    let captured: Vec<(LogLevel, String, String)> = records.lock().expect("records lock").clone();
+    assert!(
+        captured.contains(&(
+            LogLevel::Info,
+            String::from("guest.test-log"),
+            String::from("hello from js guest"),
+        )),
+        "expected verbatim (Info, \"guest.test-log\", \"hello from js guest\") record, got: {captured:?}"
+    );
+    assert!(
+        captured.contains(&(
+            LogLevel::Error,
+            String::from("guest.test-log"),
+            String::from("out of range level"),
+        )),
+        "expected out-of-range level 99 to clamp to Error, got: {captured:?}"
+    );
 }

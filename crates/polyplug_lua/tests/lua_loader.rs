@@ -1020,3 +1020,112 @@ fn dispatch_failure_is_logged_through_host_logger() {
         "expected an (Error, \"loader.lua\", \"Lua function call failed: ...boom...\") record, got: {captured:?}"
     );
 }
+
+// ── 17. Guest logging — the injected `_polyplug_log` bridge ──────────────────
+
+/// A Lua plugin whose single function logs through the polyplug_guest SDK
+/// helper (which forwards to the loader-injected `_polyplug_log` global) and
+/// once through the raw global with an out-of-range level.
+fn logging_plugin_script() -> &'static [u8] {
+    br#"
+local pg = require("polyplug_guest")
+local function impl_log(_args_ptr, _out_ptr)
+    pg.log(pg.LogLevel.Info, "guest.test-log", "hello from lua guest")
+    _polyplug_log(99, "guest.test-log", "out of range level")
+end
+function polyplug_init(_host_ptr, _ctx_ptr)
+    _G._polyplug_handlers = {
+        ["test.loader"] = {
+            contract_version = 1,
+            plugin_name      = "test-loader-guest-log",
+            functions        = { [0] = impl_log },
+        },
+    }
+end
+"#
+}
+
+/// A guest calling the injected `_polyplug_log` (via the SDK `pg.log` helper)
+/// mid-dispatch must deliver (level, scope, message) verbatim through the host
+/// logger installed via `RuntimeBuilder::logger`, and an out-of-range level
+/// must clamp to `LogLevel::Error`. The log call happens while `lua_dispatch`
+/// holds the per-VM dispatch lock — this test also proves that path is
+/// deadlock-free.
+#[test]
+fn guest_log_bridge_delivers_records_and_clamps_level() {
+    let (_dir, path) = write_temp_bundle("lua_loader_guest_log", logging_plugin_script());
+
+    let records: Arc<std::sync::Mutex<Vec<(LogLevel, String, String)>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let records_clone: Arc<std::sync::Mutex<Vec<(LogLevel, String, String)>>> =
+        Arc::clone(&records);
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
+        .logger(move |level: LogLevel, scope: &str, msg: &str| {
+            records_clone.lock().expect("records lock").push((
+                level,
+                scope.to_owned(),
+                msg.to_owned(),
+            ));
+        })
+        .build()
+        .expect("runtime build must succeed");
+
+    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let manifest: ManifestData = make_manifest(&path, "lua_loader_guest_log");
+    loader
+        .load(
+            &manifest,
+            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &runtime,
+        )
+        .expect("logging bundle must load");
+
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.loader", 1);
+    let handle: GuestContractHandle = runtime
+        .registry()
+        .find(GuestContractId::from_u64(contract_id), 0)
+        .expect("test.loader@1 must be registered");
+    let vtable_ptr: *const GuestContractInterface = runtime
+        .registry()
+        .resolve_guest_contract(handle)
+        .expect("handle must resolve to vtable");
+    // SAFETY: vtable_ptr is a valid GuestContractInterface owned by the registry.
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+
+    // SAFETY: dispatch.vm.call is a valid function pointer, loader_data is valid,
+    // and the logging function never reads its (args, out) pointers.
+    let result: AbiError = unsafe {
+        (vtable.dispatch.vm.call)(
+            vtable.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            0,
+            core::ptr::null::<()>(),
+            core::ptr::null_mut::<()>(),
+            core::ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        result.code,
+        AbiErrorCode::Ok as u32,
+        "logging guest function must dispatch Ok, got code={}",
+        result.code
+    );
+
+    let captured: Vec<(LogLevel, String, String)> = records.lock().expect("records lock").clone();
+    assert!(
+        captured.contains(&(
+            LogLevel::Info,
+            String::from("guest.test-log"),
+            String::from("hello from lua guest"),
+        )),
+        "expected verbatim (Info, \"guest.test-log\", \"hello from lua guest\") record, got: {captured:?}"
+    );
+    assert!(
+        captured.contains(&(
+            LogLevel::Error,
+            String::from("guest.test-log"),
+            String::from("out of range level"),
+        )),
+        "expected out-of-range level 99 to clamp to Error, got: {captured:?}"
+    );
+}

@@ -7,11 +7,60 @@ namespace Polyplug.Guest;
 
 /// <summary>
 /// Guest-side access to the host runtime stored during <c>polyplug_init</c>.
-/// Provides the host allocator over the raw
+/// Provides the host allocator and the host logging funnel over the raw
 /// <see cref="HostApi"/> function-pointer table.
 /// </summary>
 public static unsafe class PolyplugHost
 {
+    /// <summary>
+    /// Send a guest diagnostic to the host's logging funnel (<c>HostApi.Log</c>).
+    /// </summary>
+    /// <remarks>
+    /// Routes to the same sink as <c>RuntimeConfig::log</c>: the host-installed
+    /// callback when one is set, otherwise the host's stderr default (Error/Warn
+    /// visibility only). The host receives <c>(level, scope, message)</c> verbatim
+    /// and copies what it needs before returning — nothing here outlives the call.
+    /// By convention <paramref name="scope"/> is <c>"guest.&lt;plugin-name&gt;"</c>.
+    ///
+    /// Both strings are transcoded UTF-16 → UTF-8 at the boundary (all ABI
+    /// strings are UTF-8 <c>StringView</c>s) and the UTF-8 buffers are pinned
+    /// with <c>fixed</c> for the duration of the call, so the GC cannot move
+    /// them while the host reads through the raw pointers.
+    ///
+    /// No-op until <c>polyplug_init</c> has stored the host via
+    /// <see cref="RuntimeAbiStorage.StoreRuntimeAbi"/> (the generated init does
+    /// so), so plugins may call this unconditionally.
+    /// </remarks>
+    /// <param name="level">Severity; the host clamps unknown values to <see cref="LogLevel.Error"/>.</param>
+    /// <param name="scope">Short stable tag, e.g. <c>"guest.&lt;plugin-name&gt;"</c>.</param>
+    /// <param name="message">The log message.</param>
+    public static void Log(LogLevel level, string scope, string message)
+    {
+        IntPtr hostPtr = RuntimeAbiStorage.GetRuntimeAbi();
+        if (hostPtr == IntPtr.Zero)
+            return;
+
+        var host = (HostApi*)hostPtr;
+        if (host->Log == IntPtr.Zero)
+            return;
+
+        byte[] scopeBytes = Encoding.UTF8.GetBytes(scope);
+        byte[] messageBytes = Encoding.UTF8.GetBytes(message);
+        var logFn = (delegate* unmanaged[Cdecl]<IntPtr, uint, StringView, StringView, void>)host->Log;
+
+        // Pin both UTF-8 buffers for the call: StringView carries raw pointers
+        // the GC cannot see, so the arrays must not move while the host reads
+        // them. `fixed` over an empty array yields a null pointer — a null view
+        // with Len 0, which the ABI documents as legal.
+        fixed (byte* scopePtr = scopeBytes)
+        fixed (byte* messagePtr = messageBytes)
+        {
+            var scopeView = new StringView { Ptr = (IntPtr)scopePtr, Len = (nuint)scopeBytes.Length };
+            var messageView = new StringView { Ptr = (IntPtr)messagePtr, Len = (nuint)messageBytes.Length };
+            logFn(hostPtr, (uint)level, scopeView, messageView);
+        }
+    }
+
     /// <summary>
     /// Allocate a <see cref="StringView"/> backed by host-owned memory.
     /// </summary>

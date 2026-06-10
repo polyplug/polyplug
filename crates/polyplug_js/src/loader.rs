@@ -27,6 +27,7 @@ use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
+use polyplug::logger::LoggerHandle;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::BundleInitContext;
@@ -122,6 +123,12 @@ pub struct JsLoaderData {
     /// `JsLoaderData`, never globally, so it is Rule-12 compliant. Contention is
     /// trivial: the vec holds 0..N concurrent caller threads and never duplicates.
     pub in_dispatch_threads: Mutex<Vec<ThreadId>>,
+    /// Instance-owned copy of the runtime's logger, taken at load time.
+    ///
+    /// Dispatch-time diagnostics have no `&Runtime` back-reference, so the
+    /// per-VM data carries its own `Copy` of the handle. Same callback
+    /// contract as `RuntimeConfig::log` — never invoked under a lock guard.
+    pub logger: LoggerHandle,
 }
 
 /// Owning, thread-shareable handle to a bundle's [`JsLoaderData`].
@@ -305,10 +312,17 @@ unsafe extern "C" fn js_dispatch(
             code: code as u32,
             message: StringView::null(),
         },
-        Err(_) => AbiError {
-            code: AbiErrorCode::Generic as u32,
-            message: StringView::null(),
-        },
+        Err(e) => {
+            // Context::with has returned, so the QuickJS VM lock is released and
+            // no loader lock guard is held — safe to invoke the host logger.
+            data.logger.log(LogLevel::Error, "loader.js", || {
+                format!("JS function call failed: {e}")
+            });
+            AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            }
+        }
     }
 }
 
@@ -398,6 +412,7 @@ fn register_host_functions<'js>(
     polyplug_obj: &Object<'js>,
     host_interface: *const HostApi,
     bundle_name: &str,
+    logger: LoggerHandle,
 ) -> Result<(), RuntimeError> {
     // Store host interface pointer as JS globals on the polyplug object
     let host_interface_usize: usize = host_interface as usize;
@@ -782,6 +797,53 @@ fn register_host_functions<'js>(
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("JS runtime js-quickjs error: arenaAlloc set failed: {e}"),
+            })
+        })?;
+
+    // log(level, scope, message) delivers guest log records to the host's
+    // logging funnel (`RuntimeConfig::log` callback or the stderr default)
+    // through the instance-owned LoggerHandle copy captured at load time —
+    // per-VM captured state, no statics (Rule 12). `level` is validated via
+    // LogLevel::from_u32; non-integral, out-of-range, or unknown values clamp
+    // to LogLevel::Error, matching HostApi.log semantics. `scope` and `message`
+    // are delivered verbatim; the suggested scope convention is
+    // "guest.<plugin-name>".
+    //
+    // Lock analysis (why logging mid-dispatch cannot deadlock): this bridge
+    // runs inside guest code, i.e. while js_dispatch's Context::with holds
+    // QuickJS's internal `parallel` VM lock on the calling thread
+    // (in_dispatch_threads is NOT held there — it is released before
+    // Context::with). That is sound: the only code that enters this VM is
+    // js_dispatch / the loader's own load path, and the host logging callback
+    // is contractually forbidden from re-entering the runtime
+    // (`RuntimeBuilder::logger` / `RuntimeConfig::log` callback contract), so
+    // no path from inside the callback can reach js_dispatch — or any other
+    // loader entry point — and therefore none can attempt the VM lock or any
+    // loader Mutex. No runtime lock is held across a guest dispatch either.
+    let log_fn: Function<'js> = Function::new(
+        ctx.clone(),
+        move |level: f64, scope: String, message: String| {
+            let log_level: LogLevel = if level.fract() == 0.0 {
+                LogLevel::from_u32(level as u32).unwrap_or(LogLevel::Error)
+            } else {
+                LogLevel::Error
+            };
+            logger.log(log_level, &scope, || message);
+        },
+    )
+    .map_err(|e: rquickjs::Error| {
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: log function creation failed: {e}"),
+        })
+    })?;
+
+    polyplug_obj
+        .set("log", log_fn)
+        .map_err(|e: rquickjs::Error| {
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: log set failed: {e}"),
             })
         })?;
 
@@ -1363,6 +1425,7 @@ impl JsLoader {
                 &polyplug_obj,
                 host_interface,
                 &manifest.name,
+                runtime.logger(),
             )?;
             globals
                 .set("polyplug", polyplug_obj)
@@ -1452,6 +1515,7 @@ impl JsLoader {
             ctx,
             functions: registration_data.functions,
             in_dispatch_threads: Mutex::new(Vec::new()),
+            logger: runtime.logger(),
         }));
 
         // The box's heap address is stable across later moves of the `SendVm`/`Box`
@@ -1911,6 +1975,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
             ctx,
             functions,
             in_dispatch_threads: Mutex::new(Vec::new()),
+            logger: LoggerHandle::default_stderr(),
         });
         let ptr: *mut JsLoaderData = Box::into_raw(boxed);
         // SAFETY: ptr was just produced by Box::into_raw and is never freed in the

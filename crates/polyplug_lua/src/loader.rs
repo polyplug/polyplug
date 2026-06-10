@@ -451,6 +451,65 @@ impl LuaLoader {
             })
     }
 
+    /// Register `_polyplug_log(level, scope, message)` on the plugin VM.
+    ///
+    /// The bridge delivers guest log records to the host's logging funnel
+    /// (`RuntimeConfig::log` callback or the stderr default) through the
+    /// instance-owned [`LoggerHandle`] copy captured at load time — per-VM
+    /// captured state, no statics (Rule 12). `level` is validated via
+    /// [`LogLevel::from_u32`]; unknown or out-of-range values clamp to
+    /// [`LogLevel::Error`], matching `HostApi.log` semantics. `scope` and
+    /// `message` are delivered verbatim (lossy-decoded only if the guest passes
+    /// non-UTF-8 bytes); the suggested scope convention is
+    /// `"guest.<plugin-name>"`.
+    ///
+    /// # Lock analysis (why logging mid-dispatch cannot deadlock)
+    ///
+    /// The bridge runs inside guest code, i.e. while `lua_dispatch` holds BOTH
+    /// the per-VM `dispatch_lock` (the publish→call→clear span) and mlua's
+    /// internal `send`-feature VM lock on the calling thread. That is sound:
+    /// the ONLY code that ever acquires `dispatch_lock` or enters this VM is
+    /// `lua_dispatch` itself, and the host logging callback is contractually
+    /// forbidden from re-entering the runtime (`RuntimeBuilder::logger` /
+    /// `RuntimeConfig::log` callback contract), so no path from inside the
+    /// callback can reach `lua_dispatch` — or any other loader entry point —
+    /// and therefore none can attempt to take either lock. The general
+    /// "never log under a lock guard" rule exists to keep host callbacks
+    /// lock-free from the RUNTIME's locks; no runtime lock is held across a
+    /// guest dispatch, so that invariant holds here too.
+    fn register_log(lua: &Lua, bundle: &str, logger: LoggerHandle) -> Result<(), RuntimeError> {
+        let log_fn: Function = lua
+            .create_function(
+                move |_lua_ctx: &Lua,
+                      (level, scope, message): (i64, mlua::String, mlua::String)|
+                      -> mlua::Result<()> {
+                    let log_level: LogLevel = u32::try_from(level)
+                        .ok()
+                        .and_then(LogLevel::from_u32)
+                        .unwrap_or(LogLevel::Error);
+                    let scope_str: String = scope.to_string_lossy();
+                    let message_str: String = message.to_string_lossy();
+                    logger.log(log_level, &scope_str, || message_str);
+                    Ok(())
+                },
+            )
+            .map_err(|e: mlua::Error| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: bundle.to_owned(),
+                    error: format!("Lua VM init failed: _polyplug_log creation failed: {e}"),
+                })
+            })?;
+
+        lua.globals()
+            .set("_polyplug_log", log_fn)
+            .map_err(|e: mlua::Error| {
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: bundle.to_owned(),
+                    error: format!("Lua VM init failed: _polyplug_log set failed: {e}"),
+                })
+            })
+    }
+
     /// Resolve a [`BundleSource`] into the Lua source text plus the contextual
     /// information the shared load path needs.
     ///
@@ -627,6 +686,12 @@ impl LuaLoader {
         // after warmup). Must be registered before dispatch; init runs first but
         // dispatch happens later, so registering here is sufficient.
         Self::register_arena_alloc(&lua, &bundle_name, host_interface)?;
+
+        // Register the guest logging bridge so plugin code (and the
+        // polyplug_guest.lua `log` helper) can route diagnostics into the
+        // host's logging funnel. The captured handle is an instance-owned copy
+        // of the runtime's logger — per-VM state, no statics (Rule 12).
+        Self::register_log(&lua, &bundle_name, runtime.logger())?;
 
         // Open the init-bundle window for BOTH the init call and the registration
         // loop below: `host_register_guest_contract` attributes each registration to
