@@ -45,14 +45,19 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
+polyplug_abi   = { workspace = true }
 polyplug_guest = { workspace = true }
+polyplug_utils = { workspace = true }
 ```
 
 ```rust
 // src/lib.rs
-use polyplug_guest::*;
+use polyplug_abi::*;
+use polyplug_guest::FnPtr;
+use polyplug_utils::GuestContractId;
 
-const MY_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B; // FNV-1a of "my.contract@1"
+// FNV-1a of "guest_contract:my.contract@1" — see polyplug_utils::guest_contract_id
+const MY_CONTRACT_ID: u64 = 0x3AFC01CA348E3F0D;
 
 extern "C" fn my_fn(args: *const (), out: *mut ()) -> AbiError {
     // ... read from args, write result to out
@@ -62,7 +67,7 @@ extern "C" fn my_fn(args: *const (), out: *mut ()) -> AbiError {
 static MY_FNS: [FnPtr; 1] = [FnPtr(my_fn as *const ())];
 
 static MY_VTABLE: GuestContractInterface = GuestContractInterface {
-    contract_id: MY_CONTRACT_ID,
+    contract_id: GuestContractId::from_u64(MY_CONTRACT_ID),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
     create_instance: my_create_instance,
@@ -70,7 +75,7 @@ static MY_VTABLE: GuestContractInterface = GuestContractInterface {
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
             function_count: 1,
-            functions: MY_FNS.as_ptr(),
+            functions: MY_FNS.as_ptr() as *const *const (),
         },
     },
 };
@@ -87,9 +92,12 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_init(host: *const HostApi) -> AbiError {
+pub unsafe extern "C" fn polyplug_init(
+    host: *const HostApi,
+    _ctx: *const BundleInitContext,
+) -> AbiError {
     if host.is_null() {
-        return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
+        return AbiError { code: AbiErrorCode::Generic as u32, message: StringView::null() };
     }
     // SAFETY: host is non-null and provided by the host per ABI contract.
     let iface: &HostApi = unsafe { &*host };
@@ -109,19 +117,22 @@ Your plugin **must** be a `cdylib`:
 crate-type = ["cdylib"]
 ```
 
-**Important:** A `cdylib` cannot have a runtime dependency on the workspace `polyplug`
-crate because that would introduce a circular dependency — the host already embeds
-`polyplug`. Instead, **mirror the ABI types inline** in your plugin (as shown in the full
-example below and in `examples/guests/native/src/lib.rs`). The `polyplug_guest` crate is
-a convenience for use during development when circular dependency is not a concern; for
-standalone distribution, mirror the types directly.
+**Important:** A plugin `cdylib` must never depend on the host-side `polyplug`
+crate — the host already embeds `polyplug`, and a plugin only needs the ABI surface.
+Depend on `polyplug_abi` (the `#[repr(C)]` ABI types), `polyplug_guest` (guest-side
+helpers), and `polyplug_utils` (ID hashing), as the workspace examples under
+`examples/guests/rust/` do. A plugin distributed outside this workspace can instead
+mirror the `#[repr(C)]` ABI types inline — the ABI is defined by struct layout, not
+by linkage.
 
 ---
 
 ## Available Types
 
-All types are re-exported from `polyplug::abi`. Import them with `use polyplug_guest::*;`
-or selectively.
+The ABI types live in the `polyplug_abi` crate — import them from there directly
+(`use polyplug_abi::*;` or selectively). `polyplug_guest` adds the guest-side helpers
+(`FnPtr`, `GuestError`, `to_str`, `alloc_string`, `log`, …); it does **not** re-export
+`polyplug_abi` (the workspace is cross-crate-re-export free).
 
 ### `StringView`
 
@@ -201,7 +212,7 @@ One per contract your plugin implements. Must be `'static`.
 ```rust
 #[repr(C)]
 pub struct GuestContractInterface {
-    pub contract_id:      u64,
+    pub contract_id:      GuestContractId, // newtype around u64 (polyplug_utils)
     pub contract_version: Version,     // { major: u32, minor: u32, patch: u32 }
     pub dispatch_type:    DispatchType, // Native (0) or VirtualMachine (1)
     pub create_instance:  unsafe extern "C" fn(
@@ -216,7 +227,9 @@ pub struct GuestContractInterface {
 }
 ```
 
-- `contract_id` is the FNV-1a 64-bit hash of `"name@major_version"`.
+- `contract_id` is the FNV-1a 64-bit hash of `"guest_contract:name@major_version"`
+  (compute it with `polyplug_utils::guest_contract_id`, wrap it with
+  `GuestContractId::from_u64`).
 - `dispatch_type` determines how to access the `dispatch` union:
   - `Native` — use `dispatch.native.functions[fn_id]` for direct function pointer calls.
   - `VirtualMachine` — use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
@@ -241,7 +254,10 @@ pub struct PluginDescriptor {
 
 ### `HostApi`
 
-Passed by the host to your `polyplug_init`. Use it **only during init** — do not store it.
+Passed by the host to your `polyplug_init`. The pointer stays valid for the plugin's
+lifetime — store it once during init (`polyplug_guest::store_host_vtable`) and read it
+back later with `polyplug_guest::get_host_vtable` for allocation, logging, and
+cross-contract calls.
 
 ```rust
 #[repr(C)]
@@ -306,9 +322,15 @@ pub struct HostApi {
         arena: *mut CallArena,
     ) -> AbiError,
     pub unload_bundle: unsafe extern "C" fn(
-        this: *const HostApi, bundle_id: u64,
+        this: *const HostApi, bundle_id: BundleId,
     ) -> AbiError,
-    pub reserved: *const core::ffi::c_void,
+    pub log: unsafe extern "C" fn(
+        this: *const HostApi,
+        level: u32,
+        scope: StringView,
+        message: StringView,
+    ),
+    pub reserved: *const core::ffi::c_void, // always null; consumers must not read it
 }
 ```
 
@@ -336,8 +358,9 @@ A zeroed `GuestContractHandle` (`{ index: 0, generation: 0 }`) is the sentinel "
 
 ### `BundleInitContext`
 
-Passed to `polyplug_init`. Contains `bundle_path` — the absolute path to the bundle
-directory on disk.
+Passed to `polyplug_init` as the second argument. Contains `bundle_id` (the FNV-1a
+hash of the bundle name) and `bundle_path` — the absolute path to the bundle
+directory on disk (24 bytes total).
 
 > **Do not store the raw pointer.** Copy the string value if you need it after init.
 
@@ -379,7 +402,8 @@ an ABI call returns a non-zero code.
 The `AbiErrorCode` enum defines all possible return codes:
 
 ```rust
-pub enum AbiErrorCode: u32 {
+#[repr(u32)]
+pub enum AbiErrorCode {
     Ok = 0,                    // Success
     Generic = 1,               // Unclassified error
     BufferTooSmall = 2,        // Output buffer too small
@@ -389,6 +413,7 @@ pub enum AbiErrorCode: u32 {
     FunctionNotAvailable = 6,  // Function index out of range
     DuplicateProvider = 7,     // Contract already registered
     InvalidPointer = 8,        // Null or invalid pointer
+    ReentrantCall = 9,         // Cross-call would re-enter a VM already dispatching
     // Host contract errors (100+):
     HostContractNotFound = 100,
     HostContractVersionMismatch = 101,
@@ -402,21 +427,24 @@ Use `AbiErrorCode::Ok` for success, `AbiErrorCode::Generic` for errors.
 
 ## Hash Utilities
 
-Contract IDs are FNV-1a 64-bit hashes of `"name@major_version"`.
-`polyplugc` generates these for you; use `contract_id()` at runtime to verify.
+ID hashing lives in the `polyplug_utils` crate. Guest contract IDs are FNV-1a 64-bit
+hashes of `"guest_contract:name@major_version"` (the prefix keeps guest and host
+contract IDs from colliding). `polyplugc` generates the constants for you; use
+`guest_contract_id()` at runtime to verify.
 
 ```rust
-use polyplug_guest::contract_id;
+use polyplug_utils::guest_contract_id;
 
 // Verify the compile-time constant matches the runtime hash:
-assert_eq!(contract_id("my.contract", 1), MY_CONTRACT_ID);
+assert_eq!(guest_contract_id("my.contract", 1), MY_CONTRACT_ID);
 ```
 
 | Function | Description |
 |---|---|
-| `contract_id(name: &str, major: u64) -> u64` | FNV-1a of `"name@major"` |
-| `bundle_id(name: &str) -> u64` | FNV-1a of a bundle name |
-| `extension_id(name: &str) -> u32` | FNV-1a (32-bit) of an extension name |
+| `guest_contract_id(name: &str, major_version: u32) -> u64` | FNV-1a of `"guest_contract:name@major"` |
+| `host_contract_id(name: &str, major_version: u32) -> u64` | FNV-1a of `"host_contract:name@major"` |
+| `bundle_id(name: &str) -> u64` | FNV-1a of the bundle name |
+| `fnv1a_64(data: &[u8]) -> u64` | Raw FNV-1a 64-bit hash |
 
 ---
 
@@ -444,7 +472,7 @@ For raw buffers, call the stored interface directly:
 ```rust
 use polyplug_guest::get_host_vtable;
 
-let host = get_host_vtable();
+let host: *const HostApi = get_host_vtable();
 // SAFETY: host was stored during polyplug_init and is non-null in plugin code.
 let ptr: *mut u8 = unsafe { ((*host).alloc)(host, 64, 8) };
 if ptr.is_null() {
@@ -469,11 +497,11 @@ unsafe { ((*host).free)(host, ptr, 64, 8) };
 `polyplugc` generates the constant for you. For hand-written plugins:
 
 ```rust
-// FNV-1a-64 of "pipeline.transformer@1"
-const TRANSFORMER_CONTRACT_ID: u64 = 0x0E3044133E12EB05;
+// FNV-1a-64 of "guest_contract:pipeline.transformer@1"
+const TRANSFORMER_CONTRACT_ID: u64 = 0x1F7F345779EDC6DC;
 ```
 
-Verify at startup with `contract_id("pipeline.transformer", 1)`.
+Verify at startup with `polyplug_utils::guest_contract_id("pipeline.transformer", 1)`.
 
 ### Step 2: Define your ABI types
 
@@ -506,7 +534,7 @@ extern "C" fn plugin_transform(args: *const (), out: *mut ()) -> AbiError {
 static TRANSFORM_FNS: [FnPtr; 1] = [FnPtr(plugin_transform as *const ())];
 
 static TRANSFORM_VTABLE: GuestContractInterface = GuestContractInterface {
-    contract_id:      TRANSFORMER_CONTRACT_ID,
+    contract_id:      GuestContractId::from_u64(TRANSFORMER_CONTRACT_ID),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type:    DispatchType::Native,
     create_instance:  my_create_instance,
@@ -514,7 +542,7 @@ static TRANSFORM_VTABLE: GuestContractInterface = GuestContractInterface {
     dispatch:         DispatchMechanisms {
         native: NativeDispatch {
             function_count: 1,
-            functions:      TRANSFORM_FNS.as_ptr(),
+            functions:      TRANSFORM_FNS.as_ptr() as *const *const (),
         },
     },
 };
@@ -535,9 +563,12 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_init(host: *const HostApi) -> AbiError {
+pub unsafe extern "C" fn polyplug_init(
+    host: *const HostApi,
+    _ctx: *const BundleInitContext,
+) -> AbiError {
     if host.is_null() {
-        return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
+        return AbiError { code: AbiErrorCode::Generic as u32, message: StringView::null() };
     }
     // SAFETY: host is non-null and provided by the host per ABI contract.
     let iface: &HostApi = unsafe { &*host };
@@ -553,55 +584,66 @@ pub unsafe extern "C" fn polyplug_init(host: *const HostApi) -> AbiError {
 
 ## Full Example
 
-The canonical hand-written native Rust plugin lives at
-[`examples/guests/native/src/lib.rs`](../../examples/guests/native/src/lib.rs).
-
-It implements the `pipeline.transformer` contract — uppercasing the `name` field and
-appending `" (transformed)"` to the `value` field of a `DataRecord`.
+The canonical Rust guest plugins live under
+[`examples/guests/rust/`](../../examples/guests/rust/) — `decoder`, `transformer`,
+`validator`, `encoder`, and `reporter`. For instance,
+[`examples/guests/rust/transformer/src/lib.rs`](../../examples/guests/rust/transformer/src/lib.rs)
+implements the `data.Transformer` contract by implementing the
+`polyplugc`-generated trait and registering it through the generated `polyplug_init`.
 
 Key points demonstrated:
 
-- **Mirroring ABI types inline** (required for a standalone `cdylib` with no
-  `polyplug` dependency)
-- **Safe UTF-8 decoding** of `StringView` data
-- **Proper error returns** instead of panics
-- **Static vtable construction** with `FnPtr`
+- **Generated bindings**: `polyplugc generate` emits `generated/guest/` (trait,
+  vtable, `polyplug_init`) and `generated/manifest.toml`
+- **Safe UTF-8 decoding** of `StringView` data via `polyplug_guest::to_str`
+- **Host-allocator string returns** via `polyplug_guest::alloc_string`
+- **Proper error returns** (`Result<_, GuestError>`) instead of panics
 - **`// SAFETY:` comments** on every `unsafe` block
-- **`polyplug_init`** null-checking the `host` pointer before dereferencing
 
 ```
-examples/guests/native/
-├── Cargo.toml        # crate-type = ["cdylib"], no polyplug dep
-├── manifest.toml     # bundle metadata
+examples/guests/rust/transformer/
+├── Cargo.toml        # crate-type = ["cdylib"]; polyplug_abi + polyplug_guest + polyplug_utils deps
+├── bundle.toml       # contract definition consumed by polyplugc
+├── generated/        # polyplugc output: guest bindings + manifest.toml — do not edit
 └── src/
-    └── lib.rs        # full hand-written plugin implementation
+    └── lib.rs        # the hand-written part: the trait implementation
 ```
 
 ---
 
 ## manifest.toml — Declaring Your Bundle
 
-Every plugin bundle needs a `manifest.toml` alongside the compiled `.so`:
+Every plugin bundle needs a `manifest.toml` alongside the compiled `.so`.
+`polyplugc generate` emits it for you (under `generated/`); a hand-written one
+looks like this:
 
 ```toml
-bundle_name = "my_plugin"
-runtime     = "native"
-version     = "1.0"
-file        = "libmy_plugin.so"
-provides    = ["pipeline.transformer"]
+name     = "my_plugin"
+id       = 6083502456968126439   # fnv1a_64("my_plugin"); polyplugc precomputes this
+version  = "1.0.0"
+runtime  = "native"
+provides = ["pipeline.transformer@1"]
+function_count = { "pipeline.transformer@1" = 1 }
+file     = "libmy_plugin.so"
+```
 
-[function_count]
-"pipeline.transformer@1" = 1
+`file` may also be a per-platform table (this is what `polyplugc` emits):
+
+```toml
+[file]
+linux.x86_64 = "libmy_plugin.so"
 ```
 
 | Field | Description |
 |---|---|
-| `bundle_name` | Unique name for this bundle |
-| `runtime` | Must be `"native"` for Rust/C/C++ plugins |
+| `name` | Unique name for this bundle |
+| `id` | Bundle ID — required, non-zero; `polyplugc` precomputes it from the name |
 | `version` | Bundle version string |
-| `file` | Filename of the compiled shared library |
-| `provides` | List of contract names this bundle implements |
-| `[function_count]` | Number of functions per contract (at `"name@major"`) |
+| `runtime` | Must be `"native"` for Rust/C/C++ plugins (required) |
+| `file` | Filename of the compiled shared library, or a per-platform table |
+| `provides` | Contract names this bundle implements, at `"name@major"` |
+| `function_count` | Map from `"name@major"` to number of exported functions |
+| `[[dependency]]` | Optional declared dependencies (see `docs/TRUST_MODEL.md`) |
 
 ---
 
@@ -699,8 +741,7 @@ untrusted and may return any 32-bit value. Construct it with
 
 ## More Examples
 
-- **`examples/guests/native/`** — Hand-written Rust native plugin (`pipeline.transformer`)
-- **`examples/guests/`** — Guest plugins in C++, C#, Python, Lua, and JavaScript
+- **`examples/guests/rust/`** — Rust guest plugins (`decoder`, `transformer`, `validator`, `encoder`, `reporter`)
+- **`examples/guests/`** — The same guest plugins in C++, C#, Python, Lua, and JavaScript
 - **`examples/hosts/`** — Host runtimes that load polyplug bundles
 - **`examples/api.toml`** — API definition used by `polyplugc` for codegen
-- **`examples/contract_ids.txt`** — Registry of contract IDs for the example contracts

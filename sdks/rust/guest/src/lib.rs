@@ -10,8 +10,10 @@
 //! ```rust,ignore
 //! // In Cargo.toml: crate-type = ["cdylib"]
 //! use polyplug_abi::*;
+//! use polyplug_guest::FnPtr;
+//! use polyplug_utils::GuestContractId;
 //!
-//! // 1. Compute the contract ID at compile time (FNV-1a of "my.contract@1")
+//! // 1. Compute the contract ID at compile time (FNV-1a of "guest_contract:my.contract@1")
 //! const MY_CONTRACT_ID: u64 = /* polyplugc generates this */;
 //!
 //! // 2. Implement your function with the generic dispatch signature
@@ -23,7 +25,7 @@
 //! // 3. Declare static interface
 //! static MY_FNS: [FnPtr; 1] = [FnPtr(my_fn as *const ())];
 //! static MY_VTABLE: GuestContractInterface = GuestContractInterface {
-//!     contract_id: MY_CONTRACT_ID,
+//!     contract_id: GuestContractId::from_u64(MY_CONTRACT_ID),
 //!     contract_version: Version { major: 1, minor: 0, patch: 0 },
 //!     dispatch_type: DispatchType::Native,
 //!     create_instance: create_instance_stub,
@@ -52,7 +54,7 @@
 //!     _ctx: *const BundleInitContext,
 //! ) -> AbiError {
 //!     if host_abi.is_null() {
-//!         return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
+//!         return AbiError { code: AbiErrorCode::Generic as u32, message: StringView::null() };
 //!     }
 //!     let host: &HostApi = unsafe { &*host_abi };
 //!     unsafe {

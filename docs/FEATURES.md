@@ -152,8 +152,8 @@ safety guarantees: [`TRUST_MODEL.md`](TRUST_MODEL.md) (Hot-Reload Safety).
 
 ## 5. Unload (invalidate-only)
 
-`HostApi.unload_bundle(this, bundle_id)` is the 19th `HostApi` function pointer
-(offset 152). It invalidates a bundle at runtime without reloading it.
+`HostApi.unload_bundle(this, bundle_id)` is the 18th `HostApi` function pointer
+(offset 144). It invalidates a bundle at runtime without reloading it.
 
 - **Invalidate semantics:** unload bumps the slot generation for every contract the
   bundle registered. All previously minted `GuestContractHandle`s for those slots

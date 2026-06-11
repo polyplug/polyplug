@@ -14,13 +14,13 @@ memory may be freed without dangling any pointer or in-flight call.
 
 **Status (2026-06):** Phases 1–4 have shipped.
 - **Phase 1** — generation-counted `GuestContractHandle`: 8 bytes, `{ index: u32, generation: u32 }`, `StaleHandle` now produced by `resolve_guest_contract`.
-- **Phase 2** — invalidate-only `unload_bundle` on `HostApi` at offset 152; `RuntimeApi` retired entirely; dependent-refusal and cascade unload.
+- **Phase 2** — invalidate-only `unload_bundle` on `HostApi` at offset 144; `RuntimeApi` retired entirely; dependent-refusal and cascade unload.
 - **Phase 3** — VM true reclaim: Lua/JS loaders drop a quiescent VM on unload; Python purges the bundle's re-keyed `sys.modules` entries.
 - **Phase 4** — native opt-in Reclaim: under `UnloadMode::Reclaim` the native loader `dlclose`s the dylib on unload.
 
-The supporting ABI bits — the `UnloadMode { Retire, Reclaim }` enum, `RuntimeConfig.unload_mode` (offset 4; `RuntimeConfig` grew 24→32 bytes), and `ReloadPhaseType::Unloading = 3` with the `ReloadPhase::unloading()` constructor — have also shipped. The unload flow fires a `ReloadPhase::Unloading` callback before invalidate so the host can quiesce.
+The supporting ABI bits — the `UnloadMode { Retire, Reclaim }` enum, `RuntimeConfig.unload_mode` (offset 4; `RuntimeConfig` is 56 bytes today), and `ReloadPhaseType::Unloading = 3` with the `ReloadPhase::unloading()` constructor — have also shipped. The unload flow fires a `ReloadPhase::Unloading` callback before invalidate so the host can quiesce.
 
-The "Current State" section below therefore describes history rather than the present for the shipped items. The two items that remain future work are the call-arena **retain-and-rewind** optimization (Phase 1 of §"Core Concepts", a perf change independent of unload — see Deferred Work below) and the **D11 native live-instance counter** (see Decision Points). Phase 5 (.NET collectible ALC) also remains deferred.
+The "Current State" section below therefore describes history rather than the present for the shipped items. The items once listed here as future work have since landed as well: the call-arena **retain-and-rewind** optimization shipped (reset rewinds and retains overflow blocks; teardown frees), Phase 5 (.NET collectible ALC) shipped (per-bundle collectible `AssemblyLoadContext`; `Reclaim` truly unloads), and **D11** was resolved as host-coordinated — no native live-instance counter (see Decision Points).
 
 This is an **implementation record**; the design rationale below is retained for context. Every claim about current behavior is cited to `file:line` and was verified against the working tree at design time.
 
@@ -238,19 +238,16 @@ or adopt it as the unload home. Recommendation in §6 / Decision Points.
 
 ## Core Concepts
 
-#### Call-arena reset policy (perf, independent of unload)
+#### Call-arena reset policy (perf, independent of unload) — SHIPPED
 
-Today `CallArena::reset` (`crates/polyplug_abi/src/types/call_arena.rs`) frees every
-overflow block on each call; for workloads that consistently exceed the inline buffer
-this reintroduces one alloc + free per call. The standard arena discipline is
-**retain-and-rewind**: keep overflow blocks allocated, rewind the bump pointer to the
-start of the first block, and free only on `Drop`. The validity contract is identical
-("all arena memory valid until the next reset"), so the guest-facing class-B guarantee
-is unchanged. This is a pure class-B performance change tracked separately from
-unload; it is pending verification that the guest-facing arena contract does not depend
-on the struct's internal layout (the `CallArena` type is not currently `#[repr(C)]`
-and not in the frozen ABI surface, so the change is self-contained). Nothing in the
-unload phases depends on this optimization; it can ship independently at any time.
+`CallArena::reset` (`crates/polyplug_abi/src/types/call_arena.rs`) now follows the
+standard **retain-and-rewind** arena discipline: overflow blocks stay allocated across
+calls, `reset` rewinds the bump cursor and reuses them, and blocks are freed only on
+`Drop`/teardown. The validity contract is identical ("all arena memory valid until the
+next reset"), so the guest-facing class-B guarantee is unchanged. The same discipline
+is implemented in lockstep by every generated host caller (rust/cpp/csharp/python) and
+the SDK arena mirrors — the correctness point is teardown-frees-all versus
+per-call-rewinds. Nothing in the unload phases depends on this optimization.
 
 ### 1. Generation-counted handles
 
@@ -668,14 +665,14 @@ never sees, so it cannot even attempt the in-flight check).
 
 ### Deferred Work
 
-Two unload-area items remain deliberately deferred (recorded here, not abandoned):
+These items were deferred at design time; their final outcomes:
 
-- **Call-arena retain-and-rewind (perf).** Deferred: it changes the arena's
-  free-on-`reset()` contract to a teardown/`Drop` model that ripples into the C++ and
-  other generated host callers (only exercised in CI), so it is a separate dedicated
-  effort. Nothing in the unload phases depends on it; it can ship independently at any
-  time. Tracked as the "Call-arena reset policy" note in §"Core Concepts".
-- **D11 — native live-instance counter.** Deferred. The host owns the instance
+- **Call-arena retain-and-rewind (perf).** SHIPPED — see the "Call-arena reset
+  policy" note in §"Core Concepts": reset rewinds and retains overflow blocks,
+  teardown frees, implemented in lockstep across all generated host callers and
+  SDK mirrors.
+- **D11 — native live-instance counter.** RESOLVED — host-coordinated, no counter.
+  The host owns the instance
   lifecycle: `create_instance` / `destroy_instance` are direct guest-vtable calls the
   runtime never mediates. A runtime-side counter is not currently provided: it would
   either duplicate knowledge the host already has, or require auto-increment code

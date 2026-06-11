@@ -86,7 +86,7 @@ Each language SDK has `abi/`, `host/`, `guest/`, and `loaders/` subdirectories:
 sdks/
 ├── rust/        abi/, guest/   (the host side IS the `polyplug` crate)
 ├── cpp/         abi/, host/, guest/, loaders/
-├── csharp/      abi/, host/, guest/, loaders/, abi.tests/, host.tests/
+├── csharp/      abi/, host/, guest/, loaders/, abi.tests/, guest.tests/, host.tests/
 ├── python/      abi/, host/, guest/, loaders/, polyplug_abi/
 ├── lua/         abi/, host/, guest/, loaders/
 └── js/          abi/, host/, guest/, loaders/
@@ -779,7 +779,7 @@ polyplug/
 ├── sdks/
 │   ├── rust/    abi/, guest/   (host side = the polyplug crate itself)
 │   ├── cpp/     abi/, host/, guest/, loaders/
-│   ├── csharp/  abi/, host/, guest/, loaders/, abi.tests/, host.tests/
+│   ├── csharp/  abi/, host/, guest/, loaders/, abi.tests/, guest.tests/, host.tests/
 │   ├── python/  abi/, host/, guest/, loaders/, polyplug_abi/
 │   ├── lua/     abi/, host/, guest/, loaders/
 │   └── js/      abi/, host/, guest/, loaders/

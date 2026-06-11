@@ -360,12 +360,12 @@ if (logger != null) {
 
 Host contract IDs use a distinct prefix to avoid collisions with plugin contract IDs:
 
-- **Plugin contract**: `plugin_contract:name@major` → FNV-1a hash
+- **Guest (plugin) contract**: `guest_contract:name@major` → FNV-1a hash
 - **Host contract**: `host_contract:name@major` → FNV-1a hash
 
 For example:
 - `host.logger@1` → `host_contract:host.logger@1` → FNV-1a hash
-- `example.worker@1` → `plugin_contract:example.worker@1` → FNV-1a hash
+- `example.worker@1` → `guest_contract:example.worker@1` → FNV-1a hash
 
 This ensures that `host.logger` and a hypothetical `plugin.logger` have different IDs and never collide.
 

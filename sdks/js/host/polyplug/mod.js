@@ -142,7 +142,7 @@ const SYMBOLS = {
   polyplug_runtime_destroy: { parameters: ["pointer"], result: "void" },
 };
 
-// HostApi struct offsets imported from auto-generated abi.ts (160 bytes, 19 function pointer fields)
+// HostApi struct offsets imported from auto-generated abi.ts (168 bytes, 19 function pointer fields + trailing reserved pointer)
 const HOST_API_OFFSETS = {
   runtime: HOST_API_RUNTIME_OFFSET,
   register_guest_contract: HOST_API_REGISTER_GUEST_CONTRACT_OFFSET,

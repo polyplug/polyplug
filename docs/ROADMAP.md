@@ -250,8 +250,8 @@ concept on every user and shipped zero consumers; anything they could carry is
 already an app-defined host contract.
 
 The `get_extension` slot on `HostApi` was replaced by a single trailing
-`reserved: *const c_void` (null), moved to the end of the struct (offset 152,
-after `unload_bundle`@144). The struct stays 160 bytes; `reserved` is silent
+`reserved: *const c_void` (null) at the end of the struct (now offset 160,
+after `log`@152). The struct is 168 bytes; `reserved` is silent
 forward-compat room (it can later point to a versioned table) with no narrative.
 
 ## Cross-call Dispatch (plugin → plugin) ✅ Done
@@ -319,11 +319,11 @@ Non-obvious constraints (do not regress):
 
 ## Unload — invalidate + opt-in reclaim ✅ Done
 
-`HostApi.unload_bundle` (offset 152) invalidates a bundle (generation bump →
+`HostApi.unload_bundle` (offset 144) invalidates a bundle (generation bump →
 `StaleHandle`, registry-index removal, dependent-refusal/cascade) and fires a
 `ReloadPhaseType::Unloading` callback before invalidation. Reclaim of
 loader-owned resources is opt-in via `RuntimeConfig.unload_mode`
-(`UnloadMode { Retire (default), Reclaim }`; `RuntimeConfig` is 32 bytes,
+(`UnloadMode { Retire (default), Reclaim }`; `RuntimeConfig` is 56 bytes,
 `unload_mode` at offset 4). Full model: `docs/UNLOAD_DESIGN.md`; trust posture:
 `TRUST_MODEL.md`.
 

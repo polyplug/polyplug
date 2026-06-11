@@ -1,7 +1,9 @@
 /// Owning byte buffer.
 ///
-/// OWNERSHIP: `ptr` is always allocated via `polyplug_host_alloc`.
-/// Owner calls `polyplug_host_free(ptr, cap, align)` when done.
+/// OWNERSHIP: `ptr` is always allocated through the host allocator — the
+/// `alloc` field on `HostApi`. The owner releases it through the matching
+/// `free` field (`(host.free)(host, ptr, cap, align)`) when done. There are
+/// no separate allocator C exports; allocation always flows through `HostApi`.
 #[repr(C)]
 #[derive(Debug)]
 pub struct Buffer {

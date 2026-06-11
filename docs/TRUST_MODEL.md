@@ -222,8 +222,8 @@ The following table summarizes the sizes and alignments of the core ABI types on
 
 | Type | Size (bytes) | Alignment (bytes) | Key Fields |
 |------|--------------|-------------------|------------|
-| `HostApi` | 168 | 8 | `runtime` opaque ptr + 20 function pointers |
-| `GuestContractInterface` | 24 | 8 | `contract_id`, `functions` ptr |
+| `HostApi` | 168 | 8 | `runtime` opaque ptr + 19 function pointers + trailing `reserved` data ptr |
+| `GuestContractInterface` | 56 | 8 | `contract_id`, `contract_version`, `dispatch_type`, `create_instance`, `destroy_instance`, `dispatch` union |
 | `GuestContractHandle` | 8 | 4 | `index: u32`, `generation: u32` |
 | `StringView` | 16 | 8 | `ptr`, `len` |
 | `AbiError` | 24 | 8 | `code`, `message` (StringView) |
@@ -311,8 +311,8 @@ The core polyplug ABI **freezes at v1.0**. There is no public release yet, so th
 
 ### Frozen Surface Areas
 The following structures have the layouts and sizes that will be frozen at v1.0. At/after v1.0, any modification to these (e.g., adding a field or changing field order) is a breaking change. Sizes are verified by the layout tests in `crates/polyplug_abi`.
-- **`HostApi` (168 bytes)**: An opaque `runtime` pointer followed by 20 function pointers (full list in §5).
-- **`GuestContractInterface` (24 bytes)**: Fixed header before the function pointer array.
+- **`HostApi` (168 bytes)**: An opaque `runtime` pointer followed by 19 function pointers and a trailing `reserved` data pointer (full list in §5).
+- **`GuestContractInterface` (56 bytes)**: `contract_id`, `contract_version`, `dispatch_type`, the `create_instance`/`destroy_instance` callbacks, and the `dispatch` union.
 - **`GuestContractHandle` (8 bytes)**: `index: u32` (offset 0) and `generation: u32` (offset 4), align 4.
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
 
@@ -321,7 +321,7 @@ To support future capabilities without breaking the ABI, the host exposes contra
 `HostApi::get_host_contract(contract_id, min_version)` (and
 `resolve_host_contract_interface`). New host-side capabilities are added as new host contracts
 that plugins resolve by ID, rather than by extending the frozen `HostApi` struct.
-The trailing `reserved: *const c_void` field (offset 152) is the only sanctioned
+The trailing `reserved: *const c_void` field (offset 160) is the only sanctioned
 post-freeze expansion slot; producers set it to null, consumers must not read it.
 
 ## Hot-Reload Safety Guarantees
