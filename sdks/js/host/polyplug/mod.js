@@ -49,6 +49,10 @@ import {
   RUNTIME_CONFIG_LOG_USER_DATA_OFFSET,
   RUNTIME_CONFIG_LOG_MAX_LEVEL_OFFSET,
   RUNTIME_CONFIG_SIZE,
+  RELOAD_PHASE_PHASE_TYPE_OFFSET,
+  RELOAD_PHASE_BUNDLE_ID_OFFSET,
+  RELOAD_PHASE_BUNDLE_NAME_OFFSET,
+  RELOAD_PHASE_REASON_OFFSET,
   GUEST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET,
   GUEST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET,
   GUEST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET,
@@ -168,17 +172,16 @@ const _decoder = new TextDecoder();
 
 // Callback type for reload notifications.
 //
-// The ABI signature is `void(*)(void* user_data, ReloadPhase)`: an opaque
-// user-data pointer followed by ONE `ReloadPhase` struct (48 bytes) BY VALUE —
-// not a list of scalar arguments. ReloadPhase layout (matches
-// polyplug_abi::runtime::reload_phase):
-//   phase_type: u32 @ 0, padding @ 4, bundle_id: u64 @ 8,
-//   bundle_name: StringView{ ptr @ 16, len @ 24 },
-//   reason: StringView{ ptr @ 32, len @ 40 }.
-// There is NO retry_count field. The padding u32 is declared explicitly so the
-// struct layout lines up at the by-value ABI boundary.
+// The ABI signature is `void(*)(void* user_data, const ReloadPhase* phase)`:
+// an opaque user-data pointer followed by a CONST POINTER to the 48-byte
+// `ReloadPhase` struct. The runtime always passes a non-null pointer; the
+// pointee (and the StringViews inside it) is valid only for the duration of
+// the call. Field offsets come from the generated abi.ts constants
+// (RELOAD_PHASE_*): phase_type: u32 @ 0, bundle_id: u64 @ 8,
+// bundle_name: StringView{ ptr @ +0, len @ +8 } @ 16,
+// reason: StringView{ ptr @ +0, len @ +8 } @ 32.
 const _RELOAD_CALLBACK_TYPE = {
-    parameters: ["pointer", { struct: ["u32", "u32", "u64", "pointer", "usize", "pointer", "usize"] }],
+    parameters: ["pointer", "pointer"],
     result: "void"
 };
 
@@ -967,19 +970,25 @@ export function runtimeNew(lib, options = {}) {
 
     if (onReloadCallback) {
       const ffiReloadCallback = new Deno.UnsafeCallback(_RELOAD_CALLBACK_TYPE,
-        (_userData, phaseStruct) => {
+        (_userData, phasePtr) => {
           // _userData is the opaque on_reload_user_data pointer (unused here — the
-          // JS closure already captures the callback). phaseStruct is the 48-byte
-          // ReloadPhase passed by value as a buffer. A JS exception must never
-          // unwind across the C ABI mid-reload: catch-all, log to stderr.
+          // JS closure already captures the callback). phasePtr is a const pointer
+          // to the 48-byte ReloadPhase; the runtime guarantees it is non-null and
+          // valid only for the duration of this call, so every field is copied out
+          // before the user callback returns. A JS exception must never unwind
+          // across the C ABI mid-reload: catch-all, log to stderr.
           try {
-            const dv = new DataView(phaseStruct.buffer, phaseStruct.byteOffset, phaseStruct.byteLength);
-            const phaseType = dv.getUint32(0, true);
-            const bundleId = dv.getBigUint64(8, true);
-            const bundleNamePtrRaw = dv.getBigUint64(16, true);
-            const bundleNameLen = Number(dv.getBigUint64(24, true));
-            const reasonPtrRaw = dv.getBigUint64(32, true);
-            const reasonLen = Number(dv.getBigUint64(40, true));
+            if (phasePtr === null) {
+              // Contract: never happens. Defence-in-depth only.
+              return;
+            }
+            const view = new Deno.UnsafePointerView(phasePtr);
+            const phaseType = view.getUint32(RELOAD_PHASE_PHASE_TYPE_OFFSET);
+            const bundleId = view.getBigUint64(RELOAD_PHASE_BUNDLE_ID_OFFSET);
+            const bundleNamePtrRaw = view.getBigUint64(RELOAD_PHASE_BUNDLE_NAME_OFFSET);
+            const bundleNameLen = Number(view.getBigUint64(RELOAD_PHASE_BUNDLE_NAME_OFFSET + 8));
+            const reasonPtrRaw = view.getBigUint64(RELOAD_PHASE_REASON_OFFSET);
+            const reasonLen = Number(view.getBigUint64(RELOAD_PHASE_REASON_OFFSET + 8));
 
             let bundleName = "";
             const bundleNamePtr = Deno.UnsafePointer.create(bundleNamePtrRaw);

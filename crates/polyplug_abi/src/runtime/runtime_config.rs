@@ -23,8 +23,15 @@ pub struct RuntimeConfig {
     /// Optional hot-reload callback, or null for no callback.
     ///
     /// The first argument is the opaque `on_reload_user_data` pointer, forwarded
-    /// unchanged on every invocation.
-    pub on_reload: Option<unsafe extern "C" fn(*mut core::ffi::c_void, ReloadPhase)>,
+    /// unchanged on every invocation. The second argument is a pointer to the
+    /// [`ReloadPhase`] describing the phase.
+    ///
+    /// # Callback contract
+    /// - The runtime ALWAYS passes a non-null, properly aligned `ReloadPhase`
+    ///   pointer — callbacks never receive null.
+    /// - The pointee (and the `StringView`s inside it) is valid only for the
+    ///   duration of the call — copy the data to retain it.
+    pub on_reload: Option<unsafe extern "C" fn(*mut core::ffi::c_void, *const ReloadPhase)>,
     /// Opaque user-data pointer forwarded to `on_reload` as its first argument.
     ///
     /// # Ownership
@@ -125,6 +132,41 @@ mod tests {
         assert_eq!(offset_of!(RuntimeConfig, log), 0x20);
         assert_eq!(offset_of!(RuntimeConfig, log_user_data), 0x28);
         assert_eq!(offset_of!(RuntimeConfig, log_max_level), 0x30);
+    }
+
+    /// The nullable callbacks are `Option<fn>`: the null-pointer optimization
+    /// guarantees `Option<fn>` is layout-identical to a bare `fn` pointer (the
+    /// niche IS the null fn pointer), so wrapping changes nothing at the ABI.
+    /// This is the FFI-safety basis for the Option-nullability rule — it holds
+    /// for fn pointers and references ONLY (not raw pointers, not structs).
+    #[test]
+    fn option_fn_pointer_niche_keeps_layout() {
+        assert_eq!(
+            size_of::<
+                Option<
+                    unsafe extern "C" fn(
+                        *mut core::ffi::c_void,
+                        *const crate::runtime::ReloadPhase,
+                    ),
+                >,
+            >(),
+            size_of::<
+                unsafe extern "C" fn(*mut core::ffi::c_void, *const crate::runtime::ReloadPhase),
+            >(),
+        );
+        assert_eq!(
+            size_of::<
+                Option<
+                    unsafe extern "C" fn(
+                        *mut core::ffi::c_void,
+                        u32,
+                        crate::types::StringView,
+                        crate::types::StringView,
+                    ),
+                >,
+            >(),
+            size_of::<*const core::ffi::c_void>(),
+        );
     }
 
     #[test]

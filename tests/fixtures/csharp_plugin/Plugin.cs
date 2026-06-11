@@ -44,6 +44,22 @@ public static class Plugin
     private static readonly GCHandle s_namePin;
     private static readonly GCHandle s_contractPin;
 
+    // create_instance / destroy_instance are REQUIRED ABI fields — the runtime
+    // rejects a null fn pointer at registration. This contract is stateless, so
+    // the stubs mirror the generated C# guest code: create returns a null-data
+    // instance stamped with the contract id, destroy is a no-op.
+    [UnmanagedCallersOnly]
+    private static GuestContractInstance CreateInstanceStub(nint host, nint args)
+    {
+        return new GuestContractInstance { Data = nint.Zero, ContractId = TEST_ADD_CONTRACT_ID };
+    }
+
+    [UnmanagedCallersOnly]
+    private static void DestroyInstanceStub(nint host, GuestContractInstance instance)
+    {
+        // Stateless contract — nothing to clean up.
+    }
+
     static Plugin()
     {
         unsafe
@@ -65,8 +81,8 @@ public static class Plugin
                 ContractId = TEST_ADD_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1, Minor = 0, Patch = 0 },
                 DispatchType = DispatchType.Native,
-                CreateInstance = nint.Zero,
-                DestroyInstance = nint.Zero,
+                CreateInstance = (IntPtr)(delegate* unmanaged<nint, nint, GuestContractInstance>)&CreateInstanceStub,
+                DestroyInstance = (IntPtr)(delegate* unmanaged<nint, GuestContractInstance, void>)&DestroyInstanceStub,
                 Dispatch = new DispatchMechanisms
                 {
                     Native = new NativeDispatch { FunctionCount = 4, Functions = s_functionsPtr }

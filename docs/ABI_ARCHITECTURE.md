@@ -74,9 +74,13 @@ to stderr and `log_max_level` is ignored. The callback may run on any thread,
 must not re-enter the runtime, and the `StringView`s are only valid for the
 duration of the call. `UnloadMode { Retire = 0 (default), Reclaim = 1 }`
 selects whether `unload_bundle` frees loader-owned resources (e.g. native `dlclose`)
-or keeps them mapped (retire-not-drop). The `on_reload` callback receives a
+or keeps them mapped (retire-not-drop). The `on_reload` callback —
+`fn(user_data, phase: *const ReloadPhase)` — receives a **const pointer** to a
 `ReloadPhase` whose `ReloadPhaseType` is one of `Preparing = 0`, `Reloaded = 1`,
 `Failed = 2`, or `Unloading = 3` (fired before a bundle is invalidated on unload).
+The pointer is always non-null; the pointee (and the `StringView`s inside it) is
+valid only for the duration of the call — copy to retain. `reason` is the null
+view unless `phase_type == Failed`.
 
 ### Cross-Boundary Allocator (via HostApi fields)
 ```c

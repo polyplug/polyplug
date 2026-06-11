@@ -83,7 +83,8 @@ fn make_optional_fn_ptr_struct() -> StructInfo {
             },
             FieldInfo {
                 name: "on_reload".to_string(),
-                rust_type: r#"Option<unsafeextern"C"fn(ReloadPhase)>"#.to_string(),
+                rust_type: r#"Option<unsafeextern"C"fn(*mutcore::ffi::c_void,*constReloadPhase)>"#
+                    .to_string(),
                 doc: None,
             },
         ],

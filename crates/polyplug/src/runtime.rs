@@ -1227,6 +1227,133 @@ unsafe fn string_view_to_string_owned(
 
 // ─── HostApi C ABI callbacks ───────────────────────────────────────────────
 
+/// Validate the function-pointer fields of a plugin/host-provided contract
+/// interface WITHOUT materializing the typed struct.
+///
+/// The ABI types `create_instance` / `destroy_instance` / `dispatch.vm.call`
+/// as bare (non-`Option`) `fn` pointers because they are REQUIRED: failure is
+/// signalled through a null *instance handle* return, never through a null
+/// callback. A foreign producer can still hand us a struct with null bits in
+/// those slots, and reading such a field at its `fn` type would materialize an
+/// invalid value (UB in Rust) — so the fields are read here as raw data
+/// pointers and rejected with a precise error before any typed access.
+///
+/// `create_offset` / `destroy_offset` / `dispatch_type_offset` /
+/// `dispatch_offset` are the byte offsets of the respective fields inside the
+/// interface struct (they differ between `GuestContractInterface` and
+/// `HostContractInterface`). Inside the `DispatchMechanisms` union,
+/// `vm.call` lives at offset 0, `native.function_count` at offset 0, and
+/// `native.functions` at offset 8 (asserted by the ABI layout tests).
+///
+/// Returns the first violation as a static message, or `None` when the
+/// interface is well-formed.
+///
+/// # Safety
+/// `base` must be non-null, properly aligned for the interface struct, and
+/// point to at least `dispatch_offset + 16` readable bytes.
+unsafe fn validate_interface_fn_ptrs(
+    base: *const u8,
+    create_offset: usize,
+    destroy_offset: usize,
+    dispatch_type_offset: usize,
+    dispatch_offset: usize,
+    context: ValidationContext,
+) -> Option<&'static str> {
+    // SAFETY: the caller guarantees `base` covers the interface struct; every
+    // read below is in-bounds and reads pointer/integer bits only (never an
+    // `fn`-typed value), so null bits are observed safely.
+    unsafe {
+        let create_ptr: *const core::ffi::c_void = base
+            .add(create_offset)
+            .cast::<*const core::ffi::c_void>()
+            .read();
+        if create_ptr.is_null() {
+            return Some(match context {
+                ValidationContext::Guest => {
+                    "register_guest_contract: create_instance is null — the field is required; signal create failure by returning a null instance handle instead"
+                }
+                ValidationContext::Host => {
+                    "register_host_contract: create_instance is null — the field is required; signal create failure by returning a null instance handle instead"
+                }
+            });
+        }
+        let destroy_ptr: *const core::ffi::c_void = base
+            .add(destroy_offset)
+            .cast::<*const core::ffi::c_void>()
+            .read();
+        if destroy_ptr.is_null() {
+            return Some(match context {
+                ValidationContext::Guest => {
+                    "register_guest_contract: destroy_instance is null — the field is required; use a no-op function for stateless contracts"
+                }
+                ValidationContext::Host => {
+                    "register_host_contract: destroy_instance is null — the field is required; use a no-op function for singleton/stateless contracts"
+                }
+            });
+        }
+
+        let dispatch_type_raw: u32 = base.add(dispatch_type_offset).cast::<u32>().read();
+        if dispatch_type_raw == polyplug_abi::dispatch::DispatchType::VirtualMachine as u32 {
+            // DispatchMechanisms union, vm variant: call fn pointer at offset 0.
+            let call_ptr: *const core::ffi::c_void = base
+                .add(dispatch_offset)
+                .cast::<*const core::ffi::c_void>()
+                .read();
+            if call_ptr.is_null() {
+                return Some(match context {
+                    ValidationContext::Guest => {
+                        "register_guest_contract: dispatch.vm.call is null — required for VirtualMachine dispatch"
+                    }
+                    ValidationContext::Host => {
+                        "register_host_contract: dispatch.vm.call is null — required for VirtualMachine dispatch"
+                    }
+                });
+            }
+        } else if dispatch_type_raw == polyplug_abi::dispatch::DispatchType::Native as u32 {
+            // DispatchMechanisms union, native variant: function_count at
+            // offset 0, functions pointer at offset 8.
+            let function_count: u32 = base.add(dispatch_offset).cast::<u32>().read();
+            let functions: *const *const core::ffi::c_void = base
+                .add(dispatch_offset + 8)
+                .cast::<*const *const core::ffi::c_void>()
+                .read();
+            if function_count > 0 {
+                if functions.is_null() {
+                    return Some(match context {
+                        ValidationContext::Guest => {
+                            "register_guest_contract: dispatch.native.functions is null while function_count > 0"
+                        }
+                        ValidationContext::Host => {
+                            "register_host_contract: dispatch.native.functions is null while function_count > 0"
+                        }
+                    });
+                }
+                for fn_index in 0..function_count as usize {
+                    if functions.add(fn_index).read().is_null() {
+                        return Some(match context {
+                            ValidationContext::Guest => {
+                                "register_guest_contract: dispatch.native.functions contains a null entry within function_count"
+                            }
+                            ValidationContext::Host => {
+                                "register_host_contract: dispatch.native.functions contains a null entry within function_count"
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Which registration path [`validate_interface_fn_ptrs`] is reporting for —
+/// selects the precise error message prefix.
+#[derive(Clone, Copy)]
+enum ValidationContext {
+    Guest,
+    Host,
+}
+
 /// HostApi.register_guest_contract callback — registers a guest contract implementation with the runtime.
 ///
 /// Reads bundle_id from the runtime's per-thread init stack (dependency enforcement).
@@ -1263,6 +1390,26 @@ pub(crate) unsafe extern "C" fn host_register_guest_contract(
             message: polyplug_abi::types::StringView::from_static(
                 b"register_guest_contract: interface pointer is null",
             ),
+        };
+    }
+    // Reject null bits in the REQUIRED fn-pointer fields before any typed
+    // access to the interface — reading a null at a bare `fn` type would be an
+    // invalid value (UB), and accepting it would defer the crash to first use.
+    // SAFETY: interface is non-null (checked above) and points to a
+    // GuestContractInterface provided by the plugin for the runtime lifetime.
+    if let Some(violation) = unsafe {
+        validate_interface_fn_ptrs(
+            interface.cast::<u8>(),
+            core::mem::offset_of!(GuestContractInterface, create_instance),
+            core::mem::offset_of!(GuestContractInterface, destroy_instance),
+            core::mem::offset_of!(GuestContractInterface, dispatch_type),
+            core::mem::offset_of!(GuestContractInterface, dispatch),
+            ValidationContext::Guest,
+        )
+    } {
+        return polyplug_abi::types::AbiError {
+            code: polyplug_abi::types::AbiErrorCode::InvalidPointer as u32,
+            message: polyplug_abi::types::StringView::from_static(violation.as_bytes()),
         };
     }
     // SAFETY: this is a valid HostApi pointer passed during polyplug_init.
@@ -1907,9 +2054,31 @@ pub(crate) unsafe extern "C" fn host_register_host_contract(
             message: StringView::from_static(b"null pointer in register_host_contract"),
         };
     }
+    // Reject null bits in the REQUIRED fn-pointer fields before any typed
+    // access to the interface — reading a null at a bare `fn` type would be an
+    // invalid value (UB), and accepting it would defer the crash to the first
+    // get_host_contract / dispatch (the Wave-3 null-create_instance crash class).
+    // SAFETY: interface is non-null (checked above) and points to a
+    // HostContractInterface the host keeps valid for the runtime lifetime.
+    if let Some(violation) = unsafe {
+        validate_interface_fn_ptrs(
+            interface.cast::<u8>(),
+            core::mem::offset_of!(polyplug_abi::HostContractInterface, create_instance),
+            core::mem::offset_of!(polyplug_abi::HostContractInterface, destroy_instance),
+            core::mem::offset_of!(polyplug_abi::HostContractInterface, dispatch_type),
+            core::mem::offset_of!(polyplug_abi::HostContractInterface, dispatch),
+            ValidationContext::Host,
+        )
+    } {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::from_static(violation.as_bytes()),
+        };
+    }
     // SAFETY: this is a valid HostApi pointer. (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    // SAFETY: interface is a valid HostContractInterface pointer. Caller guarantees it remains valid for runtime lifetime.
+    // SAFETY: interface is a valid HostContractInterface pointer that passed the
+    // fn-pointer validation above. Caller guarantees it remains valid for runtime lifetime.
     let interface_ref: &'static polyplug_abi::HostContractInterface = unsafe { &*interface };
 
     match runtime.register_host_contract(interface_ref.contract_id.id(), interface_ref) {

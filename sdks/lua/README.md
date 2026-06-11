@@ -124,25 +124,39 @@ Lua runtime adapter:
 
 ## Hot-Reload
 
-To enable hot-reload, pass `config.hot_reload_enabled = true` per-instance to
-`Runtime.new(opts)` (no module-level state — each runtime owns its options):
+To enable hot-reload, pass `config.hot_reload_enabled = true` and an
+`on_reload` callback per-instance to `Runtime.new(opts)` (no module-level
+state — each runtime owns its options and its callback cdata):
 
 ```lua
 local polyplug = require("polyplug")
+local reload_phase = require("polyplug.reload_phase")
 
--- Enable hot-reload (per-instance configuration)
+-- Enable hot-reload with phase notifications (per-instance configuration).
+-- The ABI passes the phase by const pointer; the SDK copies all fields into
+-- a plain Lua table before your callback runs, so the table is safe to keep.
 local runtime = polyplug.Runtime.new({
     config = { hot_reload_enabled = true },
+    on_reload = function(phase)
+        if reload_phase.is_preparing(phase) then
+            -- Destroy all instances for phase.bundle_id here.
+        elseif reload_phase.is_reloaded(phase) then
+            print("reloaded: " .. phase.bundle_name)
+        elseif reload_phase.is_failed(phase) then
+            io.stderr:write("reload failed: " .. phase.reason .. "\n")
+        end
+    end,
 })
 ```
 
 **Key points:**
 - `hot_reload_enabled` defaults to `false` — must be explicitly enabled
 - Host must track and destroy instances on `TYPE_PREPARING` notification
-- **Known limitation:** `opts.on_reload` raises an error on LuaJIT — the ABI
-  passes `ReloadPhase` to the callback **by value**, and LuaJIT FFI cannot
-  create callbacks with struct-by-value parameters. Lua hosts currently cannot
-  receive reload-phase notifications.
+- The callback receives a Lua table `{ type, bundle_id, bundle_name, reason }`;
+  `bundle_id` is a `uint64_t` cdata (Lua numbers lose precision past 2^53) and
+  `reason` is `""` except for `TYPE_FAILED`
+- Errors raised inside the callback are caught and logged to stderr — they
+  never unwind across the C ABI
 - See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
 
 ## Performance Notes

@@ -24,6 +24,11 @@ pub struct VmDispatch {
     ///   `host->alloc`. When non-null, the arena is reset by the caller at the
     ///   start of each call, so values written into it are valid until the next
     ///   call on the same caller.
+    ///
+    /// # Nullability
+    /// REQUIRED whenever `dispatch_type == VirtualMachine` — never null in
+    /// that case (registration rejects a null `call`). When
+    /// `dispatch_type == Native` this union variant is never read.
     pub call: unsafe extern "C" fn(
         loader_data: VmLoaderData,
         instance: GuestContractInstance,

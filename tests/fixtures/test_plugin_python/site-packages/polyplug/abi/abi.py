@@ -406,7 +406,7 @@ class ReloadPhase(ctypes.Structure):
 assert ctypes.sizeof(ReloadPhase) == 48, f"ReloadPhase expected 48 bytes, got {ctypes.sizeof(ReloadPhase)}"
 
 
-_runtime_config_on_reload_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ReloadPhase)
+_runtime_config_on_reload_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
 # Nullable function pointer (Option<fn>). Can be set to None.
 _runtime_config_log_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32, StringView, StringView)
 # Nullable function pointer (Option<fn>). Can be set to None.
@@ -497,11 +497,19 @@ class HostApi(ctypes.Structure):
     
      Contains an opaque runtime pointer and function pointers for guest calls.
      All functions use self-passing pattern (receive HostApi pointer as first parameter).
-     `HostApi` is `160 bytes` (1 opaque runtime pointer + 18 function pointer fields + 1 reserved data pointer).
+     `HostApi` is `168 bytes` (1 opaque runtime pointer + 19 function pointer fields + 1 reserved data pointer).
     
      # Who provides
      The runtime creates this struct and passes it to `polyplug_init()`.
      The struct is allocated using `Box::leak()` for `'static` lifetime.
+    
+     # Nullability
+     Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
+     is the sole producer of this struct and populates all 19 callbacks at
+     creation. Consumers never construct or mutate a `HostApi`. Only the
+     `runtime` pointer can become null (it is swapped to null by
+     `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
+     is a null placeholder by contract.
     
      # Who calls
      Guest (plugin) code calls these functions to interact with the runtime.

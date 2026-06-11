@@ -162,19 +162,23 @@ if polyplug_ok then
     })
     assert_true(rt ~= nil, "Runtime.new with per-instance config succeeds")
 
-    -- LuaJIT FFI cannot create callbacks with struct-by-value parameters, so
-    -- requesting on_reload must fail LOUDLY with the documented message (not a
-    -- cryptic cast error, and never silently).
-    local cb_ok, cb_err = pcall(polyplug.Runtime.new, {
+    -- The ABI passes ReloadPhase by const pointer, which LuaJIT FFI callbacks
+    -- support — requesting on_reload must now SUCCEED and the runtime must own
+    -- the callback cdata (freed on destroy). The end-to-end phase delivery is
+    -- covered by test_reload_runtime.lua.
+    local cb_ok, rt_cb = pcall(polyplug.Runtime.new, {
         on_reload = function(_) end,
     })
-    assert_false(cb_ok, "on_reload request fails (LuaJIT struct-by-value callback limit)")
-    assert_true(tostring(cb_err):find("on_reload is not supported", 1, true) ~= nil,
-        "on_reload failure carries the documented diagnostic")
+    assert_true(cb_ok, "on_reload registration succeeds (const-pointer callback)")
+    assert_true(cb_ok and rt_cb._reload_cb_cdata ~= nil,
+        "runtime owns the reload-callback cdata")
 
     -- A second runtime must not inherit or clobber the first's options.
     local rt2 = polyplug.Runtime.new()
     assert_equals(nil, rt2._reload_cb_cdata, "second runtime owns no callback (no cross-instance leak)")
+    if cb_ok then
+        rt_cb:destroy()
+    end
 
     -- No bundles loaded: find_all must return an empty table — and the 24-byte
     -- sret must not corrupt adjacent memory (verified by the host surviving

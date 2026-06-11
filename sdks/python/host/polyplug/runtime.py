@@ -36,10 +36,10 @@ from polyplug_abi import (
     StringView,
 )
 
-# The ABI-level ReloadPhase ctypes Structure (48-byte struct passed by value to
-# the on_reload callback). The `polyplug_abi` package re-exports a higher-level
-# Python `ReloadPhase` wrapper class under the same name, so the raw ctypes
-# Structure is imported from its defining module to disambiguate.
+# The ABI-level ReloadPhase ctypes Structure (the on_reload callback receives a
+# const pointer to this 48-byte struct). The `polyplug_abi` package re-exports a
+# higher-level Python `ReloadPhase` wrapper class under the same name, so the
+# raw ctypes Structure is imported from its defining module to disambiguate.
 from polyplug_abi.abi import ReloadPhase as AbiReloadPhase
 
 _LIB_NAME: str = "polyplug"
@@ -273,7 +273,11 @@ class Runtime:
 
         if self._on_reload_cb is not None:
             self._c_callback = self._make_c_callback()
-            config.on_reload = self._c_callback
+            # The generated field type erases the pointee (c_void_p); the typed
+            # callback (POINTER(AbiReloadPhase) param) is cast to it. The
+            # original wrapper stays referenced via self._c_callback so the
+            # ctypes thunk is not garbage-collected while the runtime lives.
+            config.on_reload = ctypes.cast(self._c_callback, type(config.on_reload))
         else:
             config.on_reload = ctypes.cast(None, type(config.on_reload))
 
@@ -298,9 +302,17 @@ class Runtime:
         """
         user_callback: Callable[[ReloadPhase], None] = self._on_reload_cb  # type: ignore[assignment]
 
-        @ctypes.CFUNCTYPE(None, ctypes.c_void_p, AbiReloadPhase)
-        def c_callback(_user_data: int, abi_phase: AbiReloadPhase) -> None:
+        @ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.POINTER(AbiReloadPhase))
+        def c_callback(_user_data: int, abi_phase_ptr: "ctypes._Pointer[AbiReloadPhase]") -> None:
             try:
+                if not abi_phase_ptr:
+                    # The runtime contract guarantees a non-null pointer; this
+                    # guard is pure defence-in-depth.
+                    return
+                # The pointee is valid only for the duration of this call; all
+                # fields (and the strings they reference) are copied into the
+                # Python-level ReloadPhase below before the callback returns.
+                abi_phase: AbiReloadPhase = abi_phase_ptr.contents
                 raw_type: int = abi_phase.phase_type
                 # Total conversion: ReloadPhaseType(raw) raises ValueError on an
                 # unknown discriminant, which ctypes would swallow — fall back to

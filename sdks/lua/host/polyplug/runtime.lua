@@ -120,27 +120,34 @@ function M.Runtime.new(opts)
 
         if opts.on_reload then
             local callback = opts.on_reload
-            -- The ABI signature is void(*)(void* user_data, ReloadPhase): an opaque
-            -- user-data pointer followed by ONE ReloadPhase struct BY VALUE (no
-            -- retry_count field). user_data is unused here — the Lua closure already
-            -- captures `callback`. The callback body is wrapped in pcall: a Lua
-            -- error must never unwind across the C ABI mid-reload.
-            --
-            -- LuaJIT FFI cannot create callbacks whose C signature passes an
-            -- aggregate by value; the cast below is therefore attempted under
-            -- pcall and surfaced as a precise error instead of a cryptic
-            -- conversion failure. (Tracked SDK limitation: the ABI's by-value
-            -- ReloadPhase parameter is not expressible as a LuaJIT callback.)
-            local cast_ok, cdata_or_err = pcall(ffi.cast, "RuntimeConfig_on_reload_fn", function(
+            -- The ABI signature is void(*)(void* user_data, const ReloadPhase*):
+            -- an opaque user-data pointer followed by a const pointer to the
+            -- 48-byte ReloadPhase. The runtime always passes a non-null pointer;
+            -- the pointee (and the StringViews inside it) is valid only for the
+            -- duration of the call — all fields are copied into a Lua table
+            -- before the user callback returns. user_data is unused here — the
+            -- Lua closure already captures `callback`. The callback body is
+            -- wrapped in pcall: a Lua error must never unwind across the C ABI
+            -- mid-reload.
+            reload_cb_cdata = ffi.cast("RuntimeConfig_on_reload_fn", function(
                 _user_data,
-                phase_struct
+                phase_ptr
             )
                 local ok, err = pcall(function()
+                    if phase_ptr == nil then
+                        -- Contract: never happens. Defence-in-depth only.
+                        return
+                    end
+                    -- phase_type is an enum cdata: normalise to a plain Lua
+                    -- number so the table compares cleanly against the
+                    -- reload_phase.TYPE_* constants. bundle_id stays a uint64
+                    -- cdata (a Lua number would lose precision past 2^53);
+                    -- field reads box a copy, so retaining it is safe.
                     local phase = reload_phase.new(
-                        phase_struct.phase_type,
-                        phase_struct.bundle_id,
-                        abi.to_str(phase_struct.bundle_name),
-                        abi.to_str(phase_struct.reason)
+                        tonumber(phase_ptr.phase_type),
+                        phase_ptr.bundle_id,
+                        abi.to_str(phase_ptr.bundle_name),
+                        abi.to_str(phase_ptr.reason)
                     )
                     callback(phase)
                 end)
@@ -148,12 +155,6 @@ function M.Runtime.new(opts)
                     io.stderr:write("polyplug: reload callback error: " .. tostring(err) .. "\n")
                 end
             end)
-            if not cast_ok then
-                error("polyplug: on_reload is not supported on this LuaJIT: the ABI passes "
-                    .. "ReloadPhase by value and LuaJIT FFI cannot create callbacks with "
-                    .. "struct-by-value parameters (" .. tostring(cdata_or_err) .. ")")
-            end
-            reload_cb_cdata = cdata_or_err
             config_c.on_reload = reload_cb_cdata
         end
 

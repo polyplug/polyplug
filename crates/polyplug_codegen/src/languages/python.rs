@@ -544,7 +544,7 @@ mod tests {
     /// Test that CFUNCTYPE handles Option<fn ptr> (nullable).
     #[test]
     fn python_cfunctype_option_nullable() {
-        let rust_type = "Option<unsafeextern\"C\"fn(ReloadPhase)>";
+        let rust_type = "Option<unsafeextern\"C\"fn(*mutcore::ffi::c_void,*constReloadPhase)>";
         let (typedef, _type_name) =
             PythonGenerator::generate_cfunctype("RuntimeConfig", "on_reload", rust_type);
         assert!(

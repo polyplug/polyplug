@@ -37,6 +37,15 @@ impl StringView {
         }
     }
 
+    /// True for the null-view sentinel (`ptr` is null).
+    ///
+    /// `Option<StringView>` is not FFI-safe, so ABI structs use the null view
+    /// as their "absent string" convention (e.g. `ReloadPhase::reason` outside
+    /// the `Failed` phase).
+    pub const fn is_null(&self) -> bool {
+        self.ptr.is_null()
+    }
+
     /// Returns the StringView contents as a `&str`, assuming valid UTF-8.
     ///
     /// A null pointer or zero length yields `""` — this is the defined behaviour for
@@ -106,6 +115,13 @@ mod tests {
         assert_eq!(align_of::<StringView>(), 8);
         assert_eq!(offset_of!(StringView, ptr), 0);
         assert_eq!(offset_of!(StringView, len), 8);
+    }
+
+    #[test]
+    fn is_null_distinguishes_null_view_from_live_view() {
+        assert!(StringView::null().is_null());
+        let sv: StringView = StringView::from_static(b"x");
+        assert!(!sv.is_null());
     }
 
     #[test]

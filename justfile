@@ -382,7 +382,10 @@ test-host-lua:
     @if ! [ -f {{sdks_dir}}/lua/host/tests/test_reload_notification.lua ]; then \
         echo "NOT IMPLEMENTED: sdks/lua/host/tests/test_reload_notification.lua not found"; \
     elif command -v luajit >/dev/null 2>&1; then \
-        cd {{sdks_dir}}/lua/host/tests && luajit test_reload_notification.lua; \
+        cd {{sdks_dir}}/lua/host/tests && luajit test_reload_notification.lua && \
+        POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug.so}" \
+        POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug_native.so}" \
+        luajit test_reload_runtime.lua; \
     else \
         echo "luajit not installed, skipping"; \
     fi

@@ -8,6 +8,12 @@ pub struct NativeDispatch {
     /// Number of valid entries in the dispatch array.
     pub function_count: u32,
     /// Pointer to a static array of function pointers, indexed by function_id.
+    ///
+    /// # Nullability
+    /// Typed as a raw pointer (not `Option` — `Option<*const T>` has no null
+    /// niche and is not FFI-safe). Null is the sentinel for "no functions" and
+    /// is only legal when `function_count == 0`; registration rejects a null
+    /// array (or a null entry within `function_count`) otherwise.
     pub functions: *const *const (),
 }
 

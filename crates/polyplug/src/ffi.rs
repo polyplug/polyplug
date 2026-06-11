@@ -51,8 +51,16 @@ pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -
                 builder = builder.on_reload(move |user_data, phase| {
                     // SAFETY: cb is a valid extern "C" function pointer provided by the caller.
                     // user_data is the opaque pointer the caller stored in RuntimeConfig and
-                    // is forwarded unchanged.
-                    unsafe { cb(user_data, phase) };
+                    // is forwarded unchanged. `&phase` is a non-null, properly aligned
+                    // pointer to a ReloadPhase that lives on this stack frame for the
+                    // whole call — the ABI contract only requires the pointee to be valid
+                    // for the duration of the callback.
+                    unsafe {
+                        cb(
+                            user_data,
+                            &phase as *const polyplug_abi::runtime::ReloadPhase,
+                        )
+                    };
                 });
             }
         }

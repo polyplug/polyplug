@@ -139,12 +139,16 @@ public sealed class Runtime
     /// C ABI trampoline for the reload callback. Stateless: the per-instance
     /// callback is recovered from <paramref name="userData"/>, which carries the
     /// GCHandle of the owning runtime's <see cref="ReloadCallbackState"/>.
+    /// <paramref name="phasePtr"/> points at the ABI <c>ReloadPhase</c>; the
+    /// runtime guarantees it is non-null and valid only for the duration of the
+    /// call, so the struct (and the strings inside it) is copied to managed
+    /// memory before the callback runs.
     /// A managed exception must never unwind across the C ABI mid-reload, so the
     /// invocation is wrapped in a catch-all that logs and swallows.
     /// </summary>
-    internal static void OnReloadNative(nint userData, Polyplug.Abi.ReloadPhase phase)
+    internal static void OnReloadNative(nint userData, nint phasePtr)
     {
-        if (userData == nint.Zero)
+        if (userData == nint.Zero || phasePtr == nint.Zero)
         {
             return;
         }
@@ -157,6 +161,7 @@ public sealed class Runtime
 
         try
         {
+            Polyplug.Abi.ReloadPhase phase = Marshal.PtrToStructure<Polyplug.Abi.ReloadPhase>(phasePtr);
             ReloadPhaseType type = (ReloadPhaseType)phase.PhaseType;
             string bundleName = StringViewToString(phase.BundleName);
             string reason = StringViewToString(phase.Reason);
@@ -230,7 +235,7 @@ public sealed class Runtime
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    internal delegate void OnReloadTrampoline(nint userData, Polyplug.Abi.ReloadPhase phase);
+    internal delegate void OnReloadTrampoline(nint userData, nint phasePtr);
 
     /// <summary>
     /// Calls <c>polyplug_runtime_create</c> with default configuration

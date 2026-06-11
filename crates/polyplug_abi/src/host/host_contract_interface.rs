@@ -101,6 +101,11 @@ pub struct HostContractInterface {
     ///
     /// # Returns
     /// Opaque instance handle, or null handle on failure.
+    ///
+    /// # Nullability
+    /// REQUIRED — never null. Failure is signalled by returning a null
+    /// *instance handle*, not by a null callback. `register_host_contract`
+    /// rejects interfaces whose `create_instance` bits are null.
     pub create_instance: unsafe extern "C" fn(
         this: *const HostContractInterface,
         args: *const (),
@@ -113,6 +118,11 @@ pub struct HostContractInterface {
     /// # Arguments
     /// - `this`: HostContractInterface pointer (self-passing pattern)
     /// - `instance`: Instance handle to destroy
+    ///
+    /// # Nullability
+    /// REQUIRED — never null. Singleton/stateless contracts must supply a
+    /// no-op function. `register_host_contract` rejects interfaces whose
+    /// `destroy_instance` bits are null.
     ///
     /// # Safety
     /// After calling destroy_instance, the instance handle is invalid.

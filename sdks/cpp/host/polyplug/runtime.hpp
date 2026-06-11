@@ -52,13 +52,15 @@ namespace detail {
 using OnReloadFn = std::function<void(const ReloadPhase&)>;
 
 /// C ABI trampoline matching RuntimeConfig_on_reload_fn:
-/// void(*)(void* user_data, ReloadPhase). Recovers the owning functor from
-/// `user_data` and invokes it.
-inline void on_reload_trampoline(void* user_data, ReloadPhase phase) {
-    if (user_data != nullptr) {
+/// void(*)(void* user_data, const ReloadPhase* phase). Recovers the owning
+/// functor from `user_data` and invokes it. The runtime guarantees `phase` is
+/// non-null and valid for the duration of the call; the null check is pure
+/// defence-in-depth.
+inline void on_reload_trampoline(void* user_data, const ReloadPhase* phase) {
+    if (user_data != nullptr && phase != nullptr) {
         auto* cb = static_cast<OnReloadFn*>(user_data);
         if (*cb) {
-            (*cb)(phase);
+            (*cb)(*phase);
         }
     }
 }

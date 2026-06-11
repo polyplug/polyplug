@@ -35,6 +35,12 @@ pub struct ReloadPhase {
     /// Bundle name (borrowed string).
     pub bundle_name: StringView,
     /// Failure reason (only for Failed phase).
+    ///
+    /// # Nullability
+    /// A null view (`StringView::null()`, i.e. `is_null()` returns true) unless
+    /// `phase_type == ReloadPhaseType::Failed`. `Option<StringView>` is not
+    /// FFI-safe (no null-pointer niche for structs), so the null-view sentinel
+    /// is the ABI convention here.
     pub reason: StringView,
 }
 

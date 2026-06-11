@@ -10,7 +10,15 @@
 export interface NativeDispatch {
     /**  Number of valid entries in the dispatch array. */
     function_count: number;
-    /**  Pointer to a static array of function pointers, indexed by function_id. */
+    /**
+     *  Pointer to a static array of function pointers, indexed by function_id.
+     * 
+     *  # Nullability
+     *  Typed as a raw pointer (not `Option` — `Option<*const T>` has no null
+     *  niche and is not FFI-safe). Null is the sentinel for "no functions" and
+     *  is only legal when `function_count == 0`; registration rejects a null
+     *  array (or a null entry within `function_count`) otherwise.
+     */
     functions: bigint;
 }
 
@@ -39,6 +47,11 @@ export interface VmDispatch {
      *    `host->alloc`. When non-null, the arena is reset by the caller at the
      *    start of each call, so values written into it are valid until the next
      *    call on the same caller.
+     * 
+     *  # Nullability
+     *  REQUIRED whenever `dispatch_type == VirtualMachine` — never null in
+     *  that case (registration rejects a null `call`). When
+     *  `dispatch_type == Native` this union variant is never read.
      */
     call: number;
     /**
@@ -177,6 +190,11 @@ export interface GuestContractInterface {
      *  # Returns
      *  Opaque instance handle, or null handle on failure.
      * 
+     *  # Nullability
+     *  REQUIRED — never null. Failure is signalled by returning a null
+     *  *instance handle*, not by a null callback. `register_guest_contract`
+     *  rejects interfaces whose `create_instance` bits are null.
+     * 
      *  # Thread Safety
      *  May be called from any thread. Implementation must handle synchronization.
      */
@@ -190,6 +208,11 @@ export interface GuestContractInterface {
      *  # Arguments
      *  - `host`: HostApi pointer
      *  - `instance`: Instance handle to destroy
+     * 
+     *  # Nullability
+     *  REQUIRED — never null. Stateless contracts must supply a no-op
+     *  function. `register_guest_contract` rejects interfaces whose
+     *  `destroy_instance` bits are null.
      * 
      *  # Safety
      *  After calling destroy_instance, the instance handle is invalid.
@@ -217,11 +240,19 @@ export const GUEST_CONTRACT_INTERFACE_SIZE: number = 56;
  * 
  *  Contains an opaque runtime pointer and function pointers for guest calls.
  *  All functions use self-passing pattern (receive HostApi pointer as first parameter).
- *  `HostApi` is `160 bytes` (1 opaque runtime pointer + 18 function pointer fields + 1 reserved data pointer).
+ *  `HostApi` is `168 bytes` (1 opaque runtime pointer + 19 function pointer fields + 1 reserved data pointer).
  * 
  *  # Who provides
  *  The runtime creates this struct and passes it to `polyplug_init()`.
  *  The struct is allocated using `Box::leak()` for `'static` lifetime.
+ * 
+ *  # Nullability
+ *  Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
+ *  is the sole producer of this struct and populates all 19 callbacks at
+ *  creation. Consumers never construct or mutate a `HostApi`. Only the
+ *  `runtime` pointer can become null (it is swapped to null by
+ *  `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
+ *  is a null placeholder by contract.
  * 
  *  # Who calls
  *  Guest (plugin) code calls these functions to interact with the runtime.
@@ -717,6 +748,11 @@ export interface HostContractInterface {
      * 
      *  # Returns
      *  Opaque instance handle, or null handle on failure.
+     * 
+     *  # Nullability
+     *  REQUIRED — never null. Failure is signalled by returning a null
+     *  *instance handle*, not by a null callback. `register_host_contract`
+     *  rejects interfaces whose `create_instance` bits are null.
      */
     create_instance: number;
     /**
@@ -728,6 +764,11 @@ export interface HostContractInterface {
      *  # Arguments
      *  - `this`: HostContractInterface pointer (self-passing pattern)
      *  - `instance`: Instance handle to destroy
+     * 
+     *  # Nullability
+     *  REQUIRED — never null. Singleton/stateless contracts must supply a
+     *  no-op function. `register_host_contract` rejects interfaces whose
+     *  `destroy_instance` bits are null.
      * 
      *  # Safety
      *  After calling destroy_instance, the instance handle is invalid.
@@ -842,7 +883,15 @@ export interface ReloadPhase {
     bundle_id: bigint;
     /**  Bundle name (borrowed string). */
     bundle_name: StringView;
-    /**  Failure reason (only for Failed phase). */
+    /**
+     *  Failure reason (only for Failed phase).
+     * 
+     *  # Nullability
+     *  A null view (`StringView::null()`, i.e. `is_null()` returns true) unless
+     *  `phase_type == ReloadPhaseType::Failed`. `Option<StringView>` is not
+     *  FFI-safe (no null-pointer niche for structs), so the null-view sentinel
+     *  is the ABI convention here.
+     */
     reason: StringView;
 }
 
@@ -870,7 +919,14 @@ export interface RuntimeConfig {
      *  Optional hot-reload callback, or null for no callback.
      * 
      *  The first argument is the opaque `on_reload_user_data` pointer, forwarded
-     *  unchanged on every invocation.
+     *  unchanged on every invocation. The second argument is a pointer to the
+     *  [`ReloadPhase`] describing the phase.
+     * 
+     *  # Callback contract
+     *  - The runtime ALWAYS passes a non-null, properly aligned `ReloadPhase`
+     *    pointer — callbacks never receive null.
+     *  - The pointee (and the `StringView`s inside it) is valid only for the
+     *    duration of the call — copy the data to retain it.
      */
     on_reload: number;
     /**

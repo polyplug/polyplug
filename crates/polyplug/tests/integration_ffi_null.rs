@@ -107,3 +107,191 @@ fn test_get_error_len_null_host() {
         "get_error_len(null host) must return a non-zero length"
     );
 }
+
+// ─── Null fn-pointer rejection at registration (Option-nullability sweep) ────
+//
+// The REQUIRED fn-pointer fields (`create_instance`, `destroy_instance`,
+// `dispatch.vm.call`, the populated prefix of `dispatch.native.functions`)
+// stay bare `fn` types in the ABI: failure is signalled through null *instance
+// handles*, never null callbacks. A foreign producer can still hand the
+// runtime null bits in those slots; registration must reject them with a
+// precise InvalidPointer error instead of deferring the crash to first use
+// (the Wave-3 null-create_instance crash class). The interfaces below are
+// built as raw byte images because a typed Rust struct cannot even represent
+// a null bare `fn` value.
+
+/// Build a zeroed GuestContractInterface image and stamp raw bits into the
+/// chosen slots. Returned as MaybeUninit so the null fn-pointer slots are
+/// never materialized at their typed form.
+fn guest_iface_image(
+    create_bits: usize,
+    destroy_bits: usize,
+    dispatch_type: u32,
+    dispatch_word0: usize,
+    dispatch_word1: usize,
+) -> Box<core::mem::MaybeUninit<polyplug_abi::GuestContractInterface>> {
+    let mut image: Box<core::mem::MaybeUninit<polyplug_abi::GuestContractInterface>> =
+        Box::new(core::mem::MaybeUninit::zeroed());
+    let base: *mut u8 = image.as_mut_ptr().cast::<u8>();
+    // SAFETY: every write below is in-bounds for the boxed interface image and
+    // touches raw integer/pointer bits only — the fn-pointer slots are never
+    // read (or written) at their `fn` type.
+    unsafe {
+        base.add(core::mem::offset_of!(
+            polyplug_abi::GuestContractInterface,
+            dispatch_type
+        ))
+        .cast::<u32>()
+        .write(dispatch_type);
+        base.add(core::mem::offset_of!(
+            polyplug_abi::GuestContractInterface,
+            create_instance
+        ))
+        .cast::<usize>()
+        .write(create_bits);
+        base.add(core::mem::offset_of!(
+            polyplug_abi::GuestContractInterface,
+            destroy_instance
+        ))
+        .cast::<usize>()
+        .write(destroy_bits);
+        let dispatch_base: *mut u8 = base.add(core::mem::offset_of!(
+            polyplug_abi::GuestContractInterface,
+            dispatch
+        ));
+        dispatch_base.cast::<usize>().write(dispatch_word0);
+        dispatch_base.add(8).cast::<usize>().write(dispatch_word1);
+    }
+    image
+}
+
+/// Any non-null code address to stamp into a slot that must pass the
+/// non-null check (the function is never invoked by these tests).
+fn nonnull_fn_bits() -> usize {
+    test_get_error_len_null_host as fn() as *const core::ffi::c_void as usize
+}
+
+fn make_descriptor(name: &'static [u8]) -> polyplug_abi::PluginDescriptor {
+    polyplug_abi::PluginDescriptor {
+        name: polyplug_abi::StringView::from_static(name),
+        contract_name: polyplug_abi::StringView::from_static(name),
+        version: polyplug_abi::Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
+    }
+}
+
+fn register_and_expect_rejection(
+    image: &core::mem::MaybeUninit<polyplug_abi::GuestContractInterface>,
+    expected_fragment: &str,
+) {
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) returns a valid HostApi or null on OOM.
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    assert!(!host.is_null());
+    let descriptor: polyplug_abi::PluginDescriptor = make_descriptor(b"null_fn_test");
+    // SAFETY: host is valid; descriptor and the interface image are live for
+    // the duration of the call. The image intentionally carries null bits in
+    // REQUIRED fn-pointer slots — the call must reject, not crash.
+    let result: polyplug_abi::AbiError =
+        unsafe { ((*host).register_guest_contract)(host, &descriptor, image.as_ptr()) };
+    assert_eq!(
+        result.code,
+        polyplug_abi::AbiErrorCode::InvalidPointer as u32,
+        "registration must reject with InvalidPointer"
+    );
+    // SAFETY: the message is a static StringView produced by the runtime.
+    let message: &str = unsafe { result.message.try_as_str() }.expect("static UTF-8 message");
+    assert!(
+        message.contains(expected_fragment),
+        "error message must name the offending field; got: {message}"
+    );
+    // SAFETY: host is valid and was allocated by polyplug_runtime_create(core::ptr::null()).
+    unsafe { polyplug_runtime_destroy(host) };
+}
+
+#[test]
+fn register_guest_contract_rejects_null_create_instance() {
+    let image: Box<core::mem::MaybeUninit<polyplug_abi::GuestContractInterface>> =
+        guest_iface_image(0, nonnull_fn_bits(), 0, 0, 0);
+    register_and_expect_rejection(&image, "create_instance");
+}
+
+#[test]
+fn register_guest_contract_rejects_null_destroy_instance() {
+    let image: Box<core::mem::MaybeUninit<polyplug_abi::GuestContractInterface>> =
+        guest_iface_image(nonnull_fn_bits(), 0, 0, 0, 0);
+    register_and_expect_rejection(&image, "destroy_instance");
+}
+
+#[test]
+fn register_guest_contract_rejects_null_vm_call() {
+    // dispatch_type 1 = VirtualMachine; dispatch.vm.call (union offset 0) is null.
+    let image: Box<core::mem::MaybeUninit<polyplug_abi::GuestContractInterface>> =
+        guest_iface_image(nonnull_fn_bits(), nonnull_fn_bits(), 1, 0, 0);
+    register_and_expect_rejection(&image, "dispatch.vm.call");
+}
+
+#[test]
+fn register_guest_contract_rejects_null_native_function_table() {
+    // dispatch_type 0 = Native; function_count = 3 but functions pointer is null.
+    let image: Box<core::mem::MaybeUninit<polyplug_abi::GuestContractInterface>> =
+        guest_iface_image(nonnull_fn_bits(), nonnull_fn_bits(), 0, 3, 0);
+    register_and_expect_rejection(&image, "dispatch.native.functions");
+}
+
+#[test]
+fn register_guest_contract_rejects_null_native_function_entry() {
+    // dispatch_type 0 = Native; the table is non-null but entry [1] of 2 is null.
+    let table: [usize; 2] = [nonnull_fn_bits(), 0];
+    let image: Box<core::mem::MaybeUninit<polyplug_abi::GuestContractInterface>> =
+        guest_iface_image(
+            nonnull_fn_bits(),
+            nonnull_fn_bits(),
+            0,
+            2,
+            table.as_ptr() as usize,
+        );
+    register_and_expect_rejection(&image, "null entry");
+}
+
+#[test]
+fn register_host_contract_rejects_null_create_instance() {
+    // Build a HostContractInterface image with null create_instance bits.
+    let mut image: Box<core::mem::MaybeUninit<polyplug_abi::HostContractInterface>> =
+        Box::new(core::mem::MaybeUninit::zeroed());
+    let base: *mut u8 = image.as_mut_ptr().cast::<u8>();
+    // SAFETY: in-bounds raw writes into the boxed image; the null fn-pointer
+    // slot is never read at its `fn` type.
+    unsafe {
+        base.add(core::mem::offset_of!(
+            polyplug_abi::HostContractInterface,
+            destroy_instance
+        ))
+        .cast::<usize>()
+        .write(nonnull_fn_bits());
+    }
+
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) returns a valid HostApi or null on OOM.
+    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    assert!(!host.is_null());
+    // SAFETY: host is valid; the image is live for the call and intentionally
+    // carries null create_instance bits — the call must reject, not crash (the
+    // pre-validation behaviour deferred this to a crash inside get_host_contract).
+    let result: polyplug_abi::AbiError =
+        unsafe { ((*host).register_host_contract)(host, image.as_ptr()) };
+    assert_eq!(
+        result.code,
+        polyplug_abi::AbiErrorCode::InvalidPointer as u32,
+        "register_host_contract must reject a null create_instance with InvalidPointer"
+    );
+    // SAFETY: the message is a static StringView produced by the runtime.
+    let message: &str = unsafe { result.message.try_as_str() }.expect("static UTF-8 message");
+    assert!(
+        message.contains("create_instance"),
+        "error message must name the offending field; got: {message}"
+    );
+    // SAFETY: host is valid and was allocated by polyplug_runtime_create(core::ptr::null()).
+    unsafe { polyplug_runtime_destroy(host) };
+}

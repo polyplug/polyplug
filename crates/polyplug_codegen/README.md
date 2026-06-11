@@ -403,15 +403,22 @@ class PluginManager:
 ```
 
 ```rust
-// Rust example - No explicit tracking needed!
-// PluginGuard uses Arc, so old vtables stay alive until all guards are dropped.
-// Just destroy your caller wrappers in the Preparing callback.
-static WRAPPERS: LazyLock<Mutex<HashMap<u64, Vec<Box<dyn Any + Send>>>> = ...;
+// Rust example — caller wrappers hold Arc references, so old vtables stay
+// alive until all wrappers are dropped. Just destroy your caller wrappers in
+// the Preparing callback. ReloadPhase is a #[repr(C)] struct (phase_type
+// selects the variant), not a Rust enum. The application owns the wrapper map
+// (no statics): share it with the callback via Arc<Mutex<...>>.
+let wrappers: Arc<Mutex<HashMap<BundleId, Vec<Box<dyn Any + Send>>>>> =
+    Arc::new(Mutex::new(HashMap::new()));
 
+let cb_wrappers: Arc<Mutex<HashMap<BundleId, Vec<Box<dyn Any + Send>>>>> =
+    Arc::clone(&wrappers);
 Runtime::builder()
-    .on_reload(|_user_data, phase| {
-        if let ReloadPhase::Preparing { bundle_id, .. } = phase {
-            WRAPPERS.lock().unwrap().remove(&bundle_id);  // Drop wrapper Arc references
+    .on_reload(move |_user_data, phase| {
+        if phase.phase_type == ReloadPhaseType::Preparing {
+            if let Ok(mut map) = cb_wrappers.lock() {
+                map.remove(&phase.bundle_id); // Drop wrapper Arc references
+            }
         }
     })
     .build();

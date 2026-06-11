@@ -92,9 +92,14 @@ pub struct ReloadPhase {
     pub phase_type:  ReloadPhaseType,
     pub bundle_id:   BundleId,
     pub bundle_name: StringView,  // borrowed; do not store beyond the callback
-    pub reason:      StringView,  // only set for the Failed phase
+    pub reason:      StringView,  // null view unless phase_type == Failed
 }
 ```
+
+The FFI callback receives `ReloadPhase` **by const pointer** (`*const
+ReloadPhase`) — never by value. The runtime always passes a non-null pointer;
+the pointee (and the `StringView`s inside it) is valid only for the duration of
+the call, so callbacks must copy anything they retain.
 
 ### RuntimeBuilder
 
@@ -126,8 +131,10 @@ pub struct RuntimeConfig {
     pub hot_reload_enabled: bool,
 
     /// Optional FFI callback invoked for each reload phase. (offset 16)
-    /// The first argument is the opaque `on_reload_user_data` pointer.
-    pub on_reload: Option<unsafe extern "C" fn(*mut core::ffi::c_void, ReloadPhase)>,
+    /// The first argument is the opaque `on_reload_user_data` pointer; the
+    /// second is a const pointer to the phase — always non-null, valid only
+    /// for the duration of the call.
+    pub on_reload: Option<unsafe extern "C" fn(*mut core::ffi::c_void, *const ReloadPhase)>,
 
     /// Opaque user-data pointer forwarded to `on_reload` as its first argument. (offset 24)
     /// Owned by the host; the runtime only forwards it, never reads or frees it.

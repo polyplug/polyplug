@@ -80,6 +80,11 @@ pub struct GuestContractInterface {
     /// # Returns
     /// Opaque instance handle, or null handle on failure.
     ///
+    /// # Nullability
+    /// REQUIRED — never null. Failure is signalled by returning a null
+    /// *instance handle*, not by a null callback. `register_guest_contract`
+    /// rejects interfaces whose `create_instance` bits are null.
+    ///
     /// # Thread Safety
     /// May be called from any thread. Implementation must handle synchronization.
     pub create_instance:
@@ -92,6 +97,11 @@ pub struct GuestContractInterface {
     /// # Arguments
     /// - `host`: HostApi pointer
     /// - `instance`: Instance handle to destroy
+    ///
+    /// # Nullability
+    /// REQUIRED — never null. Stateless contracts must supply a no-op
+    /// function. `register_guest_contract` rejects interfaces whose
+    /// `destroy_instance` bits are null.
     ///
     /// # Safety
     /// After calling destroy_instance, the instance handle is invalid.
