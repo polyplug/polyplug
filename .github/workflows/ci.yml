@@ -89,8 +89,10 @@ jobs:
         run: brew install luajit
       - name: Build C# SDK
         run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
-      - name: Build libpolyplug.so
-        run: cargo build -p polyplug
+      # The host-SDK runtime suites below (C#, Python, C++) need both the core
+      # and the native-loader cdylibs in target/debug.
+      - name: Build libpolyplug + native loader
+        run: cargo build -p polyplug -p polyplug_native
       # The native *_SO / *_DIR integration suites load pre-built fixture
       # cdylibs from gitignored locations that only this script produces.
       - name: Build test fixtures
@@ -98,14 +100,26 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
       # C# SDK xunit suites: abi.tests (layout/offset + helper asserts) and
-      # host.tests (runtime create through the FFI boundary; resolves the core
-      # cdylib from target/debug built above).
+      # host.tests (runtime create + REAL hot-reload phase delivery through the
+      # FFI boundary; resolves the cdylibs from target/debug built above and
+      # the reload fixtures from build_all.sh).
       - name: Run C# SDK tests
         run: |
           dotnet test sdks/csharp/abi.tests/Polyplug.Abi.Tests.csproj
           dotnet test sdks/csharp/host.tests/Polyplug.Host.Tests.csproj
+      # Python host SDK runtime test: drives a REAL hot-reload through the
+      # python SDK + native loader against the reload fixtures built above
+      # (same suite the justfile test-host-python recipe runs).
+      - name: Run Python host SDK tests
+        run: |
+          EXT=so
+          if [ "$RUNNER_OS" = "macOS" ]; then EXT=dylib; fi
+          POLYPLUG_LIB="$PWD/target/debug/libpolyplug.$EXT" \
+          POLYPLUG_NATIVE_LIB="$PWD/target/debug/libpolyplug_native.$EXT" \
+          python3 sdks/python/host/tests/test_reload_runtime.py
       # C++ SDK test programs (ABI layout static_asserts + guest allocator
-      # tracking) — compile-and-run, seconds of wall time.
+      # tracking + REAL-runtime hot-reload phase delivery linked against the
+      # cdylibs built above) — compile-and-run, seconds of wall time.
       - name: Run C++ SDK tests
         if: runner.os == 'Linux'
         run: make -C sdks/cpp test
