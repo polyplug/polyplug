@@ -206,14 +206,14 @@ fn generate_lua_types_file(ir: &ValidatedIr) -> String {
     out.push_str(cdef_guarded_block());
     out.push_str("cdef_guarded([[\n");
     for ty in &ir.types {
-        generate_lua_user_type(&mut out, ty);
+        generate_lua_user_type(&mut out, ty, &ir.enums);
         out.push('\n');
     }
     for contract in &ir.contracts {
         let contract_struct: String = contract_name_to_struct(&contract.name);
         for func in &contract.functions {
             if needs_arg_pack(&func.params) {
-                emit_lua_arg_pack_struct(&mut out, &contract_struct, func);
+                emit_lua_arg_pack_struct(&mut out, &contract_struct, func, &ir.enums);
                 out.push('\n');
             }
         }
@@ -348,10 +348,10 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     Ok(out)
 }
 
-fn generate_lua_user_type(out: &mut String, ty: &ResolvedType) {
+fn generate_lua_user_type(out: &mut String, ty: &ResolvedType, enums: &[EnumDef]) {
     out.push_str("    typedef struct {\n");
     for field in &ty.fields {
-        let ty_name: String = lua_type_name(&field.ty);
+        let ty_name: String = lua_c_type_name(&field.ty, enums);
         out.push_str(&format!(
             "        {ty_name} {field_name};\n",
             field_name = field.name
@@ -859,11 +859,32 @@ fn needs_arg_pack(params: &[ResolvedParam]) -> bool {
     params.len() >= 2
 }
 
-fn emit_lua_arg_pack_struct(out: &mut String, contract_struct: &str, func: &ResolvedFunction) {
+/// C type name for cdef / ffi.cast / ffi.new emission. Contract ENUMS have no
+/// cdef'd C type (the generator emits them as plain Lua tables), so they map
+/// to their repr's C integer type — naming the enum directly only ever worked
+/// when it collided with an identically named ABI cdef (e.g. `LogLevel`).
+fn lua_c_type_name(ty: &ResolvedTypeRef, enums: &[EnumDef]) -> String {
+    match ty {
+        ResolvedTypeRef::UserDefined(name) => {
+            match enums.iter().find(|e: &&EnumDef| &e.name == name) {
+                Some(e) => e.repr.cpp_name().to_owned(),
+                None => name.clone(),
+            }
+        }
+        _ => lua_type_name(ty),
+    }
+}
+
+fn emit_lua_arg_pack_struct(
+    out: &mut String,
+    contract_struct: &str,
+    func: &ResolvedFunction,
+    enums: &[EnumDef],
+) {
     let struct_name: String = arg_pack_struct_name(contract_struct, &func.name);
     out.push_str("    typedef struct {\n");
     for param in &func.params {
-        let ty_name: String = lua_type_name(&param.ty);
+        let ty_name: String = lua_c_type_name(&param.ty, enums);
         out.push_str(&format!(
             "        {ty_name} {param_name};\n",
             param_name = param.name
@@ -1642,7 +1663,7 @@ fn generate_lua_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedCont
         let class_name: String = contract_name_to_lua_peer_class(&contract.name);
         for func in &contract.functions {
             if needs_arg_pack(&func.params) {
-                emit_lua_arg_pack_struct(&mut pack_cdefs, &class_name, func);
+                emit_lua_arg_pack_struct(&mut pack_cdefs, &class_name, func, &ir.enums);
             }
         }
     }
@@ -1862,7 +1883,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
         let class_name: String = host_contract_name_to_lua_caller(&contract.name);
         for func in &contract.functions {
             if needs_arg_pack(&func.params) {
-                emit_lua_arg_pack_struct(&mut pack_cdefs, &class_name, func);
+                emit_lua_arg_pack_struct(&mut pack_cdefs, &class_name, func, &ir.enums);
             }
         }
     }
@@ -1966,7 +1987,7 @@ fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
         let class_name: String = host_contract_name_to_lua_class(&contract.name);
         for func in &contract.functions {
             if needs_arg_pack(&func.params) {
-                emit_lua_arg_pack_struct(&mut pack_cdefs, &class_name, func);
+                emit_lua_arg_pack_struct(&mut pack_cdefs, &class_name, func, &ir.enums);
             }
         }
     }
@@ -1984,7 +2005,7 @@ fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("local _anchors = {}\n\n");
 
     for contract in &ir.host_contracts {
-        generate_lua_host_interface_factory(&mut out, contract);
+        generate_lua_host_interface_factory(&mut out, contract, &ir.enums);
     }
 
     out.push_str("return M\n");
@@ -1998,7 +2019,11 @@ fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
 /// returns a fully populated `HostContractInterface` with VM dispatch. The
 /// per-function marshalling runs in a scalar-only LuaJIT dispatcher callback —
 /// the only callback shape LuaJIT can create (no struct-by-value args/returns).
-fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHostContract) {
+fn generate_lua_host_interface_factory(
+    out: &mut String,
+    contract: &ResolvedHostContract,
+    enums: &[EnumDef],
+) {
     let class_name: String = host_contract_name_to_lua_class(&contract.name);
     let factory_name: String = format!(
         "create_{}_interface",
@@ -2048,8 +2073,8 @@ fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHost
     out.push_str("        local ok, code = pcall(function()\n");
     for (idx, func) in contract.functions.iter().enumerate() {
         out.push_str(&format!("            if fn_id == {idx} then\n"));
-        generate_lua_host_dispatch_args(out, &class_name, func);
-        generate_lua_host_dispatch_call(out, func);
+        generate_lua_host_dispatch_args(out, &class_name, func, enums);
+        generate_lua_host_dispatch_call(out, func, enums);
         out.push_str("                return AbiErrorCode.Ok\n");
         out.push_str("            end\n");
     }
@@ -2101,7 +2126,12 @@ fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHost
 /// Single-parameter functions receive a pointer directly to the value;
 /// multi-parameter functions receive a pointer to the arg-pack struct emitted
 /// by `emit_lua_arg_pack_struct` (same layout as the guest callers' packs).
-fn generate_lua_host_dispatch_args(out: &mut String, class_name: &str, func: &ResolvedFunction) {
+fn generate_lua_host_dispatch_args(
+    out: &mut String,
+    class_name: &str,
+    func: &ResolvedFunction,
+    enums: &[EnumDef],
+) {
     if func.params.is_empty() {
         return;
     }
@@ -2129,7 +2159,7 @@ fn generate_lua_host_dispatch_args(out: &mut String, class_name: &str, func: &Re
                 ));
             }
             other => {
-                let ty_name: String = lua_type_name(other);
+                let ty_name: String = lua_c_type_name(other, enums);
                 out.push_str(&format!(
                     "                local {name} = ffi.cast(\"const {ty}*\", args)[0]\n",
                     name = param.name,
@@ -2167,7 +2197,7 @@ fn generate_lua_host_dispatch_args(out: &mut String, class_name: &str, func: &Re
 /// Scalar returns are written through a typed out-pointer; struct returns
 /// (StringView/Buffer/user types) require the implementation to return cdata of
 /// the matching C type, which is copied into the out slot by assignment.
-fn generate_lua_host_dispatch_call(out: &mut String, func: &ResolvedFunction) {
+fn generate_lua_host_dispatch_call(out: &mut String, func: &ResolvedFunction, enums: &[EnumDef]) {
     let call_args: String = func
         .params
         .iter()
@@ -2181,7 +2211,7 @@ fn generate_lua_host_dispatch_call(out: &mut String, func: &ResolvedFunction) {
             func_name = func.name
         ));
         let ret_ty: String = match func.returns.as_ref() {
-            Some(ret) => lua_type_name(ret),
+            Some(ret) => lua_c_type_name(ret, enums),
             None => String::from("void"),
         };
         out.push_str(&format!(
@@ -2985,7 +3015,15 @@ mod tests {
     fn host_logger_ir() -> ValidatedIr {
         ValidatedIr {
             types: vec![],
-            enums: vec![],
+            enums: vec![EnumDef {
+                name: "LogLevel".to_owned(),
+                repr: ReprType::U32,
+                bitflag: false,
+                variants: vec![EnumVariant {
+                    name: "Info".to_owned(),
+                    value: "1".to_owned(),
+                }],
+            }],
             contracts: vec![],
             host_contracts: vec![ResolvedHostContract {
                 name: "host.logger".to_owned(),
@@ -3084,6 +3122,57 @@ mod tests {
         assert!(
             !out.contains("LOG_WITH_LEVELArgs"),
             "uppercased never-cdef'd pack name must be gone: {out}"
+        );
+    }
+
+    /// Contract enums are Lua TABLES — there is no cdef'd `LogLevel` C type.
+    /// Pack fields and single-param casts must use the repr's C integer type;
+    /// naming the enum only ever worked by colliding with the ABI's own
+    /// `LogLevel` cdef in abi.lua (any other enum name fails the cdef).
+    #[test]
+    fn lua_host_interface_factory_enum_fields_use_repr_ctype() {
+        let out: String = generate_lua_host_interface_factories_file(&host_logger_ir());
+        assert!(
+            out.contains("uint32_t level;"),
+            "enum pack fields must use the repr C type: {out}"
+        );
+        assert!(
+            !out.contains("LogLevel level;"),
+            "enum pack fields must not name the (never-cdef'd) enum: {out}"
+        );
+    }
+
+    /// Single enum params hit the bare-value cast path — it must also use the
+    /// repr C type, not the enum name.
+    #[test]
+    fn lua_host_dispatch_single_enum_param_uses_repr_ctype() {
+        let enums: Vec<EnumDef> = vec![EnumDef {
+            name: "LogLevel".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![EnumVariant {
+                name: "Info".to_owned(),
+                value: "1".to_owned(),
+            }],
+        }];
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "set_level".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "level".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+            }],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        generate_lua_host_dispatch_args(&mut out, "HostLogger", &func, &enums);
+        assert!(
+            out.contains("ffi.cast(\"const uint32_t*\", args)[0]"),
+            "single enum param must cast to the repr C type: {out}"
+        );
+        assert!(
+            !out.contains("const LogLevel*"),
+            "the enum name has no cdef and must not be cast to: {out}"
         );
     }
 

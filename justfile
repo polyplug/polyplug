@@ -358,6 +358,10 @@ test-host-python:
         exit 0; \
     fi
     @cd tests/integration/python && PYTHONPATH="../../../sdks/python/host:../../../sdks/python/polyplug_abi:../../../sdks/python" python3 test_hot_reload.py
+    @POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/target/{{profile}}/libpolyplug.so}" \
+    POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/target/{{profile}}/libpolyplug_native.so}" \
+    POLYPLUG_PYTHON_LIB="${POLYPLUG_PYTHON_LIB:-$(pwd)/target/{{profile}}/libpolyplug_python.so}" \
+    python3 sdks/python/host/tests/test_host_contract_runtime.py
 
 # Run C# host-lib tests
 test-host-csharp:

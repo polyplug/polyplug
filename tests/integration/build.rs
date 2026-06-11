@@ -139,6 +139,13 @@ fn main() {
         fixtures_dir.join("test_plugin_js").display()
     );
 
+    // TEST_JS_GENERATED_PLUGIN — QuickJS bundle built from polyplugc-GENERATED
+    // guest glue (non-StringView signatures; see integration_js_generated_guest.rs)
+    println!(
+        "cargo:rustc-env=TEST_JS_GENERATED_PLUGIN={}",
+        fixtures_dir.join("test_plugin_js_generated").display()
+    );
+
     // RELOAD_PLUGIN_V1_DIR, RELOAD_PLUGIN_V2_DIR — reload test plugin directories
     println!(
         "cargo:rustc-env=RELOAD_PLUGIN_V1_DIR={}",

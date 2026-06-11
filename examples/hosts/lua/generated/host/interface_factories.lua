@@ -32,7 +32,7 @@ cdef_guarded([[
 
 cdef_guarded([[
     typedef struct {
-        LogLevel level;
+        uint32_t level;
         StringView message;
     } HostLoggerLogWithLevelArgs;
 ]])

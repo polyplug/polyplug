@@ -2101,7 +2101,7 @@ fn generate_cs_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("public static class InterfaceFactories {\n");
 
     for contract in &ir.host_contracts {
-        generate_cs_host_interface_factory(&mut out, contract);
+        generate_cs_host_interface_factory(&mut out, contract, &ir.enums);
     }
 
     out.push_str("}\n");
@@ -2109,7 +2109,11 @@ fn generate_cs_host_interface_factories_file(ir: &ValidatedIr) -> String {
 }
 
 /// Generate interface factories for one host contract.
-fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostContract) {
+fn generate_cs_host_interface_factory(
+    out: &mut String,
+    contract: &ResolvedHostContract,
+    enums: &[EnumDef],
+) {
     let iface_name: String = host_contract_name_to_cs_interface(&contract.name);
     let factory_name: String = format!("Create{}Interface", iface_name.trim_start_matches('I'));
     let factory_vm_name: String =
@@ -2139,7 +2143,7 @@ fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostC
 
     // Generate thunks for each function (must be outside the factory method)
     for func in &contract.functions {
-        generate_cs_host_thunk(out, func, &contract.name, &iface_name);
+        generate_cs_host_thunk(out, func, &contract.name, &iface_name, enums);
     }
 
     // Static implementation storage and the pinned native function-pointer array.
@@ -2288,6 +2292,7 @@ fn generate_cs_host_thunk(
     func: &ResolvedFunction,
     contract_name: &str,
     iface_name: &str,
+    enums: &[EnumDef],
 ) {
     let thunk_name: String = format!(
         "{}_{}_thunk",
@@ -2330,7 +2335,7 @@ fn generate_cs_host_thunk(
 
     // Generate argument extraction
     if !func.params.is_empty() {
-        generate_cs_host_thunk_args(out, func, &pack_struct);
+        generate_cs_host_thunk_args(out, func, &pack_struct, enums);
     } else {
         out.push_str("        _ = argsPtr;\n");
     }
@@ -2361,7 +2366,12 @@ fn generate_cs_host_thunk(
 }
 
 /// Generate argument extraction for a host thunk.
-fn generate_cs_host_thunk_args(out: &mut String, func: &ResolvedFunction, pack_struct: &str) {
+fn generate_cs_host_thunk_args(
+    out: &mut String,
+    func: &ResolvedFunction,
+    pack_struct: &str,
+    enums: &[EnumDef],
+) {
     if func.params.len() == 1 {
         let param: &ResolvedParam = &func.params[0];
         let ty_name: String = cs_host_abi_type_name(&param.ty);
@@ -2381,6 +2391,29 @@ fn generate_cs_host_thunk_args(out: &mut String, func: &ResolvedFunction, pack_s
                     "        var {} = Marshal.PtrToStructure<Buffer>(argsPtr);\n",
                     param.name
                 ));
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                // Marshal.PtrToStructure<T> rejects ENUM types with an
+                // ArgumentException at dispatch time ("must be blittable or
+                // have layout information"), so enum params read the raw
+                // underlying repr integer and cast it back. User STRUCTS are
+                // formatted sequential types and marshal directly.
+                match cs_enum_for_type(&param.ty, enums) {
+                    Some(e) => {
+                        out.push_str(&format!(
+                            "        var {} = ({})Marshal.PtrToStructure<{}>(argsPtr);\n",
+                            param.name,
+                            ty_name,
+                            e.repr.cs_name()
+                        ));
+                    }
+                    None => {
+                        out.push_str(&format!(
+                            "        var {} = Marshal.PtrToStructure<{}>(argsPtr);\n",
+                            param.name, ty_name
+                        ));
+                    }
+                }
             }
             _ => {
                 out.push_str(&format!(
@@ -2472,6 +2505,14 @@ fn cs_host_abi_type_name(ty: &ResolvedTypeRef) -> String {
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "IntPtr".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
         ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Find the enum definition backing a user-defined type, if it is an enum.
+fn cs_enum_for_type<'a>(ty: &ResolvedTypeRef, enums: &'a [EnumDef]) -> Option<&'a EnumDef> {
+    match ty {
+        ResolvedTypeRef::UserDefined(name) => enums.iter().find(|e: &&EnumDef| &e.name == name),
+        _ => None,
     }
 }
 
@@ -3725,7 +3766,7 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_cs_host_interface_factory(&mut out, &contract);
+        generate_cs_host_interface_factory(&mut out, &contract, &[]);
         assert!(
             out.contains("CreateHostLoggerInterface<T>"),
             "missing NATIVE factory: {out}"
@@ -3906,6 +3947,61 @@ mod tests {
         assert!(
             !names2.contains(&"guest/PeerCallers.cs".to_owned()),
             "guest/PeerCallers.cs must NOT be emitted when no deps: {names2:?}"
+        );
+    }
+
+    /// `Marshal.PtrToStructure<T>` throws ArgumentException for ENUM types the
+    /// first time the thunk runs — single enum params must read the raw repr
+    /// integer and cast back into the enum.
+    #[test]
+    fn cs_host_thunk_single_enum_param_reads_repr_integer() {
+        let enums: Vec<EnumDef> = vec![EnumDef {
+            name: "LogLevel".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![EnumVariant {
+                name: "Info".to_owned(),
+                value: "1".to_owned(),
+            }],
+        }];
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "set_level".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "level".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+            }],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        generate_cs_host_thunk_args(&mut out, &func, "UnusedArgs", &enums);
+        assert!(
+            out.contains("var level = (LogLevel)Marshal.PtrToStructure<uint>(argsPtr);"),
+            "single enum param must read the repr integer and cast: {out}"
+        );
+        assert!(
+            !out.contains("PtrToStructure<LogLevel>"),
+            "PtrToStructure must never be instantiated with an enum type: {out}"
+        );
+    }
+
+    /// Non-enum user structs keep the direct PtrToStructure read.
+    #[test]
+    fn cs_host_thunk_single_struct_param_keeps_ptr_to_structure() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "describe".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "desc".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("ImageDesc".to_owned()),
+            }],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        generate_cs_host_thunk_args(&mut out, &func, "UnusedArgs", &[]);
+        assert!(
+            out.contains("var desc = Marshal.PtrToStructure<ImageDesc>(argsPtr);"),
+            "struct params marshal directly: {out}"
         );
     }
 }

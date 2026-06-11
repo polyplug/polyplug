@@ -1,0 +1,15 @@
+# tests/fixtures/test_plugin_js_generated/bundle.toml
+# GENERATED-glue QuickJS fixture: implements test.add@1.0 through the
+# polyplugc-generated guest wrappers (unlike test_plugin_js/bundle.js, which
+# hand-rolls the ABI). Rebuilt by tests/fixtures/build_all.sh.
+[bundle]
+name = "test_js_generated_bundle"
+version = "1.0.0"
+api = "../test_api.toml"
+runtime = "js-quickjs"
+file = "plugin.js"
+
+[[plugin]]
+name = "test_adder"
+version = "1.0.0"
+implements = ["test.add@1.0"]

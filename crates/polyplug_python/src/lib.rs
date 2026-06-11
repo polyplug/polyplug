@@ -13,13 +13,11 @@
 //!     .build()?;
 //! ```
 
-pub mod bridge;
 pub mod config;
 pub(crate) mod context;
 pub mod ffi;
 pub(crate) mod isolation;
 pub mod loader;
-pub use bridge::PythonHostBridge;
 pub use config::PythonConfig;
 pub use loader::PythonLoaderData;
 

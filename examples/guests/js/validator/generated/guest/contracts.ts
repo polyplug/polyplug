@@ -38,16 +38,12 @@ function validator_fn0_abi_wrapper(args_ptr: number, out_ptr: number): number {
     if (!impl) return 1;
     if (!args_ptr) return 8;
     if (!out_ptr) return 8;
-    // SAFETY: readU32 reads 4 bytes from a valid host-allocated buffer.
-    var input_ptr_lo = polyplug.readU32(args_ptr);
-    var input_ptr_hi = polyplug.readU32(args_ptr + 4);
-    var input_len = polyplug.readU32(args_ptr + 8);
-    var input = { ptr_lo: input_ptr_lo, ptr_hi: input_ptr_hi, len: input_len };
-    var result = impl.fn0(input);
-    // SAFETY: out_ptr is a valid host-allocated StringView buffer.
+    var arg_input = { ptr_lo: polyplug.readU32(args_ptr), ptr_hi: polyplug.readU32(args_ptr + 4), len: polyplug.readU32(args_ptr + 8) };
+    var result = impl.fn0(arg_input);
     polyplug.writeU32(out_ptr, result.ptr_lo);
     polyplug.writeU32(out_ptr + 4, result.ptr_hi);
     polyplug.writeU32(out_ptr + 8, result.len);
+    polyplug.writeU32(out_ptr + 12, 0);
     return 0;
 }
 

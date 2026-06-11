@@ -58,17 +58,17 @@ export class HostLoggerContract {
         if (!polyplug || !polyplug.callHostContract) {
             return;
         }
-        const _argsBuf = polyplug.arenaAlloc(20);
+        const _argsBuf = polyplug.arenaAlloc(24);
         const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;
-        polyplug.writeU32(argsPtr + 0, Number(level));
+        polyplug.writeU32(argsPtr, Number(level));
         const _messageBytes = new TextEncoder().encode(message);
         const _messageDataBuf = polyplug.arenaAlloc(_messageBytes.length > 0 ? _messageBytes.length : 1);
         const _messageDataPtr = _messageDataBuf[0] + _messageDataBuf[1] * 4294967296;
         for (let _i = 0; _i < _messageBytes.length; _i++) { polyplug.writeByte(_messageDataPtr + _i, _messageBytes[_i]); }
-        polyplug.writeU32(argsPtr + 4, _messageDataBuf[0]);
-        polyplug.writeU32(argsPtr + 8, _messageDataBuf[1]);
-        polyplug.writeU32(argsPtr + 12, _messageBytes.length);
-        polyplug.writeU32(argsPtr + 16, 0);
+        polyplug.writeU32(argsPtr + 8, _messageDataBuf[0]);
+        polyplug.writeU32(argsPtr + 12, _messageDataBuf[1]);
+        polyplug.writeU32(argsPtr + 16, _messageBytes.length);
+        polyplug.writeU32(argsPtr + 20, 0);
         const outPtr = 0;
         const errCode: number = polyplug.callHostContract(0x845853BB, 0xF53EB5F2, this._minVersion, 1, argsPtr, outPtr);
         if (errCode !== 0) {

@@ -162,4 +162,29 @@ echo "  -> tests/fixtures/test_plugin_lua/{polyplug_guest.lua,polyplug_abi.lua,p
 # js-quickjs fixture: bundle.js is hand-written and self-contained, no build needed.
 echo "js-quickjs bundle.js is hand-written."
 
+# ─── QuickJS GENERATED-glue fixture ───────────────────────────────────────────
+# test_plugin_js/bundle.js hand-rolls the ABI; test_plugin_js_generated/ is the
+# generator-output counterpart: polyplugc emits the guest glue, rolldown
+# bundles it with adder.js, and integration_js_generated_guest.rs drives the
+# GENERATED wrappers through a real Runtime. plugin.js + manifest.toml are
+# committed, so this rebuild is tolerated (reported, not fatal) when rolldown
+# is unavailable — mirroring the C# fixture policy.
+JS_GEN_DIR="${SCRIPT_DIR}/test_plugin_js_generated"
+if command -v rolldown >/dev/null 2>&1; then
+    echo "Building QuickJS generated-glue fixture..."
+    cargo build --release --manifest-path "${WORKSPACE_ROOT}/Cargo.toml" -p polyplugc
+    "${RELEASE_DIR}/polyplugc" generate --bundle "${JS_GEN_DIR}/bundle.toml" \
+        --lang js-quickjs --out "${JS_GEN_DIR}/generated"
+    rolldown "${JS_GEN_DIR}/adder.js" --format iife --platform neutral \
+        --file "${JS_GEN_DIR}/plugin.js"
+    # The IIFE wraps everything in an exports object, but the loader expects
+    # polyplug_init in the global scope (mirrors examples/build_all.sh).
+    sed -i 's/^(function(exports)/var polyplug_module = (function(exports)/' "${JS_GEN_DIR}/plugin.js"
+    sed -i 's/^})({});$/})({});\nglobalThis.polyplug_init = polyplug_module.polyplug_init;/' "${JS_GEN_DIR}/plugin.js"
+    cp "${JS_GEN_DIR}/generated/manifest.toml" "${JS_GEN_DIR}/manifest.toml"
+    echo "  -> tests/fixtures/test_plugin_js_generated/plugin.js"
+else
+    echo "  WARNING: rolldown unavailable — skipping QuickJS generated-glue fixture rebuild (committed plugin.js kept)" >&2
+fi
+
 echo "Done."

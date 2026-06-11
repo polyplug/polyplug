@@ -14,7 +14,7 @@ end
 
 cdef_guarded([[
     typedef struct {
-        LogLevel level;
+        uint32_t level;
         StringView message;
     } HostLoggerContractLogWithLevelArgs;
 ]])

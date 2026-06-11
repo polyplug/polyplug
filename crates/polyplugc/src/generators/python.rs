@@ -3511,6 +3511,47 @@ mod tests {
         );
     }
 
+    /// Single enum params must read the raw repr integer through a
+    /// `ctypes.POINTER(<repr ctype>)` cast — `ctypes.POINTER(IntEnum)` is a
+    /// TypeError the moment the dispatcher branch runs.
+    #[test]
+    fn python_host_dispatch_single_enum_param_uses_repr_ctype() {
+        let enums: Vec<EnumDef> = vec![EnumDef {
+            name: "LogLevel".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![EnumVariant {
+                name: "Info".to_owned(),
+                value: "1".to_owned(),
+            }],
+        }];
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "set_level".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "level".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+            }],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        generate_python_host_dispatch_args(&mut out, "HostLogger", &func, &enums);
+        assert!(
+            out.contains(
+                "level_raw: int = ctypes.cast(args, ctypes.POINTER(ctypes.c_uint32)).contents.value"
+            ),
+            "single enum param must read the repr ctype: {out}"
+        );
+        assert!(
+            out.contains("level: LogLevel = LogLevel(level_raw)"),
+            "raw integer must be wrapped back into the IntEnum: {out}"
+        );
+        assert!(
+            !out.contains("ctypes.POINTER(LogLevel)"),
+            "ctypes.POINTER(IntEnum) is a TypeError and must never be emitted: {out}"
+        );
+    }
+
     /// No generated python file (host or guest) may contain a wildcard import.
     #[test]
     fn python_generated_files_no_wildcard_imports() {
