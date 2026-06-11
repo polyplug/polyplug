@@ -9,21 +9,74 @@ using System.Runtime.InteropServices;
 // Plugin: reporter
 public static class ReporterInterfaces {
     public const ulong REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68UL;
-    private static IDataReporterGuestContract? _impl_reporter;
-    public static void SetReporterImpl(IDataReporterGuestContract impl) { _impl_reporter = impl; }
+    private static Func<IntPtr, IDataReporterGuestContract>? _factory_reporter;
+    /// <summary>
+    /// Register the author factory; call once at module initialization
+    /// (<c>[ModuleInitializer]</c>). The factory receives the HostApi pointer
+    /// at instance creation, so every implementation is constructed with its
+    /// owning runtime's host — no host pointer is stored in the SDK.
+    /// </summary>
+    public static void SetReporterFactory(Func<IntPtr, IDataReporterGuestContract> factory) { _factory_reporter = factory; }
+
+    /// <summary>Per-instance payload carried in GuestContractInstance.Data (via GCHandle).</summary>
+    private sealed class ReporterInstanceState {
+        // Host pointer captured at instance creation — routes every host call
+        // (allocation, logging, peer dispatch) to the runtime that owns it.
+        public IntPtr Host;
+        // The author's implementation, created by the SetReporterFactory factory.
+        public IDataReporterGuestContract Impl = null!;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static GuestContractInstance REPORTER_CreateInstance(IntPtr host, IntPtr args) {
+        // Calls the author factory and carries the payload in instance.Data as a
+        // normal (non-pinned) GCHandle — an opaque token the host never
+        // dereferences. Returns a null handle when host is null, the factory
+        // was not registered, or it throws.
+        try {
+            var factory = _factory_reporter;
+            if (host == IntPtr.Zero || factory is null) {
+                return new GuestContractInstance { Data = IntPtr.Zero };
+            }
+            var state = new ReporterInstanceState { Host = host, Impl = factory(host) };
+            var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);
+            return new GuestContractInstance {
+                Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),
+                ContractId = REPORTER_CONTRACT_ID,
+            };
+        } catch {
+            return new GuestContractInstance { Data = IntPtr.Zero };
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void REPORTER_DestroyInstance(IntPtr host, GuestContractInstance instance) {
+        // Frees the GCHandle allocated by CreateInstance; the payload becomes
+        // collectible. The host calls destroy exactly once per instance.
+        if (instance.Data == IntPtr.Zero) return;
+        try {
+            System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Free();
+        } catch {
+            // Foreign or double-freed handle: nothing safe to do in a native callback.
+        }
+    }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static unsafe AbiError reporter_report_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
-        // Instance is ignored for stateless plugins (instance is null).
-        // For stateful plugins, users override create_instance and use instance.Data.
         try {
+            if (instance.Data == IntPtr.Zero) {
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage("instance is null") };
+            }
             if (argsPtr == IntPtr.Zero) {
                 return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
             if (outPtr == IntPtr.Zero) {
                 return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
-            var impl = _impl_reporter ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.Generic, "not initialized");
+            // instance.Data is the GCHandle token produced by CreateInstance.
+            var state = (ReporterInstanceState?)System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Target
+                ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.InvalidPointer, "instance payload collected");
+            var impl = state.Impl;
             var input = *(Polyplug.Abi.StringView*)argsPtr;
             var result = impl.Report(input);
             *(Polyplug.Abi.StringView*)outPtr = result;
@@ -41,17 +94,6 @@ public static class ReporterInterfaces {
     private static System.Runtime.InteropServices.GCHandle _REPORTER_pin_handle;
     public static GuestContractInterface REPORTER_INTERFACE;
 
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static GuestContractInstance REPORTER_CreateInstanceStub(IntPtr host, IntPtr args) {
-        // Default stub returns null instance - users override for stateful plugins.
-        return new GuestContractInstance { Data = IntPtr.Zero };
-    }
-
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void REPORTER_DestroyInstanceStub(IntPtr host, GuestContractInstance instance) {
-        // Default stub is no-op - users override for cleanup before hot-reload.
-    }
-
     static ReporterInterfaces() {
         unsafe {
             REPORTER_FNS = new IntPtr[] {
@@ -62,8 +104,8 @@ public static class ReporterInterfaces {
                 ContractId = REPORTER_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
-                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&REPORTER_CreateInstanceStub,
-                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&REPORTER_DestroyInstanceStub,
+                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&REPORTER_CreateInstance,
+                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&REPORTER_DestroyInstance,
                 Dispatch = new DispatchMechanisms {
                     Native = new NativeDispatch {
                         FunctionCount = 1u,

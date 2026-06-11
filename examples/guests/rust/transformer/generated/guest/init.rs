@@ -19,7 +19,6 @@ use polyplug_abi::StringView;
 use polyplug_abi::Version;
 use polyplug_abi::abi_error_ok;
 use polyplug_abi::string_view_from_static;
-use polyplug_guest::store_host_vtable;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:
@@ -52,19 +51,11 @@ pub unsafe extern "C" fn polyplug_init(
     let _ = ctx; // suppress unused warning if plugin_init user stub not yet updated
     // SAFETY: host is non-null and valid per ABI contract.
     let host: &HostApi = unsafe { &*host };
-    // SAFETY: Called once during plugin init, before any host contract access.
-    unsafe {
-        store_host_vtable(host as *const HostApi);
-    }
 
-    // Call user initialization to register plugin implementations
-    unsafe extern "C" {
-        fn polyplug_user_init();
-    }
-    // SAFETY: polyplug_user_init is a safe initialization function provided by user
-    unsafe {
-        polyplug_user_init();
-    }
+    // No process-wide state is stored here. The implementation is constructed
+    // per instance by `create_instance` (which calls the author factory
+    // `polyplug_create_<plugin>` with a HostContext); init only registers the
+    // static interface tables below.
 
     let desc_TRANSFORMER: PluginDescriptor = PluginDescriptor {
         name: StringView {

@@ -156,17 +156,20 @@ fn build_cpp_consumer(tmp: &Path) -> PathBuf {
          namespace polyplug_plugin {\n\
          class TransformerImpl : public DataTransformerGuestContract {\n\
          public:\n\
+         explicit TransformerImpl(const HostApi* host) : host_(host) {}\n\
          StringView transform(StringView input) override {\n\
-         auto peer = PipelineValidatorContractPeer::resolve();\n\
+         auto peer = PipelineValidatorContractPeer::resolve(host_);\n\
          if (!peer) {\n\
-         return polyplug::alloc_string(\"ERROR:peer-unavailable\");\n\
+         return polyplug::alloc_string(host_, \"ERROR:peer-unavailable\");\n\
          }\n\
          StringView borrowed = peer->validate(input);\n\
          // Copy out of the peer's arena before `peer` is destroyed at scope exit.\n\
-         return polyplug::alloc_string(polyplug::abi::to_string(borrowed));\n\
+         return polyplug::alloc_string(host_, polyplug::abi::to_string(borrowed));\n\
          }\n\
+         private:\n\
+         const HostApi* host_;\n\
          };\n\
-         DataTransformerGuestContract* create_transformer_impl() { return new TransformerImpl(); }\n\
+         DataTransformerGuestContract* polyplug_create_transformer(const HostApi* host) { return new TransformerImpl(host); }\n\
          }  // namespace polyplug_plugin\n";
     let consumer_src: PathBuf = bundle_dir.join("consumer.cpp");
     std::fs::write(&consumer_src, consumer_cpp).expect("write consumer.cpp");
@@ -343,12 +346,23 @@ fn cpp_peer_caller_validate_roundtrip() {
         len: input.len(),
     };
     let mut out_view: StringView = StringView::null();
-    // SAFETY: transformer is stateless (create_instance stub returns a null
-    // instance), so a null instance handle is the correct dispatch token; args is
-    // a *const StringView, out is a *mut StringView per transform's ABI.
+    // The generated create_instance constructs the C++ implementation via the
+    // author factory (polyplug_create_transformer) and carries it — plus the
+    // host pointer — in instance.data; dispatch requires a real instance.
+    // SAFETY: host_abi is the runtime's live HostApi pointer; create_instance
+    // is the generated factory thunk on the resolved interface.
+    let host_abi: *const polyplug_abi::HostApi = rt.host_abi() as *const polyplug_abi::HostApi;
+    let instance: GuestContractInstance =
+        unsafe { (interface.create_instance)(host_abi, core::ptr::null()) };
+    assert!(
+        !instance.data.is_null(),
+        "create_instance must produce a non-null instance payload"
+    );
+    // SAFETY: instance was created above; args is a *const StringView, out is a
+    // *mut StringView per transform's ABI.
     let err: AbiError = unsafe {
         dispatch_fn(
-            GuestContractInstance::null(),
+            instance,
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
         )
@@ -359,6 +373,10 @@ fn cpp_peer_caller_validate_roundtrip() {
         "transform must return Ok; got code={}",
         err.code
     );
+    // SAFETY: instance was created by create_instance; destroy exactly once.
+    // out_view points to host-allocated bytes (alloc_string), which outlive the
+    // instance — destroying before reading the view below is safe.
+    unsafe { (interface.destroy_instance)(host_abi, instance) };
     assert!(
         !out_view.ptr.is_null(),
         "returned StringView must not be null"

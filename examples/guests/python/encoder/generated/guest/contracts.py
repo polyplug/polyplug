@@ -5,7 +5,8 @@
 from __future__ import annotations
 import ctypes
 from polyplug_abi import StringView, to_str
-from polyplug_guest import register_contract, store_host_interface, alloc_string_arena
+from typing import Callable
+from polyplug_guest import register_contract, alloc_string_arena
 
 POLYPLUG_ABI_VERSION: int = 1
 
@@ -14,9 +15,15 @@ class ENCODERPipelineEncoderPlugin:
         raise NotImplementedError
 
 _encoder_IMPL: ENCODERPipelineEncoderPlugin | None = None
-def set_encoder_impl(impl: ENCODERPipelineEncoderPlugin) -> None:
-    global _encoder_IMPL
-    _encoder_IMPL = impl
+_encoder_FACTORY: Callable[[int], ENCODERPipelineEncoderPlugin] | None = None
+def set_encoder_factory(factory: Callable[[int], ENCODERPipelineEncoderPlugin]) -> None:
+    """Register the author factory; call once at module import time.
+
+    The factory receives the HostApi pointer when polyplug_init runs, so the
+    implementation is constructed with its owning runtime's host pointer.
+    """
+    global _encoder_FACTORY
+    _encoder_FACTORY = factory
 
 def encoder_encode_abi(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
     impl: ENCODERPipelineEncoderPlugin | None = _encoder_IMPL
@@ -41,13 +48,16 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
     it after this returns and registers each contract itself.
 
     Args:
-        host_ptr: HostApi pointer — stored via store_host_interface so guest→guest
-                  peer callers can resolve a peer through the host (VM dispatch
-                  itself carries no per-call host state).
+        host_ptr: HostApi pointer — passed to each author factory so every
+                  implementation is constructed with its owning runtime's host
+                  (no host pointer is stored in the guest SDK).
         ctx_ptr: BundleInitContext pointer (unused)
     """
-    store_host_interface(host_ptr)
+    global _encoder_IMPL
     _ = ctx_ptr
+    if _encoder_FACTORY is None:
+        raise RuntimeError("set_encoder_factory(...) was not called at import time")
+    _encoder_IMPL = _encoder_FACTORY(host_ptr)
     register_contract(
         globals(),
         contract="pipeline.Encoder@1",

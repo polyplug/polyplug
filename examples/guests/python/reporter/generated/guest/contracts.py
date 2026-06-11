@@ -5,7 +5,8 @@
 from __future__ import annotations
 import ctypes
 from polyplug_abi import StringView, to_str
-from polyplug_guest import register_contract, store_host_interface, alloc_string_arena
+from typing import Callable
+from polyplug_guest import register_contract, alloc_string_arena
 
 POLYPLUG_ABI_VERSION: int = 1
 
@@ -14,9 +15,15 @@ class REPORTERDataReporterPlugin:
         raise NotImplementedError
 
 _reporter_IMPL: REPORTERDataReporterPlugin | None = None
-def set_reporter_impl(impl: REPORTERDataReporterPlugin) -> None:
-    global _reporter_IMPL
-    _reporter_IMPL = impl
+_reporter_FACTORY: Callable[[int], REPORTERDataReporterPlugin] | None = None
+def set_reporter_factory(factory: Callable[[int], REPORTERDataReporterPlugin]) -> None:
+    """Register the author factory; call once at module import time.
+
+    The factory receives the HostApi pointer when polyplug_init runs, so the
+    implementation is constructed with its owning runtime's host pointer.
+    """
+    global _reporter_FACTORY
+    _reporter_FACTORY = factory
 
 def reporter_report_abi(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
     impl: REPORTERDataReporterPlugin | None = _reporter_IMPL
@@ -41,13 +48,16 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
     it after this returns and registers each contract itself.
 
     Args:
-        host_ptr: HostApi pointer — stored via store_host_interface so guest→guest
-                  peer callers can resolve a peer through the host (VM dispatch
-                  itself carries no per-call host state).
+        host_ptr: HostApi pointer — passed to each author factory so every
+                  implementation is constructed with its owning runtime's host
+                  (no host pointer is stored in the guest SDK).
         ctx_ptr: BundleInitContext pointer (unused)
     """
-    store_host_interface(host_ptr)
+    global _reporter_IMPL
     _ = ctx_ptr
+    if _reporter_FACTORY is None:
+        raise RuntimeError("set_reporter_factory(...) was not called at import time")
+    _reporter_IMPL = _reporter_FACTORY(host_ptr)
     register_contract(
         globals(),
         contract="data.Reporter@1",

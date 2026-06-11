@@ -81,13 +81,17 @@ fn generated_rust_peer_caller_validates_through_real_dylibs() {
         .expect("rust_transformer bundle must load");
 
     // Resolve the probe from the SAME image the runtime loaded (same path →
-    // dlopen ref-counts the resident library, sharing the stored host vtable).
+    // dlopen ref-counts the resident library). The probe receives the
+    // runtime's live HostApi pointer — the guest holds no host statics.
     let plugin_path: PathBuf = transformer_dir.join("libtransformer.so");
     // SAFETY: the library is the freshly built trusted example plugin.
     let library: libloading::Library =
         unsafe { libloading::Library::new(&plugin_path) }.expect("transformer .so must dlopen");
     // SAFETY: the transformer exports this exact symbol and signature.
-    let probe: libloading::Symbol<'_, unsafe extern "C" fn(StringView, *mut StringView) -> u32> = unsafe {
+    let probe: libloading::Symbol<
+        '_,
+        unsafe extern "C" fn(*const polyplug_abi::HostApi, StringView, *mut StringView) -> u32,
+    > = unsafe {
         library
             .get(b"polyplug_test_peer_validate")
             .expect("probe symbol must resolve")
@@ -102,9 +106,16 @@ fn generated_rust_peer_caller_validates_through_real_dylibs() {
         ptr: core::ptr::null(),
         len: 0,
     };
-    // SAFETY: probe is a valid extern fn from the loaded transformer; input
-    // borrows live test data and out_view is a valid local slot.
-    let code: u32 = unsafe { probe(input_view, &mut out_view) };
+    // SAFETY: probe is a valid extern fn from the loaded transformer; the
+    // HostApi pointer comes from the live runtime; input borrows live test
+    // data and out_view is a valid local slot.
+    let code: u32 = unsafe {
+        probe(
+            runtime.host_abi() as *const polyplug_abi::HostApi,
+            input_view,
+            &mut out_view,
+        )
+    };
     assert_eq!(
         code,
         AbiErrorCode::Ok as u32,

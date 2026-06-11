@@ -5,12 +5,6 @@
 #include "polyplug/abi.hpp"
 #include "polyplug/guest.hpp"
 
-namespace polyplug_plugin {
-
-PipelineDecoderGuestContract* g_decoder_impl = nullptr;
-
-}  // namespace polyplug_plugin
-
 extern "C" uint32_t polyplug_abi_version() { return 1U; }
 
 extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {
@@ -19,11 +13,12 @@ extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* 
         return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 31}};
     }
 
-    // Store host interface for later access via polyplug::get_host_interface()
-    polyplug::store_host_interface(host);
+    // No DSO-global state is stored here. The implementation is constructed per
+    // instance by create_instance (which calls the author factory
+    // polyplug_create_<plugin> with the HostApi pointer); init only registers
+    // the static interface tables below.
 
     // Register plugin: decoder
-    polyplug_plugin::set_decoder_impl(polyplug_plugin::create_decoder_impl());
     PluginDescriptor desc_DECODER = {
         { (const uint8_t*)"decoder", 7U },  // name (StringView)
         { (const uint8_t*)"pipeline.Decoder@1", 18U },  // contract_name (StringView)

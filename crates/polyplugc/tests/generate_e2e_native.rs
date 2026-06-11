@@ -99,10 +99,9 @@ fn generate_into(out_dir: &Path, lang: &str) {
 // The generated headers `#include "polyplug/abi.hpp"` and
 // `"polyplug/guest.hpp"`; the test supplies the two in-tree SDK include roots
 // (`sdks/cpp/abi`, `sdks/cpp/guest`) plus the generated dir on the include
-// path. The cpp guest helpers (`alloc_string`, `store_host_interface`, …) are
-// header-only `inline` definitions, so no `-lpolyplug` link is required — the
-// host function pointers are resolved at call time via `host->`, not at link
-// time.
+// path. The cpp guest helpers (`alloc_string(host, s)`, …) are header-only
+// `inline` definitions, so no `-lpolyplug` link is required — the host
+// function pointers are resolved at call time via `host->`, not at link time.
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -130,13 +129,16 @@ fn cpp_generated_glue_compiles() {
          namespace polyplug_plugin {\n\
          class DecoderImpl : public PipelineDecoderGuestContract {\n\
          public:\n\
+         explicit DecoderImpl(const HostApi* host) : host_(host) {}\n\
          StringView decode(StringView input) override {\n\
          std::string s = polyplug::abi::to_string(input);\n\
          std::replace(s.begin(), s.end(), ',', '|');\n\
-         return polyplug::alloc_string(\"DECODED:\" + s);\n\
+         return polyplug::alloc_string(host_, \"DECODED:\" + s);\n\
          }\n\
+         private:\n\
+         const HostApi* host_;\n\
          };\n\
-         PipelineDecoderGuestContract* create_decoder_impl() { return new DecoderImpl(); }\n\
+         PipelineDecoderGuestContract* polyplug_create_decoder(const HostApi* host) { return new DecoderImpl(host); }\n\
          }  // namespace polyplug_plugin\n";
     let plugin_src: PathBuf = project_dir.join("plugin.cpp");
     std::fs::write(&plugin_src, plugin_cpp).expect("write plugin.cpp");
@@ -245,10 +247,17 @@ fn csharp_generated_glue_compiles() {
          \n\
          public sealed class DecoderPlugin : IPipelineDecoderGuestContract\n\
          {\n\
+         private readonly IntPtr _host;\n\
+         \n\
+         public DecoderPlugin(IntPtr host)\n\
+         {\n\
+         _host = host;\n\
+         }\n\
+         \n\
          public StringView Decode(StringView input)\n\
          {\n\
          string s = StringViewHelper.ToString(input).Replace(',', '|');\n\
-         return PolyplugHost.AllocString($\"DECODED:{s}\");\n\
+         return PolyplugHost.AllocString(_host, $\"DECODED:{s}\");\n\
          }\n\
          }\n\
          \n\
@@ -257,7 +266,7 @@ fn csharp_generated_glue_compiles() {
          [ModuleInitializer]\n\
          public static void Register()\n\
          {\n\
-         DecoderInterfaces.SetDecoderImpl(new DecoderPlugin());\n\
+         DecoderInterfaces.SetDecoderFactory(host => new DecoderPlugin(host));\n\
          }\n\
          }\n";
     std::fs::write(project_dir.join("Plugin.cs"), plugin_cs).expect("write Plugin.cs");

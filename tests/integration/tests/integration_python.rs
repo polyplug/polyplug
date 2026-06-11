@@ -468,8 +468,8 @@ fn vendor_current_python_sdk(bundle_dir: &Path) {
 /// Write a python bundle whose single contract function round-trips the ABI
 /// SDK's `bytes_as_view` helper (view over caller-held bytes must read back
 /// verbatim; empty bytes must yield a null view) and then calls the guest
-/// SDK's `log()` helper with the round-tripped string, plus a module-top-level
-/// `log()` probe that runs BEFORE `polyplug_init` stores the host (must be a
+/// SDK's `log(host_ptr, ...)` helper with the round-tripped string, plus a
+/// module-top-level `log(0, ...)` probe with a null host pointer (must be a
 /// graceful no-op).
 fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
     let dir: PathBuf = tmp.join("log_demo_python");
@@ -491,11 +491,16 @@ fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
     std::fs::write(dir.join("manifest.toml"), manifest).expect("write manifest.toml");
 
     let plugin_py: &str = "from polyplug_abi import bytes_as_view, to_str\n\
-         from polyplug_guest import LogLevel, log, register_contract, store_host_interface\n\
+         from polyplug_guest import LogLevel, log, register_contract\n\
          \n\
-         # Module top level runs BEFORE polyplug_init stores the host: log() must\n\
-         # be a graceful no-op here, never a crash or a delivered record.\n\
-         log(LogLevel.Error, \"guest.logdemo\", \"before-init must not be delivered\")\n\
+         # log() takes the host pointer explicitly (no SDK-level host storage).\n\
+         # A zero host pointer must be a graceful no-op, never a crash or a\n\
+         # delivered record.\n\
+         log(0, LogLevel.Error, \"guest.logdemo\", \"null host must not be delivered\")\n\
+         \n\
+         # The host pointer flows from polyplug_init into this module-level cell\n\
+         # owned by the PLUGIN (author state) — the SDK itself stores nothing.\n\
+         _host_ptr: int = 0\n\
          \n\
          \n\
          def _do_log(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:\n\
@@ -508,11 +513,12 @@ fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
          \x20   empty = bytes_as_view(b\"\")\n\
          \x20   if empty.ptr or empty.len != 0:\n\
          \x20       raise RuntimeError(\"bytes_as_view(b'') must be a null view\")\n\
-         \x20   log(LogLevel.Info, \"guest.logdemo\", to_str(view))\n\
+         \x20   log(_host_ptr, LogLevel.Info, \"guest.logdemo\", to_str(view))\n\
          \n\
          \n\
          def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n\
-         \x20   store_host_interface(host_ptr)\n\
+         \x20   global _host_ptr\n\
+         \x20   _host_ptr = host_ptr\n\
          \x20   register_contract(\n\
          \x20       globals(),\n\
          \x20       contract=\"test.logdemo@1\",\n\

@@ -4,7 +4,8 @@
 // with its Log field pointing at a managed capture callback. This validates the
 // guest-side contract end to end — UTF-16 → UTF-8 transcoding, buffer pinning,
 // StringView construction, the self-passing call convention, and the no-op
-// paths before init / with a null Log pointer.
+// paths with a null host pointer / a null Log pointer. The host pointer is
+// passed explicitly — the guest SDK holds no process-wide host storage.
 
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -38,13 +39,10 @@ public unsafe class PolyplugHostLogTests : IDisposable
 
         _host = (HostApi*)NativeMemory.AllocZeroed((nuint)sizeof(HostApi));
         _host->Log = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, uint, StringView, StringView, void>)&CaptureLog;
-        RuntimeAbiStorage.StoreRuntimeAbi((IntPtr)_host);
     }
 
     public void Dispose()
     {
-        // RuntimeAbiStorage is process-global; reset it so test order never matters.
-        RuntimeAbiStorage.StoreRuntimeAbi(IntPtr.Zero);
         NativeMemory.Free(_host);
     }
 
@@ -70,7 +68,7 @@ public unsafe class PolyplugHostLogTests : IDisposable
     [Fact]
     public void Log_DeliversLevelScopeMessageVerbatim()
     {
-        PolyplugHost.Log(LogLevel.Info, "guest.unit-test", "plain ascii message");
+        PolyplugHost.Log((IntPtr)_host, LogLevel.Info, "guest.unit-test", "plain ascii message");
 
         Assert.Equal(1, s_callCount);
         Assert.Equal((IntPtr)_host, s_capturedSelf);
@@ -87,7 +85,7 @@ public unsafe class PolyplugHostLogTests : IDisposable
         const string scope = "guest.plugin-ünïcode";
         const string message = "héllo ✓ 日本語 🦀";
 
-        PolyplugHost.Log(LogLevel.Warn, scope, message);
+        PolyplugHost.Log((IntPtr)_host, LogLevel.Warn, scope, message);
 
         Assert.Equal(1, s_callCount);
         Assert.Equal((uint)LogLevel.Warn, s_capturedLevel);
@@ -98,7 +96,7 @@ public unsafe class PolyplugHostLogTests : IDisposable
     [Fact]
     public void Log_EmptyStringsProduceLegalNullViews()
     {
-        PolyplugHost.Log(LogLevel.Trace, string.Empty, string.Empty);
+        PolyplugHost.Log((IntPtr)_host, LogLevel.Trace, string.Empty, string.Empty);
 
         Assert.Equal(1, s_callCount);
         Assert.Equal((uint)LogLevel.Trace, s_capturedLevel);
@@ -109,11 +107,9 @@ public unsafe class PolyplugHostLogTests : IDisposable
     }
 
     [Fact]
-    public void Log_NoOpBeforeInitStoresHost()
+    public void Log_NoOpWhenHostPointerIsNull()
     {
-        RuntimeAbiStorage.StoreRuntimeAbi(IntPtr.Zero);
-
-        PolyplugHost.Log(LogLevel.Error, "guest.unit-test", "must not be delivered");
+        PolyplugHost.Log(IntPtr.Zero, LogLevel.Error, "guest.unit-test", "must not be delivered");
 
         Assert.Equal(0, s_callCount);
     }
@@ -123,7 +119,7 @@ public unsafe class PolyplugHostLogTests : IDisposable
     {
         _host->Log = IntPtr.Zero;
 
-        PolyplugHost.Log(LogLevel.Error, "guest.unit-test", "must not be delivered");
+        PolyplugHost.Log((IntPtr)_host, LogLevel.Error, "guest.unit-test", "must not be delivered");
 
         Assert.Equal(0, s_callCount);
     }

@@ -165,8 +165,8 @@ inline CallArena polyplug_arena_new(uint8_t* buf, size_t len, const HostApi* hos
 /// Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 ///
 /// Dispatches to the peer through the host-mediated `call_guest_method` path.
-/// Use `resolve()` to obtain an instance; returns `std::nullopt` when the
-/// contract is not registered or the host interface is unavailable.
+/// Use `resolve(host)` to obtain an instance; returns `std::nullopt` when
+/// the contract is not registered or the host interface is null.
 ///
 /// # Call-arena lifetime
 ///
@@ -178,10 +178,12 @@ class PipelineValidatorContractPeer {
 public:
     /// Discover and resolve the peer contract through the host.
     ///
-    /// Returns `std::nullopt` if the host interface is unavailable, the contract
+    /// `host` is the per-instance HostApi pointer handed to the author
+    /// factory (`polyplug_create_<plugin>`) — no DSO-global host exists.
+    ///
+    /// Returns `std::nullopt` if the host interface is null, the contract
     /// is not registered, or `resolve_guest_contract` returns null.
-    static std::optional<PipelineValidatorContractPeer> resolve() noexcept {
-        const HostApi* host = polyplug::get_host_interface();
+    static std::optional<PipelineValidatorContractPeer> resolve(const HostApi* host) noexcept {
         if (host == nullptr) {
             return std::nullopt;
         }

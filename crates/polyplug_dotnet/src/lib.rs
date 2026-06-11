@@ -53,16 +53,18 @@ impl DotnetLoader {
     /// [`BundleSource::Bytes`]: polyplug::loader::BundleSource::Bytes
     pub fn preload_dependency_from_bytes(
         &self,
+        runtime: &Runtime,
         bundle_id: u64,
         dep_bytes: &[u8],
     ) -> Result<(), RuntimeError> {
         // Dependencies have no bundle directory; the CLR probing path is irrelevant here, so
         // an empty path is passed for the (already-initialized) context lookup. The dependency
-        // is loaded into `bundle_id`'s collectible ALC so it is reclaimed when that bundle is.
+        // is loaded into the (runtime, bundle) collectible ALC so it is reclaimed with that
+        // runtime's bundle.
         let context: Arc<DotnetContext> = Arc::clone(CLR_CONTEXT.get_or_try_init(|| {
             init_context(&self.config, Path::new(""), LoggerHandle::default_stderr())
         })?);
-        context.preload_dependency_bytes(bundle_id, dep_bytes)
+        context.preload_dependency_bytes(runtime_alc_id(runtime), bundle_id, dep_bytes)
     }
 
     /// Resolve the managed `PolyplugInit` function for an on-disk assembly
@@ -74,6 +76,7 @@ impl DotnetLoader {
     /// [`BundleSource::Path`]: polyplug::loader::BundleSource::Path
     fn resolve_init_from_path(
         &self,
+        runtime_id: u64,
         manifest: &polyplug::loader::ManifestData,
         bundle_dir: &Path,
         logger: LoggerHandle,
@@ -121,6 +124,7 @@ impl DotnetLoader {
         // sufficient — identical to the Bytes convention.
         let simple_type_name: String = format!("{bundle_name}.Plugin");
         let init_fn: InitFn = context.get_init_fn_from_path(
+            runtime_id,
             manifest.id,
             &abs_path,
             &bundle_name,
@@ -149,6 +153,7 @@ impl DotnetLoader {
     /// [`BundleSource::Bytes`]: polyplug::loader::BundleSource::Bytes
     fn resolve_init_from_bytes(
         &self,
+        runtime_id: u64,
         manifest: &polyplug::loader::ManifestData,
         bundle_dir: &Path,
         bytes: &[u8],
@@ -179,18 +184,34 @@ impl DotnetLoader {
 
         // The bridge resolves `{name}.Plugin` directly from the byte-loaded Assembly object.
         let simple_type_name: String = format!("{bundle_name}.Plugin");
-        let init_fn: InitFn =
-            context.get_init_fn_from_bytes(manifest.id, &bundle_name, bytes, &simple_type_name)?;
+        let init_fn: InitFn = context.get_init_fn_from_bytes(
+            runtime_id,
+            manifest.id,
+            &bundle_name,
+            bytes,
+            &simple_type_name,
+        )?;
         Ok((init_fn, bundle_name))
     }
 }
 
-/// Test/diagnostic probe: returns whether the bundle's collectible `AssemblyLoadContext` is
-/// still alive (`true`) or has been reclaimed / was never loaded (`false`). Forces a managed
-/// GC inside the bridge, so it is for tests and tooling — not the hot path.
-pub fn bundle_alc_alive(bundle_id: u64) -> Result<bool, RuntimeError> {
+/// The ALC runtime key for a `Runtime`: the address of its `HostApi` table.
+///
+/// The `HostApi` is owned by the `Runtime` and lives exactly as long as it, so the
+/// pointer value uniquely identifies a live runtime. Keying the managed bridge's
+/// collectible ALCs by `(runtime_id, bundle_id)` structurally isolates two runtimes
+/// loading the same bundle id (no last-writer-wins ALC race).
+fn runtime_alc_id(runtime: &Runtime) -> u64 {
+    runtime.as_context_ptr() as u64
+}
+
+/// Test/diagnostic probe: returns whether the (runtime, bundle) collectible
+/// `AssemblyLoadContext` is still alive (`true`) or has been reclaimed / was never loaded
+/// (`false`). Forces a managed GC inside the bridge, so it is for tests and tooling — not
+/// the hot path.
+pub fn bundle_alc_alive(runtime: &Runtime, bundle_id: u64) -> Result<bool, RuntimeError> {
     match CLR_CONTEXT.get() {
-        Some(context) => context.is_alc_alive(bundle_id),
+        Some(context) => context.is_alc_alive(runtime_alc_id(runtime), bundle_id),
         None => Ok(false),
     }
 }
@@ -294,12 +315,19 @@ impl BundleLoader for DotnetLoader {
                     bundle: manifest.name.clone(),
                 }));
             }
-            polyplug::loader::BundleSource::Path(_) => {
-                self.resolve_init_from_path(manifest, bundle_dir, runtime.logger())?
-            }
-            polyplug::loader::BundleSource::Bytes(bytes) => {
-                self.resolve_init_from_bytes(manifest, bundle_dir, bytes, runtime.logger())?
-            }
+            polyplug::loader::BundleSource::Path(_) => self.resolve_init_from_path(
+                runtime_alc_id(runtime),
+                manifest,
+                bundle_dir,
+                runtime.logger(),
+            )?,
+            polyplug::loader::BundleSource::Bytes(bytes) => self.resolve_init_from_bytes(
+                runtime_alc_id(runtime),
+                manifest,
+                bundle_dir,
+                bytes,
+                runtime.logger(),
+            )?,
         };
 
         // BundleInitContext.bundle_path is borrowed only for the duration of the
@@ -381,7 +409,7 @@ impl BundleLoader for DotnetLoader {
                     Some(c) => Arc::clone(c),
                     None => return Ok(()),
                 };
-                context.unload_bundle_alc(bundle_id.id())
+                context.unload_bundle_alc(runtime_alc_id(runtime), bundle_id.id())
             }
         }
     }

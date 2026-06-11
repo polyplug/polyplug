@@ -51,7 +51,7 @@ public:
         if (interface == nullptr) {
             return std::nullopt;
         }
-        return HostLoggerContract(interface, instance);
+        return HostLoggerContract(host, interface, instance);
     }
 
     /// Check if caller is valid (interface and instance are non-null).
@@ -63,7 +63,7 @@ public:
     /// Call host contract function `log` (function_id=0)
     void log(std::string_view message) noexcept {
         if (interface_ == nullptr) {
-            detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));
+            detail::log_call_failure(host_, "guest.host_caller", "HostLoggerContract.log", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));
             return;
         }
 
@@ -74,7 +74,7 @@ public:
         switch (interface_->dispatch_type) {
             case DispatchType::Native: {
                 if (0U >= interface_->dispatch.native.function_count) {
-                    detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));
+                    detail::log_call_failure(host_, "guest.host_caller", "HostLoggerContract.log", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));
                     return;
                 }
                 auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
@@ -88,7 +88,7 @@ public:
         }
 
         if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
-            detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log", err.code);
+            detail::log_call_failure(host_, "guest.host_caller", "HostLoggerContract.log", err.code);
             return;
         }
 
@@ -97,7 +97,7 @@ public:
     /// Call host contract function `log_with_level` (function_id=1)
     void log_with_level(const polyplug_generated::LogLevel& level, std::string_view message) noexcept {
         if (interface_ == nullptr) {
-            detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log_with_level", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));
+            detail::log_call_failure(host_, "guest.host_caller", "HostLoggerContract.log_with_level", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));
             return;
         }
 
@@ -109,7 +109,7 @@ public:
         switch (interface_->dispatch_type) {
             case DispatchType::Native: {
                 if (1U >= interface_->dispatch.native.function_count) {
-                    detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log_with_level", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));
+                    detail::log_call_failure(host_, "guest.host_caller", "HostLoggerContract.log_with_level", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));
                     return;
                 }
                 auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[1U]);
@@ -123,16 +123,19 @@ public:
         }
 
         if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
-            detail::log_call_failure(polyplug::get_host_interface(), "guest.host_caller", "HostLoggerContract.log_with_level", err.code);
+            detail::log_call_failure(host_, "guest.host_caller", "HostLoggerContract.log_with_level", err.code);
             return;
         }
 
     }
 
 private:
-    explicit HostLoggerContract(const HostContractInterface* interface, HostContractInstance instance) noexcept
-        : interface_(interface), instance_(instance) {}
+    explicit HostLoggerContract(const HostApi* host, const HostContractInterface* interface, HostContractInstance instance) noexcept
+        : host_(host), interface_(interface), instance_(instance) {}
 
+    // Host interface captured in from_host — used for failure logging.
+    // No DSO-global host storage exists; the pointer flows per caller.
+    const HostApi* host_;
     const HostContractInterface* interface_;
     HostContractInstance instance_;
 };

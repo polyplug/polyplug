@@ -133,7 +133,7 @@ use polyplug_abi::string_view_null;
 use guest::contracts::TestAddGuestContract;
 use guest::types::AddArgs;
 use guest::interfaces::TEST_ADDER_INTERFACE;
-use guest::interfaces::set_test_adder_impl;
+use polyplug_guest::HostContext;
 
 struct MyPlugin;
 
@@ -155,6 +155,14 @@ impl TestAddGuestContract for MyPlugin {
     }
 }
 
+/// Factory called by the generated `create_instance` for every host-created
+/// instance. The implementation travels in `GuestContractInstance.data` —
+/// no static storage.
+#[no_mangle]
+pub fn polyplug_create_test_adder(_host: HostContext) -> Box<dyn TestAddGuestContract> {
+    Box::new(MyPlugin)
+}
+
 /// # Safety
 /// `host` must be a valid non-null pointer provided by the host.
 #[no_mangle]
@@ -165,9 +173,6 @@ pub unsafe extern "C" fn polyplug_init(
     if host.is_null() {
         return AbiError { code: AbiErrorCode::Generic as u32, message: string_view_null() };
     }
-
-    // Set the implementation before registering
-    let _ = set_test_adder_impl(Box::new(MyPlugin));
 
     // SAFETY: host is non-null and valid per ABI contract.
     let host: &HostApi = unsafe { &*host };
@@ -507,16 +512,28 @@ fn test_rust_codegen_compile_and_run() {
     let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
-    // SAFETY: args is a valid AddArgs; out is a valid u32 location.
-    // For stateless plugins, we pass a null instance (GuestContractInstance::null()).
-    // The generated wrapper uses a OnceLock static for stateless plugins.
+    // The generated create_instance constructs the implementation via the
+    // author factory and carries it in instance.data — no static storage.
+    // SAFETY: host_abi outlives the instance; create_instance is the generated factory thunk.
+    let instance: GuestContractInstance =
+        unsafe { (interface.create_instance)(&host_abi as *const HostApi, core::ptr::null()) };
+    assert!(
+        !instance.data.is_null(),
+        "create_instance must produce a non-null instance payload"
+    );
+
+    // SAFETY: args is a valid AddArgs; out is a valid u32 location; instance
+    // was created by the generated create_instance above.
     let call_result: AbiError = unsafe {
         dispatch_fn(
-            GuestContractInstance::null(), // instance parameter (stateless plugin)
+            instance,
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
     };
+
+    // SAFETY: instance was created by create_instance; destroy exactly once.
+    unsafe { (interface.destroy_instance)(&host_abi as *const HostApi, instance) };
 
     assert_eq!(
         call_result.code,

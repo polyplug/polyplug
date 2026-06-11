@@ -14,16 +14,11 @@ This library provides the registration helper that deposits that list, the
 buffers). It also re-exports the ABI types plugin authors need.
 
 Per-call state (args, out, arena) is passed explicitly through each dispatch
-call. The one piece of bundle-lifetime state is the ``HostApi`` pointer: it is
-stored once at ``polyplug_init`` time via :func:`store_host_interface` so that
-guest→guest peer callers can resolve a peer through the host without threading
-the pointer through every ``str``-level impl method — exactly as the Lua and
-C++ guest SDKs do (``get_host_interface`` / ``polyplug::get_host_interface``;
-the generated JS init module stores the host vtable the same way).
-This is module-level storage; it is consistent within a single runtime (one
-shared ``HostApi``) and shares the CPython-once-per-process isolation limit the
-Python loader already documents. CLAUDE.md Rule 12 governs *host Runtime* state,
-not this guest-side SDK accessor.
+call. The ``HostApi`` pointer is NOT stored in this package: it flows from
+``polyplug_init`` into the author factory (``polyplug_create_<plugin>``), which
+constructs the implementation with its owning runtime's host pointer. Helpers
+that need the host (:func:`alloc_string`, :func:`log`, the generated peer
+callers' ``resolve(host_ptr)``) take it as an explicit argument.
 """
 
 from __future__ import annotations
@@ -61,8 +56,6 @@ __all__ = [
     "register_contract",
     "alloc_string",
     "alloc_string_arena",
-    "store_host_interface",
-    "get_host_interface",
     "log",
 ]
 
@@ -70,35 +63,8 @@ __all__ = [
 # `REGISTRATIONS_ATTR` in crates/polyplug_python/src/loader.rs verbatim.
 _REGISTRATIONS_ATTR: str = "_polyplug_registrations"
 
-# The HostApi pointer the loader passes to polyplug_init, stored once so peer
-# callers can resolve a peer without it being threaded through every call. 0
-# until polyplug_init runs. See the module docstring for the isolation scope.
-_HOST_INTERFACE_PTR: int = 0
 
-
-def store_host_interface(host_ptr: int) -> None:
-    """Record the ``HostApi`` pointer the loader passed to ``polyplug_init``.
-
-    Call this from the plugin's ``polyplug_init`` (the generated init does so).
-    Mirrors the Lua/JS/C++ guest SDKs so guest→guest peer callers can resolve a
-    peer through the host without threading the pointer through every call.
-
-    Args:
-        host_ptr: the ``HostApi`` pointer received in ``polyplug_init``.
-    """
-    global _HOST_INTERFACE_PTR
-    _HOST_INTERFACE_PTR = host_ptr
-
-
-def get_host_interface() -> int:
-    """Return the stored ``HostApi`` pointer, or 0 if ``polyplug_init`` has not run.
-
-    Peer callers use this as the default host source for ``resolve()``.
-    """
-    return _HOST_INTERFACE_PTR
-
-
-def log(level: int, scope: str, message: str) -> None:
+def log(host_ptr: int, level: int, scope: str, message: str) -> None:
     """Send a guest diagnostic to the host's logging funnel (``HostApi.log``).
 
     Routes to the same sink as ``RuntimeConfig::log``: the host-installed
@@ -106,17 +72,17 @@ def log(level: int, scope: str, message: str) -> None:
     visibility only). The host delivers ``(level, scope, message)`` verbatim and
     copies what it needs before returning — nothing here outlives the call.
 
-    No-op until ``polyplug_init`` has stored the host via
-    :func:`store_host_interface` (the generated init does so), so plugins may
-    call this unconditionally, including from module top level before init.
+    No-op when ``host_ptr`` is 0, so plugins may call this unconditionally.
 
     Args:
+        host_ptr: the ``HostApi`` pointer handed to the author factory
+            (``polyplug_create_<plugin>``) — no host pointer is stored in this
+            package.
         level: a :class:`polyplug_abi.LogLevel` value (``Error = 1`` ..
             ``Trace = 5``); the host clamps unknown values to ``Error``.
         scope: short stable tag — use ``"guest.<plugin-name>"`` by convention.
         message: the log message.
     """
-    host_ptr: int = _HOST_INTERFACE_PTR
     if not host_ptr:
         return
     # ctypes does NOT root Python objects through a StringView's raw `ptr`

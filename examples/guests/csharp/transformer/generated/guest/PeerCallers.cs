@@ -68,7 +68,7 @@ internal static unsafe class CallArenaOps {
 /// <summary>
 /// Guest-side peer caller for contract `pipeline.Validator` (id=0x45173A959EEC57C5).
 /// Resolves via the host-mediated CallGuestMethod path (offset 136 on HostApi);
-/// the host pointer is fetched from RuntimeAbiStorage on each Resolve() call.
+/// the host pointer is passed explicitly to Resolve(hostPtr) by the caller.
 /// Returns raw ABI types — do not convert StringView/Buffer to managed strings.
 /// </summary>
 public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
@@ -93,10 +93,10 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
     }
 
     /// <summary>Resolve the peer contract and create a caller instance.
-    /// Returns null when the host pointer is not stored yet, or when the
-    /// contract is not found/resolved (handle invalid or stale).</summary>
-    public static PipelineValidatorContractPeer? Resolve() {
-        IntPtr hostPtr = RuntimeAbiStorage.GetRuntimeAbi();
+    /// <paramref name="hostPtr"/> is the HostApi pointer the author factory
+    /// received — no process-wide host storage exists. Returns null when the
+    /// host pointer is null, or when the contract is not found/resolved.</summary>
+    public static PipelineValidatorContractPeer? Resolve(IntPtr hostPtr) {
         if (hostPtr == IntPtr.Zero) { return null; }
         var host = (HostApi*)hostPtr;
         // FindGuestContract: find contract 0x45173A959EEC57C5UL, min major = 1u

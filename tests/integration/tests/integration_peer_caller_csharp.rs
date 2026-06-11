@@ -155,15 +155,23 @@ fn build_csharp_consumer(tmp_root: &Path) -> PathBuf {
          \n\
          public sealed class TransformerPlugin : IDataTransformerGuestContract\n\
          {\n\
+         // Host handle for this runtime, captured at instance creation.\n\
+         private readonly IntPtr _host;\n\
+         \n\
+         public TransformerPlugin(IntPtr host)\n\
+         {\n\
+         _host = host;\n\
+         }\n\
+         \n\
          public StringView Transform(StringView input)\n\
          {\n\
-         using var peer = PipelineValidatorContractPeer.Resolve();\n\
+         using var peer = PipelineValidatorContractPeer.Resolve(_host);\n\
          if (peer is null)\n\
          {\n\
-         return PolyplugHost.AllocString(\"ERROR:peer-unavailable\");\n\
+         return PolyplugHost.AllocString(_host, \"ERROR:peer-unavailable\");\n\
          }\n\
          StringView borrowed = peer.Validate(input);\n\
-         return PolyplugHost.AllocString(StringViewHelper.ToString(borrowed));\n\
+         return PolyplugHost.AllocString(_host, StringViewHelper.ToString(borrowed));\n\
          }\n\
          }\n\
          \n\
@@ -172,7 +180,7 @@ fn build_csharp_consumer(tmp_root: &Path) -> PathBuf {
          [ModuleInitializer]\n\
          public static void Register()\n\
          {\n\
-         TransformerInterfaces.SetTransformerImpl(new TransformerPlugin());\n\
+         TransformerInterfaces.SetTransformerFactory(host => new TransformerPlugin(host));\n\
          }\n\
          }\n";
     std::fs::write(project_dir.join("Plugin.cs"), plugin_cs).expect("write Plugin.cs");
@@ -376,11 +384,23 @@ fn csharp_peer_caller_validate_roundtrip() {
         len: input.len(),
     };
     let mut out_view: StringView = StringView::null();
-    // SAFETY: transformer is stateless; null instance is the dispatch token; args
-    // is a *const StringView, out a *mut StringView per transform's ABI.
+    // The generated CreateInstance constructs the C# implementation via the
+    // author factory and carries it in instance.Data (GCHandle); dispatch
+    // requires a real instance.
+    // SAFETY: host_abi is the runtime's live HostApi pointer; create_instance
+    // is the generated factory thunk on the resolved interface.
+    let host_abi: *const polyplug_abi::HostApi = rt.host_abi() as *const polyplug_abi::HostApi;
+    let instance: GuestContractInstance =
+        unsafe { (interface.create_instance)(host_abi, core::ptr::null()) };
+    assert!(
+        !instance.data.is_null(),
+        "create_instance must produce a non-null instance payload"
+    );
+    // SAFETY: instance was created above; args is a *const StringView, out a
+    // *mut StringView per transform's ABI.
     let err: AbiError = unsafe {
         dispatch_fn(
-            GuestContractInstance::null(),
+            instance,
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
         )
@@ -391,6 +411,10 @@ fn csharp_peer_caller_validate_roundtrip() {
         "transform must return Ok; got code={}",
         err.code
     );
+    // SAFETY: instance was created by create_instance; destroy exactly once.
+    // out_view points to host-allocated bytes (AllocString), which outlive the
+    // instance.
+    unsafe { (interface.destroy_instance)(host_abi, instance) };
     assert!(
         !out_view.ptr.is_null(),
         "returned StringView must not be null"

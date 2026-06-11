@@ -6,9 +6,11 @@ using Polyplug.Abi;
 namespace Polyplug.Guest;
 
 /// <summary>
-/// Guest-side access to the host runtime stored during <c>polyplug_init</c>.
-/// Provides the host allocator and the host logging funnel over the raw
-/// <see cref="HostApi"/> function-pointer table.
+/// Guest-side access to the host runtime over the raw <see cref="HostApi"/>
+/// function-pointer table. The host pointer flows from <c>create_instance</c>
+/// through the author factory (<c>SetXxxFactory</c>) into each implementation —
+/// NO process-wide host storage exists in this SDK, so every helper takes the
+/// host pointer explicitly.
 /// </summary>
 public static unsafe class PolyplugHost
 {
@@ -27,16 +29,15 @@ public static unsafe class PolyplugHost
     /// with <c>fixed</c> for the duration of the call, so the GC cannot move
     /// them while the host reads through the raw pointers.
     ///
-    /// No-op until <c>polyplug_init</c> has stored the host via
-    /// <see cref="RuntimeAbiStorage.StoreRuntimeAbi"/> (the generated init does
-    /// so), so plugins may call this unconditionally.
+    /// No-op when <paramref name="hostPtr"/> is <see cref="IntPtr.Zero"/>, so
+    /// plugins may call this unconditionally.
     /// </remarks>
+    /// <param name="hostPtr">The <c>HostApi</c> pointer handed to the author factory.</param>
     /// <param name="level">Severity; the host clamps unknown values to <see cref="LogLevel.Error"/>.</param>
     /// <param name="scope">Short stable tag, e.g. <c>"guest.&lt;plugin-name&gt;"</c>.</param>
     /// <param name="message">The log message.</param>
-    public static void Log(LogLevel level, string scope, string message)
+    public static void Log(IntPtr hostPtr, LogLevel level, string scope, string message)
     {
-        IntPtr hostPtr = RuntimeAbiStorage.GetRuntimeAbi();
         if (hostPtr == IntPtr.Zero)
             return;
 
@@ -69,11 +70,12 @@ public static unsafe class PolyplugHost
     /// (<c>HostApi.Alloc</c>). Ownership transfers to the host: the returned
     /// view is meant to be handed back across the ABI as a function result, and
     /// the host frees it via <c>HostApi.Free</c>. The guest must NOT free it.
-    /// Returns a null view if no host is stored or allocation fails.
+    /// Returns a null view if <paramref name="hostPtr"/> is null or allocation fails.
     /// </remarks>
-    public static StringView AllocString(string value)
+    /// <param name="hostPtr">The <c>HostApi</c> pointer handed to the author factory.</param>
+    /// <param name="value">The string to copy into host-owned memory.</param>
+    public static StringView AllocString(IntPtr hostPtr, string value)
     {
-        IntPtr hostPtr = RuntimeAbiStorage.GetRuntimeAbi();
         if (hostPtr == IntPtr.Zero)
             return new StringView { Ptr = IntPtr.Zero, Len = 0 };
 

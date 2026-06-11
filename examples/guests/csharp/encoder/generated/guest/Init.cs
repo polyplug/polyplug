@@ -12,7 +12,8 @@ public static class Plugin {
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "polyplug_init")]
     public static AbiErrorCode PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {
         if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;
-        RuntimeAbiStorage.StoreRuntimeAbi(hostPtr);
+        // No process-wide host storage: the host pointer reaches each
+        // implementation through CreateInstance -> author factory.
         System.Threading.Thread.BeginThreadAffinity();
         try {
         unsafe {

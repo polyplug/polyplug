@@ -577,11 +577,18 @@ fn bytes_source_loads_fixture_and_dispatches() {
     let bundle_dir: &Path = dll.parent().expect("fixture dll must have a parent dir");
 
     // The fixture is NOT self-contained: CsharpPlugin.dll references Polyplug.Abi and
-    // Polyplug.Guest. Pre-load those dependencies from bytes into the SAME bundle's
-    // collectible ALC (keyed by bundle id) so the in-memory plugin can resolve them.
-    // CLR_CONTEXT is process-global, so this standalone loader and the runtime's loader
-    // (built below) share the same context + byte bridge.
+    // Polyplug.Guest. Pre-load those dependencies from bytes into the SAME (runtime, bundle)
+    // collectible ALC so the in-memory plugin can resolve them. The runtime must therefore
+    // exist BEFORE preloading — the ALC key includes the runtime id. CLR_CONTEXT is
+    // process-global, so this standalone loader and the runtime's loader share the same
+    // context + byte bridge.
     let manifest: ManifestData = make_csharp_fixture_manifest(bundle_dir);
+
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
+        .loader(DotnetLoader::new(DotnetConfig::default()))
+        .build()
+        .expect("failed to build runtime with dotnet loader");
+
     let preloader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     for dep_name in ["Polyplug.Abi.dll", "Polyplug.Guest.dll"] {
         let dep_dll: PathBuf = bundle_dir.join(dep_name);
@@ -592,16 +599,11 @@ fn bytes_source_loads_fixture_and_dispatches() {
         let dep_bytes: Vec<u8> = std::fs::read(&dep_dll)
             .unwrap_or_else(|e: std::io::Error| panic!("failed to read {dep_name}: {e}"));
         preloader
-            .preload_dependency_from_bytes(manifest.id, &dep_bytes)
+            .preload_dependency_from_bytes(&runtime, manifest.id, &dep_bytes)
             .unwrap_or_else(|e: RuntimeError| {
                 panic!("preload {dep_name} dependency from bytes: {e:?}")
             });
     }
-
-    let runtime: Arc<Runtime> = RuntimeBuilder::new()
-        .loader(DotnetLoader::new(DotnetConfig::default()))
-        .build()
-        .expect("failed to build runtime with dotnet loader");
 
     let load_result: Result<(), RuntimeError> =
         runtime.load_bundle_from_source(manifest, polyplug::loader::BundleSource::Bytes(bytes));
@@ -692,7 +694,17 @@ fn load_named_fixture(
     let manifest: ManifestData = make_named_fixture_manifest(bundle_dir, name);
     let bundle_id: u64 = manifest.id;
 
-    // Preload the shared dependencies into THIS bundle's collectible ALC (same bundle id).
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
+        .loader(DotnetLoader::new(DotnetConfig::default()))
+        .config(polyplug_abi::runtime::RuntimeConfig {
+            unload_mode,
+            ..Default::default()
+        })
+        .build()
+        .expect("failed to build runtime");
+
+    // Preload the shared dependencies into THIS (runtime, bundle) collectible ALC — the
+    // runtime must exist first because the ALC key includes the runtime id.
     let preloader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     for dep_name in ["Polyplug.Abi.dll", "Polyplug.Guest.dll"] {
         let dep_dll: PathBuf = bundle_dir.join(dep_name);
@@ -703,18 +715,9 @@ fn load_named_fixture(
         let dep_bytes: Vec<u8> = std::fs::read(&dep_dll)
             .unwrap_or_else(|e: std::io::Error| panic!("failed to read {dep_name}: {e}"));
         preloader
-            .preload_dependency_from_bytes(bundle_id, &dep_bytes)
+            .preload_dependency_from_bytes(&runtime, bundle_id, &dep_bytes)
             .unwrap_or_else(|e: RuntimeError| panic!("preload {dep_name} dependency: {e:?}"));
     }
-
-    let runtime: Arc<Runtime> = RuntimeBuilder::new()
-        .loader(DotnetLoader::new(DotnetConfig::default()))
-        .config(polyplug_abi::runtime::RuntimeConfig {
-            unload_mode,
-            ..Default::default()
-        })
-        .build()
-        .expect("failed to build runtime");
     runtime
         .load_bundle_from_source(manifest, polyplug::loader::BundleSource::Bytes(bytes))
         .expect("load_bundle_from_source(Bytes) failed");
@@ -765,7 +768,7 @@ fn unload_reclaim_mode_collects_alc() {
 
     assert_add_dispatch_works(&runtime);
     assert!(
-        polyplug_dotnet::bundle_alc_alive(bundle_id).expect("alc probe"),
+        polyplug_dotnet::bundle_alc_alive(&runtime, bundle_id).expect("alc probe"),
         "ALC must be alive while the bundle is loaded"
     );
 
@@ -774,7 +777,7 @@ fn unload_reclaim_mode_collects_alc() {
         .expect("unload_bundle must succeed");
 
     assert!(
-        !polyplug_dotnet::bundle_alc_alive(bundle_id).expect("alc probe"),
+        !polyplug_dotnet::bundle_alc_alive(&runtime, bundle_id).expect("alc probe"),
         "ALC must be reclaimed after a host-attested Reclaim unload"
     );
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
@@ -804,7 +807,97 @@ fn unload_retire_mode_keeps_alc() {
 
     // The contract is invalidated in the registry, but the ALC stays rooted (retired).
     assert!(
-        polyplug_dotnet::bundle_alc_alive(bundle_id).expect("alc probe"),
+        polyplug_dotnet::bundle_alc_alive(&runtime, bundle_id).expect("alc probe"),
         "ALC must remain alive under Retire (retire-not-drop)"
     );
+}
+
+/// Two `Runtime`s loading the SAME bundle id get structurally isolated collectible ALCs:
+/// the managed bridge keys contexts by (runtime id, bundle id), so unloading the bundle
+/// from one runtime reclaims only that runtime's ALC while the other runtime's copy stays
+/// alive and dispatchable. This is the regression test for the last-writer-wins ALC race
+/// the composite key removes.
+#[test]
+fn two_runtimes_same_bundle_id_have_isolated_alcs() {
+    let dll: PathBuf = csharp_fixture_dll_path();
+    if !dll.exists() {
+        eprintln!("skipping: CsharpPlugin.dll fixture not built at {dll:?}");
+        return;
+    }
+    let bytes: Vec<u8> = std::fs::read(&dll).expect("failed to read fixture dll");
+    let bundle_dir: &Path = dll.parent().expect("fixture dll must have a parent dir");
+    // ONE shared name → ONE shared bundle id across both runtimes.
+    let manifest_a: ManifestData = make_named_fixture_manifest(bundle_dir, "csharp_two_rt_probe");
+    let manifest_b: ManifestData = make_named_fixture_manifest(bundle_dir, "csharp_two_rt_probe");
+    let bundle_id: u64 = manifest_a.id;
+
+    let rt_a: Arc<Runtime> = RuntimeBuilder::new()
+        .loader(DotnetLoader::new(DotnetConfig::default()))
+        .config(polyplug_abi::runtime::RuntimeConfig {
+            unload_mode: polyplug_abi::runtime::UnloadMode::Reclaim,
+            ..Default::default()
+        })
+        .build()
+        .expect("failed to build runtime A");
+    let rt_b: Arc<Runtime> = RuntimeBuilder::new()
+        .loader(DotnetLoader::new(DotnetConfig::default()))
+        .config(polyplug_abi::runtime::RuntimeConfig {
+            unload_mode: polyplug_abi::runtime::UnloadMode::Reclaim,
+            ..Default::default()
+        })
+        .build()
+        .expect("failed to build runtime B");
+
+    // Preload the shared dependencies into EACH runtime's own (runtime, bundle)
+    // ALC — the composite key means each runtime needs its own preload pass.
+    let preloader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
+    for rt in [&rt_a, &rt_b] {
+        for dep_name in ["Polyplug.Abi.dll", "Polyplug.Guest.dll"] {
+            let dep_dll: PathBuf = bundle_dir.join(dep_name);
+            if !dep_dll.exists() {
+                eprintln!("skipping: {dep_name} dependency not built next to fixture");
+                return;
+            }
+            let dep_bytes: Vec<u8> = std::fs::read(&dep_dll)
+                .unwrap_or_else(|e: std::io::Error| panic!("failed to read {dep_name}: {e}"));
+            preloader
+                .preload_dependency_from_bytes(rt, bundle_id, &dep_bytes)
+                .unwrap_or_else(|e: RuntimeError| panic!("preload {dep_name}: {e:?}"));
+        }
+    }
+
+    rt_a.load_bundle_from_source(
+        manifest_a,
+        polyplug::loader::BundleSource::Bytes(bytes.clone()),
+    )
+    .expect("runtime A must load the bundle");
+    rt_b.load_bundle_from_source(manifest_b, polyplug::loader::BundleSource::Bytes(bytes))
+        .expect("runtime B must load the same bundle id");
+
+    // Both runtimes hold their own live ALC for the same bundle id.
+    assert!(
+        polyplug_dotnet::bundle_alc_alive(&rt_a, bundle_id).expect("alc probe A"),
+        "runtime A's ALC must be alive after load"
+    );
+    assert!(
+        polyplug_dotnet::bundle_alc_alive(&rt_b, bundle_id).expect("alc probe B"),
+        "runtime B's ALC must be alive after load"
+    );
+    assert_add_dispatch_works(&rt_a);
+    assert_add_dispatch_works(&rt_b);
+
+    // Reclaim the bundle in runtime A only.
+    rt_a.unload_bundle(polyplug_utils::BundleId::from_u64(bundle_id))
+        .expect("runtime A unload must succeed");
+
+    assert!(
+        !polyplug_dotnet::bundle_alc_alive(&rt_a, bundle_id).expect("alc probe A"),
+        "runtime A's ALC must be reclaimed after its Reclaim unload"
+    );
+    assert!(
+        polyplug_dotnet::bundle_alc_alive(&rt_b, bundle_id).expect("alc probe B"),
+        "runtime B's ALC must survive runtime A's unload — composite keying"
+    );
+    // Runtime B's copy still dispatches.
+    assert_add_dispatch_works(&rt_b);
 }

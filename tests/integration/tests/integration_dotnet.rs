@@ -260,18 +260,16 @@ fn integration_dotnet_reset() {
 }
 
 /// End-to-end guest logging: the C# fixture's `reset` calls the guest SDK's
-/// `PolyplugHost.Log`, which transcodes UTF-16 → UTF-8, crosses `HostApi.log`
-/// through the host pointer stored by `RuntimeAbiStorage.StoreRuntimeAbi`
-/// during `PolyplugInit`, and lands verbatim in the host logger installed via
+/// `PolyplugHost.Log(hostPtr, ...)` with the plugin-owned host pointer captured
+/// during `PolyplugInit` (the SDK stores no host), transcoding UTF-16 → UTF-8
+/// across `HostApi.log` and landing verbatim in the host logger installed via
 /// `RuntimeBuilder::logger`.
 ///
 /// The fixture is loaded as a COPY under a unique bundle name. The .NET bridge
-/// keys collectible AssemblyLoadContexts by bundle id process-wide (the CLR is
-/// once-per-process), so every test loading the shared fixture shares ONE
-/// assembly instance — and the `RuntimeAbiStorage` static is last-writer-wins
-/// across the parallel loads the sibling tests perform. A unique bundle id gets
-/// its own ALC with fresh statics, so the stored host pointer is
-/// deterministically this runtime's.
+/// keys collectible AssemblyLoadContexts by (runtime id, bundle id) — a unique
+/// bundle id gets its own ALC with fresh statics, so the fixture's captured
+/// host pointer is deterministically this runtime's even while sibling tests
+/// load the shared fixture in parallel.
 #[test]
 fn integration_dotnet_guest_log_routes_to_host_logger() {
     skip_if_no_dotnet!();

@@ -7,6 +7,7 @@
 #![allow(clippy::identity_op)]
 
 use super::types::*;
+use core::ffi::c_void;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchMechanisms;
@@ -21,13 +22,14 @@ use polyplug_abi::abi_error_ok;
 use polyplug_abi::string_view_from_static;
 use polyplug_abi::string_view_null;
 use polyplug_guest::GuestError;
-use polyplug_guest::alloc_string;
+use polyplug_guest::HostContext;
 use polyplug_utils::GuestContractId;
-use std::sync::OnceLock;
-/// Convert a GuestError to an AbiError, allocating the message via host_alloc.
+/// Convert a GuestError to an AbiError, allocating the message via the host allocator.
 /// Falls back to a null message if allocation fails.
-fn plugin_error_to_abi_error(e: GuestError) -> AbiError {
-    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());
+fn plugin_error_to_abi_error(host: HostContext, e: GuestError) -> AbiError {
+    let message: StringView = host
+        .alloc_string(&e.message)
+        .unwrap_or_else(|_| string_view_null());
     AbiError {
         code: e.code as u32,
         message,
@@ -53,12 +55,66 @@ unsafe impl Sync for FnPtr {}
 /// Contract ID constant -- pre-computed FNV-1a of "pipeline.Decoder@1".
 pub const DECODER_CONTRACT_ID: u64 = 0xE1D7DE773BE6E7F7;
 
-pub static DECODER_IMPL: OnceLock<Box<dyn PipelineDecoderGuestContract>> = OnceLock::new();
+unsafe extern "Rust" {
+    /// Author-provided factory — define it in the plugin crate as:
+    /// `#[unsafe(no_mangle)]`
+    /// `pub fn polyplug_create_decoder(host: HostContext) -> Box<dyn PipelineDecoderGuestContract> { ... }`
+    fn polyplug_create_decoder(host: HostContext) -> Box<dyn PipelineDecoderGuestContract>;
+}
 
-pub fn set_decoder_impl(impl_: Box<dyn PipelineDecoderGuestContract>) -> Result<(), &'static str> {
-    DECODER_IMPL
-        .set(impl_)
-        .map_err(|_| "decoder already registered")
+/// Per-instance payload carried in `GuestContractInstance.data`.
+struct DecoderPluginState {
+    /// Host context captured at instance creation — routes every host call
+    /// (allocation, logging, error reporting) to the runtime that owns it.
+    host: HostContext,
+    /// The author's implementation, created by `polyplug_create_decoder`.
+    implementation: Box<dyn PipelineDecoderGuestContract>,
+}
+
+/// Create a new instance: calls the author factory and boxes the payload.
+/// Returns a null handle when `host` is null or the factory panics.
+unsafe extern "C" fn DECODER_create_instance(
+    host: *const HostApi,
+    _args: *const (),
+) -> GuestContractInstance {
+    if host.is_null() {
+        return GuestContractInstance::null();
+    }
+    // SAFETY: host is non-null (checked above) and valid per the ABI contract
+    // for create_instance; it stays valid for the runtime's lifetime.
+    let host_ctx: HostContext = unsafe { HostContext::new(host) };
+    let implementation: Box<dyn PipelineDecoderGuestContract> =
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: the author defines `polyplug_create_decoder` in the plugin crate
+            // with `#[unsafe(no_mangle)]`; same-crate Rust ABI, signature enforced
+            // by the extern declaration above.
+            unsafe { polyplug_create_decoder(host_ctx) }
+        })) {
+            Ok(i) => i,
+            Err(_) => return GuestContractInstance::null(),
+        };
+    let state: Box<DecoderPluginState> = Box::new(DecoderPluginState {
+        host: host_ctx,
+        implementation,
+    });
+    GuestContractInstance {
+        data: Box::into_raw(state) as *mut c_void,
+        contract_id: GuestContractId::from_u64(DECODER_CONTRACT_ID),
+    }
+}
+
+/// Destroy an instance created by `DECODER_create_instance`.
+unsafe extern "C" fn DECODER_destroy_instance(
+    _host: *const HostApi,
+    instance: GuestContractInstance,
+) {
+    if instance.data.is_null() {
+        return;
+    }
+    // SAFETY: instance.data was produced by `DECODER_create_instance` via
+    // Box::into_raw and is dropped exactly once here — the host calls
+    // destroy_instance exactly once per created instance.
+    drop(unsafe { Box::from_raw(instance.data as *mut DecoderPluginState) });
 }
 
 /// ABI wrapper for decode (function_id = 0).
@@ -69,19 +125,17 @@ extern "C" fn decoder_decode_abi(
     args: *const (),
     out: *mut (),
 ) -> AbiError {
-    // Instance is ignored for stateless plugins (instance is null).
-    // For stateful plugins, users override create_instance and use instance.data.
-    let _ = instance;
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ref: &dyn PipelineDecoderGuestContract = match DECODER_IMPL.get() {
-            Some(i) => i.as_ref(),
-            None => {
-                return AbiError {
-                    code: AbiErrorCode::Generic as u32,
-                    message: string_view_from_static(b"implementation not registered"),
-                };
-            }
+    if instance.data.is_null() {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: string_view_from_static(b"instance is null"),
         };
+    }
+    // SAFETY: instance.data was produced by create_instance via Box::into_raw
+    // and stays valid until destroy_instance; the host never mutates it.
+    let state: &DecoderPluginState = unsafe { &*(instance.data as *const DecoderPluginState) };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let impl_ref: &dyn PipelineDecoderGuestContract = state.implementation.as_ref();
         if args.is_null() {
             return AbiError {
                 code: AbiErrorCode::InvalidPointer as u32,
@@ -104,7 +158,7 @@ extern "C" fn decoder_decode_abi(
                 }
                 abi_error_ok()
             }
-            Err(e) => plugin_error_to_abi_error(e),
+            Err(e) => plugin_error_to_abi_error(state.host, e),
         }
     })) {
         Ok(err) => err,
@@ -114,25 +168,6 @@ extern "C" fn decoder_decode_abi(
 
 static DECODER_FNS: [FnPtr; 1_usize] = [FnPtr(decoder_decode_abi as *const ())];
 
-/// Default create_instance stub for decoder.
-/// Returns null instance - users should override for stateful plugins.
-#[allow(clippy::unnecessary_cast)]
-unsafe extern "C" fn DECODER_create_instance_stub(
-    _host: *const HostApi,
-    _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
-}
-
-/// Default destroy_instance stub for decoder.
-/// No-op - users should override for state cleanup before hot-reload.
-unsafe extern "C" fn DECODER_destroy_instance_stub(
-    _host: *const HostApi,
-    _instance: GuestContractInstance,
-) {
-    // No-op - stateless plugins don't need cleanup
-}
-
 pub static DECODER_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(DECODER_CONTRACT_ID),
     contract_version: Version {
@@ -141,8 +176,8 @@ pub static DECODER_INTERFACE: GuestContractInterface = GuestContractInterface {
         patch: 0,
     },
     dispatch_type: DispatchType::Native,
-    create_instance: DECODER_create_instance_stub,
-    destroy_instance: DECODER_destroy_instance_stub,
+    create_instance: DECODER_create_instance,
+    destroy_instance: DECODER_destroy_instance,
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
             function_count: 1_u32,

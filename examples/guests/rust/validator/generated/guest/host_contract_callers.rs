@@ -18,7 +18,7 @@ use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::string_view_null;
-use polyplug_guest::alloc_string;
+use polyplug_guest::HostContext;
 
 /// Error type for host contract calls from guest.
 #[derive(Debug)]
@@ -48,6 +48,9 @@ pub struct HostLoggerCaller {
     /// `HostApi::get_host_contract`. Passed as the first argument to native
     /// dispatch functions (the host thunk dereferences it as the implementation pointer).
     instance: HostContractInstance,
+    /// Host interface pointer captured in `from_host` — used for cross-boundary
+    /// string allocation when marshalling StringView parameters.
+    host: *const HostApi,
 }
 
 impl HostLoggerCaller {
@@ -76,6 +79,7 @@ impl HostLoggerCaller {
         Some(HostLoggerCaller {
             interface,
             instance,
+            host: host as *const HostApi,
         })
     }
 
@@ -93,8 +97,12 @@ impl HostLoggerCaller {
         // HostContractInterface produced by resolve_host_contract_interface.
         let interface: &HostContractInterface = unsafe { &*self.interface };
 
-        let message_view: StringView =
-            alloc_string(&message).unwrap_or_else(|_| string_view_null());
+        // SAFETY: self.host was captured from a valid HostApi in `from_host`
+        // and stays valid for the runtime's lifetime.
+        let host_ctx: HostContext = unsafe { HostContext::new(self.host) };
+        let message_view: StringView = host_ctx
+            .alloc_string(&message)
+            .unwrap_or_else(|_| string_view_null());
         let args_ptr: *const () = &message_view as *const StringView as *const ();
         let out_ptr: *mut () = core::ptr::null_mut();
         let err: AbiError = unsafe {
@@ -164,9 +172,14 @@ impl HostLoggerCaller {
         // HostContractInterface produced by resolve_host_contract_interface.
         let interface: &HostContractInterface = unsafe { &*self.interface };
 
+        // SAFETY: self.host was captured from a valid HostApi in `from_host`
+        // and stays valid for the runtime's lifetime.
+        let host_ctx: HostContext = unsafe { HostContext::new(self.host) };
         let args_val: HostLoggerLogWithLevelArgs = HostLoggerLogWithLevelArgs {
             level,
-            message: alloc_string(&message).unwrap_or_else(|_| string_view_null()),
+            message: host_ctx
+                .alloc_string(&message)
+                .unwrap_or_else(|_| string_view_null()),
         };
         let args_ptr: *const () = &args_val as *const HostLoggerLogWithLevelArgs as *const ();
         let out_ptr: *mut () = core::ptr::null_mut();

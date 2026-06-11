@@ -1,37 +1,34 @@
 use polyplug_abi::StringView;
-use polyplug_guest::{GuestError, alloc_string, to_str};
+use polyplug_guest::{GuestError, HostContext, to_str};
 
 #[path = "../generated/guest/mod.rs"]
 mod generated;
 
 use generated::contracts::PipelineDecoderGuestContract;
-use generated::interfaces::set_decoder_impl;
 
-struct Plugin;
+struct Plugin {
+    /// Host handle for this runtime, captured at instance creation.
+    host: HostContext,
+}
 
 impl PipelineDecoderGuestContract for Plugin {
     fn decode(&self, input: StringView) -> Result<StringView, GuestError> {
         // SAFETY: `input` is a valid StringView whose bytes stay live for the
         // duration of this call, per the ABI contract for dispatch arguments.
         let s: &str = unsafe { to_str(&input) };
-        let decoded = s.replace(',', "|");
-        alloc_string(&format!("DECODED:{}", decoded))
+        let decoded: String = s.replace(',', "|");
+        self.host.alloc_string(&format!("DECODED:{}", decoded))
     }
 }
 
-static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-fn init() {
-    let _ = INIT.get_or_init(|| {
-        let _ = set_decoder_impl(Box::new(Plugin));
-    });
+/// Factory called by the generated `create_instance` for every host-created
+/// instance. The implementation travels in `GuestContractInstance.data`.
+#[unsafe(no_mangle)]
+pub fn polyplug_create_decoder(host: HostContext) -> Box<dyn PipelineDecoderGuestContract> {
+    Box::new(Plugin { host })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
     polyplug_abi::POLYPLUG_ABI_VERSION
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn polyplug_user_init() {
-    init();
 }

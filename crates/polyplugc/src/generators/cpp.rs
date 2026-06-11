@@ -304,31 +304,24 @@ fn generate_cpp_guest_plugin_interface(
     let class_name: String = contract_name_to_guest_contract_class(&contract.name);
     let fn_count: usize = contract.functions.len();
 
-    out.push_str(&format!("// Plugin: {}\n", plugin_name));
-    out.push_str(&format!(
-        "extern {}* g_{}_impl;\n\n",
-        class_name, plugin_lower
-    ));
+    let state_struct: String = format!("{}InstanceState", snake_to_pascal(&plugin_lower));
 
+    out.push_str(&format!("// Plugin: {}\n", plugin_name));
     out.push_str(&format!(
         "constexpr uint64_t {}_CONTRACT_ID = 0x{:016X}ULL;\n\n",
         plugin_upper, contract.contract_id
     ));
 
-    out.push_str(&format!(
-        "inline void set_{}_impl({}* impl) {{ g_{}_impl = impl; }}\n\n",
-        plugin_lower, class_name, plugin_lower
-    ));
-
-    // Forward declaration - user must implement this function
-    out.push_str("// Forward declaration - user must implement this\n");
-    out.push_str(&format!(
-        "{}* create_{}_impl();\n\n",
-        class_name, plugin_lower
-    ));
+    emit_cpp_guest_instance_machinery(
+        out,
+        &plugin_upper,
+        &plugin_lower,
+        &class_name,
+        &state_struct,
+    );
 
     for func in &contract.functions {
-        generate_cpp_guest_abi_wrapper(out, &plugin_lower, func)?;
+        generate_cpp_guest_abi_wrapper(out, &plugin_lower, &state_struct, func)?;
     }
 
     out.push_str(&format!("static void* const {}_FNS[] = {{\n", plugin_upper));
@@ -339,32 +332,6 @@ fn generate_cpp_guest_plugin_interface(
         ));
     }
     out.push_str("};\n\n");
-
-    // Instance lifecycle stubs
-    out.push_str(&format!(
-        "// Default create_instance stub for {} - returns null instance.\n",
-        plugin_name
-    ));
-    out.push_str(&format!(
-        "static GuestContractInstance {0}_create_instance_stub(const HostApi* host, const void* args) noexcept {{\n",
-        plugin_upper
-    ));
-    out.push_str("    (void)host; (void)args;  // Unused in default stub.\n");
-    out.push_str(
-        "    return GuestContractInstance{nullptr, 0U};  // Null instance for stateless plugins.\n",
-    );
-    out.push_str("}\n\n");
-    out.push_str(&format!(
-        "// Default destroy_instance stub for {} - no-op.\n",
-        plugin_name
-    ));
-    out.push_str(&format!(
-        "static void {0}_destroy_instance_stub(const HostApi* host, GuestContractInstance instance) noexcept {{\n",
-        plugin_upper
-    ));
-    out.push_str("    (void)host; (void)instance;  // Unused in default stub.\n");
-    out.push_str("    // No-op - stateless plugins don't need cleanup.\n");
-    out.push_str("}\n\n");
 
     out.push_str(&format!(
         "static GuestContractInterface {}_INTERFACE = {{\n",
@@ -381,8 +348,8 @@ fn generate_cpp_guest_plugin_interface(
         "DispatchType::VirtualMachine"
     };
     out.push_str(&format!("    {},\n", dispatch_type_str));
-    out.push_str(&format!("    {}_create_instance_stub,\n", plugin_upper));
-    out.push_str(&format!("    {}_destroy_instance_stub,\n", plugin_upper));
+    out.push_str(&format!("    {}_create_instance,\n", plugin_upper));
+    out.push_str(&format!("    {}_destroy_instance,\n", plugin_upper));
     out.push_str(&format!(
         "    DispatchMechanisms{{ .native = NativeDispatch{{ {fn_count}U, {}_FNS }} }}\n",
         plugin_upper
@@ -402,9 +369,7 @@ fn generate_cpp_guest_contract_interface(
     let class_name: String = contract_name_to_guest_contract_class(&contract.name);
     let fn_count: usize = contract.functions.len();
 
-    // Forward declaration of impl pointer
-    out.push_str("// Forward declaration -- set by polyplug_init\n");
-    out.push_str(&format!("extern {}* g_{}_impl;\n\n", class_name, lower));
+    let state_struct: String = format!("{}InstanceState", snake_to_pascal(&lower));
 
     // Contract ID constant
     out.push_str(&format!(
@@ -412,9 +377,11 @@ fn generate_cpp_guest_contract_interface(
         upper, contract.contract_id
     ));
 
+    emit_cpp_guest_instance_machinery(out, &upper, &lower, &class_name, &state_struct);
+
     // ABI wrapper functions — one per function
     for func in &contract.functions {
-        generate_cpp_guest_abi_wrapper(out, &lower, func)?;
+        generate_cpp_guest_abi_wrapper(out, &lower, &state_struct, func)?;
     }
 
     // Function pointer array
@@ -426,32 +393,6 @@ fn generate_cpp_guest_contract_interface(
         ));
     }
     out.push_str("};\n\n");
-
-    // Instance lifecycle stubs
-    out.push_str(&format!(
-        "// Default create_instance stub for {} - returns null instance.\n",
-        contract.name
-    ));
-    out.push_str(&format!(
-        "static GuestContractInstance {0}_create_instance_stub(const HostApi* host, const void* args) noexcept {{\n",
-        upper
-    ));
-    out.push_str("    (void)host; (void)args;  // Unused in default stub.\n");
-    out.push_str(
-        "    return GuestContractInstance{nullptr, 0U};  // Null instance for stateless plugins.\n",
-    );
-    out.push_str("}\n\n");
-    out.push_str(&format!(
-        "// Default destroy_instance stub for {} - no-op.\n",
-        contract.name
-    ));
-    out.push_str(&format!(
-        "static void {0}_destroy_instance_stub(const HostApi* host, GuestContractInstance instance) noexcept {{\n",
-        upper
-    ));
-    out.push_str("    (void)host; (void)instance;  // Unused in default stub.\n");
-    out.push_str("    // No-op - stateless plugins don't need cleanup.\n");
-    out.push_str("}\n\n");
 
     // Interface static
     out.push_str(&format!(
@@ -469,8 +410,8 @@ fn generate_cpp_guest_contract_interface(
         "DispatchType::VirtualMachine"
     };
     out.push_str(&format!("    {},\n", dispatch_type_str));
-    out.push_str(&format!("    {}_create_instance_stub,\n", upper));
-    out.push_str(&format!("    {}_destroy_instance_stub,\n", upper));
+    out.push_str(&format!("    {}_create_instance,\n", upper));
+    out.push_str(&format!("    {}_destroy_instance,\n", upper));
     out.push_str(&format!(
         "    DispatchMechanisms{{ .native = NativeDispatch{{ {}U, {}_FNS }} }}\n",
         fn_count, upper
@@ -480,9 +421,93 @@ fn generate_cpp_guest_contract_interface(
     Ok(())
 }
 
+/// Emit the per-plugin instance machinery: the author-factory forward
+/// declaration, the instance payload struct, and the real
+/// `create_instance` / `destroy_instance` functions.
+///
+/// The implementation is constructed by the author factory on every
+/// `create_instance` call and carried — together with the HostApi pointer —
+/// in `GuestContractInstance.data`. No DSO-global storage is involved, so two
+/// runtimes loading the same plugin DSO get fully isolated instances.
+fn emit_cpp_guest_instance_machinery(
+    out: &mut String,
+    prefix_upper: &str,
+    lower: &str,
+    class_name: &str,
+    state_struct: &str,
+) {
+    out.push_str(&format!(
+        "// Author-provided factory — implement this in your plugin .cpp. Called once\n\
+         // per host-created instance; ownership of the returned object transfers to\n\
+         // the instance (deleted in {prefix_upper}_destroy_instance).\n\
+         {class_name}* polyplug_create_{lower}(const HostApi* host);\n\n"
+    ));
+
+    out.push_str(&format!(
+        "// Per-instance payload carried in GuestContractInstance.data.\n\
+         struct {state_struct} {{\n\
+         \x20   // Host interface captured at instance creation — routes every host call\n\
+         \x20   // (allocation, logging, peer dispatch) to the runtime that owns it.\n\
+         \x20   const HostApi* host;\n\
+         \x20   // The author's implementation, created by polyplug_create_{lower}.\n\
+         \x20   {class_name}* impl;\n\
+         }};\n\n"
+    ));
+
+    out.push_str(&format!(
+        "// Create a new instance: calls the author factory and heap-allocates the payload.\n\
+         // Returns a null handle when host is null, the factory returns null, or it throws.\n\
+         static GuestContractInstance {prefix_upper}_create_instance(const HostApi* host, const void* args) noexcept {{\n\
+         \x20   (void)args;  // Contract-specific init args are unused by generated glue.\n\
+         \x20   if (host == nullptr) {{\n\
+         \x20       return GuestContractInstance{{nullptr, 0U}};\n\
+         \x20   }}\n\
+         \x20   try {{\n\
+         \x20       {class_name}* impl = polyplug_create_{lower}(host);\n\
+         \x20       if (impl == nullptr) {{\n\
+         \x20           return GuestContractInstance{{nullptr, 0U}};\n\
+         \x20       }}\n\
+         \x20       auto* state = new {state_struct}{{host, impl}};\n\
+         \x20       return GuestContractInstance{{state, {prefix_upper}_CONTRACT_ID}};\n\
+         \x20   }} catch (...) {{\n\
+         \x20       return GuestContractInstance{{nullptr, 0U}};\n\
+         \x20   }}\n\
+         }}\n\n"
+    ));
+
+    out.push_str(&format!(
+        "// Destroy an instance created by {prefix_upper}_create_instance: deletes the\n\
+         // implementation (ownership transferred from the factory) and the payload.\n\
+         static void {prefix_upper}_destroy_instance(const HostApi* host, GuestContractInstance instance) noexcept {{\n\
+         \x20   (void)host;  // The payload is guest-owned; no host call is needed to free it.\n\
+         \x20   if (instance.data == nullptr) {{\n\
+         \x20       return;\n\
+         \x20   }}\n\
+         \x20   auto* state = static_cast<{state_struct}*>(instance.data);\n\
+         \x20   delete state->impl;\n\
+         \x20   delete state;\n\
+         }}\n\n"
+    ));
+}
+
+/// Convert a lowercase snake identifier to PascalCase, e.g. "my_plugin" -> "MyPlugin".
+fn snake_to_pascal(s: &str) -> String {
+    s.split('_')
+        .map(|seg: &str| {
+            let mut chars: core::str::Chars<'_> = seg.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn generate_cpp_guest_abi_wrapper(
     out: &mut String,
     contract_lower: &str,
+    state_struct: &str,
     func: &ResolvedFunction,
 ) -> Result<(), PolyplugcError> {
     let fn_id: u32 = func.function_id;
@@ -500,11 +525,17 @@ fn generate_cpp_guest_abi_wrapper(
         "inline AbiError {0}_{1}_abi(GuestContractInstance instance, const void* args, void* out) noexcept {{\n",
         contract_lower, func.name
     ));
-    out.push_str("    // Instance is ignored for stateless plugins (instance.data is nullptr).\n");
+    out.push_str("    if (instance.data == nullptr) {\n");
+    out.push_str("        static constexpr const char* null_inst_msg = \"instance is null\";\n");
     out.push_str(
-        "    // For stateful plugins, users override create_instance and use instance.data.\n",
+        "        return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(null_inst_msg), 16}};\n",
     );
-    out.push_str("    (void)instance;  // Suppress unused warning for stateless plugins.\n");
+    out.push_str("    }\n");
+    out.push_str("    // SAFETY: instance.data was produced by create_instance and stays valid\n");
+    out.push_str("    // until destroy_instance; the host never mutates it.\n");
+    out.push_str(&format!(
+        "    const auto* state = static_cast<const {state_struct}*>(instance.data);\n"
+    ));
     out.push_str("    try {\n");
 
     if has_params {
@@ -585,12 +616,14 @@ fn build_guest_call_expr(contract_lower: &str, func: &ResolvedFunction) -> Strin
 
     let result_prefix: &str = if is_void_return { "" } else { "auto result = " };
 
+    let _ = contract_lower;
+
     if func.params.is_empty() {
         // No params — ignore args entirely
         return format!(
             "        // SAFETY: args is null for this function per ABI contract; no dereference needed.\n\
-             (void)args;\n        {}g_{}_impl->{}();\n",
-            result_prefix, contract_lower, func.name
+             (void)args;\n        {}state->impl->{}();\n",
+            result_prefix, func.name
         );
     }
 
@@ -603,8 +636,8 @@ fn build_guest_call_expr(contract_lower: &str, func: &ResolvedFunction) -> Strin
                 return format!(
                     "        // SAFETY: args is a valid const void* pointing to a {qualified_name} per ABI contract.\n\
              // The host guarantees proper alignment and size before calling this wrapper.\n\
-             {}g_{}_impl->{}(*static_cast<const {}*>(args));\n",
-                    result_prefix, contract_lower, func.name, qualified_name
+             {}state->impl->{}(*static_cast<const {}*>(args));\n",
+                    result_prefix, func.name, qualified_name
                 );
             }
             ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => {
@@ -613,8 +646,8 @@ fn build_guest_call_expr(contract_lower: &str, func: &ResolvedFunction) -> Strin
                 return format!(
                     "        // SAFETY: args is a valid const void* pointing to a {cpp_ty} per ABI contract.\n\
              // The host guarantees proper alignment and size before calling this wrapper.\n\
-             {}g_{}_impl->{}(*static_cast<const {}*>(args));\n",
-                    result_prefix, contract_lower, func.name, cpp_ty
+             {}state->impl->{}(*static_cast<const {}*>(args));\n",
+                    result_prefix, func.name, cpp_ty
                 );
             }
         }
@@ -651,8 +684,8 @@ fn build_guest_call_expr(contract_lower: &str, func: &ResolvedFunction) -> Strin
     let call_args_str: String = call_args.join(", ");
 
     code.push_str(&format!(
-        "        {}g_{}_impl->{}({});\n",
-        result_prefix, contract_lower, func.name, call_args_str
+        "        {}state->impl->{}({});\n",
+        result_prefix, func.name, call_args_str
     ));
 
     code
@@ -668,37 +701,6 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("#include \"interfaces.hpp\"\n");
     out.push_str("#include \"polyplug/abi.hpp\"\n");
     out.push_str("#include \"polyplug/guest.hpp\"\n\n");
-
-    out.push_str("namespace polyplug_plugin {\n\n");
-    if let Some(bundle) = &ir.bundle {
-        for plugin in &bundle.plugins {
-            let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
-            let class_name = if let Some(contract_impl) = plugin.implements.first() {
-                if let Some(contract) = ir.contracts.iter().find(|c| {
-                    let contract_full =
-                        format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
-                    &contract_full == contract_impl
-                }) {
-                    contract_name_to_guest_contract_class(&contract.name)
-                } else {
-                    "IPlugin".to_string()
-                }
-            } else {
-                "IPlugin".to_string()
-            };
-            out.push_str(&format!(
-                "{}* g_{}_impl = nullptr;\n",
-                class_name, plugin_lower
-            ));
-        }
-    } else {
-        for contract in &ir.contracts {
-            let lower: String = contract_name_to_lower_snake(&contract.name);
-            let class_name: String = contract_name_to_guest_contract_class(&contract.name);
-            out.push_str(&format!("{}* g_{}_impl = nullptr;\n", class_name, lower));
-        }
-    }
-    out.push_str("\n}  // namespace polyplug_plugin\n\n");
 
     // polyplug_abi_version
     out.push_str("extern \"C\" uint32_t polyplug_abi_version() { return 1U; }\n\n");
@@ -716,9 +718,13 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     ));
     out.push_str("    }\n\n");
     out.push_str(
-        "    // Store host interface for later access via polyplug::get_host_interface()\n",
+        "    // No DSO-global state is stored here. The implementation is constructed per\n",
     );
-    out.push_str("    polyplug::store_host_interface(host);\n\n");
+    out.push_str("    // instance by create_instance (which calls the author factory\n");
+    out.push_str(
+        "    // polyplug_create_<plugin> with the HostApi pointer); init only registers\n",
+    );
+    out.push_str("    // the static interface tables below.\n\n");
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -733,12 +739,8 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
             let version_minor = version_minor_patch.split('.').next().unwrap_or("0");
             let contract_name_full = format!("{}@{}", contract_name, version_major);
 
+            let _ = &plugin_lower;
             out.push_str(&format!("    // Register plugin: {}\n", plugin.name));
-            out.push_str(&format!(
-                "    polyplug_plugin::set_{}_impl(polyplug_plugin::create_{}_impl());\n",
-                plugin_lower, plugin_lower
-            ));
-
             out.push_str(&format!(
                 "    PluginDescriptor desc_{} = {{\n",
                 plugin_upper
@@ -786,15 +788,10 @@ fn generate_init_hpp_register_guest_contract(
     out: &mut String,
     contract: &ResolvedContract,
 ) -> Result<(), PolyplugcError> {
-    let lower: String = contract_name_to_lower_snake(&contract.name);
     let upper: String = contract_name_to_upper_snake(&contract.name);
     let name_bytes: usize = contract.name.len();
 
     out.push_str(&format!("    // Register contract: {}\n", contract.name));
-    out.push_str(&format!(
-        "    polyplug_plugin::g_{0}_impl = polyplug_plugin::create_{0}_impl();\n",
-        lower
-    ));
 
     out.push_str("    PluginDescriptor desc_");
     out.push_str(&upper);
@@ -1916,7 +1913,7 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
     out.push_str(&format!(
-        "        return {}(interface, instance);\n",
+        "        return {}(host, interface, instance);\n",
         class_name
     ));
     out.push_str("    }\n\n");
@@ -1937,10 +1934,13 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     // Private section
     out.push_str("private:\n");
     out.push_str(&format!(
-        "    explicit {}(const HostContractInterface* interface, HostContractInstance instance) noexcept\n",
+        "    explicit {}(const HostApi* host, const HostContractInterface* interface, HostContractInstance instance) noexcept\n",
         class_name
     ));
-    out.push_str("        : interface_(interface), instance_(instance) {}\n\n");
+    out.push_str("        : host_(host), interface_(interface), instance_(instance) {}\n\n");
+    out.push_str("    // Host interface captured in from_host — used for failure logging.\n");
+    out.push_str("    // No DSO-global host storage exists; the pointer flows per caller.\n");
+    out.push_str("    const HostApi* host_;\n");
     out.push_str("    const HostContractInterface* interface_;\n");
     out.push_str("    HostContractInstance instance_;\n");
     out.push_str("};\n\n");
@@ -2020,7 +2020,7 @@ fn generate_cpp_guest_host_contract_method(
     // returning the default (the caller is noexcept, so we cannot throw).
     out.push_str("        if (interface_ == nullptr) {\n");
     out.push_str(&format!(
-        "            detail::log_call_failure(polyplug::get_host_interface(), \"guest.host_caller\", \"{what}\", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));\n"
+        "            detail::log_call_failure(host_, \"guest.host_caller\", \"{what}\", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));\n"
     ));
     out.push_str(&format!("            {default_return}\n"));
     out.push_str("        }\n\n");
@@ -2042,7 +2042,7 @@ fn generate_cpp_guest_host_contract_method(
         "                if ({fn_id}U >= interface_->dispatch.native.function_count) {{\n"
     ));
     out.push_str(&format!(
-        "                    detail::log_call_failure(polyplug::get_host_interface(), \"guest.host_caller\", \"{what}\", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));\n"
+        "                    detail::log_call_failure(host_, \"guest.host_caller\", \"{what}\", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));\n"
     ));
     out.push_str(&format!("                    {default_return}\n"));
     out.push_str("                }\n");
@@ -2068,7 +2068,7 @@ fn generate_cpp_guest_host_contract_method(
     // noexcept, so we cannot throw.
     out.push_str("        if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {\n");
     out.push_str(&format!(
-        "            detail::log_call_failure(polyplug::get_host_interface(), \"guest.host_caller\", \"{what}\", err.code);\n"
+        "            detail::log_call_failure(host_, \"guest.host_caller\", \"{what}\", err.code);\n"
     ));
     out.push_str(&format!("            {default_return}\n"));
     out.push_str("        }\n\n");
@@ -2826,9 +2826,10 @@ fn generate_cpp_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract])
 ///
 /// The class mirrors the host caller (`generate_cpp_host_contract`) with two
 /// differences:
-/// 1. The factory (`resolve()`) takes no arguments — it fetches the `HostApi*`
-///    from the cpp guest SDK via `polyplug::get_host_interface()`, then calls
-///    `find_guest_contract` / `resolve_guest_contract` / `create_instance`.
+/// 1. The factory (`resolve(host)`) takes the per-instance `HostApi*` (the
+///    author-factory parameter / instance payload — no DSO-global storage),
+///    then calls `find_guest_contract` / `resolve_guest_contract` /
+///    `create_instance`.
 /// 2. Per-method dispatch uses `host->call_guest_method` (the host-mediated
 ///    path at HostApi offset 136) instead of indexing the native dispatch table
 ///    directly.
@@ -2844,8 +2845,8 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
     out.push_str(
         "/// Dispatches to the peer through the host-mediated `call_guest_method` path.\n",
     );
-    out.push_str("/// Use `resolve()` to obtain an instance; returns `std::nullopt` when the\n");
-    out.push_str("/// contract is not registered or the host interface is unavailable.\n");
+    out.push_str("/// Use `resolve(host)` to obtain an instance; returns `std::nullopt` when\n");
+    out.push_str("/// the contract is not registered or the host interface is null.\n");
     if needs_arena {
         out.push_str("///\n");
         out.push_str("/// # Call-arena lifetime\n");
@@ -2863,18 +2864,18 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
     }
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
 
-    // ── resolve() factory ───────────────────────────────────────────────────
+    // ── resolve(host) factory ───────────────────────────────────────────────
     out.push_str("    /// Discover and resolve the peer contract through the host.\n");
     out.push_str("    ///\n");
-    out.push_str(
-        "    /// Returns `std::nullopt` if the host interface is unavailable, the contract\n",
-    );
+    out.push_str("    /// `host` is the per-instance HostApi pointer handed to the author\n");
+    out.push_str("    /// factory (`polyplug_create_<plugin>`) — no DSO-global host exists.\n");
+    out.push_str("    ///\n");
+    out.push_str("    /// Returns `std::nullopt` if the host interface is null, the contract\n");
     out.push_str("    /// is not registered, or `resolve_guest_contract` returns null.\n");
     out.push_str(&format!(
-        "    static std::optional<{}> resolve() noexcept {{\n",
+        "    static std::optional<{}> resolve(const HostApi* host) noexcept {{\n",
         class_name
     ));
-    out.push_str("        const HostApi* host = polyplug::get_host_interface();\n");
     out.push_str("        if (host == nullptr) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
@@ -4207,8 +4208,10 @@ mod tests {
             peer_file.content
         );
         assert!(
-            peer_file.content.contains("polyplug::get_host_interface()"),
-            "resolve() must use polyplug::get_host_interface():\n{}",
+            peer_file
+                .content
+                .contains("resolve(const HostApi* host) noexcept"),
+            "resolve(host) must take the per-instance HostApi pointer:\n{}",
             peer_file.content
         );
         assert!(

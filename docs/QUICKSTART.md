@@ -92,7 +92,7 @@ generated/
 └── guest/
     ├── mod.rs
     ├── contracts.rs       the trait(s) you implement
-    ├── interfaces.rs      set_*_impl() registration helpers
+    ├── interfaces.rs      instance machinery + author-factory declarations
     ├── host_contract_callers.rs   (host-contract call helpers, if any)
     ├── init.rs            polyplug_init ABI entry point
     └── types.rs           generated enums and structs
@@ -133,57 +133,59 @@ polyplug_utils = { path = "path/to/polyplug/crates/polyplug_utils" }
 
 Create `src/lib.rs`. The generated `contracts.rs` exposes a trait named after
 the contract (`GreeterHelloGuestContract` for `greeter.Hello`). Implement that
-trait on any struct, then register it with `set_my_greeter_impl`:
+trait on any struct, then export the factory the generated `create_instance`
+calls for every host-created instance (`polyplug_create_<plugin>`):
 
 ```rust
 use polyplug_abi::StringView;
-use polyplug_guest::{GuestError, alloc_string, to_str};
+use polyplug_guest::{GuestError, HostContext, to_str};
 
 #[path = "../generated/guest/mod.rs"]
 mod generated;
 
 use generated::contracts::GreeterHelloGuestContract;
-use generated::interfaces::set_my_greeter_impl;
 
-struct Plugin;
+struct Plugin {
+    /// Host handle for this runtime, captured at instance creation.
+    host: HostContext,
+}
 
 impl GreeterHelloGuestContract for Plugin {
     fn greet(&self, name: StringView) -> Result<StringView, GuestError> {
         // SAFETY: `name` is a valid StringView live for the duration of this call.
         let s: &str = unsafe { to_str(&name) };
-        alloc_string(&format!("Hello, {}!", s))
+        self.host.alloc_string(&format!("Hello, {}!", s))
     }
 }
 
-static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-fn init() {
-    let _ = INIT.get_or_init(|| {
-        let _ = set_my_greeter_impl(Box::new(Plugin));
-    });
+/// Factory called by the generated `create_instance` for every host-created
+/// instance. The implementation travels in `GuestContractInstance.data`.
+#[unsafe(no_mangle)]
+pub fn polyplug_create_my_greeter(host: HostContext) -> Box<dyn GreeterHelloGuestContract> {
+    Box::new(Plugin { host })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
     polyplug_abi::POLYPLUG_ABI_VERSION
 }
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn polyplug_user_init() {
-    init();
-}
 ```
 
 Key points:
 
-- `alloc_string` allocates the return value through the host allocator so the
-  host can safely free it after the call. All strings returned across the ABI
-  must go through this helper.
+- `HostContext` is the per-instance handle to the host runtime. Store it in
+  your struct and use `host.alloc_string(...)` / `host.log(...)` — no
+  process-wide host storage exists, so two runtimes loading the same plugin
+  stay fully isolated.
+- `host.alloc_string` allocates the return value through the host allocator so
+  the host can safely free it after the call. All strings returned across the
+  ABI must go through this helper.
 - `to_str` re-borrows a `StringView` as a `&str` without copying. The resulting
   reference is valid only for the duration of the call.
-- `polyplug_abi_version` and `polyplug_user_init` are the two mandatory exports.
-  The generated `init.rs` provides the actual ABI entry point
-  (`polyplug_init`) that the loader calls; `polyplug_user_init` is the hook
-  where your registration code runs.
+- `polyplug_abi_version` and `polyplug_create_<plugin>` are the two mandatory
+  exports. The generated `init.rs` provides the actual ABI entry point
+  (`polyplug_init`) that the loader calls; the factory is invoked per instance
+  by the generated `create_instance`.
 
 ---
 
@@ -327,7 +329,7 @@ The naming convention `polyplugc` applies for a contract `namespace.Type`:
 | Generated item | Pattern | Example |
 |---|---|---|
 | Guest trait | `NamespaceTypeGuestContract` | `GreeterHelloGuestContract` |
-| impl setter | `set_<bundle_name>_impl()` | `set_my_greeter_impl()` |
+| author factory | `polyplug_create_<plugin>()` | `polyplug_create_my_greeter()` |
 | Host caller struct | `NamespaceTypeContract` | `GreeterHelloContract` |
 | Contract-ID constant | `NAMESPACE_TYPE_CONTRACT_ID` | `GREETER_HELLO_CONTRACT_ID` |
 
@@ -337,7 +339,7 @@ The naming convention `polyplugc` applies for a contract `namespace.Type`:
 
 | `api.toml` type | Rust guest type | Notes |
 |---|---|---|
-| `StringView` | `StringView` | UTF-8 ptr+len; use `to_str()` to borrow, `alloc_string()` to return |
+| `StringView` | `StringView` | UTF-8 ptr+len; use `to_str()` to borrow, `HostContext::alloc_string()` to return |
 | `Buffer` | `Buffer` | raw ptr+len; use `alloc_buffer()` to return |
 | `bool` | `bool` | |
 | `i32` / `u32` | `i32` / `u32` | |

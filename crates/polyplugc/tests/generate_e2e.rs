@@ -145,15 +145,32 @@ fn rust_generated_glue_compiles() {
 
     // src/lib.rs includes the generated glue verbatim and provides the minimal
     // plugin entry points. This is the only hand-written file.
-    // polyplug_user_init is the plugin author's mandatory entry point — the
-    // generated polyplug_init declares it extern and calls it. Linux ld defers
-    // unresolved cdylib symbols to load time, but macOS ld64 requires them at
-    // link time, so the stub must exist for the build to succeed everywhere.
+    // polyplug_create_decoder is the plugin author's mandatory factory — the
+    // generated create_instance declares it extern and calls it per instance.
+    // Linux ld defers unresolved cdylib symbols to load time, but macOS ld64
+    // requires them at link time, so the factory must exist for the build to
+    // succeed everywhere.
     let lib_rs: &str = "#[path = \"../gen/guest/mod.rs\"]\n\
          mod generated;\n\
          \n\
+         use generated::contracts::PipelineDecoderGuestContract;\n\
+         use polyplug_abi::StringView;\n\
+         use polyplug_guest::{GuestError, HostContext};\n\
+         \n\
+         struct Plugin {\n\
+             host: HostContext,\n\
+         }\n\
+         \n\
+         impl PipelineDecoderGuestContract for Plugin {\n\
+             fn decode(&self, _input: StringView) -> Result<StringView, GuestError> {\n\
+                 self.host.alloc_string(\"DECODED:\")\n\
+             }\n\
+         }\n\
+         \n\
          #[unsafe(no_mangle)]\n\
-         pub extern \"C\" fn polyplug_user_init() {}\n\
+         pub fn polyplug_create_decoder(host: HostContext) -> Box<dyn PipelineDecoderGuestContract> {\n\
+             Box::new(Plugin { host })\n\
+         }\n\
          \n\
          #[unsafe(no_mangle)]\n\
          pub extern \"C\" fn polyplug_abi_version() -> u32 {\n\

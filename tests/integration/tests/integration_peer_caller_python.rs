@@ -4,19 +4,20 @@
 //! executes end-to-end inside a real `Runtime`. It is the test that closes the
 //! gap #75 fixed: before the fix, `peer_callers.py` was generated but unreachable
 //! — `resolve()` needed a host pointer no idiomatic python guest could obtain.
-//! Now the guest SDK stores the host at `polyplug_init` (`store_host_interface`)
-//! and `resolve()` reads it via `get_host_interface()`, exactly like Lua/JS/C++.
+//! Now the author factory (`polyplug_create_<plugin>` via `set_<plugin>_factory`)
+//! receives the host pointer at `polyplug_init` time and the impl passes it to
+//! `resolve(host_ptr)` explicitly — no host pointer is stored in the guest SDK.
 //!
 //! The flow:
 //!   1. `polyplugc::generate` emits the Python guest glue for a `data.Transformer@1`
 //!      bundle that declares a `[[dependency]]` on `pipeline.Validator` — so the
 //!      generator emits `PipelineValidatorPeer` into `peer_callers.py`.
 //!   2. A hand-written `consumer.py` implements `transform(input: str)` by
-//!      resolving that generated peer caller (no host pointer threaded in) and
-//!      calling `validate(...)`, marshalling `str` <-> `StringView` at the boundary.
+//!      resolving that generated peer caller with the host pointer its factory
+//!      received and calling `validate(...)`, marshalling `str` <-> `StringView`
+//!      at the boundary.
 //!   3. The current python guest SDK (`polyplug_guest` + `polyplug_abi`) is
-//!      vendored into the bundle's `site-packages/` (NOT the stale fixture copy —
-//!      it must carry the new `store_host_interface`/`get_host_interface`).
+//!      vendored into the bundle's `site-packages/` (NOT a stale fixture copy).
 //!   4. A Lua **provider** bundle registers `pipeline.Validator@1` whose
 //!      `validate(StringView) -> StringView` returns `"PEER:"` + input.
 //!   5. Both bundles load into one `Runtime` (PythonLoader + LuaLoader). The
@@ -120,35 +121,37 @@ fn build_python_consumer(tmp: &Path) -> PathBuf {
     .expect("move manifest.toml to bundle root");
 
     // The only hand-written source: transform() resolves the generated peer caller
-    // (no host pointer threaded in — it reads the stored host) and calls validate().
-    // We marshal str <-> StringView at the boundary; to_str copies the borrowed
-    // result before `peer` is garbage-collected.
+    // with the host pointer the author factory received (no SDK-level host storage)
+    // and calls validate(). We marshal str <-> StringView at the boundary; to_str
+    // copies the borrowed result before `peer` is garbage-collected.
     let consumer_py: &str = "from generated.guest.contracts import (\n\
          \x20   TRANSFORMERDataTransformerPlugin,\n\
-         \x20   set_transformer_impl,\n\
+         \x20   set_transformer_factory,\n\
          \x20   polyplug_init,\n\
          )\n\
          from generated.guest.peer_callers import PipelineValidatorPeer\n\
-         from polyplug_guest import get_host_interface, alloc_string, to_str\n\
+         from polyplug_guest import alloc_string, to_str\n\
          \n\
          \n\
          class TransformerImpl(TRANSFORMERDataTransformerPlugin):\n\
+         \x20   def __init__(self, host_ptr: int) -> None:\n\
+         \x20       self._host_ptr = host_ptr\n\
+         \n\
          \x20   def transform(self, input: str) -> str:\n\
-         \x20       peer = PipelineValidatorPeer.resolve()\n\
+         \x20       peer = PipelineValidatorPeer.resolve(self._host_ptr)\n\
          \x20       if peer is None:\n\
          \x20           return \"ERROR:peer-unavailable\"\n\
-         \x20       host_ptr = get_host_interface()\n\
-         \x20       sv_in = alloc_string(host_ptr, input)\n\
+         \x20       sv_in = alloc_string(self._host_ptr, input)\n\
          \x20       sv_out = peer.validate(sv_in)\n\
          \x20       return to_str(sv_out)\n\
          \n\
          \n\
-         set_transformer_impl(TransformerImpl())\n";
+         set_transformer_factory(TransformerImpl)\n";
     std::fs::write(bundle_dir.join("consumer.py"), consumer_py).expect("write consumer.py");
 
     // Vendor the CURRENT guest SDK into site-packages/ (the loader prepends
-    // <bundle>/site-packages to sys.path). Copy the real SDK — NOT the stale
-    // fixture copy — so the new store_host_interface/get_host_interface are present.
+    // <bundle>/site-packages to sys.path). Copy the real SDK — NOT a stale
+    // fixture copy — so the helpers match the generated glue exactly.
     let site: PathBuf = bundle_dir.join("site-packages");
     let sdk_root: PathBuf = workspace_root().join("sdks").join("python");
 

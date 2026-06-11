@@ -47,29 +47,35 @@ pub(crate) const BYTE_BRIDGE_AVAILABLE: bool = matches!(
 );
 
 /// Signature of the bridge's `PolyplugByteBridgeLoadAndGetInit` entry point:
-/// `(bundle_id, asm_ptr, asm_len, type_name_ptr, type_name_len) -> init_fn_ptr (null on failure)`.
-/// The assembly is loaded into the bundle's own collectible ALC.
+/// `(runtime_id, bundle_id, asm_ptr, asm_len, type_name_ptr, type_name_len) -> init_fn_ptr
+/// (null on failure)`. The assembly is loaded into the (runtime, bundle) collectible ALC —
+/// the composite key isolates two Runtimes loading the same bundle id.
 pub(crate) type BridgeLoadAndGetInitFn =
-    unsafe extern "system" fn(u64, *const u8, i32, *const u8, i32) -> *const core::ffi::c_void;
+    unsafe extern "system" fn(u64, u64, *const u8, i32, *const u8, i32) -> *const core::ffi::c_void;
 
 /// Signature of the bridge's `PolyplugByteBridgeLoadFromPathAndGetInit` entry point:
-/// `(bundle_id, path_ptr, path_len, type_name_ptr, type_name_len) -> init_fn_ptr (null on failure)`.
-/// The assembly is loaded from disk into the bundle's own collectible ALC (with sibling-dependency
-/// probing), so on-disk (`Path`) bundles also support true managed unload.
+/// `(runtime_id, bundle_id, path_ptr, path_len, type_name_ptr, type_name_len) -> init_fn_ptr
+/// (null on failure)`. The assembly is loaded from disk into the (runtime, bundle) collectible
+/// ALC (with sibling-dependency probing), so on-disk (`Path`) bundles also support true
+/// managed unload.
 pub(crate) type BridgeLoadFromPathAndGetInitFn =
-    unsafe extern "system" fn(u64, *const u8, i32, *const u8, i32) -> *const core::ffi::c_void;
+    unsafe extern "system" fn(u64, u64, *const u8, i32, *const u8, i32) -> *const core::ffi::c_void;
 
 /// Signature of the bridge's `PolyplugByteBridgePreloadDependency` entry point:
-/// `(bundle_id, asm_ptr, asm_len) -> u32 (0 on success)`. Loads into the bundle's collectible ALC.
-pub(crate) type BridgePreloadDependencyFn = unsafe extern "system" fn(u64, *const u8, i32) -> u32;
+/// `(runtime_id, bundle_id, asm_ptr, asm_len) -> u32 (0 on success)`. Loads into the
+/// (runtime, bundle) collectible ALC.
+pub(crate) type BridgePreloadDependencyFn =
+    unsafe extern "system" fn(u64, u64, *const u8, i32) -> u32;
 
-/// Signature of the bridge's `PolyplugByteBridgeUnload` entry point: `(bundle_id) -> u32`.
-/// Requests true managed unload of the bundle's collectible ALC (cooperative/async).
-pub(crate) type BridgeUnloadFn = unsafe extern "system" fn(u64) -> u32;
+/// Signature of the bridge's `PolyplugByteBridgeUnload` entry point:
+/// `(runtime_id, bundle_id) -> u32`. Requests true managed unload of the (runtime, bundle)
+/// collectible ALC (cooperative/async).
+pub(crate) type BridgeUnloadFn = unsafe extern "system" fn(u64, u64) -> u32;
 
 /// Signature of the bridge's `PolyplugByteBridgeIsAlcAlive` test-probe entry point:
-/// `(bundle_id) -> u32` (1 = still loaded/not-yet-collected, 0 = reclaimed/never-loaded).
-pub(crate) type BridgeIsAlcAliveFn = unsafe extern "system" fn(u64) -> u32;
+/// `(runtime_id, bundle_id) -> u32` (1 = still loaded/not-yet-collected, 0 =
+/// reclaimed/never-loaded).
+pub(crate) type BridgeIsAlcAliveFn = unsafe extern "system" fn(u64, u64) -> u32;
 
 /// DotnetContext holds the live CLR runtime and the managed byte-load bridge.
 /// Created exactly once per process via CLR_CONTEXT.
@@ -401,6 +407,7 @@ impl DotnetContext {
     /// the buffer into managed storage before returning.
     pub(crate) fn preload_dependency_bytes(
         &self,
+        runtime_id: u64,
         bundle_id: u64,
         dep_bytes: &[u8],
     ) -> Result<(), RuntimeError> {
@@ -408,7 +415,12 @@ impl DotnetContext {
         // SAFETY: `preload_dependency` is a valid CLR fn ptr resolved in `init_bridge`.
         // `dep_bytes` is a valid, correctly-sized buffer; the bridge copies it during the call.
         let code: u32 = unsafe {
-            (bridge.preload_dependency)(bundle_id, dep_bytes.as_ptr(), dep_bytes.len() as i32)
+            (bridge.preload_dependency)(
+                runtime_id,
+                bundle_id,
+                dep_bytes.as_ptr(),
+                dep_bytes.len() as i32,
+            )
         };
         if code != 0 {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
@@ -433,6 +445,7 @@ impl DotnetContext {
     /// the buffer into managed storage before returning, so the caller may drop it after.
     pub(crate) fn get_init_fn_from_bytes(
         &self,
+        runtime_id: u64,
         bundle_id: u64,
         asm_name: &str,
         asm_bytes: &[u8],
@@ -445,6 +458,7 @@ impl DotnetContext {
         // and returns either a valid native fn ptr or null.
         let raw: *const core::ffi::c_void = unsafe {
             (bridge.load_and_get_init)(
+                runtime_id,
                 bundle_id,
                 asm_bytes.as_ptr(),
                 asm_bytes.len() as i32,
@@ -472,6 +486,7 @@ impl DotnetContext {
     /// probing) so the bundle supports true managed unload. `asm_name` is used only in diagnostics.
     pub(crate) fn get_init_fn_from_path(
         &self,
+        runtime_id: u64,
         bundle_id: u64,
         asm_path: &std::path::Path,
         asm_name: &str,
@@ -486,6 +501,7 @@ impl DotnetContext {
         // returns either a valid native fn ptr or null.
         let raw: *const core::ffi::c_void = unsafe {
             (bridge.load_from_path_and_get_init)(
+                runtime_id,
                 bundle_id,
                 path_bytes.as_ptr(),
                 path_bytes.len() as i32,
@@ -515,10 +531,14 @@ impl DotnetContext {
     /// references and native frames into the ALC have cleared. The host is responsible for
     /// attesting (via `UnloadMode::Reclaim`) that no thread is calling or holding a pointer
     /// into the bundle before this is invoked.
-    pub(crate) fn unload_bundle_alc(&self, bundle_id: u64) -> Result<(), RuntimeError> {
+    pub(crate) fn unload_bundle_alc(
+        &self,
+        runtime_id: u64,
+        bundle_id: u64,
+    ) -> Result<(), RuntimeError> {
         let bridge: &ByteBridge = self.bridge()?;
         // SAFETY: `unload` is a valid CLR fn ptr resolved in `init_bridge`.
-        let code: u32 = unsafe { (bridge.unload)(bundle_id) };
+        let code: u32 = unsafe { (bridge.unload)(runtime_id, bundle_id) };
         if code != 0 {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: format!("<byte-bridge-unload:{bundle_id}>"),
@@ -528,12 +548,16 @@ impl DotnetContext {
         Ok(())
     }
 
-    /// Test-only probe: returns whether a bundle's collectible ALC is still alive (1) or has
-    /// been reclaimed / was never loaded (0). Forces a GC inside the managed bridge.
-    pub(crate) fn is_alc_alive(&self, bundle_id: u64) -> Result<bool, RuntimeError> {
+    /// Test-only probe: returns whether a (runtime, bundle) collectible ALC is still alive (1)
+    /// or has been reclaimed / was never loaded (0). Forces a GC inside the managed bridge.
+    pub(crate) fn is_alc_alive(
+        &self,
+        runtime_id: u64,
+        bundle_id: u64,
+    ) -> Result<bool, RuntimeError> {
         let bridge: &ByteBridge = self.bridge()?;
         // SAFETY: `is_alc_alive` is a valid CLR fn ptr resolved in `init_bridge`.
-        let alive: u32 = unsafe { (bridge.is_alc_alive)(bundle_id) };
+        let alive: u32 = unsafe { (bridge.is_alc_alive)(runtime_id, bundle_id) };
         Ok(alive != 0)
     }
 }

@@ -9,10 +9,10 @@
 // This pulls in all guest-side headers in dependency order:
 //   1. abi/polyplug/abi.hpp      — C ABI structs, constants, allocator decls, and StringView helpers
 //   2. polyplug/contract.hpp     — Abstract base class for contract implementations
-//   3. polyplug/guest.hpp        — operator new/delete overrides + POLYPLUG_GUEST_MAIN
+//   3. polyplug/guest.hpp        — alloc_string(host, s) helper + POLYPLUG_GUEST_MAIN
 //
-// NOTE: polyplug/guest.hpp defines global operator new/delete overloads and
-// must be included in exactly one translation unit per plugin DSO.
+// NOTE: the guest SDK holds no process-wide state — the HostApi pointer flows
+// through create_instance into the per-instance payload (see polyplug/guest.hpp).
 
 #pragma once
 

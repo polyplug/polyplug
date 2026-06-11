@@ -1,219 +1,91 @@
-# Architecture Clarifications: Singleton Implementations + Caller Wrappers
+# Architecture Clarifications: Per-Instance Implementations + Caller Wrappers
 
 **Critical clarification about polyplug's instance model.**
 
 ## Terminology Note
 
-This document uses the following terminology (current as of v1.1):
+This document uses the following terminology (current as of the static-free wave):
 - **GuestContractInterface**: The interface struct a plugin provides for the host to call
 - **HostApi**: The runtime's ABI table provided to guests
+- **Instance payload**: The per-instance state carried in `GuestContractInstance.data`
 
 Interfaces are stored in `RuntimeStore` as interface slots guarded by a single `RwLock`. There is no separate slot wrapper struct around individual interfaces.
 
 ---
 
-## The Truth About "Instances"
+## The Instance Model
+
+### What polyplug HAS
+
+✅ **Real instances** — every `create_instance` call invokes the plugin's author factory
+   (`polyplug_create_<plugin>` in Rust/C++, `Set<Plugin>Factory` in C#/Python) and returns a
+   fresh implementation carried in `GuestContractInstance.data`
+✅ **Per-instance host context** — the `HostApi` pointer is captured at instance creation and
+   stored in the instance payload, so every host call routes to the runtime that owns it
+✅ **Caller wrappers** — host-side RAII objects that own exactly one instance
+   (`create_instance` in `new()`, `destroy_instance` in `drop()`)
+✅ **Callback-based lifecycle** — host destroys instances before hot-reload completes
 
 ### What polyplug DOESN'T Have
 
-❌ **NO factory pattern** that creates multiple plugin instances
-❌ **NO per-instance state** on the plugin side
-❌ **NO ability** for the host to spawn multiple instances of the same plugin
-
-### What polyplug DOES Have
-
-✅ **Singleton implementations** - Each contract has ONE implementation per loaded bundle
-✅ **Caller wrappers** - Host creates multiple wrappers that reference the same interface
-✅ **Callback-based lifecycle** - Host destroys instances before hot-reload completes
+❌ **NO static implementation storage** — generated code and SDKs hold no `OnceLock`,
+   module-level, or class-static slot for the implementation or the host pointer
+   (CLAUDE.md Rule 12). Two `Runtime`s loading the same plugin binary get fully
+   isolated instances.
+❌ **NO process-wide host pointer** — helpers like `alloc_string` and `log` take the host
+   context explicitly (Rust `HostContext`, C++ `const HostApi*`, C# `IntPtr`, Python `int`)
 
 ---
 
 ## Architecture Deep Dive
 
-### Plugin Side: Singleton via `OnceLock`
+### Plugin Side: Factory + Instance Payload
 
-Every plugin contract implementation is stored in a **static singleton**:
+The generated glue declares an author factory and constructs the implementation per instance:
 
 ```rust
-// examples/guests/rust/validator/generated/guest/interfaces.rs:50
-pub static VALIDATOR_IMPL: OnceLock<Box<dyn PipelineValidatorPlugin>> = OnceLock::new();
+// generated/guest/interfaces.rs (Rust shape; other languages mirror it)
+unsafe extern "Rust" {
+    fn polyplug_create_validator(host: HostContext) -> Box<dyn PipelineValidatorGuestContract>;
+}
 
-pub fn set_validator_impl(impl_: Box<dyn PipelineValidatorPlugin>) -> Result<(), &'static str> {
-    VALIDATOR_IMPL.set(impl_).map_err(|_| "validator already registered")
+struct ValidatorPluginState {
+    host: HostContext,                                   // captured at creation
+    implementation: Box<dyn PipelineValidatorGuestContract>,
+}
+
+unsafe extern "C" fn VALIDATOR_create_instance(host: *const HostApi, _args: *const ())
+    -> GuestContractInstance
+{
+    // calls the author factory, boxes the payload, stamps the contract id
 }
 ```
 
 **Consequences:**
-- `OnceLock::set()` can only succeed **once** per process lifetime
-- Attempting to register a second implementation returns an error
-- The plugin has exactly ONE implementation, period
+- Each `create_instance` produces an independent implementation with its own state
+- The dispatch wrappers read the implementation from `instance.data` — a null
+  instance is rejected with `InvalidPointer`
+- `destroy_instance` drops the payload exactly once
+- Re-running `polyplug_init` after an in-place binary overwrite re-creates
+  instances through the new factory — no stale static survives a reload
 
-### Host Side: Caller Wrappers (NOT Instances)
-
-What the generated code creates are **caller wrappers**, not plugin instances:
+### Host Side: Caller Wrappers Own Instances
 
 ```rust
 // examples/hosts/rust/generated/host/host_callers.rs
 pub struct PipelineValidatorContract {
     interface: *const GuestContractInterface,  // resolved interface pointer
-    instance: GuestContractInstance,           // create_instance() dispatch token
+    instance: GuestContractInstance,           // created in new(), destroyed in drop()
     host: *const HostApi,
 }
-
-impl PipelineValidatorContract {
-    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
-        // Resolve the interface from the handle via the HostApi method.
-        let interface: *const GuestContractInterface =
-            unsafe { ((*host).resolve_guest_contract)(host, handle) };
-        if interface.is_null() {
-            return None;  // No implementation registered for this handle
-        }
-        let instance = unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
-        Some(PipelineValidatorContract { interface, instance, host })  // SAME interface
-    }
-}
-```
-
-**What's actually happening:**
-```rust
-// Host creates THREE wrappers
-let wrapper1 = PipelineValidatorContract::new(handle, host)?;  // wrapper 1
-let wrapper2 = PipelineValidatorContract::new(handle, host)?;  // wrapper 2
-let wrapper3 = PipelineValidatorContract::new(handle, host)?;  // wrapper 3
-
-// All three call the SAME singleton implementation
-wrapper1.validate(input)?;  // → VALIDATOR_IMPL (singleton)
-wrapper2.validate(input)?;  // → VALIDATOR_IMPL (same singleton)
-wrapper3.validate(input)?;  // → VALIDATOR_IMPL (same singleton)
-```
-
-### The Resolved Interface Pointer
-
-```rust
-// the wrapper stores the raw pointer returned by resolve_guest_contract
-interface: *const GuestContractInterface,
 ```
 
 The wrapper holds the `*const GuestContractInterface` that `resolve_guest_contract`
-returned — there is no RAII guard type. The retire-not-drop model keeps every
-resolved interface (and its backing library) alive for the runtime's lifetime,
-so the stored pointer stays valid even across a hot-reload.
-
-**Purpose:**
-- Keeps the interface reachable for the duration of the wrapper's calls
-- **NOT** a per-instance state container
-- **NOT** creating new plugin instances
-- Just a raw pointer into the registry's retained interface
-
----
-
-## Visual Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        PLUGIN SIDE (Guest)                          │
-│                                                                     │
-│  ┌────────────────────────────────────────────────────────────┐    │
-│  │  static VALIDATOR_IMPL: OnceLock<Box<dyn Validator>>      │    │
-│  │         ↑                                                  │    │
-│  │         │ SINGLETON - only ONE implementation exists       │    │
-│  │         │                                                  │    │
-│  │  [ValidatorImpl { ... }]                                   │    │
-│  └────────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────┘
-                              ↑
-                              │ GuestContractInterface pointer
-                              │ (registered once at init)
-┌─────────────────────────────────────────────────────────────────────┐
-│                         HOST SIDE (Runtime)                         │
-│                                                                     │
-│  ┌────────────────────────────────────────────────────────────┐    │
-│  │  RuntimeStore {                                            │    │
-│  │    interface slot (RwLock-guarded)  ← ONE per contract     │    │
-│  │  }                                                         │    │
-│  └────────────────────────────────────────────────────────────┘    │
-│                              ↑                                      │
-│            ┌─────────────────┼─────────────────┐                   │
-│            │                 │                 │                   │
-│      ┌─────┴─────┐   ┌──────┴──────┐   ┌─────┴─────┐              │
-│      │ Wrapper 1 │   │  Wrapper 2  │   │ Wrapper 3 │              │
-│      │           │   │             │   │           │              │
-│      └───────────┘   └─────────────┘   └───────────┘              │
-│            │                 │                 │                   │
-│            └─────────────────┴─────────────────┘                   │
-│                              │                                      │
-│                              ↓                                      │
-│                    All call SAME singleton                          │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Why This Design?
-
-### 1. **Simplicity**
-- No instance lifecycle management complexity
-- No per-instance state synchronization
-- No factory pattern boilerplate
-
-### 2. **Hot-Reload Safety**
-- Callback-based coordination — host destroys instances before reload
-- Clean interface swap without dangling pointers
-- No instance invalidation logic needed
-
-### 3. **Performance**
-- No instance allocation overhead
-- Direct interface dispatch after wrapper creation
-- Minimal indirection: wrapper → guard → interface → singleton
-
-### 4. **Correct Mental Model**
-- Plugins are **services**, not objects
-- Host **consumes services**, doesn't instantiate objects
-- Wrappers are **references**, not instances
-
----
-
-## Common Misconceptions
-
-### Misconception: "Factory Pattern Creates Instances"
-
-**Reality:** The "factory methods" create **caller wrappers**, not plugin instances.
-
-```rust
-// WRONG mental model:
-let decoder1 = ImageDecoder::create(runtime)?;  // Creates instance 1?
-let decoder2 = ImageDecoder::create(runtime)?;  // Creates instance 2?
-
-// CORRECT mental model:
-let wrapper1 = ImageDecoder::create(runtime)?;  // Wrapper 1 → singleton interface
-let wrapper2 = ImageDecoder::create(runtime)?;  // Wrapper 2 → SAME singleton interface
-```
-
-### Misconception: "Multiple Wrappers = Multiple Instances"
-
-**Reality:** Multiple wrappers can exist, but they all call the same singleton.
-
-```rust
-// All three wrappers call the SAME implementation
-wrapper1.decode(data)?;  // → singleton
-wrapper2.decode(data)?;  // → same singleton
-wrapper3.decode(data)?;  // → same singleton
-```
-
-### Misconception: "Plugin Has Per-Instance State"
-
-**Reality:** Plugin state is global within the plugin (static), not per-wrapper.
-
-```rust
-// Plugin side - static state shared by ALL callers
-static COUNTER: AtomicU32 = AtomicU32::new(0);
-
-extern "C" fn process(args: *const (), out: *mut ()) -> AbiError {
-    // ALL wrappers (from all hosts) see the SAME counter
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-    // ...
-}
-```
+returned — there is no RAII guard type around the interface itself. The retire-not-drop
+model keeps every resolved interface (and its backing library) alive for the runtime's
+lifetime, so the stored pointer stays valid even across a hot-reload. The instance,
+by contrast, is owned by the wrapper: `new()` calls `create_instance`, `drop()` calls
+`destroy_instance`.
 
 ---
 
@@ -225,58 +97,41 @@ The host must destroy all instances when receiving the `Preparing` notification:
 
 ```rust
 // Hot-reload: Preparing phase
-// Host drops all wrappers
+// Host drops all wrappers (each drop calls destroy_instance)
 drop(w1); drop(w2); drop(w3);
 
 // Runtime can now safely swap the interface slot via apply_reload_swap
 // (under the RuntimeStore RwLock write guard)
 ```
 
-### Why Wrappers Must Be Dropped
-
-The host **must** drop all wrappers before hot-reload completes because:
-
-1. Old interface will be unloaded (DLL/SO freed)
-2. Wrappers holding references to old interface would crash on use
-3. Callback coordination prevents dangling references
-
 **Notification flow:**
 ```
 1. Runtime fires Preparing notification
-2. Host drops all wrappers for this bundle
+2. Host drops all wrappers for this bundle (instances destroyed)
 3. Runtime swaps interface
 4. Runtime fires Reloaded notification
-5. Host creates new wrappers (pointing to new interface)
+5. Host creates new wrappers — create_instance runs against the NEW code,
+   so the new factory produces fresh implementations
 ```
 
 ---
 
-## Multiple Implementations (The Exception)
+## Multiple Implementations Across Bundles
 
-The ONLY way to have "multiple instances" is loading **multiple bundles** that each implement the same contract:
+Loading **multiple bundles** that each implement the same contract yields independent
+providers (in addition to per-wrapper instances within each):
 
 ```rust
-// Load bundle A with validator implementation
 runtime.load_bundle("./plugins/validator_v1")?;
-
-// Load bundle B with ALSO validator implementation
 runtime.load_bundle("./plugins/validator_v2")?;
 
-// Find ALL implementations
 let mut handles = [GuestContractHandle::null(); 16];
 let count = runtime.find_all_by_contract(VALIDATOR_ID, 1, &mut handles)?;
 // count == 2 (one from each bundle)
 
-// Create wrappers to different implementations
-let wrapper_v1 = ValidatorContract::new(handles[0], runtime)?;  // → bundle A
-let wrapper_v2 = ValidatorContract::new(handles[1], runtime)?;  // → bundle B
-
-// These call DIFFERENT implementations
-wrapper_v1.validate(data)?;  // → validator_v1
-wrapper_v2.validate(data)?;  // → validator_v2 (different!)
+let wrapper_v1 = ValidatorContract::new(handles[0], runtime)?;  // → bundle A instance
+let wrapper_v2 = ValidatorContract::new(handles[1], runtime)?;  // → bundle B instance
 ```
-
-**This is NOT the same as factory instances** - these are completely separate bundles with separate static state.
 
 ---
 
@@ -284,39 +139,21 @@ wrapper_v2.validate(data)?;  // → validator_v2 (different!)
 
 | Term | What It Means | What It DOESN'T Mean |
 |------|---------------|---------------------|
-| **Caller Wrapper** | Host-side object providing access to interface | NOT a plugin instance |
-| **Plugin Instance** | This term is misleading - avoid it | N/A |
-| **Singleton Implementation** | ONE `OnceLock<Box<dyn Trait>>` per contract | NOT per-wrapper |
-| **Factory Method** | Creates caller wrapper, checks if plugin exists | NOT creating instances |
+| **Caller Wrapper** | Host-side RAII object owning one instance | NOT a shared reference to a singleton |
+| **Instance payload** | Factory-created state in `GuestContractInstance.data` | NOT static/global plugin state |
+| **Author factory** | `polyplug_create_<plugin>` / `Set<Plugin>Factory` | NOT a registration of a single shared object |
 | **Resolved interface pointer** | `*const GuestContractInterface` from `resolve_guest_contract` | NOT instance state |
 | **Hot-Reload** | Interface swap via callback coordination | NOT instance migration |
 
 ---
 
-## For Documentation Writers
-
-**AVOID these terms:**
-- "Create instance"
-- "Plugin instance"
-- "Factory pattern" (without heavy qualification)
-- "Instance lifecycle"
-
-**USE these terms instead:**
-- "Create caller wrapper"
-- "Plugin implementation" (singleton)
-- "Caller wrapper pattern"
-- "Wrapper lifecycle"
-
----
-
 ## Summary
 
-1. **Plugins use `OnceLock`** - ONE implementation per contract per bundle
-2. **Host creates wrappers** - Multiple wrappers reference the SAME interface
-3. **Callback coordination** - Host destroys instances before hot-reload
-4. **No factory pattern** - "Factory methods" create wrappers, not instances
-5. **Hot-reload via callback** - Wrappers must be dropped before interface swap
+1. **Plugins export a factory** — the generated `create_instance` calls it per instance
+2. **Instances carry their own host context** — no process-wide host pointer exists
+3. **Host wrappers own instances** — `new()` creates, `drop()` destroys
+4. **Callback coordination** — host destroys instances before hot-reload
+5. **Rule 12 holds end to end** — no statics holding runtime or plugin state in any
+   SDK or generated file, in any language
 
-**The architecture is: Singleton Implementations + Callback-Based Coordination**
-
-This is simpler, safer, and more performant than a factory/instance model.
+**The architecture is: Factory-Created Instances + Callback-Based Coordination.**

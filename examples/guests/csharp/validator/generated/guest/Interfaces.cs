@@ -9,21 +9,74 @@ using System.Runtime.InteropServices;
 // Plugin: validator
 public static class ValidatorInterfaces {
     public const ulong VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5UL;
-    private static IPipelineValidatorGuestContract? _impl_validator;
-    public static void SetValidatorImpl(IPipelineValidatorGuestContract impl) { _impl_validator = impl; }
+    private static Func<IntPtr, IPipelineValidatorGuestContract>? _factory_validator;
+    /// <summary>
+    /// Register the author factory; call once at module initialization
+    /// (<c>[ModuleInitializer]</c>). The factory receives the HostApi pointer
+    /// at instance creation, so every implementation is constructed with its
+    /// owning runtime's host — no host pointer is stored in the SDK.
+    /// </summary>
+    public static void SetValidatorFactory(Func<IntPtr, IPipelineValidatorGuestContract> factory) { _factory_validator = factory; }
+
+    /// <summary>Per-instance payload carried in GuestContractInstance.Data (via GCHandle).</summary>
+    private sealed class ValidatorInstanceState {
+        // Host pointer captured at instance creation — routes every host call
+        // (allocation, logging, peer dispatch) to the runtime that owns it.
+        public IntPtr Host;
+        // The author's implementation, created by the SetValidatorFactory factory.
+        public IPipelineValidatorGuestContract Impl = null!;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static GuestContractInstance VALIDATOR_CreateInstance(IntPtr host, IntPtr args) {
+        // Calls the author factory and carries the payload in instance.Data as a
+        // normal (non-pinned) GCHandle — an opaque token the host never
+        // dereferences. Returns a null handle when host is null, the factory
+        // was not registered, or it throws.
+        try {
+            var factory = _factory_validator;
+            if (host == IntPtr.Zero || factory is null) {
+                return new GuestContractInstance { Data = IntPtr.Zero };
+            }
+            var state = new ValidatorInstanceState { Host = host, Impl = factory(host) };
+            var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);
+            return new GuestContractInstance {
+                Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),
+                ContractId = VALIDATOR_CONTRACT_ID,
+            };
+        } catch {
+            return new GuestContractInstance { Data = IntPtr.Zero };
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void VALIDATOR_DestroyInstance(IntPtr host, GuestContractInstance instance) {
+        // Frees the GCHandle allocated by CreateInstance; the payload becomes
+        // collectible. The host calls destroy exactly once per instance.
+        if (instance.Data == IntPtr.Zero) return;
+        try {
+            System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Free();
+        } catch {
+            // Foreign or double-freed handle: nothing safe to do in a native callback.
+        }
+    }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static unsafe AbiError validator_validate_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
-        // Instance is ignored for stateless plugins (instance is null).
-        // For stateful plugins, users override create_instance and use instance.Data.
         try {
+            if (instance.Data == IntPtr.Zero) {
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage("instance is null") };
+            }
             if (argsPtr == IntPtr.Zero) {
                 return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
             if (outPtr == IntPtr.Zero) {
                 return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
-            var impl = _impl_validator ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.Generic, "not initialized");
+            // instance.Data is the GCHandle token produced by CreateInstance.
+            var state = (ValidatorInstanceState?)System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Target
+                ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.InvalidPointer, "instance payload collected");
+            var impl = state.Impl;
             var input = *(Polyplug.Abi.StringView*)argsPtr;
             var result = impl.Validate(input);
             *(Polyplug.Abi.StringView*)outPtr = result;
@@ -41,17 +94,6 @@ public static class ValidatorInterfaces {
     private static System.Runtime.InteropServices.GCHandle _VALIDATOR_pin_handle;
     public static GuestContractInterface VALIDATOR_INTERFACE;
 
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static GuestContractInstance VALIDATOR_CreateInstanceStub(IntPtr host, IntPtr args) {
-        // Default stub returns null instance - users override for stateful plugins.
-        return new GuestContractInstance { Data = IntPtr.Zero };
-    }
-
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void VALIDATOR_DestroyInstanceStub(IntPtr host, GuestContractInstance instance) {
-        // Default stub is no-op - users override for cleanup before hot-reload.
-    }
-
     static ValidatorInterfaces() {
         unsafe {
             VALIDATOR_FNS = new IntPtr[] {
@@ -62,8 +104,8 @@ public static class ValidatorInterfaces {
                 ContractId = VALIDATOR_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
-                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&VALIDATOR_CreateInstanceStub,
-                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&VALIDATOR_DestroyInstanceStub,
+                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&VALIDATOR_CreateInstance,
+                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&VALIDATOR_DestroyInstance,
                 Dispatch = new DispatchMechanisms {
                     Native = new NativeDispatch {
                         FunctionCount = 1u,

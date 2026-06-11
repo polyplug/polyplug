@@ -149,10 +149,23 @@ fn generated_csharp_bundle_transform_dispatches() {
     let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         // SAFETY: transmute *const () to the canonical native dispatch fn pointer.
         unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: input_view/out_view are valid and correctly typed for transform.
+    // The generated CreateInstance constructs the C# implementation via the
+    // author factory and carries it in instance.Data (GCHandle); dispatch
+    // requires a real instance.
+    // SAFETY: host_abi is the runtime's live HostApi pointer; create_instance
+    // is the generated factory thunk on the resolved interface.
+    let host_abi: *const polyplug_abi::HostApi = rt.host_abi() as *const polyplug_abi::HostApi;
+    let instance: GuestContractInstance =
+        unsafe { (vtable.create_instance)(host_abi, core::ptr::null()) };
+    assert!(
+        !instance.data.is_null(),
+        "create_instance must produce a non-null instance payload"
+    );
+    // SAFETY: input_view/out_view are valid and correctly typed for transform;
+    // instance was created above.
     let result: AbiError = unsafe {
         dispatch_fn(
-            GuestContractInstance::null(),
+            instance,
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
         )
@@ -162,6 +175,9 @@ fn generated_csharp_bundle_transform_dispatches() {
         AbiErrorCode::Ok as u32,
         "transform must return Ok"
     );
+    // SAFETY: instance was created by create_instance; destroy exactly once.
+    // out_view points to guest/host-owned bytes that outlive the instance.
+    unsafe { (vtable.destroy_instance)(host_abi, instance) };
 
     // SAFETY: out_view points to out_view.len UTF-8 bytes owned by the guest.
     let out_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };

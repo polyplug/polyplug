@@ -152,12 +152,6 @@ pub unsafe extern "C" fn polyplug_init(
     LAST_BUNDLE_PATH_PTR.store(sv.ptr as *mut u8, Ordering::SeqCst);
     LAST_BUNDLE_PATH_LEN.store(sv.len, Ordering::SeqCst);
 
-    // Store the host vtable for the guest SDK helpers (polyplug_guest::log,
-    // host allocation) — mirrors what every generated guest init does.
-    // SAFETY: host_abi is non-null (checked above) and stays valid for the
-    // plugin's lifetime per the ABI contract.
-    unsafe { polyplug_guest::store_host_vtable(host_abi) };
-
     // SAFETY: host_abi is non-null and provided by the host runtime per ABI contract.
     let host: &HostApi = unsafe { &*host_abi };
 
@@ -225,16 +219,22 @@ pub extern "C" fn polyplug_bench_inc(x: u32) -> u32 {
 
 // ─── Guest-SDK log probe ─────────────────────────────────────────────────────────
 
-/// Routes one fixed record through `polyplug_guest::log`.
+/// Routes one fixed record through `polyplug_guest::HostContext::log`.
 ///
 /// This is NOT part of the polyplug ABI and is NOT registered in any interface.
 /// The `integration_guest_log` test resolves it directly via `dlsym` AFTER the
-/// runtime has loaded this bundle (so `polyplug_init` has stored the host
-/// vtable), proving the guest SDK's logging helper delivers into a
-/// host-installed `RuntimeConfig.log` logger end to end.
+/// runtime has loaded this bundle and passes the runtime's `HostApi` pointer
+/// (`Runtime::host_abi()`), proving the guest SDK's logging helper delivers
+/// into a host-installed `RuntimeConfig.log` logger end to end. The plugin
+/// holds no process-wide host storage — the host pointer flows in per call.
+///
+/// # Safety
+/// `host` must be a valid `HostApi` pointer for the owning runtime.
 #[unsafe(no_mangle)]
-pub extern "C" fn polyplug_test_guest_log() {
-    polyplug_guest::log(
+pub unsafe extern "C" fn polyplug_test_guest_log(host: *const HostApi) {
+    // SAFETY: host is valid per this function's contract.
+    let host_ctx: polyplug_guest::HostContext = unsafe { polyplug_guest::HostContext::new(host) };
+    host_ctx.log(
         polyplug_abi::types::LogLevel::Info,
         "guest.test_plugin",
         "hello from polyplug_guest::log",

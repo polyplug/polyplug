@@ -10,20 +10,62 @@
 namespace polyplug_plugin {
 
 // Plugin: encoder
-extern PipelineEncoderGuestContract* g_encoder_impl;
-
 constexpr uint64_t ENCODER_CONTRACT_ID = 0xFC50F9D1D3DB629FULL;
 
-inline void set_encoder_impl(PipelineEncoderGuestContract* impl) { g_encoder_impl = impl; }
+// Author-provided factory — implement this in your plugin .cpp. Called once
+// per host-created instance; ownership of the returned object transfers to
+// the instance (deleted in ENCODER_destroy_instance).
+PipelineEncoderGuestContract* polyplug_create_encoder(const HostApi* host);
 
-// Forward declaration - user must implement this
-PipelineEncoderGuestContract* create_encoder_impl();
+// Per-instance payload carried in GuestContractInstance.data.
+struct EncoderInstanceState {
+    // Host interface captured at instance creation — routes every host call
+    // (allocation, logging, peer dispatch) to the runtime that owns it.
+    const HostApi* host;
+    // The author's implementation, created by polyplug_create_encoder.
+    PipelineEncoderGuestContract* impl;
+};
+
+// Create a new instance: calls the author factory and heap-allocates the payload.
+// Returns a null handle when host is null, the factory returns null, or it throws.
+static GuestContractInstance ENCODER_create_instance(const HostApi* host, const void* args) noexcept {
+    (void)args;  // Contract-specific init args are unused by generated glue.
+    if (host == nullptr) {
+        return GuestContractInstance{nullptr, 0U};
+    }
+    try {
+        PipelineEncoderGuestContract* impl = polyplug_create_encoder(host);
+        if (impl == nullptr) {
+            return GuestContractInstance{nullptr, 0U};
+        }
+        auto* state = new EncoderInstanceState{host, impl};
+        return GuestContractInstance{state, ENCODER_CONTRACT_ID};
+    } catch (...) {
+        return GuestContractInstance{nullptr, 0U};
+    }
+}
+
+// Destroy an instance created by ENCODER_create_instance: deletes the
+// implementation (ownership transferred from the factory) and the payload.
+static void ENCODER_destroy_instance(const HostApi* host, GuestContractInstance instance) noexcept {
+    (void)host;  // The payload is guest-owned; no host call is needed to free it.
+    if (instance.data == nullptr) {
+        return;
+    }
+    auto* state = static_cast<EncoderInstanceState*>(instance.data);
+    delete state->impl;
+    delete state;
+}
 
 // ABI wrapper for encode (function_id = 0)
 inline AbiError encoder_encode_abi(GuestContractInstance instance, const void* args, void* out) noexcept {
-    // Instance is ignored for stateless plugins (instance.data is nullptr).
-    // For stateful plugins, users override create_instance and use instance.data.
-    (void)instance;  // Suppress unused warning for stateless plugins.
+    if (instance.data == nullptr) {
+        static constexpr const char* null_inst_msg = "instance is null";
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(null_inst_msg), 16}};
+    }
+    // SAFETY: instance.data was produced by create_instance and stays valid
+    // until destroy_instance; the host never mutates it.
+    const auto* state = static_cast<const EncoderInstanceState*>(instance.data);
     try {
         if (args == nullptr) {
             return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
@@ -33,7 +75,7 @@ inline AbiError encoder_encode_abi(GuestContractInstance instance, const void* a
         }
         // SAFETY: args is a valid const void* pointing to a StringView per ABI contract.
 // The host guarantees proper alignment and size before calling this wrapper.
-auto result = g_encoder_impl->encode(*static_cast<const StringView*>(args));
+auto result = state->impl->encode(*static_cast<const StringView*>(args));
         // SAFETY: out is a valid void* pointing to a StringView per ABI contract.
         // The host guarantees proper alignment and size before calling this wrapper.
         *static_cast<StringView*>(out) = result;
@@ -56,24 +98,12 @@ static void* const ENCODER_FNS[] = {
     reinterpret_cast<void*>(encoder_encode_abi),
 };
 
-// Default create_instance stub for encoder - returns null instance.
-static GuestContractInstance ENCODER_create_instance_stub(const HostApi* host, const void* args) noexcept {
-    (void)host; (void)args;  // Unused in default stub.
-    return GuestContractInstance{nullptr, 0U};  // Null instance for stateless plugins.
-}
-
-// Default destroy_instance stub for encoder - no-op.
-static void ENCODER_destroy_instance_stub(const HostApi* host, GuestContractInstance instance) noexcept {
-    (void)host; (void)instance;  // Unused in default stub.
-    // No-op - stateless plugins don't need cleanup.
-}
-
 static GuestContractInterface ENCODER_INTERFACE = {
     ENCODER_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,
-    ENCODER_create_instance_stub,
-    ENCODER_destroy_instance_stub,
+    ENCODER_create_instance,
+    ENCODER_destroy_instance,
     DispatchMechanisms{ .native = NativeDispatch{ 1U, ENCODER_FNS } }
 };
 

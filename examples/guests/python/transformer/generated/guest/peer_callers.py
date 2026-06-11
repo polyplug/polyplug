@@ -17,8 +17,6 @@ from polyplug_abi import (
     StringView,
 )
 
-from polyplug_guest import get_host_interface
-
 CALL_ARENA_BUF_LEN: int = 512
 _OVERFLOW_BLOCK_ALIGN: int = ctypes.sizeof(ctypes.c_void_p)
 
@@ -52,8 +50,8 @@ class PipelineValidatorPeer:
     """Guest→guest peer caller dispatching through host-mediated call_guest_method.
 
     Per-instance state (interface, instance, arena) is instance-owned; the host
-    pointer is read from the guest SDK's stored host interface (deposited by
-    polyplug_init), mirroring the Lua/JS/C++ guest SDKs.
+    pointer is passed explicitly to resolve() by the calling implementation
+    (which received it from its author factory) — no SDK-level host storage.
     """
 
     def __init__(self, host_ptr: int, interface: int, instance: GuestContractInstance) -> None:
@@ -72,19 +70,17 @@ class PipelineValidatorPeer:
         )
 
     @classmethod
-    def resolve(cls, min_version: int = 1) -> Optional[Self]:
+    def resolve(cls, host_ptr: int, min_version: int = 1) -> Optional[Self]:
         """Discover and resolve the peer contract through the host.
 
-        The HostApi pointer is read from the guest SDK's stored host interface
-        (deposited by polyplug_init via store_host_interface).
-
         Args:
+            host_ptr: the HostApi pointer the author factory received
+                (polyplug_create_<plugin>).
             min_version: minimum major version to accept.
 
         Returns:
             Self if the contract is found and resolved, None otherwise.
         """
-        host_ptr: int = get_host_interface()
         if host_ptr == 0:
             return None
         host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))

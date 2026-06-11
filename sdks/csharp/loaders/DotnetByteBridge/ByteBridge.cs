@@ -4,10 +4,12 @@
 // loader (crates/polyplug_dotnet) calls these [UnmanagedCallersOnly] entry points via
 // hostfxr to load a guest assembly and obtain its PolyplugInit pointer.
 //
-// Each bundle is loaded into its own *collectible* AssemblyLoadContext, keyed by the
-// bundle id, so the host can later request true managed unload (Unload). The CLR itself
-// still initializes once per process (see the .NET isolation limitation in CLAUDE.md);
-// collectible ALCs unload a *bundle's assemblies*, not the CLR.
+// Each bundle is loaded into its own *collectible* AssemblyLoadContext, keyed by
+// (runtime id, bundle id) — the runtime id is the owning Runtime's HostApi pointer value —
+// so two Runtimes loading the same bundle id get fully isolated ALCs (no last-writer-wins
+// race), and the host can later request true managed unload (Unload) per runtime. The CLR
+// itself still initializes once per process (see the .NET isolation limitation in
+// CLAUDE.md); collectible ALCs unload a *bundle's assemblies*, not the CLR.
 //
 // Collectible-ALC discipline (load-bearing): the bridge must NOT retain a strong managed
 // reference (Assembly/Type/MethodInfo/delegate) into a bundle's ALC after returning the
@@ -32,17 +34,20 @@ namespace Polyplug.Loaders.DotnetByteBridge;
 public static class ByteBridge
 {
     /// <summary>
-    /// Per-bundle collectible load contexts, keyed by bundle id. This dictionary is the ONLY
+    /// Per-(runtime, bundle) collectible load contexts. The composite key structurally
+    /// isolates two Runtimes loading the same bundle id. This dictionary is the ONLY
     /// strong reference that roots a bundle's ALC; <see cref="Unload"/> removes the entry so
     /// the GC can reclaim the ALC once all native frames into it have unwound.
+    /// (Loader bookkeeping under the CLR's once-per-process constraint — collectible ALCs
+    /// must be rooted somewhere process-reachable; entries are runtime-scoped via the key.)
     /// </summary>
-    private static readonly ConcurrentDictionary<ulong, BundleLoadContext> s_contexts = new();
+    private static readonly ConcurrentDictionary<(ulong RuntimeId, ulong BundleId), BundleLoadContext> s_contexts = new();
 
     /// <summary>
-    /// Weak references stashed at unload time, keyed by bundle id, so a test probe
-    /// (<see cref="IsAlcAlive"/>) can observe whether the ALC was actually collected.
+    /// Weak references stashed at unload time, keyed by (runtime id, bundle id), so a test
+    /// probe (<see cref="IsAlcAlive"/>) can observe whether the ALC was actually collected.
     /// </summary>
-    private static readonly ConcurrentDictionary<ulong, WeakReference> s_unloaded = new();
+    private static readonly ConcurrentDictionary<(ulong RuntimeId, ulong BundleId), WeakReference> s_unloaded = new();
 
     /// <summary>A collectible ALC for one bundle, with sibling-dependency probing.</summary>
     private sealed class BundleLoadContext : AssemblyLoadContext
@@ -76,16 +81,17 @@ public static class ByteBridge
         }
     }
 
-    private static BundleLoadContext GetOrCreate(ulong bundleId, string? mainAssemblyPath)
-        => s_contexts.GetOrAdd(bundleId, static (_, path) => new BundleLoadContext(path), mainAssemblyPath);
+    private static BundleLoadContext GetOrCreate(ulong runtimeId, ulong bundleId, string? mainAssemblyPath)
+        => s_contexts.GetOrAdd((runtimeId, bundleId), static (_, path) => new BundleLoadContext(path), mainAssemblyPath);
 
     /// <summary>
-    /// Pre-load a dependency assembly from raw bytes into the given bundle's collectible ALC so
-    /// that a subsequently byte-loaded plugin in the same bundle can resolve its references.
+    /// Pre-load a dependency assembly from raw bytes into the given (runtime, bundle)
+    /// collectible ALC so that a subsequently byte-loaded plugin in the same bundle can
+    /// resolve its references.
     /// </summary>
     /// <returns>0 on success, non-zero on failure.</returns>
     [UnmanagedCallersOnly(EntryPoint = "PolyplugByteBridgePreloadDependency")]
-    public static uint PreloadDependency(ulong bundleId, IntPtr asmPtr, int asmLen)
+    public static uint PreloadDependency(ulong runtimeId, ulong bundleId, IntPtr asmPtr, int asmLen)
     {
         try
         {
@@ -94,7 +100,7 @@ public static class ByteBridge
                 return 1u;
             }
             byte[] asmBytes = CopyToManaged(asmPtr, asmLen);
-            BundleLoadContext alc = GetOrCreate(bundleId, null);
+            BundleLoadContext alc = GetOrCreate(runtimeId, bundleId, null);
             // LoadFromStream copies the buffer into managed storage; the native side may free
             // its buffer immediately after this call returns.
             alc.LoadFromStream(new MemoryStream(asmBytes, writable: false));
@@ -112,7 +118,7 @@ public static class ByteBridge
     /// </summary>
     /// <returns>The native PolyplugInit function pointer, or <see cref="IntPtr.Zero"/> on failure.</returns>
     [UnmanagedCallersOnly(EntryPoint = "PolyplugByteBridgeLoadAndGetInit")]
-    public static IntPtr LoadAndGetInit(ulong bundleId, IntPtr asmPtr, int asmLen, IntPtr typeNamePtr, int typeNameLen)
+    public static IntPtr LoadAndGetInit(ulong runtimeId, ulong bundleId, IntPtr asmPtr, int asmLen, IntPtr typeNamePtr, int typeNameLen)
     {
         try
         {
@@ -122,7 +128,7 @@ public static class ByteBridge
             }
             byte[] asmBytes = CopyToManaged(asmPtr, asmLen);
             string typeName = ReadUtf8(typeNamePtr, typeNameLen);
-            BundleLoadContext alc = GetOrCreate(bundleId, null);
+            BundleLoadContext alc = GetOrCreate(runtimeId, bundleId, null);
             // LoadFromStream copies the buffer into managed storage; the native side may free
             // its buffer immediately after this call returns.
             Assembly asm = alc.LoadFromStream(new MemoryStream(asmBytes, writable: false));
@@ -139,7 +145,7 @@ public static class ByteBridge
     /// sibling-dependency probing) and return its <c>PolyplugInit</c> function pointer.
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "PolyplugByteBridgeLoadFromPathAndGetInit")]
-    public static IntPtr LoadFromPathAndGetInit(ulong bundleId, IntPtr pathPtr, int pathLen, IntPtr typeNamePtr, int typeNameLen)
+    public static IntPtr LoadFromPathAndGetInit(ulong runtimeId, ulong bundleId, IntPtr pathPtr, int pathLen, IntPtr typeNamePtr, int typeNameLen)
     {
         try
         {
@@ -149,7 +155,7 @@ public static class ByteBridge
             }
             string path = ReadUtf8(pathPtr, pathLen);
             string typeName = ReadUtf8(typeNamePtr, typeNameLen);
-            BundleLoadContext alc = GetOrCreate(bundleId, path);
+            BundleLoadContext alc = GetOrCreate(runtimeId, bundleId, path);
             Assembly asm = alc.LoadFromAssemblyPath(path);
             return ResolveInit(asm, typeName);
         }
@@ -167,13 +173,13 @@ public static class ByteBridge
     /// </summary>
     /// <returns>0 on success (idempotent for an unknown id), non-zero on failure.</returns>
     [UnmanagedCallersOnly(EntryPoint = "PolyplugByteBridgeUnload")]
-    public static uint Unload(ulong bundleId)
+    public static uint Unload(ulong runtimeId, ulong bundleId)
     {
         try
         {
-            if (s_contexts.TryRemove(bundleId, out BundleLoadContext? alc) && alc is not null)
+            if (s_contexts.TryRemove((runtimeId, bundleId), out BundleLoadContext? alc) && alc is not null)
             {
-                s_unloaded[bundleId] = new WeakReference(alc);
+                s_unloaded[(runtimeId, bundleId)] = new WeakReference(alc);
                 alc.Unload();
             }
             return 0u;
@@ -190,13 +196,13 @@ public static class ByteBridge
     /// not been collected yet; returns 0 once the ALC has been reclaimed (or was never loaded).
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "PolyplugByteBridgeIsAlcAlive")]
-    public static uint IsAlcAlive(ulong bundleId)
+    public static uint IsAlcAlive(ulong runtimeId, ulong bundleId)
     {
-        if (s_contexts.ContainsKey(bundleId))
+        if (s_contexts.ContainsKey((runtimeId, bundleId)))
         {
             return 1u;
         }
-        if (!s_unloaded.TryGetValue(bundleId, out WeakReference? weak) || weak is null)
+        if (!s_unloaded.TryGetValue((runtimeId, bundleId), out WeakReference? weak) || weak is null)
         {
             return 0u;
         }

@@ -212,7 +212,7 @@ assert ctypes.sizeof(CallArena) == 40, f"CallArena expected 40 bytes, got {ctype
 
 
 class DependencyInfo(ctypes.Structure):
-    """ Dependency information returned by get_dependencies introspection API.
+    r""" Dependency information returned by get_dependencies introspection API.
     
      Mirrors `manifest.toml` `\[dependency\]` table structure for plugins to query
      their own declared dependencies at runtime.

@@ -65,10 +65,13 @@ pub struct PipelineValidatorContractPeer {
 impl PipelineValidatorContractPeer {
     /// Discover and resolve the peer contract through the host.
     ///
-    /// Returns `None` if the host vtable is unset, the contract is not found,
+    /// `host` is the per-instance context handed to the author factory
+    /// (`polyplug_create_<plugin>`) — no process-wide host storage exists.
+    ///
+    /// Returns `None` if the host context is null, the contract is not found,
     /// or the resolved interface pointer is null.
-    pub fn resolve() -> Option<Self> {
-        let host: *const HostApi = polyplug_guest::get_host_vtable();
+    pub fn resolve(host: polyplug_guest::HostContext) -> Option<Self> {
+        let host: *const HostApi = host.as_ptr();
         // SAFETY: host is checked for null via as_ref() which returns None on null.
         let iface_api: &HostApi = unsafe { host.as_ref()? };
         let handle: GuestContractHandle =

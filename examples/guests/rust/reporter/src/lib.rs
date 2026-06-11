@@ -1,15 +1,17 @@
 use polyplug_abi::StringView;
-use polyplug_guest::{GuestError, alloc_string, get_host_vtable, to_str};
+use polyplug_guest::{GuestError, HostContext, to_str};
 
 #[path = "../generated/guest/mod.rs"]
 mod generated;
 
 use generated::contracts::DataReporterGuestContract;
 use generated::host_contract_callers::HostLoggerCaller;
-use generated::interfaces::set_reporter_impl;
 use generated::types::LogLevel;
 
-struct Plugin;
+struct Plugin {
+    /// Host handle for this runtime, captured at instance creation.
+    host: HostContext,
+}
 
 impl DataReporterGuestContract for Plugin {
     fn report(&self, input: StringView) -> Result<StringView, GuestError> {
@@ -20,9 +22,10 @@ impl DataReporterGuestContract for Plugin {
         // Try to get host logger and log messages.
         // min_version is PACKED (major << 16 | minor): request major 1, minor 0.
         // A bare `1` would request major 0 / minor 1 and never match.
-        // SAFETY: get_host_vtable() returns a valid pointer or null
+        // SAFETY: self.host carries the HostApi pointer captured at instance
+        // creation, valid for the runtime's lifetime.
         let logger: Option<HostLoggerCaller> =
-            unsafe { HostLoggerCaller::from_host(get_host_vtable(), 0x0001_0000) };
+            unsafe { HostLoggerCaller::from_host(self.host.as_ptr(), 0x0001_0000) };
 
         if let Some(ref logger) = logger
             && logger.is_valid()
@@ -37,7 +40,7 @@ impl DataReporterGuestContract for Plugin {
             );
         }
 
-        let data = s.strip_prefix("TRANSFORMED:").unwrap_or(s);
+        let data: &str = s.strip_prefix("TRANSFORMED:").unwrap_or(s);
         let parts: Vec<&str> = data.split('|').collect();
 
         if let Some(ref logger) = logger
@@ -59,7 +62,7 @@ impl DataReporterGuestContract for Plugin {
                 );
             }
 
-            alloc_string(&format!(
+            self.host.alloc_string(&format!(
                 "Report: {} has value '{}' with count {}",
                 parts[0], parts[1], parts[2]
             ))
@@ -72,19 +75,14 @@ impl DataReporterGuestContract for Plugin {
     }
 }
 
-static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-fn init() {
-    let _ = INIT.get_or_init(|| {
-        let _ = set_reporter_impl(Box::new(Plugin));
-    });
+/// Factory called by the generated `create_instance` for every host-created
+/// instance. The implementation travels in `GuestContractInstance.data`.
+#[unsafe(no_mangle)]
+pub fn polyplug_create_reporter(host: HostContext) -> Box<dyn DataReporterGuestContract> {
+    Box::new(Plugin { host })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
     polyplug_abi::POLYPLUG_ABI_VERSION
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn polyplug_user_init() {
-    init();
 }

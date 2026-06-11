@@ -244,7 +244,7 @@ fn rust_peer_caller_echo_roundtrip() {
         .expect("provider bundle must load");
 
     // Obtain the live HostApi pointer from the runtime — this is exactly what
-    // a loaded native cdylib would receive via `polyplug_guest::get_host_vtable()`.
+    // a loaded native cdylib's author factory receives as its `HostContext`.
     let host: *const HostApi = rt.host_abi() as *const HostApi;
     assert!(!host.is_null(), "host_abi must be non-null");
 

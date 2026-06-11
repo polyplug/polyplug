@@ -10,20 +10,62 @@
 namespace polyplug_plugin {
 
 // Plugin: decoder
-extern PipelineDecoderGuestContract* g_decoder_impl;
-
 constexpr uint64_t DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7ULL;
 
-inline void set_decoder_impl(PipelineDecoderGuestContract* impl) { g_decoder_impl = impl; }
+// Author-provided factory — implement this in your plugin .cpp. Called once
+// per host-created instance; ownership of the returned object transfers to
+// the instance (deleted in DECODER_destroy_instance).
+PipelineDecoderGuestContract* polyplug_create_decoder(const HostApi* host);
 
-// Forward declaration - user must implement this
-PipelineDecoderGuestContract* create_decoder_impl();
+// Per-instance payload carried in GuestContractInstance.data.
+struct DecoderInstanceState {
+    // Host interface captured at instance creation — routes every host call
+    // (allocation, logging, peer dispatch) to the runtime that owns it.
+    const HostApi* host;
+    // The author's implementation, created by polyplug_create_decoder.
+    PipelineDecoderGuestContract* impl;
+};
+
+// Create a new instance: calls the author factory and heap-allocates the payload.
+// Returns a null handle when host is null, the factory returns null, or it throws.
+static GuestContractInstance DECODER_create_instance(const HostApi* host, const void* args) noexcept {
+    (void)args;  // Contract-specific init args are unused by generated glue.
+    if (host == nullptr) {
+        return GuestContractInstance{nullptr, 0U};
+    }
+    try {
+        PipelineDecoderGuestContract* impl = polyplug_create_decoder(host);
+        if (impl == nullptr) {
+            return GuestContractInstance{nullptr, 0U};
+        }
+        auto* state = new DecoderInstanceState{host, impl};
+        return GuestContractInstance{state, DECODER_CONTRACT_ID};
+    } catch (...) {
+        return GuestContractInstance{nullptr, 0U};
+    }
+}
+
+// Destroy an instance created by DECODER_create_instance: deletes the
+// implementation (ownership transferred from the factory) and the payload.
+static void DECODER_destroy_instance(const HostApi* host, GuestContractInstance instance) noexcept {
+    (void)host;  // The payload is guest-owned; no host call is needed to free it.
+    if (instance.data == nullptr) {
+        return;
+    }
+    auto* state = static_cast<DecoderInstanceState*>(instance.data);
+    delete state->impl;
+    delete state;
+}
 
 // ABI wrapper for decode (function_id = 0)
 inline AbiError decoder_decode_abi(GuestContractInstance instance, const void* args, void* out) noexcept {
-    // Instance is ignored for stateless plugins (instance.data is nullptr).
-    // For stateful plugins, users override create_instance and use instance.data.
-    (void)instance;  // Suppress unused warning for stateless plugins.
+    if (instance.data == nullptr) {
+        static constexpr const char* null_inst_msg = "instance is null";
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(null_inst_msg), 16}};
+    }
+    // SAFETY: instance.data was produced by create_instance and stays valid
+    // until destroy_instance; the host never mutates it.
+    const auto* state = static_cast<const DecoderInstanceState*>(instance.data);
     try {
         if (args == nullptr) {
             return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
@@ -33,7 +75,7 @@ inline AbiError decoder_decode_abi(GuestContractInstance instance, const void* a
         }
         // SAFETY: args is a valid const void* pointing to a StringView per ABI contract.
 // The host guarantees proper alignment and size before calling this wrapper.
-auto result = g_decoder_impl->decode(*static_cast<const StringView*>(args));
+auto result = state->impl->decode(*static_cast<const StringView*>(args));
         // SAFETY: out is a valid void* pointing to a StringView per ABI contract.
         // The host guarantees proper alignment and size before calling this wrapper.
         *static_cast<StringView*>(out) = result;
@@ -56,24 +98,12 @@ static void* const DECODER_FNS[] = {
     reinterpret_cast<void*>(decoder_decode_abi),
 };
 
-// Default create_instance stub for decoder - returns null instance.
-static GuestContractInstance DECODER_create_instance_stub(const HostApi* host, const void* args) noexcept {
-    (void)host; (void)args;  // Unused in default stub.
-    return GuestContractInstance{nullptr, 0U};  // Null instance for stateless plugins.
-}
-
-// Default destroy_instance stub for decoder - no-op.
-static void DECODER_destroy_instance_stub(const HostApi* host, GuestContractInstance instance) noexcept {
-    (void)host; (void)instance;  // Unused in default stub.
-    // No-op - stateless plugins don't need cleanup.
-}
-
 static GuestContractInterface DECODER_INTERFACE = {
     DECODER_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,
-    DECODER_create_instance_stub,
-    DECODER_destroy_instance_stub,
+    DECODER_create_instance,
+    DECODER_destroy_instance,
     DispatchMechanisms{ .native = NativeDispatch{ 1U, DECODER_FNS } }
 };
 

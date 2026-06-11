@@ -319,9 +319,9 @@ fn test_panic_returns_abi_error_panic() {
         "use polyplug_abi::GuestContractInterface;\n",
         "use polyplug_abi::StringView;\n",
         "use polyplug_abi::AbiErrorCode;\n",
-        "use guest::interfaces::PANIC_PLUGIN_IMPL;\n",
         "use guest::interfaces::PANIC_PLUGIN_INTERFACE;\n",
         "use guest::contracts::TestPanicGuestContract;\n",
+        "use polyplug_guest::HostContext;\n",
         "\n",
         "struct PanicPlugin;\n",
         "\n",
@@ -329,6 +329,12 @@ fn test_panic_returns_abi_error_panic() {
         "    fn do_panic(&self) -> Result<(), GuestError> {\n",
         "        panic!(\"intentional test panic\");\n",
         "    }\n",
+        "}\n",
+        "\n",
+        "/// Factory called by the generated create_instance for every instance.\n",
+        "#[unsafe(no_mangle)]\n",
+        "pub fn polyplug_create_panic_plugin(_host: HostContext) -> Box<dyn TestPanicGuestContract> {\n",
+        "    Box::new(PanicPlugin)\n",
         "}\n",
         "\n",
         "/// Register the panic plugin interface with the host.\n",
@@ -340,7 +346,6 @@ fn test_panic_returns_abi_error_panic() {
         "    host: *const HostApi,\n",
         "    ctx: *const BundleInitContext,\n",
         ") -> AbiError {\n",
-        "    PANIC_PLUGIN_IMPL.get_or_init(|| Box::new(PanicPlugin));\n",
         "    if host.is_null() || ctx.is_null() {\n",
         "        return AbiError {\n",
         "            code: AbiErrorCode::Generic as u32,\n",
@@ -470,16 +475,35 @@ fn test_panic_returns_abi_error_panic() {
     // The generated ABI wrapper uses catch_unwind internally, so the panic is
     // caught inside the extern "C" boundary. The host sees AbiError { code: Panic }.
 
+    // The generated create_instance constructs the implementation via the
+    // author factory and carries it in instance.data — dispatch needs a real
+    // instance.
+    // SAFETY: host_interface outlives the instance; create_instance is the
+    // generated factory thunk on the captured interface.
+    let instance: polyplug_abi::GuestContractInstance = unsafe {
+        (interface.create_instance)(&host_interface as *const HostApi, core::ptr::null())
+    };
+    assert!(
+        !instance.data.is_null(),
+        "create_instance must produce a non-null instance payload"
+    );
+
     // SAFETY: fn_ptr is function 0 in the interface (do_panic).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: fn_ptr is the do_panic ABI wrapper -- extern "C" with no
-        // meaningful args/out (void, no params). The catch_unwind wrapper
-        // inside the plugin catches the panic before it crosses the FFI boundary.
+    let dispatch_fn: unsafe extern "C" fn(
+        polyplug_abi::GuestContractInstance,
+        *const (),
+        *mut (),
+    ) -> AbiError =
+        // SAFETY: fn_ptr is the do_panic ABI wrapper -- the canonical 3-arg
+        // native dispatch signature. The catch_unwind wrapper inside the
+        // plugin catches the panic before it crosses the FFI boundary.
         unsafe { core::mem::transmute(fn_ptr) };
 
-    // SAFETY: do_panic ignores args and out entirely (void function, no params).
-    let call_result: AbiError = unsafe { dispatch_fn(core::ptr::null(), core::ptr::null_mut()) };
+    // SAFETY: do_panic ignores args and out entirely (void function, no params);
+    // instance was created by the generated create_instance above.
+    let call_result: AbiError =
+        unsafe { dispatch_fn(instance, core::ptr::null(), core::ptr::null_mut()) };
 
     // -- Step 11: Assert panic was caught and returned Panic --
     assert_eq!(

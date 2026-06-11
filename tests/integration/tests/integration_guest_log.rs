@@ -5,12 +5,12 @@
 //!
 //! 1. the host installs a capturing logger via `RuntimeBuilder::logger`
 //!    (RuntimeConfig.log funnel),
-//! 2. the runtime loads the native `test_plugin` fixture bundle, whose
-//!    `polyplug_init` stores the host vtable via
-//!    `polyplug_guest::store_host_vtable`,
+//! 2. the runtime loads the native `test_plugin` fixture bundle,
 //! 3. the test drives the fixture's `polyplug_test_guest_log` probe (resolved
-//!    via dlsym from the same resident image), which calls
-//!    `polyplug_guest::log(Info, "guest.test_plugin", ...)`,
+//!    via dlsym from the same resident image), passing the runtime's live
+//!    `HostApi` pointer — the probe wraps it in a `HostContext` and calls
+//!    `HostContext::log(Info, "guest.test_plugin", ...)`; no process-wide
+//!    host storage exists in the guest SDK,
 //! 4. the record must arrive verbatim in the host-installed logger.
 
 #![allow(clippy::expect_used)]
@@ -63,20 +63,21 @@ fn polyplug_guest_log_delivers_to_host_logger() {
         .expect("native test_plugin bundle must load");
 
     // Resolve the probe from the SAME image the runtime loaded (dlopen of the
-    // same path ref-counts the already-resident library, so the host vtable
-    // stored by polyplug_init during the runtime load is visible to the probe).
+    // same path ref-counts the already-resident library). The probe receives
+    // the runtime's live HostApi pointer — the guest SDK holds no host statics.
     let plugin_path: PathBuf = PathBuf::from(TEST_PLUGIN_DIR).join(plugin_lib_filename());
     // SAFETY: the library is the freshly built trusted test fixture.
     let library: libloading::Library =
         unsafe { libloading::Library::new(&plugin_path) }.expect("fixture .so must dlopen");
-    // SAFETY: the fixture exports this exact no-arg extern "C" symbol.
-    let probe: libloading::Symbol<'_, unsafe extern "C" fn()> = unsafe {
+    // SAFETY: the fixture exports this exact one-arg extern "C" symbol.
+    let probe: libloading::Symbol<'_, unsafe extern "C" fn(*const polyplug_abi::HostApi)> = unsafe {
         library
             .get(b"polyplug_test_guest_log")
             .expect("probe symbol must resolve")
     };
-    // SAFETY: probe is a valid no-arg extern "C" fn exported by the fixture.
-    unsafe { probe() };
+    // SAFETY: probe is a valid extern "C" fn exported by the fixture; the
+    // HostApi pointer comes from the live runtime and outlives the call.
+    unsafe { probe(runtime.host_abi() as *const polyplug_abi::HostApi) };
 
     let captured: Vec<(LogLevel, String, String)> = records.lock().expect("records lock").clone();
     assert!(

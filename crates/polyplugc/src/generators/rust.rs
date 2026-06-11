@@ -541,7 +541,7 @@ fn generate_guest_interfaces_file(
     ir: &ValidatedIr,
 ) -> Result<(), PolyplugcError> {
     // Shared imports
-    out.push_str("use std::sync::OnceLock;\n");
+    out.push_str("use core::ffi::c_void;\n");
     out.push_str("use polyplug_abi::AbiError;\n");
     out.push_str("use polyplug_abi::AbiErrorCode;\n");
     out.push_str("use polyplug_abi::GuestContractInterface;\n");
@@ -556,17 +556,17 @@ fn generate_guest_interfaces_file(
     out.push_str("use polyplug_abi::string_view_from_static;\n");
     out.push_str("use polyplug_abi::abi_error_ok;\n");
     out.push_str("use polyplug_guest::GuestError;\n");
-    out.push_str("use polyplug_guest::alloc_string;\n");
+    out.push_str("use polyplug_guest::HostContext;\n");
     out.push_str("use polyplug_utils::GuestContractId;\n");
     out.push_str("use super::types::*;\n");
 
     // Helper function to convert GuestError to AbiError with message allocation
     out.push_str(
-        "/// Convert a GuestError to an AbiError, allocating the message via host_alloc.\n",
+        "/// Convert a GuestError to an AbiError, allocating the message via the host allocator.\n",
     );
     out.push_str("/// Falls back to a null message if allocation fails.\n");
-    out.push_str("fn plugin_error_to_abi_error(e: GuestError) -> AbiError {\n");
-    out.push_str("    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());\n");
+    out.push_str("fn plugin_error_to_abi_error(host: HostContext, e: GuestError) -> AbiError {\n");
+    out.push_str("    let message: StringView = host.alloc_string(&e.message).unwrap_or_else(|_| string_view_null());\n");
     out.push_str("    AbiError { code: e.code as u32, message }\n");
     out.push_str("}\n\n");
     for contract in &ir.contracts {
@@ -640,18 +640,16 @@ fn generate_guest_contract_interface(
         contract.contract_id
     ));
 
-    // OnceLock for the trait object
-    out.push_str(&format!(
-        "pub static {upper}_IMPL: OnceLock<Box<dyn {trait_name}>> = OnceLock::new();\n\n"
-    ));
-
-    out.push_str(&format!(
-        "pub fn set_{lower}_impl(impl_: Box<dyn {trait_name}>) -> Result<(), &'static str> {{\n"
-    ));
-    out.push_str(&format!(
-        "    {upper}_IMPL.set(impl_).map_err(|_| \"implementation already registered\")\n"
-    ));
-    out.push_str("}\n\n");
+    // Author factory + per-instance payload — no static implementation storage.
+    let state_struct: String = format!("{struct_name}PluginState");
+    emit_guest_instance_machinery(
+        out,
+        &upper,
+        &lower,
+        &trait_name,
+        &state_struct,
+        &format!("{upper}_CONTRACT_ID"),
+    );
 
     // ABI wrapper functions
     for func in &contract.functions {
@@ -659,7 +657,7 @@ fn generate_guest_contract_interface(
             out,
             func,
             &lower,
-            &upper,
+            &state_struct,
             &struct_name,
             &trait_name,
             contract,
@@ -677,40 +675,6 @@ fn generate_guest_contract_interface(
         ));
     }
     out.push_str("];\n\n");
-
-    // ─── Instance lifecycle stubs ────────────────────────────────────────────────
-    // Default create_instance stub - returns null instance.
-    // Users should provide a custom implementation for stateful plugins.
-    out.push_str(&format!(
-        "/// Default create_instance stub for {}.\n",
-        contract.name
-    ));
-    out.push_str("/// Returns null instance - users should override for stateful plugins.\n");
-    out.push_str("#[allow(clippy::unnecessary_cast)]\n");
-    out.push_str(&format!(
-        "unsafe extern \"C\" fn {upper}_create_instance_stub(\n"
-    ));
-    out.push_str("    _host: *const HostApi,\n");
-    out.push_str("    _args: *const (),\n");
-    out.push_str(") -> GuestContractInstance {\n");
-    out.push_str("    GuestContractInstance::null()\n");
-    out.push_str("}\n\n");
-
-    // Default destroy_instance stub - no-op.
-    // Users should provide a custom implementation for cleanup.
-    out.push_str(&format!(
-        "/// Default destroy_instance stub for {}.\n",
-        contract.name
-    ));
-    out.push_str("/// No-op - users should override for state cleanup before hot-reload.\n");
-    out.push_str(&format!(
-        "unsafe extern \"C\" fn {upper}_destroy_instance_stub(\n"
-    ));
-    out.push_str("    _host: *const HostApi,\n");
-    out.push_str("    _instance: GuestContractInstance,\n");
-    out.push_str(") {\n");
-    out.push_str("    // No-op - stateless plugins don't need cleanup\n");
-    out.push_str("}\n\n");
 
     // Static GuestContractInterface
     let major: u32 = contract.version.major;
@@ -731,11 +695,9 @@ fn generate_guest_contract_interface(
         "DispatchType::VirtualMachine"
     };
     out.push_str(&format!("    dispatch_type: {dispatch_type_str},\n"));
+    out.push_str(&format!("    create_instance: {upper}_create_instance,\n"));
     out.push_str(&format!(
-        "    create_instance: {upper}_create_instance_stub,\n"
-    ));
-    out.push_str(&format!(
-        "    destroy_instance: {upper}_destroy_instance_stub,\n"
+        "    destroy_instance: {upper}_destroy_instance,\n"
     ));
     out.push_str("    dispatch: DispatchMechanisms {\n");
     out.push_str("        native: NativeDispatch {\n");
@@ -773,24 +735,23 @@ fn generate_guest_plugin_interface(
         contract.contract_id
     ));
 
-    out.push_str(&format!(
-        "pub static {plugin_upper}_IMPL: OnceLock<Box<dyn {trait_name}>> = OnceLock::new();\n\n"
-    ));
-
-    out.push_str(&format!(
-        "pub fn set_{plugin_lower}_impl(impl_: Box<dyn {trait_name}>) -> Result<(), &'static str> {{\n"
-    ));
-    out.push_str(&format!(
-        "    {plugin_upper}_IMPL.set(impl_).map_err(|_| \"{plugin_lower} already registered\")\n"
-    ));
-    out.push_str("}\n\n");
+    // Author factory + per-instance payload — no static implementation storage.
+    let state_struct: String = format!("{}PluginState", to_pascal_ident(&plugin_lower));
+    emit_guest_instance_machinery(
+        out,
+        &plugin_upper,
+        &plugin_lower,
+        &trait_name,
+        &state_struct,
+        &format!("{plugin_upper}_CONTRACT_ID"),
+    );
 
     for func in &contract.functions {
         generate_guest_abi_wrapper(
             out,
             func,
             &plugin_lower,
-            &plugin_upper,
+            &state_struct,
             &struct_name,
             &trait_name,
             contract,
@@ -807,40 +768,6 @@ fn generate_guest_plugin_interface(
         ));
     }
     out.push_str("];\n\n");
-
-    // ─── Instance lifecycle stubs ────────────────────────────────────────────────
-    // Default create_instance stub - returns null instance.
-    // Users should provide a custom implementation for stateful plugins.
-    out.push_str(&format!(
-        "/// Default create_instance stub for {}.\n",
-        plugin_name
-    ));
-    out.push_str("/// Returns null instance - users should override for stateful plugins.\n");
-    out.push_str("#[allow(clippy::unnecessary_cast)]\n");
-    out.push_str(&format!(
-        "unsafe extern \"C\" fn {plugin_upper}_create_instance_stub(\n"
-    ));
-    out.push_str("    _host: *const HostApi,\n");
-    out.push_str("    _args: *const (),\n");
-    out.push_str(") -> GuestContractInstance {\n");
-    out.push_str("    GuestContractInstance::null()\n");
-    out.push_str("}\n\n");
-
-    // Default destroy_instance stub - no-op.
-    // Users should provide a custom implementation for cleanup.
-    out.push_str(&format!(
-        "/// Default destroy_instance stub for {}.\n",
-        plugin_name
-    ));
-    out.push_str("/// No-op - users should override for state cleanup before hot-reload.\n");
-    out.push_str(&format!(
-        "unsafe extern \"C\" fn {plugin_upper}_destroy_instance_stub(\n"
-    ));
-    out.push_str("    _host: *const HostApi,\n");
-    out.push_str("    _instance: GuestContractInstance,\n");
-    out.push_str(") {\n");
-    out.push_str("    // No-op - stateless plugins don't need cleanup\n");
-    out.push_str("}\n\n");
 
     let major: u32 = contract.version.major;
     let minor: u32 = contract.version.minor;
@@ -861,10 +788,10 @@ fn generate_guest_plugin_interface(
     };
     out.push_str(&format!("    dispatch_type: {dispatch_type_str},\n"));
     out.push_str(&format!(
-        "    create_instance: {plugin_upper}_create_instance_stub,\n"
+        "    create_instance: {plugin_upper}_create_instance,\n"
     ));
     out.push_str(&format!(
-        "    destroy_instance: {plugin_upper}_destroy_instance_stub,\n"
+        "    destroy_instance: {plugin_upper}_destroy_instance,\n"
     ));
     out.push_str("    dispatch: DispatchMechanisms {\n");
     out.push_str("        native: NativeDispatch {\n");
@@ -879,12 +806,117 @@ fn generate_guest_plugin_interface(
     Ok(())
 }
 
+/// Emit the per-plugin instance machinery: the author-factory extern
+/// declaration, the instance payload struct, and the real
+/// `create_instance` / `destroy_instance` functions.
+///
+/// The implementation is constructed by the author factory on every
+/// `create_instance` call and carried — together with the `HostContext` —
+/// in `GuestContractInstance.data`. No static storage is involved, so two
+/// runtimes loading the same plugin dylib get fully isolated instances.
+fn emit_guest_instance_machinery(
+    out: &mut String,
+    prefix_upper: &str,
+    lower: &str,
+    trait_name: &str,
+    state_struct: &str,
+    contract_id_const: &str,
+) {
+    let factory_name: String = format!("polyplug_create_{lower}");
+
+    out.push_str("unsafe extern \"Rust\" {\n");
+    out.push_str(&format!(
+        "    /// Author-provided factory — define it in the plugin crate as:\n\
+         \x20   /// `#[unsafe(no_mangle)]`\n\
+         \x20   /// `pub fn {factory_name}(host: HostContext) -> Box<dyn {trait_name}> {{ ... }}`\n"
+    ));
+    out.push_str(&format!(
+        "    fn {factory_name}(host: HostContext) -> Box<dyn {trait_name}>;\n"
+    ));
+    out.push_str("}\n\n");
+
+    out.push_str(&format!(
+        "/// Per-instance payload carried in `GuestContractInstance.data`.\n\
+         struct {state_struct} {{\n\
+         \x20   /// Host context captured at instance creation — routes every host call\n\
+         \x20   /// (allocation, logging, error reporting) to the runtime that owns it.\n\
+         \x20   host: HostContext,\n\
+         \x20   /// The author's implementation, created by `{factory_name}`.\n\
+         \x20   implementation: Box<dyn {trait_name}>,\n\
+         }}\n\n"
+    ));
+
+    out.push_str(&format!(
+        "/// Create a new instance: calls the author factory and boxes the payload.\n\
+         /// Returns a null handle when `host` is null or the factory panics.\n\
+         unsafe extern \"C\" fn {prefix_upper}_create_instance(\n\
+         \x20   host: *const HostApi,\n\
+         \x20   _args: *const (),\n\
+         ) -> GuestContractInstance {{\n\
+         \x20   if host.is_null() {{\n\
+         \x20       return GuestContractInstance::null();\n\
+         \x20   }}\n\
+         \x20   // SAFETY: host is non-null (checked above) and valid per the ABI contract\n\
+         \x20   // for create_instance; it stays valid for the runtime's lifetime.\n\
+         \x20   let host_ctx: HostContext = unsafe {{ HostContext::new(host) }};\n\
+         \x20   let implementation: Box<dyn {trait_name}> =\n\
+         \x20       match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{\n\
+         \x20           // SAFETY: the author defines `{factory_name}` in the plugin crate\n\
+         \x20           // with `#[unsafe(no_mangle)]`; same-crate Rust ABI, signature enforced\n\
+         \x20           // by the extern declaration above.\n\
+         \x20           unsafe {{ {factory_name}(host_ctx) }}\n\
+         \x20       }})) {{\n\
+         \x20           Ok(i) => i,\n\
+         \x20           Err(_) => return GuestContractInstance::null(),\n\
+         \x20       }};\n\
+         \x20   let state: Box<{state_struct}> = Box::new({state_struct} {{\n\
+         \x20       host: host_ctx,\n\
+         \x20       implementation,\n\
+         \x20   }});\n\
+         \x20   GuestContractInstance {{\n\
+         \x20       data: Box::into_raw(state) as *mut c_void,\n\
+         \x20       contract_id: GuestContractId::from_u64({contract_id_const}),\n\
+         \x20   }}\n\
+         }}\n\n"
+    ));
+
+    out.push_str(&format!(
+        "/// Destroy an instance created by `{prefix_upper}_create_instance`.\n\
+         unsafe extern \"C\" fn {prefix_upper}_destroy_instance(\n\
+         \x20   _host: *const HostApi,\n\
+         \x20   instance: GuestContractInstance,\n\
+         ) {{\n\
+         \x20   if instance.data.is_null() {{\n\
+         \x20       return;\n\
+         \x20   }}\n\
+         \x20   // SAFETY: instance.data was produced by `{prefix_upper}_create_instance` via\n\
+         \x20   // Box::into_raw and is dropped exactly once here — the host calls\n\
+         \x20   // destroy_instance exactly once per created instance.\n\
+         \x20   drop(unsafe {{ Box::from_raw(instance.data as *mut {state_struct}) }});\n\
+         }}\n\n"
+    ));
+}
+
+/// Convert a lowercase snake identifier to PascalCase, e.g. "my_plugin" -> "MyPlugin".
+fn to_pascal_ident(s: &str) -> String {
+    s.split('_')
+        .map(|seg: &str| {
+            let mut chars: core::str::Chars<'_> = seg.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 /// Generate one ABI wrapper function for a contract function.
 fn generate_guest_abi_wrapper(
     out: &mut String,
     func: &ResolvedFunction,
     contract_lower: &str,
-    contract_upper: &str,
+    state_struct: &str,
     contract_struct: &str,
     trait_name: &str,
     _contract: &ResolvedContract,
@@ -906,21 +938,18 @@ fn generate_guest_abi_wrapper(
     out.push_str(&format!(
         "extern \"C\" fn {wrapper_name}(instance: GuestContractInstance, args: *const (), {out_param}) -> AbiError {{\n"
     ));
-    // For stateless plugins, instance is null - we use the OnceLock impl.
-    // For stateful plugins, users would override create_instance to return a valid instance
-    // and this wrapper would cast instance.data to the state type.
-    out.push_str("    // Instance is ignored for stateless plugins (instance is null).\n");
-    out.push_str(
-        "    // For stateful plugins, users override create_instance and use instance.data.\n",
-    );
-    out.push_str("    let _ = instance;\n");
+    out.push_str("    if instance.data.is_null() {\n");
+    out.push_str("        return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"instance is null\") };\n");
+    out.push_str("    }\n");
+    out.push_str(&format!(
+        "    // SAFETY: instance.data was produced by create_instance via Box::into_raw\n\
+         \x20   // and stays valid until destroy_instance; the host never mutates it.\n\
+         \x20   let state: &{state_struct} = unsafe {{ &*(instance.data as *const {state_struct}) }};\n"
+    ));
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
     out.push_str(&format!(
-        "        let impl_ref: &dyn {trait_name} = match {contract_upper}_IMPL.get() {{\n"
+        "        let impl_ref: &dyn {trait_name} = state.implementation.as_ref();\n"
     ));
-    out.push_str("            Some(i) => i.as_ref(),\n");
-    out.push_str("            None => return AbiError { code: AbiErrorCode::Generic as u32, message: string_view_from_static(b\"implementation not registered\") },\n");
-    out.push_str("        };\n");
 
     if !func.params.is_empty() {
         out.push_str("        if args.is_null() {\n");
@@ -951,12 +980,12 @@ fn generate_guest_abi_wrapper(
         ));
         out.push_str("                abi_error_ok()\n");
         out.push_str("            }\n");
-        out.push_str("            Err(e) => plugin_error_to_abi_error(e),\n");
+        out.push_str("            Err(e) => plugin_error_to_abi_error(state.host, e),\n");
         out.push_str("        }\n");
     } else {
         out.push_str("        match result {\n");
         out.push_str("            Ok(()) => abi_error_ok(),\n");
-        out.push_str("            Err(e) => plugin_error_to_abi_error(e),\n");
+        out.push_str("            Err(e) => plugin_error_to_abi_error(state.host, e),\n");
         out.push_str("        }\n");
     }
 
@@ -1035,7 +1064,6 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("use polyplug_abi::StringView;\n");
     out.push_str("use polyplug_abi::Version;\n");
     out.push_str("use polyplug_abi::BundleInitContext;\n");
-    out.push_str("use polyplug_guest::store_host_vtable;\n");
     out.push_str("use core::ffi::c_void;\n");
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -1088,20 +1116,15 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
         "    let _ = ctx; // suppress unused warning if plugin_init user stub not yet updated\n",
     );
     out.push_str("    // SAFETY: host is non-null and valid per ABI contract.\n");
-    out.push_str("    let host: &HostApi = unsafe { &*host };\n");
+    out.push_str("    let host: &HostApi = unsafe { &*host };\n\n");
     out.push_str(
-        "    // SAFETY: Called once during plugin init, before any host contract access.\n",
+        "    // No process-wide state is stored here. The implementation is constructed\n",
     );
-    out.push_str("    unsafe { store_host_vtable(host as *const HostApi); }\n\n");
-    // Call user initialization hook if it exists
-    out.push_str("    // Call user initialization to register plugin implementations\n");
-    out.push_str("    unsafe extern \"C\" {\n");
-    out.push_str("        fn polyplug_user_init();\n");
-    out.push_str("    }\n");
+    out.push_str("    // per instance by `create_instance` (which calls the author factory\n");
     out.push_str(
-        "    // SAFETY: polyplug_user_init is a safe initialization function provided by user\n",
+        "    // `polyplug_create_<plugin>` with a HostContext); init only registers the\n",
     );
-    out.push_str("    unsafe { polyplug_user_init(); }\n\n");
+    out.push_str("    // static interface tables below.\n\n");
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -2506,7 +2529,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("use polyplug_abi::AbiError;\n");
     out.push_str("use polyplug_abi::AbiErrorCode;\n");
     out.push_str("use polyplug_abi::string_view_null;\n");
-    out.push_str("use polyplug_guest::alloc_string;\n");
+    out.push_str("use polyplug_guest::HostContext;\n");
     if any_needs_arena {
         out.push_str("use polyplug_abi::CallArena;\n");
     }
@@ -2584,6 +2607,11 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
     out.push_str("    /// `HostApi::get_host_contract`. Passed as the first argument to native\n");
     out.push_str("    /// dispatch functions (the host thunk dereferences it as the implementation pointer).\n");
     out.push_str("    instance: HostContractInstance,\n");
+    out.push_str(
+        "    /// Host interface pointer captured in `from_host` — used for cross-boundary\n",
+    );
+    out.push_str("    /// string allocation when marshalling StringView parameters.\n");
+    out.push_str("    host: *const HostApi,\n");
     if needs_arena {
         out.push_str(
             "    /// Stable-address backing buffer for the per-call arena. Boxed so the\n\
@@ -2646,11 +2674,11 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
             "        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);\n",
         );
         out.push_str(&format!(
-            "        Some({caller_name} {{ interface, instance, arena_buf, arena }})\n"
+            "        Some({caller_name} {{ interface, instance, host: host as *const HostApi, arena_buf, arena }})\n"
         ));
     } else {
         out.push_str(&format!(
-            "        Some({caller_name} {{ interface, instance }})\n"
+            "        Some({caller_name} {{ interface, instance, host: host as *const HostApi }})\n"
         ));
     }
     out.push_str("    }\n\n");
@@ -2894,13 +2922,27 @@ fn emit_guest_host_contract_args_setup(
         return;
     }
 
+    // StringView parameters are copied into host-owned memory; the allocation
+    // goes through the host pointer captured in `from_host` (no static storage).
+    let any_string_view: bool = func
+        .params
+        .iter()
+        .any(|p: &ResolvedParam| matches!(p.ty, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)));
+    if any_string_view {
+        out.push_str(
+            "        // SAFETY: self.host was captured from a valid HostApi in `from_host`\n\
+             \x20       // and stays valid for the runtime's lifetime.\n\
+             \x20       let host_ctx: HostContext = unsafe { HostContext::new(self.host) };\n",
+        );
+    }
+
     if func.params.len() == 1 {
         let param: &ResolvedParam = &func.params[0];
         let ty_name: String = guest_param_type_name(&param.ty);
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                 out.push_str(&format!(
-                    "        let {name}_view: StringView = alloc_string(&{name}).unwrap_or_else(|_| string_view_null());\n",
+                    "        let {name}_view: StringView = host_ctx.alloc_string(&{name}).unwrap_or_else(|_| string_view_null());\n",
                     name = param.name
                 ));
                 out.push_str(&format!(
@@ -2957,7 +2999,7 @@ fn emit_guest_host_contract_args_setup(
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                 out.push_str(&format!(
-                    "            {}: alloc_string(&{}).unwrap_or_else(|_| string_view_null()),\n",
+                    "            {}: host_ctx.alloc_string(&{}).unwrap_or_else(|_| string_view_null()),\n",
                     param.name, param.name
                 ));
             }
@@ -3153,12 +3195,15 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
     // resolve()
     out.push_str("    /// Discover and resolve the peer contract through the host.\n");
     out.push_str("    ///\n");
+    out.push_str("    /// `host` is the per-instance context handed to the author factory\n");
+    out.push_str("    /// (`polyplug_create_<plugin>`) — no process-wide host storage exists.\n");
+    out.push_str("    ///\n");
     out.push_str(
-        "    /// Returns `None` if the host vtable is unset, the contract is not found,\n",
+        "    /// Returns `None` if the host context is null, the contract is not found,\n",
     );
     out.push_str("    /// or the resolved interface pointer is null.\n");
-    out.push_str("    pub fn resolve() -> Option<Self> {\n");
-    out.push_str("        let host: *const HostApi = polyplug_guest::get_host_vtable();\n");
+    out.push_str("    pub fn resolve(host: polyplug_guest::HostContext) -> Option<Self> {\n");
+    out.push_str("        let host: *const HostApi = host.as_ptr();\n");
     out.push_str(
         "        // SAFETY: host is checked for null via as_ref() which returns None on null.\n",
     );
@@ -4501,8 +4546,8 @@ mod tests {
             "missing call_guest_method: {content}"
         );
         assert!(
-            content.contains("fn resolve()"),
-            "missing resolve() method: {content}"
+            content.contains("fn resolve(host: polyplug_guest::HostContext)"),
+            "missing resolve(host) method: {content}"
         );
         assert!(
             content.contains("fn decode("),

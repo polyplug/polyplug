@@ -9,11 +9,11 @@ using System.Runtime.InteropServices;
 /// <summary>
 /// Funnels failed guest→host calls through the host logging path
 /// (level Error) before the caller returns its default value.
-/// No-op until polyplug_init has stored the host (PolyplugHost.Log contract).
+/// No-op when the host pointer is null (PolyplugHost.Log contract).
 /// </summary>
 internal static class HostCallerFailureLog {
-    internal static void Log(string what, uint code) {
-        Polyplug.Guest.PolyplugHost.Log(Polyplug.Abi.LogLevel.Error, "guest.host_caller", $"{what} failed: code={code}");
+    internal static void Log(IntPtr hostPtr, string what, uint code) {
+        Polyplug.Guest.PolyplugHost.Log(hostPtr, Polyplug.Abi.LogLevel.Error, "guest.host_caller", $"{what} failed: code={code}");
     }
 }
 
@@ -30,8 +30,11 @@ public struct HostLoggerContractLogWithLevelArgs {
 public sealed class HostLoggerContract {
     private readonly IntPtr _instance;
     private readonly IntPtr _interface;
+    // Host pointer captured in FromHost — used for failure logging.
+    // No process-wide host storage exists; the pointer flows per caller.
+    private readonly IntPtr _host;
 
-    private HostLoggerContract(IntPtr instance, IntPtr iface) { _instance = instance; _interface = iface; }
+    private HostLoggerContract(IntPtr host, IntPtr instance, IntPtr iface) { _host = host; _instance = instance; _interface = iface; }
 
     /// <summary>Factory method - creates caller from HostApi or null if not found.</summary>
     public static HostLoggerContract? FromHost(IntPtr host, uint minVersion = 0) {
@@ -50,7 +53,7 @@ public sealed class HostLoggerContract {
             if (iface == IntPtr.Zero) {
                 return null;
             }
-            return new HostLoggerContract(instance, iface);
+            return new HostLoggerContract(host, instance, iface);
         }
     }
 
@@ -60,7 +63,7 @@ public sealed class HostLoggerContract {
     /// <summary>Call host contract function `log` (function_id=0)</summary>
     public void Log(string message) {
         if (_interface == IntPtr.Zero) {
-            HostCallerFailureLog.Log("HostLoggerContract.Log", (uint)AbiErrorCode.InvalidPointer);
+            HostCallerFailureLog.Log(_host, "HostLoggerContract.Log", (uint)AbiErrorCode.InvalidPointer);
             return;
         }
 
@@ -75,7 +78,7 @@ public sealed class HostLoggerContract {
             switch (contract->DispatchType) {
                 case DispatchType.Native: {
                     if (0u >= contract->Dispatch.Native.FunctionCount) {
-                        HostCallerFailureLog.Log("HostLoggerContract.Log", (uint)AbiErrorCode.FunctionNotAvailable);
+                        HostCallerFailureLog.Log(_host, "HostLoggerContract.Log", (uint)AbiErrorCode.FunctionNotAvailable);
                         return;
                     }
                     var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[0u];
@@ -89,12 +92,12 @@ public sealed class HostLoggerContract {
                     break;
                 }
                 default:
-                    HostCallerFailureLog.Log("HostLoggerContract.Log", (uint)AbiErrorCode.Generic);
+                    HostCallerFailureLog.Log(_host, "HostLoggerContract.Log", (uint)AbiErrorCode.Generic);
                     return;
             }
 
             if (err.Code != (uint)AbiErrorCode.Ok) {
-                HostCallerFailureLog.Log("HostLoggerContract.Log", err.Code);
+                HostCallerFailureLog.Log(_host, "HostLoggerContract.Log", err.Code);
                 return;
             }
 
@@ -104,7 +107,7 @@ public sealed class HostLoggerContract {
     /// <summary>Call host contract function `log_with_level` (function_id=1)</summary>
     public void LogWithLevel(ref LogLevel level, string message) {
         if (_interface == IntPtr.Zero) {
-            HostCallerFailureLog.Log("HostLoggerContract.LogWithLevel", (uint)AbiErrorCode.InvalidPointer);
+            HostCallerFailureLog.Log(_host, "HostLoggerContract.LogWithLevel", (uint)AbiErrorCode.InvalidPointer);
             return;
         }
 
@@ -122,7 +125,7 @@ public sealed class HostLoggerContract {
             switch (contract->DispatchType) {
                 case DispatchType.Native: {
                     if (1u >= contract->Dispatch.Native.FunctionCount) {
-                        HostCallerFailureLog.Log("HostLoggerContract.LogWithLevel", (uint)AbiErrorCode.FunctionNotAvailable);
+                        HostCallerFailureLog.Log(_host, "HostLoggerContract.LogWithLevel", (uint)AbiErrorCode.FunctionNotAvailable);
                         return;
                     }
                     var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[1u];
@@ -136,12 +139,12 @@ public sealed class HostLoggerContract {
                     break;
                 }
                 default:
-                    HostCallerFailureLog.Log("HostLoggerContract.LogWithLevel", (uint)AbiErrorCode.Generic);
+                    HostCallerFailureLog.Log(_host, "HostLoggerContract.LogWithLevel", (uint)AbiErrorCode.Generic);
                     return;
             }
 
             if (err.Code != (uint)AbiErrorCode.Ok) {
-                HostCallerFailureLog.Log("HostLoggerContract.LogWithLevel", err.Code);
+                HostCallerFailureLog.Log(_host, "HostLoggerContract.LogWithLevel", err.Code);
                 return;
             }
 

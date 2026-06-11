@@ -493,15 +493,14 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     if any_string_arg {
         out.push_str("from polyplug_abi import StringView, to_str\n");
     }
-    // polyplug_guest imports: register_contract + store_host_interface are always
-    // needed (polyplug_init stores the host so peer callers can resolve it);
+    // typing.Callable types the author-factory slots set at import time.
+    out.push_str("from typing import Callable\n");
+    // polyplug_guest imports: register_contract is always needed;
     // alloc_string_arena only when a function returns a StringView (arena-allocated).
     if any_string_ret {
-        out.push_str(
-            "from polyplug_guest import register_contract, store_host_interface, alloc_string_arena\n\n",
-        );
+        out.push_str("from polyplug_guest import register_contract, alloc_string_arena\n\n");
     } else {
-        out.push_str("from polyplug_guest import register_contract, store_host_interface\n\n");
+        out.push_str("from polyplug_guest import register_contract\n\n");
     }
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
@@ -528,7 +527,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     // and returns normally on success or raises on failure (the loader maps a
     // raised exception to AbiErrorCode.Generic).
 
-    let mut registrations: Vec<(String, String, &ResolvedContract)> = Vec::new();
+    let mut registrations: Vec<(String, String, String, &ResolvedContract)> = Vec::new();
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
             for contract_impl in &plugin.implements {
@@ -540,7 +539,12 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
                     generate_guest_plugin_trait(&mut out, &plugin.name, contract);
                     generate_guest_plugin_interface(&mut out, &plugin.name, contract);
                     let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
-                    registrations.push((plugin.name.clone(), plugin_lower, contract));
+                    registrations.push((
+                        plugin.name.clone(),
+                        plugin_lower.clone(),
+                        plugin_lower,
+                        contract,
+                    ));
                 }
             }
         }
@@ -549,7 +553,8 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
             generate_guest_contract_trait(&mut out, contract);
             generate_guest_contract_interface(&mut out, contract);
             let lower: String = contract.name.replace('.', "_");
-            registrations.push((contract.name.clone(), lower, contract));
+            let upper: String = contract_name_to_upper_snake(&contract.name);
+            registrations.push((contract.name.clone(), lower, upper, contract));
         }
     }
 
@@ -563,18 +568,36 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     );
     out.push_str("    it after this returns and registers each contract itself.\n\n");
     out.push_str("    Args:\n");
+    out.push_str("        host_ptr: HostApi pointer — passed to each author factory so every\n");
     out.push_str(
-        "        host_ptr: HostApi pointer — stored via store_host_interface so guest→guest\n",
+        "                  implementation is constructed with its owning runtime's host\n",
     );
-    out.push_str(
-        "                  peer callers can resolve a peer through the host (VM dispatch\n",
-    );
-    out.push_str("                  itself carries no per-call host state).\n");
+    out.push_str("                  (no host pointer is stored in the guest SDK).\n");
     out.push_str("        ctx_ptr: BundleInitContext pointer (unused)\n");
     out.push_str("    \"\"\"\n");
-    out.push_str("    store_host_interface(host_ptr)\n");
+    if !registrations.is_empty() {
+        let globals_list: String = registrations
+            .iter()
+            .map(
+                |(_, _, impl_var, _): &(String, String, String, &ResolvedContract)| {
+                    format!("_{impl_var}_IMPL")
+                },
+            )
+            .collect::<Vec<String>>()
+            .join(", ");
+        out.push_str(&format!("    global {globals_list}\n"));
+    }
     out.push_str("    _ = ctx_ptr\n");
-    for (display_name, lower, contract) in &registrations {
+    for (_, _, impl_var, _) in &registrations {
+        out.push_str(&format!("    if _{impl_var}_FACTORY is None:\n"));
+        out.push_str(&format!(
+            "        raise RuntimeError(\"set_{impl_var}_factory(...) was not called at import time\")\n"
+        ));
+        out.push_str(&format!(
+            "    _{impl_var}_IMPL = _{impl_var}_FACTORY(host_ptr)\n"
+        ));
+    }
+    for (display_name, lower, _, contract) in &registrations {
         let contract_str: String = format!("{}@{}", contract.name, contract.version.major);
         out.push_str("    register_contract(\n");
         out.push_str("        globals(),\n");
@@ -1160,12 +1183,30 @@ fn generate_guest_contract_trait(out: &mut String, contract: &ResolvedContract) 
         generate_guest_trait_method(out, func, &contract_name_to_struct(&contract.name));
     }
     let upper: String = contract_name_to_upper_snake(&contract.name);
-    out.push_str(&format!("\n_{upper}_IMPL: {trait_name} | None = None\n"));
+    emit_python_factory_slot(out, &upper, &trait_name);
+}
+
+/// Emit the author-factory slot and registration helper for one impl variable.
+///
+/// The author calls `set_<var>_factory(MyImpl)` at import time; the generated
+/// `polyplug_init` constructs the implementation by calling the factory with
+/// the `HostApi` pointer, so the impl is built with its owning runtime's host —
+/// no host pointer is stored in the guest SDK. (The slots themselves are
+/// module-level, bounded by the documented CPython once-per-process limit.)
+fn emit_python_factory_slot(out: &mut String, var: &str, class_name: &str) {
+    out.push_str(&format!("\n_{var}_IMPL: {class_name} | None = None\n"));
     out.push_str(&format!(
-        "def set_{upper}_impl(impl: {trait_name}) -> None:\n"
+        "_{var}_FACTORY: Callable[[int], {class_name}] | None = None\n"
     ));
-    out.push_str(&format!("    global _{upper}_IMPL\n"));
-    out.push_str(&format!("    _{upper}_IMPL = impl\n\n"));
+    out.push_str(&format!(
+        "def set_{var}_factory(factory: Callable[[int], {class_name}]) -> None:\n"
+    ));
+    out.push_str("    \"\"\"Register the author factory; call once at module import time.\n\n");
+    out.push_str("    The factory receives the HostApi pointer when polyplug_init runs, so the\n");
+    out.push_str("    implementation is constructed with its owning runtime's host pointer.\n");
+    out.push_str("    \"\"\"\n");
+    out.push_str(&format!("    global _{var}_FACTORY\n"));
+    out.push_str(&format!("    _{var}_FACTORY = factory\n\n"));
 }
 
 fn generate_guest_plugin_trait(out: &mut String, plugin_name: &str, contract: &ResolvedContract) {
@@ -1175,14 +1216,7 @@ fn generate_guest_plugin_trait(out: &mut String, plugin_name: &str, contract: &R
     for func in &contract.functions {
         generate_guest_trait_method(out, func, &contract_name_to_struct(&contract.name));
     }
-    out.push_str(&format!(
-        "\n_{plugin_lower}_IMPL: {class_name} | None = None\n"
-    ));
-    out.push_str(&format!(
-        "def set_{plugin_lower}_impl(impl: {class_name}) -> None:\n"
-    ));
-    out.push_str(&format!("    global _{plugin_lower}_IMPL\n"));
-    out.push_str(&format!("    _{plugin_lower}_IMPL = impl\n\n"));
+    emit_python_factory_slot(out, &plugin_lower, &class_name);
 }
 
 fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction, _contract_struct: &str) {
@@ -3099,8 +3133,6 @@ fn generate_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract
     }
 
     // resolve() reads the host pointer the guest stored at polyplug_init time.
-    out.push_str("from polyplug_guest import get_host_interface\n\n");
-
     // Collect user-defined type imports from peer contracts.
     let mut type_imports: BTreeSet<String> = BTreeSet::new();
     for contract in peers {
@@ -3173,7 +3205,7 @@ fn generate_guest_peer_callers_stub(ir: &ValidatedIr, peers: &[&ResolvedContract
         out.push_str(&format!("class {class_name}:\n"));
         out.push_str("    @classmethod\n");
         out.push_str(&format!(
-            "    def resolve(cls, min_version: int = {min_ver}) -> Optional[Self]: ...\n"
+            "    def resolve(cls, host_ptr: int, min_version: int = {min_ver}) -> Optional[Self]: ...\n"
         ));
         out.push_str("    def __del__(self) -> None: ...\n");
         out.push_str("    def is_valid(self) -> bool: ...\n");
@@ -3198,9 +3230,10 @@ fn generate_guest_peer_callers_stub(ir: &ValidatedIr, peers: &[&ResolvedContract
 ///   `find_guest_contract` → `resolve_guest_contract` → `create_instance`
 ///   → per-call: `call_guest_method(host, instance, fn_id, args, out, arena)`.
 ///
-/// `resolve()` reads the host pointer the guest stored at `polyplug_init` via
-/// `get_host_interface()` (Lua/JS/C++ parity), so a `str`-level impl can resolve
-/// a peer without the host pointer being threaded through every call.
+/// `resolve(host_ptr)` takes the per-instance host pointer the author factory
+/// received (`polyplug_create_<plugin>`), so every peer call routes through the
+/// runtime that owns the calling instance — no host pointer is stored in the
+/// guest SDK.
 fn generate_peer_caller_class(
     out: &mut String,
     contract: &ResolvedContract,
@@ -3219,8 +3252,8 @@ fn generate_peer_caller_class(
     out.push_str(
         "    Per-instance state (interface, instance, arena) is instance-owned; the host\n",
     );
-    out.push_str("    pointer is read from the guest SDK's stored host interface (deposited by\n");
-    out.push_str("    polyplug_init), mirroring the Lua/JS/C++ guest SDKs.\n");
+    out.push_str("    pointer is passed explicitly to resolve() by the calling implementation\n");
+    out.push_str("    (which received it from its author factory) — no SDK-level host storage.\n");
     out.push_str("    \"\"\"\n\n");
 
     // __init__: stores host_ptr, interface ptr, instance, and optional arena.
@@ -3250,26 +3283,23 @@ fn generate_peer_caller_class(
     }
     out.push('\n');
 
-    // @classmethod resolve(min_version=<dep-major>) -> Self | None
+    // @classmethod resolve(host_ptr, min_version=<dep-major>) -> Self | None
     // The default min_version is the declared dependency's major so callers get
-    // the correct floor without having to repeat it. The host pointer comes from
-    // get_host_interface() (stored at polyplug_init), so str-level impls can
-    // resolve a peer without threading the pointer through every call.
+    // the correct floor without having to repeat it. The host pointer is passed
+    // explicitly by the calling implementation (it received it from its author
+    // factory) — no SDK-level host storage exists.
     out.push_str("    @classmethod\n");
     out.push_str(&format!(
-        "    def resolve(cls, min_version: int = {min_version}) -> Optional[Self]:\n"
+        "    def resolve(cls, host_ptr: int, min_version: int = {min_version}) -> Optional[Self]:\n"
     ));
     out.push_str("        \"\"\"Discover and resolve the peer contract through the host.\n\n");
-    out.push_str(
-        "        The HostApi pointer is read from the guest SDK's stored host interface\n",
-    );
-    out.push_str("        (deposited by polyplug_init via store_host_interface).\n\n");
     out.push_str("        Args:\n");
+    out.push_str("            host_ptr: the HostApi pointer the author factory received\n");
+    out.push_str("                (polyplug_create_<plugin>).\n");
     out.push_str("            min_version: minimum major version to accept.\n\n");
     out.push_str("        Returns:\n");
     out.push_str("            Self if the contract is found and resolved, None otherwise.\n");
     out.push_str("        \"\"\"\n");
-    out.push_str("        host_ptr: int = get_host_interface()\n");
     out.push_str("        if host_ptr == 0:\n");
     out.push_str("            return None\n");
     out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))\n");
@@ -4248,15 +4278,15 @@ mod tests {
             result.contains("class PipelineValidatorPeer:"),
             "peer class must be emitted: {result}"
         );
-        // resolve() takes no host_ptr — it reads the host the guest stored at
-        // polyplug_init via get_host_interface() (Lua/JS/C++ parity).
+        // resolve() takes the per-instance host pointer explicitly — no SDK-level
+        // host storage exists (the author factory receives the pointer).
         assert!(
-            result.contains("def resolve(cls, min_version: int"),
-            "resolve() must take only min_version: {result}"
+            result.contains("def resolve(cls, host_ptr: int, min_version: int"),
+            "resolve() must take host_ptr explicitly: {result}"
         );
         assert!(
-            result.contains("host_ptr: int = get_host_interface()"),
-            "resolve() must read the host from get_host_interface(): {result}"
+            !result.contains("get_host_interface"),
+            "resolve() must not read a stored host pointer: {result}"
         );
         // Uses host-mediated call_guest_method
         assert!(

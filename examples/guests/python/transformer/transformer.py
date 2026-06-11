@@ -1,11 +1,17 @@
 from generated.guest.contracts import (
     TRANSFORMERDataTransformerPlugin,
-    set_transformer_impl,
+    set_transformer_factory,
     polyplug_init,
 )
 
 
 class TransformerImpl(TRANSFORMERDataTransformerPlugin):
+    """The factory receives the HostApi pointer at polyplug_init time."""
+
+    def __init__(self, host_ptr: int) -> None:
+        # Host handle for this runtime, captured at construction.
+        self._host_ptr: int = host_ptr
+
     def transform(self, input: str) -> str:
         s = input.removeprefix("DECODED:")
         parts = s.split("|")
@@ -17,4 +23,6 @@ class TransformerImpl(TRANSFORMERDataTransformerPlugin):
         return "INVALID:format"
 
 
-set_transformer_impl(TransformerImpl())
+# Register the factory; the generated polyplug_init constructs the
+# implementation with its owning runtime's host pointer.
+set_transformer_factory(TransformerImpl)

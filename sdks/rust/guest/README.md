@@ -131,7 +131,7 @@ by linkage.
 
 The ABI types live in the `polyplug_abi` crate — import them from there directly
 (`use polyplug_abi::*;` or selectively). `polyplug_guest` adds the guest-side helpers
-(`FnPtr`, `GuestError`, `to_str`, `alloc_string`, `log`, …); it does **not** re-export
+(`FnPtr`, `GuestError`, `HostContext`, `to_str`, …); it does **not** re-export
 `polyplug_abi` (the workspace is cross-crate-re-export free).
 
 ### `StringView`
@@ -174,8 +174,8 @@ pub struct Buffer {
 ```
 
 **Ownership:** The holder must free with `host.free(host, ptr, cap, 1)` when done.
-Never place `Buffer` data on the Rust allocator — always allocate through the stored
-`HostApi` (`host.alloc`, e.g. via `alloc_string`).
+Never place `Buffer` data on the Rust allocator — always allocate through the host's
+`HostApi` (`host.alloc`, e.g. via `HostContext::alloc_string`).
 
 ---
 
@@ -254,10 +254,12 @@ pub struct PluginDescriptor {
 
 ### `HostApi`
 
-Passed by the host to your `polyplug_init`. The pointer stays valid for the plugin's
-lifetime — store it once during init (`polyplug_guest::store_host_vtable`) and read it
-back later with `polyplug_guest::get_host_vtable` for allocation, logging, and
-cross-contract calls.
+Passed by the host to your `polyplug_init` and to every `create_instance` call. The
+pointer stays valid for the plugin's lifetime. The generated glue wraps it in a
+`polyplug_guest::HostContext` and hands it to your author factory
+(`polyplug_create_<plugin>`); store that context in your implementation struct for
+allocation, logging, and cross-contract calls. There is NO process-wide host storage
+in this SDK — the pointer always flows through instances.
 
 ```rust
 #[repr(C)]
@@ -451,29 +453,27 @@ assert_eq!(guest_contract_id("my.contract", 1), MY_CONTRACT_ID);
 ## Allocator API
 
 All memory that **crosses the plugin/host boundary** must use the host allocator,
-reached through the `alloc` / `free` function-pointer fields of the `HostApi`
-the host stored during `polyplug_init`. There are no `polyplug_host_alloc` /
-`polyplug_host_free` C exports — allocation always flows through the stored interface.
+reached through the `alloc` / `free` function-pointer fields of the `HostApi` your
+implementation received via its `HostContext`. There are no `polyplug_host_alloc` /
+`polyplug_host_free` C exports — allocation always flows through that interface.
 Never return heap-allocated data from your Rust allocator — the host cannot free it.
 
-For strings, prefer the `alloc_string` helper, which allocates through `host.alloc`:
+For strings, prefer the `HostContext::alloc_string` method, which allocates through
+`host.alloc`:
 
 ```rust
-use polyplug_guest::{alloc_string, StringView};
-
-// Allocate a host-owned StringView from a &str:
-let sv: StringView = alloc_string("hello")?;
+// `self.host` is the HostContext your factory received and stored.
+let sv: StringView = self.host.alloc_string("hello")?;
 // sv.ptr points to host-allocated memory; the host frees it via
 // host.free(host, sv.ptr, sv.len, 1) when done.
 ```
 
-For raw buffers, call the stored interface directly:
+For raw buffers, call the interface directly through the context's raw pointer:
 
 ```rust
-use polyplug_guest::get_host_vtable;
-
-let host: *const HostApi = get_host_vtable();
-// SAFETY: host was stored during polyplug_init and is non-null in plugin code.
+let host: *const HostApi = self.host.as_ptr();
+// SAFETY: the HostContext came from create_instance and is valid for the
+// plugin's lifetime.
 let ptr: *mut u8 = unsafe { ((*host).alloc)(host, 64, 8) };
 if ptr.is_null() {
     // allocation failed
@@ -485,8 +485,8 @@ unsafe { ((*host).free)(host, ptr, 64, 8) };
 **Rules:**
 - A plugin must **never free** memory it did not allocate.
 - Never place cross-boundary data on the Rust managed heap (`Box`, `Vec`, `String`).
-- For string outputs, allocate via `alloc_string` (or `host.alloc`), copy bytes in,
-  return a `StringView` pointing to that allocation.
+- For string outputs, allocate via `HostContext::alloc_string` (or `host.alloc`),
+  copy bytes in, return a `StringView` pointing to that allocation.
 
 ---
 
@@ -596,7 +596,7 @@ Key points demonstrated:
 - **Generated bindings**: `polyplugc generate` emits `generated/guest/` (trait,
   vtable, `polyplug_init`) and `generated/manifest.toml`
 - **Safe UTF-8 decoding** of `StringView` data via `polyplug_guest::to_str`
-- **Host-allocator string returns** via `polyplug_guest::alloc_string`
+- **Host-allocator string returns** via `polyplug_guest::HostContext::alloc_string`
 - **Proper error returns** (`Result<_, GuestError>`) instead of panics
 - **`// SAFETY:` comments** on every `unsafe` block
 
@@ -730,9 +730,9 @@ untrusted and may return any 32-bit value. Construct it with
 
 | Rule | Detail |
 |---|---|
-| Cross-boundary allocations | Must use the stored `HostApi` `alloc` / `free` fields |
+| Cross-boundary allocations | Must use the `HostApi` `alloc` / `free` fields (via `HostContext`) |
 | Plugin-side allocations | May use Rust allocator, but must NOT cross the boundary |
-| Returned strings / buffers | Must be allocated via `alloc_string` / `host.alloc` |
+| Returned strings / buffers | Must be allocated via `HostContext::alloc_string` / `host.alloc` |
 | `StringView` (input) | Borrowed — do NOT free; valid only for the duration of the call |
 | `Buffer` (output) | Owned — caller frees with `host.free(host, ptr, cap, align)` |
 | `AbiError.message` (output) | Static or runtime-owned; receiver NEVER frees it |

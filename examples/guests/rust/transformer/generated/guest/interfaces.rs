@@ -7,6 +7,7 @@
 #![allow(clippy::identity_op)]
 
 use super::types::*;
+use core::ffi::c_void;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchMechanisms;
@@ -21,13 +22,14 @@ use polyplug_abi::abi_error_ok;
 use polyplug_abi::string_view_from_static;
 use polyplug_abi::string_view_null;
 use polyplug_guest::GuestError;
-use polyplug_guest::alloc_string;
+use polyplug_guest::HostContext;
 use polyplug_utils::GuestContractId;
-use std::sync::OnceLock;
-/// Convert a GuestError to an AbiError, allocating the message via host_alloc.
+/// Convert a GuestError to an AbiError, allocating the message via the host allocator.
 /// Falls back to a null message if allocation fails.
-fn plugin_error_to_abi_error(e: GuestError) -> AbiError {
-    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());
+fn plugin_error_to_abi_error(host: HostContext, e: GuestError) -> AbiError {
+    let message: StringView = host
+        .alloc_string(&e.message)
+        .unwrap_or_else(|_| string_view_null());
     AbiError {
         code: e.code as u32,
         message,
@@ -53,14 +55,66 @@ unsafe impl Sync for FnPtr {}
 /// Contract ID constant -- pre-computed FNV-1a of "data.Transformer@1".
 pub const TRANSFORMER_CONTRACT_ID: u64 = 0x4775991362CD68EE;
 
-pub static TRANSFORMER_IMPL: OnceLock<Box<dyn DataTransformerGuestContract>> = OnceLock::new();
+unsafe extern "Rust" {
+    /// Author-provided factory — define it in the plugin crate as:
+    /// `#[unsafe(no_mangle)]`
+    /// `pub fn polyplug_create_transformer(host: HostContext) -> Box<dyn DataTransformerGuestContract> { ... }`
+    fn polyplug_create_transformer(host: HostContext) -> Box<dyn DataTransformerGuestContract>;
+}
 
-pub fn set_transformer_impl(
-    impl_: Box<dyn DataTransformerGuestContract>,
-) -> Result<(), &'static str> {
-    TRANSFORMER_IMPL
-        .set(impl_)
-        .map_err(|_| "transformer already registered")
+/// Per-instance payload carried in `GuestContractInstance.data`.
+struct TransformerPluginState {
+    /// Host context captured at instance creation — routes every host call
+    /// (allocation, logging, error reporting) to the runtime that owns it.
+    host: HostContext,
+    /// The author's implementation, created by `polyplug_create_transformer`.
+    implementation: Box<dyn DataTransformerGuestContract>,
+}
+
+/// Create a new instance: calls the author factory and boxes the payload.
+/// Returns a null handle when `host` is null or the factory panics.
+unsafe extern "C" fn TRANSFORMER_create_instance(
+    host: *const HostApi,
+    _args: *const (),
+) -> GuestContractInstance {
+    if host.is_null() {
+        return GuestContractInstance::null();
+    }
+    // SAFETY: host is non-null (checked above) and valid per the ABI contract
+    // for create_instance; it stays valid for the runtime's lifetime.
+    let host_ctx: HostContext = unsafe { HostContext::new(host) };
+    let implementation: Box<dyn DataTransformerGuestContract> =
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: the author defines `polyplug_create_transformer` in the plugin crate
+            // with `#[unsafe(no_mangle)]`; same-crate Rust ABI, signature enforced
+            // by the extern declaration above.
+            unsafe { polyplug_create_transformer(host_ctx) }
+        })) {
+            Ok(i) => i,
+            Err(_) => return GuestContractInstance::null(),
+        };
+    let state: Box<TransformerPluginState> = Box::new(TransformerPluginState {
+        host: host_ctx,
+        implementation,
+    });
+    GuestContractInstance {
+        data: Box::into_raw(state) as *mut c_void,
+        contract_id: GuestContractId::from_u64(TRANSFORMER_CONTRACT_ID),
+    }
+}
+
+/// Destroy an instance created by `TRANSFORMER_create_instance`.
+unsafe extern "C" fn TRANSFORMER_destroy_instance(
+    _host: *const HostApi,
+    instance: GuestContractInstance,
+) {
+    if instance.data.is_null() {
+        return;
+    }
+    // SAFETY: instance.data was produced by `TRANSFORMER_create_instance` via
+    // Box::into_raw and is dropped exactly once here — the host calls
+    // destroy_instance exactly once per created instance.
+    drop(unsafe { Box::from_raw(instance.data as *mut TransformerPluginState) });
 }
 
 /// ABI wrapper for transform (function_id = 0).
@@ -71,19 +125,18 @@ extern "C" fn transformer_transform_abi(
     args: *const (),
     out: *mut (),
 ) -> AbiError {
-    // Instance is ignored for stateless plugins (instance is null).
-    // For stateful plugins, users override create_instance and use instance.data.
-    let _ = instance;
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ref: &dyn DataTransformerGuestContract = match TRANSFORMER_IMPL.get() {
-            Some(i) => i.as_ref(),
-            None => {
-                return AbiError {
-                    code: AbiErrorCode::Generic as u32,
-                    message: string_view_from_static(b"implementation not registered"),
-                };
-            }
+    if instance.data.is_null() {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: string_view_from_static(b"instance is null"),
         };
+    }
+    // SAFETY: instance.data was produced by create_instance via Box::into_raw
+    // and stays valid until destroy_instance; the host never mutates it.
+    let state: &TransformerPluginState =
+        unsafe { &*(instance.data as *const TransformerPluginState) };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let impl_ref: &dyn DataTransformerGuestContract = state.implementation.as_ref();
         if args.is_null() {
             return AbiError {
                 code: AbiErrorCode::InvalidPointer as u32,
@@ -106,7 +159,7 @@ extern "C" fn transformer_transform_abi(
                 }
                 abi_error_ok()
             }
-            Err(e) => plugin_error_to_abi_error(e),
+            Err(e) => plugin_error_to_abi_error(state.host, e),
         }
     })) {
         Ok(err) => err,
@@ -116,25 +169,6 @@ extern "C" fn transformer_transform_abi(
 
 static TRANSFORMER_FNS: [FnPtr; 1_usize] = [FnPtr(transformer_transform_abi as *const ())];
 
-/// Default create_instance stub for transformer.
-/// Returns null instance - users should override for stateful plugins.
-#[allow(clippy::unnecessary_cast)]
-unsafe extern "C" fn TRANSFORMER_create_instance_stub(
-    _host: *const HostApi,
-    _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
-}
-
-/// Default destroy_instance stub for transformer.
-/// No-op - users should override for state cleanup before hot-reload.
-unsafe extern "C" fn TRANSFORMER_destroy_instance_stub(
-    _host: *const HostApi,
-    _instance: GuestContractInstance,
-) {
-    // No-op - stateless plugins don't need cleanup
-}
-
 pub static TRANSFORMER_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(TRANSFORMER_CONTRACT_ID),
     contract_version: Version {
@@ -143,8 +177,8 @@ pub static TRANSFORMER_INTERFACE: GuestContractInterface = GuestContractInterfac
         patch: 0,
     },
     dispatch_type: DispatchType::Native,
-    create_instance: TRANSFORMER_create_instance_stub,
-    destroy_instance: TRANSFORMER_destroy_instance_stub,
+    create_instance: TRANSFORMER_create_instance,
+    destroy_instance: TRANSFORMER_destroy_instance,
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
             function_count: 1_u32,

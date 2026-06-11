@@ -50,37 +50,44 @@ First generate the guest bindings for your contract with `polyplugc` (see
 
 - a base class (e.g. `DECODERPipelineDecoderPlugin`) with one method per
   contract function,
-- a `set_<contract>_impl()` registration function,
+- a `set_<contract>_factory()` registration function — the factory receives the
+  `HostApi` pointer when `polyplug_init` runs, so the implementation is
+  constructed with its owning runtime's host (no host pointer is stored in the
+  guest SDK),
 - the `polyplug_init` entry point and `polyplug_abi_version` the loader calls.
 
-Write your plugin by subclassing the generated base class and registering an
-instance at module load time:
+Write your plugin by subclassing the generated base class and registering the
+class (its constructor takes the host pointer) as the factory at module load
+time:
 
 ```python
 from generated.guest.contracts import (
     DECODERPipelineDecoderPlugin,
-    set_decoder_impl,
+    set_decoder_factory,
     polyplug_abi_version,
     polyplug_init,
 )
-from polyplug_guest import to_str, alloc_string
+from polyplug_guest import to_str
 
 
 class DecoderImpl(DECODERPipelineDecoderPlugin):
+    def __init__(self, host_ptr: int) -> None:
+        self._host_ptr = host_ptr
+
     def decode(self, input):
-        s = to_str(input).replace(",", "|")
-        return alloc_string(f"DECODED:{s}")
+        return f"DECODED:{input.replace(',', '|')}"
 
 
-set_decoder_impl(DecoderImpl())
+set_decoder_factory(DecoderImpl)
 ```
 
 `to_str(view)` decodes an incoming `StringView` to a Python `str`.
 `alloc_string(host_ptr, s)` allocates an outgoing `StringView` through the host
 allocator (for data that must outlive the call), and
-`alloc_string_arena(arena_alloc, s)` allocates a per-call return `StringView`
-from the active arena. The loader resolves the generated `polyplug_init` symbol
-directly — there is no decorator to apply.
+`alloc_string_arena(arena_alloc, arena_ptr, s)` allocates a per-call return
+`StringView` from the active arena. `log(host_ptr, level, scope, message)`
+routes a diagnostic through the host logging funnel. The loader resolves the
+generated `polyplug_init` symbol directly — there is no decorator to apply.
 
 ## Code Generation
 

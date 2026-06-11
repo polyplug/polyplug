@@ -435,15 +435,10 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n"
             ));
-            out.push_str(&format!(
-                "    private static {iface_name}? _impl_{lower};\n"
-            ));
-            out.push_str(&format!(
-                "    public static void Set{class_name}Impl({iface_name} impl) {{ _impl_{lower} = impl; }}\n\n"
-            ));
+            emit_cs_guest_instance_machinery(&mut out, &upper, &lower, &class_name, &iface_name);
 
             // [UnmanagedCallersOnly] ABI methods
-            let impl_field: String = format!("_impl_{lower}");
+            let state_class: String = format!("{class_name}InstanceState");
             for func in &contract.functions {
                 let fn_name: String = func.name.replace('-', "_");
                 let abi_method: String = format!("{lower}_{fn_name}_abi");
@@ -454,7 +449,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                     "    private static unsafe AbiError {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {{\n",
                     abi_method
                 ));
-                emit_cs_guest_dispatch_body(&mut out, &impl_field, &class_name, func);
+                emit_cs_guest_dispatch_body(&mut out, &state_class, &class_name, func);
                 out.push_str("    }\n\n");
             }
 
@@ -462,25 +457,6 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "    private static readonly IntPtr[] {upper}_FNS;\n"
             ));
-
-            // Instance lifecycle stubs
-            out.push_str(
-                "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
-            );
-            out.push_str(&format!(
-                "    private static GuestContractInstance {upper}_CreateInstanceStub(IntPtr host, IntPtr args) {{\n"
-            ));
-            out.push_str("        // Default stub returns null instance - users override for stateful plugins.\n");
-            out.push_str("        return new GuestContractInstance { Data = IntPtr.Zero };\n");
-            out.push_str("    }\n\n");
-            out.push_str(
-                "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
-            );
-            out.push_str(&format!(
-                "    private static void {upper}_DestroyInstanceStub(IntPtr host, GuestContractInstance instance) {{\n"
-            ));
-            out.push_str("        // Default stub is no-op - users override for cleanup before hot-reload.\n");
-            out.push_str("    }\n\n");
 
             // Interface field and static constructor (GCHandle pinning)
             out.push_str(&format!(
@@ -516,10 +492,10 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             // No bundle info is available here, so default to native dispatch.
             out.push_str("                DispatchType = DispatchType.Native,\n");
             out.push_str(&format!(
-                "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstanceStub,\n"
+                "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstance,\n"
             ));
             out.push_str(&format!(
-                "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstanceStub,\n"
+                "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstance,\n"
             ));
             out.push_str("                Dispatch = new DispatchMechanisms {\n");
             out.push_str("                    Native = new NativeDispatch {\n");
@@ -577,18 +553,16 @@ fn generate_cs_guest_plugin_interface(
         "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n",
         upper = plugin_upper
     ));
-    out.push_str(&format!(
-        "    private static {iface_name}? _impl_{lower};\n",
-        lower = plugin_lower
-    ));
-    out.push_str(&format!(
-        "    public static void Set{class_name}Impl({iface_name} impl) {{ _impl_{lower} = impl; }}\n\n",
-        class_name = class_name_pascal,
-        lower = plugin_lower
-    ));
+    emit_cs_guest_instance_machinery(
+        out,
+        &plugin_upper,
+        &plugin_lower,
+        &class_name_pascal,
+        &iface_name,
+    );
 
     // [UnmanagedCallersOnly] ABI methods
-    let impl_field: String = format!("_impl_{lower}", lower = plugin_lower);
+    let state_class: String = format!("{class_name_pascal}InstanceState");
     let arg_pack_prefix: String = pascal_case(&contract.name) + "Contract";
     for func in &contract.functions {
         let fn_name: String = func.name.replace('-', "_");
@@ -598,7 +572,7 @@ fn generate_cs_guest_plugin_interface(
             "    private static unsafe AbiError {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {{\n",
             abi_method
         ));
-        emit_cs_guest_dispatch_body(out, &impl_field, &arg_pack_prefix, func);
+        emit_cs_guest_dispatch_body(out, &state_class, &arg_pack_prefix, func);
         out.push_str("    }\n\n");
     }
 
@@ -617,26 +591,6 @@ fn generate_cs_guest_plugin_interface(
         "    public static GuestContractInterface {upper}_INTERFACE;\n\n",
         upper = plugin_upper
     ));
-    // Instance lifecycle stubs
-    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
-    out.push_str(&format!(
-        "    private static GuestContractInstance {upper}_CreateInstanceStub(IntPtr host, IntPtr args) {{\n",
-        upper = plugin_upper
-    ));
-    out.push_str(
-        "        // Default stub returns null instance - users override for stateful plugins.\n",
-    );
-    out.push_str("        return new GuestContractInstance { Data = IntPtr.Zero };\n");
-    out.push_str("    }\n\n");
-    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
-    out.push_str(&format!(
-        "    private static void {upper}_DestroyInstanceStub(IntPtr host, GuestContractInstance instance) {{\n",
-        upper = plugin_upper
-    ));
-    out.push_str(
-        "        // Default stub is no-op - users override for cleanup before hot-reload.\n",
-    );
-    out.push_str("    }\n\n");
 
     // Static constructor instead of Init method
     out.push_str(&format!(
@@ -681,11 +635,11 @@ fn generate_cs_guest_plugin_interface(
     // native-dispatch").
     out.push_str("                DispatchType = DispatchType.Native,\n");
     out.push_str(&format!(
-        "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstanceStub,\n",
+        "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstance,\n",
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstanceStub,\n",
+        "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstance,\n",
         upper = plugin_upper
     ));
     out.push_str("                Dispatch = new DispatchMechanisms {\n");
@@ -705,13 +659,115 @@ fn generate_cs_guest_plugin_interface(
     out.push_str("}\n\n");
 }
 
-/// Emit the body of a guest contract ABI thunk: validate pointers, marshal the
-/// arguments from `argsPtr`, invoke the registered implementation, and write the
-/// result back through `outPtr`. Mirrors the dispatch semantics of the Rust
-/// generator so every language produces identical ABI behaviour.
+/// Emit the per-plugin instance machinery: the author-factory slot (set once at
+/// module initialization), the instance payload class, and the real
+/// `CreateInstance` / `DestroyInstance` thunks.
+///
+/// The implementation is constructed by the author factory on every
+/// `CreateInstance` call and carried — together with the host pointer — in
+/// `GuestContractInstance.Data` as a `GCHandle`. No static implementation or
+/// host-pointer storage exists; the factory slot holds set-once author wiring
+/// and is per-AssemblyLoadContext (per (runtime, bundle) after the ALC re-key).
+fn emit_cs_guest_instance_machinery(
+    out: &mut String,
+    upper: &str,
+    lower: &str,
+    class_pascal: &str,
+    iface_name: &str,
+) {
+    out.push_str(&format!(
+        "    private static Func<IntPtr, {iface_name}>? _factory_{lower};\n"
+    ));
+    out.push_str("    /// <summary>\n");
+    out.push_str("    /// Register the author factory; call once at module initialization\n");
+    out.push_str(
+        "    /// (<c>[ModuleInitializer]</c>). The factory receives the HostApi pointer\n",
+    );
+    out.push_str("    /// at instance creation, so every implementation is constructed with its\n");
+    out.push_str("    /// owning runtime's host — no host pointer is stored in the SDK.\n");
+    out.push_str("    /// </summary>\n");
+    out.push_str(&format!(
+        "    public static void Set{class_pascal}Factory(Func<IntPtr, {iface_name}> factory) {{ _factory_{lower} = factory; }}\n\n"
+    ));
+
+    out.push_str("    /// <summary>Per-instance payload carried in GuestContractInstance.Data (via GCHandle).</summary>\n");
+    out.push_str(&format!(
+        "    private sealed class {class_pascal}InstanceState {{\n"
+    ));
+    out.push_str(
+        "        // Host pointer captured at instance creation — routes every host call\n",
+    );
+    out.push_str("        // (allocation, logging, peer dispatch) to the runtime that owns it.\n");
+    out.push_str("        public IntPtr Host;\n");
+    out.push_str(&format!(
+        "        // The author's implementation, created by the Set{class_pascal}Factory factory.\n"
+    ));
+    out.push_str(&format!("        public {iface_name} Impl = null!;\n"));
+    out.push_str("    }\n\n");
+
+    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
+    out.push_str(&format!(
+        "    private static GuestContractInstance {upper}_CreateInstance(IntPtr host, IntPtr args) {{\n"
+    ));
+    out.push_str(
+        "        // Calls the author factory and carries the payload in instance.Data as a\n",
+    );
+    out.push_str("        // normal (non-pinned) GCHandle — an opaque token the host never\n");
+    out.push_str("        // dereferences. Returns a null handle when host is null, the factory\n");
+    out.push_str("        // was not registered, or it throws.\n");
+    out.push_str("        try {\n");
+    out.push_str(&format!("            var factory = _factory_{lower};\n"));
+    out.push_str("            if (host == IntPtr.Zero || factory is null) {\n");
+    out.push_str("                return new GuestContractInstance { Data = IntPtr.Zero };\n");
+    out.push_str("            }\n");
+    out.push_str(&format!(
+        "            var state = new {class_pascal}InstanceState {{ Host = host, Impl = factory(host) }};\n"
+    ));
+    out.push_str(
+        "            var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);\n",
+    );
+    out.push_str("            return new GuestContractInstance {\n");
+    out.push_str(
+        "                Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),\n",
+    );
+    out.push_str(&format!(
+        "                ContractId = {upper}_CONTRACT_ID,\n"
+    ));
+    out.push_str("            };\n");
+    out.push_str("        } catch {\n");
+    out.push_str("            return new GuestContractInstance { Data = IntPtr.Zero };\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+
+    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
+    out.push_str(&format!(
+        "    private static void {upper}_DestroyInstance(IntPtr host, GuestContractInstance instance) {{\n"
+    ));
+    out.push_str(
+        "        // Frees the GCHandle allocated by CreateInstance; the payload becomes\n",
+    );
+    out.push_str("        // collectible. The host calls destroy exactly once per instance.\n");
+    out.push_str("        if (instance.Data == IntPtr.Zero) return;\n");
+    out.push_str("        try {\n");
+    out.push_str(
+        "            System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Free();\n",
+    );
+    out.push_str("        } catch {\n");
+    out.push_str(
+        "            // Foreign or double-freed handle: nothing safe to do in a native callback.\n",
+    );
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+}
+
+/// Emit the body of a guest contract ABI thunk: validate pointers, recover the
+/// instance payload from `instance.Data`, marshal the arguments from `argsPtr`,
+/// invoke the implementation, and write the result back through `outPtr`.
+/// Mirrors the dispatch semantics of the Rust generator so every language
+/// produces identical ABI behaviour.
 fn emit_cs_guest_dispatch_body(
     out: &mut String,
-    impl_field: &str,
+    state_class: &str,
     contract_struct: &str,
     func: &ResolvedFunction,
 ) {
@@ -719,11 +775,12 @@ fn emit_cs_guest_dispatch_body(
     let has_return: bool = func.returns.is_some();
     let has_params: bool = !func.params.is_empty();
 
-    out.push_str("        // Instance is ignored for stateless plugins (instance is null).\n");
-    out.push_str(
-        "        // For stateful plugins, users override create_instance and use instance.Data.\n",
-    );
     out.push_str("        try {\n");
+    out.push_str("            if (instance.Data == IntPtr.Zero) {\n");
+    out.push_str(
+        "                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage(\"instance is null\") };\n",
+    );
+    out.push_str("            }\n");
     if has_params {
         out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
         out.push_str(
@@ -738,9 +795,14 @@ fn emit_cs_guest_dispatch_body(
         );
         out.push_str("            }\n");
     }
+    out.push_str(
+        "            // instance.Data is the GCHandle token produced by CreateInstance.\n",
+    );
     out.push_str(&format!(
-        "            var impl = {impl_field} ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.Generic, \"not initialized\");\n"
+        "            var state = ({state_class}?)System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Target\n"
     ));
+    out.push_str("                ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.InvalidPointer, \"instance payload collected\");\n");
+    out.push_str("            var impl = state.Impl;\n");
 
     // Marshal arguments and build the implementation call expression.
     let call_args: String = if !has_params {
@@ -824,7 +886,8 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = \"polyplug_init\")]\n");
     out.push_str("    public static AbiErrorCode PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {\n");
     out.push_str("        if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;\n");
-    out.push_str("        RuntimeAbiStorage.StoreRuntimeAbi(hostPtr);\n");
+    out.push_str("        // No process-wide host storage: the host pointer reaches each\n");
+    out.push_str("        // implementation through CreateInstance -> author factory.\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
     out.push_str("        unsafe {\n");
@@ -1442,11 +1505,14 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     ));
     out.push_str(&format!("public sealed class {} {{\n", class_name));
     out.push_str("    private readonly IntPtr _instance;\n");
-    out.push_str("    private readonly IntPtr _interface;\n\n");
+    out.push_str("    private readonly IntPtr _interface;\n");
+    out.push_str("    // Host pointer captured in FromHost — used for failure logging.\n");
+    out.push_str("    // No process-wide host storage exists; the pointer flows per caller.\n");
+    out.push_str("    private readonly IntPtr _host;\n\n");
 
     // Private constructor
     out.push_str(&format!(
-        "    private {}(IntPtr instance, IntPtr iface) {{ _instance = instance; _interface = iface; }}\n\n",
+        "    private {}(IntPtr host, IntPtr instance, IntPtr iface) {{ _host = host; _instance = instance; _interface = iface; }}\n\n",
         class_name
     ));
 
@@ -1478,7 +1544,7 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     out.push_str("                return null;\n");
     out.push_str("            }\n");
     out.push_str(&format!(
-        "            return new {}(instance, iface);\n",
+        "            return new {}(host, instance, iface);\n",
         class_name
     ));
     out.push_str("        }\n");
@@ -1543,7 +1609,7 @@ fn generate_cs_guest_host_contract_method(
     // before returning the default (silent defaults hide real wiring bugs).
     out.push_str("        if (_interface == IntPtr.Zero) {\n");
     out.push_str(&format!(
-        "            HostCallerFailureLog.Log(\"{what}\", (uint)AbiErrorCode.InvalidPointer);\n"
+        "            HostCallerFailureLog.Log(_host, \"{what}\", (uint)AbiErrorCode.InvalidPointer);\n"
     ));
     if has_return {
         out.push_str(&format!("            return default({});\n", return_type));
@@ -1573,7 +1639,7 @@ fn generate_cs_guest_host_contract_method(
         "                    if ({fn_id}u >= contract->Dispatch.Native.FunctionCount) {{\n"
     ));
     out.push_str(&format!(
-        "                        HostCallerFailureLog.Log(\"{what}\", (uint)AbiErrorCode.FunctionNotAvailable);\n"
+        "                        HostCallerFailureLog.Log(_host, \"{what}\", (uint)AbiErrorCode.FunctionNotAvailable);\n"
     ));
     if has_return {
         out.push_str(&format!(
@@ -1606,7 +1672,7 @@ fn generate_cs_guest_host_contract_method(
     out.push_str("                }\n");
     out.push_str("                default:\n");
     out.push_str(&format!(
-        "                    HostCallerFailureLog.Log(\"{what}\", (uint)AbiErrorCode.Generic);\n"
+        "                    HostCallerFailureLog.Log(_host, \"{what}\", (uint)AbiErrorCode.Generic);\n"
     ));
     if has_return {
         out.push_str(&format!(
@@ -1622,7 +1688,7 @@ fn generate_cs_guest_host_contract_method(
     // before returning the default.
     out.push_str("            if (err.Code != (uint)AbiErrorCode.Ok) {\n");
     out.push_str(&format!(
-        "                HostCallerFailureLog.Log(\"{what}\", err.Code);\n"
+        "                HostCallerFailureLog.Log(_host, \"{what}\", err.Code);\n"
     ));
     if has_return {
         out.push_str(&format!(
@@ -1758,17 +1824,15 @@ fn emit_cs_log_call_failure_helper(out: &mut String) {
     out.push_str("/// <summary>\n");
     out.push_str("/// Funnels failed guest→host calls through the host logging path\n");
     out.push_str("/// (level Error) before the caller returns its default value.\n");
-    out.push_str(
-        "/// No-op until polyplug_init has stored the host (PolyplugHost.Log contract).\n",
-    );
+    out.push_str("/// No-op when the host pointer is null (PolyplugHost.Log contract).\n");
     out.push_str("/// </summary>\n");
     out.push_str("internal static class HostCallerFailureLog {\n");
-    out.push_str("    internal static void Log(string what, uint code) {\n");
+    out.push_str("    internal static void Log(IntPtr hostPtr, string what, uint code) {\n");
     // Fully qualified on purpose: a contract-defined `LogLevel` enum in the
     // same compilation would otherwise shadow the ABI's LogLevel (same
     // collision class as the cpp generator's global ::LogLevel).
     out.push_str(
-        "        Polyplug.Guest.PolyplugHost.Log(Polyplug.Abi.LogLevel.Error, \"guest.host_caller\", $\"{what} failed: code={code}\");\n",
+        "        Polyplug.Guest.PolyplugHost.Log(hostPtr, Polyplug.Abi.LogLevel.Error, \"guest.host_caller\", $\"{what} failed: code={code}\");\n",
     );
     out.push_str("    }\n");
     out.push_str("}\n\n");
@@ -2571,8 +2635,8 @@ fn peer_min_version(ir: &ValidatedIr, target_contract_id: u64) -> u32 {
 ///
 /// Each peer contract gets one `<Name>ContractPeer` sealed class that:
 ///
-///   1. Fetches the host pointer via `RuntimeAbiStorage.GetRuntimeAbi()` (same
-///      accessor that `PolyplugHost.AllocString` uses — no new import needed).
+///   1. Takes the host pointer explicitly in `Resolve(IntPtr hostPtr)` — the
+///      pointer the author factory received; no process-wide host storage.
 ///   2. Resolves the contract via `FindGuestContract` → `ResolveGuestContract`
 ///      → `CreateInstance` using `delegate* unmanaged[Cdecl]` casts on the
 ///      IntPtr fields of `HostApi`, exactly as the host-side `Callers.cs` does.
@@ -2608,7 +2672,7 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         out.push_str(&format!(
             "/// <summary>\n/// Guest-side peer caller for contract `{}` (id=0x{:016X}).\n\
              /// Resolves via the host-mediated CallGuestMethod path (offset 136 on HostApi);\n\
-             /// the host pointer is fetched from RuntimeAbiStorage on each Resolve() call.\n\
+             /// the host pointer is passed explicitly to Resolve(hostPtr) by the caller.\n\
              /// Returns raw ABI types — do not convert StringView/Buffer to managed strings.\n\
              /// </summary>\n",
             contract.name, contract.contract_id
@@ -2654,16 +2718,22 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         }
         out.push_str("    }\n\n");
 
-        // Resolve factory — guest-side: get host from RuntimeAbiStorage, then
+        // Resolve factory — guest-side: the host pointer is passed explicitly (it
+        // reached the implementation through its author factory), then
         // FindGuestContract → ResolveGuestContract → CreateInstance.
         out.push_str("    /// <summary>Resolve the peer contract and create a caller instance.\n");
-        out.push_str("    /// Returns null when the host pointer is not stored yet, or when the\n");
         out.push_str(
-            "    /// contract is not found/resolved (handle invalid or stale).</summary>\n",
+            "    /// <paramref name=\"hostPtr\"/> is the HostApi pointer the author factory\n",
         );
-        out.push_str(&format!("    public static {peer_name}? Resolve() {{\n"));
-        // Fetch host from RuntimeAbiStorage — same accessor PolyplugHost.AllocString uses.
-        out.push_str("        IntPtr hostPtr = RuntimeAbiStorage.GetRuntimeAbi();\n");
+        out.push_str(
+            "    /// received — no process-wide host storage exists. Returns null when the\n",
+        );
+        out.push_str(
+            "    /// host pointer is null, or when the contract is not found/resolved.</summary>\n",
+        );
+        out.push_str(&format!(
+            "    public static {peer_name}? Resolve(IntPtr hostPtr) {{\n"
+        ));
         out.push_str("        if (hostPtr == IntPtr.Zero) { return null; }\n");
         out.push_str("        var host = (HostApi*)hostPtr;\n");
         // FindGuestContract: (this, contract_id, min_major) → GuestContractHandle
@@ -3530,20 +3600,20 @@ mod tests {
         // Null-interface path logs InvalidPointer.
         assert!(
             out.contains(
-                "HostCallerFailureLog.Log(\"HostLoggerContract.Log\", (uint)AbiErrorCode.InvalidPointer);"
+                "HostCallerFailureLog.Log(_host, \"HostLoggerContract.Log\", (uint)AbiErrorCode.InvalidPointer);"
             ),
             "null-interface path must log InvalidPointer: {out}"
         );
         // Native bounds-check path logs FunctionNotAvailable.
         assert!(
             out.contains(
-                "HostCallerFailureLog.Log(\"HostLoggerContract.Log\", (uint)AbiErrorCode.FunctionNotAvailable);"
+                "HostCallerFailureLog.Log(_host, \"HostLoggerContract.Log\", (uint)AbiErrorCode.FunctionNotAvailable);"
             ),
             "bounds-check path must log FunctionNotAvailable: {out}"
         );
         // ABI error path logs the actual error code.
         assert!(
-            out.contains("HostCallerFailureLog.Log(\"HostLoggerContract.Log\", err.Code);"),
+            out.contains("HostCallerFailureLog.Log(_host, \"HostLoggerContract.Log\", err.Code);"),
             "ABI error path must log err.Code: {out}"
         );
         // No failure path returns default without a preceding log call: every
@@ -3865,8 +3935,12 @@ mod tests {
             "peer class must dispatch via CallGuestMethod: {content}"
         );
         assert!(
-            content.contains("RuntimeAbiStorage.GetRuntimeAbi()"),
-            "peer class must use RuntimeAbiStorage host accessor: {content}"
+            content.contains("Resolve(IntPtr hostPtr)"),
+            "peer class must take the host pointer explicitly in Resolve: {content}"
+        );
+        assert!(
+            !content.contains("RuntimeAbiStorage"),
+            "peer class must not read a stored host pointer: {content}"
         );
     }
 

@@ -27,6 +27,12 @@ public static class Plugin
 
     private static readonly nint[] s_functions = new nint[4];
     private static GuestContractInterface s_interface;
+
+    // PLUGIN-OWNED host pointer for the Reset log probe (dispatch thunks receive
+    // no host argument in this hand-rolled fixture). This is author state, not
+    // SDK state — and it lives in this assembly's collectible ALC, which the
+    // loader keys by (runtime id, bundle id), so it is per-runtime-per-bundle.
+    private static nint s_hostPtr;
     private static readonly byte[] s_versionBytes = System.Text.Encoding.UTF8.GetBytes("1.0");
     private static readonly byte[] s_nameBytes = System.Text.Encoding.UTF8.GetBytes("csharp_test_adder");
     private static readonly byte[] s_contractBytes = System.Text.Encoding.UTF8.GetBytes("test.add");
@@ -140,9 +146,10 @@ public static class Plugin
     public static AbiError Reset(nint args, nint result)
     {
         // Deterministic guest→host log probe: routes through HostApi.Log via the
-        // host pointer stored by PolyplugInit. Non-ASCII characters prove the
-        // UTF-16 → UTF-8 boundary transcode. A no-op when no host is stored.
-        PolyplugHost.Log(LogLevel.Info, "guest.csharp_test_adder", "héllo from .NET ✓");
+        // plugin-owned host pointer captured in PolyplugInit (the SDK stores no
+        // host). Non-ASCII characters prove the UTF-16 → UTF-8 boundary
+        // transcode. A no-op when no host was captured.
+        PolyplugHost.Log(s_hostPtr, LogLevel.Info, "guest.csharp_test_adder", "héllo from .NET ✓");
         return new AbiError { Code = (uint)AbiErrorCode.Ok };
     }
 
@@ -154,7 +161,9 @@ public static class Plugin
             if (hostPtr == nint.Zero)
                 return 1;
 
-            RuntimeAbiStorage.StoreRuntimeAbi(hostPtr);
+            // Capture the host pointer in PLUGIN-OWNED state for the Reset log
+            // probe — the guest SDK holds no process-wide host storage.
+            s_hostPtr = hostPtr;
 
             var host = (HostApi*)hostPtr;
 

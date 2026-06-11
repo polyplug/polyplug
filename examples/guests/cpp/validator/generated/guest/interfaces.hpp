@@ -10,20 +10,62 @@
 namespace polyplug_plugin {
 
 // Plugin: validator
-extern PipelineValidatorGuestContract* g_validator_impl;
-
 constexpr uint64_t VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5ULL;
 
-inline void set_validator_impl(PipelineValidatorGuestContract* impl) { g_validator_impl = impl; }
+// Author-provided factory — implement this in your plugin .cpp. Called once
+// per host-created instance; ownership of the returned object transfers to
+// the instance (deleted in VALIDATOR_destroy_instance).
+PipelineValidatorGuestContract* polyplug_create_validator(const HostApi* host);
 
-// Forward declaration - user must implement this
-PipelineValidatorGuestContract* create_validator_impl();
+// Per-instance payload carried in GuestContractInstance.data.
+struct ValidatorInstanceState {
+    // Host interface captured at instance creation — routes every host call
+    // (allocation, logging, peer dispatch) to the runtime that owns it.
+    const HostApi* host;
+    // The author's implementation, created by polyplug_create_validator.
+    PipelineValidatorGuestContract* impl;
+};
+
+// Create a new instance: calls the author factory and heap-allocates the payload.
+// Returns a null handle when host is null, the factory returns null, or it throws.
+static GuestContractInstance VALIDATOR_create_instance(const HostApi* host, const void* args) noexcept {
+    (void)args;  // Contract-specific init args are unused by generated glue.
+    if (host == nullptr) {
+        return GuestContractInstance{nullptr, 0U};
+    }
+    try {
+        PipelineValidatorGuestContract* impl = polyplug_create_validator(host);
+        if (impl == nullptr) {
+            return GuestContractInstance{nullptr, 0U};
+        }
+        auto* state = new ValidatorInstanceState{host, impl};
+        return GuestContractInstance{state, VALIDATOR_CONTRACT_ID};
+    } catch (...) {
+        return GuestContractInstance{nullptr, 0U};
+    }
+}
+
+// Destroy an instance created by VALIDATOR_create_instance: deletes the
+// implementation (ownership transferred from the factory) and the payload.
+static void VALIDATOR_destroy_instance(const HostApi* host, GuestContractInstance instance) noexcept {
+    (void)host;  // The payload is guest-owned; no host call is needed to free it.
+    if (instance.data == nullptr) {
+        return;
+    }
+    auto* state = static_cast<ValidatorInstanceState*>(instance.data);
+    delete state->impl;
+    delete state;
+}
 
 // ABI wrapper for validate (function_id = 0)
 inline AbiError validator_validate_abi(GuestContractInstance instance, const void* args, void* out) noexcept {
-    // Instance is ignored for stateless plugins (instance.data is nullptr).
-    // For stateful plugins, users override create_instance and use instance.data.
-    (void)instance;  // Suppress unused warning for stateless plugins.
+    if (instance.data == nullptr) {
+        static constexpr const char* null_inst_msg = "instance is null";
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(null_inst_msg), 16}};
+    }
+    // SAFETY: instance.data was produced by create_instance and stays valid
+    // until destroy_instance; the host never mutates it.
+    const auto* state = static_cast<const ValidatorInstanceState*>(instance.data);
     try {
         if (args == nullptr) {
             return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
@@ -33,7 +75,7 @@ inline AbiError validator_validate_abi(GuestContractInstance instance, const voi
         }
         // SAFETY: args is a valid const void* pointing to a StringView per ABI contract.
 // The host guarantees proper alignment and size before calling this wrapper.
-auto result = g_validator_impl->validate(*static_cast<const StringView*>(args));
+auto result = state->impl->validate(*static_cast<const StringView*>(args));
         // SAFETY: out is a valid void* pointing to a StringView per ABI contract.
         // The host guarantees proper alignment and size before calling this wrapper.
         *static_cast<StringView*>(out) = result;
@@ -56,24 +98,12 @@ static void* const VALIDATOR_FNS[] = {
     reinterpret_cast<void*>(validator_validate_abi),
 };
 
-// Default create_instance stub for validator - returns null instance.
-static GuestContractInstance VALIDATOR_create_instance_stub(const HostApi* host, const void* args) noexcept {
-    (void)host; (void)args;  // Unused in default stub.
-    return GuestContractInstance{nullptr, 0U};  // Null instance for stateless plugins.
-}
-
-// Default destroy_instance stub for validator - no-op.
-static void VALIDATOR_destroy_instance_stub(const HostApi* host, GuestContractInstance instance) noexcept {
-    (void)host; (void)instance;  // Unused in default stub.
-    // No-op - stateless plugins don't need cleanup.
-}
-
 static GuestContractInterface VALIDATOR_INTERFACE = {
     VALIDATOR_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,
-    VALIDATOR_create_instance_stub,
-    VALIDATOR_destroy_instance_stub,
+    VALIDATOR_create_instance,
+    VALIDATOR_destroy_instance,
     DispatchMechanisms{ .native = NativeDispatch{ 1U, VALIDATOR_FNS } }
 };
 

@@ -2,8 +2,6 @@
 #
 # - abi/test_layout.cpp is a compile-time suite (static_assert only, no main):
 #   compiling it IS the test — every layout assert is evaluated by the compiler.
-# - guest/test_alloc_tracking.cpp is a runtime test with its own main and
-#   non-zero exit on failure.
 # - host/test_reload_runtime.cpp is a REAL-runtime hot-reload test: it links
 #   the core + native-loader cdylibs from the workspace target dir and drives
 #   a real reload of the tests/fixtures/reload_plugin fixtures. Skip-honestly:
@@ -31,16 +29,12 @@ FIXTURES_DIR = $(abspath ../../tests/fixtures)
 
 .PHONY: test clean
 
-test: $(BUILD_DIR)/test_layout.o $(BUILD_DIR)/test_alloc_tracking $(BUILD_DIR)/test_reload_runtime
+test: $(BUILD_DIR)/test_layout.o $(BUILD_DIR)/test_reload_runtime
 	@echo "OK: abi/test_layout.cpp compiled - all ABI layout static_asserts hold"
-	$(BUILD_DIR)/test_alloc_tracking
 	$(BUILD_DIR)/test_reload_runtime
 
 $(BUILD_DIR)/test_layout.o: abi/test_layout.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
-
-$(BUILD_DIR)/test_alloc_tracking: guest/test_alloc_tracking.cpp | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $< -o $@
 
 $(BUILD_DIR)/test_reload_runtime: host/test_reload_runtime.cpp | $(BUILD_DIR)
 	@if [ -z "$(POLYPLUG_TARGET_DIR)" ]; then \

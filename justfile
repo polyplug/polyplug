@@ -327,7 +327,7 @@ test-integration:
     @echo "=== Running Integration Tests ==="
     cargo test --{{profile}} -p integration
 
-# Run C++ SDK test programs (ABI layout static_asserts + guest allocator tracking)
+# Run C++ SDK test programs (ABI layout static_asserts + reload runtime)
 test-sdk-cpp:
     @echo "=== Running C++ SDK Tests ==="
     make -C {{sdks_dir}}/cpp test
