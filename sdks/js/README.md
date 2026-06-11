@@ -49,18 +49,30 @@ if (decoder) {
 
 ### Plugin Author
 
-```typescript
-import { plugin } from "@polyplug/guest";
+Each bundle runs in its own QuickJS VM (one VM per runtime per bundle), so
+module state inside the VM is instance state. The generated `guest/init` module
+owns `polyplug_init`; you implement the contract functions, register them with
+the generated `set<Contract>Impl`, and bundle everything (e.g. with rolldown)
+into the single entry script:
 
-plugin((host, ctx) => {
-    host.registerContract(host, descriptor, contractInterface);
-});
+```javascript
+import { setDecoderImpl } from './generated/guest/contracts';
+import { polyplug_init } from './generated/guest/init';
+import { toStr, allocStringArena } from '@polyplug/guest';
 
-class DecoderImpl implements PipelineDecoder {
-    decode(input: string): string {
-        return `DECODED:${input}`;
-    }
+function decode(input) {
+    const s = toStr(input);
+    const result = allocStringArena(`DECODED:${s}`);
+    return {
+        ptr_lo: Number(result.ptr & 0xFFFFFFFFn),
+        ptr_hi: Number((result.ptr >> 32n) & 0xFFFFFFFFn),
+        len: result.len,
+    };
 }
+
+setDecoderImpl(decode);
+
+export { polyplug_init };
 ```
 
 ## Code Generation
@@ -112,10 +124,13 @@ TypeScript wrappers over the polyplug C ABI:
 
 ### Guest Library (`guest/`)
 
-Bootstrap layer for JavaScript plugins:
-- `plugin()` function — Marks plugin entry point
-- `HostApi` — Contract registration
-- `BundleInitContext` — Bundle metadata
+Helpers for JavaScript plugins (the entry point is generated; the QuickJS
+loader calls it):
+- `toStr(sv)` / `allocString(str)` / `allocStringArena(str)` — string crossings
+  via the host allocator or the per-call arena
+- `readBytes` / `writeBytes` / `freeBytes` — raw boundary memory helpers
+- `log(level, scope, message)` — host logging funnel
+- `AbiErrorCode` / `LogLevel` enum mirrors
 - Error boundary — Plugin errors don't take down host
 
 ### Loaders (`loaders/`)

@@ -24,16 +24,16 @@ Interfaces are stored in `RuntimeStore` as interface slots guarded by a single `
 
 The runtime notifies the host before and after interface swap, plus failure case. The host is responsible for tracking and destroying all guest contract instances it has created.
 
-**Critical clarification:** Plugins use `OnceLock<Box<dyn Trait>>` for singleton implementations. The "instances" are actually **caller wrappers** on the host side, not plugin instances. Multiple wrappers can reference the same singleton interface.
+**Critical clarification:** Every host-created instance is real: the generated `create_instance` invokes the author factory (`polyplug_create_<plugin>` in Rust/C++, the registered factory in C#/Python) and boxes the implementation — together with its `HostContext`/host pointer — into `GuestContractInstance.data`. The host-side **caller wrappers** each own one such instance; destroying a wrapper destroys its instance. There is no process-wide singleton implementation and no static plugin storage.
 
 ### 2. Hidden Implementation
 
 The generated caller wrappers hide the resolved `GuestContractInterface` pointer from the application developer. They only see:
 
 ```cpp
-auto decoder = PipelineDecoder::create(rt, contract_id);  // Creates wrapper
-auto result = decoder.decode(input);  // Calls singleton plugin implementation
-decoder.reset();  // Or let it go out of scope
+auto decoder = PipelineDecoder::create(rt, contract_id);  // Creates wrapper + plugin instance
+auto result = decoder.decode(input);  // Dispatches into that instance
+decoder.reset();  // Destroys the instance — or let it go out of scope
 ```
 
 ### 3. Three-Phase Notification

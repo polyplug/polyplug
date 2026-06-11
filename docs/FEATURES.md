@@ -120,9 +120,11 @@ section) for the full discussion.
 
 ## 4. Hot-reload
 
-Hot-reload is **native-only**. The model is **retire-not-drop**: superseded
-interfaces and native libraries are never freed while the runtime lives, so any
-raw pointer handed out before a reload stays valid for the runtime's lifetime.
+Hot-reload is supported by the **native, Lua, and JS (QuickJS)** loaders — their
+`reload()` re-reads the on-disk source and swaps the live interface. The model is
+**retire-not-drop**: superseded interfaces and native libraries are never freed
+while the runtime lives, so any raw pointer handed out before a reload stays
+valid for the runtime's lifetime.
 
 - **Pointer-validity guarantee:** a `*const GuestContractInterface` from
   `resolve_guest_contract` stays valid across reloads, continuing to serve the
@@ -138,8 +140,9 @@ raw pointer handed out before a reload stays valid for the runtime's lifetime.
   `Reloaded`, `Failed`. The post-`Preparing` leak check is informational and
   never blocks. Failure leaves the active version untouched.
 - **Cascade reload:** reloading a bundle that others depend on is supported.
-- **VM loaders are not reloadable:** Python, .NET, Lua, and JavaScript loaders all
-  return `HotReloadDisabled` from `reload()`.
+- **Python and .NET are not reloadable:** both loaders return
+  `HotReloadDisabled` from `reload()` unconditionally (interpreter/CLR
+  once-per-process constraints). Lua and JS (QuickJS) reload like native does.
 - **Windows-safe:** the retire-not-drop model loads each version from a distinct
   on-disk filename (e.g. `reload_plugin_v1` vs `_v2`), so a reload never overwrites
   a file while it is mapped — the Windows DLL file-lock that would break

@@ -53,8 +53,8 @@ build with.
 │      runtime, PIPELINE_DECODER_CONTRACT_ID);                       │
 │  decoder.decode(input)?;               // single indirect call     │
 │                                                                    │
-│  Native bundles support hot-reload (runtime.reload()); VM bundles  │
-│  (lua / python / js-quickjs / dotnet) return HotReloadDisabled.    │
+│  Native, lua, and js-quickjs bundles support hot-reload            │
+│  (runtime.reload()); python / dotnet return HotReloadDisabled.     │
 └────────────────────────────────────────────────────────────────────┘
 ```
 

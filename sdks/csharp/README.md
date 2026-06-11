@@ -54,24 +54,40 @@ if (decoder.HasValue)
 
 ### Plugin Author
 
-```csharp
-using Polyplug.Guest;
+The generated glue handles `polyplug_init` and contract registration. You
+implement the generated contract interface and register a **factory** at module
+load — the factory receives the `HostApi` pointer for every host-created
+instance, so the host handle lives in the instance, never in a static:
 
-[PolyplugPlugin]
-public static class MyPlugin
+```csharp
+using System.Runtime.CompilerServices;
+using Polyplug.Guest;
+using Polyplug.Abi;
+
+public sealed class DecoderImpl : IPipelineDecoderGuestContract
 {
-    public static void Init(HostApi host, BundleInitContext ctx)
+    // Host handle for this runtime, captured at instance creation.
+    private readonly IntPtr _host;
+
+    public DecoderImpl(IntPtr host)
     {
-        // Register your contract implementations via the host interface
-        host.RegisterContract(host, ref descriptor, ref contractInterface);
+        _host = host;
+    }
+
+    public StringView Decode(StringView input)
+    {
+        string s = StringViewHelper.ToString(input);
+        return PolyplugHost.AllocString(_host, $"DECODED:{s}");
     }
 }
 
-public class DecoderImpl : IPipelineDecoder
+public static class Registration
 {
-    public string Decode(string input)
+    [ModuleInitializer]
+    public static void Register()
     {
-        return $"DECODED:{input}";
+        // The factory receives the HostApi pointer per created instance.
+        DecoderInterfaces.SetDecoderFactory(host => new DecoderImpl(host));
     }
 }
 ```
@@ -125,11 +141,13 @@ C# wrappers over the polyplug C ABI:
 
 ### Guest Library (`guest/`)
 
-Bootstrap layer for C# plugins:
-- `[PolyplugPlugin]` attribute — Marks plugin entry point
-- `HostApi` — Contract registration
-- `BundleInitContext` — Bundle metadata
-- Exception boundary — Plugin crashes don't take down host
+Helpers for C# plugins (the entry point and registration are generated):
+- `PolyplugHost.AllocString(IntPtr hostPtr, string)` / `PolyplugHost.Log(...)` —
+  host services with the `HostApi` pointer passed explicitly (no statics)
+- `PinnedStringView` — pinned UTF-8 view for boundary crossings
+- `GuestException` — Exception boundary; plugin crashes don't take down host
+- Authors implement the generated `I<Contract>GuestContract` and register a
+  factory via the generated `Set<Contract>Factory` (e.g. in a `[ModuleInitializer]`)
 
 ### Loaders (`loaders/`)
 
@@ -168,6 +186,8 @@ var runtime = new RuntimeBuilder()
 - Registering an `OnReload` callback enables hot-reload for that runtime
 - The callback is supplied at build time and owned by the Runtime instance
 - Host must track and destroy instances on `Preparing` notification
+- Hot-reload applies to native, Lua, and JS (QuickJS) bundles; the .NET loader's
+  `reload()` returns `HotReloadDisabled` (use collectible-ALC `unload` instead)
 - See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
 
 ## Performance Notes

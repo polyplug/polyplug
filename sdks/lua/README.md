@@ -44,18 +44,24 @@ end
 
 ### Plugin Author
 
+Each bundle runs in its own Lua VM (one VM per runtime per bundle), so module
+state inside the VM is instance state. The generated `guest/contracts` module
+owns `polyplug_init` and registration; you implement the contract functions and
+register them with the generated `set_<contract>_impl`:
+
 ```lua
-local polyplug_guest = require("polyplug_guest")
+local polyplug = require('polyplug_guest')
+local polyplug_abi = require('polyplug_abi')
+local contracts = require('generated.guest.contracts')
 
-polyplug_guest.plugin(function(host, ctx)
-    host.register_guest_contract(host, descriptor, contractInterface)
-end)
-
-DecoderImpl = {}
-
-function DecoderImpl:decode(input)
-    return "DECODED:" .. input
+local function decode(input)
+    local s = polyplug_abi.to_str(input)
+    return polyplug.alloc_string('DECODED:' .. s)
 end
+
+contracts.set_decoder_impl(decode)
+
+return contracts
 ```
 
 ## Code Generation
@@ -109,10 +115,12 @@ LuaJIT FFI wrappers over the polyplug C ABI:
 
 ### Guest Library (`guest/`)
 
-Bootstrap layer for Lua plugins:
-- `polyplug_guest.plugin()` — Marks plugin entry point
-- `HostApi` — Contract registration
-- `BundleInitContext` — Bundle metadata
+Helpers for Lua plugins (the entry point is generated; the loader calls it):
+- `store_host_interface` / `get_host_interface` — per-VM host pointer (each VM
+  is per-runtime-per-bundle, so this is instance state, not a process global)
+- `alloc_string` / `alloc_string_arena` — host-allocator / per-call-arena strings
+- `log(level, scope, message)` — host logging funnel
+- `ok()` / `err(code, message)` — `AbiError` constructors
 - Error boundary — Plugin errors don't take down host
 
 ### Loaders (`loaders/`)

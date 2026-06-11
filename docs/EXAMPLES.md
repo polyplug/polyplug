@@ -141,12 +141,12 @@ every bundle it finds, and runs the full five-stage pipeline.
 
 | Language | Path | Entry point | Loaders registered |
 |---|---|---|---|
-| Rust | `hosts/rust/` | `src/main.rs` | native, JS (QuickJS), Lua, Python |
-| C++ | `hosts/cpp/` | `main.cpp` | native, JS (QuickJS), Lua, Python |
+| Rust | `hosts/rust/` | `src/main.rs` | native, JS (QuickJS), Lua, Python, dotnet |
+| C++ | `hosts/cpp/` | `host.cpp` (`main.cpp` builds the hot-reload host) | native, JS (QuickJS), Lua, Python, dotnet |
 | C# | `hosts/csharp/` | `Program.cs` | native, JS (QuickJS), Lua, Python, dotnet |
-| Python | `hosts/python/` | `main.py` | native, Python, JS, Lua |
-| Lua | `hosts/lua/` | `host.lua` | native, Lua, JS, Python |
-| JavaScript (Deno) | `hosts/js/` | `host.js` | native, Lua, JS, Python |
+| Python | `hosts/python/` | `main.py` | native, Python, JS, Lua, dotnet |
+| Lua | `hosts/lua/` | `host.lua` | native, Lua, JS, Python, dotnet |
+| JavaScript (Deno) | `hosts/js/` | `host.js` | native, Lua, JS, Python, dotnet |
 
 The Rust host (`hosts/rust/`) is the primary reference: it is the most complete
 and most closely tracks internal API changes. Read it alongside the generated

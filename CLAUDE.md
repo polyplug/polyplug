@@ -65,7 +65,8 @@ The 3-argument form `fn(rt_ctx, host, ctx)` is **gone** — do not use it.
 There are **two separate codegen pipelines** — they share no language emitters by design:
 
 - **ABI-SDK emitters** live in `crates/polyplug_codegen/src/languages/`:
-  `rust.rs`, `cpp.rs`, `csharp.rs`, `python.rs`, `lua.rs`, `js.rs`. They are driven at
+  `cpp.rs`, `csharp.rs`, `python.rs`, `lua.rs`, `js.rs` (no Rust emitter — the Rust ABI
+  sources are the truth themselves). They are driven at
   build time by `crates/polyplug_abi/build/generate.rs`, which emits the `sdks/*/abi`
   files from the extracted ABI types.
 - **Contract-plugin generators** live in `crates/polyplugc/src/generators/`:
@@ -754,24 +755,24 @@ polyplug/
 │   ├── polyplug_native/             native cdylib loader (supports hot-reload)
 │   │   └── src/  config.rs, ffi.rs, lib.rs, loader.rs
 │   ├── polyplug_python/             Python loader
-│   │   └── src/  config.rs, ffi.rs, lib.rs, loader.rs
+│   │   └── src/  config.rs, context.rs, ffi.rs, isolation.rs, lib.rs, loader.rs
 │   ├── polyplug_lua/                Lua loader
 │   │   └── src/  bridge.rs, config.rs, ffi.rs, lib.rs, loader.rs
 │   ├── polyplug_js/                 JavaScript (QuickJS) loader
-│   │   └── src/  config.rs, ffi.rs, lib.rs, loader.rs
+│   │   └── src/  bridge.rs, config.rs, ffi.rs, lib.rs, loader.rs
 │   ├── polyplug_dotnet/             .NET/C# loader
-│   │   └── src/  config.rs, ffi.rs, lib.rs, loader.rs
+│   │   └── src/  config.rs, context.rs, ffi.rs, lib.rs, version.rs
 │   ├── polyplug_codegen/            codegen library
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── context.rs, data.rs, error.rs, generator.rs
+│   │       ├── context.rs, data.rs, error.rs, generator.rs, reserved.rs
 │   │       └── languages/
 │   │           ├── mod.rs
-│   │           ├── rust.rs, cpp.rs, csharp.rs, python.rs, lua.rs, js.rs
+│   │           ├── cpp.rs, csharp.rs, python.rs, lua.rs, js.rs
 │   ├── polyplugc/                   CLI binary
 │   │   └── src/
 │   │       ├── main.rs
-│   │       ├── ir.rs, pack.rs, parser.rs
+│   │       ├── ir.rs, lib.rs, parser.rs, validate.rs
 │   │       └── generators/
 │   │           ├── mod.rs
 │   │           ├── rust.rs, cpp.rs, csharp.rs, python.rs, lua.rs, js_quickjs.rs
