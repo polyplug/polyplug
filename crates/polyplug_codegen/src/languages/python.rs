@@ -318,11 +318,16 @@ impl PythonGenerator {
 
     fn format_docstring(doc: &str, indent_level: usize) -> String {
         let indent = "    ".repeat(indent_level);
+        // Doc text carried over from rustdoc may contain backslashes (e.g. the
+        // escaped `\[dependency\]` table reference). In a regular docstring
+        // those are invalid escape sequences and raise SyntaxWarning on import
+        // (SyntaxError under -W error) — emit a raw docstring in that case.
+        let prefix: &str = if doc.contains('\\') { "r" } else { "" };
         let lines: Vec<&str> = doc.lines().collect();
         if lines.len() == 1 {
-            format!("{}\"\"\"{}\"\"\"\n", indent, lines[0])
+            format!("{}{}\"\"\"{}\"\"\"\n", indent, prefix, lines[0])
         } else {
-            let mut result = format!("{}\"\"\"{}\n", indent, lines[0]);
+            let mut result = format!("{}{}\"\"\"{}\n", indent, prefix, lines[0]);
             for line in &lines[1..] {
                 result.push_str(&format!("{}{}\n", indent, line));
             }

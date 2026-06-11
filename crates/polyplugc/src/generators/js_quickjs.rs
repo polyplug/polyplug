@@ -1434,7 +1434,7 @@ fn generate_ts_guest_host_contract_method(
     out.push_str("        }\n");
 
     if has_return {
-        emit_ts_guest_host_contract_readback(out, func.returns.as_ref());
+        emit_ts_guest_host_contract_readback(out, func.returns.as_ref(), enums);
         out.push_str("        return result;\n");
     }
 
@@ -2085,15 +2085,32 @@ fn emit_ts_guest_host_contract_args_setup(
                 ));
             }
             ResolvedTypeRef::UserDefined(_) => {
-                // UserDefined types in guest caller context are enum-backed scalars
-                // (u32 in TypeScript). Pack as a 4-byte value in an 8-byte aligned slot.
+                // UserDefined types in guest caller context are enum-backed scalars.
+                // Pack through the repr width in an 8-byte aligned slot: a plain
+                // writeU32 would truncate a u64-repr enum's high word. The callee
+                // reads exactly its repr width from offset 0 (little-endian), so
+                // narrower reprs are covered by the low bytes of the u32 write.
                 out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
                 out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
-                out.push_str(&format!(
-                    "        polyplug.writeU32(argsPtr, Number({0}));\n",
-                    param.name
-                ));
-                out.push_str("        polyplug.writeU32(argsPtr + 4, 0);\n");
+                match js_enum_for_type(&param.ty, enums).map(|e: &EnumDef| &e.repr) {
+                    Some(ReprType::U64) => {
+                        out.push_str(&format!(
+                            "        polyplug.writeU32(argsPtr, Number({0}) >>> 0);\n",
+                            param.name
+                        ));
+                        out.push_str(&format!(
+                            "        polyplug.writeU32(argsPtr + 4, Math.floor(Number({0}) / 4294967296));\n",
+                            param.name
+                        ));
+                    }
+                    _ => {
+                        out.push_str(&format!(
+                            "        polyplug.writeU32(argsPtr, Number({0}));\n",
+                            param.name
+                        ));
+                        out.push_str("        polyplug.writeU32(argsPtr + 4, 0);\n");
+                    }
+                }
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {
                 out.push_str("        const argsPtr = 0;\n");
@@ -2345,7 +2362,11 @@ fn emit_ts_guest_host_contract_out_setup(out: &mut String, returns: &Option<Reso
 ///
 /// Called after the dispatch call succeeds (errCode === 0).  The `returns` value
 /// must NOT be `None` or `Void` — callers must guard against that.
-fn emit_ts_guest_host_contract_readback(out: &mut String, returns: Option<&ResolvedTypeRef>) {
+fn emit_ts_guest_host_contract_readback(
+    out: &mut String,
+    returns: Option<&ResolvedTypeRef>,
+    enums: &[EnumDef],
+) {
     let Some(ret_ty) = returns else {
         return;
     };
@@ -2396,9 +2417,25 @@ fn emit_ts_guest_host_contract_readback(out: &mut String, returns: Option<&Resol
             }
         },
         ResolvedTypeRef::UserDefined(_) => {
-            out.push_str(
-                "        const result = { lo: polyplug.readU32(outPtr), hi: polyplug.readU32(outPtr + 4) } as any;\n",
-            );
+            // Enum returns read back as their repr integer — the declared TS
+            // return type is the numeric enum itself, NOT the {lo, hi} object.
+            // The out slot is pre-zeroed by the out-setup, so narrower reprs
+            // read correctly through readU32.
+            match js_enum_for_type(ret_ty, enums).map(|e: &EnumDef| &e.repr) {
+                Some(ReprType::U64) => {
+                    out.push_str(
+                        "        const result = (polyplug.readU32(outPtr) + polyplug.readU32(outPtr + 4) * 4294967296) as any;\n",
+                    );
+                }
+                Some(_) => {
+                    out.push_str("        const result = polyplug.readU32(outPtr) as any;\n");
+                }
+                None => {
+                    out.push_str(
+                        "        const result = { lo: polyplug.readU32(outPtr), hi: polyplug.readU32(outPtr + 4) } as any;\n",
+                    );
+                }
+            }
         }
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {}
     }
@@ -2985,7 +3022,7 @@ fn generate_ts_peer_caller_method(
     out.push_str("        }\n");
 
     if has_return {
-        emit_ts_guest_host_contract_readback(out, func.returns.as_ref());
+        emit_ts_guest_host_contract_readback(out, func.returns.as_ref(), enums);
         out.push_str("        return result;\n");
     }
 
@@ -4103,6 +4140,101 @@ mod tests {
         assert!(
             out.contains("polyplug.writeU32(argsPtr + 8, _messageDataBuf[0]);"),
             "StringView after u32 must be written at C-layout offset 8: {out}"
+        );
+    }
+
+    // ─── Caller-side enum marshalling (repr-integer slots) ──────────────────────
+
+    fn pixel_format_enums() -> Vec<EnumDef> {
+        vec![EnumDef {
+            name: "PixelFormat".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![EnumVariant {
+                name: "Rgba8".to_owned(),
+                value: "1".to_owned(),
+            }],
+        }]
+    }
+
+    #[test]
+    fn quickjs_caller_single_enum_param_writes_repr_integer() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "set_format".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "fmt".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("PixelFormat".to_owned()),
+            }],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        emit_ts_guest_host_contract_args_setup(&mut out, &func, &pixel_format_enums());
+        assert!(
+            out.contains("polyplug.writeU32(argsPtr, Number(fmt));"),
+            "u32-repr enum param must be written into the arena slot: {out}"
+        );
+        assert!(
+            out.contains("const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;"),
+            "the slot's ADDRESS must be passed as argsPtr: {out}"
+        );
+    }
+
+    #[test]
+    fn quickjs_caller_enum_return_reads_repr_integer() {
+        let returns: Option<ResolvedTypeRef> =
+            Some(ResolvedTypeRef::UserDefined("PixelFormat".to_owned()));
+        let mut out: String = String::new();
+        emit_ts_guest_host_contract_readback(&mut out, returns.as_ref(), &pixel_format_enums());
+        assert!(
+            out.contains("const result = polyplug.readU32(outPtr) as any;"),
+            "u32-repr enum return must read back the repr integer: {out}"
+        );
+        assert!(
+            !out.contains("{ lo:"),
+            "enum return must NOT fall back to the {{lo, hi}} object shape: {out}"
+        );
+    }
+
+    #[test]
+    fn quickjs_caller_u64_enum_splits_words() {
+        let enums: Vec<EnumDef> = vec![EnumDef {
+            name: "BigFlags".to_owned(),
+            repr: ReprType::U64,
+            bitflag: false,
+            variants: vec![EnumVariant {
+                name: "A".to_owned(),
+                value: "1".to_owned(),
+            }],
+        }];
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "set_flags".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "flags".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("BigFlags".to_owned()),
+            }],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        emit_ts_guest_host_contract_args_setup(&mut out, &func, &enums);
+        assert!(
+            out.contains("polyplug.writeU32(argsPtr, Number(flags) >>> 0);")
+                && out.contains(
+                    "polyplug.writeU32(argsPtr + 4, Math.floor(Number(flags) / 4294967296));"
+                ),
+            "u64-repr enum param must split into lo/hi words (writeU32 alone truncates): {out}"
+        );
+
+        let returns: Option<ResolvedTypeRef> =
+            Some(ResolvedTypeRef::UserDefined("BigFlags".to_owned()));
+        let mut ret: String = String::new();
+        emit_ts_guest_host_contract_readback(&mut ret, returns.as_ref(), &enums);
+        assert!(
+            ret.contains(
+                "(polyplug.readU32(outPtr) + polyplug.readU32(outPtr + 4) * 4294967296) as any"
+            ),
+            "u64-repr enum return must combine lo/hi words: {ret}"
         );
     }
 }

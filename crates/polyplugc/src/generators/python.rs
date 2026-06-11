@@ -194,7 +194,7 @@ fn generate_python_types_file(ir: &ValidatedIr) -> String {
         let struct_name: String = contract_name_to_struct(&contract.name);
         for func in &contract.functions {
             if needs_arg_pack(&func.params) {
-                emit_python_arg_pack_struct(&mut out, &struct_name, func);
+                emit_python_arg_pack_struct(&mut out, &struct_name, func, &ir.enums);
                 out.push('\n');
             }
         }
@@ -260,7 +260,7 @@ fn generate_host_types_file(ir: &ValidatedIr) -> String {
         let struct_name: String = contract_name_to_struct(&contract.name);
         for func in &contract.functions {
             if needs_arg_pack(&func.params) {
-                emit_python_arg_pack_struct(&mut out, &struct_name, func);
+                emit_python_arg_pack_struct(&mut out, &struct_name, func, &ir.enums);
                 out.push('\n');
             }
         }
@@ -405,7 +405,7 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     );
 
     for contract in &ir.contracts {
-        generate_host_caller_class(&mut out, contract);
+        generate_host_caller_class(&mut out, contract, &ir.enums);
     }
 
     out
@@ -690,12 +690,19 @@ fn generate_python_user_type_stub(out: &mut String, ty: &ResolvedType) {
     out.push_str("    _fields_: ClassVar[list[tuple[str, type]]]\n");
 }
 
-fn emit_python_arg_pack_struct(out: &mut String, contract_struct: &str, func: &ResolvedFunction) {
+fn emit_python_arg_pack_struct(
+    out: &mut String,
+    contract_struct: &str,
+    func: &ResolvedFunction,
+    enums: &[EnumDef],
+) {
     let struct_name: String = arg_pack_struct_name(contract_struct, &func.name);
     out.push_str(&format!("class {}(ctypes.Structure):\n", struct_name));
     out.push_str("    _fields_: ClassVar = [\n");
     for param in &func.params {
-        let param_ty: String = python_type_name(&param.ty);
+        // Enum fields use their repr ctype: ctypes.Structure._fields_ rejects
+        // IntEnum classes with a TypeError at class-creation time.
+        let param_ty: String = python_pack_field_type(&param.ty, enums);
         out.push_str(&format!("        (\"{}\", {}),\n", param.name, param_ty));
     }
     out.push_str("    ]\n");
@@ -712,7 +719,7 @@ fn emit_python_arg_pack_stub(out: &mut String, contract_struct: &str, func: &Res
 }
 
 /// Generate the host caller class for a contract with instance wrapper pattern.
-fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
+fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enums: &[EnumDef]) {
     let struct_name: String = contract_name_to_struct(&contract.name);
     let caller_name: String = format!("{struct_name}Caller");
     let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
@@ -851,12 +858,17 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     out.push_str("        return self.is_valid()\n\n");
 
     for func in &contract.functions {
-        generate_host_caller_method(out, func, &struct_name);
+        generate_host_caller_method(out, func, &struct_name, enums);
     }
     out.push('\n');
 }
 
-fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
+fn generate_host_caller_method(
+    out: &mut String,
+    func: &ResolvedFunction,
+    contract_struct: &str,
+    enums: &[EnumDef],
+) {
     let fn_id: u32 = func.function_id;
     let needs_arena: bool = fn_needs_arena(func);
     let sig_params: String = build_python_sig_params(func, contract_struct);
@@ -876,8 +888,8 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
         out.push_str("        # invalidating all pointers from the previous call.\n");
         out.push_str("        _arena_reset(self._arena)\n");
     }
-    emit_python_host_args_setup(out, func, contract_struct);
-    emit_python_host_out_setup(out, &func.returns);
+    emit_python_host_args_setup(out, func, contract_struct, enums);
+    emit_python_host_out_setup(out, &func.returns, enums);
 
     // Branch on the resolved interface's dispatch_type. Native guests (C++/Rust/
     // native Python) call the function pointer directly; VM guests (Lua, JS) route
@@ -943,7 +955,10 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
         "            raise ContractError(f\"polyplug call failed (code {err.code})\", err.code)\n",
     );
     if has_return_value(&func.returns) {
-        out.push_str("        return out_val\n\n");
+        out.push_str(&format!(
+            "        return {}\n\n",
+            python_host_caller_return_expr(&func.returns, enums)
+        ));
     } else {
         out.push_str("        return None\n\n");
     }
@@ -980,7 +995,12 @@ fn build_python_sig_params(func: &ResolvedFunction, contract_struct: &str) -> St
     params.join("")
 }
 
-fn emit_python_host_args_setup(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
+fn emit_python_host_args_setup(
+    out: &mut String,
+    func: &ResolvedFunction,
+    contract_struct: &str,
+    enums: &[EnumDef],
+) {
     if func.params.is_empty() {
         out.push_str("        args_ptr: ctypes.c_void_p = ctypes.c_void_p()\n");
         return;
@@ -991,12 +1011,27 @@ fn emit_python_host_args_setup(out: &mut String, func: &ResolvedFunction, contra
         match &param.ty {
             // Struct-like params (user-defined structs, StringView, Buffer) are passed
             // by the caller as ctypes Structures already — take their address directly.
+            // Enums are the exception: they are IntEnum values, and
+            // ctypes.byref(IntEnum) is a TypeError — box the raw repr integer
+            // instead (same rule as the guest-side host-contract caller).
             ResolvedTypeRef::UserDefined(_)
             | ResolvedTypeRef::AbiType(AbiBuiltin::StringView | AbiBuiltin::Buffer) => {
-                out.push_str(&format!(
-                    "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref({}), ctypes.c_void_p)\n",
-                    param.name
-                ));
+                if let Some(e) = python_enum_for_type(&param.ty, enums) {
+                    let raw_ctype: &str = python_ctype_for_repr(&e.repr);
+                    out.push_str(&format!(
+                        "        {name}_val: {raw_ctype} = {raw_ctype}(int({name}))\n",
+                        name = param.name
+                    ));
+                    out.push_str(&format!(
+                        "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref({name}_val), ctypes.c_void_p)\n",
+                        name = param.name
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref({}), ctypes.c_void_p)\n",
+                        param.name
+                    ));
+                }
             }
             // Scalar params arrive as Python values; wrap them in their ctypes scalar.
             _ => {
@@ -1023,9 +1058,28 @@ fn emit_python_host_args_setup(out: &mut String, func: &ResolvedFunction, contra
     out.push_str("        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(args_val), ctypes.c_void_p)\n");
 }
 
-fn emit_python_host_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+fn emit_python_host_out_setup(
+    out: &mut String,
+    returns: &Option<ResolvedTypeRef>,
+    enums: &[EnumDef],
+) {
     if !has_return_value(returns) {
         out.push_str("        out_ptr: ctypes.c_void_p = ctypes.c_void_p()\n");
+        return;
+    }
+    // Enum returns: the out slot is the enum's repr ctype. An IntEnum class is
+    // not a ctypes type — `EnumName()` has no zero-arg constructor and
+    // ctypes.byref(IntEnum) is a TypeError. The success return converts the
+    // raw repr integer back with `EnumName(out_val.value)`.
+    if let Some(e) = returns
+        .as_ref()
+        .and_then(|ret: &ResolvedTypeRef| python_enum_for_type(ret, enums))
+    {
+        let raw_ctype: &str = python_ctype_for_repr(&e.repr);
+        out.push_str(&format!("        out_val: {raw_ctype} = {raw_ctype}()\n"));
+        out.push_str(
+            "        out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)\n",
+        );
         return;
     }
     let ret_ty: String = python_return_type(returns);
@@ -1033,6 +1087,18 @@ fn emit_python_host_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef
     out.push_str(
         "        out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)\n",
     );
+}
+
+/// Success-path return expression for the host-caller / peer-caller out slot.
+/// Enum out slots hold the raw repr integer and convert back to the IntEnum.
+fn python_host_caller_return_expr(returns: &Option<ResolvedTypeRef>, enums: &[EnumDef]) -> String {
+    match returns
+        .as_ref()
+        .and_then(|ret: &ResolvedTypeRef| python_enum_for_type(ret, enums))
+    {
+        Some(e) => format!("{}(out_val.value)", e.name),
+        None => "out_val".to_owned(),
+    }
 }
 
 fn collect_python_type_imports(ir: &ValidatedIr) -> BTreeSet<String> {
@@ -1822,10 +1888,16 @@ fn python_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
 fn emit_python_guest_host_contract_success_return(
     out: &mut String,
     returns: &Option<ResolvedTypeRef>,
+    enums: &[EnumDef],
 ) {
     let Some(ret_ty) = returns else {
         return;
     };
+    // Enum out slots hold the raw repr integer; convert back to the IntEnum.
+    if let Some(e) = python_enum_for_type(ret_ty, enums) {
+        out.push_str(&format!("        return {}(result.value)\n", e.name));
+        return;
+    }
     match ret_ty {
         ResolvedTypeRef::AbiType(AbiBuiltin::StringView)
         | ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
@@ -2063,7 +2135,7 @@ fn generate_python_guest_host_contract_method(
     out.push_str("        dispatch_type: int = iface.dispatch_type\n");
 
     emit_python_guest_host_contract_args_setup(out, func, enums);
-    emit_python_guest_host_contract_out_setup(out, &func.returns);
+    emit_python_guest_host_contract_out_setup(out, &func.returns, enums);
 
     out.push_str("        err: AbiError\n");
     out.push_str("        if dispatch_type == DispatchType.Native:\n");
@@ -2108,7 +2180,7 @@ fn generate_python_guest_host_contract_method(
     } else {
         out.push_str("            return\n");
     }
-    emit_python_guest_host_contract_success_return(out, &func.returns);
+    emit_python_guest_host_contract_success_return(out, &func.returns, enums);
     out.push('\n');
 }
 
@@ -2237,10 +2309,22 @@ fn emit_python_guest_host_contract_args_setup(
 }
 
 /// Emit the out_ptr setup for a Python guest host contract method.
-fn emit_python_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+fn emit_python_guest_host_contract_out_setup(
+    out: &mut String,
+    returns: &Option<ResolvedTypeRef>,
+    enums: &[EnumDef],
+) {
     if let Some(ret_ty) = returns {
         let py_ty: String = python_guest_caller_return_type_name(ret_ty);
-        if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
+        // Enum returns: the out slot is the enum's repr ctype. An IntEnum class
+        // is not a ctypes type — `EnumName()` has no zero-arg constructor and
+        // ctypes.byref(IntEnum) is a TypeError. The success return converts the
+        // raw repr integer back with `EnumName(result.value)`.
+        if let Some(e) = python_enum_for_type(ret_ty, enums) {
+            let raw_ctype: &str = python_ctype_for_repr(&e.repr);
+            out.push_str(&format!("        result: {raw_ctype} = {raw_ctype}()\n"));
+            out.push_str("        out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(result), ctypes.c_void_p)\n");
+        } else if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
             out.push_str("        result: StringView = StringView()\n");
             out.push_str("        out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(result), ctypes.c_void_p)\n");
         } else if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)) {
@@ -3066,7 +3150,7 @@ fn generate_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract
 
     for contract in peers {
         let min_ver: u32 = peer_min_version(ir, contract.contract_id);
-        generate_peer_caller_class(&mut out, contract, min_ver);
+        generate_peer_caller_class(&mut out, contract, min_ver, &ir.enums);
     }
 
     out
@@ -3117,7 +3201,12 @@ fn generate_guest_peer_callers_stub(ir: &ValidatedIr, peers: &[&ResolvedContract
 /// `resolve()` reads the host pointer the guest stored at `polyplug_init` via
 /// `get_host_interface()` (Lua/JS/C++ parity), so a `str`-level impl can resolve
 /// a peer without the host pointer being threaded through every call.
-fn generate_peer_caller_class(out: &mut String, contract: &ResolvedContract, min_version: u32) {
+fn generate_peer_caller_class(
+    out: &mut String,
+    contract: &ResolvedContract,
+    min_version: u32,
+    enums: &[EnumDef],
+) {
     let class_name: String = format!("{}Peer", contract_name_to_camel(&contract.name));
     let needs_arena: bool = contract_needs_arena(contract);
 
@@ -3235,7 +3324,7 @@ fn generate_peer_caller_class(out: &mut String, contract: &ResolvedContract, min
 
     // Per-function dispatch methods
     for func in &contract.functions {
-        generate_peer_caller_method(out, func, &contract_name_to_struct(&contract.name));
+        generate_peer_caller_method(out, func, &contract_name_to_struct(&contract.name), enums);
     }
 
     out.push('\n');
@@ -3245,7 +3334,12 @@ fn generate_peer_caller_class(out: &mut String, contract: &ResolvedContract, min
 ///
 /// Uses `call_guest_method` for both native and VM guests so the host can apply
 /// its guarded dispatch path (resolve→dispatch window, thread guards, etc.).
-fn generate_peer_caller_method(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
+fn generate_peer_caller_method(
+    out: &mut String,
+    func: &ResolvedFunction,
+    contract_struct: &str,
+    enums: &[EnumDef],
+) {
     let fn_id: u32 = func.function_id;
     let needs_arena: bool = fn_needs_arena(func);
     let sig_params: String = build_python_sig_params(func, contract_struct);
@@ -3264,9 +3358,9 @@ fn generate_peer_caller_method(out: &mut String, func: &ResolvedFunction, contra
     }
 
     // args setup — reuse the proven host-caller pattern.
-    emit_python_host_args_setup(out, func, contract_struct);
+    emit_python_host_args_setup(out, func, contract_struct, enums);
     // out slot setup
-    emit_python_host_out_setup(out, &func.returns);
+    emit_python_host_out_setup(out, &func.returns, enums);
 
     // Dispatch via call_guest_method (host-mediated, guarded).
     out.push_str("        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))\n");
@@ -3283,7 +3377,10 @@ fn generate_peer_caller_method(out: &mut String, func: &ResolvedFunction, contra
     // Carry the ABI error code instead of discarding it.
     out.push_str("            raise RuntimeError(f\"peer call failed (code {err.code})\")\n");
     if has_return_value(&func.returns) {
-        out.push_str("        return out_val\n\n");
+        out.push_str(&format!(
+            "        return {}\n\n",
+            python_host_caller_return_expr(&func.returns, enums)
+        ));
     } else {
         out.push_str("        return None\n\n");
     }
@@ -4210,6 +4307,120 @@ mod tests {
         assert!(
             peers_wrong.is_empty(),
             "collect_peer_contracts must return empty when dep id does not match any contract"
+        );
+    }
+
+    // ─── Caller-side enum marshalling (repr ctypes) ──────────────────────────────
+    //
+    // Enums are emitted as `enum.IntEnum` classes: `ctypes.byref(IntEnum)` is a
+    // TypeError and `EnumName()` has no zero-arg constructor, so caller paths
+    // must box params in the repr ctype and read returns back from a repr-ctype
+    // out slot via `EnumName(out_val.value)`.
+
+    fn pixel_format_enums() -> Vec<EnumDef> {
+        vec![EnumDef {
+            name: "PixelFormat".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![EnumVariant {
+                name: "Rgba8".to_owned(),
+                value: "1".to_owned(),
+            }],
+        }]
+    }
+
+    #[test]
+    fn python_host_caller_single_enum_param_boxes_repr_ctype() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "set_format".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "fmt".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("PixelFormat".to_owned()),
+            }],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        emit_python_host_args_setup(&mut out, &func, "ImageCodecContract", &pixel_format_enums());
+        assert!(
+            out.contains("fmt_val: ctypes.c_uint32 = ctypes.c_uint32(int(fmt))"),
+            "enum param must be boxed in its repr ctype: {out}"
+        );
+        assert!(
+            out.contains("ctypes.byref(fmt_val)"),
+            "the repr box's address must be passed: {out}"
+        );
+        assert!(
+            !out.contains("ctypes.byref(fmt)"),
+            "ctypes.byref(IntEnum) is a TypeError and must never be emitted: {out}"
+        );
+    }
+
+    #[test]
+    fn python_host_caller_enum_return_uses_repr_ctype_and_converts_back() {
+        let returns: Option<ResolvedTypeRef> =
+            Some(ResolvedTypeRef::UserDefined("PixelFormat".to_owned()));
+        let mut out: String = String::new();
+        emit_python_host_out_setup(&mut out, &returns, &pixel_format_enums());
+        assert!(
+            out.contains("out_val: ctypes.c_uint32 = ctypes.c_uint32()"),
+            "enum return must allocate a repr-ctype out slot: {out}"
+        );
+        assert!(
+            !out.contains("PixelFormat()"),
+            "IntEnum has no zero-arg constructor and must never be instantiated: {out}"
+        );
+        let ret_expr: String = python_host_caller_return_expr(&returns, &pixel_format_enums());
+        assert_eq!(
+            ret_expr, "PixelFormat(out_val.value)",
+            "the raw repr integer must convert back into the IntEnum"
+        );
+    }
+
+    #[test]
+    fn python_guest_host_contract_enum_return_uses_repr_ctype() {
+        let returns: Option<ResolvedTypeRef> =
+            Some(ResolvedTypeRef::UserDefined("PixelFormat".to_owned()));
+        let mut out: String = String::new();
+        emit_python_guest_host_contract_out_setup(&mut out, &returns, &pixel_format_enums());
+        assert!(
+            out.contains("result: ctypes.c_uint32 = ctypes.c_uint32()"),
+            "enum return must allocate a repr-ctype out slot: {out}"
+        );
+        let mut ret: String = String::new();
+        emit_python_guest_host_contract_success_return(&mut ret, &returns, &pixel_format_enums());
+        assert!(
+            ret.contains("return PixelFormat(result.value)"),
+            "the raw repr integer must convert back into the IntEnum: {ret}"
+        );
+    }
+
+    #[test]
+    fn python_host_caller_arg_pack_enum_field_uses_repr_ctype() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "convert".to_owned(),
+            function_id: 0,
+            params: vec![
+                ResolvedParam {
+                    name: "fmt".to_owned(),
+                    ty: ResolvedTypeRef::UserDefined("PixelFormat".to_owned()),
+                },
+                ResolvedParam {
+                    name: "count".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                },
+            ],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        emit_python_arg_pack_struct(&mut out, "ImageCodecContract", &func, &pixel_format_enums());
+        assert!(
+            out.contains("(\"fmt\", ctypes.c_uint32)"),
+            "enum pack fields must use the repr ctype — IntEnum in _fields_ is a TypeError: {out}"
+        );
+        assert!(
+            !out.contains("(\"fmt\", PixelFormat)"),
+            "IntEnum class must never appear in _fields_: {out}"
         );
     }
 }

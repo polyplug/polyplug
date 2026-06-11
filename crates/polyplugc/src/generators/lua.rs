@@ -281,7 +281,7 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     );
 
     for contract in &ir.contracts {
-        generate_host_contract_caller(&mut out, contract);
+        generate_host_contract_caller(&mut out, contract, &ir.enums);
         out.push('\n');
     }
 
@@ -362,7 +362,7 @@ fn generate_lua_user_type(out: &mut String, ty: &ResolvedType, enums: &[EnumDef]
 
 /// Generate the full host caller for a contract with instance-based RAII pattern.
 /// Creates methods table, metatable with __gc, and factory function.
-fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) {
+fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, enums: &[EnumDef]) {
     let contract_prefix: String = contract_name_to_prefix(&contract.name);
     let contract_struct: String = contract_name_to_struct(&contract.name);
     let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
@@ -406,7 +406,7 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) 
 
     // Contract function methods - pass instance as first argument
     for func in &contract.functions {
-        generate_host_caller_method(out, func, &contract_prefix, &contract_struct);
+        generate_host_caller_method(out, func, &contract_prefix, &contract_struct, enums);
         out.push_str(",\n\n");
     }
 
@@ -476,6 +476,7 @@ fn generate_host_caller_method(
     func: &ResolvedFunction,
     contract_prefix: &str,
     _contract_struct: &str,
+    enums: &[EnumDef],
 ) {
     let fn_id: u32 = func.function_id;
     let sig_params: String = build_lua_sig_params(func);
@@ -488,8 +489,8 @@ fn generate_host_caller_method(
     out.push_str("        end\n");
 
     // Setup args and out
-    emit_lua_host_args_setup(out, func, contract_prefix);
-    emit_lua_host_out_setup(out, &func.returns);
+    emit_lua_host_args_setup(out, func, contract_prefix, enums);
+    emit_lua_host_out_setup(out, &func.returns, enums);
 
     // Dispatch on the interface's dispatch_type. Native guests (C++/Rust/native
     // Python) call the function pointer directly; VM guests (Lua, JS) route
@@ -531,7 +532,7 @@ fn generate_host_caller_method(
     if has_return_value(&func.returns) {
         out.push_str(&format!(
             "        return {}\n",
-            lua_return_expr(&func.returns)
+            lua_return_expr(&func.returns, enums)
         ));
     } else {
         out.push_str("        return nil\n");
@@ -695,7 +696,12 @@ fn build_lua_sig_params(func: &ResolvedFunction) -> String {
     params.join("")
 }
 
-fn emit_lua_host_args_setup(out: &mut String, func: &ResolvedFunction, contract_prefix: &str) {
+fn emit_lua_host_args_setup(
+    out: &mut String,
+    func: &ResolvedFunction,
+    contract_prefix: &str,
+    enums: &[EnumDef],
+) {
     if func.params.is_empty() {
         out.push_str("    local args_ptr = nil\n");
         return;
@@ -750,15 +756,39 @@ fn emit_lua_host_args_setup(out: &mut String, func: &ResolvedFunction, contract_
                 ));
             }
             ResolvedTypeRef::UserDefined(_) => {
-                out.push_str(&format!(
-                    "    local args_ptr = ffi.cast(\"const void*\", {} )\n",
-                    param.name
-                ));
+                match lua_enum_repr_c_type(&param.ty, enums) {
+                    // Enum: the value is a plain Lua number. Write it into a
+                    // repr-integer slot and pass the SLOT's address — casting
+                    // the bare number to void* would make the enum VALUE the
+                    // address (same class the factory-side fix removed).
+                    Some(repr) => {
+                        out.push_str(&format!(
+                            "    local {name}_val = ffi.new(\"{repr}[1]\", {name})\n",
+                            name = param.name
+                        ));
+                        out.push_str(&format!(
+                            "    local args_ptr = ffi.cast(\"const void*\", {name}_val)\n",
+                            name = param.name
+                        ));
+                    }
+                    // Struct: a cdef'd struct cdata is a reference cdata, so
+                    // the cast yields its address.
+                    None => {
+                        out.push_str(&format!(
+                            "    local args_ptr = ffi.cast(\"const void*\", {} )\n",
+                            param.name
+                        ));
+                    }
+                }
             }
             _ => {
+                // Scalar/pointer params need a 1-element array slot for the same
+                // reason as scalar out slots (see lua_return_is_scalar): a scalar
+                // ffi.new("T", v) is a VALUE cdata and ffi.cast("void*", value)
+                // converts the value instead of taking its address.
                 let ty_name: String = lua_type_name(&param.ty);
                 out.push_str(&format!(
-                    "    local {name}_val = ffi.new(\"{ty}\", {name})\n",
+                    "    local {name}_val = ffi.new(\"{ty}[1]\", {name})\n",
                     name = param.name,
                     ty = ty_name
                 ));
@@ -781,9 +811,20 @@ fn emit_lua_host_args_setup(out: &mut String, func: &ResolvedFunction, contract_
     out.push_str("    local args_ptr = ffi.cast(\"const void*\", args_val)\n");
 }
 
-fn emit_lua_host_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+fn emit_lua_host_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>, enums: &[EnumDef]) {
     if !has_return_value(returns) {
         out.push_str("    local out_ptr = nil\n");
+        return;
+    }
+    // Enum returns: the out slot is the enum's repr C integer type (the enum
+    // itself has no cdef'd C type), as a 1-element array like other scalars.
+    let enum_repr: Option<String> = match returns {
+        Some(ret) => lua_enum_repr_c_type(ret, enums),
+        None => None,
+    };
+    if let Some(repr) = enum_repr {
+        out.push_str(&format!("    local out_val = ffi.new(\"{repr}[1]\")\n"));
+        out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
         return;
     }
     let ret_ty: String = match returns {
@@ -830,10 +871,15 @@ fn lua_return_is_scalar(ty: &ResolvedTypeRef) -> bool {
     )
 }
 
-fn lua_return_expr(returns: &Option<ResolvedTypeRef>) -> &'static str {
+fn lua_return_expr(returns: &Option<ResolvedTypeRef>, enums: &[EnumDef]) -> String {
     match returns {
-        Some(ret) if lua_return_is_scalar(ret) => "out_val[0]",
-        _ => "out_val",
+        // Enum out slots are repr-integer arrays; tonumber() collapses any
+        // boxed 64-bit cdata element into a plain Lua number.
+        Some(ret) if lua_enum_repr_c_type(ret, enums).is_some() => {
+            "tonumber(out_val[0])".to_owned()
+        }
+        Some(ret) if lua_return_is_scalar(ret) => "out_val[0]".to_owned(),
+        _ => "out_val".to_owned(),
     }
 }
 
@@ -872,6 +918,21 @@ fn lua_c_type_name(ty: &ResolvedTypeRef, enums: &[EnumDef]) -> String {
             }
         }
         _ => lua_type_name(ty),
+    }
+}
+
+/// Resolve `ty` to its enum repr C integer type name when it names a contract
+/// enum. Caller-side marshalling needs this distinction: an enum value is a
+/// plain Lua NUMBER (the generator emits enums as Lua tables, not cdefs), so it
+/// must travel through a repr-typed slot — while a non-enum `UserDefined` is a
+/// struct cdata that already carries its own address.
+fn lua_enum_repr_c_type(ty: &ResolvedTypeRef, enums: &[EnumDef]) -> Option<String> {
+    match ty {
+        ResolvedTypeRef::UserDefined(name) => enums
+            .iter()
+            .find(|e: &&EnumDef| &e.name == name)
+            .map(|e: &EnumDef| e.repr.cpp_name().to_owned()),
+        _ => None,
     }
 }
 
@@ -1266,7 +1327,11 @@ fn generate_host_contracts_file(ir: &ValidatedIr) -> String {
 // ─── Guest Host Contract Caller Generation ─────────────────────────────────────
 
 /// Generate one guest-side host contract caller class.
-fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+fn generate_lua_guest_host_contract_caller(
+    out: &mut String,
+    contract: &ResolvedHostContract,
+    enums: &[EnumDef],
+) {
     let class_name: String = host_contract_name_to_lua_caller(&contract.name);
 
     out.push_str(&format!(
@@ -1327,7 +1392,7 @@ fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("end\n\n");
 
     for func in &contract.functions {
-        generate_lua_guest_host_contract_method(out, func, &class_name);
+        generate_lua_guest_host_contract_method(out, func, &class_name, enums);
     }
 
     out.push('\n');
@@ -1338,6 +1403,7 @@ fn generate_lua_guest_host_contract_method(
     out: &mut String,
     func: &ResolvedFunction,
     class_name: &str,
+    enums: &[EnumDef],
 ) {
     let fn_id: u32 = func.function_id;
     let has_return: bool = func.returns.is_some();
@@ -1373,8 +1439,8 @@ fn generate_lua_guest_host_contract_method(
     out.push_str("    local interface = ffi.cast(\"HostContractInterface*\", self._interface)\n");
     out.push_str("    local dispatch_type = interface.dispatch_type\n");
 
-    emit_lua_guest_host_contract_args_setup(out, func, class_name);
-    emit_lua_guest_host_contract_out_setup(out, &func.returns);
+    emit_lua_guest_host_contract_args_setup(out, func, class_name, enums);
+    emit_lua_guest_host_contract_out_setup(out, &func.returns, enums);
 
     out.push_str("    local err\n");
     out.push_str("    if dispatch_type == 0 then\n");
@@ -1429,7 +1495,10 @@ fn generate_lua_guest_host_contract_method(
     out.push_str("    end\n");
 
     if has_return {
-        out.push_str(&format!("    return {}\n", lua_return_expr(&func.returns)));
+        out.push_str(&format!(
+            "    return {}\n",
+            lua_return_expr(&func.returns, enums)
+        ));
     }
     out.push_str("end\n\n");
 }
@@ -1442,6 +1511,7 @@ fn emit_lua_guest_host_contract_args_setup(
     out: &mut String,
     func: &ResolvedFunction,
     pack_prefix: &str,
+    enums: &[EnumDef],
 ) {
     if func.params.is_empty() {
         out.push_str("    local args_ptr = nil\n");
@@ -1492,15 +1562,39 @@ fn emit_lua_guest_host_contract_args_setup(
                 ));
             }
             ResolvedTypeRef::UserDefined(_) => {
-                out.push_str(&format!(
-                    "    local args_ptr = ffi.cast(\"const void*\", {})\n",
-                    param.name
-                ));
+                match lua_enum_repr_c_type(&param.ty, enums) {
+                    // Enum: the value is a plain Lua number. Write it into a
+                    // repr-integer slot and pass the SLOT's address — casting
+                    // the bare number to void* would make the enum VALUE the
+                    // address (same class the factory-side fix removed).
+                    Some(repr) => {
+                        out.push_str(&format!(
+                            "    local {name}_val = ffi.new(\"{repr}[1]\", {name})\n",
+                            name = param.name
+                        ));
+                        out.push_str(&format!(
+                            "    local args_ptr = ffi.cast(\"const void*\", {name}_val)\n",
+                            name = param.name
+                        ));
+                    }
+                    // Struct: a cdef'd struct cdata is a reference cdata, so
+                    // the cast yields its address.
+                    None => {
+                        out.push_str(&format!(
+                            "    local args_ptr = ffi.cast(\"const void*\", {})\n",
+                            param.name
+                        ));
+                    }
+                }
             }
             ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => {
+                // Scalar/pointer params need a 1-element array slot for the same
+                // reason as scalar out slots (see lua_return_is_scalar): a scalar
+                // ffi.new("T", v) is a VALUE cdata and ffi.cast("void*", value)
+                // converts the value instead of taking its address.
                 let ty_name: String = lua_type_name(&param.ty);
                 out.push_str(&format!(
-                    "    local {name}_val = ffi.new(\"{ty}\", {name})\n",
+                    "    local {name}_val = ffi.new(\"{ty}[1]\", {name})\n",
                     name = param.name,
                     ty = ty_name
                 ));
@@ -1557,9 +1651,19 @@ fn emit_lua_guest_host_contract_args_setup(
 }
 
 /// Emit the out_ptr setup for a Lua guest host contract method.
-fn emit_lua_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+fn emit_lua_guest_host_contract_out_setup(
+    out: &mut String,
+    returns: &Option<ResolvedTypeRef>,
+    enums: &[EnumDef],
+) {
     if let Some(ret_ty) = returns {
-        if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
+        // Enum returns: the out slot is the enum's repr C integer type (the
+        // enum itself has no cdef'd C type), as a 1-element array like other
+        // scalars; read back via lua_return_expr's tonumber(out_val[0]).
+        if let Some(repr) = lua_enum_repr_c_type(ret_ty, enums) {
+            out.push_str(&format!("    local out_val = ffi.new(\"{repr}[1]\")\n"));
+            out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
+        } else if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
             out.push_str("    local out_val = ffi.new(\"StringView\")\n");
             out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
         } else if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)) {
@@ -1678,7 +1782,7 @@ fn generate_lua_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedCont
 
     for contract in peers {
         let min_ver: u32 = peer_min_version_lua(ir, contract.contract_id);
-        generate_lua_guest_peer_caller(&mut out, contract, min_ver);
+        generate_lua_guest_peer_caller(&mut out, contract, min_ver, &ir.enums);
     }
 
     // Export peer classes and their contract-ID constants.
@@ -1705,7 +1809,12 @@ fn generate_lua_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedCont
 }
 
 /// Generate one guest-side peer caller class for `contract`.
-fn generate_lua_guest_peer_caller(out: &mut String, contract: &ResolvedContract, min_version: u32) {
+fn generate_lua_guest_peer_caller(
+    out: &mut String,
+    contract: &ResolvedContract,
+    min_version: u32,
+    enums: &[EnumDef],
+) {
     let class_name: String = contract_name_to_lua_peer_class(&contract.name);
 
     out.push_str(&format!(
@@ -1771,14 +1880,19 @@ fn generate_lua_guest_peer_caller(out: &mut String, contract: &ResolvedContract,
     out.push_str("end\n\n");
 
     for func in &contract.functions {
-        generate_lua_guest_peer_method(out, func, &class_name);
+        generate_lua_guest_peer_method(out, func, &class_name, enums);
     }
 
     out.push('\n');
 }
 
 /// Generate one method on a guest peer caller class.
-fn generate_lua_guest_peer_method(out: &mut String, func: &ResolvedFunction, class_name: &str) {
+fn generate_lua_guest_peer_method(
+    out: &mut String,
+    func: &ResolvedFunction,
+    class_name: &str,
+    enums: &[EnumDef],
+) {
     let fn_id: u32 = func.function_id;
     let has_return: bool = func.returns.is_some();
 
@@ -1812,8 +1926,8 @@ fn generate_lua_guest_peer_method(out: &mut String, func: &ResolvedFunction, cla
     // Args and out setup — reuse the same helpers as the host-contract caller so
     // marshalling is identical (no extra tostring() layer = avoids the a3-parity
     // double-conversion Lua footgun).
-    emit_lua_guest_host_contract_args_setup(out, func, class_name);
-    emit_lua_guest_host_contract_out_setup(out, &func.returns);
+    emit_lua_guest_host_contract_args_setup(out, func, class_name, enums);
+    emit_lua_guest_host_contract_out_setup(out, &func.returns, enums);
 
     out.push_str("    local err\n");
     out.push_str("    if dispatch_type == 0 then\n");
@@ -1861,7 +1975,10 @@ fn generate_lua_guest_peer_method(out: &mut String, func: &ResolvedFunction, cla
     out.push_str("    end\n");
 
     if has_return {
-        out.push_str(&format!("    return {}\n", lua_return_expr(&func.returns)));
+        out.push_str(&format!(
+            "    return {}\n",
+            lua_return_expr(&func.returns, enums)
+        ));
     }
     out.push_str("end\n\n");
 }
@@ -1905,7 +2022,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     );
 
     for contract in &ir.host_contracts {
-        generate_lua_guest_host_contract_caller(&mut out, contract);
+        generate_lua_guest_host_contract_caller(&mut out, contract, &ir.enums);
     }
 
     out.push_str("-- Contract ID constants\n");
@@ -2559,7 +2676,7 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_lua_guest_host_contract_caller(&mut out, &contract);
+        generate_lua_guest_host_contract_caller(&mut out, &contract, &[]);
         assert!(
             out.contains("HostLoggerContract = {}"),
             "missing class table: {out}"
@@ -2649,7 +2766,7 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_lua_guest_host_contract_caller(&mut out, &contract);
+        generate_lua_guest_host_contract_caller(&mut out, &contract, &[]);
         assert!(
             out.contains("HostFsReaderContract = {}"),
             "missing class table: {out}"
@@ -2781,7 +2898,7 @@ mod tests {
         );
 
         let mut out: String = String::new();
-        generate_lua_guest_peer_caller(&mut out, peers[0], 1);
+        generate_lua_guest_peer_caller(&mut out, peers[0], 1, &ir.enums);
 
         assert!(
             out.contains("PipelineValidatorPeer = {}"),
@@ -3202,5 +3319,172 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ─── Caller-side enum marshalling (repr-integer slots) ──────────────────────
+    //
+    // Enums are emitted as plain Lua tables (numbers at the call site), so a
+    // caller must NEVER cast the bare value to void* (value-as-address). Params
+    // go through a repr-integer 1-element array slot whose ADDRESS is passed;
+    // returns use a repr-integer slot read back with tonumber().
+
+    fn pixel_format_enums() -> Vec<EnumDef> {
+        vec![EnumDef {
+            name: "PixelFormat".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![
+                EnumVariant {
+                    name: "Unknown".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Rgba8".to_owned(),
+                    value: "1".to_owned(),
+                },
+            ],
+        }]
+    }
+
+    fn enum_codec_contract() -> ResolvedContract {
+        ResolvedContract {
+            name: "image.Codec".to_owned(),
+            contract_id: 0x1111_2222_3333_4444_u64,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![
+                ResolvedFunction {
+                    name: "set_format".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "fmt".to_owned(),
+                        ty: ResolvedTypeRef::UserDefined("PixelFormat".to_owned()),
+                    }],
+                    returns: None,
+                },
+                ResolvedFunction {
+                    name: "get_format".to_owned(),
+                    function_id: 1,
+                    params: vec![],
+                    returns: Some(ResolvedTypeRef::UserDefined("PixelFormat".to_owned())),
+                },
+            ],
+        }
+    }
+
+    fn assert_enum_caller_marshalling(out: &str) {
+        // (i) single-enum param: repr-integer slot + address pass.
+        assert!(
+            out.contains("local fmt_val = ffi.new(\"uint32_t[1]\", fmt)"),
+            "enum param must be written into a repr-integer slot: {out}"
+        );
+        assert!(
+            out.contains("local args_ptr = ffi.cast(\"const void*\", fmt_val)"),
+            "enum param must pass the slot's address: {out}"
+        );
+        assert!(
+            !out.contains("ffi.cast(\"const void*\", fmt )")
+                && !out.contains("ffi.cast(\"const void*\", fmt)"),
+            "bare enum value must never be cast to void* (value-as-address): {out}"
+        );
+        // (ii) enum return: repr-integer out slot + tonumber() read-back.
+        assert!(
+            out.contains("local out_val = ffi.new(\"uint32_t[1]\")"),
+            "enum return must allocate a repr-integer out slot: {out}"
+        );
+        assert!(
+            out.contains("return tonumber(out_val[0])"),
+            "enum return must be read back with tonumber(): {out}"
+        );
+        assert!(
+            !out.contains("ffi.new(\"PixelFormat\""),
+            "enum has no cdef'd C type — must use the repr integer: {out}"
+        );
+    }
+
+    #[test]
+    fn lua_host_caller_enum_param_and_return_use_repr_slots() {
+        let mut out: String = String::new();
+        generate_host_contract_caller(&mut out, &enum_codec_contract(), &pixel_format_enums());
+        assert_enum_caller_marshalling(&out);
+    }
+
+    #[test]
+    fn lua_peer_caller_enum_param_and_return_use_repr_slots() {
+        let mut out: String = String::new();
+        generate_lua_guest_peer_caller(&mut out, &enum_codec_contract(), 1, &pixel_format_enums());
+        assert_enum_caller_marshalling(&out);
+    }
+
+    #[test]
+    fn lua_guest_host_contract_caller_enum_param_and_return_use_repr_slots() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.theme".to_owned(),
+            contract_id: 0xDEAD_BEEF_u64,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            singleton: false,
+            functions: vec![
+                ResolvedFunction {
+                    name: "set_mode".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "fmt".to_owned(),
+                        ty: ResolvedTypeRef::UserDefined("PixelFormat".to_owned()),
+                    }],
+                    returns: None,
+                },
+                ResolvedFunction {
+                    name: "get_mode".to_owned(),
+                    function_id: 1,
+                    params: vec![],
+                    returns: Some(ResolvedTypeRef::UserDefined("PixelFormat".to_owned())),
+                },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_lua_guest_host_contract_caller(&mut out, &contract, &pixel_format_enums());
+        assert_enum_caller_marshalling(&out);
+    }
+
+    /// Scalar single params share the same LuaJIT pitfall: a scalar value cdata
+    /// cast to void* converts the VALUE, not its address — so the caller must
+    /// use the 1-element array form just like scalar out slots.
+    #[test]
+    fn lua_host_caller_single_scalar_param_uses_array_slot() {
+        let contract: ResolvedContract = ResolvedContract {
+            name: "counter.Inc".to_owned(),
+            contract_id: 0x5555_6666_u64,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "inc".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "amount".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                }],
+                returns: None,
+            }],
+        };
+        let mut out: String = String::new();
+        generate_host_contract_caller(&mut out, &contract, &[]);
+        assert!(
+            out.contains("local amount_val = ffi.new(\"uint32_t[1]\", amount)"),
+            "scalar param must use a 1-element array slot: {out}"
+        );
+        assert!(
+            !out.contains("ffi.new(\"uint32_t\", amount)"),
+            "scalar value cdata cast to void* is value-as-address: {out}"
+        );
     }
 }

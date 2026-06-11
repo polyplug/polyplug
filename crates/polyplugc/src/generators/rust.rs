@@ -2919,8 +2919,12 @@ fn emit_guest_host_contract_args_setup(
                 ));
             }
             ResolvedTypeRef::UserDefined(_) => {
+                // The parameter is received BY VALUE (guest_param_type_name maps
+                // UserDefined to the bare type), so take the address of the local
+                // — `{name} as *const {ty}` on a by-value enum/struct is an
+                // invalid cast (E0606) and never compiled.
                 out.push_str(&format!(
-                    "        let args_ptr: *const () = {name} as *const {ty} as *const ();\n",
+                    "        let args_ptr: *const () = &{name} as *const {ty} as *const ();\n",
                     name = param.name,
                     ty = ty_name
                 ));
@@ -4573,6 +4577,33 @@ mod tests {
         assert!(
             !mod_content.contains("pub mod peer_callers;"),
             "guest/mod.rs must NOT declare peer_callers with no bundle: {mod_content}"
+        );
+    }
+
+    /// The guest→host-contract caller receives single user-defined params BY
+    /// VALUE (guest_param_type_name maps UserDefined to the bare type), so the
+    /// args pointer must take the address of the local — `mode as *const Ty`
+    /// on a by-value enum/struct is an invalid cast (E0606) and never compiled.
+    #[test]
+    fn guest_host_contract_single_user_defined_param_passes_address() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "set_mode".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "mode".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("PixelFormat".to_owned()),
+            }],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        emit_guest_host_contract_args_setup(&mut out, &func, "HostThemeCaller");
+        assert!(
+            out.contains("&mode as *const PixelFormat as *const ()"),
+            "by-value user-defined param must be passed by ADDRESS: {out}"
+        );
+        assert!(
+            !out.contains("= mode as *const"),
+            "casting a by-value enum/struct to a pointer is invalid Rust (E0606): {out}"
         );
     }
 }
