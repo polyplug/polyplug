@@ -155,8 +155,8 @@ only difference is the plugin's source language. These numbers are apples-to-app
 
 | Plugin language | `counter_inc` arm | ~ns/call | ~throughput |
 |---|---|---|---|
-| Rust (cdylib) | `polyplug/dispatch` | ~2.5 | ~395 M/s |
-| C++ (cdylib) | `polyplug/dispatch_cpp` | ~2.7 | ~370 M/s |
+| Rust (cdylib) | `polyplug/dispatch` | ~2.3 | ~430 M/s |
+| C++ (cdylib) | `polyplug/dispatch_cpp` | ~2.5 | ~400 M/s |
 
 The ~0.2 ns spread is compiler codegen + run-to-run noise, not a polyplug
 property: **native dispatch does not care what language wrote the plugin.** Any
@@ -180,8 +180,8 @@ cargo bench -p polyplug_dotnet --bench dispatch_benchmark  # .NET (CLR)
 > *the interpreter*, and they each measure it slightly differently (e.g. the
 > Python one times GIL acquisition + a Python function call). A row reading
 > "Python: 300 ns" is mostly CPython, not polyplug — quoting it next to the
-> ~2.5 ns native rows would invite a false "polyplug is 100× slower in Python"
-> read. The honest statement is: **native dispatch is ~2.5 ns regardless of
+> ~2.3–2.5 ns native rows would invite a false "polyplug is 100× slower in Python"
+> read. The honest statement is: **native dispatch is ~2.3–2.5 ns regardless of
 > plugin language; VM-hosted languages additionally pay their interpreter's
 > per-call cost, which is a property of that VM, and which you pay no matter how
 > you'd embed it.** Keep the two tiers separate.
@@ -219,9 +219,8 @@ entirely. The pessimal "re-resolve every call" path is measured separately in
 `contract_dispatch::cross_plugin`.
 
 `hot_reload_swap` (~17 µs, native bundles only) is the price of swapping a
-plugin's code *without restarting the host* — a capability static linking and the
-WASM/subprocess alternatives cannot match cheaply. Its value is the capability,
-not the nanoseconds.
+plugin's code *without restarting the host* — a capability static linking
+cannot offer at all. Its value is the capability, not the nanoseconds.
 
 > Honesty note: `load`/`reload` re-`dlopen` the *same* file each iteration, so the
 > first dlopen pays the cold page-in and the rest are warm/refcounted. These are
@@ -382,7 +381,6 @@ aren't lost. **Priority: benches for what we currently ship come first.**
 
 | Idea | What it would show | The caveat ("it can be argued against") |
 |---|---|---|
-| **vs sandboxed alternatives** | Call overhead vs a WASM boundary (wasmtime) and vs subprocess/IPC, to quantify what "trusted, same-process, native speed" buys. | Apples-to-oranges on *safety guarantees* — WASM/IPC give isolation we don't. It's a speed-vs-isolation trade, not a strict win; frame it as "here's the cost of isolation you may not need." Also pulls in a heavy `wasmtime` dev-dependency. |
 | **guest→host / peer-caller marshalling** | The generated-caller overhead *on top of* the ABI entry point — what a plugin pays to call back into the host or call a peer contract through generated glue, vs the raw `call_guest_method` figure `cross_call` already measures. | Needs per-language **generated** caller fixtures, so any number conflates the language runtime (QuickJS, CPython, CLR…) with polyplug's marshalling. The native rows would be honest; the VM rows mostly measure the interpreter — same two-tier caveat as the dispatch matrix. |
 | **unload/load churn soak** | Time drift across many `load → unload → load` loops, to surface retired-resource accumulation (the retire-not-drop model keeps superseded interfaces/libs alive for the runtime lifetime). | It's a **leak detector dressed as a bench** — the signal is *time stability* across iterations, not speed. A flat line means "no creeping cost," which reads as a non-result to anyone expecting a throughput number; it needs a drift/regression lens (or a memory probe), not a median-ns headline. |
 

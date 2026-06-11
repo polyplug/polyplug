@@ -8,9 +8,10 @@
 # does a call cost?" — every combination, not just one axis.
 #
 #   hosts  : rust, cpp, csharp, python, lua, js   (examples/hosts/*)
-#   guests : rust, cpp, lua, js, python           (examples/plugins/<lang>_*)
-#            (no C# guest: there is no built dotnet guest bundle and the host
-#             examples do not register the .NET loader — that column is N/A.)
+#   guests : rust, cpp, lua, js, python, csharp   (examples/plugins/<lang>_*;
+#            csharp bundles live in examples/plugins-csharp — they need the
+#            .NET loader, which every example host now registers — so the
+#            full 6×6 matrix is measured, no N/A column.)
 #
 # Local-only, like every benchmark here. The measured numbers are piped straight
 # into scripts/gen_bench_charts.py, which renders cross_lang_matrix.svg. Nothing

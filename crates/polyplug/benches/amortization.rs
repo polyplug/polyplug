@@ -17,8 +17,8 @@
 //               it (see `counter_inc`), so this is *not* a per-call cost.
 //   3. reload  — `Runtime::reload_bundle` (native-only hot-reload): dlopen the
 //               new dylib, re-run `polyplug_init`, atomically swap the interface,
-//               and retire the old library. A capability static linking and the
-//               WASM/IPC alternatives cannot match cheaply.
+//               and retire the old library. A capability static linking
+//               cannot offer at all.
 //
 // Honesty notes:
 //   * These are one-time costs. A critic rightly points out they are irrelevant

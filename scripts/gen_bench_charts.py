@@ -481,9 +481,10 @@ def chart_amortization(criterion_dir: Path, out: Path) -> None:
 #
 # The guest bars are read live from each loader's warm steady-state dispatch
 # bench (VM/context already created, function cached) so they stay current and
-# comparable. The host-FFI numbers are the measured figures documented in
-# docs/PERFORMANCE.md (host micro-benchmarks need each language's runtime to
-# reproduce). All numbers are illustrative — one machine; trust the ordering.
+# comparable. The host-FFI numbers are hardcoded ESTIMATES (no dedicated
+# host-call bench exists yet — only the Rust floor is benched); the chart
+# labels itself accordingly. All numbers are illustrative — one machine;
+# trust the ordering.
 
 
 def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
@@ -511,8 +512,8 @@ def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
         "warm per-call cost the runtime pays to run a plugin written in each language (log scale, lower is better)",
         rows,
         "All bars measured live: native from counter_inc; .NET/Lua/Python/JS from each loader's "
-        "warm cached-dispatch bench. Python additionally pays a one-time ~12 µs GIL acquire + compile "
-        "on a cold call (see PERFORMANCE.md).",
+        "warm cached-dispatch bench. Python's cold-call arm (gil_acquire_and_call) measures ~12-14 µs; "
+        "what it pays for is under investigation (see PERFORMANCE.md).",
     )
 
 
@@ -574,7 +575,15 @@ def chart_cross_language_matrix(data_path: Path, out: Path) -> None:
 
 
 def chart_cross_language_host(criterion_dir: Path, out: Path) -> None:
-    """Per-call FFI overhead, host -> runtime, by host language (log scale)."""
+    """Per-call FFI overhead, host -> runtime, by host language (log scale).
+
+    ESTIMATES, NOT MEASUREMENTS: these row values are hardcoded order-of-magnitude
+    figures (only the Rust floor is backed by a bench, counter_inc). A measured
+    host-call bench will replace them and make this chart live-sourced; until
+    then the chart itself says so. C# is deliberately absent: there is no
+    single-boundary estimate for it, and mixing in the measured end-to-end
+    matrix cell would compare a different quantity — see cross_lang_matrix.
+    """
     rows: list = [
         ("Rust (links the crate, no FFI)", 2.0, _HILITE),
         ("C++ (native)", 15.0, _NEUTRAL),
@@ -585,12 +594,14 @@ def chart_cross_language_host(criterion_dir: Path, out: Path) -> None:
     ]
     _chart_hbar_log(
         out,
-        "Reaching the runtime, by app language",
-        "per-call cost for an app in each language to cross into the runtime (log scale, lower is better)",
+        "Reaching the runtime, by app language (ESTIMATES)",
+        "estimated orders of magnitude — NOT measurements; a measured host-call bench "
+        "lands in a future update. See cross_lang_matrix for measured end-to-end numbers.",
         rows,
-        "A Rust host links libpolyplug directly — there is no FFI boundary, so it is "
-        "the floor. C++/Lua/JS are the fast FFI end; Python's dynamic FFI is the cost "
-        "of its convenience. Host FFI micro-benchmarks — see docs/PERFORMANCE.md.",
+        "Only the Rust floor is benched (counter_inc); the other bars are estimates of the "
+        "bare FFI hop, pending a dedicated host-call bench. C# is omitted: no single-boundary "
+        "estimate exists, and the measured csharp matrix cell is end-to-end (a different "
+        "quantity). Trust the ordering, not the digits — see docs/PERFORMANCE.md.",
     )
 
 

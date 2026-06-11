@@ -17,7 +17,7 @@ This document defines the security boundaries, dependency enforcement mechanisms
 
 **What we don't protect against:** Malicious memory access, plugin crashes, privilege escalation. Plugins run in-process with full host privileges.
 
-**Bottom line:** polyplug is an architecture enforcement tool, not a security sandbox. For untrusted plugins, use OS-level isolation (WASM, containers, separate processes).
+**Bottom line:** polyplug is an architecture enforcement tool, not a security sandbox. For untrusted plugins, use OS-level isolation (containers, separate processes).
 
 ---
 
@@ -426,9 +426,6 @@ Python, Lua, and JavaScript (QuickJS) plugins are implemented. All respect the s
 
 ### Priority Resolution
 A weighting system for multi-impl providers is planned for a future version. This will allow the host or a "Coordinator Bundle" to assign priorities to implementations, ensuring that `find_guest_contract` returns the "best" provider rather than just the first one registered.
-
-### WASM sandbox support
-Future versions will support WASM plugins in a sandboxed execution environment, providing crash isolation without IPC overhead. This is the planned path for untrusted plugin execution.
 
 ## Plugin crash isolation
 

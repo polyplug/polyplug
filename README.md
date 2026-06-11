@@ -6,80 +6,61 @@
 
 polyplug is a plugin runtime that enables seamless cross-language plugin development. Write plugins in Rust, Python, C#, Lua, JavaScript, or C++ — and load them all from a single host application with zero/minimal-overhead FFI dispatch.
 
-**Just add polyplug as a dependency and it works on Linux, macOS, and Windows.** No manual downloads, no build-from-source requirements, no obstacles.
+**Status: pre-release.** The project is pre-1.0 and not yet published to any package registry — build from source (see [Installation](#installation)). The full test suite runs on Linux, macOS, and Windows.
 
 ## Features
 
-- **Cross-Language** — Write plugins in Rust, Python, C#, Lua, JavaScript/Deno, or C++
-- **Cross-Platform** — Works on Linux (x64), macOS (x64/ARM64), and Windows (x64) with zero setup
-- **Hot Reload** — Reload plugins at runtime with notification system for seamless updates
+- **Cross-Language** — Write plugins in Rust, Python, C#, Lua, JavaScript (QuickJS), or C++ (host applications can also be written in any of the six, including JS on Deno)
+- **Cross-Platform** — Linux (x64), macOS (x64/ARM64), and Windows (x64)
+- **Hot Reload** — Native, Lua, and JS (QuickJS) bundles reload at runtime; the host observes reloads through the `on_reload` phase callback (Python and .NET bundles do not hot-reload)
 - **Zero/Minimal-Overhead FFI** — Direct function pointer dispatch with no runtime overhead for native languages, minimal overhead for VM-based languages
 - **Type-Safe Code Generation** — The `polyplugc` CLI generates type-safe bindings for all languages
-- **Singleton Plugin Implementations** — Each contract has one implementation; host creates caller wrappers with Arc-based lifecycle
 - **Multiple Loader Types** — Native, Python, Lua, JavaScript (QuickJS), and .NET loaders
 
 ## Quick Start
 
 ### Installation
 
-#### Rust
-
-```toml
-# Cargo.toml
-[dependencies]
-polyplug = "0.1"
-polyplug_abi = "0.1"
-```
-
-#### Python
+polyplug is not yet published to crates.io, PyPI, NuGet, LuaRocks, or npm —
+everything builds from this workspace:
 
 ```bash
-pip install polyplug
-# Native library is bundled - no additional setup needed
+# Core runtime, loaders, and the polyplugc CLI
+cargo build --release
+
+# Build the example plugin bundles (all six languages)
+bash examples/build_all.sh
 ```
 
-#### C# / .NET
-
-```bash
-dotnet add package Polyplug
-# Native libraries for all platforms are bundled in the package
-```
-
-#### Lua (LuaRocks)
-
-```bash
-luarocks install polyplug
-# Native library is bundled
-```
-
-#### JavaScript / Deno
-
-```typescript
-import { Runtime } from "@polyplug/runtime";
-// Native library auto-detected and loaded
-```
-
-#### C++
-
-```cmake
-find_package(Polyplug REQUIRED)
-# Downloads native library if not found locally
-```
+- **Rust hosts** depend on the `polyplug` and `polyplug_abi` crates by path.
+- **Other host languages** use the SDKs under `sdks/<lang>/host` together with
+  the built loader cdylibs (`target/release/deps/libpolyplug*.so`).
+- See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) for the full end-to-end setup.
 
 ### Basic Usage
 
-```rust
-use polyplug::{PluginHost, PluginDescriptor};
+A Rust host builds a `Runtime`, registers the loaders it needs, loads bundles,
+then calls plugins through `polyplugc`-generated typed callers (condensed from
+[`examples/hosts/rust`](examples/hosts/rust)):
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let host = PluginHost::new()?;
-    
-    // Load a plugin from any supported language
-    let plugin = host.load("path/to/plugin.polyplug")?;
-    
-    // Call plugin functions through generated bindings
-    let result = plugin.my_function(&input)?;
-    
+```rust
+use polyplug::runtime::Runtime;
+use polyplug_native::{NativeConfig, NativeLoader};
+
+fn run() -> Result<(), String> {
+    let runtime: Runtime = Runtime::builder()
+        .loader(NativeLoader::new(NativeConfig {}))
+        // .loader(LuaLoader / JsLoader / PythonLoader / DotnetLoader ...)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Load a plugin bundle directory (any supported language)
+    runtime
+        .load_bundle("path/to/bundle".as_ref())
+        .map_err(|e| e.to_string())?;
+
+    // Call plugin functions through polyplugc-generated typed callers
+    // (find_contract::<MyContract>(&runtime, MY_CONTRACT_ID) -> decode(...) etc.)
     Ok(())
 }
 ```
@@ -91,18 +72,28 @@ polyplug/
 ├── crates/
 │   ├── polyplug/           # Rust runtime core
 │   ├── polyplug_abi/       # ABI definitions
-│   ├── polyplug_guest/     # Guest library for Rust plugins
+│   ├── polyplug_utils/     # Shared hash utilities (bundle_id, contract_id)
+│   ├── polyplug_native/    # Native (cdylib) bundle loader
+│   ├── polyplug_python/    # Python bundle loader
+│   ├── polyplug_lua/       # Lua bundle loader
+│   ├── polyplug_js/        # JavaScript (QuickJS) bundle loader
+│   ├── polyplug_dotnet/    # .NET/C# bundle loader
+│   ├── polyplug_codegen/   # Code generation library
 │   ├── polyplugc/          # CLI codegen tool
-│   └── polyplug_codegen/   # Code generation library
-├── sdks/                   # Cross-language SDKs (host + guest + ABI)
+│   └── sdk_validator/      # Validates SDK helpers against the ABI
+├── sdks/                   # Cross-language SDKs
+│   ├── rust/               # Rust SDK (abi/, guest/ — the host side IS the polyplug crate)
+│   ├── cpp/                # C++ SDK (abi/, host/, guest/, loaders/)
 │   ├── csharp/             # C# SDK (abi/, host/, guest/, loaders/)
 │   ├── python/             # Python SDK (abi/, host/, guest/, loaders/)
-│   ├── cpp/                # C++ SDK (abi/, host/, guest/, loaders/)
 │   ├── lua/                # Lua SDK (abi/, host/, guest/, loaders/)
 │   └── js/                 # JavaScript SDK (abi/, host/, guest/, loaders/)
 └── examples/               # Example hosts and plugins
-    ├── hosts/
-    └── guests/
+    ├── api.toml
+    ├── hosts/              # One example host per language
+    ├── guests/             # Guest sources per language
+    ├── plugins/            # Built example bundles (rust/cpp/lua/js/python)
+    └── plugins-csharp/     # Built C# example bundles (need the .NET loader)
 ```
 
 ## Documentation

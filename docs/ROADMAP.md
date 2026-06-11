@@ -144,11 +144,6 @@ Held until the owner decides to publish. Kept here so it isn't lost.
     thousand calls and is noise by 1 M. Reuses the integration tests' `TestNativeLoader`
     (the `polyplug` crate cannot dev-depend on `polyplug_native` — that would be a
     dependency cycle). Local-only; see `benches/README.md`.
-  _Follow-up (not yet built — documented in the benches README so it isn't lost;
-  it has a caveat, so it is not a clean headline):_
-  - **vs sandboxed alternatives** — call-overhead comparison against a WASM
-    boundary (wasmtime) and a subprocess/IPC boundary, to quantify what the
-    "trusted same-process, native speed" posture buys vs the isolation tiers.
 - **C3. ~~Reference tracing extension.~~ ❌ Cancelled (2026-06).** The extension
   concept was removed (out of scope — see "Extension system — Removed"). Tracing
   is an app concern: implement it as a `host.logger`-style host contract.
@@ -159,7 +154,7 @@ Larger, mostly architectural — each needs an explicit owner decision before
 scoping:
 
 - **Sandboxed / untrusted plugin tier.** The trust model is "trusted same
-  process." A sandboxed guest target (WASM, or seccomp/process isolation) would
+  process." A sandboxed guest target (seccomp / process isolation) would
   let hosts load *untrusted* plugins — a natural fit for a "universal plugin
   runtime" and a significant market expansion.
 - **Per-call resource limits / timeouts.** Wall-clock + memory caps per guest

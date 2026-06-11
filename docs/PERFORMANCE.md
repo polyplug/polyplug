@@ -32,7 +32,9 @@ polyplug is designed for **zero-overhead hot path calls**. The architecture ensu
 │   3. interface.functions[fn_id](args, out)                      │
 │      └─> Direct indirect call                                   │
 │                                                                  │
-│   Total overhead: ~2 ns (native) to ~13 µs (Python, GIL)        │
+│   Total overhead: ~2.3 ns measured (native guests); VM guests    │
+│   add tens of ns to µs depending on language — see the           │
+│   cross-language matrix below                                    │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -68,12 +70,13 @@ call takes.** A few extra pointers so nothing here is mysterious:
 
 - **The units.** `ns` is a *nanosecond* — a billionth of a second. `µs` is a
   *microsecond* = 1,000 ns. `ms` is a *millisecond* = 1,000 µs. For scale: a
-  ~2 ns call means **~500 million calls per second**; a ~13 µs call is still
-  ~75,000 per second.
+  ~2 ns call means **~500 million calls per second**; even a ~10 µs call is
+  still ~100,000 per second.
 - **"Lower is better."** Bars and cells show how long a call takes, so a shorter
   bar (or a greener cell) is faster.
 - **What is a *log scale*?** Some charts span a huge range — native calls are
-  ~2 ns while a Python call is ~13,000 ns. On a normal (*linear*) axis, equal
+  ~2 ns while a scripted-host round trip can run to thousands of ns. On a
+  normal (*linear*) axis, equal
   steps mean equal *amounts* (10, 20, 30…), so the fast bars would shrink to
   invisible slivers next to the slow ones. A **log scale** makes equal steps mean
   equal *multiples* instead (1 → 10 → 100 → 1,000…), so everything is readable at
@@ -96,9 +99,18 @@ code.)
 
 ![reaching the runtime — per-call cost by app language](assets/benches/cross_lang_host.svg)
 
-| Language | Backend | Call Overhead | Speedup vs Python ctypes |
-|----------|---------|---------------|--------------------------|
-| **Rust** | Links the crate (no FFI) | ~2 ns | 300x+ |
+> **Measured vs estimated — read this first.** This direction does **not** yet
+> have a dedicated, reproducible benchmark. What *is* measured today:
+> the Rust-host floor (~2.3 ns, the `counter_inc` bench) and the **end-to-end**
+> per-host-language numbers in the
+> [cross-language matrix](#call-cost-for-any-language-combination) (measured by
+> `examples/hosts/roundtrip_bench.sh`). The single-boundary figures in the chart
+> and table below are **estimated orders of magnitude** for the bare FFI hop,
+> pending a dedicated host-call benchmark. Trust the ordering, not the digits.
+
+| Language | Backend | Call Overhead (estimated) | vs Python ctypes (estimated) |
+|----------|---------|---------------------------|------------------------------|
+| **Rust** | Links the crate (no FFI) | ~2 ns (measured: `counter_inc`) | 300x+ |
 | **C++** | Native | ~10-20 ns | 30-60x |
 | **Lua** | LuaJIT FFI | ~20-50 ns | 10-30x |
 | **JavaScript** | Deno FFI | ~50-100 ns | 5-10x |
@@ -185,12 +197,12 @@ const result = interface.call(0, input);
 **Two backend options:**
 
 #### ctypes (default)
-- **Overhead**: ~670 ns per call
+- **Overhead**: ~670 ns per call (estimate — dedicated host-call bench pending)
 - **Requirements**: None (built-in)
 - **Best for**: Plugin functions >10μs
 
 #### cffi ABI (optional)
-- **Overhead**: ~380 ns per call (1.7x faster)
+- **Overhead**: ~380 ns per call (estimate; faster than ctypes)
 - **Requirements**: `pip install cffi`
 - **Best for**: Performance-sensitive applications
 
@@ -216,6 +228,9 @@ interface = rt.resolve_guest_contract(handle)  # raw interface pointer
 | 1-10 μs (light) | 5-50% overhead | 3-30% overhead | Any language OK |
 | 10-100 μs (moderate) | 0.5-5% overhead | 0.3-3% overhead | Negligible |
 | > 100 μs (heavy) | < 0.5% overhead | < 0.3% overhead | Negligible |
+
+> The percentages derive from the *estimated* Python host-call overheads above
+> (~670 ns ctypes / ~380 ns cffi) — treat them as guidance, not measurements.
 
 ### Language Selection Guide
 
@@ -272,7 +287,7 @@ wants to pick up a swapped-in version.
 | Operation | Cost | Impact |
 |-----------|------|--------|
 | Cached interface pointer (the hot path) | ~2 ns dispatch | Keeps serving the version it resolved (valid via retire-not-drop) |
-| Re-find + re-resolve | ~30 ns (≈20 ns find + ~10 ns resolve) | Picks up the swapped-in interface |
+| Re-find + re-resolve | ~20-30 ns (`amortization/find_and_resolve` measures ~22 ns) | Picks up the swapped-in interface |
 
 For typical plugin calls (>1µs), even an explicit re-resolve every call is <5%.
 
@@ -283,27 +298,27 @@ For typical plugin calls (>1µs), even an explicit re-resolve every call is <5%.
 ### Run Benchmarks
 
 ```bash
-# Python
-cd sdks/python/host
-python -m venv .venv && source .venv/bin/activate
-pip install cffi
-POLYPLUG_LIB=/path/to/libpolyplug.so python benchmarks/benchmark_ffi_final.py
-
-# Rust core
+# Rust core (criterion)
 cargo bench -p polyplug
+
+# Loader crates (VM dispatch benches)
+cargo bench -p polyplug_lua -p polyplug_js -p polyplug_python -p polyplug_dotnet
+
+# Full measured cross-language matrix (every host × every guest)
+just bench-roundtrip          # wraps examples/hosts/roundtrip_bench.sh
 ```
+
+There is currently **no reproducible benchmark for the non-Rust host-side FFI
+hop** in isolation — the per-language "reaching the runtime" figures are
+estimates (see the note in that section). The measured host-side numbers are
+the end-to-end cells in the
+[cross-language matrix](#call-cost-for-any-language-combination).
 
 ### Expected Results
 
 > Methodology: criterion 0.8, `--release`, 100 samples/bench. The illustrative
 > numbers here and below were taken on an AMD Ryzen 9 5900X (12-core) / 32 GiB
 > Linux box. Re-run on your own quiet machine and trust **ratios**, not absolute ns.
-
-**Python host FFI (1M iterations, host calling into `libpolyplug`):**
-```
-ctypes:   ~670 ns/call
-cffi ABI: ~380 ns/call (1.7x faster)
-```
 
 **Rust core (`cargo bench -p polyplug`):**
 ```
@@ -328,11 +343,11 @@ the Rust and C++ polyplug arms is the plugin's source language.
 
 | Arm | Mechanism | ns/call | Throughput | vs floor |
 |---|---|---|---|---|
-| `native/inline_never` | direct Rust call, `#[inline(never)]`, no ABI boundary | ~1.5 ns | ~650 M/s | 1.0× (floor) |
-| `ffi/by_value` | raw `dlsym` `extern "C" inc(u32)->u32`, by value | ~1.8 ns | ~553 M/s | 1.2× |
-| `native/abi_marshalled` | ptr-in / ptr-out ABI convention, **statically linked** | ~2.3 ns | ~480 M/s | 1.5× |
-| `polyplug/dispatch` | **resolved contract dispatch over a loaded Rust `.so`** | ~2.3 ns | ~430 M/s | 1.5× |
-| `polyplug/dispatch_cpp` | the same, dispatching a **C++**-authored plugin | ~2.5 ns | ~390 M/s | 1.7× |
+| `native/inline_never` | direct Rust call, `#[inline(never)]`, no ABI boundary | ~1.1–1.5 ns | ~650–900 M/s | 1.0× (floor) |
+| `ffi/by_value` | raw `dlsym` `extern "C" inc(u32)->u32`, by value | ~1.8–2.0 ns | ~500–550 M/s | ~1.5× |
+| `native/abi_marshalled` | ptr-in / ptr-out ABI convention, **statically linked** | ~2.1 ns | ~480 M/s | ~1.6× |
+| `polyplug/dispatch` | **resolved contract dispatch over a loaded Rust `.so`** | ~2.3 ns | ~430 M/s | ~1.8× |
+| `polyplug/dispatch_cpp` | the same, dispatching a **C++**-authored plugin | ~2.5 ns | ~400 M/s | ~1.9× |
 
 _(Numbers from one developer machine — treat the **ratios**, not the absolute
 ns, as the result; they move with CPU but the ordering and gaps are stable. The
@@ -340,16 +355,16 @@ chart above is regenerated from the same run by `scripts/gen_bench_charts.py`.)_
 
 **What the numbers say:**
 
-- **polyplug's safe dispatch costs ~0.5 ns more than hand-rolled raw FFI**
-  (2.3 ns vs 1.8 ns) — roughly a single L1 cache hit — for full type-checked
+- **polyplug's safe dispatch costs ~0.3–0.5 ns more than hand-rolled raw FFI**
+  (~2.3 ns vs ~1.8–2.0 ns) — roughly a single L1 cache hit — for full type-checked
   registration, lifecycle management, hot-reload, and retire-not-drop safety.
 - **Most of that gap is the calling convention, not dispatch.** The
   `abi_marshalled` arm pays 2.1 ns with *no dynamic library at all*: passing a
   struct by pointer and writing the result through an out-pointer is inherently
   a touch more than passing a `u32` in a register. Crossing the `.so` boundary
   on top of that adds only ~0.2 ns.
-- Both FFI paths are within **2×** of a function call the compiler is *forbidden
-  to inline*. At **~440 million calls/second**, the safety boundary is free for
+- Both FFI paths are within **~2×** of a function call the compiler is *forbidden
+  to inline*. At **~430 million calls/second**, the safety boundary is free for
   any workload that does real work per call.
 
 The honest framing: a *direct* call (arm 1) is genuinely cheaper — it has no
@@ -496,7 +511,8 @@ for data in dataset:
 
 ### 3. Choose the Right Language
 
-For hot paths called millions of times:
+For hot paths called millions of times (estimated host-call overheads — see
+[Reaching the runtime](#reaching-the-runtime-host-call-overhead)):
 - C++: ~10-20 ns overhead
 - Python ctypes: ~670 ns overhead
 - Difference: 30-60x
@@ -593,7 +609,7 @@ arena helper.
 | Lua (LuaJIT) guest returns | Yes | `_polyplug_arena_alloc` bridge → `alloc_string_arena` in the guest SDK |
 | Rust host callers | Yes | per-caller `CallArena` field threaded into VM dispatch when a return needs it |
 | Native Rust / C++ / C# guest returns | N/A | returns are already **borrowed zero-allocation views** into guest-owned memory — nothing to allocate, so no arena is needed |
-| Python guest returns | N/A | Python guests dispatch through **`DispatchType::Native`** (ctypes function pointers); the native ABI signature carries no arena, exactly like native Rust/C++ |
+| Python (CPython) guest returns | Yes | Python guests register **`DispatchType::VirtualMachine`** (`polyplug_python` loader); the `_polyplug_arena_alloc` bridge injected into the plugin module writes returns into the per-call arena |
 
 ### Null-arena fallback
 
@@ -629,21 +645,23 @@ QuickJS guest plugins use a cached Context architecture for minimal dispatch ove
 │   2. func.clone().restore(&ctx)       // ~10-50 ns              │
 │   3. func.call(args)                  // JS execution           │
 │                                                                  │
-│   Total overhead: ~75 ns (excluding JS execution time)          │
+│   Total overhead: ~80–100 ns warm (cached_context_single_call,  │
+│   excluding JS execution time)                                  │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 #### Benchmark Results
 
-| Benchmark | Time | Description |
-|-----------|------|-------------|
-| `cached_context_single_call` | **90-100 ns** | Single dispatch with cached Context |
-| `cached_context_10_calls` | 674-716 ns | 10 calls (~67-72 ns/call) |
+The canonical QuickJS numbers (one table, quoted everywhere) live in the
+[QuickJS guest-dispatch table](#quickjs-js-guest-plugins) under
+*Calling into a plugin* below: **~80–100 ns** per warm single dispatch
+(`cached_dispatch/cached_context_single_call`), amortizing to **~70 ns/call**
+over a 10-call batch (`cached_context_10_calls`).
 
 #### Why This Is Minimal Overhead
 
-The ~85 ns overhead is the theoretical minimum for QuickJS dispatch:
+The ~80–100 ns warm overhead is close to the floor for QuickJS dispatch:
 
 | Component | Time | Description |
 |-----------|------|-------------|
@@ -651,7 +669,7 @@ The ~85 ns overhead is the theoretical minimum for QuickJS dispatch:
 | `Persistent::clone()` | ~10-20 ns | Clone the persistent reference |
 | `restore(&ctx)` | ~30-50 ns | Restore JS function in context |
 | JS function call overhead | ~10-20 ns | QuickJS internal dispatch |
-| **Total** | **~60-100 ns** | **Cannot be reduced further** |
+| **Total** | **~80–100 ns measured** | components are estimates; the total is the measured arm |
 
 This overhead cannot be eliminated because:
 1. QuickJS requires a context scope for any JS operation
@@ -668,15 +686,8 @@ Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
 
 #### Comparison with Other VM Loaders
 
-| Loader | Dispatch Overhead | Architecture |
-|--------|-------------------|--------------|
-| **Native** | ~2 ns | Direct function pointer |
-| **.NET** | **~8 ns** | CLR `[UnmanagedCallersOnly]` function pointer |
-| **Lua** | **~35 ns** | LuaJIT FFI + mlua |
-| **QuickJS** | **~95 ns** | Per-bundle Runtime + Cached Context |
-| **Python** | ~13 µs (GIL) / ~63 ns (cached) | PyO3 GIL + callable |
-
-**.NET dispatch is near-native** thanks to `[UnmanagedCallersOnly]` function pointers. Lua is the fastest VM loader due to LuaJIT's extremely efficient FFI.
+See the canonical [Summary table](#summary) under *Calling into a plugin*
+below — all loaders, one table, no duplicate copies to drift.
 
 ---
 
@@ -721,8 +732,8 @@ a `find_guest_contract` + `resolve_guest_contract` registry lookup before dispat
 
 | Benchmark | Time | Description |
 |-----------|------|-------------|
-| `cached_context_single_call` | **90-100 ns** | Single dispatch with cached Context |
-| `cached_context_10_calls` | 674-716 ns | 10 calls (~67-72 ns/call) |
+| `cached_context_single_call` | **~80–100 ns** | Single warm dispatch with cached Context — the canonical QuickJS per-call figure |
+| `cached_context_10_calls` | ~670–730 ns | 10 calls (~70 ns/call amortized) |
 
 ### Lua (LuaJIT Guest Plugins)
 
@@ -740,18 +751,28 @@ a `find_guest_contract` + `resolve_guest_contract` registry lookup before dispat
 
 | Benchmark | Time | Description |
 |-----------|------|-------------|
-| `gil_acquire_and_call` | **12.7-13.8 µs** | GIL acquisition + function call |
-| `gil_acquire_and_10_calls` | 12.8-12.9 µs | GIL + 10 calls (GIL amortized) |
-| `gil_acquire_only` | 37 ns | GIL acquisition only |
-| `cached_python_single_call` | **59-67 ns** | Cached function (GIL already held) |
-| `cached_python_10_calls` | 290-335 ns | 10 cached calls (~29-34 ns/call) |
+| `gil_acquire_and_call` | **~12-14 µs** | What the arm literally times: attach to the interpreter **+ define `noop_dispatch` from source (`py.run`) + look it up + call it**, all per iteration |
+| `gil_acquire_and_10_calls` | ~12-13 µs | Same arm with 10 calls inside one acquisition (per-call cost amortizes) |
+| `gil_acquire_only` | ~35-37 ns | GIL acquisition alone |
+| `cached_python_single_call` | **~60-67 ns** | Cached function (GIL already held) |
+| `cached_python_10_calls` | ~290-335 ns | 10 cached calls (~29-34 ns/call) |
 
 > The Python warm-dispatch arm is named `cached_python_*` (not `cached_function_*`)
 > so it does not collide with the Lua bench's identically-grouped `cached_function_*`
 > — both write to the shared `cached_dispatch` criterion group, and a shared id would
 > overwrite the other loader's data.
 
-**Key insight**: Python's GIL acquisition dominates overhead (~13 µs). Once GIL is held, cached dispatch is fast (~63 ns). For batch operations, acquire GIL once and make multiple calls.
+**Key insight — and an open discrepancy**: the measured numbers do not add up
+to a "the GIL costs ~13 µs" story. `gil_acquire_and_call` measures ~12-14 µs,
+but `gil_acquire_only` measures only ~35-37 ns and a cached call with the GIL
+held is ~60-67 ns — so GIL acquisition alone cannot explain the ~12 µs arm.
+Reading the bench source, that arm also *defines its Python function from
+source (`py.run`) on every iteration*, so it times far more than "acquire +
+call"; exactly how the ~12 µs splits is **under investigation** (a follow-up
+benchmark task will isolate it). What the data does support: warm cached
+dispatch is ~60-67 ns, and batching many calls inside one acquisition
+amortizes the expensive arm (`gil_acquire_and_10_calls` ≈
+`gil_acquire_and_call`).
 
 ### .NET (CLR Guest Plugins)
 
@@ -770,17 +791,17 @@ a `find_guest_contract` + `resolve_guest_contract` registry lookup before dispat
 | **Native** | ~2 ns | Maximum performance |
 | **.NET** | ~7-11 ns | Near-native with CLR ecosystem |
 | **Lua** | ~35 ns | Fastest VM dispatch, embedded scripting |
-| **QuickJS** | ~80 ns | Fast VM dispatch, JS ecosystem |
-| **Python** | ~13 µs (GIL) / ~60 ns (cached) | Data science, ML ecosystem |
+| **QuickJS** | ~80–100 ns (`cached_context_single_call`) | Fast VM dispatch, JS ecosystem |
+| **Python** | ~60 ns warm (cached, GIL held); cold arm ~12-14 µs (under investigation) | Data science, ML ecosystem |
 
 ### Performance Insights
 
 1. **Native is zero overhead** - Direct function pointer calls
 2. **.NET is near-native** - `[UnmanagedCallersOnly]` enables ~7-11 ns dispatch through CLR
 3. **Lua is the fastest VM loader** - LuaJIT's FFI provides ~35 ns dispatch
-4. **QuickJS follows closely** - ~80 ns with cached context architecture
-5. **Python's GIL is the bottleneck** - ~13 µs to acquire GIL, but only ~60 ns once held
-6. **All VM loaders are "fast enough"** - Even Python's 13 µs is negligible for functions >100 µs
+4. **QuickJS follows closely** - ~80–100 ns with cached context architecture
+5. **Python warm dispatch is ~60 ns** - the cold `gil_acquire_and_call` arm measures ~12-14 µs, which GIL acquisition alone (~37 ns) does not explain; under investigation
+6. **All VM loaders are "fast enough"** - even a ~12-14 µs cold call is negligible for functions >100 µs
 
 ---
 
