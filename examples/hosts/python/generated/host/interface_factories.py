@@ -4,120 +4,93 @@
 
 from __future__ import annotations
 import ctypes
-from typing import Callable, Any
 from polyplug_abi import (
-    AbiError,
     AbiErrorCode,
     Buffer,
-    DispatchMechanisms,
     DispatchType,
     HostContractInterface,
-    NativeDispatch,
     StringView,
     Version,
-    VmDispatch,
 )
 from host.contracts import HostLogger
 from host.types import LogLevel
 
-# Create a host contract interface for `host.logger` with NATIVE dispatch.
-#
-# Takes an implementation instance and creates an interface.
-# The implementation must inherit from the ABC class.
-#
-# Memory:
-# The returned interface is cached and lives for the lifetime of the program.
-def create_host_logger_interface(impl: HostLogger) -> HostContractInterface:
-    global _HostLogger_impl
-    _HostLogger_impl = impl
+# ctypes callbacks cannot return structs by value ("invalid result type
+# for callback function"), so host contracts are registered with VM
+# dispatch routed through the native trampoline exported by the python
+# loader cdylib (polyplug_python_host_vm_dispatch in polyplug_python);
+# the per-contract marshalling lives in a scalar-only ctypes dispatcher.
+_HOST_DISPATCH_CALLBACK_CTYPE = ctypes.CFUNCTYPE(
+    ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p
+)
 
-    @ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
-    def _host_logger_log_thunk(impl_ptr: int, args: int, out: int) -> AbiError:
-        try:
-            impl = _HostLogger_impl
-            if impl is None:
-                return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))
-            message_sv: StringView = ctypes.cast(args, ctypes.POINTER(StringView)).contents
-            message: str = ctypes.string_at(message_sv.ptr, message_sv.len).decode('utf-8')
-            impl.log(message)
-            _ = out
-            return AbiError(code=AbiErrorCode.Ok, message=StringView(ptr=0, len=0))
-        except Exception:
-            return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))
 
-    @ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
-    def _host_logger_log_with_level_thunk(impl_ptr: int, args: int, out: int) -> AbiError:
-        try:
-            impl = _HostLogger_impl
-            if impl is None:
-                return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))
-            class LOG_WITH_LEVELArgs(ctypes.Structure):
-                _fields_ = [
-                    ("level", LogLevel),
-                    ("message", StringView),
-                ]
-            packed: LOG_WITH_LEVELArgs = ctypes.cast(args, ctypes.POINTER(LOG_WITH_LEVELArgs)).contents
-            level: LogLevel = packed.level
-            message: str = ctypes.string_at(packed.message.ptr, packed.message.len).decode('utf-8')
-            impl.log_with_level(level, message)
-            _ = out
-            return AbiError(code=AbiErrorCode.Ok, message=StringView(ptr=0, len=0))
-        except Exception:
-            return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))
+class _PolyplugPythonHostDispatchBridge(ctypes.Structure):
+    """Mirrors PolyplugPythonHostDispatchBridge (crates/polyplug_python/src/ffi.rs)."""
 
-    functions = [
-        ctypes.cast(_host_logger_log_thunk, ctypes.c_void_p),
-        ctypes.cast(_host_logger_log_with_level_thunk, ctypes.c_void_p),
+    _fields_ = [("callback", _HOST_DISPATCH_CALLBACK_CTYPE)]
+
+
+class _HostLoggerLogWithLevelArgs(ctypes.Structure):
+    _fields_ = [
+        ("level", ctypes.c_uint32),
+        ("message", StringView),
     ]
-    functions_array = (ctypes.c_void_p * 2)(*functions)
 
-    interface = HostContractInterface()
-    interface.contract_id = 0xF53EB5F2845853BB
-    interface.contract_version = Version(major=1, minor=0, patch=0)
-    interface.singleton = False
-    interface.dispatch_type = DispatchType.Native
-    interface.runtime = 0  # Set by runtime during registration
-    # The managed implementation lives in a module global (Python objects
-    # cannot be stored in a raw c_void_p); user_data is unused for this path.
-    interface.user_data = 0
-    interface.create_instance = ctypes.cast(None, type(interface.create_instance))
-    interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))
-    interface.dispatch.native.function_count = 2
-    interface.dispatch.native.functions = ctypes.cast(functions_array, ctypes.c_void_p)
-    # Anchor the function-pointer array on the interface object so it
-    # outlives this factory call (ctypes does not keep it alive).
-    interface._keepalive = (functions_array,)
 
-    return interface
-
-_HostLogger_impl: HostLogger | None = None
-
-# Create a host contract interface for `host.logger` with VM dispatch.
-#
-# Used when the host implementation is in a VM language (Python, Lua, JS).
+# Create a host contract interface for `host.logger` (VM dispatch via the python
+# loader trampoline — see the module header for why native dispatch is
+# impossible under ctypes).
 #
 # Arguments:
-#     bridge_data: Opaque pointer to VM-specific data
-#     dispatch_fn: Function to call for each contract function
+#     impl: implementation instance (must inherit from the ABC class)
+#     python_bridge_lib: ctypes.CDLL handle for the python loader cdylib
+#         (libpolyplug_python), e.g. polyplug_loaders_python.bridge_lib()
 #
 # Memory:
-# The returned interface is cached and lives for the lifetime of the program.
-def create_host_logger_interface_vm(
-    dispatch_fn: Callable[[int, int, int, int], int],
-) -> HostContractInterface:
+# The returned interface (with the dispatcher and bridge anchored on its
+# `_keepalive`) must stay alive for the lifetime of the program.
+def create_host_logger_interface(impl: HostLogger, python_bridge_lib: ctypes.CDLL) -> HostContractInterface:
+    @_HOST_DISPATCH_CALLBACK_CTYPE
+    def _dispatch(fn_id: int, args: int, out: int) -> int:
+        try:
+            if fn_id == 0:
+                message_sv: StringView = ctypes.cast(args, ctypes.POINTER(StringView)).contents
+                message: str = ctypes.string_at(message_sv.ptr, message_sv.len).decode('utf-8')
+                impl.log(message)
+                return AbiErrorCode.Ok
+            if fn_id == 1:
+                packed: _HostLoggerLogWithLevelArgs = ctypes.cast(args, ctypes.POINTER(_HostLoggerLogWithLevelArgs)).contents
+                level: LogLevel = LogLevel(packed.level)
+                message: str = ctypes.string_at(packed.message.ptr, packed.message.len).decode('utf-8')
+                impl.log_with_level(level, message)
+                return AbiErrorCode.Ok
+            return AbiErrorCode.FunctionNotAvailable
+        except Exception:
+            return AbiErrorCode.Panic
+
+    bridge = _PolyplugPythonHostDispatchBridge(callback=_dispatch)
+
     interface = HostContractInterface()
     interface.contract_id = 0xF53EB5F2845853BB
     interface.contract_version = Version(major=1, minor=0, patch=0)
     interface.singleton = False
     interface.dispatch_type = DispatchType.VirtualMachine
     interface.runtime = 0  # Set by runtime during registration
-    interface.user_data = 0  # VM dispatch routes through dispatch.vm.loader_data
-    interface.create_instance = ctypes.cast(None, type(interface.create_instance))
-    interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))
-    vm_call_cfunc = type(interface.dispatch.vm.call)(dispatch_fn)
-    interface.dispatch.vm.call = vm_call_cfunc
-    interface.dispatch.vm.loader_data = VmDispatch().loader_data
-    interface._keepalive = (vm_call_cfunc,)
+    # Opaque NON-NULL instance token: the native create_instance stub
+    # returns user_data as the instance data and guest callers treat a
+    # null instance.data as "contract unavailable".
+    interface.user_data = ctypes.addressof(bridge)
+    # ctypes cannot create struct-returning callbacks, so the instance
+    # stubs and the VM dispatch trampoline are NATIVE functions exported
+    # by the python loader cdylib.
+    interface.create_instance = ctypes.cast(python_bridge_lib.polyplug_python_host_create_instance, type(interface.create_instance))
+    interface.destroy_instance = ctypes.cast(python_bridge_lib.polyplug_python_host_destroy_instance, type(interface.destroy_instance))
+    interface.dispatch.vm.call = ctypes.cast(python_bridge_lib.polyplug_python_host_vm_dispatch, type(interface.dispatch.vm.call))
+    interface.dispatch.vm.loader_data.data = ctypes.addressof(bridge)
+    # Anchor the bridge, dispatcher callback, and implementation on the
+    # interface object so they outlive this factory call.
+    interface._keepalive = (bridge, _dispatch, impl)
 
     return interface
 

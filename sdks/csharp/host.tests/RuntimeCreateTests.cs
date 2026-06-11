@@ -21,22 +21,68 @@ namespace Polyplug.Host.Tests
         }
 
         /// <summary>
-        /// Resolve the polyplug core cdylib from POLYPLUG_LIB so the native
-        /// import target resolves to the freshly built core rather than a stale
-        /// copy in the test output directory.
+        /// Resolve the polyplug core cdylib. POLYPLUG_LIB wins (so CI points the
+        /// suite at the freshly built core); otherwise the workspace target
+        /// directory is probed relative to the test assembly. There is NO silent
+        /// skip: when neither resolves, the suite fails loudly with instructions —
+        /// a test run that quietly no-ops hides exactly the never-run breakage
+        /// class these tests exist to catch.
         /// </summary>
-        private static void InstallNativeLibraryResolver()
+        private static string ResolveCoreLibrary()
         {
-            string? corePath = Environment.GetEnvironmentVariable("POLYPLUG_LIB");
-            if (string.IsNullOrEmpty(corePath))
+            string? fromEnv = Environment.GetEnvironmentVariable("POLYPLUG_LIB");
+            if (!string.IsNullOrEmpty(fromEnv) && File.Exists(fromEnv))
             {
-                return;
+                return Path.GetFullPath(fromEnv);
             }
 
-            string? depsDir = Path.GetDirectoryName(Path.GetFullPath(corePath));
+            // Probe the cargo target dir of the enclosing workspace (the test
+            // assembly lives under sdks/csharp/host.tests/bin/...).
+            DirectoryInfo? dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Cargo.toml")))
+            {
+                dir = dir.Parent;
+            }
+
+            string libFileName = OperatingSystem.IsWindows()
+                ? "polyplug.dll"
+                : OperatingSystem.IsMacOS()
+                    ? "libpolyplug.dylib"
+                    : "libpolyplug.so";
+
+            if (dir is not null)
+            {
+                string[] candidates = new[]
+                {
+                    Path.Combine(dir.FullName, "target", "release", libFileName),
+                    Path.Combine(dir.FullName, "target", "release", "deps", libFileName),
+                    Path.Combine(dir.FullName, "target", "debug", libFileName),
+                    Path.Combine(dir.FullName, "target", "debug", "deps", libFileName),
+                };
+                foreach (string candidate in candidates)
+                {
+                    if (File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"{libFileName} not found. Set POLYPLUG_LIB to the built core cdylib " +
+                $"(e.g. `export POLYPLUG_LIB=$PWD/target/release/{libFileName}` after " +
+                "`cargo build --release -p polyplug`) or build the workspace so " +
+                $"target/{{release,debug}}/{libFileName} exists.");
+        }
+
+        private static void InstallNativeLibraryResolver()
+        {
+            string corePath = ResolveCoreLibrary();
+            string? depsDir = Path.GetDirectoryName(corePath);
             if (depsDir is null)
             {
-                return;
+                throw new InvalidOperationException(
+                    $"resolved core cdylib path has no directory: {corePath}");
             }
 
             DllImportResolver resolver = (string libraryName, Assembly assembly, DllImportSearchPath? searchPath) =>
@@ -57,19 +103,9 @@ namespace Polyplug.Host.Tests
             NativeLibrary.SetDllImportResolver(typeof(Runtime).Assembly, resolver);
         }
 
-        private static bool NativeLibAvailable()
-        {
-            return !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("POLYPLUG_LIB"));
-        }
-
         [Fact]
         public void DefaultRuntimeCreateAndDispose()
         {
-            if (!NativeLibAvailable())
-            {
-                return;
-            }
-
             Runtime runtime = new RuntimeBuilder().Build();
             Assert.NotEqual(nint.Zero, runtime.HostHandle);
             GC.KeepAlive(runtime);
@@ -78,11 +114,6 @@ namespace Polyplug.Host.Tests
         [Fact]
         public void RuntimeCreateWithHotReloadConfig()
         {
-            if (!NativeLibAvailable())
-            {
-                return;
-            }
-
             bool callbackRegistered = false;
             Runtime runtime = new RuntimeBuilder()
                 .OnReload(_ => callbackRegistered = true)
@@ -99,11 +130,6 @@ namespace Polyplug.Host.Tests
         [Fact]
         public void ReloadCallbacksArePerInstance()
         {
-            if (!NativeLibAvailable())
-            {
-                return;
-            }
-
             // Rule 12: each runtime owns its reload callback — building a second
             // runtime with a different callback must not clobber the first.
             bool firstFired = false;

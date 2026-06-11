@@ -70,7 +70,9 @@ function echo(argsPtr, outPtr) {
     }
 }
 
-function polyplug_init(rt_ctx, host_vtable, ctx) {
+// The loader calls polyplug_init with the HostApi and BundleInitContext
+// pointers split into 32-bit lo/hi f64 halves: (host_lo, host_hi, ctx_lo, ctx_hi).
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
     // Canonical contract id: fnv1a_64("guest_contract:test.add@1") = 0x40244DF59FCBECB6.
     // Passed split into 32-bit halves; the loader recomposes (hi << 32 | lo).
     var vtable = {

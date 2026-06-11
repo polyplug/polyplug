@@ -6,6 +6,14 @@ use core::ffi::c_void;
 
 use polyplug::loader::BundleLoader;
 use polyplug::logger::LoggerHandle;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
+use polyplug_abi::CallArena;
+use polyplug_abi::GuestContractInstance;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
+use polyplug_abi::StringView;
+use polyplug_abi::VmLoaderData;
 use polyplug_abi::types::LogLevel;
 
 use crate::{PythonLoader, config::PythonConfig};
@@ -18,6 +26,119 @@ use crate::{PythonLoader, config::PythonConfig};
 pub struct PolyplugPythonConfig {
     pub min_version_ptr: *const u8,
     pub min_version_len: usize,
+}
+
+// ─── Host-contract bridge for ctypes hosts ───────────────────────────────────
+//
+// ctypes callbacks cannot return structs by value ("invalid result type for
+// callback function"), so a Python host can never produce the native-dispatch
+// thunk signature (`AbiError` return), the VM-dispatch `call` signature
+// (struct parameters AND struct return), or a `create_instance` returning
+// `HostContractInstance` by value. The generated Python host interface
+// factories therefore register host contracts with VM dispatch whose `call`
+// points at `polyplug_python_host_vm_dispatch` below; the trampoline forwards
+// to a scalar-only ctypes callback (`u32 (*)(u32, const void*, void*)`)
+// stored in a `PolyplugPythonHostDispatchBridge` carried via
+// `VmDispatch.loader_data`. This mirrors the LuaJIT bridge in
+// `crates/polyplug_lua/src/ffi.rs` (same struct-return NYI class).
+
+/// Bridge between the ABI VM-dispatch convention and a ctypes-creatable callback.
+#[repr(C)]
+pub struct PolyplugPythonHostDispatchBridge {
+    /// Scalar-only dispatch callback: `(fn_id, args, out) -> AbiErrorCode as u32`.
+    pub callback: Option<unsafe extern "C" fn(u32, *const c_void, *mut c_void) -> u32>,
+}
+
+/// VM-dispatch trampoline for host contracts implemented in a ctypes host.
+///
+/// Matches `VmDispatch.call`. Routes the call to the scalar ctypes callback in
+/// the `PolyplugPythonHostDispatchBridge` carried by `loader_data` and widens
+/// the returned `u32` code into an `AbiError` (static message).
+///
+/// # Safety
+/// `loader_data.data` must be null or point to a live
+/// `PolyplugPythonHostDispatchBridge` that outlives every dispatch through the
+/// registered interface (the generated factory anchors it on the interface's
+/// keepalive tuple). `args`/`out` follow the per-function ABI marshalling
+/// contract and are passed through untouched.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_python_host_vm_dispatch(
+    loader_data: VmLoaderData,
+    _instance: GuestContractInstance,
+    fn_id: u32,
+    args: *const (),
+    out: *mut (),
+    _arena: *mut CallArena,
+) -> AbiError {
+    let bridge_ptr: *const PolyplugPythonHostDispatchBridge =
+        loader_data.data as *const PolyplugPythonHostDispatchBridge;
+    if bridge_ptr.is_null() {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::from_static(b"python host dispatch bridge is null"),
+        };
+    }
+    // SAFETY: bridge_ptr is non-null (checked above) and points to a live
+    // PolyplugPythonHostDispatchBridge per this function's safety contract.
+    let callback: Option<unsafe extern "C" fn(u32, *const c_void, *mut c_void) -> u32> =
+        unsafe { (*bridge_ptr).callback };
+    match callback {
+        Some(cb) => {
+            // SAFETY: cb is the ctypes callback installed by the generated
+            // factory; args/out are forwarded untouched per the dispatch contract.
+            let code: u32 = unsafe { cb(fn_id, args as *const c_void, out as *mut c_void) };
+            if code == AbiErrorCode::Ok as u32 {
+                AbiError::ok()
+            } else {
+                AbiError {
+                    code,
+                    message: StringView::from_static(b"python host contract returned error"),
+                }
+            }
+        }
+        None => AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::from_static(b"python host dispatch bridge has no callback"),
+        },
+    }
+}
+
+/// `create_instance` stub for host contracts registered by a ctypes host.
+///
+/// ctypes callbacks cannot return `HostContractInstance` by value, so the
+/// generated factory installs this native stub. The instance is the
+/// registrant-owned `user_data` pointer (self-passing pattern).
+///
+/// # Safety
+/// `this` must be null or a valid `HostContractInterface` pointer (the runtime
+/// always passes the registered interface).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_python_host_create_instance(
+    this: *const HostContractInterface,
+    _args: *const c_void,
+) -> HostContractInstance {
+    if this.is_null() {
+        return HostContractInstance::null();
+    }
+    HostContractInstance {
+        // SAFETY: this is non-null (checked above) and points at the registered
+        // interface per the self-passing ABI contract; user_data is registrant-owned.
+        data: unsafe { (*this).user_data },
+    }
+}
+
+/// `destroy_instance` stub for host contracts registered by a ctypes host.
+///
+/// The instance is the registrant-owned `user_data` (see
+/// `polyplug_python_host_create_instance`) — nothing to free.
+///
+/// # Safety
+/// Always safe; both parameters are ignored.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_python_host_destroy_instance(
+    _this: *const HostContractInterface,
+    _instance: HostContractInstance,
+) {
 }
 
 /// Create a heap-allocated `PythonLoader` and return it as an opaque pointer.

@@ -198,6 +198,21 @@ const _LOG_CALLBACK_TYPE = {
 };
 
 /**
+ * Decode `len` UTF-8 bytes at a raw pointer into a string.
+ *
+ * Deno's UnsafePointerView has no `getUtf8String` — only `getCString` (which
+ * needs a NUL terminator the ABI's StringView does not guarantee). Length-
+ * bounded UTF-8 must go through `getArrayBuffer` + TextDecoder.
+ * @param {Deno.PointerObject} ptr - Non-null pointer to UTF-8 bytes.
+ * @param {number} len - Byte count.
+ * @returns {string}
+ */
+function utf8At(ptr, len) {
+  const bytes = new Deno.UnsafePointerView(ptr).getArrayBuffer(len);
+  return new TextDecoder().decode(bytes);
+}
+
+/**
  * Decode a by-value StringView struct buffer ({ ptr @ 0, len @ 8 }) into a string.
  * @param {Uint8Array} svStruct - 16-byte StringView struct buffer.
  * @returns {string}
@@ -209,7 +224,7 @@ function decodeStringViewStruct(svStruct) {
   if (ptr === null || len === 0) {
     return "";
   }
-  return new Deno.UnsafePointerView(ptr).getUtf8String(len);
+  return utf8At(ptr, len);
 }
 
 /**
@@ -969,12 +984,12 @@ export function runtimeNew(lib, options = {}) {
             let bundleName = "";
             const bundleNamePtr = Deno.UnsafePointer.create(bundleNamePtrRaw);
             if (bundleNamePtr !== null && bundleNameLen > 0) {
-              bundleName = new Deno.UnsafePointerView(bundleNamePtr).getUtf8String(bundleNameLen);
+              bundleName = utf8At(bundleNamePtr, bundleNameLen);
             }
             let reason = "";
             const reasonPtr = Deno.UnsafePointer.create(reasonPtrRaw);
             if (reasonPtr !== null && reasonLen > 0) {
-              reason = new Deno.UnsafePointerView(reasonPtr).getUtf8String(reasonLen);
+              reason = utf8At(reasonPtr, reasonLen);
             }
             onReloadCallback(new ReloadPhase(phaseType, bundleId, bundleName, reason));
           } catch (e) {

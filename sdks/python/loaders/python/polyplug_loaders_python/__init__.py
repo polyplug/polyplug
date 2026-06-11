@@ -41,4 +41,15 @@ def register_python_loader(runtime: Runtime, min_version: str = "3.11") -> None:
     runtime.register_loader(_RUNTIME_NAME, loader_ptr)
 
 
-__all__ = ["register_python_loader"]
+def bridge_lib() -> ctypes.CDLL:
+    """Handle to the python loader cdylib for the host-contract bridge.
+
+    The generated host interface factories (host/interface_factories.py) need
+    the ``polyplug_python_host_*`` trampolines exported by this cdylib because
+    ctypes callbacks cannot return structs by value. The factories cast the
+    symbols themselves; this accessor only hands out the CDLL.
+    """
+    return _get_lib()
+
+
+__all__ = ["register_python_loader", "bridge_lib"]

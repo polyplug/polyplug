@@ -37,7 +37,7 @@ fn make_bundle_js(contract_id: u64, fn_count: u32, contract_name: &str) -> Strin
     let contract_hi: u32 = (contract_id >> 32) as u32;
     format!(
         r#"
-function polyplug_init(rt_ctx, host_vtable, ctx) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "{contract_name}",
@@ -241,7 +241,7 @@ fn load_bundle_with_functions_registers_correct_count() {
     // Bundle with 3 functions
     let bundle: String = format!(
         r#"
-function polyplug_init(rt_ctx, host_vtable, ctx) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "test.math",
@@ -494,7 +494,7 @@ fn bundle_path_global_is_injected() {
 if (typeof globalThis.bundlePath !== 'string') {{
     throw new Error('bundlePath not injected');
 }}
-function polyplug_init(rt_ctx, host_vtable, ctx) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "test.bundlepath",
@@ -556,7 +556,7 @@ for (var i = 0; i < methods.length; i++) {{
         throw new Error('missing method: ' + methods[i]);
     }}
 }}
-function polyplug_init(rt_ctx, host_vtable, ctx) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "test.methods",
@@ -640,7 +640,7 @@ fn vtable_uses_vm_dispatch() {
 
     let bundle: String = format!(
         r#"
-function polyplug_init(rt_ctx, host_vtable, ctx) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "test.vm_dispatch",
@@ -726,7 +726,7 @@ var ptr_hi = result[1];
 if (ptr_lo !== 0 || ptr_hi !== 0) {{
     polyplug.free(ptr_lo, ptr_hi, 64, 1);
 }}
-function polyplug_init(rt_ctx, host_vtable, ctx) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "test.memory",
@@ -1039,7 +1039,7 @@ if (result === '') {{
     throw new Error("expected empty string, got: " + result);
 }}
 
-function polyplug_init(rt_ctx, host_vtable, ctx) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     var vtable = {{
         contractLo: {},
         contractHi: {},
@@ -1441,7 +1441,7 @@ function callHost(argsPtr, outPtr) {{
     return polyplug.callHostContract({host_lo}, {host_hi}, 0x10000, {host_fn_id}, argsPtr, outPtr);
 }}
 
-function polyplug_init(rt_ctx, host_vtable, ctx) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     var vtable = {{
         contractLo: {guest_lo} >>> 0,
         contractHi: {guest_hi} >>> 0,
@@ -1723,5 +1723,147 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
             String::from("out of range level"),
         )),
         "expected out-of-range level 99 to clamp to Error, got: {captured:?}"
+    );
+}
+
+// ── polyplug_init returned AbiError ───────────────────────────────────────────
+
+/// A plugin whose `polyplug_init` registers a valid vtable but returns a
+/// non-zero AbiError must FAIL to load with that code and message. Before
+/// the fix the loader discarded the return value and treated the bundle
+/// as loaded.
+#[test]
+fn load_init_returning_error_code_fails_load() {
+    let bundle: &str = r#"
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
+    var vtable = {
+        functions: [function(args, out) { return 0; }]
+    };
+    polyplug.registerVtable(0x1, 0x0, vtable, 1, "test.initerr", 0x00010000);
+    return { code: 1, message: "init refused" };
+}
+"#;
+    let (_dir, path) = write_temp_bundle_with_name(bundle, "test.initerr");
+
+    let runtime: Arc<Runtime> = make_runtime();
+    let loader: JsLoader = make_loader();
+    let manifest: ManifestData = make_manifest(&path, "test.initerr");
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
+    assert!(result.is_err(), "non-zero init code must fail the load");
+    let err_str: String = result
+        .expect_err("expected Err for non-zero init code")
+        .to_string();
+    assert!(
+        err_str.contains("returned error code 1") && err_str.contains("init refused"),
+        "error must carry the returned code and message, got: {err_str}"
+    );
+}
+
+/// A bare numeric non-zero return from `polyplug_init` is also honored.
+#[test]
+fn load_init_returning_bare_error_number_fails_load() {
+    let bundle: &str = r#"
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
+    var vtable = {
+        functions: [function(args, out) { return 0; }]
+    };
+    polyplug.registerVtable(0x2, 0x0, vtable, 1, "test.initnum", 0x00010000);
+    return 3;
+}
+"#;
+    let (_dir, path) = write_temp_bundle_with_name(bundle, "test.initnum");
+
+    let runtime: Arc<Runtime> = make_runtime();
+    let loader: JsLoader = make_loader();
+    let manifest: ManifestData = make_manifest(&path, "test.initnum");
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
+    assert!(
+        result.is_err(),
+        "bare non-zero init number must fail the load"
+    );
+    let err_str: String = result
+        .expect_err("expected Err for bare non-zero init number")
+        .to_string();
+    assert!(
+        err_str.contains("returned error code 3"),
+        "error must carry the returned code, got: {err_str}"
+    );
+}
+
+// ── registerVtable malformed vtables ──────────────────────────────────────────
+
+/// A vtable without a `functions` array must fail the load with a precise
+/// error naming the missing field — not the misleading generic
+/// "polyplug_init did not call registerVtable".
+#[test]
+fn register_vtable_without_functions_array_fails_precisely() {
+    let bundle: &str = r#"
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
+    polyplug.registerVtable(0x3, 0x0, { notFunctions: [] }, 1, "test.malformed", 0x00010000);
+    return { code: 0, message: null };
+}
+"#;
+    let (_dir, path) = write_temp_bundle_with_name(bundle, "test.malformed");
+
+    let runtime: Arc<Runtime> = make_runtime();
+    let loader: JsLoader = make_loader();
+    let manifest: ManifestData = make_manifest(&path, "test.malformed");
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
+    assert!(result.is_err(), "malformed vtable must fail the load");
+    let err_str: String = result
+        .expect_err("expected Err for malformed vtable")
+        .to_string();
+    assert!(
+        err_str.contains("no 'functions' array"),
+        "error must name the missing functions array, got: {err_str}"
+    );
+    assert!(
+        !err_str.contains("did not call registerVtable"),
+        "error must not blame the bundle for skipping registerVtable, got: {err_str}"
+    );
+}
+
+/// A vtable whose declared fnCount exceeds the functions array must fail
+/// the load naming the missing index.
+#[test]
+fn register_vtable_with_short_functions_array_fails_precisely() {
+    let bundle: &str = r#"
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
+    var vtable = {
+        functions: [function(args, out) { return 0; }]
+    };
+    polyplug.registerVtable(0x4, 0x0, vtable, 2, "test.short", 0x00010000);
+    return { code: 0, message: null };
+}
+"#;
+    let (_dir, path) = write_temp_bundle_with_name(bundle, "test.short");
+
+    let runtime: Arc<Runtime> = make_runtime();
+    let loader: JsLoader = make_loader();
+    let manifest: ManifestData = make_manifest(&path, "test.short");
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        &manifest,
+        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &runtime,
+    );
+    assert!(result.is_err(), "short functions array must fail the load");
+    let err_str: String = result
+        .expect_err("expected Err for short functions array")
+        .to_string();
+    assert!(
+        err_str.contains("functions[1] is missing"),
+        "error must name the missing function index, got: {err_str}"
     );
 }

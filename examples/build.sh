@@ -63,7 +63,7 @@ if [ -f "hosts/csharp/Program.cs" ]; then
 fi
 
 # Build Python host (script, no build needed)
-if [ -f "hosts/python/host.py" ]; then
+if [ -f "hosts/python/main.py" ]; then
     echo "  ✓ python host (script)"
 fi
 

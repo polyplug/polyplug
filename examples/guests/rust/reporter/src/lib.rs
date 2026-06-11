@@ -17,10 +17,12 @@ impl DataReporterGuestContract for Plugin {
         // duration of this call, per the ABI contract for dispatch arguments.
         let s: &str = unsafe { to_str(&input) };
 
-        // Try to get host logger and log messages
+        // Try to get host logger and log messages.
+        // min_version is PACKED (major << 16 | minor): request major 1, minor 0.
+        // A bare `1` would request major 0 / minor 1 and never match.
         // SAFETY: get_host_vtable() returns a valid pointer or null
         let logger: Option<HostLoggerCaller> =
-            unsafe { HostLoggerCaller::from_host(get_host_vtable(), 1) };
+            unsafe { HostLoggerCaller::from_host(get_host_vtable(), 0x0001_0000) };
 
         if let Some(ref logger) = logger
             && logger.is_valid()

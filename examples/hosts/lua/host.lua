@@ -13,6 +13,9 @@ local abi = require('polyplug_abi')
 -- Required AFTER polyplug/polyplug_abi so the ffi.cdef ABI types the callers
 -- reference (GuestContractInterface, AbiError, StringView, ...) are defined.
 local callers = require('generated.host.callers')
+-- Generated host-contract interface factories (host.logger). Also required
+-- AFTER polyplug_abi for the same cdef ordering reason.
+local interface_factories = require('generated.host.interface_factories')
 
 -- Allow overriding the core library via POLYPLUG_LIB (verify_hosts.sh sets it).
 local lib_override = os.getenv('POLYPLUG_LIB')
@@ -107,6 +110,25 @@ for _, loader in ipairs(loaders) do
         io.stderr:write('  loader ' .. loader.name .. ' unavailable: ' .. tostring(err) .. '\n')
     end
 end
+
+-- Host-side implementation of the `host.logger` contract, registered through
+-- the GENERATED interface factory so plugins can call back into the host
+-- (mirrors the rust/cpp reference hosts' ConsoleLogger).
+local ConsoleLogger = {}
+
+function ConsoleLogger:log(message)
+    print('[plugin] ' .. message)
+end
+
+function ConsoleLogger:log_with_level(level, message)
+    local level_names = { [0] = 'DEBUG', [1] = 'INFO', [2] = 'WARN', [3] = 'ERROR' }
+    local level_str = level_names[tonumber(level)] or 'INFO'
+    print(string.format('[plugin][%s] %s', level_str, message))
+end
+
+local logger_iface = interface_factories.create_host_logger_interface(
+    ConsoleLogger, lua_loader.bridge_lib())
+rt:register_host_contract(logger_iface)
 
 local bundle_dirs = list_bundle_dirs(plugin_path)
 if #bundle_dirs == 0 then

@@ -31,4 +31,14 @@ function M.register(rt)
     rt:register_loader("lua", loader)
 end
 
+--- Handle to the lua loader cdylib for the host-contract bridge.
+-- The generated host interface factories (host/interface_factories.lua) need
+-- the `polyplug_lua_host_*` trampolines exported by this cdylib because LuaJIT
+-- callbacks cannot return structs by value. The trampoline cdefs live in the
+-- generated factories file; this accessor only hands out the clib.
+-- @return clib  ffi.load handle for libpolyplug_lua.
+function M.bridge_lib()
+    return get_lib()
+end
+
 return M

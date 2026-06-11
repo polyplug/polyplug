@@ -8,6 +8,7 @@ use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
+use crate::ir::ReprType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
@@ -1967,7 +1968,11 @@ fn generate_host_contracts_stub(ir: &ValidatedIr) -> String {
 // ─── Guest Host Contract Caller Generation ─────────────────────────────────────
 
 /// Generate one guest-side host contract caller class.
-fn generate_python_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+fn generate_python_guest_host_contract_caller(
+    out: &mut String,
+    contract: &ResolvedHostContract,
+    enums: &[EnumDef],
+) {
     let class_name: String = host_contract_name_to_python_caller(&contract.name);
 
     out.push_str(&format!(
@@ -2011,14 +2016,18 @@ fn generate_python_guest_host_contract_caller(out: &mut String, contract: &Resol
     out.push_str("        return self._interface != 0\n\n");
 
     for func in &contract.functions {
-        generate_python_guest_host_contract_method(out, func);
+        generate_python_guest_host_contract_method(out, func, enums);
     }
 
     out.push('\n');
 }
 
 /// Generate one method for a guest-side host contract caller.
-fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedFunction) {
+fn generate_python_guest_host_contract_method(
+    out: &mut String,
+    func: &ResolvedFunction,
+    enums: &[EnumDef],
+) {
     let fn_id: u32 = func.function_id;
     let return_type: String = match &func.returns {
         Some(ty) => python_guest_caller_return_type_name(ty),
@@ -2053,7 +2062,7 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
     out.push_str("        iface: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractInterface)).contents\n");
     out.push_str("        dispatch_type: int = iface.dispatch_type\n");
 
-    emit_python_guest_host_contract_args_setup(out, func);
+    emit_python_guest_host_contract_args_setup(out, func, enums);
     emit_python_guest_host_contract_out_setup(out, &func.returns);
 
     out.push_str("        err: AbiError\n");
@@ -2104,7 +2113,11 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
 }
 
 /// Emit the args_ptr setup for a Python guest host contract method.
-fn emit_python_guest_host_contract_args_setup(out: &mut String, func: &ResolvedFunction) {
+fn emit_python_guest_host_contract_args_setup(
+    out: &mut String,
+    func: &ResolvedFunction,
+    enums: &[EnumDef],
+) {
     if func.params.is_empty() {
         out.push_str("        args_ptr: ctypes.c_void_p = ctypes.c_void_p()\n");
         return;
@@ -2138,10 +2151,24 @@ fn emit_python_guest_host_contract_args_setup(out: &mut String, func: &ResolvedF
                 ));
             }
             ResolvedTypeRef::UserDefined(_) => {
-                out.push_str(&format!(
-                    "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref({}), ctypes.c_void_p)\n",
-                    param.name
-                ));
+                // Enums are IntEnum values: ctypes.byref(IntEnum) is a
+                // TypeError, so box the raw repr integer instead.
+                if let Some(e) = python_enum_for_type(&param.ty, enums) {
+                    let raw_ctype: &str = python_ctype_for_repr(&e.repr);
+                    out.push_str(&format!(
+                        "        {name}_val: {raw_ctype} = {raw_ctype}(int({name}))\n",
+                        name = param.name
+                    ));
+                    out.push_str(&format!(
+                        "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref({name}_val), ctypes.c_void_p)\n",
+                        name = param.name
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref({}), ctypes.c_void_p)\n",
+                        param.name
+                    ));
+                }
             }
             ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => {
                 let ty_name: String = python_type_name(&param.ty);
@@ -2166,7 +2193,9 @@ fn emit_python_guest_host_contract_args_setup(out: &mut String, func: &ResolvedF
     out.push_str("        class _ArgsPack(ctypes.Structure):\n");
     out.push_str("            _fields_ = [\n");
     for param in &func.params {
-        let param_ty: String = python_type_name(&param.ty);
+        // Enum fields use their repr ctype: ctypes.Structure._fields_ rejects
+        // IntEnum classes with a TypeError at class-creation time.
+        let param_ty: String = python_pack_field_type(&param.ty, enums);
         out.push_str(&format!(
             "                (\"{}\", {}),\n",
             param.name, param_ty
@@ -2193,7 +2222,12 @@ fn emit_python_guest_host_contract_args_setup(out: &mut String, func: &ResolvedF
                 ));
             }
             _ => {
-                out.push_str(&format!("        args_val.{0} = {0}\n", param.name));
+                if python_enum_for_type(&param.ty, enums).is_some() {
+                    // IntEnum is an int subclass; store the raw repr integer.
+                    out.push_str(&format!("        args_val.{0} = int({0})\n", param.name));
+                } else {
+                    out.push_str(&format!("        args_val.{0} = {0}\n", param.name));
+                }
             }
         }
     }
@@ -2245,7 +2279,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     );
 
     for contract in &ir.host_contracts {
-        generate_python_guest_host_contract_caller(&mut out, contract);
+        generate_python_guest_host_contract_caller(&mut out, contract, &ir.enums);
     }
 
     // Emit contract ID constants
@@ -2515,18 +2549,13 @@ fn generate_python_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
-    out.push_str("from typing import Callable, Any\n");
     out.push_str("from polyplug_abi import (\n");
-    out.push_str("    AbiError,\n");
     out.push_str("    AbiErrorCode,\n");
     out.push_str("    Buffer,\n");
-    out.push_str("    DispatchMechanisms,\n");
     out.push_str("    DispatchType,\n");
     out.push_str("    HostContractInterface,\n");
-    out.push_str("    NativeDispatch,\n");
     out.push_str("    StringView,\n");
     out.push_str("    Version,\n");
-    out.push_str("    VmDispatch,\n");
     out.push_str(")\n");
 
     // Explicit imports only: a wildcard (`from host.contracts import *`)
@@ -2552,127 +2581,118 @@ fn generate_python_host_interface_factories_file(ir: &ValidatedIr) -> String {
     }
     out.push('\n');
 
+    // ctypes callbacks cannot return structs by value ("invalid result type
+    // for callback function"), so host contracts register with VM dispatch
+    // routed through the native trampoline exported by the python loader
+    // cdylib; the per-contract marshalling lives in a scalar-only ctypes
+    // dispatcher callback. Mirrors the LuaJIT bridge (same struct-return NYI).
+    out.push_str("# ctypes callbacks cannot return structs by value (\"invalid result type\n");
+    out.push_str("# for callback function\"), so host contracts are registered with VM\n");
+    out.push_str("# dispatch routed through the native trampoline exported by the python\n");
+    out.push_str("# loader cdylib (polyplug_python_host_vm_dispatch in polyplug_python);\n");
+    out.push_str("# the per-contract marshalling lives in a scalar-only ctypes dispatcher.\n");
+    out.push_str("_HOST_DISPATCH_CALLBACK_CTYPE = ctypes.CFUNCTYPE(\n");
+    out.push_str("    ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p\n");
+    out.push_str(")\n\n\n");
+    out.push_str("class _PolyplugPythonHostDispatchBridge(ctypes.Structure):\n");
+    out.push_str(
+        "    \"\"\"Mirrors PolyplugPythonHostDispatchBridge (crates/polyplug_python/src/ffi.rs).\"\"\"\n\n",
+    );
+    out.push_str("    _fields_ = [(\"callback\", _HOST_DISPATCH_CALLBACK_CTYPE)]\n\n\n");
+
+    // Module-level arg-pack structures for multi-parameter functions; the
+    // layout mirrors the guest-side callers' packs (same field order/types).
     for contract in &ir.host_contracts {
-        generate_python_host_interface_factory(&mut out, contract);
+        let class_name: String = host_contract_name_to_python_class(&contract.name);
+        for func in &contract.functions {
+            if func.params.len() >= 2 {
+                let pack_name: String = python_host_pack_struct_name(&class_name, &func.name);
+                out.push_str(&format!("class {pack_name}(ctypes.Structure):\n"));
+                out.push_str("    _fields_ = [\n");
+                for param in &func.params {
+                    let field_ty: String = python_pack_field_type(&param.ty, &ir.enums);
+                    out.push_str(&format!("        (\"{}\", {}),\n", param.name, field_ty));
+                }
+                out.push_str("    ]\n\n\n");
+            }
+        }
+    }
+
+    for contract in &ir.host_contracts {
+        generate_python_host_interface_factory(&mut out, contract, &ir.enums);
     }
 
     out
 }
 
+/// Module-level arg-pack class name for a host contract function
+/// (e.g. `host.logger` / `log_with_level` -> `_HostLoggerLogWithLevelArgs`).
+fn python_host_pack_struct_name(class_name: &str, fn_name: &str) -> String {
+    let fn_pascal: String = fn_name
+        .split('_')
+        .map(|seg: &str| {
+            let mut chars: core::str::Chars<'_> = seg.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("");
+    format!("_{class_name}{fn_pascal}Args")
+}
+
 /// Generate interface factories for one host contract.
-fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedHostContract) {
+fn generate_python_host_interface_factory(
+    out: &mut String,
+    contract: &ResolvedHostContract,
+    enums: &[EnumDef],
+) {
     let class_name: String = host_contract_name_to_python_class(&contract.name);
     let factory_name: String = format!(
         "create_{}_interface",
-        contract.name.replace('.', "_").to_lowercase()
-    );
-    let factory_vm_name: String = format!(
-        "create_{}_interface_vm",
         contract.name.replace('.', "_").to_lowercase()
     );
     let contract_id: u64 = contract.contract_id;
     let major: u32 = contract.version.major;
     let minor: u32 = contract.version.minor;
     let singleton: bool = contract.singleton;
-    let fn_count: usize = contract.functions.len();
 
-    // NATIVE dispatch factory
     out.push_str(&format!(
-        "# Create a host contract interface for `{}` with NATIVE dispatch.\n",
+        "# Create a host contract interface for `{}` (VM dispatch via the python\n",
         contract.name
     ));
-    out.push_str("#\n");
-    out.push_str("# Takes an implementation instance and creates an interface.\n");
-    out.push_str("# The implementation must inherit from the ABC class.\n");
-    out.push_str("#\n");
-    out.push_str("# Memory:\n");
-    out.push_str("# The returned interface is cached and lives for the lifetime of the program.\n");
-    out.push_str(&format!(
-        "def {factory_name}(impl: {class_name}) -> HostContractInterface:\n"
-    ));
-    out.push_str(&format!("    global _{class_name}_impl\n"));
-    out.push_str(&format!("    _{class_name}_impl = impl\n\n"));
-
-    // Generate thunks for each function
-    for func in &contract.functions {
-        generate_python_host_thunk(out, func, &contract.name, &class_name);
-    }
-
-    // Function pointer array: the thunks are already CFUNCTYPE instances (the
-    // decorator wraps them), so each is cast to c_void_p and packed into a real
-    // ctypes array — a plain Python list cannot be ctypes.cast (ArgumentError).
-    out.push_str("    functions = [\n");
-    for func in &contract.functions {
-        let thunk_name: String = format!(
-            "_{}_{}_thunk",
-            contract.name.replace('.', "_").to_lowercase(),
-            func.name
-        );
-        out.push_str(&format!(
-            "        ctypes.cast({thunk_name}, ctypes.c_void_p),\n"
-        ));
-    }
-    out.push_str("    ]\n");
-    out.push_str(&format!(
-        "    functions_array = (ctypes.c_void_p * {fn_count})(*functions)\n\n"
-    ));
-
-    // Create the interface using the real ABI struct
-    out.push_str("    interface = HostContractInterface()\n");
-    out.push_str(&format!(
-        "    interface.contract_id = 0x{contract_id:016X}\n"
-    ));
-    out.push_str(&format!(
-        "    interface.contract_version = Version(major={major}, minor={minor}, patch=0)\n"
-    ));
-    out.push_str(&format!(
-        "    interface.singleton = {singleton}\n",
-        singleton = python_bool(singleton)
-    ));
-    out.push_str("    interface.dispatch_type = DispatchType.Native\n");
-    out.push_str("    interface.runtime = 0  # Set by runtime during registration\n");
-    out.push_str("    # The managed implementation lives in a module global (Python objects\n");
-    out.push_str("    # cannot be stored in a raw c_void_p); user_data is unused for this path.\n");
-    out.push_str("    interface.user_data = 0\n");
-    out.push_str(
-        "    interface.create_instance = ctypes.cast(None, type(interface.create_instance))\n",
-    );
-    out.push_str(
-        "    interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))\n",
-    );
-    out.push_str(&format!(
-        "    interface.dispatch.native.function_count = {fn_count}\n"
-    ));
-    out.push_str(
-        "    interface.dispatch.native.functions = ctypes.cast(functions_array, ctypes.c_void_p)\n",
-    );
-    out.push_str("    # Anchor the function-pointer array on the interface object so it\n");
-    out.push_str("    # outlives this factory call (ctypes does not keep it alive).\n");
-    out.push_str("    interface._keepalive = (functions_array,)\n\n");
-    out.push_str("    return interface\n\n");
-
-    // Global implementation storage
-    out.push_str(&format!(
-        "_{class_name}_impl: {class_name} | None = None\n\n"
-    ));
-
-    // VM dispatch factory
-    out.push_str(&format!(
-        "# Create a host contract interface for `{}` with VM dispatch.\n",
-        contract.name
-    ));
-    out.push_str("#\n");
-    out.push_str("# Used when the host implementation is in a VM language (Python, Lua, JS).\n");
+    out.push_str("# loader trampoline — see the module header for why native dispatch is\n");
+    out.push_str("# impossible under ctypes).\n");
     out.push_str("#\n");
     out.push_str("# Arguments:\n");
-    out.push_str("#     bridge_data: Opaque pointer to VM-specific data\n");
-    out.push_str("#     dispatch_fn: Function to call for each contract function\n");
+    out.push_str("#     impl: implementation instance (must inherit from the ABC class)\n");
+    out.push_str("#     python_bridge_lib: ctypes.CDLL handle for the python loader cdylib\n");
+    out.push_str("#         (libpolyplug_python), e.g. polyplug_loaders_python.bridge_lib()\n");
     out.push_str("#\n");
     out.push_str("# Memory:\n");
-    out.push_str("# The returned interface is cached and lives for the lifetime of the program.\n");
-    out.push_str(&format!("def {factory_vm_name}(\n"));
-    out.push_str("    dispatch_fn: Callable[[int, int, int, int], int],\n");
-    out.push_str(") -> HostContractInterface:\n");
+    out.push_str("# The returned interface (with the dispatcher and bridge anchored on its\n");
+    out.push_str("# `_keepalive`) must stay alive for the lifetime of the program.\n");
+    out.push_str(&format!(
+        "def {factory_name}(impl: {class_name}, python_bridge_lib: ctypes.CDLL) -> HostContractInterface:\n"
+    ));
+
+    // Scalar-only dispatcher: (fn_id, args, out) -> AbiErrorCode int.
+    out.push_str("    @_HOST_DISPATCH_CALLBACK_CTYPE\n");
+    out.push_str("    def _dispatch(fn_id: int, args: int, out: int) -> int:\n");
+    out.push_str("        try:\n");
+    for (idx, func) in contract.functions.iter().enumerate() {
+        out.push_str(&format!("            if fn_id == {idx}:\n"));
+        generate_python_host_dispatch_args(out, &class_name, func, enums);
+        generate_python_host_dispatch_call(out, func);
+        out.push_str("                return AbiErrorCode.Ok\n");
+    }
+    out.push_str("            return AbiErrorCode.FunctionNotAvailable\n");
+    out.push_str("        except Exception:\n");
+    out.push_str("            return AbiErrorCode.Panic\n\n");
+
+    out.push_str("    bridge = _PolyplugPythonHostDispatchBridge(callback=_dispatch)\n\n");
+
     out.push_str("    interface = HostContractInterface()\n");
     out.push_str(&format!(
         "    interface.contract_id = 0x{contract_id:016X}\n"
@@ -2686,209 +2706,179 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     ));
     out.push_str("    interface.dispatch_type = DispatchType.VirtualMachine\n");
     out.push_str("    interface.runtime = 0  # Set by runtime during registration\n");
+    out.push_str("    # Opaque NON-NULL instance token: the native create_instance stub\n");
+    out.push_str("    # returns user_data as the instance data and guest callers treat a\n");
+    out.push_str("    # null instance.data as \"contract unavailable\".\n");
+    out.push_str("    interface.user_data = ctypes.addressof(bridge)\n");
+    out.push_str("    # ctypes cannot create struct-returning callbacks, so the instance\n");
+    out.push_str("    # stubs and the VM dispatch trampoline are NATIVE functions exported\n");
+    out.push_str("    # by the python loader cdylib.\n");
     out.push_str(
-        "    interface.user_data = 0  # VM dispatch routes through dispatch.vm.loader_data\n",
+        "    interface.create_instance = ctypes.cast(python_bridge_lib.polyplug_python_host_create_instance, type(interface.create_instance))\n",
     );
     out.push_str(
-        "    interface.create_instance = ctypes.cast(None, type(interface.create_instance))\n",
+        "    interface.destroy_instance = ctypes.cast(python_bridge_lib.polyplug_python_host_destroy_instance, type(interface.destroy_instance))\n",
     );
     out.push_str(
-        "    interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))\n",
+        "    interface.dispatch.vm.call = ctypes.cast(python_bridge_lib.polyplug_python_host_vm_dispatch, type(interface.dispatch.vm.call))\n",
     );
-    // A plain Python callable cannot be ctypes.cast (ArgumentError); it must be
-    // wrapped in a CFUNCTYPE instance, which is anchored on the interface object
-    // so it outlives this factory call.
-    out.push_str("    vm_call_cfunc = type(interface.dispatch.vm.call)(dispatch_fn)\n");
-    out.push_str("    interface.dispatch.vm.call = vm_call_cfunc\n");
-    out.push_str("    interface.dispatch.vm.loader_data = VmDispatch().loader_data\n");
-    out.push_str("    interface._keepalive = (vm_call_cfunc,)\n\n");
+    out.push_str("    interface.dispatch.vm.loader_data.data = ctypes.addressof(bridge)\n");
+    out.push_str("    # Anchor the bridge, dispatcher callback, and implementation on the\n");
+    out.push_str("    # interface object so they outlive this factory call.\n");
+    out.push_str("    interface._keepalive = (bridge, _dispatch, impl)\n\n");
     out.push_str("    return interface\n\n");
 }
 
-/// Render a Rust bool as a Python literal (`True` / `False`); Rust's
-/// `Display` for bool would emit lowercase `false`, a Python NameError.
-fn python_bool(value: bool) -> &'static str {
-    if value { "True" } else { "False" }
-}
-
-/// Generate a thunk function for a host contract function.
-fn generate_python_host_thunk(
+/// Emit argument extraction for one host-contract dispatcher branch
+/// (16-space indent, inside `try:` / `if fn_id == N:`).
+fn generate_python_host_dispatch_args(
     out: &mut String,
-    func: &ResolvedFunction,
-    contract_name: &str,
     class_name: &str,
+    func: &ResolvedFunction,
+    enums: &[EnumDef],
 ) {
-    let thunk_name: String = format!(
-        "_{}_{}_thunk",
-        contract_name.replace('.', "_").to_lowercase(),
-        func.name
-    );
-    let has_return: bool = func.returns.is_some();
-
-    out.push_str(
-        "    @ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n",
-    );
-    out.push_str(&format!(
-        "    def {thunk_name}(impl_ptr: int, args: int, out: int) -> AbiError:\n"
-    ));
-    out.push_str("        try:\n");
-    out.push_str(&format!("            impl = _{class_name}_impl\n"));
-    out.push_str("            if impl is None:\n");
-    out.push_str(
-        "                return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))\n",
-    );
-
-    // Generate argument extraction
-    if !func.params.is_empty() {
-        generate_python_host_thunk_args(out, func);
-    } else {
-        out.push_str("            _ = args\n");
+    if func.params.is_empty() {
+        return;
     }
-
-    // Generate the method call
-    generate_python_host_thunk_call(out, func, has_return);
-
-    // Handle return value
-    if has_return {
-        let _ret_ty: String = match func.returns.as_ref() {
-            Some(ret) => python_host_return_type_name(ret),
-            None => String::from("None"),
-        };
-        out.push_str("            # SAFETY: out is a valid pointer per ABI contract.\n");
-        out.push_str(
-            "            ctypes.memmove(out, ctypes.byref(result), ctypes.sizeof(result))\n",
-        );
-    } else {
-        out.push_str("            _ = out\n");
-    }
-
-    out.push_str(
-        "            return AbiError(code=AbiErrorCode.Ok, message=StringView(ptr=0, len=0))\n",
-    );
-    out.push_str("        except Exception:\n");
-    out.push_str(
-        "            return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))\n",
-    );
-    out.push('\n');
-}
-
-/// Generate argument extraction for a host thunk.
-fn generate_python_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
     if func.params.len() == 1 {
         let param: &ResolvedParam = &func.params[0];
         let ty_name: String = python_host_abi_type_name(&param.ty);
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                 out.push_str(&format!(
-                    "            {name}_sv: StringView = ctypes.cast(args, ctypes.POINTER(StringView)).contents\n",
+                    "                {name}_sv: StringView = ctypes.cast(args, ctypes.POINTER(StringView)).contents\n",
                     name = param.name
                 ));
                 out.push_str(&format!(
-                    "            {name}: str = ctypes.string_at({name}_sv.ptr, {name}_sv.len).decode('utf-8')\n",
+                    "                {name}: str = ctypes.string_at({name}_sv.ptr, {name}_sv.len).decode('utf-8')\n",
                     name = param.name
                 ));
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
                 out.push_str(&format!(
-                    "            {name}_buf: Buffer = ctypes.cast(args, ctypes.POINTER(Buffer)).contents\n",
+                    "                {name}_buf: Buffer = ctypes.cast(args, ctypes.POINTER(Buffer)).contents\n",
                     name = param.name
                 ));
                 out.push_str(&format!(
-                    "            {name}: bytes = ctypes.string_at({name}_buf.ptr, {name}_buf.len)\n",
+                    "                {name}: bytes = ctypes.string_at({name}_buf.ptr, {name}_buf.len)\n",
                     name = param.name
                 ));
             }
             ResolvedTypeRef::UserDefined(_) => {
-                out.push_str(&format!(
-                    "            {name}: {ty} = ctypes.cast(args, ctypes.POINTER({ty})).contents\n",
-                    name = param.name,
-                    ty = ty_name
-                ));
+                // Enums are IntEnum classes: read the raw repr integer and
+                // wrap it; ctypes.POINTER(IntEnum) is a TypeError.
+                if let Some(e) = python_enum_for_type(&param.ty, enums) {
+                    let raw_ctype: &str = python_ctype_for_repr(&e.repr);
+                    out.push_str(&format!(
+                        "                {name}_raw: int = ctypes.cast(args, ctypes.POINTER({raw_ctype})).contents.value\n",
+                        name = param.name
+                    ));
+                    out.push_str(&format!(
+                        "                {name}: {ty} = {ty}({name}_raw)\n",
+                        name = param.name,
+                        ty = ty_name
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "                {name}: {ty} = ctypes.cast(args, ctypes.POINTER({ty})).contents\n",
+                        name = param.name,
+                        ty = ty_name
+                    ));
+                }
             }
             _ => {
                 out.push_str(&format!(
-                    "            {name}: {ty} = ctypes.cast(args, ctypes.POINTER({ty})).contents\n",
+                    "                {name}: {ty} = ctypes.cast(args, ctypes.POINTER({ty})).contents.value\n",
                     name = param.name,
                     ty = ty_name
                 ));
             }
         }
     } else {
-        // Multiple params - use arg-pack struct
-        let pack_struct: String = format!("{}Args", func.name.to_uppercase());
+        let pack_name: String = python_host_pack_struct_name(class_name, &func.name);
         out.push_str(&format!(
-            "            class {pack_struct}(ctypes.Structure):\n"
+            "                packed: {pack_name} = ctypes.cast(args, ctypes.POINTER({pack_name})).contents\n"
         ));
-        out.push_str("                _fields_ = [\n");
-        for param in &func.params {
-            let cpp_ty: String = python_host_abi_type_name(&param.ty);
-            out.push_str(&format!(
-                "                    (\"{}\", {}),\n",
-                param.name, cpp_ty
-            ));
-        }
-        out.push_str("                ]\n");
-        out.push_str(&format!(
-            "            packed: {pack_struct} = ctypes.cast(args, ctypes.POINTER({pack_struct})).contents\n"
-        ));
-        // Extract each param from the packed struct
         for param in &func.params {
             match &param.ty {
                 ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                     out.push_str(&format!(
-                        "            {name}: str = ctypes.string_at(packed.{name}.ptr, packed.{name}.len).decode('utf-8')\n",
+                        "                {name}: str = ctypes.string_at(packed.{name}.ptr, packed.{name}.len).decode('utf-8')\n",
                         name = param.name
                     ));
                 }
                 ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
                     out.push_str(&format!(
-                        "            {name}: bytes = ctypes.string_at(packed.{name}.ptr, packed.{name}.len)\n",
+                        "                {name}: bytes = ctypes.string_at(packed.{name}.ptr, packed.{name}.len)\n",
                         name = param.name
                     ));
                 }
                 _ => {
                     let ty_name: String = python_host_param_type_name(&param.ty);
-                    out.push_str(&format!(
-                        "            {name}: {ty} = packed.{name}\n",
-                        name = param.name,
-                        ty = ty_name
-                    ));
+                    // Enum pack fields hold the raw repr integer; wrap it back
+                    // into the IntEnum before handing it to the implementation.
+                    if python_enum_for_type(&param.ty, enums).is_some() {
+                        out.push_str(&format!(
+                            "                {name}: {ty} = {ty}(packed.{name})\n",
+                            name = param.name,
+                            ty = ty_name
+                        ));
+                    } else {
+                        out.push_str(&format!(
+                            "                {name}: {ty} = packed.{name}\n",
+                            name = param.name,
+                            ty = ty_name
+                        ));
+                    }
                 }
             }
         }
     }
 }
 
-/// Generate the method call inside a host thunk.
-fn generate_python_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_return: bool) {
-    let call_args: String = if func.params.is_empty() {
-        String::new()
-    } else if func.params.len() == 1 {
-        let param: &ResolvedParam = &func.params[0];
-        param.name.clone()
-    } else {
-        func.params
-            .iter()
-            .map(|p: &ResolvedParam| p.name.clone())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+/// Emit the implementation call (and result store) for one dispatcher branch.
+fn generate_python_host_dispatch_call(out: &mut String, func: &ResolvedFunction) {
+    let call_args: String = func
+        .params
+        .iter()
+        .map(|p: &ResolvedParam| p.name.clone())
+        .collect::<Vec<String>>()
+        .join(", ");
 
-    if has_return {
-        let ret_ty: String = match func.returns.as_ref() {
-            Some(ret) => python_host_return_type_name(ret),
-            None => String::from("None"),
-        };
+    if func.returns.is_some() {
         out.push_str(&format!(
-            "            result: {ret_ty} = impl.{func_name}({call_args})\n",
+            "                result = impl.{func_name}({call_args})\n",
             func_name = func.name
         ));
+        match func.returns.as_ref() {
+            Some(ResolvedTypeRef::Primitive(p)) => {
+                let ctype: &str = python_primitive_type(p);
+                out.push_str(&format!("                result_c = {ctype}(result)\n"));
+                out.push_str(
+                    "                ctypes.memmove(out, ctypes.byref(result_c), ctypes.sizeof(result_c))\n",
+                );
+            }
+            _ => {
+                // Struct returns (StringView/Buffer/user types): the
+                // implementation must return a ctypes instance of the
+                // matching ABI type, copied into the out slot.
+                out.push_str(
+                    "                ctypes.memmove(out, ctypes.byref(result), ctypes.sizeof(result))\n",
+                );
+            }
+        }
     } else {
         out.push_str(&format!(
-            "            impl.{func_name}({call_args})\n",
+            "                impl.{func_name}({call_args})\n",
             func_name = func.name
         ));
     }
+}
+
+/// Render a Rust bool as a Python literal (`True` / `False`); Rust's
+/// `Display` for bool would emit lowercase `false`, a Python NameError.
+fn python_bool(value: bool) -> &'static str {
+    if value { "True" } else { "False" }
 }
 
 /// Generate ABI type name for host thunk arguments.
@@ -2900,6 +2890,38 @@ fn python_host_abi_type_name(ty: &ResolvedTypeRef) -> String {
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "ctypes.c_void_p".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "None".to_owned(),
         ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Find the enum definition for a user-defined type, if it is an enum.
+fn python_enum_for_type<'a>(ty: &ResolvedTypeRef, enums: &'a [EnumDef]) -> Option<&'a EnumDef> {
+    match ty {
+        ResolvedTypeRef::UserDefined(name) => enums.iter().find(|e: &&EnumDef| &e.name == name),
+        _ => None,
+    }
+}
+
+/// ctypes integer type for an enum's declared repr.
+fn python_ctype_for_repr(repr: &ReprType) -> &'static str {
+    match repr {
+        ReprType::U8 => "ctypes.c_uint8",
+        ReprType::U16 => "ctypes.c_uint16",
+        ReprType::U32 => "ctypes.c_uint32",
+        ReprType::U64 => "ctypes.c_uint64",
+    }
+}
+
+/// ctypes field type for arg-pack struct members.
+///
+/// Generated enums are `enum.IntEnum` classes: `ctypes.Structure._fields_`
+/// rejects them with a TypeError at class-creation time — the first time the
+/// emitting thunk/caller actually runs. Enum members therefore use their
+/// repr's ctype; call sites convert with `EnumName(raw)` on extraction and
+/// plain int assignment on packing (IntEnum is an int subclass).
+fn python_pack_field_type(ty: &ResolvedTypeRef, enums: &[EnumDef]) -> String {
+    match python_enum_for_type(ty, enums) {
+        Some(e) => python_ctype_for_repr(&e.repr).to_owned(),
+        None => python_host_abi_type_name(ty),
     }
 }
 
@@ -3389,6 +3411,106 @@ mod tests {
         );
     }
 
+    /// The host interface factories must register host contracts with VM
+    /// dispatch routed through the NATIVE trampoline exported by the python
+    /// loader cdylib. The old output was broken-by-construction twice over:
+    /// `ctypes.CFUNCTYPE(AbiError, ...)` thunks raise "invalid result type
+    /// for callback function" the moment the factory runs (ctypes callbacks
+    /// cannot return structs by value), and `create_instance` was cast from
+    /// `None` — a NULL function pointer the runtime invokes unconditionally
+    /// in `host_get_host_contract`.
+    #[test]
+    fn python_interface_factories_route_through_native_trampoline() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![EnumDef {
+                name: "LogLevel".to_owned(),
+                repr: ReprType::U32,
+                bitflag: false,
+                variants: vec![EnumVariant {
+                    name: "Info".to_owned(),
+                    value: "1".to_owned(),
+                }],
+            }],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                singleton: false,
+                functions: vec![
+                    ResolvedFunction {
+                        name: "log".to_owned(),
+                        function_id: 0,
+                        params: vec![ResolvedParam {
+                            name: "message".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        }],
+                        returns: None,
+                    },
+                    ResolvedFunction {
+                        name: "log_with_level".to_owned(),
+                        function_id: 1,
+                        params: vec![
+                            ResolvedParam {
+                                name: "level".to_owned(),
+                                ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                            },
+                            ResolvedParam {
+                                name: "message".to_owned(),
+                                ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                            },
+                        ],
+                        returns: None,
+                    },
+                ],
+            }],
+            bundle: None,
+        };
+        let out: String = generate_python_host_interface_factories_file(&ir);
+        // No struct-returning ctypes callbacks anywhere — ctypes rejects them
+        // at callback-creation time ("invalid result type").
+        assert!(
+            !out.contains("ctypes.CFUNCTYPE(AbiError"),
+            "no AbiError-returning ctypes callbacks may be emitted: {out}"
+        );
+        assert!(
+            !out.contains("ctypes.cast(None, type(interface.create_instance))"),
+            "create_instance must not be a NULL function pointer: {out}"
+        );
+        assert!(
+            out.contains("interface.create_instance = ctypes.cast(python_bridge_lib.polyplug_python_host_create_instance"),
+            "create_instance must use the native stub: {out}"
+        );
+        assert!(
+            out.contains("interface.dispatch.vm.call = ctypes.cast(python_bridge_lib.polyplug_python_host_vm_dispatch"),
+            "dispatch must route through the native trampoline: {out}"
+        );
+        assert!(
+            out.contains("interface.dispatch_type = DispatchType.VirtualMachine"),
+            "factories must register VM dispatch: {out}"
+        );
+        // Enum pack fields use the repr ctype (IntEnum classes are rejected by
+        // ctypes.Structure._fields_ with a TypeError at class-creation time)
+        // and are wrapped back into the enum before reaching the impl.
+        assert!(
+            out.contains("(\"level\", ctypes.c_uint32),"),
+            "enum pack fields must use the repr ctype: {out}"
+        );
+        assert!(
+            out.contains("level: LogLevel = LogLevel(packed.level)"),
+            "enum pack fields must be wrapped back into the IntEnum: {out}"
+        );
+        assert!(
+            out.contains("interface._keepalive = (bridge, _dispatch, impl)"),
+            "bridge and dispatcher must be anchored on the interface keepalive: {out}"
+        );
+    }
+
     /// No generated python file (host or guest) may contain a wildcard import.
     #[test]
     fn python_generated_files_no_wildcard_imports() {
@@ -3752,7 +3874,7 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_python_guest_host_contract_caller(&mut out, &contract);
+        generate_python_guest_host_contract_caller(&mut out, &contract, &[]);
         assert!(
             out.contains("class HostLoggerContract:"),
             "missing class def: {out}"
@@ -3822,7 +3944,7 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_python_guest_host_contract_caller(&mut out, &contract);
+        generate_python_guest_host_contract_caller(&mut out, &contract, &[]);
         assert!(
             out.contains("class HostFsReaderContract:"),
             "missing class def: {out}"

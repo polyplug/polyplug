@@ -33,6 +33,17 @@ public static class Plugin
     private static readonly PluginDescriptor s_descriptor;
     private static readonly nint s_functionsPtr;
 
+    // Pinned for the process lifetime: every pointer that escapes to the host
+    // (descriptor StringViews, the version StringView returned by Version, the
+    // dispatch function array) must come from a pinned object, mirroring the
+    // GCHandle.Alloc(..., Pinned) pattern in the generated C# guest code.
+    // Pointers taken inside a `fixed` block become invalid the moment the
+    // block exits — the GC may move the array afterwards.
+    private static readonly GCHandle s_functionsPin;
+    private static readonly GCHandle s_versionPin;
+    private static readonly GCHandle s_namePin;
+    private static readonly GCHandle s_contractPin;
+
     static Plugin()
     {
         unsafe
@@ -42,8 +53,12 @@ public static class Plugin
             s_functions[2] = (IntPtr)(delegate* unmanaged<nint, nint, AbiError>)&Version;
             s_functions[3] = (IntPtr)(delegate* unmanaged<nint, nint, AbiError>)&Reset;
 
-            var handle = System.Runtime.InteropServices.GCHandle.Alloc(s_functions, GCHandleType.Pinned);
-            s_functionsPtr = handle.AddrOfPinnedObject();
+            s_functionsPin = GCHandle.Alloc(s_functions, GCHandleType.Pinned);
+            s_functionsPtr = s_functionsPin.AddrOfPinnedObject();
+
+            s_versionPin = GCHandle.Alloc(s_versionBytes, GCHandleType.Pinned);
+            s_namePin = GCHandle.Alloc(s_nameBytes, GCHandleType.Pinned);
+            s_contractPin = GCHandle.Alloc(s_contractBytes, GCHandleType.Pinned);
 
             s_interface = new GuestContractInterface
             {
@@ -58,16 +73,12 @@ public static class Plugin
                 }
             };
 
-            fixed (byte* namePtr = s_nameBytes)
-            fixed (byte* contractPtr = s_contractBytes)
+            s_descriptor = new PluginDescriptor
             {
-                s_descriptor = new PluginDescriptor
-                {
-                    Name = new StringView { Ptr = (nint)namePtr, Len = (nuint)s_nameBytes.Length },
-                    ContractName = new StringView { Ptr = (nint)contractPtr, Len = (nuint)s_contractBytes.Length },
-                    Version = new Polyplug.Abi.Version { Major = 1, Minor = 0, Patch = 0 }
-                };
-            }
+                Name = new StringView { Ptr = s_namePin.AddrOfPinnedObject(), Len = (nuint)s_nameBytes.Length },
+                ContractName = new StringView { Ptr = s_contractPin.AddrOfPinnedObject(), Len = (nuint)s_contractBytes.Length },
+                Version = new Polyplug.Abi.Version { Major = 1, Minor = 0, Patch = 0 }
+            };
         }
     }
 
@@ -101,10 +112,10 @@ public static class Plugin
         unsafe
         {
             var outPtr = (StringView*)result;
-            fixed (byte* ptr = s_versionBytes)
-            {
-                *outPtr = new StringView { Ptr = (nint)ptr, Len = (nuint)s_versionBytes.Length };
-            }
+            // The pointer escapes this call (the host reads the StringView after
+            // we return), so it must come from the process-lifetime pin — never
+            // from a `fixed` block, whose pin ends at the block's closing brace.
+            *outPtr = new StringView { Ptr = s_versionPin.AddrOfPinnedObject(), Len = (nuint)s_versionBytes.Length };
         }
         return new AbiError { Code = (uint)AbiErrorCode.Ok };
     }

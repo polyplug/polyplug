@@ -51,8 +51,8 @@ echo ""
 
 # Run Python host
 echo "=== Python Host ==="
-if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
-    if PYTHONPATH="$PYTHON_HOST_PATH" python3 hosts/python/host.py 2>&1; then
+if command -v python3 &> /dev/null && [ -f "hosts/python/main.py" ]; then
+    if PYTHONPATH="$PYTHON_HOST_PATH" python3 hosts/python/main.py 2>&1; then
         echo "✓ python host passed"
     else
         echo "✗ python host failed"
@@ -165,8 +165,8 @@ if [ -f "$WORKSPACE_DIR/target/release/pipeline_host" ]; then
     fi
 fi
 
-if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
-    OUTPUT=$(PYTHONPATH="$PYTHON_HOST_PATH" python3 hosts/python/host.py 2>&1)
+if command -v python3 &> /dev/null && [ -f "hosts/python/main.py" ]; then
+    OUTPUT=$(PYTHONPATH="$PYTHON_HOST_PATH" python3 hosts/python/main.py 2>&1)
     if echo "$OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
         echo "✓ python host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))

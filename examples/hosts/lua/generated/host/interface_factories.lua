@@ -2,105 +2,111 @@
 -- DO NOT EDIT BY HAND
 -- Re-generate with: polyplugc generate --api <api.toml> --lang lua --out <dir>
 
+-- Requires the polyplug_abi cdefs (HostContractInterface, AbiError, ...);
+-- the host must require("polyplug_abi") before requiring this module.
 local ffi = require("ffi")
 
 -- ABI error codes (match polyplug_abi.AbiErrorCode)
 local AbiErrorCode = {
     Ok = 0,
     Panic = 3,
+    FunctionNotAvailable = 6,
 }
+
+local function cdef_guarded(decl)
+	local ok, err = pcall(ffi.cdef, decl)
+	if not ok and not string.find(err, "already defined", 1, true) then
+		error(err, 2)
+	end
+end
+
+cdef_guarded([[
+    typedef uint32_t (*PolyplugLuaHostDispatchCallback)(uint32_t, const void*, void*);
+    typedef struct PolyplugLuaHostDispatchBridge {
+        PolyplugLuaHostDispatchCallback callback;
+    } PolyplugLuaHostDispatchBridge;
+    AbiError polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
+    HostContractInstance polyplug_lua_host_create_instance(const HostContractInterface*, const void*);
+    void polyplug_lua_host_destroy_instance(const HostContractInterface*, HostContractInstance);
+]])
+
+cdef_guarded([[
+    typedef struct {
+        LogLevel level;
+        StringView message;
+    } HostLoggerLogWithLevelArgs;
+]])
 
 local M = {}
 
--- Create a host contract interface for `host.logger` with NATIVE dispatch.
---
--- Takes an implementation table and creates an interface.
--- The implementation must have methods matching the contract.
---
--- Memory:
--- The returned interface is cached and lives for the lifetime of the program.
-function M.create_host_logger_interface(impl)
-    _HostLogger_impl = impl
+-- Anchors for cdata that must stay alive after a factory returns: the
+-- runtime keeps the interface pointer for its whole lifetime and every
+-- dispatch reaches the bridge + callback. Module-local (per-VM) state.
+local _anchors = {}
 
-    local function _host_logger_log_thunk(impl_ptr, args, out)
-        local ok, err = pcall(function()
-            local impl = _HostLogger_impl
-            if impl == nil then
-                return AbiErrorCode.Panic
-            end
-            local message_sv = ffi.cast("StringView*", args)[0]
-            local message = ffi.string(message_sv.ptr, message_sv.len)
-            impl:log(message)
-            local _ = out
-            return AbiErrorCode.Ok
-        end)
-        if not ok then
-            return AbiErrorCode.Panic
-        end
-        return err
-    end
-
-    local function _host_logger_log_with_level_thunk(impl_ptr, args, out)
-        local ok, err = pcall(function()
-            local impl = _HostLogger_impl
-            if impl == nil then
-                return AbiErrorCode.Panic
-            end
-            local packed = ffi.cast("LOG_WITH_LEVELArgs*", args)[0]
-            local level: userdata = packed.level
-            local message = ffi.string(packed.message.ptr, packed.message.len)
-            impl:log_with_level(level, message)
-            local _ = out
-            return AbiErrorCode.Ok
-        end)
-        if not ok then
-            return AbiErrorCode.Panic
-        end
-        return err
-    end
-
-    local functions = ffi.new("void*[2]")
-    functions[0] = ffi.cast("void*", ffi.cast("uint32_t (*)(const void*, const void*, void*)", _host_logger_log_thunk))
-    functions[1] = ffi.cast("void*", ffi.cast("uint32_t (*)(const void*, const void*, void*)", _host_logger_log_with_level_thunk))
-
-    local interface = ffi.new("HostContractVTable")
-    interface.header.vtable_version = 1
-    interface.header.contract_id = 0xF53EB5F2845853BBULL
-    interface.header.contract_major = 1
-    interface.header.contract_minor = 0
-    interface.header.function_count = 2
-    interface.header.singleton = false  -- multi-instance
-    interface.header.dispatch_type = 0  -- DispatchType.Native
-    interface.dispatch.native.impl_ptr = nil  -- We use global _impl instead
-    interface.dispatch.native.functions = functions
-
-    return interface
-end
-
-_HostLogger_impl = nil
-
--- Create a host contract interface for `host.logger` with VM dispatch.
---
--- Used when the host implementation is in a VM language (Python, Lua, JS).
+-- Create a host contract interface for `host.logger` (VM dispatch via the lua
+-- loader trampoline — see the file header for why native dispatch is
+-- impossible under LuaJIT).
 --
 -- Arguments:
---     bridge_data: Opaque pointer to VM-specific data
---     dispatch_fn: Function to call for each contract function
+--     impl: implementation table with methods matching the contract
+--     lua_bridge_lib: ffi.load handle for the lua loader cdylib
+--         (libpolyplug_lua), e.g. require('polyplug.loaders.lua').bridge_lib()
 --
 -- Memory:
--- The returned interface is cached and lives for the lifetime of the program.
-function M.create_host_logger_interface_vm(bridge_data, dispatch_fn)
-    local interface = ffi.new("HostContractVTable")
-    interface.header.vtable_version = 1
-    interface.header.contract_id = 0xF53EB5F2845853BBULL
-    interface.header.contract_major = 1
-    interface.header.contract_minor = 0
-    interface.header.function_count = 2
-    interface.header.singleton = false  -- multi-instance
-    interface.header.dispatch_type = 1  -- DispatchType.VirtualMachine
-    interface.dispatch.vm.call = dispatch_fn
-    interface.dispatch.vm.bridge_data = bridge_data
+-- The returned interface is anchored and lives for the lifetime of the program.
+function M.create_host_logger_interface(impl, lua_bridge_lib)
+    if impl == nil then
+        error("create_host_logger_interface: impl is nil")
+    end
+    if lua_bridge_lib == nil then
+        error("create_host_logger_interface: lua_bridge_lib is nil (pass the lua loader cdylib handle)")
+    end
 
+    local function dispatch(fn_id, args, out)
+        local ok, code = pcall(function()
+            if fn_id == 0 then
+                local message_sv = ffi.cast("const StringView*", args)[0]
+                local message = ffi.string(message_sv.ptr, message_sv.len)
+                impl:log(message)
+                local _ = out
+                return AbiErrorCode.Ok
+            end
+            if fn_id == 1 then
+                local packed = ffi.cast("const HostLoggerLogWithLevelArgs*", args)[0]
+                local level = packed.level
+                local message = ffi.string(packed.message.ptr, packed.message.len)
+                impl:log_with_level(level, message)
+                local _ = out
+                return AbiErrorCode.Ok
+            end
+            return AbiErrorCode.FunctionNotAvailable
+        end)
+        if not ok then
+            return AbiErrorCode.Panic
+        end
+        return code
+    end
+
+    local callback = ffi.cast("PolyplugLuaHostDispatchCallback", dispatch)
+    local bridge = ffi.new("PolyplugLuaHostDispatchBridge")
+    bridge.callback = callback
+
+    local interface = ffi.new("HostContractInterface")
+    interface.contract_id = 0xF53EB5F2845853BBULL
+    interface.contract_version.major = 1
+    interface.contract_version.minor = 0
+    interface.contract_version.patch = 0
+    interface.singleton = 0  -- multi-instance
+    interface.dispatch_type = ffi.C.DispatchType_VirtualMachine
+    interface.runtime = nil  -- set by the runtime during registration
+    interface.user_data = ffi.cast("void*", bridge)
+    interface.create_instance = lua_bridge_lib.polyplug_lua_host_create_instance
+    interface.destroy_instance = lua_bridge_lib.polyplug_lua_host_destroy_instance
+    interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_host_vm_dispatch
+    interface.dispatch.vm.loader_data.data = ffi.cast("void*", bridge)
+
+    _anchors[#_anchors + 1] = { interface = interface, bridge = bridge, callback = callback, impl = impl }
     return interface
 end
 

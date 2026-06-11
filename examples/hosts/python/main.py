@@ -25,8 +25,10 @@ except ImportError:
 
 try:
     from polyplug_loaders_python import register_python_loader
+    from polyplug_loaders_python import bridge_lib as python_bridge_lib
 except ImportError:
     register_python_loader = None
+    python_bridge_lib = None
 
 try:
     from polyplug_loaders_lua import register_lua_loader
@@ -55,6 +57,36 @@ from generated.host.callers import (
     DATA_REPORTER_CONTRACT_ID,
     PIPELINE_VALIDATOR_CONTRACT_ID,
 )
+# The generated host package imports its siblings as `host.*` (the layout the
+# generators emit for sys.path-rooted packages), so `generated/` must be
+# importable as a package ROOT. NOTE: this script is named main.py on purpose —
+# a sibling regular module named `host` would shadow the generated `host`
+# namespace package no matter what the sys.path order is.
+sys.path.insert(0, str(Path(__file__).parent / "generated"))
+
+from host.contracts import HostLogger  # noqa: E402  (sys.path setup above)
+from host.interface_factories import create_host_logger_interface  # noqa: E402
+from host.types import LogLevel  # noqa: E402
+
+
+class ConsoleLogger(HostLogger):
+    """Host-side implementation of the `host.logger` contract.
+
+    Mirrors the rust/cpp reference hosts' ConsoleLogger output format.
+    """
+
+    def log(self, message: str) -> None:
+        print(f"[plugin] {message}")
+
+    def log_with_level(self, level: LogLevel, message: str) -> None:
+        names = {
+            LogLevel.DEBUG: "DEBUG",
+            LogLevel.INFO: "INFO",
+            LogLevel.WARN: "WARN",
+            LogLevel.ERROR: "ERROR",
+        }
+        level_str = names.get(level, "INFO")
+        print(f"[plugin][{level_str}] {message}")
 
 
 def make_caller(caller_cls, rt, contract_id: int):
@@ -115,6 +147,19 @@ def main():
             register(rt)
         except RuntimeError as e:
             print(f"  loader {name} unavailable: {e}", file=sys.stderr)
+
+    # Register the host.logger contract through the GENERATED factory so
+    # plugins can call back into the host (mirrors the rust/cpp hosts). The
+    # factory needs the python loader cdylib for the host-contract bridge
+    # trampolines (ctypes cannot create struct-returning callbacks).
+    if python_bridge_lib is None:
+        print(
+            "  host.logger registration unavailable: polyplug_loaders_python not importable",
+            file=sys.stderr,
+        )
+    else:
+        logger_iface = create_host_logger_interface(ConsoleLogger(), python_bridge_lib())
+        rt.register_host_contract(logger_iface)
 
     bundles = scanner.scan_dir(plugin_path)
     if not bundles:

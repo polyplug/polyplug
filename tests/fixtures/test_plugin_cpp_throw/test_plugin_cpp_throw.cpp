@@ -9,97 +9,17 @@
 // The dispatch entry stored in `functions[0]` uses the polyplug native calling
 // convention `extern "C" AbiError(const void* args, void* out)`.
 //
-// The ABI structs below are declared locally with C-compatible layout so the
-// fixture stays self-contained and does not depend on generated bindings.
+// ABI types come from the real C++ ABI SDK header (sdks/cpp/abi/polyplug/abi.hpp)
+// so the fixture can never drift from the frozen layouts; build_all.sh passes
+// the include path.
 
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 
+#include <polyplug/abi.hpp>
+
 namespace {
-
-// ─── ABI types (C-layout, mirrors polyplug_abi) ──────────────────────────────
-
-struct StringView {
-    const uint8_t* ptr;
-    size_t len;
-};
-
-struct Version {
-    uint32_t major;
-    uint32_t minor;
-    uint32_t patch;
-};
-
-enum class AbiErrorCode : uint32_t {
-    Ok = 0,
-    Generic = 1,
-};
-
-struct AbiError {
-    AbiErrorCode code;
-    StringView message;
-};
-
-enum class DispatchType : uint32_t {
-    Native = 0,
-    VirtualMachine = 1,
-};
-
-struct GuestContractInstance {
-    void* data;
-    uint64_t contract_id;
-};
-
-struct NativeDispatch {
-    uint32_t function_count;
-    void* const* functions;
-};
-
-struct VmDispatch {
-    void* call;
-    void* loader_data;
-};
-
-union DispatchMechanisms {
-    NativeDispatch native;
-    VmDispatch vm;
-};
-
-struct PluginDescriptor {
-    StringView name;
-    StringView contract_name;
-    Version version;
-};
-
-struct BundleInitContext {
-    uint64_t bundle_id;
-    StringView bundle_path;
-};
-
-using create_instance_fn = GuestContractInstance (*)(const void* host, const void* args);
-using destroy_instance_fn = void (*)(const void* host, GuestContractInstance instance);
-
-struct GuestContractInterface {
-    uint64_t contract_id;
-    Version contract_version;
-    DispatchType dispatch_type;
-    create_instance_fn create_instance;
-    destroy_instance_fn destroy_instance;
-    DispatchMechanisms dispatch;
-};
-
-// HostApi is opaque to this fixture except for `register_guest_contract`, which
-// is the first function pointer following the leading `runtime` pointer.
-using register_contract_fn = AbiError (*)(const void* host,
-                                          const PluginDescriptor* descriptor,
-                                          const GuestContractInterface* interface);
-
-struct HostApi {
-    void* runtime;
-    register_contract_fn register_guest_contract;
-    // Remaining function pointers are unused by this fixture.
-};
 
 // ─── test.add contract (throwing implementation) ─────────────────────────────
 
@@ -128,17 +48,17 @@ AbiError cpp_throw_abi(const void* args, void* out) noexcept {
     (void)out;
     try {
         throwing_impl();
-        return AbiError{AbiErrorCode::Ok, StringView{nullptr, 0}};
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
     } catch (...) {
-        return AbiError{AbiErrorCode::Generic, StringView{nullptr, 0}};
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{nullptr, 0}};
     }
 }
 
-GuestContractInstance create_instance_stub(const void*, const void*) noexcept {
+GuestContractInstance create_instance_stub(const HostApi*, const void*) noexcept {
     return GuestContractInstance{nullptr, 0};
 }
 
-void destroy_instance_stub(const void*, GuestContractInstance) noexcept {}
+void destroy_instance_stub(const HostApi*, GuestContractInstance) noexcept {}
 
 void* const kTestAddFns[] = {
     reinterpret_cast<void*>(&cpp_throw_abi),
@@ -169,7 +89,7 @@ extern "C" uint32_t polyplug_abi_version() {
 
 extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {
     if (host == nullptr || ctx == nullptr) {
-        return AbiError{AbiErrorCode::Generic, StringView{nullptr, 0}};
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{nullptr, 0}};
     }
     return host->register_guest_contract(host, &kTestAddDescriptor, &kTestAddInterface);
 }

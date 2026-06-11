@@ -152,6 +152,12 @@ pub unsafe extern "C" fn polyplug_init(
     LAST_BUNDLE_PATH_PTR.store(sv.ptr as *mut u8, Ordering::SeqCst);
     LAST_BUNDLE_PATH_LEN.store(sv.len, Ordering::SeqCst);
 
+    // Store the host vtable for the guest SDK helpers (polyplug_guest::log,
+    // host allocation) — mirrors what every generated guest init does.
+    // SAFETY: host_abi is non-null (checked above) and stays valid for the
+    // plugin's lifetime per the ABI contract.
+    unsafe { polyplug_guest::store_host_vtable(host_abi) };
+
     // SAFETY: host_abi is non-null and provided by the host runtime per ABI contract.
     let host: &HostApi = unsafe { &*host_abi };
 
@@ -215,4 +221,22 @@ pub extern "C" fn polyplug_panicking_fn(_args: *const (), _out: *mut ()) -> AbiE
 #[unsafe(no_mangle)]
 pub extern "C" fn polyplug_bench_inc(x: u32) -> u32 {
     x.wrapping_add(1)
+}
+
+// ─── Guest-SDK log probe ─────────────────────────────────────────────────────────
+
+/// Routes one fixed record through `polyplug_guest::log`.
+///
+/// This is NOT part of the polyplug ABI and is NOT registered in any interface.
+/// The `integration_guest_log` test resolves it directly via `dlsym` AFTER the
+/// runtime has loaded this bundle (so `polyplug_init` has stored the host
+/// vtable), proving the guest SDK's logging helper delivers into a
+/// host-installed `RuntimeConfig.log` logger end to end.
+#[unsafe(no_mangle)]
+pub extern "C" fn polyplug_test_guest_log() {
+    polyplug_guest::log(
+        polyplug_abi::types::LogLevel::Info,
+        "guest.test_plugin",
+        "hello from polyplug_guest::log",
+    );
 }

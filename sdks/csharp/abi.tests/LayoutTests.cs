@@ -68,5 +68,26 @@ namespace Polyplug.Abi.Tests
         [Fact]
         public void VersionIs12Bytes() => Assert.Equal(12, Marshal.SizeOf<Version>());
 
+        [Fact]
+        public void HostApiCallGuestMethodAtOffset136() => Assert.Equal((nint)136, Marshal.OffsetOf<HostApi>(nameof(HostApi.CallGuestMethod)));
+
+        [Fact]
+        public void HostApiUnloadBundleAtOffset144() => Assert.Equal((nint)144, Marshal.OffsetOf<HostApi>(nameof(HostApi.UnloadBundle)));
+
+        [Fact]
+        public void HostApiLogAtOffset152() => Assert.Equal((nint)152, Marshal.OffsetOf<HostApi>(nameof(HostApi.Log)));
+
+        [Fact]
+        public void HostApiReservedAtOffset160() => Assert.Equal((nint)160, Marshal.OffsetOf<HostApi>(nameof(HostApi.Reserved)));
+
+        [Fact]
+        public void RuntimeConfigLogAtOffset32() => Assert.Equal((nint)32, Marshal.OffsetOf<RuntimeConfig>(nameof(RuntimeConfig.Log)));
+
+        [Fact]
+        public void RuntimeConfigLogUserDataAtOffset40() => Assert.Equal((nint)40, Marshal.OffsetOf<RuntimeConfig>(nameof(RuntimeConfig.LogUserData)));
+
+        [Fact]
+        public void RuntimeConfigLogMaxLevelAtOffset48() => Assert.Equal((nint)48, Marshal.OffsetOf<RuntimeConfig>(nameof(RuntimeConfig.LogMaxLevel)));
+
     }
 }

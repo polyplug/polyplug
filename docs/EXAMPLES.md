@@ -144,7 +144,7 @@ every bundle it finds, and runs the full five-stage pipeline.
 | Rust | `hosts/rust/` | `src/main.rs` | native, JS (QuickJS), Lua, Python |
 | C++ | `hosts/cpp/` | `main.cpp` | native, JS (QuickJS), Lua, Python |
 | C# | `hosts/csharp/` | `Program.cs` | native, JS (QuickJS), Lua, Python, dotnet |
-| Python | `hosts/python/` | `host.py` | native, Python, JS, Lua |
+| Python | `hosts/python/` | `main.py` | native, Python, JS, Lua |
 | Lua | `hosts/lua/` | `host.lua` | native, Lua, JS, Python |
 | JavaScript (Deno) | `hosts/js/` | `host.js` | native, Lua, JS, Python |
 

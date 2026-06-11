@@ -46,3 +46,51 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 unsafe extern "C" fn polyplug_user_init() {
     init();
 }
+
+// ─── Generated-peer-caller probe ─────────────────────────────────────────────
+
+/// Drives the GENERATED peer caller (`generated/guest/peer_callers.rs`) end to
+/// end: resolves the declared `pipeline.Validator` dependency through the host
+/// and dispatches `validate` via host-mediated `call_guest_method`.
+///
+/// This is NOT part of the polyplug ABI and is NOT registered in any interface.
+/// The `integration_peer_caller_generated_rust` test resolves it via `dlsym`
+/// AFTER the runtime has loaded this bundle, so the generated peer-caller code
+/// itself executes — not an inline replica of it.
+///
+/// # Safety
+/// `out` must be a valid non-null pointer to a StringView slot. The runtime
+/// must have loaded this bundle (so `polyplug_init` stored the host vtable).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_test_peer_validate(
+    input: StringView,
+    out: *mut StringView,
+) -> u32 {
+    if out.is_null() {
+        return polyplug_abi::AbiErrorCode::InvalidPointer as u32;
+    }
+    let mut peer: generated::peer_callers::PipelineValidatorContractPeer =
+        match generated::peer_callers::PipelineValidatorContractPeer::resolve() {
+            Some(p) => p,
+            None => return polyplug_abi::AbiErrorCode::NotFound as u32,
+        };
+    match peer.validate(input) {
+        Ok(view) => {
+            // `view` borrows the peer caller's arena, which dies with `peer` at
+            // the end of this function — copy into host-allocated memory so the
+            // out slot outlives this call.
+            // SAFETY: `view` is a valid UTF-8 StringView produced by the
+            // validator guest, live until the peer's next arena-backed call.
+            let s: &str = unsafe { to_str(&view) };
+            match alloc_string(s) {
+                Ok(stable) => {
+                    // SAFETY: out is non-null per this function's contract.
+                    unsafe { *out = stable };
+                    polyplug_abi::AbiErrorCode::Ok as u32
+                }
+                Err(e) => e.code as u32,
+            }
+        }
+        Err(e) => e.code as u32,
+    }
+}

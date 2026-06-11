@@ -97,6 +97,18 @@ jobs:
         run: bash tests/fixtures/build_all.sh
       - name: Run tests
         run: cargo test --workspace
+      # C# SDK xunit suites: abi.tests (layout/offset + helper asserts) and
+      # host.tests (runtime create through the FFI boundary; resolves the core
+      # cdylib from target/debug built above).
+      - name: Run C# SDK tests
+        run: |
+          dotnet test sdks/csharp/abi.tests/Polyplug.Abi.Tests.csproj
+          dotnet test sdks/csharp/host.tests/Polyplug.Host.Tests.csproj
+      # C++ SDK test programs (ABI layout static_asserts + guest allocator
+      # tracking) — compile-and-run, seconds of wall time.
+      - name: Run C++ SDK tests
+        if: runner.os == 'Linux'
+        run: make -C sdks/cpp test
 
   windows:
     name: Windows (build + tests)

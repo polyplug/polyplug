@@ -718,15 +718,33 @@ impl LuaLoader {
         // as the first parameter to each HostApi function call.
         let host_interface_i64: i64 = host_interface as usize as i64;
         let ctx_ptr: i64 = &ctx as *const polyplug_abi::BundleInitContext as i64;
-        let init_result: Result<(), mlua::Error> =
-            init_fn.call::<()>((host_interface_i64, ctx_ptr));
+        let init_result: Result<Value, mlua::Error> =
+            init_fn.call::<Value>((host_interface_i64, ctx_ptr));
 
-        init_result.map_err(|e: mlua::Error| {
+        let init_value: Value = init_result.map_err(|e: mlua::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.clone(),
                 error: format!("Lua polyplug_init raised error: {}", e),
             })
         })?;
+
+        // Honor the AbiError code returned by polyplug_init. Generated guests
+        // return an AbiErrorCode number (Ok = 0); handler-table-only fixtures
+        // return nothing (nil), which is treated as success. A non-zero code
+        // means the guest refused to initialize — fail the load with that code
+        // instead of silently treating the bundle as loaded.
+        let init_code: u32 = match &init_value {
+            Value::Integer(code) => *code as u32,
+            Value::Number(code) => *code as u32,
+            Value::Table(t) => t.get::<u32>("code").unwrap_or(0_u32),
+            _ => 0_u32,
+        };
+        if init_code != AbiErrorCode::Ok as u32 {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.clone(),
+                error: format!("Lua polyplug_init returned error code {}", init_code),
+            }));
+        }
 
         // Read the handler table that polyplug_init populated. Its shape is
         // per-contract: `_polyplug_handlers[contract_name] = { contract_version,

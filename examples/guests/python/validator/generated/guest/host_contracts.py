@@ -63,11 +63,11 @@ class HostLoggerContract:
         dispatch_type: int = iface.dispatch_type
         class _ArgsPack(ctypes.Structure):
             _fields_ = [
-                ("level", LogLevel),
+                ("level", ctypes.c_uint32),
                 ("message", StringView),
             ]
         args_val: _ArgsPack = _ArgsPack()
-        args_val.level = level
+        args_val.level = int(level)
         message_bytes: bytes = message.encode('utf-8')
         args_val.message = StringView(ptr=ctypes.cast(ctypes.c_char_p(message_bytes), ctypes.c_void_p), len=len(message_bytes))
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(args_val), ctypes.c_void_p)

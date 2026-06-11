@@ -104,7 +104,11 @@ for entry in "${CPP_FIXTURES[@]}"; do
         exit 1
     fi
 
-    g++ -std=c++20 -fPIC -shared -O2 "${src}" -o "${out}"
+    # The fixtures include the real ABI SDK header (<polyplug/abi.hpp>) instead
+    # of hand-rolled struct mirrors, so the SDK include path is required.
+    g++ -std=c++20 -fPIC -shared -O2 \
+        -I "${SCRIPT_DIR}/../../sdks/cpp/abi" \
+        "${src}" -o "${out}"
     echo "  ${lib_name} -> tests/fixtures/${lib_name}"
 done
 

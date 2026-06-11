@@ -495,3 +495,6 @@ perf.data.old
 examples/hosts/cpp/host
 examples/hosts/cpp/hot_reload_host
 examples/hosts/cpp/*.d
+
+# C++ SDK test runner artifacts (built by sdks/cpp/Makefile)
+sdks/cpp/build/

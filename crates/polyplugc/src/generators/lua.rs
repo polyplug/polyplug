@@ -1912,18 +1912,76 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
 // ─── Host Interface Factories Generation ─────────────────────────────────────────
 
 /// Generate all host-side interface factories into a single file.
+///
+/// LuaJIT FFI callbacks cannot return structs by value (a documented NYI), so a
+/// LuaJIT host can never produce native-dispatch thunks (which return `AbiError`
+/// by value) nor `create_instance` stubs (which return `HostContractInstance` by
+/// value) in pure Lua. The factories therefore register host contracts with VM
+/// dispatch routed through the native trampoline exported by the lua loader
+/// cdylib (`polyplug_lua_host_vm_dispatch` plus the instance stubs in
+/// `crates/polyplug_lua/src/ffi.rs`); all per-contract marshalling lives in a
+/// scalar-only LuaJIT dispatcher callback that the trampoline forwards to.
 fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(file_header());
+    out.push_str("-- Requires the polyplug_abi cdefs (HostContractInterface, AbiError, ...);\n");
+    out.push_str("-- the host must require(\"polyplug_abi\") before requiring this module.\n");
     out.push_str("local ffi = require(\"ffi\")\n\n");
 
     out.push_str("-- ABI error codes (match polyplug_abi.AbiErrorCode)\n");
     out.push_str("local AbiErrorCode = {\n");
     out.push_str("    Ok = 0,\n");
     out.push_str("    Panic = 3,\n");
+    out.push_str("    FunctionNotAvailable = 6,\n");
     out.push_str("}\n\n");
 
+    out.push_str(cdef_guarded_block());
+
+    // Bridge + trampoline declarations, resolved from the lua loader cdylib
+    // (libpolyplug_lua). Layout must match `PolyplugLuaHostDispatchBridge` and
+    // the exported trampoline signatures in crates/polyplug_lua/src/ffi.rs.
+    out.push_str("cdef_guarded([[\n");
+    out.push_str(
+        "    typedef uint32_t (*PolyplugLuaHostDispatchCallback)(uint32_t, const void*, void*);\n",
+    );
+    out.push_str("    typedef struct PolyplugLuaHostDispatchBridge {\n");
+    out.push_str("        PolyplugLuaHostDispatchCallback callback;\n");
+    out.push_str("    } PolyplugLuaHostDispatchBridge;\n");
+    out.push_str(
+        "    AbiError polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*);\n",
+    );
+    out.push_str(
+        "    HostContractInstance polyplug_lua_host_create_instance(const HostContractInterface*, const void*);\n",
+    );
+    out.push_str(
+        "    void polyplug_lua_host_destroy_instance(const HostContractInterface*, HostContractInstance);\n",
+    );
+    out.push_str("]])\n\n");
+
+    // Arg-pack structs for multi-parameter host contract functions. Layout
+    // mirrors the guest-side callers' packs (same field order/types); the
+    // guest callers cdef identically laid out structs under their own names.
+    let mut pack_cdefs: String = String::new();
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_lua_class(&contract.name);
+        for func in &contract.functions {
+            if needs_arg_pack(&func.params) {
+                emit_lua_arg_pack_struct(&mut pack_cdefs, &class_name, func);
+            }
+        }
+    }
+    if !pack_cdefs.is_empty() {
+        out.push_str("cdef_guarded([[\n");
+        out.push_str(&pack_cdefs);
+        out.push_str("]])\n\n");
+    }
+
     out.push_str("local M = {}\n\n");
+
+    out.push_str("-- Anchors for cdata that must stay alive after a factory returns: the\n");
+    out.push_str("-- runtime keeps the interface pointer for its whole lifetime and every\n");
+    out.push_str("-- dispatch reaches the bridge + callback. Module-local (per-VM) state.\n");
+    out.push_str("local _anchors = {}\n\n");
 
     for contract in &ir.host_contracts {
         generate_lua_host_interface_factory(&mut out, contract);
@@ -1933,250 +1991,170 @@ fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out
 }
 
-/// Generate interface factories for one host contract.
+/// Generate the interface factory for one host contract.
+///
+/// The factory takes the implementation table plus the lua loader cdylib handle
+/// (an `ffi.load` clib exposing the `polyplug_lua_host_*` trampolines) and
+/// returns a fully populated `HostContractInterface` with VM dispatch. The
+/// per-function marshalling runs in a scalar-only LuaJIT dispatcher callback —
+/// the only callback shape LuaJIT can create (no struct-by-value args/returns).
 fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHostContract) {
     let class_name: String = host_contract_name_to_lua_class(&contract.name);
     let factory_name: String = format!(
         "create_{}_interface",
         contract.name.replace('.', "_").to_lowercase()
     );
-    let factory_vm_name: String = format!(
-        "create_{}_interface_vm",
-        contract.name.replace('.', "_").to_lowercase()
-    );
-    let fn_count: usize = contract.functions.len();
     let contract_id: u64 = contract.contract_id;
     let major: u32 = contract.version.major;
     let minor: u32 = contract.version.minor;
-    let singleton: bool = contract.singleton;
+    let patch: u32 = contract.version.patch;
+    let singleton: u8 = if contract.singleton { 1_u8 } else { 0_u8 };
+    let singleton_comment: &str = if contract.singleton {
+        "singleton"
+    } else {
+        "multi-instance"
+    };
 
-    // NATIVE dispatch factory
     out.push_str(&format!(
-        "-- Create a host contract interface for `{}` with NATIVE dispatch.\n",
+        "-- Create a host contract interface for `{}` (VM dispatch via the lua\n",
         contract.name
     ));
-    out.push_str("--\n");
-    out.push_str("-- Takes an implementation table and creates an interface.\n");
-    out.push_str("-- The implementation must have methods matching the contract.\n");
-    out.push_str("--\n");
-    out.push_str("-- Memory:\n");
-    out.push_str(
-        "-- The returned interface is cached and lives for the lifetime of the program.\n",
-    );
-    out.push_str(&format!("function M.{factory_name}(impl)\n"));
-    out.push_str(&format!("    _{class_name}_impl = impl\n\n"));
-
-    // Generate thunks for each function
-    for func in &contract.functions {
-        generate_lua_host_thunk(out, func, &contract.name, &class_name);
-    }
-
-    // Static function pointer array
-    out.push_str(&format!(
-        "    local functions = ffi.new(\"void*[{fn_count}]\")\n"
-    ));
-    for (idx, func) in contract.functions.iter().enumerate() {
-        let thunk_name: String = format!(
-            "_{}_{}_thunk",
-            contract.name.replace('.', "_").to_lowercase(),
-            func.name
-        );
-        out.push_str(&format!(
-            "    functions[{idx}] = ffi.cast(\"void*\", ffi.cast(\"uint32_t (*)(const void*, const void*, void*)\", {thunk_name}))\n"
-        ));
-    }
-    out.push('\n');
-
-    // Create the interface
-    out.push_str("    local interface = ffi.new(\"HostContractVTable\")\n");
-    out.push_str("    interface.header.vtable_version = 1\n");
-    out.push_str(&format!(
-        "    interface.header.contract_id = 0x{contract_id:016X}ULL\n"
-    ));
-    out.push_str(&format!("    interface.header.contract_major = {major}\n"));
-    out.push_str(&format!("    interface.header.contract_minor = {minor}\n"));
-    out.push_str(&format!(
-        "    interface.header.function_count = {fn_count}\n"
-    ));
-    out.push_str(&format!(
-        "    interface.header.singleton = {singleton}  -- {}\n",
-        if singleton {
-            "singleton"
-        } else {
-            "multi-instance"
-        }
-    ));
-    out.push_str("    interface.header.dispatch_type = 0  -- DispatchType.Native\n");
-    out.push_str("    interface.dispatch.native.impl_ptr = nil  -- We use global _impl instead\n");
-    out.push_str("    interface.dispatch.native.functions = functions\n\n");
-    out.push_str("    return interface\n");
-    out.push_str("end\n\n");
-
-    // Global implementation storage
-    out.push_str(&format!("_{class_name}_impl = nil\n\n"));
-
-    // VM dispatch factory
-    out.push_str(&format!(
-        "-- Create a host contract interface for `{}` with VM dispatch.\n",
-        contract.name
-    ));
-    out.push_str("--\n");
-    out.push_str("-- Used when the host implementation is in a VM language (Python, Lua, JS).\n");
+    out.push_str("-- loader trampoline — see the file header for why native dispatch is\n");
+    out.push_str("-- impossible under LuaJIT).\n");
     out.push_str("--\n");
     out.push_str("-- Arguments:\n");
-    out.push_str("--     bridge_data: Opaque pointer to VM-specific data\n");
-    out.push_str("--     dispatch_fn: Function to call for each contract function\n");
+    out.push_str("--     impl: implementation table with methods matching the contract\n");
+    out.push_str("--     lua_bridge_lib: ffi.load handle for the lua loader cdylib\n");
+    out.push_str(
+        "--         (libpolyplug_lua), e.g. require('polyplug.loaders.lua').bridge_lib()\n",
+    );
     out.push_str("--\n");
     out.push_str("-- Memory:\n");
     out.push_str(
-        "-- The returned interface is cached and lives for the lifetime of the program.\n",
+        "-- The returned interface is anchored and lives for the lifetime of the program.\n",
     );
     out.push_str(&format!(
-        "function M.{factory_vm_name}(bridge_data, dispatch_fn)\n"
-    ));
-    out.push_str("    local interface = ffi.new(\"HostContractVTable\")\n");
-    out.push_str("    interface.header.vtable_version = 1\n");
-    out.push_str(&format!(
-        "    interface.header.contract_id = 0x{contract_id:016X}ULL\n"
-    ));
-    out.push_str(&format!("    interface.header.contract_major = {major}\n"));
-    out.push_str(&format!("    interface.header.contract_minor = {minor}\n"));
-    out.push_str(&format!(
-        "    interface.header.function_count = {fn_count}\n"
+        "function M.{factory_name}(impl, lua_bridge_lib)\n"
     ));
     out.push_str(&format!(
-        "    interface.header.singleton = {singleton}  -- {}\n",
-        if singleton {
-            "singleton"
-        } else {
-            "multi-instance"
-        }
+        "    if impl == nil then\n        error(\"{factory_name}: impl is nil\")\n    end\n"
     ));
-    out.push_str("    interface.header.dispatch_type = 1  -- DispatchType.VirtualMachine\n");
-    out.push_str("    interface.dispatch.vm.call = dispatch_fn\n");
-    out.push_str("    interface.dispatch.vm.bridge_data = bridge_data\n\n");
-    out.push_str("    return interface\n");
-    out.push_str("end\n\n");
-}
+    out.push_str(&format!(
+        "    if lua_bridge_lib == nil then\n        error(\"{factory_name}: lua_bridge_lib is nil (pass the lua loader cdylib handle)\")\n    end\n\n"
+    ));
 
-/// Generate a thunk function for a host contract function.
-fn generate_lua_host_thunk(
-    out: &mut String,
-    func: &ResolvedFunction,
-    contract_name: &str,
-    class_name: &str,
-) {
-    let thunk_name: String = format!(
-        "_{}_{}_thunk",
-        contract_name.replace('.', "_").to_lowercase(),
-        func.name
-    );
-    let has_return: bool = func.returns.is_some();
-
-    out.push_str(&format!(
-        "    local function {thunk_name}(impl_ptr, args, out)\n"
-    ));
-    out.push_str("        local ok, err = pcall(function()\n");
-    out.push_str(&format!("            local impl = _{class_name}_impl\n"));
-    out.push_str("            if impl == nil then\n");
-    out.push_str("                return AbiErrorCode.Panic\n");
-    out.push_str("            end\n");
-
-    // Generate argument extraction
-    if !func.params.is_empty() {
-        generate_lua_host_thunk_args(out, func);
-    } else {
-        out.push_str("            local _ = args\n");
+    // Scalar-only dispatcher: (fn_id, args, out) -> AbiErrorCode number.
+    out.push_str("    local function dispatch(fn_id, args, out)\n");
+    out.push_str("        local ok, code = pcall(function()\n");
+    for (idx, func) in contract.functions.iter().enumerate() {
+        out.push_str(&format!("            if fn_id == {idx} then\n"));
+        generate_lua_host_dispatch_args(out, &class_name, func);
+        generate_lua_host_dispatch_call(out, func);
+        out.push_str("                return AbiErrorCode.Ok\n");
+        out.push_str("            end\n");
     }
-
-    // Generate the method call
-    generate_lua_host_thunk_call(out, func, has_return);
-
-    // Handle return value
-    if has_return {
-        out.push_str("            -- SAFETY: out is a valid pointer per ABI contract.\n");
-        out.push_str("            ffi.copy(out, result, ffi.sizeof(result))\n");
-    } else {
-        out.push_str("            local _ = out\n");
-    }
-
-    out.push_str("            return AbiErrorCode.Ok\n");
+    out.push_str("            return AbiErrorCode.FunctionNotAvailable\n");
     out.push_str("        end)\n");
     out.push_str("        if not ok then\n");
     out.push_str("            return AbiErrorCode.Panic\n");
     out.push_str("        end\n");
-    out.push_str("        return err\n");
+    out.push_str("        return code\n");
     out.push_str("    end\n\n");
+
+    // Bridge + interface construction. The callback cast anchors the LuaJIT
+    // callback object; bridge and interface are plain cdata.
+    out.push_str("    local callback = ffi.cast(\"PolyplugLuaHostDispatchCallback\", dispatch)\n");
+    out.push_str("    local bridge = ffi.new(\"PolyplugLuaHostDispatchBridge\")\n");
+    out.push_str("    bridge.callback = callback\n\n");
+
+    out.push_str("    local interface = ffi.new(\"HostContractInterface\")\n");
+    out.push_str(&format!(
+        "    interface.contract_id = 0x{contract_id:016X}ULL\n"
+    ));
+    out.push_str(&format!("    interface.contract_version.major = {major}\n"));
+    out.push_str(&format!("    interface.contract_version.minor = {minor}\n"));
+    out.push_str(&format!("    interface.contract_version.patch = {patch}\n"));
+    out.push_str(&format!(
+        "    interface.singleton = {singleton}  -- {singleton_comment}\n"
+    ));
+    out.push_str("    interface.dispatch_type = ffi.C.DispatchType_VirtualMachine\n");
+    out.push_str("    interface.runtime = nil  -- set by the runtime during registration\n");
+    out.push_str("    interface.user_data = ffi.cast(\"void*\", bridge)\n");
+    out.push_str(
+        "    interface.create_instance = lua_bridge_lib.polyplug_lua_host_create_instance\n",
+    );
+    out.push_str(
+        "    interface.destroy_instance = lua_bridge_lib.polyplug_lua_host_destroy_instance\n",
+    );
+    out.push_str("    interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_host_vm_dispatch\n");
+    out.push_str("    interface.dispatch.vm.loader_data.data = ffi.cast(\"void*\", bridge)\n\n");
+
+    out.push_str(
+        "    _anchors[#_anchors + 1] = { interface = interface, bridge = bridge, callback = callback, impl = impl }\n",
+    );
+    out.push_str("    return interface\n");
+    out.push_str("end\n\n");
 }
 
-/// Generate argument extraction for a host thunk.
-fn generate_lua_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
+/// Emit argument extraction for one host-contract dispatcher branch.
+///
+/// Single-parameter functions receive a pointer directly to the value;
+/// multi-parameter functions receive a pointer to the arg-pack struct emitted
+/// by `emit_lua_arg_pack_struct` (same layout as the guest callers' packs).
+fn generate_lua_host_dispatch_args(out: &mut String, class_name: &str, func: &ResolvedFunction) {
+    if func.params.is_empty() {
+        return;
+    }
     if func.params.len() == 1 {
         let param: &ResolvedParam = &func.params[0];
-        let ty_name: String = lua_host_abi_type_name(&param.ty);
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                 out.push_str(&format!(
-                    "            local {name}_sv = ffi.cast(\"StringView*\", args)[0]\n",
+                    "                local {name}_sv = ffi.cast(\"const StringView*\", args)[0]\n",
                     name = param.name
                 ));
                 out.push_str(&format!(
-                    "            local {name} = ffi.string({name}_sv.ptr, {name}_sv.len)\n",
+                    "                local {name} = ffi.string({name}_sv.ptr, {name}_sv.len)\n",
                     name = param.name
                 ));
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
                 out.push_str(&format!(
-                    "            local {name}_buf = ffi.cast(\"Buffer*\", args)[0]\n",
+                    "                local {name}_buf = ffi.cast(\"const Buffer*\", args)[0]\n",
                     name = param.name
                 ));
                 out.push_str(&format!(
-                    "            local {name} = ffi.string({name}_buf.ptr, {name}_buf.len)\n",
+                    "                local {name} = ffi.string({name}_buf.ptr, {name}_buf.len)\n",
                     name = param.name
                 ));
             }
-            ResolvedTypeRef::UserDefined(_) => {
+            other => {
+                let ty_name: String = lua_type_name(other);
                 out.push_str(&format!(
-                    "            local {name} = ffi.cast(\"{ty}*\", args)[0]\n",
-                    name = param.name,
-                    ty = ty_name
-                ));
-            }
-            _ => {
-                out.push_str(&format!(
-                    "            local {name} = ffi.cast(\"{ty}*\", args)[0]\n",
+                    "                local {name} = ffi.cast(\"const {ty}*\", args)[0]\n",
                     name = param.name,
                     ty = ty_name
                 ));
             }
         }
     } else {
-        // Multiple params - use arg-pack struct
-        let pack_struct: String = format!("{}Args", func.name.to_uppercase());
+        let pack_struct: String = arg_pack_struct_name(class_name, &func.name);
         out.push_str(&format!(
-            "            local packed = ffi.cast(\"{pack_struct}*\", args)[0]\n"
+            "                local packed = ffi.cast(\"const {pack_struct}*\", args)[0]\n"
         ));
-        // Extract each param from the packed struct
         for param in &func.params {
             match &param.ty {
-                ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                ResolvedTypeRef::AbiType(AbiBuiltin::StringView)
+                | ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
                     out.push_str(&format!(
-                        "            local {name} = ffi.string(packed.{name}.ptr, packed.{name}.len)\n",
-                        name = param.name
-                    ));
-                }
-                ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
-                    out.push_str(&format!(
-                        "            local {name} = ffi.string(packed.{name}.ptr, packed.{name}.len)\n",
+                        "                local {name} = ffi.string(packed.{name}.ptr, packed.{name}.len)\n",
                         name = param.name
                     ));
                 }
                 _ => {
-                    let ty_name: String = lua_host_param_type_annotation(&param.ty);
                     out.push_str(&format!(
-                        "            local {name}: {ty} = packed.{name}\n",
-                        name = param.name,
-                        ty = ty_name
+                        "                local {name} = packed.{name}\n",
+                        name = param.name
                     ));
                 }
             }
@@ -2184,47 +2162,37 @@ fn generate_lua_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
     }
 }
 
-/// Generate the method call inside a host thunk.
-fn generate_lua_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_return: bool) {
-    let call_args: String = if func.params.is_empty() {
-        String::new()
-    } else if func.params.len() == 1 {
-        let param: &ResolvedParam = &func.params[0];
-        param.name.clone()
-    } else {
-        func.params
-            .iter()
-            .map(|p: &ResolvedParam| p.name.clone())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+/// Emit the implementation call (and result store) for one dispatcher branch.
+///
+/// Scalar returns are written through a typed out-pointer; struct returns
+/// (StringView/Buffer/user types) require the implementation to return cdata of
+/// the matching C type, which is copied into the out slot by assignment.
+fn generate_lua_host_dispatch_call(out: &mut String, func: &ResolvedFunction) {
+    let call_args: String = func
+        .params
+        .iter()
+        .map(|p: &ResolvedParam| p.name.clone())
+        .collect::<Vec<_>>()
+        .join(", ");
 
-    if has_return {
-        let _ret_ty: String = match func.returns.as_ref() {
-            Some(ret) => lua_host_abi_type_name(ret),
+    if has_return_value(&func.returns) {
+        out.push_str(&format!(
+            "                local result = impl:{func_name}({call_args})\n",
+            func_name = func.name
+        ));
+        let ret_ty: String = match func.returns.as_ref() {
+            Some(ret) => lua_type_name(ret),
             None => String::from("void"),
         };
         out.push_str(&format!(
-            "            local result = impl:{func_name}({call_args})\n",
-            func_name = func.name
+            "                ffi.cast(\"{ret_ty}*\", out)[0] = result\n"
         ));
     } else {
         out.push_str(&format!(
-            "            impl:{func_name}({call_args})\n",
+            "                impl:{func_name}({call_args})\n",
             func_name = func.name
         ));
-    }
-}
-
-/// Generate ABI type name for host thunk arguments.
-fn lua_host_abi_type_name(ty: &ResolvedTypeRef) -> String {
-    match ty {
-        ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => name.clone(),
+        out.push_str("                local _ = out\n");
     }
 }
 
@@ -3010,5 +2978,140 @@ mod tests {
             out.contains("return out_val"),
             "StringView return must use return out_val: {out}"
         );
+    }
+
+    // ─── Host Interface Factory Tests ──────────────────────────────────────────
+
+    fn host_logger_ir() -> ValidatedIr {
+        ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: crate::ir::Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                singleton: false,
+                functions: vec![
+                    ResolvedFunction {
+                        name: "log".to_owned(),
+                        function_id: 0,
+                        params: vec![ResolvedParam {
+                            name: "message".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        }],
+                        returns: None,
+                    },
+                    ResolvedFunction {
+                        name: "log_with_level".to_owned(),
+                        function_id: 1,
+                        params: vec![
+                            ResolvedParam {
+                                name: "level".to_owned(),
+                                ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                            },
+                            ResolvedParam {
+                                name: "message".to_owned(),
+                                ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                            },
+                        ],
+                        returns: None,
+                    },
+                ],
+            }],
+            bundle: None,
+        }
+    }
+
+    /// The factory must populate the REAL ABI `HostContractInterface` struct —
+    /// the old output wrote `interface.header.*` fields on a fictional
+    /// `HostContractVTable` that no cdef ever defined.
+    #[test]
+    fn lua_host_interface_factory_uses_real_abi_struct() {
+        let out: String = generate_lua_host_interface_factories_file(&host_logger_ir());
+        assert!(
+            out.contains("ffi.new(\"HostContractInterface\")"),
+            "factory must build the real ABI struct: {out}"
+        );
+        assert!(
+            !out.contains("HostContractVTable"),
+            "fictional HostContractVTable must be gone: {out}"
+        );
+        assert!(
+            !out.contains("interface.header"),
+            "HostContractInterface has no header wrapper: {out}"
+        );
+        assert!(
+            out.contains("interface.contract_version.major = 1"),
+            "version must be set on the real field: {out}"
+        );
+        assert!(
+            out.contains("interface.singleton = 0  -- multi-instance"),
+            "singleton must be a numeric uint8_t value: {out}"
+        );
+        assert!(
+            out.contains(
+                "interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_host_vm_dispatch"
+            ),
+            "dispatch must route through the lua loader trampoline: {out}"
+        );
+        assert!(
+            out.contains(
+                "interface.create_instance = lua_bridge_lib.polyplug_lua_host_create_instance"
+            ),
+            "create_instance must use the native stub: {out}"
+        );
+    }
+
+    /// Multi-parameter functions must cast to an arg-pack struct that the SAME
+    /// file cdefs (guarded), using the canonical pack-struct naming — the old
+    /// output cast to `LOG_WITH_LEVELArgs*` which was never cdef'd anywhere.
+    #[test]
+    fn lua_host_interface_factory_cdefs_arg_pack_structs() {
+        let out: String = generate_lua_host_interface_factories_file(&host_logger_ir());
+        assert!(
+            out.contains("} HostLoggerLogWithLevelArgs;"),
+            "arg-pack struct must be cdef'd in the factories file: {out}"
+        );
+        assert!(
+            out.contains("ffi.cast(\"const HostLoggerLogWithLevelArgs*\", args)"),
+            "dispatcher must cast to the cdef'd pack struct: {out}"
+        );
+        assert!(
+            !out.contains("LOG_WITH_LEVELArgs"),
+            "uppercased never-cdef'd pack name must be gone: {out}"
+        );
+    }
+
+    /// The dispatcher must be plain Lua — the old output emitted
+    /// `local level: userdata = ...`, which is not Lua syntax at all.
+    #[test]
+    fn lua_host_interface_factory_emits_valid_lua_syntax() {
+        let out: String = generate_lua_host_interface_factories_file(&host_logger_ir());
+        assert!(
+            !out.contains(": userdata"),
+            "type-annotation syntax is not Lua: {out}"
+        );
+        assert!(
+            out.contains("local level = packed.level"),
+            "pack fields must be extracted with plain assignments: {out}"
+        );
+        // Every generated factory line must survive a Lua parse: no `local x: T`.
+        for line in out.lines() {
+            let trimmed: &str = line.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("local ") {
+                assert!(
+                    !rest
+                        .split('=')
+                        .next()
+                        .is_some_and(|lhs: &str| lhs.contains(':')),
+                    "invalid Lua type annotation in generated line: {line}"
+                );
+            }
+        }
     }
 }

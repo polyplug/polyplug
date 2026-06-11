@@ -658,7 +658,8 @@ fn register_host_functions<'js>(
          vtable_obj: Object<'js>,
          fn_count: u32,
          contract_name: String,
-         contract_version: u32| {
+         contract_version: u32|
+         -> Result<(), rquickjs::Error> {
             let contract_id: u64 = (contract_hi as u64) << 32 | contract_lo as u64;
             let fn_count_usize: usize = fn_count as usize;
 
@@ -667,14 +668,28 @@ fn register_host_functions<'js>(
             let functions_array: Object<'js> =
                 match vtable_obj.get::<&str, Object<'js>>("functions") {
                     Ok(arr) => arr,
-                    Err(_) => return,
+                    Err(_) => {
+                        return Err(rquickjs::Exception::throw_message(
+                            &ctx,
+                            &format!(
+                                "registerVtable: vtable for contract '{contract_name}' has no 'functions' array"
+                            ),
+                        ));
+                    }
                 };
 
             for i in 0..fn_count_usize {
                 let func: Function<'js> = match functions_array.get::<u32, Function<'js>>(i as u32)
                 {
                     Ok(f) => f,
-                    Err(_) => return,
+                    Err(_) => {
+                        return Err(rquickjs::Exception::throw_message(
+                            &ctx,
+                            &format!(
+                                "registerVtable: vtable for contract '{contract_name}' declares fnCount={fn_count} but functions[{i}] is missing or not a function"
+                            ),
+                        ));
+                    }
                 };
                 let func_persistent: Persistent<Function<'static>> = Persistent::save(&ctx, func);
                 functions.push(func_persistent);
@@ -691,10 +706,16 @@ fn register_host_functions<'js>(
             let slot_guard: UserDataGuard<Rc<RefCell<Option<JsRegistrationData>>>> =
                 match ctx.userdata::<Rc<RefCell<Option<JsRegistrationData>>>>() {
                     Some(guard) => guard,
-                    None => return,
+                    None => {
+                        return Err(rquickjs::Exception::throw_message(
+                            &ctx,
+                            "registerVtable: registration slot missing from VM userdata (loader bug)",
+                        ));
+                    }
                 };
             let mut cell: core::cell::RefMut<Option<JsRegistrationData>> = slot_guard.borrow_mut();
             *cell = Some(data);
+            Ok(())
         },
     )
     .map_err(|e: rquickjs::Error| {
@@ -1543,14 +1564,50 @@ impl JsLoader {
             let ctx_lo: f64 = (ctx_usize as u32) as f64;
             let ctx_hi: f64 = ((ctx_usize >> 32) as u32) as f64;
 
-            init_fn
-                .call::<(f64, f64, f64, f64), ()>((host_lo, host_hi, ctx_lo, ctx_hi))
+            let init_value: Value<'_> = init_fn
+                .call::<(f64, f64, f64, f64), Value<'_>>((host_lo, host_hi, ctx_lo, ctx_hi))
                 .map_err(|e: rquickjs::Error| {
+                    let thrown: Value<'_> = ctx_ref.catch();
+                    let detail: String = match thrown.as_exception() {
+                        Some(exc) => exc.message().unwrap_or_else(|| e.to_string()),
+                        None => e.to_string(),
+                    };
                     RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: manifest.name.clone(),
-                        error: format!("JS runtime js-quickjs error: polyplug_init call failed: {e}"),
+                        error: format!(
+                            "JS runtime js-quickjs error: polyplug_init call failed: {detail}"
+                        ),
                     })
                 })?;
+
+            // Honor the AbiError returned by polyplug_init. Generated guests
+            // return `{ code, message }`; a bare number is also accepted.
+            // `undefined` is treated as success. A non-zero code means the
+            // guest refused to initialize — fail the load with that code and
+            // message instead of silently treating the bundle as loaded.
+            let (init_code, init_message): (u32, Option<String>) =
+                if let Some(obj) = init_value.as_object() {
+                    let code: u32 = obj.get::<&str, f64>("code").unwrap_or(0.0_f64) as u32;
+                    let message: Option<String> =
+                        obj.get::<&str, Option<String>>("message").unwrap_or(None);
+                    (code, message)
+                } else if let Some(num) = init_value.as_number() {
+                    (num as u32, None)
+                } else {
+                    (0_u32, None)
+                };
+            if init_code != AbiErrorCode::Ok as u32 {
+                let detail: String = match init_message {
+                    Some(msg) if !msg.is_empty() => format!(" ({msg})"),
+                    _ => String::new(),
+                };
+                return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "JS runtime js-quickjs error: polyplug_init returned error code {init_code}{detail}"
+                    ),
+                }));
+            }
 
             Ok::<(), RuntimeError>(())
         });

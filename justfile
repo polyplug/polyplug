@@ -327,6 +327,17 @@ test-integration:
     @echo "=== Running Integration Tests ==="
     cargo test --{{profile}} -p integration
 
+# Run C++ SDK test programs (ABI layout static_asserts + guest allocator tracking)
+test-sdk-cpp:
+    @echo "=== Running C++ SDK Tests ==="
+    make -C {{sdks_dir}}/cpp test
+
+# Run C# SDK xunit suites (abi.tests layout/helper + host.tests runtime)
+test-sdk-csharp:
+    @echo "=== Running C# SDK Tests ==="
+    dotnet test {{sdks_dir}}/csharp/abi.tests/Polyplug.Abi.Tests.csproj
+    dotnet test {{sdks_dir}}/csharp/host.tests/Polyplug.Host.Tests.csproj
+
 # Run C++ host-lib tests
 test-host-cpp:
     @echo "=== Running C++ Host Lib Tests ==="
@@ -386,7 +397,10 @@ test-host-js:
     @if ! [ -f {{sdks_dir}}/js/host/tests/reload_notification_test.ts ]; then \
         echo "NOT IMPLEMENTED: sdks/js/host/tests/reload_notification_test.ts not found"; \
     elif command -v deno >/dev/null 2>&1; then \
-        cd {{sdks_dir}}/js/host/tests && deno test reload_notification_test.ts; \
+        cd {{sdks_dir}}/js/host/tests && deno test reload_notification_test.ts && \
+        POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug.so}" \
+        POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug_native.so}" \
+        deno test -A reload_runtime_test.ts; \
     else \
         echo "deno not installed, skipping"; \
     fi

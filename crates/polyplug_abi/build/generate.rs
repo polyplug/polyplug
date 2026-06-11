@@ -1746,6 +1746,28 @@ fn generate_csharp_layout_tests(sized_structs: &[(&str, usize)]) -> String {
         ));
     }
 
+    // Field OFFSET asserts for the frozen tail of HostApi and the logging
+    // fields of RuntimeConfig. Size-only asserts cannot catch a transposed
+    // or dropped field that another field's padding silently compensates
+    // for; these offsets are frozen ABI (see CLAUDE.md: call_guest_method
+    // @136, unload_bundle @144, log @152, reserved @160; RuntimeConfig log
+    // @32, log_user_data @40, log_max_level @48).
+    let offset_asserts: [(&str, &str, usize); 7] = [
+        ("HostApi", "CallGuestMethod", 136),
+        ("HostApi", "UnloadBundle", 144),
+        ("HostApi", "Log", 152),
+        ("HostApi", "Reserved", 160),
+        ("RuntimeConfig", "Log", 32),
+        ("RuntimeConfig", "LogUserData", 40),
+        ("RuntimeConfig", "LogMaxLevel", 48),
+    ];
+    for (struct_name, field, offset) in offset_asserts {
+        output.push_str(&format!(
+            "        [Fact]\n        public void {struct_name}{field}AtOffset{offset}() => \
+             Assert.Equal((nint){offset}, Marshal.OffsetOf<{struct_name}>(nameof({struct_name}.{field})));\n\n",
+        ));
+    }
+
     output.push_str("    }\n}\n");
     output
 }

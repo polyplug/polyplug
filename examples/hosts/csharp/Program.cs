@@ -151,6 +151,16 @@ class Program
         rt.RegisterJsLoader();
         rt.RegisterDotnetLoader();
 
+        // Register the host.logger contract through the GENERATED factory so
+        // plugins can call back into the host (mirrors the rust/cpp hosts).
+        // The interface struct is copied into unmanaged memory that the runtime
+        // keeps for its whole lifetime — intentionally never freed.
+        HostContractInterface loggerIface =
+            InterfaceFactories.CreateHostLoggerInterface(new ConsoleLogger());
+        nint loggerIfacePtr = Marshal.AllocHGlobal(Marshal.SizeOf<HostContractInterface>());
+        Marshal.StructureToPtr(loggerIface, loggerIfacePtr, false);
+        rt.RegisterHostContract(loggerIfacePtr);
+
         var bundles = Directory.GetDirectories(pluginPath)
             .Where(dir => File.Exists(Path.Combine(dir, "manifest.toml")))
             .ToList();
@@ -248,5 +258,32 @@ class Program
         }
 
         Console.WriteLine("\ndone.");
+    }
+}
+
+/// <summary>
+/// Host-side implementation of the `host.logger` contract.
+/// Mirrors the rust/cpp reference hosts' ConsoleLogger output format.
+/// </summary>
+class ConsoleLogger : IHostLogger
+{
+    public void Log(string message)
+    {
+        Console.WriteLine($"[plugin] {message}");
+    }
+
+    // LogLevel spelled out: Polyplug.Abi also defines a LogLevel (the runtime
+    // logging funnel levels), which is ambiguous here.
+    public void LogWithLevel(ref Polyplug.Generated.LogLevel level, string message)
+    {
+        string levelStr = level switch
+        {
+            Polyplug.Generated.LogLevel.Debug => "DEBUG",
+            Polyplug.Generated.LogLevel.Info => "INFO",
+            Polyplug.Generated.LogLevel.Warn => "WARN",
+            Polyplug.Generated.LogLevel.Error => "ERROR",
+            _ => "INFO",
+        };
+        Console.WriteLine($"[plugin][{levelStr}] {message}");
     }
 }

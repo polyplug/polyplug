@@ -24,7 +24,6 @@ from polyplug_abi import (
     Array,
     Compatibility,
     DispatchMechanisms,
-    DispatchType,
     GuestContractHandle,
     GuestContractInstance,
     GuestContractInterface,
@@ -35,8 +34,6 @@ from polyplug_abi import (
     ReloadPhaseType,
     RuntimeConfig,
     StringView,
-    Version,
-    VmDispatch,
 )
 
 # The ABI-level ReloadPhase ctypes Structure (48-byte struct passed by value to
@@ -54,8 +51,6 @@ COMPATIBILITY_STRICT: int = Compatibility.Strict
 COMPATIBILITY_RELAXED: int = Compatibility.Relaxed
 COMPATIBILITY_YOLO: int = Compatibility.Yolo
 
-# DispatchType enum values for host contracts
-DISPATCH_TYPE_VIRTUAL_MACHINE: int = DispatchType.VirtualMachine
 # GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes, align 4).
 # The null handle sentinel has index == u32::MAX (0xFFFFFFFF) and generation == 0.
 _NULL_HANDLE_INDEX: int = (1 << 32) - 1
@@ -214,10 +209,10 @@ class Runtime:
         self._c_callback: Optional[ctypes.CFUNCTYPE] = None
         self._runtime_config: Optional[RuntimeConfig] = None
 
-        # Per-instance host-contract keepalives: implementation objects, ctypes
-        # dispatch callbacks, and interface structs, keyed by contract_id.
-        self._host_contract_impls: dict[int, Callable[[int, int, int], None]] = {}
-        self._host_contract_callbacks: dict[int, ctypes.CFUNCTYPE] = {}
+        # Per-instance host-contract keepalives: registered interface structs
+        # (with their thunks/stubs anchored on `_keepalive`), keyed by
+        # contract_id. The runtime holds raw pointers into these for its whole
+        # lifetime, so they must stay alive on THIS instance (Rule 12).
         self._host_contract_interfaces: dict[int, HostContractInterface] = {}
 
         # Create HostApi (options or default)
@@ -438,65 +433,26 @@ class Runtime:
         # No explicit release needed - the registry manages lifetimes
         pass
 
-    def register_host_contract(
-        self,
-        contract_id: int,
-        contract_major: int,
-        contract_minor: int,
-        function_count: int,
-        impl: Callable[[int, int, int], None],
-    ) -> None:
-        """Register a host contract implementation.
+    def register_host_contract(self, interface: HostContractInterface) -> None:
+        """Register a fully populated host contract interface with the runtime.
 
-        The implementation, dispatch callback, and interface struct are kept
-        alive on THIS instance (per-runtime, keyed by contract_id) — never on
-        the class, where a second runtime registering the same contract_id
-        would clobber the first (Rule 12).
+        The interface comes from a GENERATED factory
+        (``generated/host/interface_factories.py``: ``create_*_interface``),
+        which builds the thunks, instance stubs, and dispatch table with the
+        correct ABI signatures and anchors them on ``interface._keepalive``.
+
+        The interface struct is kept alive on THIS instance (per-runtime,
+        keyed by contract_id) — never on the class, where a second runtime
+        registering the same contract_id would clobber the first (Rule 12).
+        The runtime holds the raw pointer for its whole lifetime.
         """
         host: int = self._ensure_host()
 
-        # Store implementation to keep it alive (instance-owned).
-        self._host_contract_impls[contract_id] = impl
-
-        # Create dispatch callback
-        @ctypes.CFUNCTYPE(
-            ctypes.c_uint32,
-            ctypes.c_void_p,
-            ctypes.c_uint32,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-        )
-        def dispatch_callback(bridge_data: int, fn_id: int, args_ptr: int, out_ptr: int) -> int:
-            impl_func = self._host_contract_impls.get(contract_id)
-            if impl_func is None:
-                return AbiErrorCode.HostContractNotFound
-            try:
-                impl_func(fn_id, args_ptr, out_ptr)
-                return AbiErrorCode.Ok
-            except Exception:
-                return AbiErrorCode.HostContractCallFailed
-
-        # Store callback (instance-owned keepalive).
-        self._host_contract_callbacks[contract_id] = dispatch_callback
-
-        # Create HostContractInterface (flat struct per D-25)
-        interface = HostContractInterface()
-        interface.contract_id = contract_id
-        interface.contract_version = Version(
-            major=contract_major, minor=contract_minor, patch=0
-        )
-        interface.singleton = True
-        interface.dispatch_type = DISPATCH_TYPE_VIRTUAL_MACHINE
-        interface.runtime = 0  # Set by runtime during registration
-        interface.create_instance = ctypes.cast(None, type(interface.create_instance))
-        interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))
-        interface.dispatch.vm.call = ctypes.cast(dispatch_callback, type(interface.dispatch.vm.call))
-        interface.dispatch.vm.loader_data = VmDispatch().loader_data
-
-        # Store interface (instance-owned keepalive).
+        contract_id: int = interface.contract_id
+        # Instance-owned keepalive: the struct address must stay stable and
+        # alive for the runtime lifetime.
         self._host_contract_interfaces[contract_id] = interface
 
-        # Register via HostApi
         interface_ptr = ctypes.addressof(interface)
         err: AbiError = self._register_host_contract_fn(host, interface_ptr)
         if err.code == AbiErrorCode.DuplicateProvider:

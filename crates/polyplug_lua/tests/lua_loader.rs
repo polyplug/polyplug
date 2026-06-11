@@ -1129,3 +1129,65 @@ fn guest_log_bridge_delivers_records_and_clamps_level() {
         "expected out-of-range level 99 to clamp to Error, got: {captured:?}"
     );
 }
+
+// ── polyplug_init returned AbiError code ──────────────────────────────────────
+
+/// A plugin whose `polyplug_init` registers handlers but returns a non-zero
+/// AbiErrorCode must FAIL to load with that code in the error message.
+/// Before the fix the loader discarded the return value and treated the
+/// bundle as loaded.
+#[test]
+fn load_init_returning_error_code_fails_load() {
+    let (_dir, path) = write_temp_bundle(
+        "lua_loader_init_err_code",
+        br#"
+local function impl_noop(_args_ptr, _out_ptr) end
+function polyplug_init(_reg, _ctx)
+    _G._polyplug_handlers = {
+        ["test.initerr"] = {
+            contract_version = 1,
+            plugin_name      = "test-init-err",
+            functions        = { [0] = impl_noop },
+        },
+    }
+    return 1  -- AbiErrorCode.Generic
+end
+"#,
+    );
+    let result: Result<(), RuntimeError> = load_script(&path, "lua_loader_init_err_code");
+    assert!(result.is_err(), "non-zero init code must fail the load");
+    let err: RuntimeError = result.expect_err("expected Err for non-zero init code");
+    match &err {
+        RuntimeError::Loader(LoaderError::InitFailed { error, .. }) => {
+            assert!(
+                error.contains("returned error code 1"),
+                "error must carry the returned code, got: {error}"
+            );
+        }
+        other => panic!("expected InitFailed, got: {other:?}"),
+    }
+}
+
+/// A plugin whose `polyplug_init` explicitly returns AbiErrorCode.Ok (0)
+/// must load successfully — the return-value check must not reject success.
+#[test]
+fn load_init_returning_ok_code_succeeds() {
+    let (_dir, path) = write_temp_bundle(
+        "lua_loader_init_ok_code",
+        br#"
+local function impl_noop(_args_ptr, _out_ptr) end
+function polyplug_init(_reg, _ctx)
+    _G._polyplug_handlers = {
+        ["test.initok"] = {
+            contract_version = 1,
+            plugin_name      = "test-init-ok",
+            functions        = { [0] = impl_noop },
+        },
+    }
+    return 0  -- AbiErrorCode.Ok
+end
+"#,
+    );
+    let result: Result<(), RuntimeError> = load_script(&path, "lua_loader_init_ok_code");
+    assert!(result.is_ok(), "explicit Ok return must load: {result:?}");
+}
