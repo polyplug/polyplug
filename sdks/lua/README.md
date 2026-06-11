@@ -167,6 +167,53 @@ local runtime = polyplug.Runtime.new({
   never unwind across the C ABI
 - See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
 
+## Custom Logger
+
+Pass `log` (and optionally `log_max_level`) to `Runtime.new(opts)` to receive
+every runtime diagnostic — and guest log lines routed through the
+`HostApi.log` funnel — in a Lua function:
+
+```lua
+local polyplug = require("polyplug")
+
+local runtime = polyplug.Runtime.new({
+    log = function(level, scope, message)
+        -- level is a number (polyplug.LogLevel.Error .. .Trace),
+        -- scope/message are plain Lua strings (already copied — safe to keep).
+        io.stderr:write(string.format("[%d][%s] %s\n", level, scope, message))
+    end,
+    log_max_level = polyplug.LogLevel.Info, -- default: polyplug.LogLevel.Warn
+})
+```
+
+**How it works (and why it needs the lua loader cdylib):** the ABI callback
+`RuntimeConfig.log` receives its `scope`/`message` `StringView`s **by value**
+(deliberate — hot path), and LuaJIT FFI callbacks cannot receive structs by
+value. The SDK therefore installs `polyplug_lua_log_trampoline` — a native
+trampoline exported by the `polyplug_lua` loader cdylib — as `RuntimeConfig.log`
+and carries a `PolyplugLuaLogBridge` (scalar-only LuaJIT callback + user_data)
+in `log_user_data`. The trampoline decomposes the views into ptr+len scalars
+and forwards them; the SDK converts them to Lua strings before your function
+runs.
+
+**Key points:**
+- Requires the `polyplug_lua` loader cdylib (set `POLYPLUG_LUA_LIB` or have
+  `libpolyplug_lua` on the loader path) and the lua loaders package on
+  `package.path` — `Runtime.new` raises a descriptive error otherwise
+- Your function runs on **whatever thread the runtime logs from**; do not
+  touch thread-affine state and never re-enter the runtime from inside it
+- Errors raised inside the callback are caught and logged to stderr — they
+  never unwind across the C ABI
+- Levels above `log_max_level` are filtered before any formatting work —
+  disabled levels cost nothing
+- Without `log`, the default sink writes Error/Warn to stderr and drops the
+  rest
+- The callback cdata and bridge are anchored per Runtime instance and released
+  on `destroy()` (no module-level state)
+- Measured delivery cost: ~255 ns per delivered log line (trampoline +
+  LuaJIT callback + `ffi.string` copies + user function); see
+  `crates/polyplug/benches/README.md`
+
 ## Performance Notes
 
 - **Backend**: LuaJIT FFI (required)

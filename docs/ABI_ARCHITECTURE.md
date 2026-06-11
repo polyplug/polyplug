@@ -72,7 +72,12 @@ every runtime diagnostic at or below `log_max_level` (`LogLevel { Error = 1,
 Warn = 2, Info = 3, Debug = 4, Trace = 5 }`); when null, Error/Warn messages go
 to stderr and `log_max_level` is ignored. The callback may run on any thread,
 must not re-enter the runtime, and the `StringView`s are only valid for the
-duration of the call. `UnloadMode { Retire = 0 (default), Reclaim = 1 }`
+duration of the call. The by-value `StringView` parameters are deliberate (hot
+path, no copies); LuaJIT FFI callbacks cannot receive structs by value, so the
+Lua host SDK installs the `polyplug_lua_log_trampoline` exported by the
+polyplug_lua loader cdylib as `log` and carries a scalar-callback
+`PolyplugLuaLogBridge` in `log_user_data` (see
+`crates/polyplug_lua/src/ffi.rs`). `UnloadMode { Retire = 0 (default), Reclaim = 1 }`
 selects whether `unload_bundle` frees loader-owned resources (e.g. native `dlclose`)
 or keeps them mapped (retire-not-drop). The `on_reload` callback —
 `fn(user_data, phase: *const ReloadPhase)` — receives a **const pointer** to a

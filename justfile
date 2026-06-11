@@ -392,7 +392,10 @@ test-host-lua:
         cd {{sdks_dir}}/lua/host/tests && luajit test_reload_notification.lua && \
         POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug.so}" \
         POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug_native.so}" \
-        luajit test_reload_runtime.lua; \
+        luajit test_reload_runtime.lua && \
+        POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug.so}" \
+        POLYPLUG_LUA_LIB="${POLYPLUG_LUA_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug_lua.so}" \
+        luajit test_log_runtime.lua; \
     else \
         echo "luajit not installed, skipping"; \
     fi

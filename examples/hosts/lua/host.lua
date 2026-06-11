@@ -93,7 +93,20 @@ end
 local plugin_path = get_plugin_path()
 io.stderr:write('loading plugins from: ' .. plugin_path .. '\n\n')
 
-local rt = polyplug.Runtime.new()
+-- Custom runtime logger: receives every runtime diagnostic AND guest log
+-- lines routed through the funnel (HostApi.log -> RuntimeConfig.log). The SDK
+-- routes it through the polyplug_lua loader cdylib's log trampoline because
+-- LuaJIT callbacks cannot receive the ABI's by-value StringViews. Output goes
+-- to STDERR only — verify_hosts.sh requires the hosts' pipeline stdout to stay
+-- byte-identical across languages. The callback runs on whatever thread the
+-- runtime logs from.
+local rt = polyplug.Runtime.new({
+    log = function(level, scope, message)
+        io.stderr:write(string.format('[host-log][%d][%s] %s\n', level, scope, message))
+    end,
+    -- Info: also surface guest lifecycle log lines, not just Error/Warn.
+    log_max_level = polyplug.LogLevel.Info,
+})
 
 -- Register loaders for every runtime the example plugins may use. Loaders whose
 -- backing cdylib is unavailable are skipped so the host still runs for the rest.

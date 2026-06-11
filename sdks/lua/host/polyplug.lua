@@ -66,6 +66,7 @@ end
 
 M.NULL_HANDLE_INDEX = runtime.NULL_HANDLE_INDEX
 M.AbiErrorCode = abi.AbiErrorCode
+M.LogLevel = runtime.LogLevel
 
 M.bundle_id = abi.bundle_id
 M.guest_contract_id = abi.guest_contract_id

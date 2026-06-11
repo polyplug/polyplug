@@ -956,6 +956,14 @@ export interface RuntimeConfig {
      *    from inside the callback may deadlock).
      *  - The `scope` and `message` `StringView`s are valid only for the
      *    duration of the call — copy the bytes to retain them.
+     * 
+     *  # Language note (LuaJIT hosts)
+     *  The by-value `StringView` parameters are deliberate — the hot path
+     *  stays copy-free. LuaJIT FFI callbacks cannot receive structs by value,
+     *  so a Lua host cannot implement this signature directly; the Lua host
+     *  SDK instead installs `polyplug_lua_log_trampoline` (exported by the
+     *  polyplug_lua loader cdylib) here and carries a scalar-callback bridge
+     *  in `log_user_data`.
      */
     log: number;
     /**

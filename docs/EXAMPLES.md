@@ -152,6 +152,16 @@ The Rust host (`hosts/rust/`) is the primary reference: it is the most complete
 and most closely tracks internal API changes. Read it alongside the generated
 code in `hosts/rust/generated/` to understand the full host-side flow.
 
+The Lua host additionally installs a **custom runtime logger**
+(`Runtime.new{ log = ..., log_max_level = ... }`, routed through the
+`polyplug_lua` loader cdylib's log trampoline because LuaJIT callbacks cannot
+receive the ABI's by-value `StringView`s). Its output goes to **stderr** as
+`[host-log][<level>][<scope>] <message>` lines so the pipeline stdout stays
+byte-identical across hosts (`verify_hosts.sh`). The lua decoder guest emits a
+one-time `guest.lua_decoder` Info line through the funnel on its first
+dispatch (visible from any host whose logger delivers Info). See
+`sdks/lua/README.md` § Custom Logger.
+
 ### Cross-language parity host (`hosts/parity/`)
 
 A dedicated Rust host that loads each contract from every language and asserts

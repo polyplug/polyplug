@@ -15,6 +15,23 @@ ffi.cdef([[
     // on_reload callback pointer lives INSIDE RuntimeConfig (offset 8).
     const HostApi* polyplug_runtime_create(const void* config);
     void polyplug_runtime_destroy(const HostApi* host);
+
+    // ─── Custom-logger bridge (polyplug_lua loader-cdylib trampoline) ───
+    // LuaJIT FFI callbacks cannot receive structs by value, so a Lua host can
+    // never install RuntimeConfig.log directly (its scope/message StringViews
+    // are BY VALUE — deliberate, hot path). The polyplug_lua loader cdylib
+    // exports polyplug_lua_log_trampoline with the exact RuntimeConfig.log
+    // signature; it reads a PolyplugLuaLogBridge from log_user_data and
+    // forwards the views as ptr+len scalars to the LuaJIT-creatable callback
+    // below. Mirrors crates/polyplug_lua/src/ffi.rs::PolyplugLuaLogBridge.
+    typedef void (*PolyplugLuaLogCallbackFn)(
+        void*, uint32_t, const uint8_t*, size_t, const uint8_t*, size_t);
+    typedef struct PolyplugLuaLogBridge {
+        PolyplugLuaLogCallbackFn callback;
+        void* user_data;
+    } PolyplugLuaLogBridge;
+    void polyplug_lua_log_trampoline(void* user_data, uint32_t level,
+                                     StringView scope, StringView message);
 ]])
 
 local M = {}
@@ -27,6 +44,18 @@ local FNV_PRIME = 0x00000100000001B3ULL
 -- handle is index == u32::MAX. Null checks test the `.index` field of the returned cdata.
 M.NULL_HANDLE_INDEX = 0xFFFFFFFF
 M.AbiErrorCode = abi.AbiErrorCode
+
+-- Log severity levels for the opts.log callback of Runtime.new, read from the
+-- ABI LogLevel enum cdef'd by abi.lua (single source — cannot drift). Lower
+-- values are more severe; a record is delivered only when
+-- `level <= log_max_level`.
+M.LogLevel = {
+    Error = tonumber(ffi.C.LogLevel_Error),
+    Warn  = tonumber(ffi.C.LogLevel_Warn),
+    Info  = tonumber(ffi.C.LogLevel_Info),
+    Debug = tonumber(ffi.C.LogLevel_Debug),
+    Trace = tonumber(ffi.C.LogLevel_Trace),
+}
 
 -- Exact FFI signature used for HostApi.find_all_guest_contracts. The return
 -- type is the ABI `Array` struct BY VALUE (24 bytes: items ptr + len size_t +
@@ -115,19 +144,31 @@ M.Runtime.__index = M.Runtime
 -- Uses HostApi-based API: polyplug_runtime_create returns HostApi*.
 --
 -- All configuration is per-instance (Rule 12: no module statics shared
--- across runtimes). The reload-callback FFI cdata is owned by the returned
--- Runtime and released on destroy().
+-- across runtimes). The reload-callback and log-callback FFI cdata are owned
+-- by the returned Runtime and released on destroy().
 -- @param opts table|nil  Optional options table:
---   opts.config    table     { compatibility = number, hot_reload_enabled = boolean }
---   opts.on_reload function  Callback receiving a ReloadPhase table.
+--   opts.config        table     { compatibility = number, hot_reload_enabled = boolean }
+--   opts.on_reload     function  Callback receiving a ReloadPhase table.
+--   opts.log           function  Custom logger `function(level, scope, message)`
+--                                receiving every runtime diagnostic; level is a
+--                                number (see M.LogLevel), scope/message are Lua
+--                                strings. Requires the polyplug_lua loader
+--                                cdylib (the SDK routes through its exported
+--                                log trampoline — LuaJIT callbacks cannot
+--                                receive the ABI's by-value StringViews).
+--   opts.log_max_level number    Maximum delivered level (see M.LogLevel);
+--                                defaults to M.LogLevel.Warn. Only meaningful
+--                                with opts.log.
 -- @return Runtime             The runtime instance.
 function M.Runtime.new(opts)
     local lib = get_lib()
     opts = opts or {}
     local host_ptr
     local reload_cb_cdata = nil
+    local log_cb_cdata = nil
+    local log_bridge = nil
 
-    if opts.config or opts.on_reload then
+    if opts.config or opts.on_reload or opts.log then
         -- Build a single RuntimeConfig; the on_reload callback pointer lives
         -- inside it — there is no separate options wrapper.
         local config_c = ffi.new("RuntimeConfig", {
@@ -178,6 +219,64 @@ function M.Runtime.new(opts)
             config_c.on_reload = reload_cb_cdata
         end
 
+        if opts.log then
+            -- Custom logger. The ABI signature for RuntimeConfig.log passes
+            -- the scope/message StringViews BY VALUE (deliberate — hot path),
+            -- which LuaJIT FFI callbacks cannot receive. The SDK therefore
+            -- installs the native polyplug_lua_log_trampoline exported by the
+            -- polyplug_lua loader cdylib as RuntimeConfig.log; it reads the
+            -- PolyplugLuaLogBridge below from log_user_data and forwards the
+            -- views as ptr+len scalars to this LuaJIT callback.
+            --
+            -- THREAD AFFINITY: the user function runs on whatever thread the
+            -- runtime logs from (the RuntimeConfig.log contract is
+            -- any-thread). Do not touch thread-affine state inside it, and
+            -- never re-enter the runtime from the callback.
+            --
+            -- The callback body is wrapped in pcall: a logger must never
+            -- crash the runtime, and a Lua error must never unwind across
+            -- the C ABI.
+            local log_fn = opts.log
+            log_cb_cdata = ffi.cast("PolyplugLuaLogCallbackFn", function(
+                _user_data, level, scope_ptr, scope_len, msg_ptr, msg_len
+            )
+                local ok, cb_err = pcall(function()
+                    -- Copy the views into interned Lua strings BEFORE the user
+                    -- fn runs: the pointers are only valid for this call.
+                    local scope = scope_len > 0 and ffi.string(scope_ptr, scope_len) or ""
+                    local message = msg_len > 0 and ffi.string(msg_ptr, msg_len) or ""
+                    log_fn(tonumber(level), scope, message)
+                end)
+                if not ok then
+                    io.stderr:write("polyplug: log callback error: " .. tostring(cb_err) .. "\n")
+                end
+            end)
+
+            -- Resolve the trampoline from the polyplug_lua loader cdylib via
+            -- the loaders module — the SAME clib handle the vm-dispatch host
+            -- interface factories use (the module caches its ffi.load handle
+            -- for the process lifetime, so the symbol stays valid). The
+            -- require is lazy on purpose: hosts that never pass opts.log do
+            -- not need the loaders package on package.path.
+            local ok_tramp, trampoline = pcall(function()
+                return require('polyplug.loaders.lua').bridge_lib().polyplug_lua_log_trampoline
+            end)
+            if not ok_tramp then
+                log_cb_cdata:free()
+                error("polyplug: opts.log requires the polyplug_lua loader cdylib "
+                    .. "(set POLYPLUG_LUA_LIB and put the lua loaders package on "
+                    .. "package.path): " .. tostring(trampoline))
+            end
+
+            log_bridge = ffi.new("PolyplugLuaLogBridge")
+            log_bridge.callback = log_cb_cdata
+            log_bridge.user_data = nil -- the Lua closure already captures log_fn
+
+            config_c.log = trampoline
+            config_c.log_user_data = log_bridge
+            config_c.log_max_level = opts.log_max_level or M.LogLevel.Warn
+        end
+
         -- config_c stays anchored (local) for the duration of the create call;
         -- the runtime copies what it needs before returning.
         host_ptr = lib.polyplug_runtime_create(config_c)
@@ -188,6 +287,9 @@ function M.Runtime.new(opts)
     if host_ptr == nil then
         if reload_cb_cdata ~= nil then
             reload_cb_cdata:free()
+        end
+        if log_cb_cdata ~= nil then
+            log_cb_cdata:free()
         end
         error("polyplug_runtime_create failed: returned null HostApi")
     end
@@ -201,6 +303,14 @@ function M.Runtime.new(opts)
         -- Owned reload-callback cdata: must outlive the native runtime (the
         -- runtime may invoke it until destroy), freed in destroy()/GC.
         _reload_cb_cdata = reload_cb_cdata,
+        -- Owned log-callback cdata + bridge cdata (Rule 12: per-instance, not
+        -- module state). RuntimeConfig.log_user_data points at _log_bridge and
+        -- the runtime may log from any thread until destroy, so BOTH must stay
+        -- anchored here for the runtime's lifetime; the callback slot is freed
+        -- in destroy()/GC (the bridge cdata is reclaimed by the Lua GC once
+        -- unreferenced).
+        _log_cb_cdata = log_cb_cdata,
+        _log_bridge = log_bridge,
         _destroyed = false
     }
     local obj = setmetatable(self, M.Runtime)
@@ -213,6 +323,11 @@ function M.Runtime.new(opts)
                 self._reload_cb_cdata:free()
                 self._reload_cb_cdata = nil
             end
+            if self._log_cb_cdata ~= nil then
+                self._log_cb_cdata:free()
+                self._log_cb_cdata = nil
+            end
+            self._log_bridge = nil
         end
     end)
     return obj
@@ -376,7 +491,8 @@ end
 
 --- Destroy the runtime explicitly.
 -- Call polyplug_runtime_destroy on the HostApi, then release the owned
--- reload-callback FFI cdata (the runtime may invoke it up until destroy).
+-- reload-callback and log-callback FFI cdata (the runtime may invoke them up
+-- until destroy).
 function M.Runtime:destroy()
     if self._host ~= nil and not self._destroyed then
         self._lib.polyplug_runtime_destroy(self._host)
@@ -386,6 +502,11 @@ function M.Runtime:destroy()
             self._reload_cb_cdata:free()
             self._reload_cb_cdata = nil
         end
+        if self._log_cb_cdata ~= nil then
+            self._log_cb_cdata:free()
+            self._log_cb_cdata = nil
+        end
+        self._log_bridge = nil
     end
 end
 

@@ -366,6 +366,33 @@ teardown, so the bench does not leak (the `drop_frees_all_blocks` unit test in
 
 ---
 
+### Lua custom-logger delivery path (measured in the Lua SDK test, not criterion)
+
+`sdks/lua/host/tests/test_log_runtime.lua` carries an opt-in
+(`POLYPLUG_BENCH_ITERS`-gated) measurement of the Lua host custom-logger
+delivery path: one `polyplug_lua_log_trampoline` call (the exact
+`RuntimeConfig.log` signature, StringViews by value) → `PolyplugLuaLogBridge`
+read → LuaJIT scalar callback → two `ffi.string` copies → user Lua function.
+
+- **~255 ns per delivered log line** locally (`LOGPATH_NS=254–261`,
+  2M iterations, release build).
+- This cost is paid **only for delivered records**: levels above
+  `log_max_level` are filtered inside the runtime before any formatting work,
+  so disabled levels stay zero-cost, and dispatch hot paths never touch the
+  logger at all.
+
+Run it:
+
+```bash
+cargo build --release -p polyplug -p polyplug_lua
+POLYPLUG_BENCH_ITERS=2000000 \
+POLYPLUG_LIB=$PWD/target/release/libpolyplug.so \
+POLYPLUG_LUA_LIB=$PWD/target/release/libpolyplug_lua.so \
+luajit sdks/lua/host/tests/test_log_runtime.lua
+```
+
+---
+
 ## Future benchmark ideas (documented, not yet built)
 
 These are worth building, but each has a caveat that keeps it from being a clean
