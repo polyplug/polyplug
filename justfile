@@ -637,6 +637,13 @@ bench-roundtrip iters="200000":
     @echo "=== Cross-language round-trip matrix ({{iters}} iters/cell) ==="
     POLYPLUG_BENCH_ITERS={{iters}} bash examples/hosts/roundtrip_bench.sh
 
+# Measure the BARE host → runtime call (one find_guest_contract lookup, no guest
+# dispatch) in every example host language and refresh cross_lang_host.svg.
+# Same prerequisites as bench-roundtrip (workspace + example plugins built).
+bench-hostcall iters="200000":
+    @echo "=== Host-call overhead by app language ({{iters}} iters/host) ==="
+    POLYPLUG_BENCH_ITERS={{iters}} bash examples/hosts/roundtrip_bench.sh --hostcall
+
 # Flamegraph-profile a single benchmark (requires cargo-flamegraph + perf).
 # Usage: just flamegraph [bench] [package]
 # Examples:

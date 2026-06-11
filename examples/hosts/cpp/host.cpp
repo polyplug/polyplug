@@ -254,6 +254,40 @@ int main() {
         }
     }
 
+    // Host-call micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS): times the BARE
+    // host → runtime call — one find_guest_contract per iteration through the
+    // HostApi function pointer (one C ABI hop + the runtime's registry lookup),
+    // no guest dispatch. Every returned handle is null-checked and the hit count
+    // accumulates into a volatile sink so the loop cannot be dead-code eliminated.
+    if (const char* hostcall_iters_env = std::getenv("POLYPLUG_BENCH_ITERS")) {
+        const long iters = std::atol(hostcall_iters_env);
+        if (iters > 0) {
+            const long warmup = iters < 10000 ? iters : 10000;
+            volatile long hits = 0;
+            for (long i = 0; i < warmup; ++i) {
+                if (polyplug::is_valid(rt.find_guest_contract(PIPELINE_DECODER_CONTRACT_ID, 0))) {
+                    hits = hits + 1;
+                }
+            }
+            hits = 0;
+            const auto start = std::chrono::steady_clock::now();
+            for (long i = 0; i < iters; ++i) {
+                if (polyplug::is_valid(rt.find_guest_contract(PIPELINE_DECODER_CONTRACT_ID, 0))) {
+                    hits = hits + 1;
+                }
+            }
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            const double ns =
+                std::chrono::duration<double, std::nano>(elapsed).count() / static_cast<double>(iters);
+            if (hits == iters) {
+                std::cout << "HOSTCALL_NS=" << ns << " LANG=cpp\n";
+            } else {
+                std::cerr << "HOSTCALL bench: lookup missed (" << hits << "/" << iters
+                          << " hits) — no result printed\n";
+            }
+        }
+    }
+
     std::cout << "\ndone.\n";
 
     return 0;

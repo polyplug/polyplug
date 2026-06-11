@@ -20,6 +20,7 @@ import {
   PipelineEncoderContract,
   DataReporterContract,
   PipelineValidatorContract,
+  PIPELINE_DECODER_CONTRACT_ID,
 } from "./generated/host/callers.ts";
 
 const pluginPath = Deno.env.get("POLYPLUG_PLUGIN_PATH")
@@ -181,6 +182,34 @@ if (benchIters) {
     const t1 = performance.now();
     console.log(`ROUNDTRIP_NS=${(((t1 - t0) * 1e6) / n).toFixed(2)} LANG=js`);
     benchDecoder.destroy();
+  }
+}
+
+// Host-call micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS): times the BARE
+// host → runtime call — one findGuestContract per iteration through the HostApi
+// function pointer (one Deno FFI hop + the runtime's registry lookup), no guest
+// dispatch. Every returned handle is null-checked and the hit count is verified,
+// so the lookup result is observably consumed each iteration.
+if (benchIters) {
+  const n = parseInt(benchIters, 10);
+  if (n > 0) {
+    const NULL_INDEX = 0xFFFFFFFF;
+    const warmup = Math.min(n, 10000);
+    let hits = 0;
+    for (let i = 0; i < warmup; i++) {
+      if (rt.findGuestContract(PIPELINE_DECODER_CONTRACT_ID, 0).index !== NULL_INDEX) hits++;
+    }
+    hits = 0;
+    const t0 = performance.now();
+    for (let i = 0; i < n; i++) {
+      if (rt.findGuestContract(PIPELINE_DECODER_CONTRACT_ID, 0).index !== NULL_INDEX) hits++;
+    }
+    const t1 = performance.now();
+    if (hits === n) {
+      console.log(`HOSTCALL_NS=${(((t1 - t0) * 1e6) / n).toFixed(2)} LANG=js`);
+    } else {
+      console.error(`HOSTCALL bench: lookup missed (${hits}/${n} hits) — no result printed`);
+    }
   }
 }
 

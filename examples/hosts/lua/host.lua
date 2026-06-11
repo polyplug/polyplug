@@ -227,4 +227,37 @@ if bench_iters then
     end
 end
 
+-- Host-call micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS): times the BARE
+-- host → runtime call — one find_guest_contract per iteration through the HostApi
+-- function pointer (one LuaJIT FFI hop + the runtime's registry lookup), no guest
+-- dispatch. Every returned handle is null-checked and the hit count is verified,
+-- so the lookup result is observably consumed each iteration.
+if bench_iters then
+    local n = tonumber(bench_iters)
+    if n and n > 0 then
+        local cid = callers.PIPELINE_DECODER_CONTRACT_ID
+        local warmup = math.min(n, 10000)
+        local hits = 0
+        for _ = 1, warmup do
+            if rt:find_guest_contract(cid, 0).index ~= polyplug.NULL_HANDLE_INDEX then
+                hits = hits + 1
+            end
+        end
+        hits = 0
+        local t0 = os.clock()
+        for _ = 1, n do
+            if rt:find_guest_contract(cid, 0).index ~= polyplug.NULL_HANDLE_INDEX then
+                hits = hits + 1
+            end
+        end
+        local t1 = os.clock()
+        if hits == n then
+            print(string.format('HOSTCALL_NS=%.2f LANG=lua', (t1 - t0) * 1e9 / n))
+        else
+            io.stderr:write(string.format(
+                'HOSTCALL bench: lookup missed (%d/%d hits) — no result printed\n', hits, n))
+        end
+    end
+end
+
 print('\ndone.')

@@ -472,6 +472,40 @@ def chart_amortization(criterion_dir: Path, out: Path) -> None:
     )
 
 
+def chart_hero(criterion_dir: Path, out: Path) -> None:
+    """README hero: one plugin call end to end, every bar live from criterion.
+
+    One log-scale chart that tells the whole story at a glance: what a plugin
+    call costs next to a direct call and raw FFI, and what each VM language
+    adds. Sources (all `median.point_estimate`, per-call via throughput):
+      - direct call / raw FFI / polyplug native : the counter_inc_1m arms
+      - .NET   : clr_dispatch/clr_init_call (warm [UnmanagedCallersOnly])
+      - Lua    : lua_dispatch/vm_dispatch_single_call (warm LuaJIT call)
+      - JS     : cached_dispatch/cached_context_single_call (cached QuickJS ctx)
+      - Python : cached_dispatch/cached_python_single_call (GIL held, cached fn)
+    """
+    rows: list = [
+        ("direct function call (no plugins)", per_call_ns(criterion_dir, "counter_inc_1m/native/inline_never"), _FLOOR),
+        ("raw FFI (dlsym, no safety)", per_call_ns(criterion_dir, "counter_inc_1m/ffi/by_value"), _FLOOR),
+        ("polyplug — native plugin (Rust/C++)", per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch"), _HILITE),
+        ("polyplug — .NET plugin", per_call_ns(criterion_dir, "clr_dispatch/clr_init_call"), _NEUTRAL),
+        ("polyplug — Lua plugin (LuaJIT)", per_call_ns(criterion_dir, "lua_dispatch/vm_dispatch_single_call"), _NEUTRAL),
+        ("polyplug — JS plugin (QuickJS)", per_call_ns(criterion_dir, "cached_dispatch/cached_context_single_call"), _NEUTRAL),
+        ("polyplug — Python plugin (cached)", per_call_ns(criterion_dir, "cached_dispatch/cached_python_single_call"), _SLOW),
+    ]
+    _chart_hbar_log(
+        out,
+        "One plugin call, end to end",
+        "time to call one plugin function and get the answer back, by plugin language "
+        "(log scale, lower is better)",
+        rows,
+        "All bars measured live by cargo bench on one machine. A native plugin costs about "
+        "one extra nanosecond over a raw function call; VM plugins add their interpreter's "
+        "warm per-call cost (Python: GIL held, function cached — its cold arm is slower, "
+        "see PERFORMANCE.md). A bar twice as long is 10x slower (log scale).",
+    )
+
+
 # ─── cross-language comparison (log-scale horizontal bars) ────────────────────
 #
 # These two charts compare the *languages* against each other, in both
@@ -480,11 +514,10 @@ def chart_amortization(criterion_dir: Path, out: Path) -> None:
 #   - host  = an application written in language X calling INTO the runtime
 #
 # The guest bars are read live from each loader's warm steady-state dispatch
-# bench (VM/context already created, function cached) so they stay current and
-# comparable. The host-FFI numbers are hardcoded ESTIMATES (no dedicated
-# host-call bench exists yet — only the Rust floor is benched); the chart
-# labels itself accordingly. All numbers are illustrative — one machine;
-# trust the ordering.
+# bench (VM/context already created, function cached). The host bars are read
+# live from the HOSTCALL sweep (`examples/hosts/roundtrip_bench.sh --hostcall`),
+# which times one find_guest_contract call through the runtime in every example
+# host. All numbers are from one machine; trust the ordering.
 
 
 def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
@@ -574,35 +607,68 @@ def chart_cross_language_matrix(data_path: Path, out: Path) -> None:
     )
 
 
-def chart_cross_language_host(criterion_dir: Path, out: Path) -> None:
-    """Per-call FFI overhead, host -> runtime, by host language (log scale).
+def _read_hostcall(path: Path) -> dict:
+    """Parse `<host> <ns>` lines from examples/hosts/roundtrip_bench.sh --hostcall."""
+    data: dict = {}
+    for line in path.read_text().splitlines():
+        parts: list = line.split()
+        if len(parts) == 2:
+            try:
+                data[parts[0]] = float(parts[1])
+            except ValueError:
+                continue
+    return data
 
-    ESTIMATES, NOT MEASUREMENTS: these row values are hardcoded order-of-magnitude
-    figures (only the Rust floor is backed by a bench, counter_inc). A measured
-    host-call bench will replace them and make this chart live-sourced; until
-    then the chart itself says so. C# is deliberately absent: there is no
-    single-boundary estimate for it, and mixing in the measured end-to-end
-    matrix cell would compare a different quantity — see cross_lang_matrix.
+
+# Fixed row order + per-host label/color for the host-call chart. The mechanism
+# each host pays to cross into the runtime is part of the label so the chart
+# explains itself.
+_HOSTCALL_ROWS: list = [
+    ("rust", "Rust (links the crate, no FFI)", _HILITE),
+    ("cpp", "C++ (C ABI)", _NEUTRAL),
+    ("csharp", "C# (.NET function pointer)", _NEUTRAL),
+    ("lua", "Lua (LuaJIT FFI)", _NEUTRAL),
+    ("js", "JavaScript (Deno FFI)", _NEUTRAL),
+    ("python", "Python (ctypes)", _SLOW),
+]
+
+
+def chart_cross_language_host(data_path: Path, out: Path) -> bool:
+    """Per-call host → runtime cost, by host language (log scale), measured.
+
+    Reads `<host> <ns>` rows produced by `examples/hosts/roundtrip_bench.sh
+    --hostcall`: each example host times one find_guest_contract call through
+    the runtime (one FFI hop + the registry lookup, no guest dispatch) in a
+    POLYPLUG_BENCH_ITERS-gated loop. Without a data file the chart is left
+    untouched — it never regenerates from assumptions. Returns True if the
+    SVG was written.
     """
+    if not data_path.is_file():
+        print(
+            f"  skip {out.name}: no host-call data file at {data_path} "
+            "(run examples/hosts/roundtrip_bench.sh --hostcall)",
+            file=sys.stderr,
+        )
+        return False
+    raw: dict = _read_hostcall(data_path)
     rows: list = [
-        ("Rust (links the crate, no FFI)", 2.0, _HILITE),
-        ("C++ (native)", 15.0, _NEUTRAL),
-        ("Lua (LuaJIT FFI)", 35.0, _NEUTRAL),
-        ("JavaScript (Deno FFI)", 75.0, _NEUTRAL),
-        ("Python (cffi ABI)", 380.0, _SLOW),
-        ("Python (ctypes)", 670.0, _SLOW),
+        (label, raw[host], color) for host, label, color in _HOSTCALL_ROWS if host in raw
     ]
+    if not rows:
+        print(f"  skip {out.name}: no host-call data in {data_path}", file=sys.stderr)
+        return False
     _chart_hbar_log(
         out,
-        "Reaching the runtime, by app language (ESTIMATES)",
-        "estimated orders of magnitude — NOT measurements; a measured host-call bench "
-        "lands in a future update. See cross_lang_matrix for measured end-to-end numbers.",
+        "Reaching the runtime, by app language",
+        "one find_guest_contract call through the runtime, per host language — "
+        "measured, log scale, lower is better",
         rows,
-        "Only the Rust floor is benched (counter_inc); the other bars are estimates of the "
-        "bare FFI hop, pending a dedicated host-call bench. C# is omitted: no single-boundary "
-        "estimate exists, and the measured csharp matrix cell is end-to-end (a different "
-        "quantity). Trust the ordering, not the digits — see docs/PERFORMANCE.md.",
+        "Each bar is measured live: the example host for that language calls "
+        "find_guest_contract in a tight loop (one FFI hop + the runtime's registry lookup; "
+        "no guest code runs). Rust links the crate, so its bar is the lookup itself. "
+        "Local-only; reproduce with `just bench-hostcall`. See docs/PERFORMANCE.md.",
     )
+    return True
 
 
 # ─── entry point ──────────────────────────────────────────────────────────────
@@ -619,24 +685,41 @@ def main() -> int:
         help="render ONLY the cross-language matrix from a `<host> <guest> <ns>` "
         "data file (no criterion data required — used by examples/hosts/roundtrip_bench.sh)",
     )
+    parser.add_argument(
+        "--hostcall",
+        type=Path,
+        metavar="DATAFILE",
+        help="render ONLY the host-call chart (cross_lang_host.svg) from a "
+        "`<host> <ns>` data file (no criterion data required — used by "
+        "examples/hosts/roundtrip_bench.sh --hostcall)",
+    )
     args = parser.parse_args()
 
     criterion_dir: Path = args.criterion_dir
     out_dir: Path = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Matrix mode: the data comes from a live host×guest sweep, not criterion, so
-    # it renders on its own and never touches the criterion-sourced charts.
+    # Matrix / hostcall modes: the data comes from a live sweep of the example
+    # hosts, not criterion, so each renders on its own and never touches the
+    # criterion-sourced charts.
     if args.matrix is not None:
         chart_cross_language_matrix(args.matrix, out_dir / "cross_lang_matrix.svg")
         print(f"wrote {out_dir / 'cross_lang_matrix.svg'}")
+        return 0
+    if args.hostcall is not None:
+        if chart_cross_language_host(args.hostcall, out_dir / "cross_lang_host.svg"):
+            print(f"wrote {out_dir / 'cross_lang_host.svg'}")
         return 0
 
     if not criterion_dir.is_dir():
         print(f"error: {criterion_dir} is not a directory (run cargo bench first)", file=sys.stderr)
         return 1
 
+    # cross_lang_host.svg is NOT in this list: it renders only from a live
+    # --hostcall sweep (it has no criterion source and never regenerates from
+    # stale data). cross_lang_matrix.svg likewise renders only via --matrix.
     charts: list = [
+        ("hero.svg", chart_hero),
         ("counter_inc.svg", chart_counter_inc),
         ("dispatch_by_shape.svg", chart_dispatch_by_shape),
         ("payload_scaling.svg", chart_payload_scaling),
@@ -644,7 +727,6 @@ def main() -> int:
         ("native_round_trip.svg", chart_native_round_trip),
         ("amortization.svg", chart_amortization),
         ("cross_lang_guest.svg", chart_cross_language_guest),
-        ("cross_lang_host.svg", chart_cross_language_host),
     ]
     for name, render in charts:
         target: Path = out_dir / name

@@ -8,6 +8,11 @@ polyplug is a plugin runtime that enables seamless cross-language plugin develop
 
 **Status: pre-release.** The project is pre-1.0 and not yet published to any package registry — build from source (see [Installation](#installation)). The full test suite runs on Linux, macOS, and Windows.
 
+![one plugin call, end to end — by plugin language](docs/assets/benches/hero.svg)
+
+> One plugin call, end to end — **lower is better**, log scale (a bar twice as long is 10× slower, not 2×).
+> Measured locally from live benchmark runs; see [docs/PERFORMANCE.md](docs/PERFORMANCE.md#how-to-read-these-charts) for how to read these charts and reproduce the numbers.
+
 ## Features
 
 - **Cross-Language** — Write plugins in Rust, Python, C#, Lua, JavaScript (QuickJS), or C++ (host applications can also be written in any of the six, including JS on Deno)

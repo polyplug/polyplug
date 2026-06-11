@@ -257,6 +257,37 @@ class Program
             }
         }
 
+        // Host-call micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS): times the BARE
+        // host → runtime call — one FindGuestContract per iteration through the
+        // HostApi function pointer (one P/Invoke hop + the runtime's registry lookup),
+        // no guest dispatch. Every returned handle is null-checked and the hit count
+        // is compared against the iteration count so the JIT cannot eliminate the loop.
+        if (benchIters != null && int.TryParse(benchIters, out var hostcallIters) && hostcallIters > 0)
+        {
+            int warmup = Math.Min(hostcallIters, 10000);
+            long hits = 0;
+            for (int i = 0; i < warmup; i++)
+            {
+                if (rt.FindGuestContract(ContractIds.PIPELINE_DECODER_CONTRACT_ID, 0).Index != uint.MaxValue) hits++;
+            }
+            hits = 0;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < hostcallIters; i++)
+            {
+                if (rt.FindGuestContract(ContractIds.PIPELINE_DECODER_CONTRACT_ID, 0).Index != uint.MaxValue) hits++;
+            }
+            sw.Stop();
+            double ns = sw.Elapsed.TotalNanoseconds / hostcallIters;
+            if (hits == hostcallIters)
+            {
+                Console.WriteLine($"HOSTCALL_NS={ns:F2} LANG=csharp");
+            }
+            else
+            {
+                Console.Error.WriteLine($"HOSTCALL bench: lookup missed ({hits}/{hostcallIters} hits) — no result printed");
+            }
+        }
+
         Console.WriteLine("\ndone.");
     }
 }

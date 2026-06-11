@@ -88,6 +88,11 @@ call takes.** A few extra pointers so nothing here is mysterious:
   absolute ns will shift on your hardware. Re-run on a quiet machine to get your
   own numbers (each section says how).
 
+The README's hero chart (*one plugin call, end to end*) is rendered from the
+same live criterion data — the `counter_inc` floor arms plus each VM loader's
+warm dispatch bench — and regenerates with `just bench-charts` like every other
+criterion-sourced chart here.
+
 ---
 
 ## Reaching the runtime (host call overhead)
@@ -99,23 +104,23 @@ code.)
 
 ![reaching the runtime — per-call cost by app language](assets/benches/cross_lang_host.svg)
 
-> **Measured vs estimated — read this first.** This direction does **not** yet
-> have a dedicated, reproducible benchmark. What *is* measured today:
-> the Rust-host floor (~2.3 ns, the `counter_inc` bench) and the **end-to-end**
-> per-host-language numbers in the
-> [cross-language matrix](#call-cost-for-any-language-combination) (measured by
-> `examples/hosts/roundtrip_bench.sh`). The single-boundary figures in the chart
-> and table below are **estimated orders of magnitude** for the bare FFI hop,
-> pending a dedicated host-call benchmark. Trust the ordering, not the digits.
+> **How this is measured.** `just bench-hostcall` (wrapping
+> `examples/hosts/roundtrip_bench.sh --hostcall`) runs every example host with
+> `POLYPLUG_BENCH_ITERS` set; each host times one `find_guest_contract` call per
+> iteration through the runtime — one FFI hop plus the registry lookup, **no
+> guest code runs** — and the chart above regenerates straight from that live
+> run (there is no committed data file). The Rust bar has no FFI hop at all, so
+> it is the registry lookup itself (it agrees with the core
+> `registry/find_guest_contract` criterion bench, ~20 ns).
 
-| Language | Backend | Call Overhead (estimated) | vs Python ctypes (estimated) |
-|----------|---------|---------------------------|------------------------------|
-| **Rust** | Links the crate (no FFI) | ~2 ns (measured: `counter_inc`) | 300x+ |
-| **C++** | Native | ~10-20 ns | 30-60x |
-| **Lua** | LuaJIT FFI | ~20-50 ns | 10-30x |
-| **JavaScript** | Deno FFI | ~50-100 ns | 5-10x |
-| **Python** | cffi ABI | ~380 ns | 1.7x |
-| **Python** | ctypes | ~670 ns | 1.0x (baseline) |
+| Language | Mechanism | Call overhead (measured) | vs Rust (floor) |
+|----------|-----------|--------------------------|-----------------|
+| **Rust** | Links the crate (no FFI) | ~19 ns (the registry lookup itself) | 1.0x |
+| **C++** | C ABI | ~24 ns | ~1.3x |
+| **C#** | .NET function pointer | ~36 ns | ~1.9x |
+| **Lua** | LuaJIT FFI | ~250 ns | ~13x |
+| **Python** | ctypes | ~790 ns | ~41x |
+| **JavaScript** | Deno FFI | ~2.2 µs | ~115x |
 
 A Rust host is the floor: it links `libpolyplug` as a normal crate and calls its
 methods directly, so there is **no FFI boundary to cross** — the only cost is the
@@ -130,11 +135,11 @@ operation itself. Every other language reaches the runtime through the C ABI.
 
 | Language | FFI Mechanism | Overhead Source |
 |----------|---------------|-----------------|
-| C++ | Direct function call | None - same language |
-| Lua | LuaJIT FFI | JIT-compiled, near-native |
-| JavaScript | V8 FFI | V8 fast calls, some GC |
-| Python cffi | libffi | Pre-parsed bindings |
-| Python ctypes | libffi + Python wrappers | Dynamic type checking |
+| C++ | C ABI call | One indirect call through a `HostApi` field — near-native |
+| C# | .NET function pointer | Managed → native transition per call |
+| Lua | LuaJIT FFI | cdata call + 8-byte struct return + method-table lookup |
+| Python ctypes | libffi + Python wrappers | Dynamic argument conversion per call |
+| JavaScript | Deno FFI | Struct-returning calls are not V8 fast-call eligible |
 
 ---
 
@@ -158,10 +163,14 @@ interface->functions[fn_id](args, out);
 **Hot-reload safety:** re-`find_guest_contract` + `resolve_guest_contract` to
 observe a swapped-in version; the previously resolved pointer stays valid (retired, not freed).
 
-### Lua (Near-Optimal)
+### Lua (Fast)
 
-**LuaJIT FFI is extremely fast (~2x native C):**
-- Module-level type caching (`InterfaceType`, `DispatchFnType`)
+**LuaJIT FFI keeps the hot path compiled (~250 ns per runtime call measured —
+the cdata call itself is near-native; the rest is the struct return and method
+dispatch):**
+- Module-level type caching (`InterfaceType`, `DispatchFnType`, and one cached
+  `ffi.typeof` ctype per `HostApi` function pointer — string-based `ffi.cast`
+  in a loop would exhaust LuaJIT's ctype table)
 - Function pointer cache (`func_cache`)
 - JIT-compiled calls
 
@@ -175,9 +184,10 @@ local result = interface:call(0, input)
 
 **Hot-reload safety:** re-`find_guest_contract` + `resolve_guest_contract` to observe a swapped-in version.
 
-### JavaScript / Deno (Good)
+### JavaScript / Deno (Slowest measured — cache aggressively)
 
-**V8 FFI is fast:**
+**Deno FFI pays the most per runtime call (~2.2 µs measured — handle-returning
+calls go through V8's slow path), so resolve once and reuse:**
 - Module-level caches (`_funcCache`, `_DISPATCH_FN_TYPE`)
 - `BigUint64Array` for fast interface reads
 - `UnsafeFnPointer` for direct calls
@@ -194,20 +204,20 @@ const result = interface.call(0, input);
 
 ### Python (Acceptable)
 
-**Two backend options:**
+**One hot path — ctypes:**
 
-#### ctypes (default)
-- **Overhead**: ~670 ns per call (estimate — dedicated host-call bench pending)
+- **Overhead**: ~790 ns per call (measured, `just bench-hostcall`)
 - **Requirements**: None (built-in)
-- **Best for**: Plugin functions >10μs
+- **Best for**: Plugin functions >10μs, where the overhead drops below ~8%
 
-#### cffi ABI (optional)
-- **Overhead**: ~380 ns per call (estimate; faster than ctypes)
-- **Requirements**: `pip install cffi`
-- **Best for**: Performance-sensitive applications
+The SDK auto-selects a cffi backend when `cffi` is installed, but that backend
+only wraps the **two** library exports (`polyplug_runtime_create` /
+`polyplug_runtime_destroy`). Every per-call operation goes through cached
+ctypes function pointers read from the `HostApi` struct, so installing cffi
+does **not** change the per-call overhead.
 
 ```python
-# Automatic backend selection (ctypes by default, cffi if installed)
+# Backend selection only affects create/destroy; the hot path is ctypes either way
 from polyplug import Runtime
 
 rt = Runtime()
@@ -222,24 +232,25 @@ interface = rt.resolve_guest_contract(handle)  # raw interface pointer
 
 ### When to Use Each Backend
 
-| Plugin Function Duration | Python ctypes | Python cffi | Other Languages |
-|-------------------------|---------------|-------------|-----------------|
-| < 1 μs (trivial) | 50-70% overhead | 30-40% overhead | Use C++/Lua |
-| 1-10 μs (light) | 5-50% overhead | 3-30% overhead | Any language OK |
-| 10-100 μs (moderate) | 0.5-5% overhead | 0.3-3% overhead | Negligible |
-| > 100 μs (heavy) | < 0.5% overhead | < 0.3% overhead | Negligible |
+| Plugin Function Duration | Python host (~790 ns/call) | Other Languages |
+|-------------------------|----------------------------|-----------------|
+| < 1 μs (trivial) | ≥ 44% overhead | Use Rust/C++/C# |
+| 1-10 μs (light) | 7-44% overhead | Any language OK |
+| 10-100 μs (moderate) | 0.8-7% overhead | Negligible |
+| > 100 μs (heavy) | < 0.8% overhead | Negligible |
 
-> The percentages derive from the *estimated* Python host-call overheads above
-> (~670 ns ctypes / ~380 ns cffi) — treat them as guidance, not measurements.
+> The percentages derive from the *measured* Python host-call overhead above
+> (~790 ns per call, `just bench-hostcall`) — your hardware will shift the
+> absolute numbers, not the shape.
 
 ### Language Selection Guide
 
 | Use Case | Recommended Language | Reason |
 |----------|---------------------|--------|
-| Maximum performance | C++ | Zero FFI overhead |
-| Game engines | C++ or Lua | LuaJIT is extremely fast |
-| Web backends | JavaScript (Deno) | Good FFI, async support |
-| Data science | Python | Ecosystem, acceptable overhead |
+| Maximum performance | Rust or C++ | ~19-24 ns per runtime call (measured) |
+| Game engines | C++ or Lua | LuaJIT keeps the hot path compiled (~250 ns/call) |
+| Web backends | JavaScript (Deno) | Async support — but the FFI hop is the highest measured (~2.2 µs/call), so cache resolved pointers |
+| Data science | Python | Ecosystem; ~790 ns/call is negligible for >10 µs functions |
 | Scripting/embedded | Lua | Small footprint, fast FFI |
 
 ---
@@ -306,12 +317,16 @@ cargo bench -p polyplug_lua -p polyplug_js -p polyplug_python -p polyplug_dotnet
 
 # Full measured cross-language matrix (every host × every guest)
 just bench-roundtrip          # wraps examples/hosts/roundtrip_bench.sh
+
+# Host-side FFI hop in isolation (refreshes cross_lang_host.svg)
+just bench-hostcall           # wraps examples/hosts/roundtrip_bench.sh --hostcall
 ```
 
-There is currently **no reproducible benchmark for the non-Rust host-side FFI
-hop** in isolation — the per-language "reaching the runtime" figures are
-estimates (see the note in that section). The measured host-side numbers are
-the end-to-end cells in the
+The non-Rust host-side FFI hop is measured **in isolation** by
+`just bench-hostcall` — one `find_guest_contract` call per iteration in every
+example host, no guest dispatch (see
+[Reaching the runtime](#reaching-the-runtime-host-call-overhead)). The
+**end-to-end** per-pairing numbers are the cells in the
 [cross-language matrix](#call-cost-for-any-language-combination).
 
 ### Expected Results
@@ -511,13 +526,14 @@ for data in dataset:
 
 ### 3. Choose the Right Language
 
-For hot paths called millions of times (estimated host-call overheads — see
+For hot paths called millions of times (measured host-call overheads — see
 [Reaching the runtime](#reaching-the-runtime-host-call-overhead)):
-- C++: ~10-20 ns overhead
-- Python ctypes: ~670 ns overhead
-- Difference: 30-60x
+- C++: ~24 ns per runtime call
+- Python (ctypes): ~790 ns per runtime call
+- Difference: ~33x
 
-If your hot path is truly performance-critical, consider C++ or Lua.
+If your hot path is truly performance-critical, write the host in Rust, C++,
+or C#.
 
 ---
 

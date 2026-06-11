@@ -211,6 +211,7 @@ def main():
     bench_iters: str = os.environ.get("POLYPLUG_BENCH_ITERS", "")
     if bench_iters:
         run_roundtrip_bench(rt, int(bench_iters))
+        run_hostcall_bench(rt, int(bench_iters))
 
     print("\ndone.")
 
@@ -233,6 +234,35 @@ def run_roundtrip_bench(rt, iters: int) -> None:
         decoder.decode(sv)
     elapsed: int = time.perf_counter_ns() - start
     print(f"ROUNDTRIP_NS={elapsed / iters:.2f} LANG=python")
+
+
+def run_hostcall_bench(rt, iters: int) -> None:
+    """Time the BARE host -> runtime call: one find_guest_contract lookup per
+    iteration (one ctypes FFI hop + the runtime's registry lookup), no guest
+    dispatch. Every returned handle is null-checked and the hit count is
+    verified so the lookup result is observably consumed each iteration.
+    Prints HOSTCALL_NS=<ns/call>."""
+    import time
+
+    contract_id: int = PIPELINE_DECODER_CONTRACT_ID
+    warmup: int = min(iters, 10000)
+    hits: int = 0
+    for _ in range(warmup):
+        if rt.find_guest_contract(contract_id, 0).index != 0xFFFFFFFF:
+            hits += 1
+    hits = 0
+    start: int = time.perf_counter_ns()
+    for _ in range(iters):
+        if rt.find_guest_contract(contract_id, 0).index != 0xFFFFFFFF:
+            hits += 1
+    elapsed: int = time.perf_counter_ns() - start
+    if hits == iters:
+        print(f"HOSTCALL_NS={elapsed / iters:.2f} LANG=python")
+    else:
+        print(
+            f"HOSTCALL bench: lookup missed ({hits}/{iters} hits) — no result printed",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

@@ -229,6 +229,45 @@ fn run() -> Result<(), String> {
         );
     }
 
+    // Host-call micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS): times the BARE
+    // host → runtime call — one find_guest_contract lookup per iteration, no guest
+    // dispatch. A Rust host links the crate directly (no FFI), so this bar is the
+    // runtime's registry lookup itself. Every returned handle is null-checked and
+    // the hit count is fed through std::hint::black_box so the loop cannot be
+    // dead-code eliminated.
+    if let Ok(iters_str) = env::var("POLYPLUG_BENCH_ITERS")
+        && let Ok(iters) = iters_str.parse::<u64>()
+        && iters > 0
+    {
+        let warmup: u64 = iters.min(10_000);
+        let mut hits: u64 = 0;
+        for _ in 0..warmup {
+            if let Ok(handle) = runtime.find_guest_contract(PIPELINE_DECODER_CONTRACT_ID, 0)
+                && !handle.is_null()
+            {
+                hits = hits.wrapping_add(1);
+            }
+        }
+        hits = 0;
+        let start: std::time::Instant = std::time::Instant::now();
+        for _ in 0..iters {
+            if let Ok(handle) = runtime.find_guest_contract(PIPELINE_DECODER_CONTRACT_ID, 0)
+                && !handle.is_null()
+            {
+                hits = hits.wrapping_add(1);
+            }
+        }
+        let elapsed_ns: u128 = start.elapsed().as_nanos();
+        if std::hint::black_box(hits) == iters {
+            println!(
+                "HOSTCALL_NS={:.2} LANG=rust",
+                elapsed_ns as f64 / iters as f64
+            );
+        } else {
+            eprintln!("HOSTCALL bench: lookup missed ({hits}/{iters} hits) — no result printed");
+        }
+    }
+
     println!("\ndone.");
     Ok(())
 }

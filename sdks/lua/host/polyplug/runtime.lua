@@ -35,6 +35,26 @@ M.AbiErrorCode = abi.AbiErrorCode
 -- the callee writes the full 24-byte sret.
 M.FIND_ALL_FN_SIGNATURE = "Array(*)(const HostApi*, uint64_t, uint32_t)"
 
+-- ─── Cached HostApi function-pointer ctypes ─────────────────────────────────────
+-- LuaJIT does NOT intern anonymous function-pointer types: every
+-- `ffi.cast("T(*)(...)", p)` parsed from a STRING registers a brand-new ctype
+-- in an internal table hard-capped at 65,536 entries that is never garbage
+-- collected, so any Runtime method called in a tight loop eventually aborts
+-- the whole VM with "table overflow". Parse each HostApi function-pointer
+-- type exactly ONCE here and cast through the cached ctype object at the call
+-- sites (casting with a ctype object creates no new ctype).
+local GET_ERROR_LEN_FN_T = ffi.typeof("size_t(*)(const HostApi*)")
+local GET_LAST_ERROR_FN_T = ffi.typeof("size_t(*)(const HostApi*, uint8_t*, size_t)")
+-- load_bundle and reload_bundle share one shape: AbiError fn(host, path, len).
+local BUNDLE_PATH_FN_T = ffi.typeof("AbiError(*)(const HostApi*, const uint8_t*, size_t)")
+local UNLOAD_BUNDLE_FN_T = ffi.typeof("AbiError(*)(const HostApi*, uint64_t)")
+local FIND_GUEST_CONTRACT_FN_T = ffi.typeof("GuestContractHandle(*)(const HostApi*, uint64_t, uint32_t)")
+local FIND_ALL_FN_T = ffi.typeof(M.FIND_ALL_FN_SIGNATURE)
+local HOST_FREE_FN_T = ffi.typeof("void(*)(const HostApi*, void*, size_t, size_t)")
+local RESOLVE_GUEST_CONTRACT_FN_T = ffi.typeof("const GuestContractInterface*(*)(const HostApi*, GuestContractHandle)")
+local REGISTER_HOST_CONTRACT_FN_T = ffi.typeof("AbiError(*)(const HostApi*, const HostContractInterface*)")
+local REGISTER_LOADER_FN_T = ffi.typeof("AbiError(*)(const HostApi*, StringView, void*)")
+
 M.bundle_id = abi.bundle_id
 
 -- Compatibility modes matching polyplug_abi::Compatibility #[repr(u32)]
@@ -76,14 +96,14 @@ end
 function M.last_error(host, lib)
     lib = lib or get_lib()
     -- Cast and call through HostApi.get_error_len field
-    local get_error_len_fn = ffi.cast("size_t(*)(const HostApi*)", host.get_error_len)
+    local get_error_len_fn = ffi.cast(GET_ERROR_LEN_FN_T, host.get_error_len)
     local len = get_error_len_fn(host)
     if len == 0 then
         return ""
     end
     local buf = ffi.new("uint8_t[?]", len)
     -- Cast and call through HostApi.get_last_error field
-    local get_last_error_fn = ffi.cast("size_t(*)(const HostApi*, uint8_t*, size_t)", host.get_last_error)
+    local get_last_error_fn = ffi.cast(GET_LAST_ERROR_FN_T, host.get_last_error)
     get_last_error_fn(host, buf, len)
     return ffi.string(buf, len)
 end
@@ -206,7 +226,7 @@ function M.Runtime:load_bundle(path)
     local path_bytes = ffi.new("uint8_t[?]", #path_str, path_str)
     -- Cast function pointer and call with self-passing pattern.
     -- HostApi.load_bundle returns AbiError (24-byte struct), not uint32_t.
-    local fn = ffi.cast("AbiError(*)(const HostApi*, const uint8_t*, size_t)", self._host_struct.load_bundle)
+    local fn = ffi.cast(BUNDLE_PATH_FN_T, self._host_struct.load_bundle)
     local err = fn(self._host, path_bytes, #path_str)
     if err.code ~= ffi.C.AbiErrorCode_Ok then
         error("load_bundle failed: " .. M.last_error(self._host, self._lib))
@@ -221,7 +241,7 @@ function M.Runtime:reload_bundle(path)
     local path_bytes = ffi.new("uint8_t[?]", #path_str, path_str)
     -- Cast function pointer and call with self-passing pattern.
     -- HostApi.reload_bundle returns AbiError (24-byte struct), not uint32_t.
-    local fn = ffi.cast("AbiError(*)(const HostApi*, const uint8_t*, size_t)", self._host_struct.reload_bundle)
+    local fn = ffi.cast(BUNDLE_PATH_FN_T, self._host_struct.reload_bundle)
     local err = fn(self._host, path_bytes, #path_str)
     if err.code ~= ffi.C.AbiErrorCode_Ok then
         error("reload_bundle failed: " .. M.last_error(self._host, self._lib))
@@ -234,7 +254,7 @@ end
 function M.Runtime:unload_bundle(bundle_id)
     -- Cast function pointer and call with self-passing pattern.
     -- HostApi.unload_bundle returns AbiError (24-byte struct), not uint32_t.
-    local fn = ffi.cast("AbiError(*)(const HostApi*, uint64_t)", self._host_struct.unload_bundle)
+    local fn = ffi.cast(UNLOAD_BUNDLE_FN_T, self._host_struct.unload_bundle)
     local err = fn(self._host, bundle_id)
     if err.code ~= ffi.C.AbiErrorCode_Ok then
         error("unload_bundle failed: " .. M.last_error(self._host, self._lib))
@@ -251,7 +271,7 @@ function M.Runtime:find_guest_contract(contract_id, min_version)
     -- Cast function pointer and call with self-passing pattern.
     -- GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes) and
     -- crosses the C ABI as the struct by value, returned by value here.
-    local fn = ffi.cast("GuestContractHandle(*)(const HostApi*, uint64_t, uint32_t)", self._host_struct.find_guest_contract)
+    local fn = ffi.cast(FIND_GUEST_CONTRACT_FN_T, self._host_struct.find_guest_contract)
     return fn(self._host, contract_id, min_version)
 end
 
@@ -269,7 +289,7 @@ function M.Runtime:find_all_guest_contracts(contract_id, min_version, cap)
     -- the SysV sret write past the buffer LuaJIT allocates for the return
     -- value (memory corruption). The element type is GuestContractHandle
     -- (#[repr(C)] { index: u32, generation: u32 } = 8 bytes / stride 8).
-    local fn = ffi.cast(M.FIND_ALL_FN_SIGNATURE, self._host_struct.find_all_guest_contracts)
+    local fn = ffi.cast(FIND_ALL_FN_T, self._host_struct.find_all_guest_contracts)
     local arr = fn(self._host, contract_id, min_version)
     local result = {}
     -- arr.len is a size_t cdata (uint64_t); math.min on cdata errors, so
@@ -285,7 +305,7 @@ function M.Runtime:find_all_guest_contracts(contract_id, min_version, cap)
     -- alignment: size = len * sizeof(GuestContractHandle), align = arr.align.
     if arr.items ~= nil and len > 0 then
         local elem_size = ffi.sizeof("GuestContractHandle")
-        local free_fn = ffi.cast("void(*)(const HostApi*, void*, size_t, size_t)", self._host_struct.free)
+        local free_fn = ffi.cast(HOST_FREE_FN_T, self._host_struct.free)
         free_fn(self._host, arr.items, len * elem_size, arr.align)
     end
     return result
@@ -305,7 +325,7 @@ function M.Runtime:resolve_guest_contract(handle)
     -- Cast function pointer and call with self-passing pattern.
     -- GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes) and
     -- crosses the C ABI as the struct passed by value.
-    local fn = ffi.cast("const GuestContractInterface*(*)(const HostApi*, GuestContractHandle)", self._host_struct.resolve_guest_contract)
+    local fn = ffi.cast(RESOLVE_GUEST_CONTRACT_FN_T, self._host_struct.resolve_guest_contract)
     local interface = fn(self._host, handle)
     if interface == nil then
         return nil, M.last_error(self._host, self._lib)
@@ -322,7 +342,7 @@ function M.Runtime:register_host_contract(interface)
     end
     -- Cast function pointer and call with self-passing pattern.
     -- HostApi.register_host_contract returns AbiError (24-byte struct), not uint32_t.
-    local fn = ffi.cast("AbiError(*)(const HostApi*, const HostContractInterface*)", self._host_struct.register_host_contract)
+    local fn = ffi.cast(REGISTER_HOST_CONTRACT_FN_T, self._host_struct.register_host_contract)
     local err = fn(self._host, interface)
     if err.code ~= ffi.C.AbiErrorCode_Ok then
         error("register_host_contract failed: " .. M.last_error(self._host, self._lib))
@@ -341,7 +361,7 @@ function M.Runtime:register_loader(runtime_name, loader_ptr)
     name_view.ptr = name_bytes
     name_view.len = #name_str
     -- Cast function pointer; StringView is passed by value (ptr + len).
-    local fn = ffi.cast("AbiError(*)(const HostApi*, StringView, void*)", self._host_struct.register_loader)
+    local fn = ffi.cast(REGISTER_LOADER_FN_T, self._host_struct.register_loader)
     local err = fn(self._host, name_view, loader_ptr)
     if err.code ~= ffi.C.AbiErrorCode_Ok then
         error("register_loader failed: " .. M.last_error(self._host, self._lib))
