@@ -41,9 +41,9 @@ Two independent locks cooperate, with distinct jobs:
 Readers never take `reload_serialize`; they stay fully concurrent with an in-flight reload.
 Only writer-vs-writer reloads serialize. The invariant this establishes — *a contract provided
 by both the old and new versions is resolvable after every reload, under any interleaving* — is
-enforced deterministically by `concurrent_reloads_are_mutually_exclusive` in
-`crates/polyplug/tests/stress_hot_reload.rs`, which uses the reload callback bracket as a
-mutual-exclusion probe.
+enforced deterministically by `concurrent_reloads_are_mutually_exclusive` in the
+`reload` module of the concurrency suite (`crates/polyplug/tests/concurrency/`), which uses
+the reload callback bracket as a mutual-exclusion probe.
 
 ---
 

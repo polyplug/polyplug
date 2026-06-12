@@ -379,6 +379,20 @@ Nightly-only memory-safety and supply-chain checks (`.github/workflows/
 nightly.yml`, `schedule` + `workflow_dispatch` — never on push/PR, so zero
 per-PR Action minutes).
 
+- **Concurrency suite (`crates/polyplug/tests/concurrency/`, `--test concurrency`):**
+  one organized home for every parallel/concurrent test, one module per concurrent
+  surface — `dispatch` (resolve+call while a reload/unload swaps the slot in
+  flight), `reload` (concurrent reload of the same bundle + deterministic
+  critical-section mutual exclusion), `registry` (concurrent register/find/
+  resolve/swap + duplicate-registration races for guest, host, and loader),
+  `load_unload` (retire/reclaim races, no UAF on invalidate), `multi_runtime`
+  (Rule-12 isolation: N runtimes built/used/destroyed across threads stay fully
+  independent), and `logger` (concurrent `host->log` funnel thread-safety). It
+  pairs deterministic interleaving probes with high-iteration stress tests — the
+  latter are the TSAN job's race oracle below. The suite exists because the
+  historical concurrent-reload flake passed in isolation and only failed under
+  full-suite parallel load, so scattered non-deterministic stress tests alone were
+  proven insufficient.
 - **Fuzzing (`fuzz/`):** three `cargo-fuzz` targets over the untrusted-input
   parsers — `fuzz_manifest` (`parse_manifest` + `validate`), `fuzz_contract`
   (`parse_api_str` + `parse_bundle_str`), `fuzz_version` (`Version: FromStr`).
@@ -392,12 +406,15 @@ per-PR Action minutes).
   the prior epoch keeps a superseded interface/library alive until it unpins, and
   in a short-lived test a still-pinned or not-yet-collected epoch garbage entry
   reads to LSAN as a leak.
-- **TSAN:** nightly `-Zsanitizer=thread` over `stress_concurrent_registry`
-  (pure Rust, no `dlopen`), including `stress_concurrent_unload_with_resolvers`
-  which exercises the resolve↔unload (resolve→dispatch) race. Confirms the
-  registry's `RwLock` access is data-race-free and the epoch guarantee holds under
-  concurrent unload (a reader pinned before the unload never observes a freed
-  interface).
+- **TSAN:** nightly `-Zsanitizer=thread` over the pure-Rust epoch race surface of
+  the concurrency suite (`crates/polyplug/tests/concurrency/` — `--test concurrency`,
+  scoped by positive filters to the `registry`/`load_unload` modules plus the
+  `RuntimeStore` swap-vs-dispatch tests, which have no `dlopen`). Includes the
+  resolve↔unload (resolve→dispatch) race. Confirms the registry's `RwLock` access
+  is data-race-free and the epoch guarantee holds under concurrent unload (a reader
+  pinned before the unload never observes a freed interface). The Runtime-level
+  reload tests in the same suite load real `.so` bundles (uninstrumented under
+  `-Zbuild-std`) and stay out of TSAN scope by design.
 - **Supply-chain (`deny.toml`):** `cargo-deny` checks advisories (deny yanked +
   known CVEs), licenses (permissive allow-list; first-party workspace crates are
   `publish = false` + skipped), and sources (crates.io only).

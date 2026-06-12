@@ -327,6 +327,13 @@ test-integration:
     @echo "=== Running Integration Tests ==="
     cargo test --{{profile}} -p integration
 
+# Run the dedicated concurrency / parallelism suite (one module per concurrent
+# surface: dispatch, reload, registry, load_unload, multi_runtime, logger).
+# Repeats the run to surface any interleaving flakiness.
+concurrency:
+    @echo "=== Running concurrency suite (x5) ==="
+    for i in 1 2 3 4 5; do cargo test --{{profile}} -p polyplug --test concurrency; done
+
 # Model-check the epoch publish/reclaim protocol with loom.
 # Exhaustively verifies the lock-free read path's pin→load→deref against
 # concurrent publish→swap→defer-reclaim (loom_epoch_model crate; compiled only
