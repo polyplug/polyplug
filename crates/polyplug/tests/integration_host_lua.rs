@@ -38,9 +38,9 @@ fn test_last_error_after_failed_load() {
     let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let bad_path: &[u8] = b"/does/not/exist";
+    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host is non-null; bad_path ptr/len are valid for the slice.
-    let result: polyplug_abi::AbiError =
-        unsafe { ((*host).load_bundle)(host, bad_path.as_ptr(), bad_path.len()) };
+    unsafe { ((*host).load_bundle)(host, bad_path.as_ptr(), bad_path.len(), &mut result) };
     assert_ne!(
         result.code,
         polyplug_abi::AbiErrorCode::Ok as u32,

@@ -171,8 +171,12 @@ unsafe impl Sync for PythonLoaderData {}
 unsafe extern "C" fn python_create_instance(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// Stub `destroy_instance` for Python plugins — no instance state to free.
@@ -209,6 +213,23 @@ unsafe extern "C" fn python_destroy_instance(
 unsafe extern "C" fn python_vm_dispatch(
     loader_data: VmLoaderData,
     _instance: GuestContractInstance,
+    fn_id: u32,
+    args: *const (),
+    out: *mut (),
+    arena: *mut CallArena,
+    out_err: *mut AbiError,
+) {
+    // SAFETY: loader_data wraps a valid PythonLoaderData pointer created by the
+    // loader; it is leaked for the runtime lifetime so the borrow is valid for the call.
+    let result: AbiError = unsafe { python_vm_dispatch_impl(loader_data, fn_id, args, out, arena) };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result) };
+    }
+}
+
+unsafe fn python_vm_dispatch_impl(
+    loader_data: VmLoaderData,
     fn_id: u32,
     args: *const (),
     out: *mut (),
@@ -527,11 +548,15 @@ pub(crate) fn register_contracts(
         // copies what it retains). `static_interface` is a leaked Box, valid for
         // 'static. This is the canonical self-passing registration path shared by
         // every loader.
-        let reg_result: AbiError = unsafe {
+        let mut reg_result: AbiError = AbiError::ok();
+        // SAFETY: `host_interface` is a valid HostApi pointer; `reg_result` is a
+        // valid, writable out-param for the duration of the call.
+        unsafe {
             ((*host_interface).register_guest_contract)(
                 host_interface,
                 &descriptor as *const PluginDescriptor,
                 static_interface,
+                &mut reg_result,
             )
         };
 

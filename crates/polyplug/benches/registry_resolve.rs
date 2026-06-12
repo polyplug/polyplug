@@ -29,12 +29,16 @@ use polyplug_utils::GuestContractId;
 
 // ─── Instance lifecycle stubs for benchmarks ────────────────────────────────────
 
-/// Stub create_instance for benchmarks - returns null instance.
+/// Stub create_instance for benchmarks - writes null instance to out_instance.
 unsafe extern "C" fn bench_create_instance(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// Stub destroy_instance for benchmarks - no cleanup needed.

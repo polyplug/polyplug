@@ -62,8 +62,12 @@ pub enum SingleProviderResolution {
 unsafe extern "C" fn stateless_create_instance(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// Built-in no-op `destroy_instance` stub, paired with `stateless_create_instance`.
@@ -583,13 +587,14 @@ impl RuntimeStore {
             let create_instance: unsafe extern "C" fn(
                 *const HostApi,
                 *const (),
-            ) -> GuestContractInstance = if create_raw.is_null() {
+                *mut GuestContractInstance,
+            ) = if create_raw.is_null() {
                 stateless_create_instance
             } else {
                 // SAFETY: non-null pointer to a valid create_instance per ABI.
                 core::mem::transmute::<
                     *const (),
-                    unsafe extern "C" fn(*const HostApi, *const ()) -> GuestContractInstance,
+                    unsafe extern "C" fn(*const HostApi, *const (), *mut GuestContractInstance),
                 >(create_raw)
             };
             let destroy_instance: unsafe extern "C" fn(*const HostApi, GuestContractInstance) =
@@ -1724,8 +1729,12 @@ mod tests {
     unsafe extern "C" fn noop_create_instance(
         _host: *const HostApi,
         _args: *const (),
-    ) -> GuestContractInstance {
-        GuestContractInstance::null()
+        out_instance: *mut GuestContractInstance,
+    ) {
+        if !out_instance.is_null() {
+            // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+            unsafe { out_instance.write(GuestContractInstance::null()) };
+        }
     }
 
     /// No-op destroy_instance callback.

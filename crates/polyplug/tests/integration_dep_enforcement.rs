@@ -110,8 +110,12 @@ impl BundleLoader for ProbeLoader {
 unsafe extern "C" fn noop_create_instance(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// No-op destroy_instance callback for the registered provider interface.

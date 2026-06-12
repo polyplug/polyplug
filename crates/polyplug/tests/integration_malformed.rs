@@ -13,8 +13,10 @@ use polyplug_utils::bundle_id;
 
 fn load_bundle_path(host: *const HostApi, dir: &str) -> polyplug_abi::AbiError {
     let bytes: &[u8] = dir.as_bytes();
+    let mut err: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host non-null (checked by caller), bytes valid for bytes.len().
-    unsafe { ((*host).load_bundle)(host, bytes.as_ptr(), bytes.len()) }
+    unsafe { ((*host).load_bundle)(host, bytes.as_ptr(), bytes.len(), &mut err) };
+    err
 }
 
 fn make_tmpdir(name: &str) -> PathBuf {

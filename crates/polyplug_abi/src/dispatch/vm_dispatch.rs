@@ -24,6 +24,8 @@ pub struct VmDispatch {
     ///   `host->alloc`. When non-null, the arena is reset by the caller at the
     ///   start of each call, so values written into it are valid until the next
     ///   call on the same caller.
+    /// - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///   success, an error otherwise). Never null.
     ///
     /// # Nullability
     /// REQUIRED whenever `dispatch_type == VirtualMachine` — never null in
@@ -36,7 +38,8 @@ pub struct VmDispatch {
         args: *const (),
         out: *mut (),
         arena: *mut CallArena,
-    ) -> AbiError,
+        out_err: *mut AbiError,
+    ),
     /// Loader-specific data handle.
     /// Opaque to the host; interpreted by the dispatch function.
     pub loader_data: VmLoaderData,

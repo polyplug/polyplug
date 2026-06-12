@@ -29,12 +29,19 @@ unsafe extern "C" fn registry_register_callback(
     _this: *const HostApi,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     if descriptor.is_null() || interface.is_null() {
-        return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
-            message: StringView::null(),
-        };
+        if !out_err.is_null() {
+            // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+            unsafe {
+                out_err.write(AbiError {
+                    code: AbiErrorCode::InvalidPointer as u32,
+                    message: StringView::null(),
+                })
+            };
+        }
+        return;
     }
 
     // SAFETY: descriptor and interface are valid for this call (ABI contract).
@@ -62,7 +69,7 @@ unsafe extern "C" fn registry_register_callback(
         }
     });
 
-    match result {
+    let err: AbiError = match result {
         Ok(_) => AbiError {
             code: AbiErrorCode::Ok as u32,
             message: StringView::null(),
@@ -71,6 +78,10 @@ unsafe extern "C" fn registry_register_callback(
             code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
+    };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(err) };
     }
 }
 
@@ -148,10 +159,11 @@ unsafe extern "C" fn noop_load_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -160,10 +172,11 @@ unsafe extern "C" fn noop_reload_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -171,10 +184,11 @@ unsafe extern "C" fn noop_reload_bundle(
 unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostApi,
     _interface: *const polyplug_abi::HostContractInterface,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -182,10 +196,11 @@ unsafe extern "C" fn noop_register_host_contract(
 unsafe extern "C" fn noop_register_loader(
     _this: *const HostApi,
     _loader_ptr: *mut core::ffi::c_void,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -211,15 +226,23 @@ unsafe extern "C" fn noop_call_guest_method(
     _args: *const core::ffi::c_void,
     _out: *mut core::ffi::c_void,
     _arena: *mut polyplug_abi::CallArena,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
-unsafe extern "C" fn noop_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
-    AbiError::ok()
+unsafe extern "C" fn noop_unload_bundle(
+    _this: *const HostApi,
+    _bundle_id: BundleId,
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 fn load_memory_plugin() -> libloading::Library {
@@ -481,8 +504,12 @@ unsafe extern "C" fn stub_create_guest_instance(
     _this: *const polyplug_abi::HostApi,
     _interface: *const polyplug_abi::GuestContractInterface,
     _args: *const core::ffi::c_void,
-) -> polyplug_abi::GuestContractInstance {
-    polyplug_abi::GuestContractInstance::null()
+    out_instance: *mut polyplug_abi::GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(

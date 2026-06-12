@@ -169,8 +169,9 @@ mod tests {
         // fails and records a per-runtime last_error. Runtime 2 is left untouched.
         // SAFETY: host1 is a valid HostApi; passing a null path is the path
         // explicitly handled by host_load_bundle (sets last_error, returns error).
-        let rc1: polyplug_abi::AbiError =
-            unsafe { ((*host1).load_bundle)(host1, core::ptr::null(), 0) };
+        let mut rc1: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+        // SAFETY: rc1 is a valid, writable out-param for the load_bundle result.
+        unsafe { ((*host1).load_bundle)(host1, core::ptr::null(), 0, &mut rc1) };
         assert_eq!(rc1.code, AbiErrorCode::InvalidPointer as u32);
 
         // Runtime 1 must now observe its own error; runtime 2 must observe none —
@@ -191,8 +192,9 @@ mod tests {
         // The reverse: drive a different error into runtime 2 and confirm runtime 1's
         // error is unaffected (each keeps its own most-recent error independently).
         // SAFETY: host2 is valid; null path is the handled error path.
-        let rc2: polyplug_abi::AbiError =
-            unsafe { ((*host2).load_bundle)(host2, core::ptr::null(), 0) };
+        let mut rc2: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+        // SAFETY: rc2 is a valid, writable out-param for the load_bundle result.
+        unsafe { ((*host2).load_bundle)(host2, core::ptr::null(), 0, &mut rc2) };
         assert_eq!(rc2.code, AbiErrorCode::InvalidPointer as u32);
         // SAFETY: both hosts valid.
         let len2_after: usize = unsafe { ((*host2).get_error_len)(host2) };
@@ -248,8 +250,9 @@ mod tests {
         let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host.is_null());
 
-        // SAFETY: host is valid, testing null path handling
-        let result = unsafe { ((*host).load_bundle)(host, core::ptr::null(), 0) };
+        let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+        // SAFETY: host is valid, testing null path handling; result is a valid out-param.
+        unsafe { ((*host).load_bundle)(host, core::ptr::null(), 0, &mut result) };
         assert_eq!(result.code, AbiErrorCode::InvalidPointer as u32);
 
         // SAFETY: host was returned by polyplug_runtime_create and is destroyed once.
@@ -374,8 +377,10 @@ mod tests {
                         return;
                     }
 
-                    // SAFETY: host is valid, testing load_bundle error handling
-                    let result = unsafe { ((*host).load_bundle)(host, b"/bad".as_ptr(), 4) };
+                    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+                    // SAFETY: host is valid, testing load_bundle error handling;
+                    // result is a valid, writable out-param.
+                    unsafe { ((*host).load_bundle)(host, b"/bad".as_ptr(), 4, &mut result) };
 
                     if result.code == AbiErrorCode::Ok as u32 {
                         success.fetch_add(1, Ordering::SeqCst);

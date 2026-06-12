@@ -98,18 +98,18 @@ pub struct HostContractInterface {
     /// # Arguments
     /// - `this`: HostContractInterface pointer (self-passing pattern)
     /// - `args`: Optional initialization arguments (contract-specific)
-    ///
-    /// # Returns
-    /// Opaque instance handle, or null handle on failure.
+    /// - `out_instance`: out-param; the new instance handle is written here. A
+    ///   null `data` denotes a stateless instance or construction failure.
     ///
     /// # Nullability
-    /// REQUIRED — never null. Failure is signalled by returning a null
+    /// REQUIRED — never null. Failure is signalled by writing a null
     /// *instance handle*, not by a null callback. `register_host_contract`
     /// rejects interfaces whose `create_instance` bits are null.
     pub create_instance: unsafe extern "C" fn(
         this: *const HostContractInterface,
         args: *const (),
-    ) -> HostContractInstance,
+        out_instance: *mut HostContractInstance,
+    ),
     /// Destroy an instance of this host contract.
     ///
     /// For singleton contracts, this is typically a no-op (singleton lives forever).
@@ -131,7 +131,7 @@ pub struct HostContractInterface {
     /// Union of dispatch mechanisms — access based on dispatch_type.
     ///
     /// For Native dispatch: use `dispatch.native.functions[fn_id]`.
-    /// For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
+    /// For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`.
     pub dispatch: DispatchMechanisms,
 }
 

@@ -318,8 +318,12 @@ fn concurrent_register_loader_duplicate_is_exactly_one_winner() {
 unsafe extern "C" fn hc_create(
     _this: *const HostContractInterface,
     _args: *const (),
-) -> HostContractInstance {
-    HostContractInstance::null()
+    out_instance: *mut HostContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(HostContractInstance::null()) };
+    }
 }
 
 /// No-op host-contract `destroy_instance`.

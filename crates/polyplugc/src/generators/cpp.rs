@@ -456,21 +456,25 @@ fn emit_cpp_guest_instance_machinery(
 
     out.push_str(&format!(
         "// Create a new instance: calls the author factory and heap-allocates the payload.\n\
-         // Returns a null handle when host is null, the factory returns null, or it throws.\n\
-         static GuestContractInstance {prefix_upper}_create_instance(const HostApi* host, const void* args) noexcept {{\n\
+         // Writes a null handle to *out_instance when host is null, the factory returns\n\
+         // null, or it throws.\n\
+         static void {prefix_upper}_create_instance(const HostApi* host, const void* args, GuestContractInstance* out_instance) noexcept {{\n\
          \x20   (void)args;  // Contract-specific init args are unused by generated glue.\n\
+         \x20   if (out_instance == nullptr) return;\n\
          \x20   if (host == nullptr) {{\n\
-         \x20       return GuestContractInstance{{nullptr, 0U}};\n\
+         \x20       *out_instance = GuestContractInstance{{nullptr, 0U}};\n\
+         \x20       return;\n\
          \x20   }}\n\
          \x20   try {{\n\
          \x20       {class_name}* impl = polyplug_create_{lower}(host);\n\
          \x20       if (impl == nullptr) {{\n\
-         \x20           return GuestContractInstance{{nullptr, 0U}};\n\
+         \x20           *out_instance = GuestContractInstance{{nullptr, 0U}};\n\
+         \x20           return;\n\
          \x20       }}\n\
          \x20       auto* state = new {state_struct}{{host, impl}};\n\
-         \x20       return GuestContractInstance{{state, {prefix_upper}_CONTRACT_ID}};\n\
+         \x20       *out_instance = GuestContractInstance{{state, {prefix_upper}_CONTRACT_ID}};\n\
          \x20   }} catch (...) {{\n\
-         \x20       return GuestContractInstance{{nullptr, 0U}};\n\
+         \x20       *out_instance = GuestContractInstance{{nullptr, 0U}};\n\
          \x20   }}\n\
          }}\n\n"
     ));
@@ -522,14 +526,15 @@ fn generate_cpp_guest_abi_wrapper(
         func.name, fn_id
     ));
     out.push_str(&format!(
-        "inline AbiError {0}_{1}_abi(GuestContractInstance instance, const void* args, void* out) noexcept {{\n",
+        "inline void {0}_{1}_abi(GuestContractInstance instance, const void* args, void* out, AbiError* out_err) noexcept {{\n",
         contract_lower, func.name
     ));
     out.push_str("    if (instance.data == nullptr) {\n");
     out.push_str("        static constexpr const char* null_inst_msg = \"instance is null\";\n");
     out.push_str(
-        "        return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(null_inst_msg), 16}};\n",
+        "        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(null_inst_msg), 16}};\n",
     );
+    out.push_str("        return;\n");
     out.push_str("    }\n");
     out.push_str("    // SAFETY: instance.data was produced by create_instance and stays valid\n");
     out.push_str("    // until destroy_instance; the host never mutates it.\n");
@@ -541,15 +546,17 @@ fn generate_cpp_guest_abi_wrapper(
     if has_params {
         out.push_str("        if (args == nullptr) {\n");
         out.push_str(
-            "            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};\n",
+            "            *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};\n",
         );
+        out.push_str("            return;\n");
         out.push_str("        }\n");
     }
     if !is_void_return {
         out.push_str("        if (out == nullptr) {\n");
         out.push_str(
-            "            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};\n",
+            "            *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};\n",
         );
+        out.push_str("            return;\n");
         out.push_str("        }\n");
     }
 
@@ -561,7 +568,8 @@ fn generate_cpp_guest_abi_wrapper(
         // For void, emit success return (call_expr already emits the call + newline)
         out.push_str("        // SAFETY: out pointer is not dereferenced for void return per ABI contract.\n");
         out.push_str("        (void)out;\n");
-        out.push_str("        return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
+        out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
+        out.push_str("        return;\n");
     } else {
         let ret_type: String = func
             .returns
@@ -576,7 +584,8 @@ fn generate_cpp_guest_abi_wrapper(
             "        *static_cast<{}*>(out) = result;\n",
             ret_type
         ));
-        out.push_str("        return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
+        out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
+        out.push_str("        return;\n");
     }
 
     out.push_str("    } catch (const std::exception&) {\n");
@@ -593,13 +602,15 @@ fn generate_cpp_guest_abi_wrapper(
     out.push_str(
         "        static constexpr const char* err_msg = \"guest threw std::exception\";\n",
     );
-    out.push_str("        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 26}};\n");
+    out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 26}};\n");
+    out.push_str("        return;\n");
     out.push_str("    } catch (...) {\n");
     out.push_str(
         "        // SAFETY: panic_msg is a static constexpr string literal with known length 15.\n",
     );
     out.push_str("        static constexpr const char* panic_msg = \"plugin panicked\";\n");
-    out.push_str("        return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};\n");
+    out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};\n");
+    out.push_str("        return;\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
 
@@ -762,7 +773,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
             out.push_str("    };\n");
 
             out.push_str(&format!(
-                "    AbiError err_{upper} = host->register_guest_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_INTERFACE);\n",
+                "    AbiError err_{upper}{{}};\n    host->register_guest_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_INTERFACE, &err_{upper});\n",
                 upper = plugin_upper
             ));
             out.push_str(&format!(
@@ -818,7 +829,7 @@ fn generate_init_hpp_register_guest_contract(
     out.push_str("    };\n");
 
     out.push_str(&format!(
-        "    AbiError err_{upper} = host->register_guest_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_INTERFACE);\n",
+        "    AbiError err_{upper}{{}};\n    host->register_guest_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_INTERFACE, &err_{upper});\n",
         upper = upper
     ));
     out.push_str(&format!(
@@ -1328,7 +1339,7 @@ fn generate_cpp_host_contract(
         "        // handle from `create_instance` and use it as an opaque dispatch token.\n",
     );
     out.push_str(
-        "        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);\n",
+        "        GuestContractInstance instance{};\n        host->create_guest_instance(host, iface, nullptr, &instance);\n",
     );
     out.push_str(&format!(
         "        return {}(iface, instance, host);\n",
@@ -1426,7 +1437,8 @@ fn generate_cpp_host_contract(
     out.push_str("        if (instance_.data != nullptr) {\n");
     out.push_str("            host_->destroy_guest_instance(host_, interface_, instance_);\n");
     out.push_str("        }\n");
-    out.push_str("        instance_ = host_->create_guest_instance(host_, interface_, nullptr);\n");
+    out.push_str("        instance_ = GuestContractInstance{};\n");
+    out.push_str("        host_->create_guest_instance(host_, interface_, nullptr, &instance_);\n");
     out.push_str("    }\n\n");
 
     // Generate method callers
@@ -1582,13 +1594,13 @@ fn generate_cpp_host_function(
     ));
     out.push_str("                }\n");
     out.push_str(&format!(
-        "                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[{}U]);\n",
+        "                auto fn_ = reinterpret_cast<void(*)(GuestContractInstance, const void*, void*, AbiError*)>(interface_->dispatch.native.functions[{}U]);\n",
         fn_id
     ));
     out.push_str("                // SAFETY: instance_ is the token returned by create_instance and is valid.\n");
     out.push_str("                // args_ptr/out_ptr match the ABI contract for this function.\n");
     out.push_str(&format!(
-        "                err = fn_(instance_, args_ptr, {});\n",
+        "                fn_(instance_, args_ptr, {}, &err);\n",
         out_ptr_expr
     ));
     out.push_str("                break;\n");
@@ -1599,7 +1611,7 @@ fn generate_cpp_host_function(
     // pass nullptr and the VM bridge falls back to per-value host allocation.
     let arena_arg: &str = if needs_arena { "&arena_" } else { "nullptr" };
     out.push_str(&format!(
-        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, {}U, args_ptr, {}, {});\n",
+        "                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, {}U, args_ptr, {}, {}, &err);\n",
         fn_id, out_ptr_expr, arena_arg
     ));
     out.push_str("                break;\n");
@@ -2049,9 +2061,9 @@ fn generate_cpp_guest_host_contract_method(
     out.push_str(&format!("                    {default_return}\n"));
     out.push_str("                }\n");
     out.push_str(&format!(
-        "                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[{fn_id}U]);\n"
+        "                auto fn_ = reinterpret_cast<void(*)(HostContractInstance, const void*, void*, AbiError*)>(interface_->dispatch.native.functions[{fn_id}U]);\n"
     ));
-    out.push_str("                err = fn_(instance_, args_ptr, out_ptr);\n");
+    out.push_str("                fn_(instance_, args_ptr, out_ptr, &err);\n");
     out.push_str("                break;\n");
     out.push_str("            }\n");
     out.push_str("            case DispatchType::VirtualMachine: {\n");
@@ -2059,7 +2071,7 @@ fn generate_cpp_guest_host_contract_method(
     // instance, so pass a null one (matches rust.rs). The host-contract instance
     // is conveyed to the native thunk via the Native branch, not the VM bridge.
     out.push_str(&format!(
-        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, GuestContractInstance{{}}, {fn_id}U, args_ptr, out_ptr, nullptr);\n"
+        "                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, GuestContractInstance{{}}, {fn_id}U, args_ptr, out_ptr, nullptr, &err);\n"
     ));
     out.push_str("                break;\n");
     out.push_str("            }\n");
@@ -2416,12 +2428,13 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
         "    static constexpr HostContractInterface_create_instance_fn create_instance_stub =\n",
     );
     out.push_str(
-        "        +[](const HostContractInterface* self, const void* /*args*/) noexcept -> HostContractInstance {\n",
+        "        +[](const HostContractInterface* self, const void* /*args*/, HostContractInstance* out_instance) noexcept -> void {\n",
     );
-    out.push_str("        // Return the registrant-owned user_data as the instance; the thunks\n");
+    out.push_str("        if (out_instance == nullptr) return;\n");
+    out.push_str("        // Write the registrant-owned user_data as the instance; the thunks\n");
     out.push_str("        // recover the implementation from it (no mutable static state — the\n");
     out.push_str("        // interface itself is heap-allocated per factory call).\n");
-    out.push_str("        return HostContractInstance{self->user_data};\n");
+    out.push_str("        *out_instance = HostContractInstance{self->user_data};\n");
     out.push_str("    };\n\n");
 
     // destroy_instance stub for host-side factory (captureless lambda → fn ptr).
@@ -2498,10 +2511,11 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
         "    static constexpr HostContractInterface_create_instance_fn vm_create_instance_stub =\n",
     );
     out.push_str(
-        "        +[](const HostContractInterface* /*this*/, const void* /*args*/) noexcept -> HostContractInstance {\n",
+        "        +[](const HostContractInterface* /*this*/, const void* /*args*/, HostContractInstance* out_instance) noexcept -> void {\n",
     );
-    out.push_str("        // VM dispatch: instance managed by VM loader, return placeholder\n");
-    out.push_str("        return HostContractInstance{nullptr};\n");
+    out.push_str("        if (out_instance == nullptr) return;\n");
+    out.push_str("        // VM dispatch: instance managed by VM loader, write placeholder\n");
+    out.push_str("        *out_instance = HostContractInstance{nullptr};\n");
     out.push_str("    };\n\n");
 
     // destroy_instance stub for VM factory (captureless lambda → fn ptr).
@@ -2557,7 +2571,7 @@ fn generate_cpp_host_thunk(
     // a plain function pointer. The implementation is recovered from the instance
     // token, which create_instance sets from the interface's user_data (no static).
     out.push_str(&format!(
-        "    static constexpr auto {} = +[](HostContractInstance instance, const void* args, void* out) noexcept -> AbiError {{\n",
+        "    static constexpr auto {} = +[](HostContractInstance instance, const void* args, void* out, AbiError* out_err) noexcept -> void {{\n",
         thunk_name
     ));
     out.push_str(&format!(
@@ -2565,7 +2579,8 @@ fn generate_cpp_host_thunk(
         trait_name
     ));
     out.push_str("        if (impl == nullptr) {\n");
-    out.push_str("            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};\n");
+    out.push_str("            *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};\n");
+    out.push_str("            return;\n");
     out.push_str("        }\n");
     out.push_str("        try {\n");
 
@@ -2594,9 +2609,9 @@ fn generate_cpp_host_thunk(
         out.push_str("            (void)out;\n");
     }
 
-    out.push_str("            return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
+    out.push_str("            *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
     out.push_str("        } catch (...) {\n");
-    out.push_str("            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};\n");
+    out.push_str("            *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};\n");
     out.push_str("        }\n");
     out.push_str("    };\n\n");
 }
@@ -2901,7 +2916,7 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         "        // Route creation through the host so the runtime tracks the instance.\n",
     );
     out.push_str(
-        "        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);\n",
+        "        GuestContractInstance instance{};\n        host->create_guest_instance(host, iface, nullptr, &instance);\n",
     );
     out.push_str(
         "        // Stamp the peer contract id so `host->call_guest_method` routes by it\n",
@@ -3133,7 +3148,7 @@ fn generate_cpp_peer_fn_caller(out: &mut String, class_name: &str, func: &Resolv
     out.push_str("        // are valid for the lifetime of this wrapper. args_ptr/out_ptr match\n");
     out.push_str("        // the ABI contract for this function.\n");
     out.push_str(&format!(
-        "        AbiError err = host_->call_guest_method(host_, instance_, {}U, args_ptr, out_ptr, {});\n",
+        "        AbiError err{{}};\n        host_->call_guest_method(host_, instance_, {}U, args_ptr, out_ptr, {}, &err);\n",
         fn_id, arena_arg
     ));
 
@@ -3425,9 +3440,9 @@ mod tests {
             "missing destroy_guest_instance call in destructor: {out}"
         );
 
-        // Check factory calls host-mediated create_guest_instance
+        // Check factory calls host-mediated create_guest_instance via out-param
         assert!(
-            out.contains("host->create_guest_instance(host, iface, nullptr)"),
+            out.contains("host->create_guest_instance(host, iface, nullptr, &instance)"),
             "missing create_guest_instance call in factory: {out}"
         );
 
@@ -3451,10 +3466,10 @@ mod tests {
             "missing private constructor: {out}"
         );
 
-        // Check dispatch uses instance_
+        // Check dispatch uses instance_ and passes &err as out-param
         assert!(
-            out.contains("fn_(instance_, args_ptr,"),
-            "missing instance_ in dispatch call: {out}"
+            out.contains("fn_(instance_, args_ptr,") && out.contains(", &err)"),
+            "dispatch must call fn_ with instance_, args_ptr, out_ptr, &err: {out}"
         );
     }
 

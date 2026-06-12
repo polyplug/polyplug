@@ -140,10 +140,11 @@ unsafe extern "C" fn stub_load_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -152,10 +153,11 @@ unsafe extern "C" fn stub_reload_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -163,10 +165,11 @@ unsafe extern "C" fn stub_reload_bundle(
 unsafe extern "C" fn stub_register_host_contract(
     _this: *const HostApi,
     _interface: *const polyplug_abi::HostContractInterface,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -174,10 +177,11 @@ unsafe extern "C" fn stub_register_host_contract(
 unsafe extern "C" fn stub_register_loader(
     _this: *const HostApi,
     _loader_ptr: *mut core::ffi::c_void,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -203,15 +207,23 @@ unsafe extern "C" fn stub_call_guest_method(
     _args: *const core::ffi::c_void,
     _out: *mut core::ffi::c_void,
     _arena: *mut polyplug_abi::CallArena,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
-unsafe extern "C" fn stub_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
-    AbiError::ok()
+unsafe extern "C" fn stub_unload_bundle(
+    _this: *const HostApi,
+    _bundle_id: BundleId,
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 /// Stub alloc callback.
@@ -235,12 +247,19 @@ unsafe extern "C" fn registry_register_callback(
     _this: *const HostApi,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     if descriptor.is_null() || interface.is_null() {
-        return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
-            message: StringView::null(),
-        };
+        if !out_err.is_null() {
+            // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+            unsafe {
+                out_err.write(AbiError {
+                    code: AbiErrorCode::InvalidPointer as u32,
+                    message: StringView::null(),
+                })
+            };
+        }
+        return;
     }
 
     // SAFETY: descriptor and interface are valid for this call (ABI contract).
@@ -271,7 +290,7 @@ unsafe extern "C" fn registry_register_callback(
         }
     });
 
-    match result {
+    let err_val: AbiError = match result {
         Ok(_) => AbiError {
             code: AbiErrorCode::Ok as u32,
             message: StringView::null(),
@@ -280,6 +299,10 @@ unsafe extern "C" fn registry_register_callback(
             code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
+    };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(err_val) };
     }
 }
 
@@ -407,17 +430,19 @@ fn stress_large_buffer_fill_and_read() {
 
     // SAFETY: fn_ptr is function 0 in the interface (memory_fill_preallocated_buffer).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are enforced
         // by the test (FillArgs matches what memory_plugin fn 0 expects).
         unsafe { core::mem::transmute(fn_ptr) };
 
+    let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid FillArgs, out is a valid u32 location.
-    let call_result: AbiError = unsafe {
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const FillArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut call_result,
         )
     };
 
@@ -469,17 +494,19 @@ fn stress_string_view_non_ascii_utf8() {
 
     // SAFETY: fn_ptr is function 2 in the interface (memory_echo_string_view).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (StringView matches what memory_plugin fn 2 expects).
         unsafe { core::mem::transmute(fn_ptr) };
 
+    let mut call_result: AbiError = AbiError::ok();
     // SAFETY: input_sv is a valid StringView with a valid ptr/len, out_sv is a valid location.
-    let call_result: AbiError = unsafe {
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &input_sv as *const StringView as *const (),
             &mut out_sv as *mut StringView as *mut (),
+            &mut call_result,
         )
     };
 
@@ -539,17 +566,19 @@ fn stress_zero_length_buffer_and_string_view() {
 
     // SAFETY: fn_ptr is function 3 in the interface (memory_zero_length_roundtrip).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(3) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (ZeroArgs/ZeroResult match what memory_plugin fn 3 expects).
         unsafe { core::mem::transmute(fn_ptr) };
 
+    let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid ZeroArgs, out is a valid ZeroResult location.
-    let call_result: AbiError = unsafe {
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const ZeroArgs as *const (),
             &mut out as *mut ZeroResult as *mut (),
+            &mut call_result,
         )
     };
 
@@ -605,7 +634,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
                 // Get function 0 (memory_fill_preallocated_buffer) from interface.
                 // SAFETY: interface.functions is valid for function_count (4) entries.
                 let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-                let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+                let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
                     // SAFETY: fn_ptr is the fill function with compatible signature.
                     unsafe { core::mem::transmute(fn_ptr) };
 
@@ -619,12 +648,14 @@ fn stress_concurrent_8_threads_no_shared_memory() {
                 };
                 let mut out: u32 = 0_u32;
 
+                let mut result: AbiError = AbiError::ok();
                 // SAFETY: args is a valid FillArgs, out is a valid u32 location.
-                let result: AbiError = unsafe {
+                unsafe {
                     dispatch_fn(
                         GuestContractInstance::null(),
                         &args as *const FillArgs as *const (),
                         &mut out as *mut u32 as *mut (),
+                        &mut result,
                     )
                 };
                 assert_eq!(
@@ -760,17 +791,19 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
 
     // SAFETY: fn_ptr is function 1 in the interface (memory_alloc_buffer_via_host).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(1) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (AllocArgs/Buffer match what memory_plugin fn 1 expects).
         unsafe { core::mem::transmute(fn_ptr) };
 
+    let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid AllocArgs (host interface is live), out_buf is a valid Buffer location.
-    let call_result: AbiError = unsafe {
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AllocArgs as *const (),
             &mut out_buf as *mut Buffer as *mut (),
+            &mut call_result,
         )
     };
 
@@ -854,17 +887,19 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
 
     // SAFETY: fn_ptr is function 0 in the interface (memory_fill_preallocated_buffer).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (FillArgs matches what memory_plugin fn 0 expects).
         unsafe { core::mem::transmute(fn_ptr) };
 
+    let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid FillArgs, out is a valid u32 location.
-    let call_result: AbiError = unsafe {
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const FillArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut call_result,
         )
     };
 
@@ -951,8 +986,12 @@ unsafe extern "C" fn stub_create_guest_instance(
     _this: *const polyplug_abi::HostApi,
     _interface: *const polyplug_abi::GuestContractInterface,
     _args: *const core::ffi::c_void,
-) -> polyplug_abi::GuestContractInstance {
-    polyplug_abi::GuestContractInstance::null()
+    out_instance: *mut polyplug_abi::GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(

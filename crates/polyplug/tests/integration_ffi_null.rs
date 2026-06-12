@@ -21,10 +21,10 @@ fn test_runtime_free_null() {
 #[test]
 fn test_load_bundle_null_host() {
     let path: &[u8] = b"/some/path";
+    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: passing null host is explicitly part of the null-safety contract being tested.
     // We call the underlying host_load_bundle function directly since we don't have a HostApi.
-    let result: polyplug_abi::AbiError =
-        unsafe { host_load_bundle(core::ptr::null(), path.as_ptr(), path.len()) };
+    unsafe { host_load_bundle(core::ptr::null(), path.as_ptr(), path.len(), &mut result) };
     assert_eq!(
         result.code,
         polyplug_abi::AbiErrorCode::InvalidPointer as u32,
@@ -37,9 +37,9 @@ fn test_load_bundle_null_path() {
     // SAFETY: polyplug_runtime_create(core::ptr::null()) returns a valid HostApi or null on OOM.
     let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
+    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host is valid (asserted above); null path tests the null-safety contract.
-    let result: polyplug_abi::AbiError =
-        unsafe { ((*host).load_bundle)(host, core::ptr::null(), 0) };
+    unsafe { ((*host).load_bundle)(host, core::ptr::null(), 0, &mut result) };
     assert_eq!(
         result.code,
         polyplug_abi::AbiErrorCode::InvalidPointer as u32,
@@ -191,11 +191,11 @@ fn register_and_expect_rejection(
     let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let descriptor: polyplug_abi::PluginDescriptor = make_descriptor(b"null_fn_test");
+    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host is valid; descriptor and the interface image are live for
     // the duration of the call. The image intentionally carries null bits in
     // REQUIRED fn-pointer slots — the call must reject, not crash.
-    let result: polyplug_abi::AbiError =
-        unsafe { ((*host).register_guest_contract)(host, &descriptor, image.as_ptr()) };
+    unsafe { ((*host).register_guest_contract)(host, &descriptor, image.as_ptr(), &mut result) };
     assert_eq!(
         result.code,
         polyplug_abi::AbiErrorCode::InvalidPointer as u32,
@@ -276,11 +276,11 @@ fn register_host_contract_rejects_null_create_instance() {
     // SAFETY: polyplug_runtime_create(core::ptr::null()) returns a valid HostApi or null on OOM.
     let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
+    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host is valid; the image is live for the call and intentionally
     // carries null create_instance bits — the call must reject, not crash (the
     // pre-validation behaviour deferred this to a crash inside get_host_contract).
-    let result: polyplug_abi::AbiError =
-        unsafe { ((*host).register_host_contract)(host, image.as_ptr()) };
+    unsafe { ((*host).register_host_contract)(host, image.as_ptr(), &mut result) };
     assert_eq!(
         result.code,
         polyplug_abi::AbiErrorCode::InvalidPointer as u32,

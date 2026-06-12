@@ -96,20 +96,28 @@ unsafe extern "C" fn bench_add(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     // SAFETY: args points to AddArgs and out to u32 per the caller's contract.
     unsafe {
         let a: &AddArgs = &*(args as *const AddArgs);
         *(out as *mut u32) = a.a.wrapping_add(a.b);
     }
-    AbiError::ok()
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn noop_create_instance(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn noop_destroy_instance(
@@ -239,8 +247,9 @@ unsafe fn resolve_and_dispatch(host: *const HostApi, contract_id: u64) -> u32 {
     // dispatch through the host-mediated cross-call (count + resolve + native call).
     // Using call_guest_method (not a cached interface pointer) keeps every
     // iteration inside the resolve chain, which is the locked region under test.
+    let mut err: AbiError = AbiError::ok();
     // SAFETY: instance carries the registered contract_id; args/out match bench_add.
-    let err: AbiError = unsafe {
+    unsafe {
         (api.call_guest_method)(
             host,
             instance,
@@ -248,6 +257,7 @@ unsafe fn resolve_and_dispatch(host: *const HostApi, contract_id: u64) -> u32 {
             &args as *const AddArgs as *const core::ffi::c_void,
             &mut out as *mut u32 as *mut core::ffi::c_void,
             core::ptr::null_mut::<CallArena>(),
+            &mut err,
         )
     };
     black_box(handle);
@@ -271,8 +281,12 @@ unsafe fn cached_dispatch(interface: *const GuestContractInterface, contract_id:
     // SAFETY: dispatch_type is Native (registered as such); fn 0 is in range.
     let fn_ptr: *const () = unsafe { *iface.dispatch.native.functions };
     // SAFETY: transmute to the native dispatch signature bench_add was built with.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
 
     let instance: GuestContractInstance = GuestContractInstance {
         data: core::ptr::null_mut(),
@@ -283,12 +297,14 @@ unsafe fn cached_dispatch(interface: *const GuestContractInterface, contract_id:
         b: 57_u32,
     };
     let mut out: u32 = 0_u32;
+    let mut err: AbiError = AbiError::ok();
     // SAFETY: instance carries the registered contract_id; args/out match bench_add.
-    let err: AbiError = unsafe {
+    unsafe {
         dispatch_fn(
             instance,
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut err,
         )
     };
     black_box(err);

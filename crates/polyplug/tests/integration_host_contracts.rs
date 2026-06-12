@@ -24,8 +24,12 @@ use polyplug_utils::HostContractId;
 unsafe extern "C" fn noop_create_instance(
     _this: *const HostContractInterface,
     _args: *const (),
-) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance::null()
+    out_instance: *mut polyplug_abi::HostContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(polyplug_abi::HostContractInstance::null()) };
+    }
 }
 
 /// No-op destroy_instance callback.

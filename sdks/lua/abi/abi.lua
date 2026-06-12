@@ -107,7 +107,7 @@ ffi.cdef[[
     } GuestContractInstance;
     // Expected size: 16 bytes
 
-    typedef AbiError (*HostApi_register_guest_contract_fn)(const HostApi*, const PluginDescriptor*, const GuestContractInterface*);
+    typedef void (*HostApi_register_guest_contract_fn)(const HostApi*, const PluginDescriptor*, const GuestContractInterface*, AbiError*);
     typedef uint8_t* (*HostApi_alloc_fn)(const HostApi*, size_t, size_t);
     typedef void (*HostApi_free_fn)(const HostApi*, uint8_t*, size_t, size_t);
     typedef GuestContractHandle (*HostApi_find_guest_contract_fn)(const HostApi*, uint64_t, uint32_t);
@@ -117,16 +117,16 @@ ffi.cdef[[
     typedef const HostContractInterface* (*HostApi_resolve_host_contract_interface_fn)(const HostApi*, uint64_t, uint32_t);
     typedef Array (*HostApi_list_bundles_fn)(const HostApi*);
     typedef Array (*HostApi_get_dependencies_fn)(const HostApi*);
-    typedef AbiError (*HostApi_load_bundle_fn)(const HostApi*, const uint8_t*, size_t);
-    typedef AbiError (*HostApi_reload_bundle_fn)(const HostApi*, const uint8_t*, size_t);
-    typedef AbiError (*HostApi_register_host_contract_fn)(const HostApi*, const HostContractInterface*);
-    typedef AbiError (*HostApi_register_loader_fn)(const HostApi*, void*);
+    typedef void (*HostApi_load_bundle_fn)(const HostApi*, const uint8_t*, size_t, AbiError*);
+    typedef void (*HostApi_reload_bundle_fn)(const HostApi*, const uint8_t*, size_t, AbiError*);
+    typedef void (*HostApi_register_host_contract_fn)(const HostApi*, const HostContractInterface*, AbiError*);
+    typedef void (*HostApi_register_loader_fn)(const HostApi*, void*, AbiError*);
     typedef size_t (*HostApi_get_last_error_fn)(const HostApi*, uint8_t*, size_t);
     typedef size_t (*HostApi_get_error_len_fn)(const HostApi*);
-    typedef AbiError (*HostApi_call_guest_method_fn)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
-    typedef AbiError (*HostApi_unload_bundle_fn)(const HostApi*, uint64_t);
+    typedef void (*HostApi_call_guest_method_fn)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);
+    typedef void (*HostApi_unload_bundle_fn)(const HostApi*, uint64_t, AbiError*);
     typedef void (*HostApi_log_fn)(const HostApi*, uint32_t, StringView, StringView);
-    typedef GuestContractInstance (*HostApi_create_guest_instance_fn)(const HostApi*, const GuestContractInterface*, const void*);
+    typedef void (*HostApi_create_guest_instance_fn)(const HostApi*, const GuestContractInterface*, const void*, GuestContractInstance*);
     typedef void (*HostApi_destroy_guest_instance_fn)(const HostApi*, const GuestContractInterface*, GuestContractInstance);
     //  Host Interface — function table passed to guests during initialization.
     // 
@@ -184,9 +184,8 @@ ffi.cdef[[
         //  - `this`: HostApi pointer (self-passing)
         //  - `descriptor`: Plugin descriptor with contract metadata
         //  - `interface`: GuestContractInterface to register
-        // 
-        //  # Returns
-        //  AbiError::OK on success, error code on failure.
+        //  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+        //    success, an error otherwise). Never null.
         HostApi_register_guest_contract_fn register_guest_contract;
         //  Allocate memory using the host allocator.
         // 
@@ -307,9 +306,8 @@ ffi.cdef[[
         //  - `this`: HostApi pointer (self-passing)
         //  - `path`: UTF-8 path to bundle directory (not null-terminated)
         //  - `path_len`: Length of path in bytes
-        // 
-        //  # Returns
-        //  AbiError::OK on success, error code on failure.
+        //  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+        //    success, an error otherwise). Never null.
         HostApi_load_bundle_fn load_bundle;
         //  Reload a plugin bundle (hot-reload).
         // 
@@ -320,9 +318,8 @@ ffi.cdef[[
         //  - `this`: HostApi pointer (self-passing)
         //  - `path`: UTF-8 path to bundle directory (not null-terminated)
         //  - `path_len`: Length of path in bytes
-        // 
-        //  # Returns
-        //  AbiError::OK on success, error code on failure.
+        //  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+        //    success, an error otherwise). Never null.
         HostApi_reload_bundle_fn reload_bundle;
         //  Register a host contract interface.
         // 
@@ -331,9 +328,8 @@ ffi.cdef[[
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `interface`: HostContractInterface to register
-        // 
-        //  # Returns
-        //  AbiError::OK on success, error code on failure.
+        //  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+        //    success, an error otherwise). Never null.
         HostApi_register_host_contract_fn register_host_contract;
         //  Register a language loader.
         // 
@@ -342,9 +338,8 @@ ffi.cdef[[
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `loader_ptr`: Opaque pointer to the loader implementation
-        // 
-        //  # Returns
-        //  AbiError::OK on success, error code on failure.
+        //  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+        //    success, an error otherwise). Never null.
         // 
         //  The loader's name comes from its own `BundleLoader::loader_name()`
         //  implementation — the single source of truth — so it is not passed here.
@@ -421,9 +416,8 @@ ffi.cdef[[
         //  - `out`: Pointer to the output buffer for the return value
         //  - `arena`: Optional per-call [`CallArena`] for variable-size return values;
         //    null is allowed
-        // 
-        //  # Returns
-        //  AbiError::OK on success, error code on failure.
+        //  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+        //    success, an error otherwise). Never null.
         HostApi_call_guest_method_fn call_guest_method;
         //  Unload a guest bundle, invalidating its handles and freeing its resources.
         // 
@@ -451,10 +445,10 @@ ffi.cdef[[
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `bundle_id`: Identifier of the bundle to unload
-        // 
-        //  # Returns
-        //  `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
-        //  or a still-loaded bundle declared a dependency on a contract this bundle provides).
+        //  - `out_err`: out-param; the result is written here — `AbiError::ok()` on
+        //    success, an error on failure (e.g. the bundle is not loaded, or a
+        //    still-loaded bundle declared a dependency on a contract this bundle
+        //    provides). Never null.
         HostApi_unload_bundle_fn unload_bundle;
         //  Log a guest diagnostic into the host's logging funnel.
         // 
@@ -484,8 +478,8 @@ ffi.cdef[[
         //  `resolve_guest_contract`) and the constructor `args`. The runtime invokes the
         //  interface's `create_instance` under an epoch pin (so a concurrent unload cannot
         //  free the interface mid-construction) and tracks the resulting instance for its
-        //  live-instance accounting. Returns the new `GuestContractInstance` (a null
-        //  `data` denotes a stateless instance).
+        //  live-instance accounting. The new `GuestContractInstance` is written through
+        //  `out_instance` (a null `data` denotes a stateless instance).
         HostApi_create_guest_instance_fn create_guest_instance;
         //  Destroy a guest contract instance through the runtime (host-mediated).
         // 
@@ -803,7 +797,7 @@ ffi.cdef[[
         ParseVersionError_InvalidInt = 1,
     } ParseVersionError;
 
-    typedef AbiError (*VmDispatch_call_fn)(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
+    typedef void (*VmDispatch_call_fn)(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);
     //  VM dispatch data — call through a dispatch function.
     // 
     //  Used when `dispatch_type == DispatchType::VirtualMachine`.
@@ -822,6 +816,8 @@ ffi.cdef[[
         //    `host->alloc`. When non-null, the arena is reset by the caller at the
         //    start of each call, so values written into it are valid until the next
         //    call on the same caller.
+        //  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+        //    success, an error otherwise). Never null.
         // 
         //  # Nullability
         //  REQUIRED whenever `dispatch_type == VirtualMachine` — never null in
@@ -998,7 +994,7 @@ ffi.cdef[[
         VmDispatch vm;
     } DispatchMechanisms;
 
-    typedef GuestContractInstance (*GuestContractInterface_create_instance_fn)(const HostApi*, const void*);
+    typedef void (*GuestContractInterface_create_instance_fn)(const HostApi*, const void*, GuestContractInstance*);
     typedef void (*GuestContractInterface_destroy_instance_fn)(const HostApi*, GuestContractInstance);
     //  Guest Contract Interface — one per contract implemented by a guest (plugin).
     // 
@@ -1021,8 +1017,8 @@ ffi.cdef[[
     //  - `destroy_instance`: Destructor to clean up instances before hot-reload
     // 
     //  # Dispatch
-    //  - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out)`
-    //  - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out)`
+    //  - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out, out_err)`
+    //  - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`
     typedef struct GuestContractInterface {
         //  FNV-1a hash of "guest_contract:name@major_version".
         // 
@@ -1047,12 +1043,11 @@ ffi.cdef[[
         //  # Arguments
         //  - `host`: HostApi pointer (for memory allocation via host->alloc)
         //  - `args`: Optional initialization arguments (contract-specific)
-        // 
-        //  # Returns
-        //  Opaque instance handle, or null handle on failure.
+        //  - `out_instance`: out-param; the new instance handle is written here. A
+        //    null `data` denotes a stateless instance or construction failure.
         // 
         //  # Nullability
-        //  REQUIRED — never null. Failure is signalled by returning a null
+        //  REQUIRED — never null. Failure is signalled by writing a null
         //  *instance handle*, not by a null callback. `register_guest_contract`
         //  rejects interfaces whose `create_instance` bits are null.
         // 
@@ -1079,12 +1074,12 @@ ffi.cdef[[
         //  Union of dispatch mechanisms — access based on dispatch_type.
         // 
         //  For Native dispatch: use `dispatch.native.functions[fn_id]`.
-        //  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
+        //  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`.
         DispatchMechanisms dispatch;
     } GuestContractInterface;
     // Expected size: 56 bytes
 
-    typedef HostContractInstance (*HostContractInterface_create_instance_fn)(const HostContractInterface*, const void*);
+    typedef void (*HostContractInterface_create_instance_fn)(const HostContractInterface*, const void*, HostContractInstance*);
     typedef void (*HostContractInterface_destroy_instance_fn)(const HostContractInterface*, HostContractInstance);
     //  Host Contract Interface — for host-provided services.
     // 
@@ -1156,12 +1151,11 @@ ffi.cdef[[
         //  # Arguments
         //  - `this`: HostContractInterface pointer (self-passing pattern)
         //  - `args`: Optional initialization arguments (contract-specific)
-        // 
-        //  # Returns
-        //  Opaque instance handle, or null handle on failure.
+        //  - `out_instance`: out-param; the new instance handle is written here. A
+        //    null `data` denotes a stateless instance or construction failure.
         // 
         //  # Nullability
-        //  REQUIRED — never null. Failure is signalled by returning a null
+        //  REQUIRED — never null. Failure is signalled by writing a null
         //  *instance handle*, not by a null callback. `register_host_contract`
         //  rejects interfaces whose `create_instance` bits are null.
         HostContractInterface_create_instance_fn create_instance;
@@ -1185,7 +1179,7 @@ ffi.cdef[[
         //  Union of dispatch mechanisms — access based on dispatch_type.
         // 
         //  For Native dispatch: use `dispatch.native.functions[fn_id]`.
-        //  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
+        //  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`.
         DispatchMechanisms dispatch;
     } HostContractInterface;
     // Expected size: 80 bytes

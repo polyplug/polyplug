@@ -67,30 +67,39 @@ struct AddArgs {
 
 /// Native host-contract dispatch target — the function a guest's host-contract
 /// call ultimately invokes. Signature matches the frozen native host-contract ABI
-/// `extern "C" fn(HostContractInstance, *const (), *mut ()) -> AbiError` (the same
-/// shape generated guest host-fn callers transmute to). Adds the two `u32` args
-/// and writes the sum to `out` so the work survives dead-code elimination.
+/// `extern "C" fn(HostContractInstance, *const (), *mut (), *mut AbiError)` (the
+/// same shape generated guest host-fn callers transmute to). Adds the two `u32`
+/// args and writes the sum to `out` so the work survives dead-code elimination.
 ///
 /// # Safety
-/// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`.
+/// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`;
+/// `out_err` must be non-null and writable.
 unsafe extern "C" fn host_add(
     _instance: HostContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     // SAFETY: args points to AddArgs and out to u32 per the caller's contract.
     unsafe {
         let a: &AddArgs = &*(args as *const AddArgs);
         *(out as *mut u32) = a.a.wrapping_add(a.b);
     }
-    AbiError::ok()
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn host_create_instance(
     _this: *const HostContractInterface,
     _args: *const (),
-) -> HostContractInstance {
-    HostContractInstance::null()
+    out_instance: *mut HostContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(HostContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn host_destroy_instance(
@@ -160,7 +169,7 @@ fn bench_host_contract_call(c: &mut Criterion) {
     };
     assert!(!resolved.is_null(), "host interface must resolve");
     // SAFETY: resolved is the registered 'static interface; fn 0 is host_add.
-    let dispatch_fn: unsafe extern "C" fn(HostContractInstance, *const (), *mut ()) -> AbiError = unsafe {
+    let dispatch_fn: unsafe extern "C" fn(HostContractInstance, *const (), *mut (), *mut AbiError) = unsafe {
         let fn_ptr: *const () = *(*resolved).dispatch.native.functions.add(0);
         core::mem::transmute(fn_ptr)
     };
@@ -178,13 +187,15 @@ fn bench_host_contract_call(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("host_contract_call", "native"), |b| {
         b.iter(|| {
+            let mut err: AbiError = AbiError::ok();
             // SAFETY: dispatch_fn is host_add; instance is the stateless null
-            // token; args/out match host_add's layout.
-            let err: AbiError = unsafe {
+            // token; args/out match host_add's layout; err is writable.
+            unsafe {
                 dispatch_fn(
                     black_box(instance),
                     black_box(&args as *const AddArgs as *const ()),
                     black_box(&mut out as *mut u32 as *mut ()),
+                    &mut err,
                 )
             };
             black_box(err);

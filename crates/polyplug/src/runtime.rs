@@ -262,9 +262,10 @@ impl Runtime {
         out: *mut core::ffi::c_void,
         arena: *mut polyplug_abi::types::CallArena,
     ) -> polyplug_abi::types::AbiError {
+        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
         // SAFETY: host_abi is the runtime's own owned HostApi whose `runtime`
         // field points to this Runtime; forwarding the args is the same call the
-        // VM/native guests make.
+        // VM/native guests make; `err` is a valid, writable out-param.
         unsafe {
             host_call_guest_method(
                 &*self.host_abi as *const HostApi,
@@ -273,8 +274,10 @@ impl Runtime {
                 args,
                 out,
                 arena,
+                &mut err,
             )
-        }
+        };
+        err
     }
 
     /// Register a host contract interface.
@@ -1471,6 +1474,22 @@ pub(crate) unsafe extern "C" fn host_register_guest_contract(
     this: *const HostApi,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
+    out_err: *mut polyplug_abi::types::AbiError,
+) {
+    // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
+    // contract requires callers to pass a valid, non-null out_err pointer.
+    let result: polyplug_abi::types::AbiError =
+        unsafe { host_register_guest_contract_impl(this, descriptor, interface) };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result) };
+    }
+}
+
+unsafe fn host_register_guest_contract_impl(
+    this: *const HostApi,
+    descriptor: *const PluginDescriptor,
+    interface: *const GuestContractInterface,
 ) -> polyplug_abi::types::AbiError {
     if this.is_null() {
         return polyplug_abi::types::AbiError {
@@ -1807,12 +1826,15 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
                 if let Some(&instance) = singleton_guard.get(&contract_id) {
                     return instance;
                 }
-                // SAFETY: interface.create_instance is a valid function pointer
-                // Pass the HostContractInterface pointer (self-passing pattern)
-                let instance: HostContractInstance = unsafe {
+                let mut instance: HostContractInstance = HostContractInstance::null();
+                // SAFETY: interface.create_instance is a valid function pointer; the
+                // HostContractInterface pointer is passed (self-passing pattern) and
+                // `instance` is a valid, writable out-param.
+                unsafe {
                     (interface.create_instance)(
                         interface as *const HostContractInterface,
                         core::ptr::null(),
+                        &mut instance,
                     )
                 };
                 // Never cache a NULL instance: creation failed, so leave the cache
@@ -1824,14 +1846,18 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
                 instance
             } else {
                 // Multi-instance: create new instance each call
-                // SAFETY: interface.create_instance is a valid function pointer
-                // Pass the HostContractInterface pointer (self-passing pattern)
+                let mut instance: HostContractInstance = HostContractInstance::null();
+                // SAFETY: interface.create_instance is a valid function pointer; the
+                // HostContractInterface pointer is passed (self-passing pattern) and
+                // `instance` is a valid, writable out-param.
                 unsafe {
                     (interface.create_instance)(
                         interface as *const HostContractInterface,
                         core::ptr::null(),
+                        &mut instance,
                     )
-                }
+                };
+                instance
             }
         }
         None => {
@@ -2013,6 +2039,21 @@ pub unsafe extern "C" fn host_load_bundle(
     this: *const HostApi,
     path: *const u8,
     path_len: usize,
+    out_err: *mut polyplug_abi::AbiError,
+) {
+    // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
+    // contract requires callers to pass a valid, non-null out_err pointer.
+    let result: polyplug_abi::AbiError = unsafe { host_load_bundle_impl(this, path, path_len) };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result) };
+    }
+}
+
+unsafe fn host_load_bundle_impl(
+    this: *const HostApi,
+    path: *const u8,
+    path_len: usize,
 ) -> polyplug_abi::AbiError {
     if this.is_null() {
         return AbiError {
@@ -2064,6 +2105,21 @@ pub unsafe extern "C" fn host_load_bundle(
 /// - this must be a valid HostApi pointer with valid runtime field
 /// - path must point to path_len valid UTF-8 bytes for the duration of the call
 pub unsafe extern "C" fn host_reload_bundle(
+    this: *const HostApi,
+    path: *const u8,
+    path_len: usize,
+    out_err: *mut polyplug_abi::AbiError,
+) {
+    // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
+    // contract requires callers to pass a valid, non-null out_err pointer.
+    let result: polyplug_abi::AbiError = unsafe { host_reload_bundle_impl(this, path, path_len) };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result) };
+    }
+}
+
+unsafe fn host_reload_bundle_impl(
     this: *const HostApi,
     path: *const u8,
     path_len: usize,
@@ -2122,6 +2178,20 @@ pub unsafe extern "C" fn host_reload_bundle(
 pub unsafe extern "C" fn host_unload_bundle(
     this: *const HostApi,
     bundle_id: BundleId,
+    out_err: *mut polyplug_abi::AbiError,
+) {
+    // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
+    // contract requires callers to pass a valid, non-null out_err pointer.
+    let result: polyplug_abi::AbiError = unsafe { host_unload_bundle_impl(this, bundle_id) };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result) };
+    }
+}
+
+unsafe fn host_unload_bundle_impl(
+    this: *const HostApi,
+    bundle_id: BundleId,
 ) -> polyplug_abi::AbiError {
     if this.is_null() {
         return AbiError {
@@ -2152,6 +2222,21 @@ pub unsafe extern "C" fn host_unload_bundle(
 /// - this must be a valid HostApi pointer with valid runtime field
 /// - interface must be a valid HostContractInterface pointer that remains valid for runtime lifetime
 pub(crate) unsafe extern "C" fn host_register_host_contract(
+    this: *const HostApi,
+    interface: *const polyplug_abi::HostContractInterface,
+    out_err: *mut polyplug_abi::AbiError,
+) {
+    // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
+    // contract requires callers to pass a valid, non-null out_err pointer.
+    let result: polyplug_abi::AbiError =
+        unsafe { host_register_host_contract_impl(this, interface) };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result) };
+    }
+}
+
+unsafe fn host_register_host_contract_impl(
     this: *const HostApi,
     interface: *const polyplug_abi::HostContractInterface,
 ) -> polyplug_abi::AbiError {
@@ -2220,6 +2305,20 @@ pub(crate) unsafe extern "C" fn host_register_host_contract(
 /// - loader_ptr must be a *mut Box<dyn BundleLoader> erased to *mut c_void by a loader cdylib
 ///   compiled against the same polyplug rlib
 pub(crate) unsafe extern "C" fn host_register_loader(
+    this: *const HostApi,
+    loader_ptr: *mut core::ffi::c_void,
+    out_err: *mut polyplug_abi::AbiError,
+) {
+    // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
+    // contract requires callers to pass a valid, non-null out_err pointer.
+    let result: polyplug_abi::AbiError = unsafe { host_register_loader_impl(this, loader_ptr) };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result) };
+    }
+}
+
+unsafe fn host_register_loader_impl(
     this: *const HostApi,
     loader_ptr: *mut core::ffi::c_void,
 ) -> polyplug_abi::AbiError {
@@ -2364,6 +2463,25 @@ pub(crate) unsafe extern "C" fn host_call_guest_method(
     args: *const core::ffi::c_void,
     out: *mut core::ffi::c_void,
     arena: *mut polyplug_abi::types::CallArena,
+    out_err: *mut polyplug_abi::types::AbiError,
+) {
+    // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
+    // contract requires callers to pass a valid, non-null out_err pointer.
+    let result: polyplug_abi::types::AbiError =
+        unsafe { host_call_guest_method_impl(this, instance, fn_id, args, out, arena) };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result) };
+    }
+}
+
+unsafe fn host_call_guest_method_impl(
+    this: *const HostApi,
+    instance: polyplug_abi::guest::GuestContractInstance,
+    fn_id: u32,
+    args: *const core::ffi::c_void,
+    out: *mut core::ffi::c_void,
+    arena: *mut polyplug_abi::types::CallArena,
 ) -> polyplug_abi::types::AbiError {
     // Only the host vtable pointer is a hard precondition. A null `instance.data`
     // is explicitly VALID: stateless contracts (every VM-backed contract, plus
@@ -2482,7 +2600,7 @@ pub(crate) unsafe extern "C" fn host_call_guest_method(
             // ABI signature, so `arena` is intentionally unused on this path.
             let _ = arena;
             // SAFETY: native dispatch slots have the frozen native ABI signature
-            // `extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError`
+            // `extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)`
             // (see polyplugc rust generator); `slot` is a non-null pointer to such
             // a function. The transmute reinterprets the type-erased `*const ()` as
             // that concrete fn pointer, which is the established native-call form.
@@ -2490,18 +2608,24 @@ pub(crate) unsafe extern "C" fn host_call_guest_method(
                 polyplug_abi::guest::GuestContractInstance,
                 *const (),
                 *mut (),
-            ) -> polyplug_abi::types::AbiError = unsafe { core::mem::transmute(slot) };
+                *mut polyplug_abi::types::AbiError,
+            ) = unsafe { core::mem::transmute(slot) };
+            let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
             // SAFETY: args/out satisfy the target function's ABI layout per the
-            // caller's contract; instance belongs to this contract.
-            unsafe { func(instance, args.cast::<()>(), out.cast::<()>()) }
+            // caller's contract; instance belongs to this contract; `err` is a
+            // valid, writable out-param for the native call's AbiError result.
+            unsafe { func(instance, args.cast::<()>(), out.cast::<()>(), &mut err) };
+            err
         }
         polyplug_abi::dispatch::DispatchType::VirtualMachine => {
             // SAFETY: dispatch_type == VirtualMachine guarantees the `vm` union
             // variant is the active one, so reading it is sound.
             let vm: polyplug_abi::dispatch::VmDispatch = unsafe { interface.dispatch.vm };
+            let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
             // SAFETY: vm.call is the loader-provided VM dispatch entry point with
-            // the frozen 6-arg signature; loader_data is the matching opaque handle.
-            // args/out/arena are forwarded unchanged per the VM dispatch contract.
+            // the frozen out-param signature; loader_data is the matching opaque
+            // handle. args/out/arena are forwarded unchanged per the VM dispatch
+            // contract; `err` is a valid, writable out-param for its AbiError result.
             unsafe {
                 (vm.call)(
                     vm.loader_data,
@@ -2510,8 +2634,10 @@ pub(crate) unsafe extern "C" fn host_call_guest_method(
                     args.cast::<()>(),
                     out.cast::<()>(),
                     arena,
+                    &mut err,
                 )
-            }
+            };
+            err
         }
     }
 }
@@ -2534,6 +2660,22 @@ pub(crate) unsafe extern "C" fn host_create_guest_instance(
     this: *const HostApi,
     interface: *const GuestContractInterface,
     args: *const core::ffi::c_void,
+    out_instance: *mut polyplug_abi::guest::GuestContractInstance,
+) {
+    // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
+    // contract requires callers to pass a valid, non-null out_instance pointer.
+    let result: polyplug_abi::guest::GuestContractInstance =
+        unsafe { host_create_guest_instance_impl(this, interface, args) };
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(result) };
+    }
+}
+
+unsafe fn host_create_guest_instance_impl(
+    this: *const HostApi,
+    interface: *const GuestContractInterface,
+    args: *const core::ffi::c_void,
 ) -> polyplug_abi::guest::GuestContractInstance {
     if this.is_null() || interface.is_null() {
         return polyplug_abi::guest::GuestContractInstance::null();
@@ -2553,11 +2695,13 @@ pub(crate) unsafe extern "C" fn host_create_guest_instance(
     // GuestContractInterface kept alive by the pin above; reading its fields is sound.
     let contract_id: GuestContractId = unsafe { (*interface).contract_id };
 
+    let mut inst: polyplug_abi::guest::GuestContractInstance =
+        polyplug_abi::guest::GuestContractInstance::null();
     // SAFETY: `create_instance` is non-null by ABI contract (register_guest_contract
     // rejects null bits); the interface stays alive across the call via the pin;
-    // `args` satisfies the contract's argument layout per the caller's contract.
-    let inst: polyplug_abi::guest::GuestContractInstance =
-        unsafe { ((*interface).create_instance)(this, args.cast::<()>()) };
+    // `args` satisfies the contract's argument layout per the caller's contract;
+    // `inst` is a valid, writable out-param for the constructed instance.
+    unsafe { ((*interface).create_instance)(this, args.cast::<()>(), &mut inst) };
 
     if !inst.data.is_null() {
         runtime.note_instance_created(contract_id);
@@ -2623,8 +2767,12 @@ mod tests {
     unsafe extern "C" fn test_create_instance(
         _this: *const HostContractInterface,
         _args: *const (),
-    ) -> HostContractInstance {
-        HostContractInstance::null()
+        out_instance: *mut HostContractInstance,
+    ) {
+        if !out_instance.is_null() {
+            // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+            unsafe { out_instance.write(HostContractInstance::null()) };
+        }
     }
 
     /// No-op destroy_instance for a test host contract interface.
@@ -2845,8 +2993,12 @@ mod tests {
         unsafe extern "C" fn stub_create_instance(
             _host: *const HostApi,
             _args: *const (),
-        ) -> GuestContractInstance {
-            GuestContractInstance::null()
+            out_instance: *mut GuestContractInstance,
+        ) {
+            if !out_instance.is_null() {
+                // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+                unsafe { out_instance.write(GuestContractInstance::null()) };
+            }
         }
 
         unsafe extern "C" fn stub_destroy_instance(
@@ -2904,13 +3056,17 @@ mod tests {
         _instance: polyplug_abi::guest::GuestContractInstance,
         args: *const (),
         out: *mut (),
-    ) -> polyplug_abi::types::AbiError {
+        out_err: *mut polyplug_abi::types::AbiError,
+    ) {
         // SAFETY: the test passes a valid *const i32 / *mut i32.
         unsafe {
             let input: i32 = *(args as *const i32);
             *(out as *mut i32) = input + 1;
         }
-        polyplug_abi::types::AbiError::ok()
+        if !out_err.is_null() {
+            // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+            unsafe { out_err.write(polyplug_abi::types::AbiError::ok()) };
+        }
     }
 
     /// Sync wrapper for a static native function-pointer table.
@@ -2939,8 +3095,12 @@ mod tests {
         unsafe extern "C" fn stub_create(
             _host: *const HostApi,
             _args: *const (),
-        ) -> GuestContractInstance {
-            GuestContractInstance::null()
+            out_instance: *mut GuestContractInstance,
+        ) {
+            if !out_instance.is_null() {
+                // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+                unsafe { out_instance.write(GuestContractInstance::null()) };
+            }
         }
         unsafe extern "C" fn stub_destroy(_host: *const HostApi, _instance: GuestContractInstance) {
         }
@@ -2997,8 +3157,9 @@ mod tests {
                 data: &raw const NATIVE_FNS as *mut core::ffi::c_void,
                 contract_id: GuestContractId::from_u64(1),
             };
-        // SAFETY: host_call_guest_method tolerates a null `this`.
-        let err: polyplug_abi::types::AbiError = unsafe {
+        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
+        // SAFETY: host_call_guest_method tolerates a null `this`; `err` is a valid out-param.
+        unsafe {
             host_call_guest_method(
                 core::ptr::null(),
                 instance,
@@ -3006,6 +3167,7 @@ mod tests {
                 core::ptr::null(),
                 core::ptr::null_mut(),
                 core::ptr::null_mut(),
+                &mut err,
             )
         };
         assert_eq!(
@@ -3023,8 +3185,10 @@ mod tests {
         let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
         let instance: polyplug_abi::guest::GuestContractInstance =
             polyplug_abi::guest::GuestContractInstance::null();
-        // SAFETY: re-resolution of contract_id == 0 fails before any pointer deref.
-        let err: polyplug_abi::types::AbiError = unsafe {
+        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
+        // SAFETY: re-resolution of contract_id == 0 fails before any pointer deref;
+        // `err` is a valid out-param.
+        unsafe {
             host_call_guest_method(
                 host_with_runtime(&runtime),
                 instance,
@@ -3032,6 +3196,7 @@ mod tests {
                 core::ptr::null(),
                 core::ptr::null_mut(),
                 core::ptr::null_mut(),
+                &mut err,
             )
         };
         assert_eq!(err.code, polyplug_abi::types::AbiErrorCode::NotFound as u32);
@@ -3053,9 +3218,10 @@ mod tests {
             };
         let input: i32 = 41;
         let mut output: i32 = 0;
+        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
         // SAFETY: native_add_one reads *const i32 from args and writes *mut i32 to out;
-        // it ignores instance.data, so a null data handle is sound.
-        let err: polyplug_abi::types::AbiError = unsafe {
+        // it ignores instance.data, so a null data handle is sound; `err` is a valid out-param.
+        unsafe {
             host_call_guest_method(
                 host_with_runtime(&runtime),
                 instance,
@@ -3063,6 +3229,7 @@ mod tests {
                 &raw const input as *const core::ffi::c_void,
                 &raw mut output as *mut core::ffi::c_void,
                 core::ptr::null_mut(),
+                &mut err,
             )
         };
         assert_eq!(err.code, polyplug_abi::types::AbiErrorCode::Ok as u32);
@@ -3080,8 +3247,9 @@ mod tests {
                 data: &raw const NATIVE_FNS as *mut core::ffi::c_void,
                 contract_id: GuestContractId::from_u64(0xDEAD_BEEF),
             };
-        // SAFETY: this is valid; contract_id is unregistered so lookup fails.
-        let err: polyplug_abi::types::AbiError = unsafe {
+        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
+        // SAFETY: this is valid; contract_id is unregistered so lookup fails; `err` is a valid out-param.
+        unsafe {
             host_call_guest_method(
                 host_with_runtime(&runtime),
                 instance,
@@ -3089,6 +3257,7 @@ mod tests {
                 core::ptr::null(),
                 core::ptr::null_mut(),
                 core::ptr::null_mut(),
+                &mut err,
             )
         };
         assert_eq!(err.code, polyplug_abi::types::AbiErrorCode::NotFound as u32);
@@ -3107,8 +3276,10 @@ mod tests {
             };
         let input: i32 = 41;
         let mut output: i32 = 0;
-        // SAFETY: native_add_one reads *const i32 from args and writes *mut i32 to out.
-        let err: polyplug_abi::types::AbiError = unsafe {
+        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
+        // SAFETY: native_add_one reads *const i32 from args and writes *mut i32 to out;
+        // `err` is a valid out-param.
+        unsafe {
             host_call_guest_method(
                 host_with_runtime(&runtime),
                 instance,
@@ -3116,6 +3287,7 @@ mod tests {
                 &raw const input as *const core::ffi::c_void,
                 &raw mut output as *mut core::ffi::c_void,
                 core::ptr::null_mut(),
+                &mut err,
             )
         };
         assert!(err.is_ok(), "native dispatch should succeed");
@@ -3136,11 +3308,17 @@ mod tests {
     unsafe extern "C" fn stateful_create_instance(
         _host: *const HostApi,
         _args: *const (),
-    ) -> polyplug_abi::guest::GuestContractInstance {
+        out_instance: *mut polyplug_abi::guest::GuestContractInstance,
+    ) {
         let boxed: Box<u8> = Box::new(0u8);
-        polyplug_abi::guest::GuestContractInstance {
-            data: Box::into_raw(boxed) as *mut core::ffi::c_void,
-            contract_id: GuestContractId::from_u64(STATEFUL_CONTRACT_ID),
+        let instance: polyplug_abi::guest::GuestContractInstance =
+            polyplug_abi::guest::GuestContractInstance {
+                data: Box::into_raw(boxed) as *mut core::ffi::c_void,
+                contract_id: GuestContractId::from_u64(STATEFUL_CONTRACT_ID),
+            };
+        if !out_instance.is_null() {
+            // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+            unsafe { out_instance.write(instance) };
         }
     }
 
@@ -3226,12 +3404,15 @@ mod tests {
         );
 
         // Create two stateful instances through the host-mediated path.
-        // SAFETY: host and interface are valid; create_instance ignores args.
-        let inst_a: polyplug_abi::guest::GuestContractInstance =
-            unsafe { host_create_guest_instance(host, interface, core::ptr::null()) };
-        // SAFETY: as above.
-        let inst_b: polyplug_abi::guest::GuestContractInstance =
-            unsafe { host_create_guest_instance(host, interface, core::ptr::null()) };
+        let mut inst_a: polyplug_abi::guest::GuestContractInstance =
+            polyplug_abi::guest::GuestContractInstance::null();
+        // SAFETY: host and interface are valid; create_instance ignores args;
+        // inst_a is a valid out-param.
+        unsafe { host_create_guest_instance(host, interface, core::ptr::null(), &mut inst_a) };
+        let mut inst_b: polyplug_abi::guest::GuestContractInstance =
+            polyplug_abi::guest::GuestContractInstance::null();
+        // SAFETY: as above; inst_b is a valid out-param.
+        unsafe { host_create_guest_instance(host, interface, core::ptr::null(), &mut inst_b) };
         assert!(!inst_a.data.is_null() && !inst_b.data.is_null());
         assert_eq!(
             runtime.live_instance_count_for_contracts(&[cid]),
@@ -3270,9 +3451,10 @@ mod tests {
 
         // The stateless contract's create_instance returns a null `data`, so the
         // host must not count it.
-        // SAFETY: host and interface are valid.
-        let inst: polyplug_abi::guest::GuestContractInstance =
-            unsafe { host_create_guest_instance(host, interface, core::ptr::null()) };
+        let mut inst: polyplug_abi::guest::GuestContractInstance =
+            polyplug_abi::guest::GuestContractInstance::null();
+        // SAFETY: host and interface are valid; `inst` is a valid out-param.
+        unsafe { host_create_guest_instance(host, interface, core::ptr::null(), &mut inst) };
         assert!(inst.data.is_null(), "stateless instance has null data");
         assert_eq!(
             runtime.live_instance_count_for_contracts(&[cid]),
@@ -3356,8 +3538,10 @@ mod tests {
                 data: &raw const NATIVE_FNS as *mut core::ffi::c_void,
                 contract_id: GuestContractId::from_u64(contract_id),
             };
-        // SAFETY: function_count is 1; fn_id 5 is out of range and must be rejected.
-        let err: polyplug_abi::types::AbiError = unsafe {
+        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
+        // SAFETY: function_count is 1; fn_id 5 is out of range and must be rejected;
+        // `err` is a valid out-param.
+        unsafe {
             host_call_guest_method(
                 host_with_runtime(&runtime),
                 instance,
@@ -3365,6 +3549,7 @@ mod tests {
                 core::ptr::null(),
                 core::ptr::null_mut(),
                 core::ptr::null_mut(),
+                &mut err,
             )
         };
         assert_eq!(
@@ -3381,12 +3566,16 @@ mod tests {
         _args: *const (),
         out: *mut (),
         _arena: *mut polyplug_abi::types::CallArena,
-    ) -> polyplug_abi::types::AbiError {
+        out_err: *mut polyplug_abi::types::AbiError,
+    ) {
         // SAFETY: the test passes a valid *mut u32 for out.
         unsafe {
             *(out as *mut u32) = fn_id;
         }
-        polyplug_abi::types::AbiError::ok()
+        if !out_err.is_null() {
+            // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+            unsafe { out_err.write(polyplug_abi::types::AbiError::ok()) };
+        }
     }
 
     fn register_vm_caller_contract(
@@ -3402,8 +3591,12 @@ mod tests {
         unsafe extern "C" fn stub_create(
             _host: *const HostApi,
             _args: *const (),
-        ) -> GuestContractInstance {
-            GuestContractInstance::null()
+            out_instance: *mut GuestContractInstance,
+        ) {
+            if !out_instance.is_null() {
+                // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+                unsafe { out_instance.write(GuestContractInstance::null()) };
+            }
         }
         unsafe extern "C" fn stub_destroy(_host: *const HostApi, _instance: GuestContractInstance) {
         }
@@ -3461,8 +3654,9 @@ mod tests {
                 contract_id: GuestContractId::from_u64(contract_id),
             };
         let mut output: u32 = 0;
-        // SAFETY: vm_echo_call writes the fn_id into *mut u32 out.
-        let err: polyplug_abi::types::AbiError = unsafe {
+        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
+        // SAFETY: vm_echo_call writes the fn_id into *mut u32 out; `err` is a valid out-param.
+        unsafe {
             host_call_guest_method(
                 host_with_runtime(&runtime),
                 instance,
@@ -3470,6 +3664,7 @@ mod tests {
                 core::ptr::null(),
                 &raw mut output as *mut core::ffi::c_void,
                 core::ptr::null_mut(),
+                &mut err,
             )
         };
         assert!(err.is_ok(), "vm dispatch should succeed");
@@ -3896,11 +4091,17 @@ mod tests {
         unsafe extern "C" fn stub_create_instance(
             _this: *const HostContractInterface,
             _args: *const (),
-        ) -> HostContractInstance {
+            out_instance: *mut HostContractInstance,
+        ) {
             // Return a non-null dummy pointer for testing
             static mut DUMMY: usize = 0xDEADBEEF;
-            HostContractInstance {
-                data: &raw mut DUMMY as *mut core::ffi::c_void,
+            if !out_instance.is_null() {
+                // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+                unsafe {
+                    out_instance.write(HostContractInstance {
+                        data: &raw mut DUMMY as *mut core::ffi::c_void,
+                    })
+                };
             }
         }
 
@@ -4179,8 +4380,9 @@ mod tests {
     unsafe extern "C" fn counting_create_instance(
         _this: *const HostContractInterface,
         _args: *const (),
-    ) -> HostContractInstance {
-        LOCAL_INSTANCE_COUNTER.with(|counter| {
+        out_instance: *mut HostContractInstance,
+    ) {
+        let instance: HostContractInstance = LOCAL_INSTANCE_COUNTER.with(|counter| {
             let count: usize = counter.get();
             counter.set(count + 1);
             // Use the count as a "unique" pointer value - we don't actually allocate
@@ -4188,7 +4390,11 @@ mod tests {
             HostContractInstance {
                 data: (count + 1) as *mut core::ffi::c_void, // +1 to avoid null for count=0
             }
-        })
+        });
+        if !out_instance.is_null() {
+            // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+            unsafe { out_instance.write(instance) };
+        }
     }
 
     /// No-op destroy for counting instances.

@@ -69,28 +69,37 @@ struct AddArgs {
 }
 
 /// Native dispatch target — adds two `u32` args, writes the sum to `out` so the
-/// work is not dead-code-eliminated. Canonical 3-arg native ABI.
+/// work is not dead-code-eliminated. Canonical 4-arg native ABI.
 ///
 /// # Safety
-/// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`.
+/// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`;
+/// `out_err` must be non-null and writable.
 unsafe extern "C" fn bench_add(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     // SAFETY: args points to AddArgs and out to u32 per the caller's contract.
     unsafe {
         let a: &AddArgs = &*(args as *const AddArgs);
         *(out as *mut u32) = a.a.wrapping_add(a.b);
     }
-    AbiError::ok()
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn noop_create_instance(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn noop_destroy_instance(
@@ -167,9 +176,13 @@ fn find_resolve_dispatch(runtime: &Runtime, contract_id: u64) -> u32 {
 fn dispatch_fn0(interface: &GuestContractInterface) -> u32 {
     // SAFETY: the interface is native with fn 0 present (registered above).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions };
-    // SAFETY: transmute to the canonical 3-arg native dispatch signature.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    // SAFETY: transmute to the canonical 4-arg native dispatch signature.
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     let instance: GuestContractInstance = GuestContractInstance {
         data: core::ptr::null_mut(),
         contract_id: GuestContractId::from_u64(interface.contract_id.id()),
@@ -179,12 +192,14 @@ fn dispatch_fn0(interface: &GuestContractInterface) -> u32 {
         b: 57_u32,
     };
     let mut out: u32 = 0_u32;
-    // SAFETY: instance carries the contract_id; args/out match bench_add.
-    let err: AbiError = unsafe {
+    let mut err: AbiError = AbiError::ok();
+    // SAFETY: instance carries the contract_id; args/out match bench_add; err is writable.
+    unsafe {
         dispatch_fn(
             instance,
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut err,
         )
     };
     black_box(err);

@@ -48,8 +48,8 @@ use crate::{
 /// - `destroy_instance`: Destructor to clean up instances before hot-reload
 ///
 /// # Dispatch
-/// - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out)`
-/// - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out)`
+/// - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out, out_err)`
+/// - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GuestContractInterface {
@@ -76,19 +76,21 @@ pub struct GuestContractInterface {
     /// # Arguments
     /// - `host`: HostApi pointer (for memory allocation via host->alloc)
     /// - `args`: Optional initialization arguments (contract-specific)
-    ///
-    /// # Returns
-    /// Opaque instance handle, or null handle on failure.
+    /// - `out_instance`: out-param; the new instance handle is written here. A
+    ///   null `data` denotes a stateless instance or construction failure.
     ///
     /// # Nullability
-    /// REQUIRED — never null. Failure is signalled by returning a null
+    /// REQUIRED — never null. Failure is signalled by writing a null
     /// *instance handle*, not by a null callback. `register_guest_contract`
     /// rejects interfaces whose `create_instance` bits are null.
     ///
     /// # Thread Safety
     /// May be called from any thread. Implementation must handle synchronization.
-    pub create_instance:
-        unsafe extern "C" fn(host: *const HostApi, args: *const ()) -> GuestContractInstance,
+    pub create_instance: unsafe extern "C" fn(
+        host: *const HostApi,
+        args: *const (),
+        out_instance: *mut GuestContractInstance,
+    ),
     /// Destroy an instance of this contract.
     ///
     /// MUST be called before hot-reload for all instances.
@@ -110,7 +112,7 @@ pub struct GuestContractInterface {
     /// Union of dispatch mechanisms — access based on dispatch_type.
     ///
     /// For Native dispatch: use `dispatch.native.functions[fn_id]`.
-    /// For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
+    /// For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`.
     pub dispatch: DispatchMechanisms,
 }
 

@@ -192,10 +192,11 @@ unsafe extern "C" fn noop_load_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -204,10 +205,11 @@ unsafe extern "C" fn noop_reload_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -215,10 +217,11 @@ unsafe extern "C" fn noop_reload_bundle(
 unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostApi,
     _interface: *const polyplug_abi::HostContractInterface,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -226,10 +229,11 @@ unsafe extern "C" fn noop_register_host_contract(
 unsafe extern "C" fn noop_register_loader(
     _this: *const HostApi,
     _loader_ptr: *mut core::ffi::c_void,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
@@ -255,15 +259,23 @@ unsafe extern "C" fn noop_call_guest_method(
     _args: *const core::ffi::c_void,
     _out: *mut core::ffi::c_void,
     _arena: *mut polyplug_abi::CallArena,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Ok as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 }
 
-unsafe extern "C" fn noop_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
-    AbiError::ok()
+unsafe extern "C" fn noop_unload_bundle(
+    _this: *const HostApi,
+    _bundle_id: BundleId,
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 // --- Registry callback -------------------------------------------------------
@@ -276,12 +288,19 @@ unsafe extern "C" fn registry_register_callback(
     _this: *const HostApi,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     if descriptor.is_null() || interface.is_null() {
-        return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
-            message: StringView::null(),
-        };
+        if !out_err.is_null() {
+            // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+            unsafe {
+                out_err.write(AbiError {
+                    code: AbiErrorCode::InvalidPointer as u32,
+                    message: StringView::null(),
+                })
+            };
+        }
+        return;
     }
 
     // SAFETY: descriptor and interface are valid for this call (ABI contract).
@@ -312,7 +331,7 @@ unsafe extern "C" fn registry_register_callback(
         }
     });
 
-    match result {
+    let err_val: AbiError = match result {
         Ok(_) => AbiError {
             code: AbiErrorCode::Ok as u32,
             message: StringView::null(),
@@ -321,6 +340,10 @@ unsafe extern "C" fn registry_register_callback(
             code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
+    };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(err_val) };
     }
 }
 
@@ -446,8 +469,12 @@ fn stress_error_code_and_message_received_correctly() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
     // enforced by the test (fn 0 writes AbiError to *out, ignores args).
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
 
     let host_interface: HostApi = make_host_interface();
     let message_args: MessageArgs = MessageArgs {
@@ -459,12 +486,14 @@ fn stress_error_code_and_message_received_correctly() {
         message: StringView::null(),
     };
 
+    let mut call_result: AbiError = AbiError::ok();
     // SAFETY: message_args carries a live HostApi; out is a valid AbiError location.
-    let call_result: AbiError = unsafe {
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &message_args as *const MessageArgs as *const (),
             &mut out as *mut AbiError as *mut (),
+            &mut call_result,
         )
     };
 
@@ -517,17 +546,23 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     // SAFETY: fn_ptr is function 1 in the interface (error_panic).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(1) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. fn 1 ignores both
-    // args and out -- it catches the panic internally and returns Panic directly.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    // args and out -- it catches the panic internally and writes Panic to out_err.
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
 
-    // fn 1 returns the AbiError directly (not via out pointer). Both args and out are null.
+    // fn 1 returns the AbiError via out_err. Both args and out are null.
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: fn 1 ignores args and out entirely (no pointer dereferences).
-    let result: AbiError = unsafe {
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             core::ptr::null(),
             core::ptr::null_mut(),
+            &mut result,
         )
     };
 
@@ -614,17 +649,23 @@ fn stress_error_chain_b_errors_a_propagates() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Args is *const ChainArgs,
     // out is *mut AbiError -- types enforced by this test.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
 
+    let mut call_result: AbiError = AbiError::ok();
     // SAFETY: chain_args is a valid ChainArgs with a live HostApi.
     // out is a valid AbiError location. error_chain_propagate calls fn 1 via the host
     // interface and writes the returned AbiError (Panic) to *out.
-    let call_result: AbiError = unsafe {
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &chain_args as *const ChainArgs as *const (),
             &mut out as *mut AbiError as *mut (),
+            &mut call_result,
         )
     };
 
@@ -667,8 +708,12 @@ fn stress_error_message_lifetime_valid_during_read() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
     // enforced by the test (fn 0 writes AbiError to *out, ignores args).
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
 
     let host_interface: HostApi = make_host_interface();
     let message_args: MessageArgs = MessageArgs {
@@ -680,12 +725,14 @@ fn stress_error_message_lifetime_valid_during_read() {
         message: StringView::null(),
     };
 
+    let mut call_result: AbiError = AbiError::ok();
     // SAFETY: message_args carries a live HostApi; out is a valid AbiError location.
-    let call_result: AbiError = unsafe {
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &message_args as *const MessageArgs as *const (),
             &mut out as *mut AbiError as *mut (),
+            &mut call_result,
         )
     };
 
@@ -741,8 +788,12 @@ unsafe extern "C" fn stub_create_guest_instance(
     _this: *const polyplug_abi::HostApi,
     _interface: *const polyplug_abi::GuestContractInterface,
     _args: *const core::ffi::c_void,
-) -> polyplug_abi::GuestContractInstance {
-    polyplug_abi::GuestContractInstance::null()
+    out_instance: *mut polyplug_abi::GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(

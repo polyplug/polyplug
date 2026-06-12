@@ -69,6 +69,23 @@ pub unsafe extern "C" fn polyplug_python_host_vm_dispatch(
     args: *const (),
     out: *mut (),
     _arena: *mut CallArena,
+    out_err: *mut AbiError,
+) {
+    // SAFETY: loader_data carries the bridge pointer per this function's safety
+    // contract; the impl forwards args/out untouched to the ctypes callback.
+    let result: AbiError =
+        unsafe { polyplug_python_host_vm_dispatch_impl(loader_data, fn_id, args, out) };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result) };
+    }
+}
+
+unsafe fn polyplug_python_host_vm_dispatch_impl(
+    loader_data: VmLoaderData,
+    fn_id: u32,
+    args: *const (),
+    out: *mut (),
 ) -> AbiError {
     let bridge_ptr: *const PolyplugPythonHostDispatchBridge =
         loader_data.data as *const PolyplugPythonHostDispatchBridge;
@@ -116,14 +133,20 @@ pub unsafe extern "C" fn polyplug_python_host_vm_dispatch(
 pub unsafe extern "C" fn polyplug_python_host_create_instance(
     this: *const HostContractInterface,
     _args: *const c_void,
-) -> HostContractInstance {
-    if this.is_null() {
-        return HostContractInstance::null();
-    }
-    HostContractInstance {
-        // SAFETY: this is non-null (checked above) and points at the registered
-        // interface per the self-passing ABI contract; user_data is registrant-owned.
-        data: unsafe { (*this).user_data },
+    out_instance: *mut HostContractInstance,
+) {
+    let instance: HostContractInstance = if this.is_null() {
+        HostContractInstance::null()
+    } else {
+        HostContractInstance {
+            // SAFETY: this is non-null (checked above) and points at the registered
+            // interface per the self-passing ABI contract; user_data is registrant-owned.
+            data: unsafe { (*this).user_data },
+        }
+    };
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(instance) };
     }
 }
 

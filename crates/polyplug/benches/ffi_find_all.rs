@@ -49,16 +49,24 @@ thread_local! {
 ///
 /// # Safety
 /// `descriptor` and `interface` must be valid pointers for the call duration.
+/// `out_err` must be non-null and writable.
 unsafe extern "C" fn bench_register_callback(
     _this: *const HostApi,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     if descriptor.is_null() || interface.is_null() {
-        return AbiError {
-            code: AbiErrorCode::Generic as u32,
-            message: StringView::null(),
-        };
+        if !out_err.is_null() {
+            // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+            unsafe {
+                out_err.write(AbiError {
+                    code: AbiErrorCode::Generic as u32,
+                    message: StringView::null(),
+                })
+            };
+        }
+        return;
     }
 
     // SAFETY: descriptor is valid for this call per ABI contract.
@@ -89,7 +97,7 @@ unsafe extern "C" fn bench_register_callback(
             }
         });
 
-    match result {
+    let err: AbiError = match result {
         Ok(_) => {
             LAST_CONTRACT_ID.with(|cell| cell.set(iface.contract_id.id()));
             AbiError::ok()
@@ -98,6 +106,10 @@ unsafe extern "C" fn bench_register_callback(
             code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
+    };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(err) };
     }
 }
 
@@ -225,10 +237,16 @@ unsafe extern "C" fn bench_load_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe {
+            out_err.write(AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            })
+        };
     }
 }
 
@@ -236,30 +254,48 @@ unsafe extern "C" fn bench_reload_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe {
+            out_err.write(AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            })
+        };
     }
 }
 
 unsafe extern "C" fn bench_register_host_contract(
     _this: *const HostApi,
     _interface: *const polyplug_abi::HostContractInterface,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe {
+            out_err.write(AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            })
+        };
     }
 }
 
 unsafe extern "C" fn bench_register_loader(
     _this: *const HostApi,
     _loader_ptr: *mut core::ffi::c_void,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe {
+            out_err.write(AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            })
+        };
     }
 }
 
@@ -282,15 +318,28 @@ unsafe extern "C" fn bench_call_guest_method(
     _args: *const core::ffi::c_void,
     _out: *mut core::ffi::c_void,
     _arena: *mut polyplug_abi::CallArena,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe {
+            out_err.write(AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            })
+        };
     }
 }
 
-unsafe extern "C" fn bench_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
-    AbiError::ok()
+unsafe extern "C" fn bench_unload_bundle(
+    _this: *const HostApi,
+    _bundle_id: BundleId,
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 // ─── Setup helper ────────────────────────────────────────────────────────────
@@ -458,8 +507,12 @@ fn bench_ffi_find_all_empty_result(c: &mut Criterion) {
 unsafe extern "C" fn sweep_create_instance(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// Stub destroy_instance for the synthetic sweep interfaces.
@@ -604,8 +657,12 @@ unsafe extern "C" fn stub_create_guest_instance(
     _this: *const polyplug_abi::HostApi,
     _interface: *const polyplug_abi::GuestContractInterface,
     _args: *const core::ffi::c_void,
-) -> polyplug_abi::GuestContractInstance {
-    polyplug_abi::GuestContractInstance::null()
+    out_instance: *mut polyplug_abi::GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(

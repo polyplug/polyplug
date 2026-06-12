@@ -210,9 +210,10 @@ pub unsafe fn register_native_loader(host: *const HostApi) {
     let loader: *mut c_void = Box::into_raw(Box::new(
         Box::new(TestNativeLoader::new()) as Box<dyn BundleLoader>
     )) as *mut c_void;
+    let mut rc: AbiError = AbiError::ok();
     // SAFETY: host is valid;
     // loader is a `*mut Box<dyn BundleLoader>` erased to `*mut c_void` as host_register_loader expects.
-    let rc: AbiError = unsafe { ((*host).register_loader)(host, loader) };
+    unsafe { ((*host).register_loader)(host, loader, &mut rc) };
     assert_eq!(
         rc.code,
         AbiErrorCode::Ok as u32,

@@ -36,9 +36,9 @@ fn clear_error(host: *const HostApi) {
 /// `load_bundle` with a non-existent path.
 fn trigger_error(host: *const HostApi) {
     let path: &[u8] = b"/nonexistent/path/that/does/not/exist";
+    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host is valid; path is valid bytes.
-    let result: polyplug_abi::AbiError =
-        unsafe { ((*host).load_bundle)(host, path.as_ptr(), path.len()) };
+    unsafe { ((*host).load_bundle)(host, path.as_ptr(), path.len(), &mut result) };
     assert_ne!(
         result.code,
         polyplug_abi::AbiErrorCode::Ok as u32,
@@ -356,9 +356,9 @@ fn last_error_large_message_handling() {
 
     // A 512-byte path — long enough to exercise message formatting with the path included.
     let long_path: Vec<u8> = core::iter::repeat_n(b'x', 512).collect();
+    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host is valid; long_path is a valid non-null byte slice.
-    let result: polyplug_abi::AbiError =
-        unsafe { ((*host).load_bundle)(host, long_path.as_ptr(), long_path.len()) };
+    unsafe { ((*host).load_bundle)(host, long_path.as_ptr(), long_path.len(), &mut result) };
     assert_ne!(
         result.code,
         polyplug_abi::AbiErrorCode::Ok as u32,

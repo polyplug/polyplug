@@ -446,7 +446,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                     "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
                 );
                 out.push_str(&format!(
-                    "    private static unsafe AbiError {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {{\n",
+                    "    private static unsafe void {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {{\n",
                     abi_method
                 ));
                 emit_cs_guest_dispatch_body(&mut out, &state_class, &class_name, func);
@@ -473,7 +473,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                 let fn_name: String = func.name.replace('-', "_");
                 let abi_method: String = format!("{lower}_{fn_name}_abi");
                 out.push_str(&format!(
-                    "                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError>)&{abi_method},\n"
+                    "                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&{abi_method},\n"
                 ));
             }
             out.push_str("            };\n");
@@ -492,7 +492,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             // No bundle info is available here, so default to native dispatch.
             out.push_str("                DispatchType = DispatchType.Native,\n");
             out.push_str(&format!(
-                "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstance,\n"
+                "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance*, void>)&{upper}_CreateInstance,\n"
             ));
             out.push_str(&format!(
                 "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstance,\n"
@@ -569,7 +569,7 @@ fn generate_cs_guest_plugin_interface(
         let abi_method: String = format!("{lower}_{fn_name}_abi", lower = plugin_lower);
         out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
         out.push_str(&format!(
-            "    private static unsafe AbiError {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {{\n",
+            "    private static unsafe void {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {{\n",
             abi_method
         ));
         emit_cs_guest_dispatch_body(out, &state_class, &arg_pack_prefix, func);
@@ -606,7 +606,7 @@ fn generate_cs_guest_plugin_interface(
         let fn_name: String = func.name.replace('-', "_");
         let abi_method: String = format!("{lower}_{fn_name}_abi", lower = plugin_lower);
         out.push_str(&format!(
-            "                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError>)&{abi_method},\n"
+            "                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&{abi_method},\n"
         ));
     }
     out.push_str("            };\n");
@@ -635,7 +635,7 @@ fn generate_cs_guest_plugin_interface(
     // native-dispatch").
     out.push_str("                DispatchType = DispatchType.Native,\n");
     out.push_str(&format!(
-        "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstance,\n",
+        "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance*, void>)&{upper}_CreateInstance,\n",
         upper = plugin_upper
     ));
     out.push_str(&format!(
@@ -707,18 +707,20 @@ fn emit_cs_guest_instance_machinery(
 
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
-        "    private static GuestContractInstance {upper}_CreateInstance(IntPtr host, IntPtr args) {{\n"
+        "    private static unsafe void {upper}_CreateInstance(IntPtr host, IntPtr args, GuestContractInstance* outInstance) {{\n"
     ));
     out.push_str(
         "        // Calls the author factory and carries the payload in instance.Data as a\n",
     );
     out.push_str("        // normal (non-pinned) GCHandle — an opaque token the host never\n");
-    out.push_str("        // dereferences. Returns a null handle when host is null, the factory\n");
+    out.push_str("        // dereferences. Writes a null handle when host is null, the factory\n");
     out.push_str("        // was not registered, or it throws.\n");
+    out.push_str("        if (outInstance == null) return;\n");
     out.push_str("        try {\n");
     out.push_str(&format!("            var factory = _factory_{lower};\n"));
     out.push_str("            if (host == IntPtr.Zero || factory is null) {\n");
-    out.push_str("                return new GuestContractInstance { Data = IntPtr.Zero };\n");
+    out.push_str("                *outInstance = new GuestContractInstance { Data = IntPtr.Zero };\n");
+    out.push_str("                return;\n");
     out.push_str("            }\n");
     out.push_str(&format!(
         "            var state = new {class_pascal}InstanceState {{ Host = host, Impl = factory(host) }};\n"
@@ -726,7 +728,7 @@ fn emit_cs_guest_instance_machinery(
     out.push_str(
         "            var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);\n",
     );
-    out.push_str("            return new GuestContractInstance {\n");
+    out.push_str("            *outInstance = new GuestContractInstance {\n");
     out.push_str(
         "                Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),\n",
     );
@@ -735,7 +737,7 @@ fn emit_cs_guest_instance_machinery(
     ));
     out.push_str("            };\n");
     out.push_str("        } catch {\n");
-    out.push_str("            return new GuestContractInstance { Data = IntPtr.Zero };\n");
+    out.push_str("            *outInstance = new GuestContractInstance { Data = IntPtr.Zero };\n");
     out.push_str("        }\n");
     out.push_str("    }\n\n");
 
@@ -775,33 +777,40 @@ fn emit_cs_guest_dispatch_body(
     let has_return: bool = func.returns.is_some();
     let has_params: bool = !func.params.is_empty();
 
+    out.push_str("        if (outErr == null) return;\n");
     out.push_str("        try {\n");
     out.push_str("            if (instance.Data == IntPtr.Zero) {\n");
     out.push_str(
-        "                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage(\"instance is null\") };\n",
+        "                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage(\"instance is null\") };\n",
     );
+    out.push_str("                return;\n");
     out.push_str("            }\n");
     if has_params {
         out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
         out.push_str(
-            "                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n",
+            "                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n",
         );
+        out.push_str("                return;\n");
         out.push_str("            }\n");
     }
     if has_return {
         out.push_str("            if (outPtr == IntPtr.Zero) {\n");
         out.push_str(
-            "                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n",
+            "                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n",
         );
+        out.push_str("                return;\n");
         out.push_str("            }\n");
     }
     out.push_str(
         "            // instance.Data is the GCHandle token produced by CreateInstance.\n",
     );
     out.push_str(&format!(
-        "            var state = ({state_class}?)System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Target\n"
+        "            var state = ({state_class}?)System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Target;\n"
     ));
-    out.push_str("                ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.InvalidPointer, \"instance payload collected\");\n");
+    out.push_str("            if (state is null) {\n");
+    out.push_str("                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage(\"instance payload collected\") };\n");
+    out.push_str("                return;\n");
+    out.push_str("            }\n");
     out.push_str("            var impl = state.Impl;\n");
 
     // Marshal arguments and build the implementation call expression.
@@ -847,14 +856,14 @@ fn emit_cs_guest_dispatch_body(
     } else {
         out.push_str(&format!("            impl.{method_name}({call_args});\n"));
     }
-    out.push_str("            return new AbiError { Code = (uint)AbiErrorCode.Ok };\n");
+    out.push_str("            *outErr = new AbiError { Code = (uint)AbiErrorCode.Ok };\n");
     out.push_str("        } catch (Polyplug.Guest.GuestException ex) {\n");
     out.push_str("            var msg = StringViewHelper.StaticMessage(ex.Message);\n");
-    out.push_str("            return new AbiError { Code = ex.Code, Message = msg };\n");
+    out.push_str("            *outErr = new AbiError { Code = ex.Code, Message = msg };\n");
     out.push_str("        } catch {\n");
     out.push_str("            var msg = StringViewHelper.StaticMessage(\"plugin panicked\");\n");
     out.push_str(
-        "            return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };\n",
+        "            *outErr = new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };\n",
     );
     out.push_str("        }\n");
 }
@@ -952,9 +961,12 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                     out.push_str(&format!("                    Version = new Polyplug.Abi.Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
                     out.push_str("                };\n");
                     out.push_str("                var host = (HostApi*)hostPtr;\n");
-                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;\n");
+                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError*, void>)host->RegisterGuestContract;\n");
                     out.push_str(&format!(
-                        "                var err_{plugin_lower} = registerFn(hostPtr, &desc_{plugin_lower}, interfacePtr_{plugin_lower});\n"
+                        "                AbiError err_{plugin_lower} = default;\n"
+                    ));
+                    out.push_str(&format!(
+                        "                registerFn(hostPtr, &desc_{plugin_lower}, interfacePtr_{plugin_lower}, &err_{plugin_lower});\n"
                     ));
                     out.push_str(&format!("                if (err_{plugin_lower}.Code != (uint)AbiErrorCode.Ok) return err_{plugin_lower};\n"));
                     out.push_str("            }\n");
@@ -1009,9 +1021,12 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
             out.push_str(&format!("                    Version = new Polyplug.Abi.Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
             out.push_str("                };\n");
             out.push_str("                var host = (HostApi*)hostPtr;\n");
-            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;\n");
+            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError*, void>)host->RegisterGuestContract;\n");
             out.push_str(&format!(
-                "                var err_{lower} = registerFn(hostPtr, &desc_{lower}, interfacePtr_{lower});\n"
+                "                AbiError err_{lower} = default;\n"
+            ));
+            out.push_str(&format!(
+                "                registerFn(hostPtr, &desc_{lower}, interfacePtr_{lower}, &err_{lower});\n"
             ));
             out.push_str(&format!("                if (err_{lower}.Code != (uint)AbiErrorCode.Ok) return err_{lower};\n"));
             out.push_str("            }\n");
@@ -1315,7 +1330,7 @@ fn generate_host_fn_caller(
     // runtime reject the call ("attempted to call a UnmanagedCallersOnly method from
     // managed code"). The transition is also needed whenever a guest calls back into the
     // host. The cost is one GC transition per native dispatch — correctness over a micro-opt.
-    out.push_str("            AbiError err;\n");
+    out.push_str("            AbiError err = default;\n");
     out.push_str("            switch (_interface->DispatchType) {\n");
     out.push_str("                case DispatchType.Native: {\n");
     // Function-id bounds check against the native dispatch table. Valid only in
@@ -1333,26 +1348,26 @@ fn generate_host_fn_caller(
     out.push_str(&format!(
         "                    nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
     ));
-    out.push_str("                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;\n");
-    out.push_str("                    err = dispatch(_instance, argsPtr, outPtr);\n");
+    out.push_str("                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;\n");
+    out.push_str("                    dispatch(_instance, argsPtr, outPtr, &err);\n");
     out.push_str("                    break;\n");
     out.push_str("                }\n");
     out.push_str("                case DispatchType.VirtualMachine: {\n");
-    // Canonical VM dispatch signature: (loader_data, instance, fn_id, args, out, arena).
-    out.push_str("                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;\n");
+    // Canonical VM dispatch signature: (loader_data, instance, fn_id, args, out, arena, out_err).
+    out.push_str("                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;\n");
     if needs_arena {
         // Arena-backed functions hand the guest this caller's per-call arena so it
         // can write variable-size returns without per-value host->alloc.
         out.push_str("                    fixed (CallArena* arenaPtr = &_arena) {\n");
         out.push_str(&format!(
-            "                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr);\n"
+            "                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr, &err);\n"
         ));
         out.push_str("                    }\n");
     } else {
         // No variable-size output: a null arena makes the VM bridge fall back to
         // per-value host allocation.
         out.push_str(&format!(
-            "                    err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null);\n"
+            "                    vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null, &err);\n"
         ));
     }
     out.push_str("                    break;\n");
@@ -1637,7 +1652,7 @@ fn generate_cs_guest_host_contract_method(
     emit_cs_guest_host_contract_out_setup(out, &func.returns);
 
     // Dispatch call
-    out.push_str("            AbiError err;\n");
+    out.push_str("            AbiError err = default;\n");
     out.push_str("            switch (contract->DispatchType) {\n");
     out.push_str("                case DispatchType.Native: {\n");
     // Function-id bounds check belongs to the Native arm only: on a VM interface
@@ -1661,20 +1676,20 @@ fn generate_cs_guest_host_contract_method(
     out.push_str(&format!(
         "                    var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[{fn_id}u];\n"
     ));
-    out.push_str("                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)fnPtr;\n");
-    out.push_str("                    err = fn_(_instance, argsPtr, outPtr);\n");
+    out.push_str("                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError*, void>)fnPtr;\n");
+    out.push_str("                    fn_(_instance, argsPtr, outPtr, &err);\n");
     out.push_str("                    break;\n");
     out.push_str("                }\n");
     out.push_str("                case DispatchType.VirtualMachine: {\n");
-    // Canonical VM dispatch signature: (loader_data, instance, fn_id, args, out, arena).
+    // Canonical VM dispatch signature: (loader_data, instance, fn_id, args, out, arena, out_err).
     out.push_str(
-        "                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;\n",
+        "                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError*, void>)contract->Dispatch.Vm.Call;\n",
     );
     // A null arena (IntPtr.Zero) makes the VM bridge fall back to per-value host
     // allocation. C# guests are dispatched through native function pointers, so the
     // host-side caller has no per-call arena to publish here.
     out.push_str(&format!(
-        "                    err = vmFn(contract->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, IntPtr.Zero);\n"
+        "                    vmFn(contract->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, IntPtr.Zero, &err);\n"
     ));
     out.push_str("                    break;\n");
     out.push_str("                }\n");

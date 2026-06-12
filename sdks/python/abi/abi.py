@@ -347,6 +347,113 @@ class ParseVersionError(enum.IntEnum):
 POLYPLUG_ABI_VERSION: int = 1
 
 
+_vm_dispatch_call_t = ctypes.CFUNCTYPE(None, VmLoaderData, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+class VmDispatch(ctypes.Structure):
+    """ VM dispatch data — call through a dispatch function.
+    
+     Used when `dispatch_type == DispatchType::VirtualMachine`.
+     The `call` function receives `loader_data` which contains VM-specific state.
+    """
+    _fields_ = [
+        ("call", _vm_dispatch_call_t),
+        ("loader_data", VmLoaderData),
+    ]
+
+# Expected size: 16 bytes
+assert ctypes.sizeof(VmDispatch) == 16, f"VmDispatch expected 16 bytes, got {ctypes.sizeof(VmDispatch)}"
+
+
+_host_api_register_guest_contract_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_host_api_alloc_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
+_host_api_free_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
+_host_api_find_guest_contract_t = ctypes.CFUNCTYPE(GuestContractHandle, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_host_api_find_all_guest_contracts_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_host_api_resolve_guest_contract_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, GuestContractHandle)
+_host_api_get_host_contract_t = ctypes.CFUNCTYPE(HostContractInstance, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_host_api_resolve_host_contract_interface_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_host_api_list_bundles_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p)
+_host_api_get_dependencies_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p)
+_host_api_load_bundle_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p)
+_host_api_reload_bundle_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p)
+_host_api_register_host_contract_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_host_api_register_loader_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_host_api_get_last_error_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
+_host_api_get_error_len_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p)
+_host_api_call_guest_method_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_host_api_unload_bundle_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p)
+_host_api_log_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32, StringView, StringView)
+_host_api_create_guest_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_host_api_destroy_guest_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, GuestContractInstance)
+class HostApi(ctypes.Structure):
+    """ Host Interface — function table passed to guests during initialization.
+    
+     Contains an opaque runtime pointer and function pointers for guest calls.
+     All functions use self-passing pattern (receive HostApi pointer as first parameter).
+     `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
+     Tail offsets: `create_guest_instance` @160, `destroy_guest_instance` @168, `reserved` @176.
+    
+     # Who provides
+     The runtime creates this struct and passes it to `polyplug_init()`.
+     The struct is allocated using `Box::leak()` for `'static` lifetime.
+    
+     # Nullability
+     Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
+     is the sole producer of this struct and populates all 21 callbacks at
+     creation. Consumers never construct or mutate a `HostApi`. Only the
+     `runtime` pointer can become null (it is swapped to null by
+     `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
+     is a null placeholder by contract.
+    
+     # Who calls
+     Guest (plugin) code calls these functions to interact with the runtime.
+     SDK-generated wrappers handle the self-passing pattern automatically.
+    
+     # Ownership
+     The struct is statically allocated by the runtime. The pointer is valid
+     until the runtime is destroyed. Guest must NOT free this pointer.
+    
+     # Lifetime
+     Lives as long as the runtime that created it.
+    
+     # Thread Safety
+     All functions are safe to call from any thread. The runtime uses
+     internal synchronization (RwLock/Mutex) for shared state.
+    
+     # Self-passing pattern
+     Each function receives the interface pointer as its first parameter,
+     allowing guests to call: `host->find_guest_contract(host, id, ver)`
+     SDKs hide this pattern: `host.find_guest_contract(id, ver)`
+    """
+    _fields_ = [
+        ("runtime", ctypes.c_void_p),
+        ("register_guest_contract", _host_api_register_guest_contract_t),
+        ("alloc", _host_api_alloc_t),
+        ("free", _host_api_free_t),
+        ("find_guest_contract", _host_api_find_guest_contract_t),
+        ("find_all_guest_contracts", _host_api_find_all_guest_contracts_t),
+        ("resolve_guest_contract", _host_api_resolve_guest_contract_t),
+        ("get_host_contract", _host_api_get_host_contract_t),
+        ("resolve_host_contract_interface", _host_api_resolve_host_contract_interface_t),
+        ("list_bundles", _host_api_list_bundles_t),
+        ("get_dependencies", _host_api_get_dependencies_t),
+        ("load_bundle", _host_api_load_bundle_t),
+        ("reload_bundle", _host_api_reload_bundle_t),
+        ("register_host_contract", _host_api_register_host_contract_t),
+        ("register_loader", _host_api_register_loader_t),
+        ("get_last_error", _host_api_get_last_error_t),
+        ("get_error_len", _host_api_get_error_len_t),
+        ("call_guest_method", _host_api_call_guest_method_t),
+        ("unload_bundle", _host_api_unload_bundle_t),
+        ("log", _host_api_log_t),
+        ("create_guest_instance", _host_api_create_guest_instance_t),
+        ("destroy_guest_instance", _host_api_destroy_guest_instance_t),
+        ("reserved", ctypes.c_void_p),
+    ]
+
+# Expected size: 184 bytes
+assert ctypes.sizeof(HostApi) == 184, f"HostApi expected 184 bytes, got {ctypes.sizeof(HostApi)}"
+
+
 class BundleInitContext(ctypes.Structure):
     """ Context passed to every guest `polyplug_init()` function.
     
@@ -452,113 +559,6 @@ class AbiError(ctypes.Structure):
 assert ctypes.sizeof(AbiError) == 24, f"AbiError expected 24 bytes, got {ctypes.sizeof(AbiError)}"
 
 
-_vm_dispatch_call_t = ctypes.CFUNCTYPE(AbiError, VmLoaderData, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
-class VmDispatch(ctypes.Structure):
-    """ VM dispatch data — call through a dispatch function.
-    
-     Used when `dispatch_type == DispatchType::VirtualMachine`.
-     The `call` function receives `loader_data` which contains VM-specific state.
-    """
-    _fields_ = [
-        ("call", _vm_dispatch_call_t),
-        ("loader_data", VmLoaderData),
-    ]
-
-# Expected size: 16 bytes
-assert ctypes.sizeof(VmDispatch) == 16, f"VmDispatch expected 16 bytes, got {ctypes.sizeof(VmDispatch)}"
-
-
-_host_api_register_guest_contract_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
-_host_api_alloc_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
-_host_api_free_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
-_host_api_find_guest_contract_t = ctypes.CFUNCTYPE(GuestContractHandle, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-_host_api_find_all_guest_contracts_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-_host_api_resolve_guest_contract_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, GuestContractHandle)
-_host_api_get_host_contract_t = ctypes.CFUNCTYPE(HostContractInstance, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-_host_api_resolve_host_contract_interface_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-_host_api_list_bundles_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p)
-_host_api_get_dependencies_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p)
-_host_api_load_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
-_host_api_reload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
-_host_api_register_host_contract_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)
-_host_api_register_loader_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)
-_host_api_get_last_error_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
-_host_api_get_error_len_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p)
-_host_api_call_guest_method_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
-_host_api_unload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_uint64)
-_host_api_log_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32, StringView, StringView)
-_host_api_create_guest_instance_t = ctypes.CFUNCTYPE(GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
-_host_api_destroy_guest_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, GuestContractInstance)
-class HostApi(ctypes.Structure):
-    """ Host Interface — function table passed to guests during initialization.
-    
-     Contains an opaque runtime pointer and function pointers for guest calls.
-     All functions use self-passing pattern (receive HostApi pointer as first parameter).
-     `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
-     Tail offsets: `create_guest_instance` @160, `destroy_guest_instance` @168, `reserved` @176.
-    
-     # Who provides
-     The runtime creates this struct and passes it to `polyplug_init()`.
-     The struct is allocated using `Box::leak()` for `'static` lifetime.
-    
-     # Nullability
-     Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
-     is the sole producer of this struct and populates all 21 callbacks at
-     creation. Consumers never construct or mutate a `HostApi`. Only the
-     `runtime` pointer can become null (it is swapped to null by
-     `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
-     is a null placeholder by contract.
-    
-     # Who calls
-     Guest (plugin) code calls these functions to interact with the runtime.
-     SDK-generated wrappers handle the self-passing pattern automatically.
-    
-     # Ownership
-     The struct is statically allocated by the runtime. The pointer is valid
-     until the runtime is destroyed. Guest must NOT free this pointer.
-    
-     # Lifetime
-     Lives as long as the runtime that created it.
-    
-     # Thread Safety
-     All functions are safe to call from any thread. The runtime uses
-     internal synchronization (RwLock/Mutex) for shared state.
-    
-     # Self-passing pattern
-     Each function receives the interface pointer as its first parameter,
-     allowing guests to call: `host->find_guest_contract(host, id, ver)`
-     SDKs hide this pattern: `host.find_guest_contract(id, ver)`
-    """
-    _fields_ = [
-        ("runtime", ctypes.c_void_p),
-        ("register_guest_contract", _host_api_register_guest_contract_t),
-        ("alloc", _host_api_alloc_t),
-        ("free", _host_api_free_t),
-        ("find_guest_contract", _host_api_find_guest_contract_t),
-        ("find_all_guest_contracts", _host_api_find_all_guest_contracts_t),
-        ("resolve_guest_contract", _host_api_resolve_guest_contract_t),
-        ("get_host_contract", _host_api_get_host_contract_t),
-        ("resolve_host_contract_interface", _host_api_resolve_host_contract_interface_t),
-        ("list_bundles", _host_api_list_bundles_t),
-        ("get_dependencies", _host_api_get_dependencies_t),
-        ("load_bundle", _host_api_load_bundle_t),
-        ("reload_bundle", _host_api_reload_bundle_t),
-        ("register_host_contract", _host_api_register_host_contract_t),
-        ("register_loader", _host_api_register_loader_t),
-        ("get_last_error", _host_api_get_last_error_t),
-        ("get_error_len", _host_api_get_error_len_t),
-        ("call_guest_method", _host_api_call_guest_method_t),
-        ("unload_bundle", _host_api_unload_bundle_t),
-        ("log", _host_api_log_t),
-        ("create_guest_instance", _host_api_create_guest_instance_t),
-        ("destroy_guest_instance", _host_api_destroy_guest_instance_t),
-        ("reserved", ctypes.c_void_p),
-    ]
-
-# Expected size: 184 bytes
-assert ctypes.sizeof(HostApi) == 184, f"HostApi expected 184 bytes, got {ctypes.sizeof(HostApi)}"
-
-
 class DispatchMechanisms(ctypes.Union):
     """ Union of dispatch mechanisms — use based on `dispatch_type`.
     
@@ -573,7 +573,7 @@ class DispatchMechanisms(ctypes.Union):
     ]
 
 
-_guest_contract_interface_create_instance_t = ctypes.CFUNCTYPE(GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)
+_guest_contract_interface_create_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 _guest_contract_interface_destroy_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, GuestContractInstance)
 class GuestContractInterface(ctypes.Structure):
     """ Guest Contract Interface — one per contract implemented by a guest (plugin).
@@ -597,8 +597,8 @@ class GuestContractInterface(ctypes.Structure):
      - `destroy_instance`: Destructor to clean up instances before hot-reload
     
      # Dispatch
-     - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out)`
-     - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out)`
+     - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out, out_err)`
+     - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`
     """
     _fields_ = [
         ("contract_id", ctypes.c_uint64),
@@ -613,7 +613,7 @@ class GuestContractInterface(ctypes.Structure):
 assert ctypes.sizeof(GuestContractInterface) == 56, f"GuestContractInterface expected 56 bytes, got {ctypes.sizeof(GuestContractInterface)}"
 
 
-_host_contract_interface_create_instance_t = ctypes.CFUNCTYPE(HostContractInstance, ctypes.c_void_p, ctypes.c_void_p)
+_host_contract_interface_create_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 _host_contract_interface_destroy_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, HostContractInstance)
 class HostContractInterface(ctypes.Structure):
     """ Host Contract Interface — for host-provided services.

@@ -113,18 +113,27 @@ fn inc_native(x: u32) -> u32 {
 /// Same instance + pointer-in / pointer-out convention as a dispatched contract
 /// function, but a normal statically-linked Rust fn — no dynamic library, no
 /// registry. The leading `GuestContractInstance` mirrors the native dispatch ABI
-/// (`fn(GuestContractInstance, *const (), *mut ()) -> AbiError`); this stateless
+/// (`fn(GuestContractInstance, *const (), *mut (), *mut AbiError)`); this stateless
 /// arm ignores it, exactly as the stateless fixture does.
 ///
 /// # Safety
-/// `args` must point to a valid `u32`; `out` must point to a writable `u32`.
+/// `args` must point to a valid `u32`; `out` must point to a writable `u32`;
+/// `out_err` must be non-null and writable.
 #[inline(never)]
-extern "C" fn inc_abi(_instance: GuestContractInstance, args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn inc_abi(
+    _instance: GuestContractInstance,
+    args: *const (),
+    out: *mut (),
+    out_err: *mut AbiError,
+) {
     // SAFETY: the bench passes `&u32` as `args`; it is non-null and aligned.
     let x: u32 = unsafe { *(args as *const u32) };
     // SAFETY: the bench passes `&mut u32` as `out`; it is non-null and aligned.
     unsafe { core::ptr::write(out as *mut u32, x.wrapping_add(1)) };
-    AbiError::ok()
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 // ─── Interface capture for the polyplug-dispatch arm ─────────────────────────
@@ -140,19 +149,26 @@ thread_local! {
 ///
 /// # Safety
 /// `interface` must be valid for the duration of this call.
+/// `out_err` must be non-null and writable.
 unsafe extern "C" fn capture_register_callback(
     _this: *const HostApi,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
-) -> AbiError {
-    if descriptor.is_null() || interface.is_null() {
-        return AbiError {
+    out_err: *mut AbiError,
+) {
+    let err: AbiError = if descriptor.is_null() || interface.is_null() {
+        AbiError {
             code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
-        };
+        }
+    } else {
+        CAPTURED_INTERFACE.with(|cell: &Cell<*const GuestContractInterface>| cell.set(interface));
+        AbiError::ok()
+    };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(err) };
     }
-    CAPTURED_INTERFACE.with(|cell: &Cell<*const GuestContractInterface>| cell.set(interface));
-    AbiError::ok()
 }
 
 // ─── Unused HostApi stubs ────────────────────────────────────────────────────
@@ -212,10 +228,16 @@ unsafe extern "C" fn stub_load_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe {
+            out_err.write(AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            })
+        };
     }
 }
 
@@ -223,30 +245,48 @@ unsafe extern "C" fn stub_reload_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe {
+            out_err.write(AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            })
+        };
     }
 }
 
 unsafe extern "C" fn stub_register_host_contract(
     _this: *const HostApi,
     _interface: *const HostContractInterface,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe {
+            out_err.write(AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            })
+        };
     }
 }
 
 unsafe extern "C" fn stub_register_loader(
     _this: *const HostApi,
     _loader_ptr: *mut c_void,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe {
+            out_err.write(AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            })
+        };
     }
 }
 
@@ -269,15 +309,28 @@ unsafe extern "C" fn stub_call_guest_method(
     _args: *const c_void,
     _out: *mut c_void,
     _arena: *mut CallArena,
-) -> AbiError {
-    AbiError {
-        code: AbiErrorCode::Generic as u32,
-        message: StringView::null(),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe {
+            out_err.write(AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            })
+        };
     }
 }
 
-unsafe extern "C" fn stub_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
-    AbiError::ok()
+unsafe extern "C" fn stub_unload_bundle(
+    _this: *const HostApi,
+    _bundle_id: BundleId,
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn stub_alloc(_this: *const HostApi, _size: usize, _align: usize) -> *mut u8 {
@@ -325,7 +378,7 @@ fn load_dispatch_fn(
     so_path: &str,
 ) -> (
     libloading::Library,
-    unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError,
+    unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError),
 ) {
     // SAFETY: so_path is a valid cdylib built by tests/fixtures/build_all.sh.
     let library: libloading::Library =
@@ -361,9 +414,13 @@ fn load_dispatch_fn(
     // SAFETY: fn 0 is in range (function_count == 1 for test.add).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: the registered fn has the native dispatch signature
-    // `fn(GuestContractInstance, *const (), *mut ()) -> AbiError`.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    // `fn(GuestContractInstance, *const (), *mut (), *mut AbiError)`.
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
 
     (library, dispatch_fn)
 }
@@ -388,20 +445,22 @@ fn bench_counter_inc(c: &mut Criterion) {
     });
 
     // ── Arm 2: ABI-shaped call (ptr-in/ptr-out), statically linked ─────────────
-    let abi_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    let abi_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         inc_abi;
     group.bench_function(BenchmarkId::new("native", "abi_marshalled"), |b| {
         b.iter(|| {
             let mut counter: u32 = 0;
             for _ in 0..COUNT {
                 let mut out: u32 = 0;
+                let mut err: AbiError = AbiError::ok();
                 // SAFETY: &counter is a valid u32 in, &mut out is a valid u32 out;
-                // the instance handle is ignored by this stateless arm.
-                let err: AbiError = unsafe {
+                // the instance handle is ignored by this stateless arm; err is writable.
+                unsafe {
                     black_box(abi_fn)(
                         black_box(GuestContractInstance::null()),
                         black_box(&counter as *const u32 as *const ()),
                         black_box(&mut out as *mut u32 as *mut ()),
+                        &mut err,
                     )
                 };
                 debug_assert!(err.is_ok());
@@ -442,7 +501,7 @@ fn bench_counter_inc(c: &mut Criterion) {
     {
         let (library, dispatch_fn): (
             libloading::Library,
-            unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError,
+            unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError),
         ) = load_dispatch_fn(TEST_PLUGIN_SO);
 
         group.bench_function(BenchmarkId::new("polyplug", "dispatch"), |b| {
@@ -451,14 +510,16 @@ fn bench_counter_inc(c: &mut Criterion) {
                 for _ in 0..COUNT {
                     let args: AddArgs = AddArgs { a: counter, b: 1 };
                     let mut out: u32 = 0;
+                    let mut err: AbiError = AbiError::ok();
                     // SAFETY: args is a valid AddArgs, out is a valid u32; the
                     // registered `add` reads (a, b) and writes the u32 sum. The
-                    // stateless contract ignores the null instance handle.
-                    let err: AbiError = unsafe {
+                    // stateless contract ignores the null instance handle; err is writable.
+                    unsafe {
                         black_box(dispatch_fn)(
                             black_box(GuestContractInstance::null()),
                             black_box(&args as *const AddArgs as *const ()),
                             black_box(&mut out as *mut u32 as *mut ()),
+                            &mut err,
                         )
                     };
                     debug_assert!(err.is_ok());
@@ -477,7 +538,7 @@ fn bench_counter_inc(c: &mut Criterion) {
     {
         let (library, dispatch_fn): (
             libloading::Library,
-            unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError,
+            unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError),
         ) = load_dispatch_fn(TEST_PLUGIN_CPP_SO);
 
         group.bench_function(BenchmarkId::new("polyplug", "dispatch_cpp"), |b| {
@@ -486,14 +547,16 @@ fn bench_counter_inc(c: &mut Criterion) {
                 for _ in 0..COUNT {
                     let args: AddArgs = AddArgs { a: counter, b: 1 };
                     let mut out: u32 = 0;
+                    let mut err: AbiError = AbiError::ok();
                     // SAFETY: args is a valid AddArgs, out is a valid u32; the
                     // C++ `test.add` reads (a, b) and writes the u32 sum. The
-                    // stateless contract ignores the null instance handle.
-                    let err: AbiError = unsafe {
+                    // stateless contract ignores the null instance handle; err is writable.
+                    unsafe {
                         black_box(dispatch_fn)(
                             black_box(GuestContractInstance::null()),
                             black_box(&args as *const AddArgs as *const ()),
                             black_box(&mut out as *mut u32 as *mut ()),
+                            &mut err,
                         )
                     };
                     debug_assert!(err.is_ok());
@@ -525,8 +588,12 @@ unsafe extern "C" fn stub_create_guest_instance(
     _this: *const polyplug_abi::HostApi,
     _interface: *const polyplug_abi::GuestContractInterface,
     _args: *const c_void,
-) -> polyplug_abi::GuestContractInstance {
-    polyplug_abi::GuestContractInstance::null()
+    out_instance: *mut polyplug_abi::GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(

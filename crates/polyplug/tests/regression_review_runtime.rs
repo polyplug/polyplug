@@ -37,8 +37,12 @@ use polyplug_utils::{BundleId, GuestContractId, HostContractId};
 unsafe extern "C" fn noop_create_instance(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn noop_destroy_instance(
@@ -277,8 +281,9 @@ fn call_guest_method_single_provider_dispatches() {
     };
     // fn_id 0 with function_count 0 → FunctionNotAvailable, but crucially NOT
     // DuplicateProvider: routing proceeded to a single live interface.
+    let mut err: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host_abi is valid; instance carries a registered contract_id.
-    let err = unsafe {
+    unsafe {
         ((*host_abi).call_guest_method)(
             host_abi,
             instance,
@@ -286,6 +291,7 @@ fn call_guest_method_single_provider_dispatches() {
             core::ptr::null(),
             core::ptr::null_mut(),
             core::ptr::null_mut::<CallArena>(),
+            &mut err,
         )
     };
     assert_eq!(
@@ -308,8 +314,9 @@ fn call_guest_method_multiple_providers_rejected() {
         data: core::ptr::null_mut(),
         contract_id: GuestContractId::from_u64(contract_id),
     };
+    let mut err: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host_abi is valid; instance carries a registered contract_id.
-    let err = unsafe {
+    unsafe {
         ((*host_abi).call_guest_method)(
             host_abi,
             instance,
@@ -317,6 +324,7 @@ fn call_guest_method_multiple_providers_rejected() {
             core::ptr::null(),
             core::ptr::null_mut(),
             core::ptr::null_mut::<CallArena>(),
+            &mut err,
         )
     };
     assert_eq!(
@@ -336,12 +344,14 @@ fn register_guest_contract_null_descriptor_is_invalid_pointer() {
     let host_abi: *const HostApi = runtime.host_abi();
     let interface: &'static GuestContractInterface =
         leak_guest_interface(GuestContractId::new("x", 1).id());
+    let mut err: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host_abi valid; descriptor deliberately null to exercise the guard.
-    let err = unsafe {
+    unsafe {
         ((*host_abi).register_guest_contract)(
             host_abi,
             core::ptr::null(),
             interface as *const GuestContractInterface,
+            &mut err,
         )
     };
     assert_eq!(err.code, AbiErrorCode::InvalidPointer as u32);
@@ -360,12 +370,14 @@ fn register_guest_contract_null_interface_is_invalid_pointer() {
             patch: 0,
         },
     };
+    let mut err: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host_abi valid; interface deliberately null to exercise the guard.
-    let err = unsafe {
+    unsafe {
         ((*host_abi).register_guest_contract)(
             host_abi,
             &descriptor as *const PluginDescriptor,
             core::ptr::null(),
+            &mut err,
         )
     };
     assert_eq!(err.code, AbiErrorCode::InvalidPointer as u32);
@@ -381,7 +393,8 @@ fn register_guest_contract_null_interface_is_invalid_pointer() {
 unsafe extern "C" fn reentrant_create_instance(
     this: *const HostContractInterface,
     _args: *const (),
-) -> HostContractInstance {
+    out_instance: *mut HostContractInstance,
+) {
     // SAFETY: `this` is the registered interface; its `runtime` field points at the
     // owning Runtime (set when the interface was registered for this test).
     let runtime_ptr: *const Runtime = unsafe { (*this).runtime as *const Runtime };
@@ -393,7 +406,10 @@ unsafe extern "C" fn reentrant_create_instance(
         // read guard from host_get_host_contract were still held, this deadlocks.
         let _ = runtime.register_host_contract(0xDEAD_u64, nested);
     }
-    HostContractInstance::null()
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(HostContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn inert_destroy_instance(
@@ -405,8 +421,12 @@ unsafe extern "C" fn inert_destroy_instance(
 unsafe extern "C" fn inert_create_instance(
     _this: *const HostContractInterface,
     _args: *const (),
-) -> HostContractInstance {
-    HostContractInstance::null()
+    out_instance: *mut HostContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(HostContractInstance::null()) };
+    }
 }
 
 fn leak_inert_host_interface(id: u64, singleton: bool) -> &'static HostContractInterface {
@@ -474,10 +494,11 @@ static SINGLETON_CALLS: Mutex<u32> = Mutex::new(0);
 unsafe extern "C" fn flaky_singleton_create_instance(
     _this: *const HostContractInterface,
     _args: *const (),
-) -> HostContractInstance {
+    out_instance: *mut HostContractInstance,
+) {
     let mut calls = SINGLETON_CALLS.lock().unwrap();
     *calls += 1;
-    if *calls == 1 {
+    let instance: HostContractInstance = if *calls == 1 {
         HostContractInstance::null()
     } else {
         // Non-null sentinel: a non-null, never-dereferenced pointer. The test only
@@ -486,6 +507,10 @@ unsafe extern "C" fn flaky_singleton_create_instance(
         HostContractInstance {
             data: core::ptr::NonNull::<core::ffi::c_void>::dangling().as_ptr(),
         }
+    };
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(instance) };
     }
 }
 
@@ -753,21 +778,25 @@ fn register_guest_contract_duplicate_returns_duplicate_provider_code() {
     // Attribute both registrations to the same (non-zero) bundle id, exactly as
     // a loader's init window would.
     runtime.push_init_bundle_id(0xD0D0_u64);
+    let mut first: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host_abi is valid; descriptor and interface are valid 'static refs.
-    let first: polyplug_abi::AbiError = unsafe {
+    unsafe {
         ((*host_abi).register_guest_contract)(
             host_abi,
             &descriptor as *const PluginDescriptor,
             interface as *const GuestContractInterface,
+            &mut first,
         )
     };
     assert_eq!(first.code, AbiErrorCode::Ok as u32, "first must register");
+    let mut second: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: same as above — deliberate same-bundle duplicate registration.
-    let second: polyplug_abi::AbiError = unsafe {
+    unsafe {
         ((*host_abi).register_guest_contract)(
             host_abi,
             &descriptor as *const PluginDescriptor,
             interface as *const GuestContractInterface,
+            &mut second,
         )
     };
     runtime.pop_init_bundle_id();

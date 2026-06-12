@@ -194,8 +194,12 @@ impl Drop for LuaDispatchGuard<'_> {
 unsafe extern "C" fn lua_create_instance(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// Stub destroy_instance for Lua plugins - no cleanup needed.
@@ -226,6 +230,23 @@ const ARENA_GLOBAL: &str = "_polyplug_arena";
 unsafe extern "C" fn lua_dispatch(
     loader_data: VmLoaderData,
     _instance: GuestContractInstance,
+    fn_id: u32,
+    args: *const (),
+    out: *mut (),
+    arena: *mut CallArena,
+    out_err: *mut AbiError,
+) {
+    // SAFETY: loader_data wraps a valid pointer to LuaLoaderData created by the
+    // loader; args/out/arena satisfy the ABI dispatch contract for this call.
+    let result: AbiError = unsafe { lua_dispatch_impl(loader_data, fn_id, args, out, arena) };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result) };
+    }
+}
+
+unsafe fn lua_dispatch_impl(
+    loader_data: VmLoaderData,
     fn_id: u32,
     args: *const (),
     out: *mut (),
@@ -951,11 +972,15 @@ impl LuaLoader {
             // `descriptor` is stack-allocated and valid for this call (register_guest_contract must copy
             // any data it needs to retain — the contract is that descriptor is borrowed for the call only).
             // `static_interface` is a stack value; the registry copies it during the call.
-            let reg_result: AbiError = unsafe {
+            let mut reg_result: AbiError = AbiError::ok();
+            // SAFETY: `host_interface` is a valid HostApi pointer; `reg_result` is a
+            // valid, writable out-param for the duration of the call.
+            unsafe {
                 ((*host_interface).register_guest_contract)(
                     host_interface,
                     &descriptor as *const PluginDescriptor,
                     static_interface,
+                    &mut reg_result,
                 )
             };
 
@@ -1388,9 +1413,8 @@ end
         // SAFETY: vm_loader_data wraps a live LuaLoaderData; the out pointer is a
         // valid local i32; the guest function ignores both pointers.
         let err: AbiError = unsafe {
-            lua_dispatch(
+            lua_dispatch_impl(
                 vm_loader_data,
-                GuestContractInstance::null(),
                 0,
                 core::ptr::null(),
                 &mut out_buf as *mut i32 as *mut (),
@@ -1434,9 +1458,8 @@ end
                 // up by the test before dispatch; the guest function ignores the
                 // forwarded args/out pointers.
                 let nested: AbiError = unsafe {
-                    lua_dispatch(
+                    lua_dispatch_impl(
                         vm_loader_data,
-                        GuestContractInstance::null(),
                         0,
                         core::ptr::null(),
                         core::ptr::null_mut(),
@@ -1455,9 +1478,8 @@ end
         // Outer dispatch: sets the flag, runs the guest fn, which re-enters.
         // SAFETY: vm_loader_data wraps the live leaked LuaLoaderData.
         let outer: AbiError = unsafe {
-            lua_dispatch(
+            lua_dispatch_impl(
                 vm_loader_data,
-                GuestContractInstance::null(),
                 0,
                 core::ptr::null(),
                 core::ptr::null_mut(),
@@ -1489,9 +1511,8 @@ end
         );
         // SAFETY: vm_loader_data still wraps the live leaked LuaLoaderData.
         let recovered: AbiError = unsafe {
-            lua_dispatch(
+            lua_dispatch_impl(
                 vm_loader_data,
-                GuestContractInstance::null(),
                 0,
                 core::ptr::null(),
                 core::ptr::null_mut(),
@@ -1558,9 +1579,8 @@ end
             // SAFETY: data_addr is the live leaked LuaLoaderData pointer; it
             // outlives all threads in this test. The guest fn ignores its args.
             unsafe {
-                lua_dispatch(
+                lua_dispatch_impl(
                     vm_loader_data_a,
-                    GuestContractInstance::null(),
                     0,
                     core::ptr::null(),
                     core::ptr::null_mut(),
@@ -1582,9 +1602,8 @@ end
             // function — dispatching fn_id 0 here would re-enter the barrier
             // choreography with no partner and deadlock.
             unsafe {
-                lua_dispatch(
+                lua_dispatch_impl(
                     vm_loader_data_b,
-                    GuestContractInstance::null(),
                     1,
                     core::ptr::null(),
                     core::ptr::null_mut(),
@@ -1711,9 +1730,8 @@ end
                 // SAFETY: data_addr is the live leaked LuaLoaderData; out is a
                 // valid local; arena_a_addr is a valid CallArena.
                 let err: AbiError = unsafe {
-                    lua_dispatch(
+                    lua_dispatch_impl(
                         vm,
-                        GuestContractInstance::null(),
                         0,
                         core::ptr::null(),
                         &mut out as *mut i64 as *mut (),
@@ -1748,9 +1766,8 @@ end
                 // SAFETY: data_addr is the live leaked LuaLoaderData; out is a
                 // valid local; arena_b_addr is a valid CallArena.
                 let err: AbiError = unsafe {
-                    lua_dispatch(
+                    lua_dispatch_impl(
                         vm,
-                        GuestContractInstance::null(),
                         1,
                         core::ptr::null(),
                         &mut out as *mut i64 as *mut (),

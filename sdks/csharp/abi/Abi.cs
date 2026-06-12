@@ -47,6 +47,8 @@ public struct VmDispatch
     ///    `host->alloc`. When non-null, the arena is reset by the caller at the
     ///    start of each call, so values written into it are valid until the next
     ///    call on the same caller.
+    ///  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///    success, an error otherwise). Never null.
     ///
     ///  # Nullability
     ///  REQUIRED whenever `dispatch_type == VirtualMachine` — never null in
@@ -139,8 +141,8 @@ public struct GuestContractInstance
 ///  - `destroy_instance`: Destructor to clean up instances before hot-reload
 ///
 ///  # Dispatch
-///  - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out)`
-///  - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out)`
+///  - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out, out_err)`
+///  - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`
 [StructLayout(LayoutKind.Sequential, Size = 56)]
 public struct GuestContractInterface
 {
@@ -167,12 +169,11 @@ public struct GuestContractInterface
     ///  # Arguments
     ///  - `host`: HostApi pointer (for memory allocation via host->alloc)
     ///  - `args`: Optional initialization arguments (contract-specific)
-    ///
-    ///  # Returns
-    ///  Opaque instance handle, or null handle on failure.
+    ///  - `out_instance`: out-param; the new instance handle is written here. A
+    ///    null `data` denotes a stateless instance or construction failure.
     ///
     ///  # Nullability
-    ///  REQUIRED — never null. Failure is signalled by returning a null
+    ///  REQUIRED — never null. Failure is signalled by writing a null
     ///  *instance handle*, not by a null callback. `register_guest_contract`
     ///  rejects interfaces whose `create_instance` bits are null.
     ///
@@ -199,7 +200,7 @@ public struct GuestContractInterface
     ///  Union of dispatch mechanisms — access based on dispatch_type.
     ///
     ///  For Native dispatch: use `dispatch.native.functions[fn_id]`.
-    ///  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
+    ///  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`.
     public DispatchMechanisms Dispatch;
 }
 
@@ -263,9 +264,8 @@ public struct HostApi
     ///  - `this`: HostApi pointer (self-passing)
     ///  - `descriptor`: Plugin descriptor with contract metadata
     ///  - `interface`: GuestContractInterface to register
-    ///
-    ///  # Returns
-    ///  AbiError::OK on success, error code on failure.
+    ///  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///    success, an error otherwise). Never null.
     public IntPtr RegisterGuestContract;
     ///  Allocate memory using the host allocator.
     ///
@@ -386,9 +386,8 @@ public struct HostApi
     ///  - `this`: HostApi pointer (self-passing)
     ///  - `path`: UTF-8 path to bundle directory (not null-terminated)
     ///  - `path_len`: Length of path in bytes
-    ///
-    ///  # Returns
-    ///  AbiError::OK on success, error code on failure.
+    ///  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///    success, an error otherwise). Never null.
     public IntPtr LoadBundle;
     ///  Reload a plugin bundle (hot-reload).
     ///
@@ -399,9 +398,8 @@ public struct HostApi
     ///  - `this`: HostApi pointer (self-passing)
     ///  - `path`: UTF-8 path to bundle directory (not null-terminated)
     ///  - `path_len`: Length of path in bytes
-    ///
-    ///  # Returns
-    ///  AbiError::OK on success, error code on failure.
+    ///  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///    success, an error otherwise). Never null.
     public IntPtr ReloadBundle;
     ///  Register a host contract interface.
     ///
@@ -410,9 +408,8 @@ public struct HostApi
     ///  # Arguments
     ///  - `this`: HostApi pointer (self-passing)
     ///  - `interface`: HostContractInterface to register
-    ///
-    ///  # Returns
-    ///  AbiError::OK on success, error code on failure.
+    ///  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///    success, an error otherwise). Never null.
     public IntPtr RegisterHostContract;
     ///  Register a language loader.
     ///
@@ -421,9 +418,8 @@ public struct HostApi
     ///  # Arguments
     ///  - `this`: HostApi pointer (self-passing)
     ///  - `loader_ptr`: Opaque pointer to the loader implementation
-    ///
-    ///  # Returns
-    ///  AbiError::OK on success, error code on failure.
+    ///  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///    success, an error otherwise). Never null.
     ///
     ///  The loader's name comes from its own `BundleLoader::loader_name()`
     ///  implementation — the single source of truth — so it is not passed here.
@@ -500,9 +496,8 @@ public struct HostApi
     ///  - `out`: Pointer to the output buffer for the return value
     ///  - `arena`: Optional per-call [`CallArena`] for variable-size return values;
     ///    null is allowed
-    ///
-    ///  # Returns
-    ///  AbiError::OK on success, error code on failure.
+    ///  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///    success, an error otherwise). Never null.
     public IntPtr CallGuestMethod;
     ///  Unload a guest bundle, invalidating its handles and freeing its resources.
     ///
@@ -530,10 +525,10 @@ public struct HostApi
     ///  # Arguments
     ///  - `this`: HostApi pointer (self-passing)
     ///  - `bundle_id`: Identifier of the bundle to unload
-    ///
-    ///  # Returns
-    ///  `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
-    ///  or a still-loaded bundle declared a dependency on a contract this bundle provides).
+    ///  - `out_err`: out-param; the result is written here — `AbiError::ok()` on
+    ///    success, an error on failure (e.g. the bundle is not loaded, or a
+    ///    still-loaded bundle declared a dependency on a contract this bundle
+    ///    provides). Never null.
     public IntPtr UnloadBundle;
     ///  Log a guest diagnostic into the host's logging funnel.
     ///
@@ -563,8 +558,8 @@ public struct HostApi
     ///  `resolve_guest_contract`) and the constructor `args`. The runtime invokes the
     ///  interface's `create_instance` under an epoch pin (so a concurrent unload cannot
     ///  free the interface mid-construction) and tracks the resulting instance for its
-    ///  live-instance accounting. Returns the new `GuestContractInstance` (a null
-    ///  `data` denotes a stateless instance).
+    ///  live-instance accounting. The new `GuestContractInstance` is written through
+    ///  `out_instance` (a null `data` denotes a stateless instance).
     public IntPtr CreateGuestInstance;
     ///  Destroy a guest contract instance through the runtime (host-mediated).
     ///
@@ -663,12 +658,11 @@ public struct HostContractInterface
     ///  # Arguments
     ///  - `this`: HostContractInterface pointer (self-passing pattern)
     ///  - `args`: Optional initialization arguments (contract-specific)
-    ///
-    ///  # Returns
-    ///  Opaque instance handle, or null handle on failure.
+    ///  - `out_instance`: out-param; the new instance handle is written here. A
+    ///    null `data` denotes a stateless instance or construction failure.
     ///
     ///  # Nullability
-    ///  REQUIRED — never null. Failure is signalled by returning a null
+    ///  REQUIRED — never null. Failure is signalled by writing a null
     ///  *instance handle*, not by a null callback. `register_host_contract`
     ///  rejects interfaces whose `create_instance` bits are null.
     public IntPtr CreateInstance;
@@ -692,7 +686,7 @@ public struct HostContractInterface
     ///  Union of dispatch mechanisms — access based on dispatch_type.
     ///
     ///  For Native dispatch: use `dispatch.native.functions[fn_id]`.
-    ///  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
+    ///  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`.
     public DispatchMechanisms Dispatch;
 }
 

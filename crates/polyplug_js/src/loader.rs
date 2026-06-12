@@ -211,8 +211,12 @@ impl Drop for JsDispatchGuard<'_> {
 unsafe extern "C" fn js_create_instance(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// Stub destroy_instance for JS plugins - no cleanup needed.
@@ -234,6 +238,23 @@ unsafe extern "C" fn js_destroy_instance(_host: *const HostApi, _instance: Guest
 unsafe extern "C" fn js_dispatch(
     loader_data: VmLoaderData,
     _instance: GuestContractInstance,
+    fn_id: u32,
+    args: *const (),
+    out: *mut (),
+    arena: *mut CallArena,
+    out_err: *mut AbiError,
+) {
+    // SAFETY: loader_data wraps a valid pointer to JsLoaderData created by the
+    // loader; args/out/arena satisfy the ABI dispatch contract for this call.
+    let result: AbiError = unsafe { js_dispatch_impl(loader_data, fn_id, args, out, arena) };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result) };
+    }
+}
+
+unsafe fn js_dispatch_impl(
+    loader_data: VmLoaderData,
     fn_id: u32,
     args: *const (),
     out: *mut (),
@@ -613,17 +634,20 @@ fn register_host_functions<'js>(
             if iface.is_null() {
                 return AbiErrorCode::NotFound as u32;
             }
+            let mut instance: GuestContractInstance = GuestContractInstance::null();
             // SAFETY: iface is non-null and points to a valid GuestContractInterface
-            // returned by resolve_guest_contract; null ctx is accepted for stateless contracts.
-            let mut instance: GuestContractInstance =
-                unsafe { ((*iface).create_instance)(hvt, core::ptr::null()) };
+            // returned by resolve_guest_contract; null ctx is accepted for stateless contracts;
+            // `instance` is a valid, writable out-param for the duration of the call.
+            unsafe { ((*iface).create_instance)(hvt, core::ptr::null(), &mut instance) };
             // create_instance returns a null (null-id) handle for stateless/VM peers, but
             // host call_guest_method routes by instance.contract_id — stamp the id we resolved.
             instance.contract_id = GuestContractId::from_u64(contract_id);
+            let mut err: AbiError = AbiError::ok();
             // SAFETY: hvt, instance, and iface are all valid; args_ptr/out_ptr are caller-supplied
             // addresses that the generated peer_callers.ts aligns via polyplug.alloc; a null arena
-            // is the documented fallback for callers that carry no per-call arena.
-            let err: AbiError = unsafe {
+            // is the documented fallback for callers that carry no per-call arena; `err` is a
+            // valid, writable out-param for the duration of the call.
+            unsafe {
                 ((*hvt).call_guest_method)(
                     hvt,
                     instance,
@@ -631,6 +655,7 @@ fn register_host_functions<'js>(
                     args_ptr as usize as *const core::ffi::c_void,
                     out_ptr as usize as *mut core::ffi::c_void,
                     core::ptr::null_mut(),
+                    &mut err,
                 )
             };
             // SAFETY: iface is non-null (checked above); instance was produced by create_instance
@@ -1184,20 +1209,30 @@ fn register_host_functions<'js>(
                         *const core::ffi::c_void,
                         *const core::ffi::c_void,
                         *mut core::ffi::c_void,
-                    ) -> AbiError = unsafe { core::mem::transmute(fn_ptr) };
+                        *mut AbiError,
+                    ) = unsafe { core::mem::transmute(fn_ptr) };
+                    let mut err: AbiError = AbiError::ok();
                     // SAFETY: dispatch_fn is transmuted from a valid host native function pointer;
                     // instance.data is the contract-state pointer owned by the host; args and out
-                    // are caller-supplied buffers aligned by the generated caller via polyplug.alloc.
-                    let err: AbiError = unsafe {
-                        dispatch_fn(instance.data as *const core::ffi::c_void, args, out)
+                    // are caller-supplied buffers aligned by the generated caller via polyplug.alloc;
+                    // `err` is a valid, writable out-param for the duration of the call.
+                    unsafe {
+                        dispatch_fn(
+                            instance.data as *const core::ffi::c_void,
+                            args,
+                            out,
+                            &mut err,
+                        )
                     };
                     err.code
                 }
                 DispatchType::VirtualMachine => {
+                    let mut err: AbiError = AbiError::ok();
                     // SAFETY: iface is non-null; vm.call + loader_data are the host-provided VM
                     // dispatcher; a null GuestContractInstance + null arena match the canonical
-                    // rust host-contract caller (host contracts carry no guest instance / per-call arena).
-                    let err: AbiError = unsafe {
+                    // rust host-contract caller (host contracts carry no guest instance / per-call arena);
+                    // `err` is a valid, writable out-param for the duration of the call.
+                    unsafe {
                         ((*iface).dispatch.vm.call)(
                             (*iface).dispatch.vm.loader_data,
                             GuestContractInstance::null(),
@@ -1205,6 +1240,7 @@ fn register_host_functions<'js>(
                             args as *const (),
                             out as *mut (),
                             core::ptr::null_mut(),
+                            &mut err,
                         )
                     };
                     err.code
@@ -1714,13 +1750,16 @@ impl JsLoader {
             },
         };
 
+        let mut abi_result: AbiError = AbiError::ok();
         // SAFETY: host_interface, descriptor, and static_interface are valid for this call.
-        // The register_guest_contract function uses self-passing pattern.
-        let abi_result: AbiError = unsafe {
+        // The register_guest_contract function uses self-passing pattern; `abi_result`
+        // is a valid, writable out-param for the duration of the call.
+        unsafe {
             ((*host_interface).register_guest_contract)(
                 host_interface,
                 &descriptor,
                 static_interface,
+                &mut abi_result,
             )
         };
 
@@ -2190,7 +2229,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         // registers VirtualMachine dispatch, so the vm union variant is active.
         // arg/out_val are valid for the duration of the call; a null arena is
         // the documented host->alloc fallback.
-        let err: AbiError = unsafe {
+        let mut err: AbiError = AbiError::ok();
+        unsafe {
             assert_eq!((*iface).dispatch_type, DispatchType::VirtualMachine);
             ((*iface).dispatch.vm.call)(
                 (*iface).dispatch.vm.loader_data,
@@ -2199,6 +2239,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
                 &arg as *const f64 as *const (),
                 &mut out_val as *mut f64 as *mut (),
                 core::ptr::null_mut(),
+                &mut err,
             )
         };
         assert_eq!(
@@ -2262,9 +2303,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         // SAFETY: vm_loader_data wraps a live JsLoaderData; the guest function
         // ignores the forwarded args/out pointers.
         let err: AbiError = unsafe {
-            js_dispatch(
+            js_dispatch_impl(
                 vm_loader_data,
-                GuestContractInstance::null(),
                 0,
                 core::ptr::null(),
                 &mut out_buf as *mut i32 as *mut (),
@@ -2309,9 +2349,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
                 // by the test before dispatch; the guest ignores the forwarded
                 // args/out pointers.
                 let nested: AbiError = unsafe {
-                    js_dispatch(
+                    js_dispatch_impl(
                         vm_loader_data,
-                        GuestContractInstance::null(),
                         0,
                         core::ptr::null(),
                         core::ptr::null_mut(),
@@ -2344,9 +2383,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         // which calls reenter() → js_dispatch on the same VM.
         // SAFETY: vm_loader_data wraps the live leaked JsLoaderData.
         let outer: AbiError = unsafe {
-            js_dispatch(
+            js_dispatch_impl(
                 vm_loader_data,
-                GuestContractInstance::null(),
                 0,
                 core::ptr::null(),
                 core::ptr::null_mut(),
@@ -2379,9 +2417,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         );
         // SAFETY: vm_loader_data still wraps the live leaked JsLoaderData.
         let recovered: AbiError = unsafe {
-            js_dispatch(
+            js_dispatch_impl(
                 vm_loader_data,
-                GuestContractInstance::null(),
                 0,
                 core::ptr::null(),
                 core::ptr::null_mut(),
@@ -2459,9 +2496,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
             // SAFETY: data_addr is the live leaked JsLoaderData pointer; it
             // outlives all threads in this test. The guest fn ignores its args.
             unsafe {
-                js_dispatch(
+                js_dispatch_impl(
                     vm_loader_data_a,
-                    GuestContractInstance::null(),
                     0,
                     core::ptr::null(),
                     core::ptr::null_mut(),
@@ -2483,9 +2519,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
             // function — dispatching fn_id 0 here would re-enter the barrier
             // choreography with no partner and deadlock.
             unsafe {
-                js_dispatch(
+                js_dispatch_impl(
                     vm_loader_data_b,
-                    GuestContractInstance::null(),
                     1,
                     core::ptr::null(),
                     core::ptr::null_mut(),

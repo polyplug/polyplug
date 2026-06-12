@@ -76,9 +76,9 @@ fn test_resolve_plugin_stale_handle() {
 
     // Load a plugin to get a valid slot
     let path_bytes: &[u8] = TEST_PLUGIN_DIR.as_bytes();
+    let mut rc: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host is valid; path_bytes is valid UTF-8 for the duration of the call.
-    let rc: polyplug_abi::AbiError =
-        unsafe { ((*host).load_bundle)(host, path_bytes.as_ptr(), path_bytes.len()) };
+    unsafe { ((*host).load_bundle)(host, path_bytes.as_ptr(), path_bytes.len(), &mut rc) };
     assert_eq!(
         rc.code,
         polyplug_abi::AbiErrorCode::Ok as u32,
@@ -147,9 +147,9 @@ fn test_find_all_guest_contracts_single_plugin() {
 
     // Load reload_plugin_v1 which provides "reload.test@1"
     let v1_path_bytes: &[u8] = RELOAD_PLUGIN_V1_DIR.as_bytes();
+    let mut rc: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host is valid; v1_path_bytes is valid UTF-8.
-    let rc: polyplug_abi::AbiError =
-        unsafe { ((*host).load_bundle)(host, v1_path_bytes.as_ptr(), v1_path_bytes.len()) };
+    unsafe { ((*host).load_bundle)(host, v1_path_bytes.as_ptr(), v1_path_bytes.len(), &mut rc) };
     assert_eq!(
         rc.code,
         polyplug_abi::AbiErrorCode::Ok as u32,
@@ -203,9 +203,16 @@ fn test_find_all_guest_contracts_multiple_plugins() {
 
     // Load test_plugin (Rust) which provides "test.add@1"
     let rust_path_bytes: &[u8] = TEST_PLUGIN_DIR.as_bytes();
+    let mut rc_rust: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host is valid; rust_path_bytes is valid UTF-8.
-    let rc_rust: polyplug_abi::AbiError =
-        unsafe { ((*host).load_bundle)(host, rust_path_bytes.as_ptr(), rust_path_bytes.len()) };
+    unsafe {
+        ((*host).load_bundle)(
+            host,
+            rust_path_bytes.as_ptr(),
+            rust_path_bytes.len(),
+            &mut rc_rust,
+        )
+    };
     assert_eq!(
         rc_rust.code,
         polyplug_abi::AbiErrorCode::Ok as u32,
@@ -238,9 +245,16 @@ fn test_find_all_guest_contracts_multiple_plugins() {
     // Load the C++ plugin (also provides "test.add@1")
     let cpp_path_str: String = cpp_bundle_dir.to_string_lossy().into_owned();
     let cpp_path_bytes: &[u8] = cpp_path_str.as_bytes();
+    let mut rc_cpp: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: host is valid; cpp_path_bytes is valid UTF-8.
-    let rc_cpp: polyplug_abi::AbiError =
-        unsafe { ((*host).load_bundle)(host, cpp_path_bytes.as_ptr(), cpp_path_bytes.len()) };
+    unsafe {
+        ((*host).load_bundle)(
+            host,
+            cpp_path_bytes.as_ptr(),
+            cpp_path_bytes.len(),
+            &mut rc_cpp,
+        )
+    };
     if rc_cpp.code != polyplug_abi::AbiErrorCode::Ok as u32 {
         let mut err_buf: [u8; 512] = [0_u8; 512];
         // SAFETY: err_buf is a valid stack-allocated buffer; host is valid.

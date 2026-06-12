@@ -323,8 +323,10 @@ mod tests {
         _this: *const HostApi,
         _descriptor: *const PluginDescriptor,
         _interface: *const GuestContractInterface,
-    ) -> AbiError {
-        AbiError::ok()
+        out_err: *mut AbiError,
+    ) {
+        // SAFETY: the test host always supplies a valid out-param pointer.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 
     unsafe extern "C" fn stub_find(
@@ -374,22 +376,32 @@ mod tests {
         Array::empty()
     }
 
-    unsafe extern "C" fn stub_load(_this: *const HostApi, _p: *const u8, _l: usize) -> AbiError {
-        AbiError::ok()
+    unsafe extern "C" fn stub_load(
+        _this: *const HostApi,
+        _p: *const u8,
+        _l: usize,
+        out_err: *mut AbiError,
+    ) {
+        // SAFETY: the test host always supplies a valid out-param pointer.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 
     unsafe extern "C" fn stub_register_host(
         _this: *const HostApi,
         _interface: *const HostContractInterface,
-    ) -> AbiError {
-        AbiError::ok()
+        out_err: *mut AbiError,
+    ) {
+        // SAFETY: the test host always supplies a valid out-param pointer.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 
     unsafe extern "C" fn stub_register_loader(
         _this: *const HostApi,
         _loader: *mut core::ffi::c_void,
-    ) -> AbiError {
-        AbiError::ok()
+        out_err: *mut AbiError,
+    ) {
+        // SAFETY: the test host always supplies a valid out-param pointer.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 
     unsafe extern "C" fn stub_get_last_error(
@@ -411,12 +423,19 @@ mod tests {
         _args: *const core::ffi::c_void,
         _out: *mut core::ffi::c_void,
         _arena: *mut CallArena,
-    ) -> AbiError {
-        AbiError::ok()
+        out_err: *mut AbiError,
+    ) {
+        // SAFETY: the test host always supplies a valid out-param pointer.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 
-    unsafe extern "C" fn stub_unload(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
-        AbiError::ok()
+    unsafe extern "C" fn stub_unload(
+        _this: *const HostApi,
+        _bundle_id: BundleId,
+        out_err: *mut AbiError,
+    ) {
+        // SAFETY: the test host always supplies a valid out-param pointer.
+        unsafe { out_err.write(AbiError::ok()) };
     }
 
     /// `HostApi.log` stub for the test host — drops the record.
@@ -432,8 +451,10 @@ mod tests {
         _this: *const crate::host::HostApi,
         _interface: *const crate::guest::GuestContractInterface,
         _args: *const core::ffi::c_void,
-    ) -> crate::guest::GuestContractInstance {
-        crate::guest::GuestContractInstance::null()
+        out_instance: *mut crate::guest::GuestContractInstance,
+    ) {
+        // SAFETY: the test host always supplies a valid out-param pointer.
+        unsafe { out_instance.write(crate::guest::GuestContractInstance::null()) };
     }
 
     unsafe extern "C" fn stub_destroy_guest_instance(

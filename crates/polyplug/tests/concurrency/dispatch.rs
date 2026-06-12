@@ -52,8 +52,12 @@ const MOCK_FNS: [*const (); 0] = [];
 unsafe extern "C" fn create_instance_v1(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// `create_instance` for the reloaded interface — a distinct function pointer so
@@ -61,8 +65,12 @@ unsafe extern "C" fn create_instance_v1(
 unsafe extern "C" fn create_instance_v2(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn noop_destroy_instance(
@@ -162,10 +170,10 @@ fn dispatch_concurrent_with_reload_is_safe() {
                             let create_fn: unsafe extern "C" fn(
                                 *const HostApi,
                                 *const (),
-                            )
-                                -> GuestContractInstance = (*interface_ptr).create_instance;
-                            let instance: GuestContractInstance =
-                                create_fn(core::ptr::null(), core::ptr::null());
+                                *mut GuestContractInstance,
+                            ) = (*interface_ptr).create_instance;
+                            let mut instance: GuestContractInstance = GuestContractInstance::null();
+                            create_fn(core::ptr::null(), core::ptr::null(), &mut instance);
                             assert!(instance.is_null(), "mock create_instance returns null");
                         }
 
@@ -214,10 +222,13 @@ fn dispatch_concurrent_with_reload_is_safe() {
 
     // SAFETY: same retained slot interface; reading the function pointer field is
     // a plain pointer comparison against the known reloaded callback.
-    let create_after: unsafe extern "C" fn(*const HostApi, *const ()) -> GuestContractInstance =
+    let create_after: unsafe extern "C" fn(*const HostApi, *const (), *mut GuestContractInstance) =
         unsafe { (*interface_after).create_instance };
-    let expected_create: unsafe extern "C" fn(*const HostApi, *const ()) -> GuestContractInstance =
-        create_instance_v2;
+    let expected_create: unsafe extern "C" fn(
+        *const HostApi,
+        *const (),
+        *mut GuestContractInstance,
+    ) = create_instance_v2;
     assert!(
         core::ptr::fn_addr_eq(create_after, expected_create),
         "reloaded interface must expose the v2 create_instance pointer"

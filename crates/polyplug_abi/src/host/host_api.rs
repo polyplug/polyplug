@@ -91,14 +91,14 @@ pub struct HostApi {
     /// - `this`: HostApi pointer (self-passing)
     /// - `descriptor`: Plugin descriptor with contract metadata
     /// - `interface`: GuestContractInterface to register
-    ///
-    /// # Returns
-    /// AbiError::OK on success, error code on failure.
+    /// - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///   success, an error otherwise). Never null.
     pub register_guest_contract: unsafe extern "C" fn(
         this: *const HostApi,
         descriptor: *const PluginDescriptor,
         interface: *const GuestContractInterface,
-    ) -> AbiError,
+        out_err: *mut AbiError,
+    ),
     /// Allocate memory using the host allocator.
     ///
     /// Memory allocated here must be freed via `free`.
@@ -238,11 +238,14 @@ pub struct HostApi {
     /// - `this`: HostApi pointer (self-passing)
     /// - `path`: UTF-8 path to bundle directory (not null-terminated)
     /// - `path_len`: Length of path in bytes
-    ///
-    /// # Returns
-    /// AbiError::OK on success, error code on failure.
-    pub load_bundle:
-        unsafe extern "C" fn(this: *const HostApi, path: *const u8, path_len: usize) -> AbiError,
+    /// - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///   success, an error otherwise). Never null.
+    pub load_bundle: unsafe extern "C" fn(
+        this: *const HostApi,
+        path: *const u8,
+        path_len: usize,
+        out_err: *mut AbiError,
+    ),
     /// Reload a plugin bundle (hot-reload).
     ///
     /// Replaces the bundle's contracts with new versions from the updated binary.
@@ -252,11 +255,14 @@ pub struct HostApi {
     /// - `this`: HostApi pointer (self-passing)
     /// - `path`: UTF-8 path to bundle directory (not null-terminated)
     /// - `path_len`: Length of path in bytes
-    ///
-    /// # Returns
-    /// AbiError::OK on success, error code on failure.
-    pub reload_bundle:
-        unsafe extern "C" fn(this: *const HostApi, path: *const u8, path_len: usize) -> AbiError,
+    /// - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///   success, an error otherwise). Never null.
+    pub reload_bundle: unsafe extern "C" fn(
+        this: *const HostApi,
+        path: *const u8,
+        path_len: usize,
+        out_err: *mut AbiError,
+    ),
     /// Register a host contract interface.
     ///
     /// Host applications register their contracts for plugins to consume.
@@ -264,13 +270,13 @@ pub struct HostApi {
     /// # Arguments
     /// - `this`: HostApi pointer (self-passing)
     /// - `interface`: HostContractInterface to register
-    ///
-    /// # Returns
-    /// AbiError::OK on success, error code on failure.
+    /// - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///   success, an error otherwise). Never null.
     pub register_host_contract: unsafe extern "C" fn(
         this: *const HostApi,
         interface: *const crate::host::HostContractInterface,
-    ) -> AbiError,
+        out_err: *mut AbiError,
+    ),
     /// Register a language loader.
     ///
     /// Host applications register loaders for each runtime language they support.
@@ -278,14 +284,16 @@ pub struct HostApi {
     /// # Arguments
     /// - `this`: HostApi pointer (self-passing)
     /// - `loader_ptr`: Opaque pointer to the loader implementation
-    ///
-    /// # Returns
-    /// AbiError::OK on success, error code on failure.
+    /// - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///   success, an error otherwise). Never null.
     ///
     /// The loader's name comes from its own `BundleLoader::loader_name()`
     /// implementation — the single source of truth — so it is not passed here.
-    pub register_loader:
-        unsafe extern "C" fn(this: *const HostApi, loader_ptr: *mut c_void) -> AbiError,
+    pub register_loader: unsafe extern "C" fn(
+        this: *const HostApi,
+        loader_ptr: *mut c_void,
+        out_err: *mut AbiError,
+    ),
     /// Get last error message.
     ///
     /// Returns the most recent error message from this runtime.
@@ -359,9 +367,8 @@ pub struct HostApi {
     /// - `out`: Pointer to the output buffer for the return value
     /// - `arena`: Optional per-call [`CallArena`] for variable-size return values;
     ///   null is allowed
-    ///
-    /// # Returns
-    /// AbiError::OK on success, error code on failure.
+    /// - `out_err`: out-param; the result is written here (`AbiError::ok()` on
+    ///   success, an error otherwise). Never null.
     pub call_guest_method: unsafe extern "C" fn(
         this: *const HostApi,
         instance: GuestContractInstance,
@@ -369,7 +376,8 @@ pub struct HostApi {
         args: *const c_void,
         out: *mut c_void,
         arena: *mut CallArena,
-    ) -> AbiError,
+        out_err: *mut AbiError,
+    ),
     /// Unload a guest bundle, invalidating its handles and freeing its resources.
     ///
     /// This performs **true unload**: the bundle's slots have their generation bumped,
@@ -396,11 +404,12 @@ pub struct HostApi {
     /// # Arguments
     /// - `this`: HostApi pointer (self-passing)
     /// - `bundle_id`: Identifier of the bundle to unload
-    ///
-    /// # Returns
-    /// `AbiError::ok()` on success, an error on failure (e.g. the bundle is not loaded,
-    /// or a still-loaded bundle declared a dependency on a contract this bundle provides).
-    pub unload_bundle: unsafe extern "C" fn(this: *const HostApi, bundle_id: BundleId) -> AbiError,
+    /// - `out_err`: out-param; the result is written here — `AbiError::ok()` on
+    ///   success, an error on failure (e.g. the bundle is not loaded, or a
+    ///   still-loaded bundle declared a dependency on a contract this bundle
+    ///   provides). Never null.
+    pub unload_bundle:
+        unsafe extern "C" fn(this: *const HostApi, bundle_id: BundleId, out_err: *mut AbiError),
     /// Log a guest diagnostic into the host's logging funnel.
     ///
     /// Routes to the same sink as `RuntimeConfig::log`: the host-installed
@@ -434,13 +443,14 @@ pub struct HostApi {
     /// `resolve_guest_contract`) and the constructor `args`. The runtime invokes the
     /// interface's `create_instance` under an epoch pin (so a concurrent unload cannot
     /// free the interface mid-construction) and tracks the resulting instance for its
-    /// live-instance accounting. Returns the new `GuestContractInstance` (a null
-    /// `data` denotes a stateless instance).
+    /// live-instance accounting. The new `GuestContractInstance` is written through
+    /// `out_instance` (a null `data` denotes a stateless instance).
     pub create_guest_instance: unsafe extern "C" fn(
         this: *const HostApi,
         interface: *const GuestContractInterface,
         args: *const c_void,
-    ) -> GuestContractInstance,
+        out_instance: *mut GuestContractInstance,
+    ),
     /// Destroy a guest contract instance through the runtime (host-mediated).
     ///
     /// Mirror of `create_guest_instance`: the runtime invokes the interface's

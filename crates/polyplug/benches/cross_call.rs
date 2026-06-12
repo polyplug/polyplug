@@ -54,23 +54,28 @@ struct AddArgs {
 /// Native dispatch target — the function the cross-call ultimately invokes.
 ///
 /// Signature matches the frozen native ABI
-/// `extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError`.
+/// `extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)`.
 /// Adds the two `u32` args and writes the sum to `out` so the work is not
 /// dead-code-eliminated.
 ///
 /// # Safety
-/// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`.
+/// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`;
+/// `out_err` must be non-null and writable.
 unsafe extern "C" fn bench_add(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     // SAFETY: args points to AddArgs and out to u32 per the caller's contract.
     unsafe {
         let a: &AddArgs = &*(args as *const AddArgs);
         *(out as *mut u32) = a.a.wrapping_add(a.b);
     }
-    AbiError::ok()
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 // ─── Interface + provider registration ───────────────────────────────────────
@@ -105,8 +110,12 @@ fn leak_native_interface(contract_id: u64) -> &'static GuestContractInterface {
 unsafe extern "C" fn noop_create_instance(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn noop_destroy_instance(
@@ -175,9 +184,11 @@ fn bench_cross_call_native(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("native", "single_provider"), |b| {
         b.iter(|| {
+            let mut err: AbiError = AbiError::ok();
             // SAFETY: host_ptr is the runtime's valid 'static HostApi; instance
-            // carries a registered contract_id; args/out match bench_add's layout.
-            let err: AbiError = unsafe {
+            // carries a registered contract_id; args/out match bench_add's layout;
+            // err is a valid, writable out-param.
+            unsafe {
                 ((*host_abi).call_guest_method)(
                     black_box(host_ptr),
                     black_box(instance),
@@ -185,6 +196,7 @@ fn bench_cross_call_native(c: &mut Criterion) {
                     black_box(&args as *const AddArgs as *const core::ffi::c_void),
                     black_box(&mut out as *mut u32 as *mut core::ffi::c_void),
                     black_box(core::ptr::null_mut::<CallArena>()),
+                    &mut err,
                 )
             };
             black_box(err);
@@ -247,10 +259,11 @@ fn bench_peer_caller_native(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("peer", "stateless_route"), |b| {
         b.iter(|| {
+            let mut err: AbiError = AbiError::ok();
             // SAFETY: host_ptr is the runtime's valid 'static HostApi; peer_instance
             // carries a registered contract_id with a null data handle (valid for a
-            // stateless peer); args/out match bench_add's layout.
-            let err: AbiError = unsafe {
+            // stateless peer); args/out match bench_add's layout; err is writable.
+            unsafe {
                 ((*host_abi).call_guest_method)(
                     black_box(host_ptr),
                     black_box(peer_instance),
@@ -258,6 +271,7 @@ fn bench_peer_caller_native(c: &mut Criterion) {
                     black_box(&args as *const AddArgs as *const core::ffi::c_void),
                     black_box(&mut out as *mut u32 as *mut core::ffi::c_void),
                     black_box(core::ptr::null_mut::<CallArena>()),
+                    &mut err,
                 )
             };
             black_box(err);
