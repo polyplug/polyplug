@@ -126,16 +126,15 @@ impl BundleLoader for LuaDependerLoader {
         _source: &polyplug::loader::BundleSource,
         runtime: &Runtime,
     ) -> Result<(), RuntimeError> {
-        let host: &'static HostApi = runtime.host_abi();
+        let host: *const HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 
         // Enter the enforcement window, exactly as a real loader does.
         runtime.push_init_bundle_id(bundle_id.id());
 
-        // SAFETY: host is a valid HostApi from the runtime.
-        let handle: GuestContractHandle = unsafe {
-            (host.find_guest_contract)(host as *const HostApi, self.provider_contract_id, 0_u32)
-        };
+        // SAFETY: host is a valid HostApi pointer from the runtime.
+        let handle: GuestContractHandle =
+            unsafe { ((*host).find_guest_contract)(host, self.provider_contract_id, 0_u32) };
 
         runtime.pop_init_bundle_id();
 

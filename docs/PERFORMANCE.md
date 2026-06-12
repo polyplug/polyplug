@@ -989,30 +989,39 @@ python3 scripts/gen_bench_charts.py --soak target/soak/soak_rss.txt \
 
 - **Churn throughput:** ~17,500–18,600 full load→dispatch→unload→drop cycles/sec
   (100,000 cycles in ~5.4–5.7 s across runs).
-- **RSS series:** climbs **linearly** from ~3.1 MiB to ~20.6 MiB over 100,000
-  cycles — slope ~0.17 KiB/cycle, **constant** across the first and second halves
-  (no plateau). That straight-line, non-decaying growth under *full teardown* is a
-  real leak signal, not allocator/`dlclose` retention.
+- **RSS series:** after the fix below, the series holds **steady-state / flat**
+  across the run (no straight-line growth). The original soak *before* the fix
+  climbed linearly from ~3.1 MiB to ~20.6 MiB over 100,000 cycles (slope
+  ~0.17 KiB/cycle, constant across halves), which was the real leak signal — not
+  allocator/`dlclose` retention.
 
-### Leak found (flagged, not fixed here — out of bench scope)
+### Leak found and fixed — `HostApi` is reclaimed at teardown
 
 The soak surfaced a genuine **core leak in the `Runtime` lifecycle**, ~168 bytes
-per runtime built-and-dropped. It is **not** in load, unload, dispatch, or the
-`dlopen`/`dlclose` machinery (a build-and-drop-only bisection leaks at the same
+per runtime built-and-dropped. It was **not** in load, unload, dispatch, or the
+`dlopen`/`dlclose` machinery (a build-and-drop-only bisection leaked at the same
 slope; a pure `dlopen`+`dlclose` loop with no runtime is flat). Root cause:
-`RuntimeBuilder::build` does `Box::leak(Box::new(HostApi { … }))` to obtain the
-`&'static HostApi` the FFI requires, and there is **no `impl Drop for Runtime`**
-that reclaims it — `Arc<Runtime>` teardown frees the `Runtime` but not the leaked
-`HostApi` (168 bytes, matching the observed per-cycle growth). A long-running host
-that creates and destroys many short-lived runtimes (or repeatedly calls
-`polyplug_runtime_create` / `polyplug_runtime_destroy`) leaks one `HostApi` per
-runtime. **This is filed for a core fix; the bench task does not touch core.** The
-chart shows the leak (a rising amber line) on purpose — once the core fix lands and
-reclaims the `HostApi` at teardown, the same soak should redraw it flat (green).
+`RuntimeBuilder::build` used `Box::leak(Box::new(HostApi { … }))` to obtain the
+`&'static HostApi` the FFI required, and there was no owner that reclaimed it —
+`Arc<Runtime>` teardown freed the `Runtime` but not the leaked `HostApi`
+(168 bytes, matching the observed per-cycle growth).
 
-The default `cargo test` run of this harness uses a tiny built-in cycle count
-(env unset), so it stays fast and green and does not assert flatness — it is a
-diagnostic, not a regression gate, until the leak is fixed.
+**Fix:** the `Runtime` now *owns* its `HostApi` as a `Box<HostApi>` placed as the
+last struct field, so it drops after `registry`/`loaders` (whose teardown
+`dlclose`s plugin libraries that may hold pointers into the `HostApi`).
+`polyplug_runtime_destroy` reconstructs the `Arc<Runtime>` and drops it, cascading
+into `Runtime` teardown that frees the owned `HostApi` box last. A long-running
+host that creates and destroys many short-lived runtimes no longer leaks. This
+narrowed the destroy contract to **exactly-once** (the runtime owns and frees the
+`HostApi` on the single legitimate destroy; calling destroy again or concurrently
+on the same handle is undefined behavior, same as C `free()`).
+
+The regression is locked in two ways: `crates/polyplug/tests/leak_host_abi.rs`
+asserts post-warmup RSS growth stays under 1 MiB across 50,000 build→drop cycles
+(it failed at ~8 MiB against the old leak, passes now), and the soak harness
+redraws flat (green). The default `cargo test` run of the soak harness uses a tiny
+built-in cycle count (env unset) so it stays fast — set `POLYPLUG_SOAK_ITERS` for
+a full run.
 
 ## See Also
 

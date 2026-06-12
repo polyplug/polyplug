@@ -93,7 +93,7 @@ fn native_to_native_cross_call() {
     let caller_iface: &GuestContractInterface = unsafe { &*caller_iface_ptr };
 
     // Create a real caller instance so it captures the runtime's HostApi pointer.
-    let host: *const HostApi = rt.host_abi() as *const HostApi;
+    let host: *const HostApi = rt.host_abi();
     // SAFETY: `create_instance` is a valid factory pointer; `host` is the
     // runtime's own 'static HostApi pointer (non-null) per the ABI contract.
     let caller_instance: GuestContractInstance =
@@ -278,7 +278,7 @@ fn cross_call_reresolves_after_reload() {
     let target_iface_ptr: *const GuestContractInterface = resolve_interface(&rt, target_id);
     // SAFETY: live interface pointer; runtime outlives the borrow.
     let target_iface: &GuestContractInterface = unsafe { &*target_iface_ptr };
-    let host: *const HostApi = rt.host_abi() as *const HostApi;
+    let host: *const HostApi = rt.host_abi();
     // SAFETY: valid factory; `host` is the runtime's non-null 'static HostApi.
     let target_instance: GuestContractInstance =
         unsafe { (target_iface.create_instance)(host, core::ptr::null()) };

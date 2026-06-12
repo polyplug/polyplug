@@ -245,7 +245,7 @@ fn rust_peer_caller_echo_roundtrip() {
 
     // Obtain the live HostApi pointer from the runtime — this is exactly what
     // a loaded native cdylib's author factory receives as its `HostContext`.
-    let host: *const HostApi = rt.host_abi() as *const HostApi;
+    let host: *const HostApi = rt.host_abi();
     assert!(!host.is_null(), "host_abi must be non-null");
 
     // Resolve the peer contract using the inline peer caller — mirrors generated code.

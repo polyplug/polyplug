@@ -161,11 +161,14 @@ impl RuntimeBuilder {
         let logger: LoggerHandle = LoggerHandle::from_config(&self.config);
         let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::with_logger(logger));
 
-        // Build the static HostApi. This must be 'static.
+        // Build the owned HostApi. The `Box` gives it a stable heap address that
+        // is independent of where the `Runtime` value lives, so the pointer handed
+        // to plugins survives the runtime's move into its `Arc`. Ownership lives in
+        // the `Runtime` (its last-declared field) and is reclaimed on teardown.
         // The `runtime` field is null here and patched once below, after the
         // Runtime is placed inside its Arc, so callbacks can recover the Runtime
         // via `(*this).runtime`.
-        let host_abi: &'static HostApi = Box::leak(Box::new(HostApi {
+        let host_abi: Box<HostApi> = Box::new(HostApi {
             runtime: core::ptr::null_mut(),
             register_guest_contract: crate::runtime::host_register_guest_contract,
             alloc: crate::runtime::host_alloc,
@@ -188,7 +191,7 @@ impl RuntimeBuilder {
             unload_bundle: crate::runtime::host_unload_bundle,
             log: crate::runtime::host_log,
             reserved: core::ptr::null(),
-        }));
+        });
 
         let mut loader_map: HashMap<String, Box<dyn BundleLoader>> = HashMap::new();
 
@@ -244,15 +247,27 @@ impl RuntimeBuilder {
 
         let runtime: Arc<Runtime> = Arc::new(runtime);
 
-        // Patch the HostApi.runtime field to point at the Arc's target.
-        // SAFETY: `host_abi` is the unique leaked HostApi for this Runtime and
-        // no plugin has received it yet (bundle loading happens after this write), so
-        // this is a single writer with no concurrent reader. `Arc::as_ptr` stays valid
-        // for the lifetime of the Arc, and the HostApi lives at least as long
-        // (callbacks only run while the Runtime — and thus the Arc — is alive).
+        // Patch the owned HostApi's `runtime` field to point at the Arc's target.
+        // The patch pointer is derived ENTIRELY through raw pointers from
+        // `Arc::as_ptr` — no intermediate `&`/`&mut` to the Runtime or HostApi is
+        // formed — so the write does not violate Stacked Borrows. `Box<HostApi>` is
+        // layout-identical to `*mut HostApi` (a single non-null pointer for a sized
+        // payload), so reading the field as `*mut HostApi` yields the Box's stable
+        // heap address — the same pointer plugins later receive via `host_abi()`.
+        //
+        // SAFETY: `rt_ptr` comes from `Arc::as_ptr` and is valid for the Arc's
+        // lifetime; `&raw const (*rt_ptr).host_abi` addresses the `Box<HostApi>`
+        // field in-bounds. Reading it as `*mut HostApi` is sound by the layout
+        // identity above and yields the live owned HostApi. No plugin has received
+        // that HostApi yet (bundle loading happens after this write), so this is a
+        // single writer with no concurrent reader and no aliasing live reference.
+        // The HostApi is owned by the Runtime the Arc holds, so it outlives the
+        // runtime pointer written here.
         unsafe {
-            (*(host_abi as *const HostApi as *mut HostApi)).runtime =
-                Arc::as_ptr(&runtime) as *mut c_void;
+            let rt_ptr: *const Runtime = Arc::as_ptr(&runtime);
+            let box_field_ptr: *const Box<HostApi> = &raw const (*rt_ptr).host_abi;
+            let host_abi_ptr: *mut HostApi = (box_field_ptr as *const *mut HostApi).read();
+            (*host_abi_ptr).runtime = rt_ptr as *mut c_void;
         }
 
         // If nothing discovered, return Runtime with no loaded bundles (no graph needed)

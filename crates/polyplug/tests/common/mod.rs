@@ -136,10 +136,10 @@ impl TestNativeLoader {
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(expected_bundle_id.id());
 
-        let host_abi: &'static HostApi = runtime.host_abi();
+        let host_abi: *const HostApi = runtime.host_abi();
         // SAFETY: host_abi is a valid HostApi reference from the runtime; init_fn_ptr is a
         // valid function pointer; ctx is stack-allocated and outlives the call.
-        let init_result: AbiError = unsafe { init_fn_ptr(host_abi as *const HostApi, &ctx) };
+        let init_result: AbiError = unsafe { init_fn_ptr(host_abi, &ctx) };
 
         runtime.pop_init_bundle_id();
 

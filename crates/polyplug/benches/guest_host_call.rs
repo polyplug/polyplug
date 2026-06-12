@@ -146,8 +146,8 @@ fn bench_host_contract_call(c: &mut Criterion) {
         .register_host_contract(contract_id, interface)
         .expect("host contract registration should succeed");
 
-    let host_abi: &'static HostApi = runtime.host_abi();
-    let host_ptr: *const HostApi = host_abi as *const HostApi;
+    let host_abi: *const HostApi = runtime.host_abi();
+    let host_ptr: *const HostApi = host_abi;
 
     // Resolve ONCE through the real HostApi callback (a guest caches its host
     // interface for its lifetime); the instance for a singleton stateless host
@@ -155,8 +155,9 @@ fn bench_host_contract_call(c: &mut Criterion) {
     // packed `(major << 16) | minor` form the runtime decodes — require major 1.
     let min_version: u32 = 1_u32 << 16;
     // SAFETY: host_ptr is the runtime's valid 'static HostApi.
-    let resolved: *const HostContractInterface =
-        unsafe { (host_abi.resolve_host_contract_interface)(host_ptr, contract_id, min_version) };
+    let resolved: *const HostContractInterface = unsafe {
+        ((*host_abi).resolve_host_contract_interface)(host_ptr, contract_id, min_version)
+    };
     assert!(!resolved.is_null(), "host interface must resolve");
     // SAFETY: resolved is the registered 'static interface; fn 0 is host_add.
     let dispatch_fn: unsafe extern "C" fn(HostContractInstance, *const (), *mut ()) -> AbiError = unsafe {

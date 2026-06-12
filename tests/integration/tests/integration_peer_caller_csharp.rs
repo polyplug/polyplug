@@ -389,7 +389,7 @@ fn csharp_peer_caller_validate_roundtrip() {
     // requires a real instance.
     // SAFETY: host_abi is the runtime's live HostApi pointer; create_instance
     // is the generated factory thunk on the resolved interface.
-    let host_abi: *const polyplug_abi::HostApi = rt.host_abi() as *const polyplug_abi::HostApi;
+    let host_abi: *const polyplug_abi::HostApi = rt.host_abi();
     let instance: GuestContractInstance =
         unsafe { (interface.create_instance)(host_abi, core::ptr::null()) };
     assert!(

@@ -212,13 +212,13 @@ impl BundleLoader for NativeLoader {
         // A panicking plugin init must not unwind across the C ABI (UB / process abort).
         // catch_unwind contains it and maps it to a proper LoaderError. The init stack
         // is popped on BOTH the success and panic paths so it never leaks an entry.
-        let host_abi: &'static HostApi = runtime.host_abi();
+        let host_abi: *const HostApi = runtime.host_abi();
         let init_outcome: Result<AbiError, Box<dyn core::any::Any + Send>> =
             std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
-                // SAFETY: host_abi is a valid HostApi reference obtained from the runtime.
+                // SAFETY: host_abi is a valid HostApi pointer obtained from the runtime.
                 // init_fn_ptr is a valid function pointer resolved from the plugin library.
                 // ctx is a stack-allocated BundleInitContext that outlives the call.
-                unsafe { init_fn_ptr(host_abi as *const HostApi, &ctx) }
+                unsafe { init_fn_ptr(host_abi, &ctx) }
             }));
 
         // ─── Step 7: Pop bundle_id (always, including panic path) ──────────────────────
@@ -385,13 +385,13 @@ impl BundleLoader for NativeLoader {
         // ─── Step 6: Get HostApi and call init (panic-isolated) ────────────────────
         // A panicking plugin init must not unwind across the C ABI. catch_unwind contains
         // it; the init stack is popped on both the success and panic paths.
-        let host_abi: &'static HostApi = runtime.host_abi();
+        let host_abi: *const HostApi = runtime.host_abi();
         let init_outcome: Result<AbiError, Box<dyn core::any::Any + Send>> =
             std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
-                // SAFETY: host_abi is a valid HostApi reference obtained from the runtime.
+                // SAFETY: host_abi is a valid HostApi pointer obtained from the runtime.
                 // init_fn_ptr is a valid function pointer resolved from the new plugin library.
                 // ctx is a stack-allocated BundleInitContext that outlives the call.
-                unsafe { init_fn_ptr(host_abi as *const HostApi, &ctx) }
+                unsafe { init_fn_ptr(host_abi, &ctx) }
             }));
 
         // ─── Step 7: Pop bundle_id (always, including panic path) ────────────────────────

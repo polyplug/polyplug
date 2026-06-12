@@ -157,8 +157,8 @@ fn bench_cross_call_native(c: &mut Criterion) {
     let contract_id: u64 = GuestContractId::new("bench.contract", 1_u32).id();
     register_native_provider(&runtime, contract_id, 0x1111_u64);
 
-    let host_abi: &'static HostApi = runtime.host_abi();
-    let host_ptr: *const HostApi = host_abi as *const HostApi;
+    let host_abi: *const HostApi = runtime.host_abi();
+    let host_ptr: *const HostApi = host_abi;
     let instance: GuestContractInstance = GuestContractInstance {
         data: core::ptr::null_mut(),
         contract_id: GuestContractId::from_u64(contract_id),
@@ -178,7 +178,7 @@ fn bench_cross_call_native(c: &mut Criterion) {
             // SAFETY: host_ptr is the runtime's valid 'static HostApi; instance
             // carries a registered contract_id; args/out match bench_add's layout.
             let err: AbiError = unsafe {
-                (host_abi.call_guest_method)(
+                ((*host_abi).call_guest_method)(
                     black_box(host_ptr),
                     black_box(instance),
                     black_box(0_u32),
@@ -226,8 +226,8 @@ fn bench_peer_caller_native(c: &mut Criterion) {
     let contract_id: u64 = GuestContractId::new("bench.contract", 1_u32).id();
     register_native_provider(&runtime, contract_id, 0x2222_u64);
 
-    let host_abi: &'static HostApi = runtime.host_abi();
-    let host_ptr: *const HostApi = host_abi as *const HostApi;
+    let host_abi: *const HostApi = runtime.host_abi();
+    let host_ptr: *const HostApi = host_abi;
     // Peer vantage point: a stateless instance — null `data`, target contract_id —
     // exactly what a generated peer caller obtains from a VM/stateless peer's
     // create_instance and routes on.
@@ -251,7 +251,7 @@ fn bench_peer_caller_native(c: &mut Criterion) {
             // carries a registered contract_id with a null data handle (valid for a
             // stateless peer); args/out match bench_add's layout.
             let err: AbiError = unsafe {
-                (host_abi.call_guest_method)(
+                ((*host_abi).call_guest_method)(
                     black_box(host_ptr),
                     black_box(peer_instance),
                     black_box(0_u32),

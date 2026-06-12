@@ -66,8 +66,6 @@ pub(crate) struct LoadOptions {
 /// The runtime instance.
 pub struct Runtime {
     pub(crate) registry: Arc<RuntimeStore>,
-    /// The static HostApi given to plugins. Must be 'static.
-    pub(crate) host_abi: &'static HostApi,
     /// All registered loaders, keyed by loader_name.
     ///
     /// Interior-mutable (`RwLock`) so loaders can be registered after `build()`
@@ -128,6 +126,15 @@ pub struct Runtime {
     /// make the counter *larger* than this thread needs; the worst case is taking the
     /// Mutex and finding no entry for this thread (returning `0`), which is correct.
     pub(crate) active_init_count: AtomicUsize,
+    /// The owned HostApi handed to plugins. A `Box` gives it a stable heap
+    /// address independent of where the `Runtime` value lives, so the pointer
+    /// captured by plugins survives the runtime's move into its `Arc`.
+    ///
+    /// Declared last so it is dropped after `registry` and `loaders` — their
+    /// teardown dlcloses plugin libraries whose destructors may still call
+    /// through this HostApi; freeing it last keeps those callbacks sound.
+    /// (Rust drops fields in declaration order, first-declared first.)
+    pub(crate) host_abi: Box<HostApi>,
 }
 
 impl Runtime {
@@ -222,12 +229,12 @@ impl Runtime {
         out: *mut core::ffi::c_void,
         arena: *mut polyplug_abi::types::CallArena,
     ) -> polyplug_abi::types::AbiError {
-        // SAFETY: host_abi is the runtime's own 'static HostApi whose `runtime`
+        // SAFETY: host_abi is the runtime's own owned HostApi whose `runtime`
         // field points to this Runtime; forwarding the args is the same call the
         // VM/native guests make.
         unsafe {
             host_call_guest_method(
-                self.host_abi as *const HostApi,
+                &*self.host_abi as *const HostApi,
                 instance,
                 fn_id,
                 args,
@@ -297,15 +304,20 @@ impl Runtime {
         self.host_runtime
     }
 
-    /// Get the HostApi for use in plugin registrars.
+    /// Get the HostApi pointer for use in plugin registrars.
+    ///
+    /// Returns a raw pointer rather than a reference: the HostApi is owned by the
+    /// `Runtime` (a `Box<HostApi>` with a stable heap address), so its validity is
+    /// tied to the runtime's lifetime, not `'static`. The FFI/loaders already treat
+    /// it as a raw pointer.
     #[inline(always)]
-    pub fn host_abi(&self) -> &'static HostApi {
-        self.host_abi
+    pub fn host_abi(&self) -> *const HostApi {
+        &*self.host_abi as *const HostApi
     }
 
     /// Get the HostApi pointer for passing to guest contracts.
     ///
-    /// Returns the runtime's `'static` HostApi, whose `runtime` field was
+    /// Returns the runtime's owned HostApi, whose `runtime` field was
     /// patched once in `RuntimeBuilder::build` to point at this Runtime.
     /// The runtime pointer can be extracted via `(*host_interface).runtime`.
     ///
@@ -313,7 +325,7 @@ impl Runtime {
     /// The returned pointer is valid for the lifetime of the Runtime.
     #[inline(always)]
     pub fn as_context_ptr(&self) -> *const HostApi {
-        self.host_abi as *const HostApi
+        &*self.host_abi as *const HostApi
     }
 
     #[inline(always)]
@@ -2782,7 +2794,7 @@ mod tests {
     }
 
     fn host_with_runtime(runtime: &Arc<Runtime>) -> *const HostApi {
-        runtime.host_abi() as *const HostApi
+        runtime.host_abi()
     }
 
     #[test]

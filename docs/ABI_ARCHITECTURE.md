@@ -58,7 +58,10 @@ C exports.
 // Returns a HostApi* that exposes all runtime operations.
 const HostApi* polyplug_runtime_create(const void* config);
 
-// Destroy a runtime instance (double-destroy is a safe no-op).
+// Destroy a runtime instance. Must be called exactly once per handle returned
+// by polyplug_runtime_create. Calling it more than once, or concurrently with
+// itself on the same handle, is undefined behavior — the handle is freed, same
+// as C free(); the HostApi pointer is dangling afterwards and must not be used.
 void polyplug_runtime_destroy(const HostApi* host);
 ```
 

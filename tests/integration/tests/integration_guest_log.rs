@@ -77,7 +77,7 @@ fn polyplug_guest_log_delivers_to_host_logger() {
     };
     // SAFETY: probe is a valid extern "C" fn exported by the fixture; the
     // HostApi pointer comes from the live runtime and outlives the call.
-    unsafe { probe(runtime.host_abi() as *const polyplug_abi::HostApi) };
+    unsafe { probe(runtime.host_abi()) };
 
     let captured: Vec<(LogLevel, String, String)> = records.lock().expect("records lock").clone();
     assert!(

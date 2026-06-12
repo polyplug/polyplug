@@ -59,7 +59,7 @@ impl BundleLoader for ProbeLoader {
         _source: &polyplug::loader::BundleSource,
         runtime: &Runtime,
     ) -> Result<(), RuntimeError> {
-        let host_abi: &'static HostApi = runtime.host_abi();
+        let host_abi: *const HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 
         // Enter the enforcement window, exactly as the native loader does.
@@ -68,40 +68,24 @@ impl BundleLoader for ProbeLoader {
         // Probe the declared dependency: must resolve (non-null handle).
         // SAFETY: host_abi is a valid HostApi from the runtime.
         let declared_handle: GuestContractHandle = unsafe {
-            (host_abi.find_guest_contract)(
-                host_abi as *const HostApi,
-                self.declared_contract_id,
-                0_u32,
-            )
+            ((*host_abi).find_guest_contract)(host_abi, self.declared_contract_id, 0_u32)
         };
 
         // Probe the undeclared contract: must be denied (null handle).
         // SAFETY: host_abi is a valid HostApi from the runtime.
         let undeclared_handle: GuestContractHandle = unsafe {
-            (host_abi.find_guest_contract)(
-                host_abi as *const HostApi,
-                self.undeclared_contract_id,
-                0_u32,
-            )
+            ((*host_abi).find_guest_contract)(host_abi, self.undeclared_contract_id, 0_u32)
         };
 
         // Probe the enumeration API for both contracts. The declared one must be
         // enumerable; the undeclared one must come back empty during init.
         // SAFETY: host_abi is a valid HostApi from the runtime.
         let declared_all: polyplug_abi::Array<GuestContractHandle> = unsafe {
-            (host_abi.find_all_guest_contracts)(
-                host_abi as *const HostApi,
-                self.declared_contract_id,
-                0_u32,
-            )
+            ((*host_abi).find_all_guest_contracts)(host_abi, self.declared_contract_id, 0_u32)
         };
         // SAFETY: host_abi is a valid HostApi from the runtime.
         let undeclared_all: polyplug_abi::Array<GuestContractHandle> = unsafe {
-            (host_abi.find_all_guest_contracts)(
-                host_abi as *const HostApi,
-                self.undeclared_contract_id,
-                0_u32,
-            )
+            ((*host_abi).find_all_guest_contracts)(host_abi, self.undeclared_contract_id, 0_u32)
         };
         let declared_all_len: usize = declared_all.len;
         let undeclared_all_len: usize = undeclared_all.len;

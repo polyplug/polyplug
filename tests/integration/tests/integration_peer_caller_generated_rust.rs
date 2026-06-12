@@ -109,13 +109,7 @@ fn generated_rust_peer_caller_validates_through_real_dylibs() {
     // SAFETY: probe is a valid extern fn from the loaded transformer; the
     // HostApi pointer comes from the live runtime; input borrows live test
     // data and out_view is a valid local slot.
-    let code: u32 = unsafe {
-        probe(
-            runtime.host_abi() as *const polyplug_abi::HostApi,
-            input_view,
-            &mut out_view,
-        )
-    };
+    let code: u32 = unsafe { probe(runtime.host_abi(), input_view, &mut out_view) };
     assert_eq!(
         code,
         AbiErrorCode::Ok as u32,

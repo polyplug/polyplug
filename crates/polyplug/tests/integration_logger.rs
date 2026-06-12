@@ -155,7 +155,7 @@ fn host_api_log_routes_guest_records_into_host_logger() {
         .build()
         .expect("build runtime");
 
-    let host: &polyplug_abi::HostApi = runtime.host_abi();
+    let host: *const polyplug_abi::HostApi = runtime.host_abi();
     let scope: &str = "guest.test_plugin";
     let message: &str = "hello from a guest";
     let scope_view = StringView {
@@ -169,22 +169,12 @@ fn host_api_log_routes_guest_records_into_host_logger() {
     // SAFETY: host is the runtime's live HostApi; both views borrow local UTF-8
     // string data valid for the duration of each synchronous call.
     unsafe {
-        (host.log)(
-            host as *const polyplug_abi::HostApi,
-            LogLevel::Info as u32,
-            scope_view,
-            message_view,
-        );
+        ((*host).log)(host, LogLevel::Info as u32, scope_view, message_view);
         // Unknown level (plugins are untrusted): must clamp to Error, not UB.
-        (host.log)(
-            host as *const polyplug_abi::HostApi,
-            999,
-            scope_view,
-            message_view,
-        );
+        ((*host).log)(host, 999, scope_view, message_view);
         // Null views are legal at the ABI boundary and read as "".
-        (host.log)(
-            host as *const polyplug_abi::HostApi,
+        ((*host).log)(
+            host,
             LogLevel::Warn as u32,
             StringView::null(),
             StringView::null(),

@@ -5,7 +5,6 @@
 //!   1. Builder scan path now routes through the shared explicit-load path, so
 //!      discovered bundles get dependency declaration + non-empty descriptors.
 //!   2. `call_guest_method` refuses ambiguous routing when >1 provider exists.
-//!   3. Concurrent double-destroy is race-free (atomic swap).
 //!   4. `host_register_guest_contract` null-checks descriptor and interface.
 //!   5. `host_get_host_contract` drops the read guard before create_instance
 //!      (no deadlock) and never caches a NULL singleton.
@@ -117,18 +116,14 @@ impl BundleLoader for DepProbeLoader {
         _source: &polyplug::loader::BundleSource,
         runtime: &Runtime,
     ) -> Result<(), RuntimeError> {
-        let host_abi: &'static HostApi = runtime.host_abi();
+        let host_abi: *const HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(bundle_id.id());
 
         if manifest.name == self.probing_bundle {
             // SAFETY: host_abi is a valid HostApi from the runtime.
             let handle = unsafe {
-                (host_abi.find_guest_contract)(
-                    host_abi as *const HostApi,
-                    self.declared_contract_id,
-                    0_u32,
-                )
+                ((*host_abi).find_guest_contract)(host_abi, self.declared_contract_id, 0_u32)
             };
             *self.declared_resolved.lock().unwrap() = Some(!handle.is_null());
         } else {
@@ -275,7 +270,7 @@ fn call_guest_method_single_provider_dispatches() {
     let contract_id: u64 = GuestContractId::new("solo.contract", 1_u32).id();
     register_provider(&runtime, contract_id, 0x1111_u64);
 
-    let host_abi: &'static HostApi = runtime.host_abi();
+    let host_abi: *const HostApi = runtime.host_abi();
     let instance: GuestContractInstance = GuestContractInstance {
         data: core::ptr::null_mut(),
         contract_id: GuestContractId::from_u64(contract_id),
@@ -284,8 +279,8 @@ fn call_guest_method_single_provider_dispatches() {
     // DuplicateProvider: routing proceeded to a single live interface.
     // SAFETY: host_abi is valid; instance carries a registered contract_id.
     let err = unsafe {
-        (host_abi.call_guest_method)(
-            host_abi as *const HostApi,
+        ((*host_abi).call_guest_method)(
+            host_abi,
             instance,
             0_u32,
             core::ptr::null(),
@@ -308,15 +303,15 @@ fn call_guest_method_multiple_providers_rejected() {
     register_provider(&runtime, contract_id, 0xAAAA_u64);
     register_provider(&runtime, contract_id, 0xBBBB_u64);
 
-    let host_abi: &'static HostApi = runtime.host_abi();
+    let host_abi: *const HostApi = runtime.host_abi();
     let instance: GuestContractInstance = GuestContractInstance {
         data: core::ptr::null_mut(),
         contract_id: GuestContractId::from_u64(contract_id),
     };
     // SAFETY: host_abi is valid; instance carries a registered contract_id.
     let err = unsafe {
-        (host_abi.call_guest_method)(
-            host_abi as *const HostApi,
+        ((*host_abi).call_guest_method)(
+            host_abi,
             instance,
             0_u32,
             core::ptr::null(),
@@ -332,51 +327,19 @@ fn call_guest_method_multiple_providers_rejected() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Finding 3 — concurrent double-destroy is race-free.
-// ════════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn concurrent_destroy_race_does_not_crash() {
-    use std::thread;
-
-    for _ in 0..200 {
-        // SAFETY: create has no pointer preconditions.
-        let host: *const HostApi =
-            unsafe { polyplug::ffi::polyplug_runtime_create(core::ptr::null()) };
-        assert!(!host.is_null());
-        let host_addr: usize = host as usize;
-
-        let handles: Vec<thread::JoinHandle<()>> = (0..8)
-            .map(|_| {
-                thread::spawn(move || {
-                    let h: *const HostApi = host_addr as *const HostApi;
-                    // SAFETY: every thread races destroy on the same handle. The
-                    // atomic swap guarantees exactly one reclaim; all others no-op.
-                    unsafe { polyplug::ffi::polyplug_runtime_destroy(h) };
-                })
-            })
-            .collect();
-
-        for h in handles {
-            h.join().expect("destroy thread must not panic");
-        }
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
 // Finding 4 — host_register_guest_contract null-checks pointers.
 // ════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn register_guest_contract_null_descriptor_is_invalid_pointer() {
     let runtime: Arc<Runtime> = build_bare_runtime();
-    let host_abi: &'static HostApi = runtime.host_abi();
+    let host_abi: *const HostApi = runtime.host_abi();
     let interface: &'static GuestContractInterface =
         leak_guest_interface(GuestContractId::new("x", 1).id());
     // SAFETY: host_abi valid; descriptor deliberately null to exercise the guard.
     let err = unsafe {
-        (host_abi.register_guest_contract)(
-            host_abi as *const HostApi,
+        ((*host_abi).register_guest_contract)(
+            host_abi,
             core::ptr::null(),
             interface as *const GuestContractInterface,
         )
@@ -387,7 +350,7 @@ fn register_guest_contract_null_descriptor_is_invalid_pointer() {
 #[test]
 fn register_guest_contract_null_interface_is_invalid_pointer() {
     let runtime: Arc<Runtime> = build_bare_runtime();
-    let host_abi: &'static HostApi = runtime.host_abi();
+    let host_abi: *const HostApi = runtime.host_abi();
     let descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"n"),
         contract_name: StringView::from_static(b"c"),
@@ -399,8 +362,8 @@ fn register_guest_contract_null_interface_is_invalid_pointer() {
     };
     // SAFETY: host_abi valid; interface deliberately null to exercise the guard.
     let err = unsafe {
-        (host_abi.register_guest_contract)(
-            host_abi as *const HostApi,
+        ((*host_abi).register_guest_contract)(
+            host_abi,
             &descriptor as *const PluginDescriptor,
             core::ptr::null(),
         )
@@ -498,11 +461,10 @@ fn get_host_contract_reentrant_register_does_not_deadlock() {
         .register_host_contract(contract_id, interface)
         .expect("register host contract");
 
-    let host_abi: &'static HostApi = runtime.host_abi();
+    let host_abi: *const HostApi = runtime.host_abi();
     // SAFETY: host_abi valid; contract_id is registered. This call's
     // create_instance re-enters register_host_contract — must complete, not hang.
-    let _instance =
-        unsafe { (host_abi.get_host_contract)(host_abi as *const HostApi, contract_id, 0_u32) };
+    let _instance = unsafe { ((*host_abi).get_host_contract)(host_abi, contract_id, 0_u32) };
     // Reaching here at all proves no deadlock.
 }
 
@@ -556,17 +518,15 @@ fn get_host_contract_does_not_cache_null_singleton() {
         .register_host_contract(contract_id, interface)
         .expect("register host contract");
 
-    let host_abi: &'static HostApi = runtime.host_abi();
+    let host_abi: *const HostApi = runtime.host_abi();
     // First call: create_instance returns NULL — must NOT be cached.
     // SAFETY: host_abi valid; contract_id registered.
-    let first =
-        unsafe { (host_abi.get_host_contract)(host_abi as *const HostApi, contract_id, 0_u32) };
+    let first = unsafe { ((*host_abi).get_host_contract)(host_abi, contract_id, 0_u32) };
     assert!(first.is_null(), "first singleton creation returned null");
 
     // Second call: a retry must occur (cache was not poisoned) and now succeed.
     // SAFETY: host_abi valid; contract_id registered.
-    let second =
-        unsafe { (host_abi.get_host_contract)(host_abi as *const HostApi, contract_id, 0_u32) };
+    let second = unsafe { ((*host_abi).get_host_contract)(host_abi, contract_id, 0_u32) };
     assert!(
         !second.is_null(),
         "null singleton must not be cached: a later call must retry and succeed"
@@ -778,7 +738,7 @@ fn validate_accepts_absent_dependency_contract_id() {
 #[test]
 fn register_guest_contract_duplicate_returns_duplicate_provider_code() {
     let runtime: Arc<Runtime> = build_bare_runtime();
-    let host_abi: &'static HostApi = runtime.host_abi();
+    let host_abi: *const HostApi = runtime.host_abi();
     let contract_id: u64 = GuestContractId::new("dup.contract", 1).id();
     let interface: &'static GuestContractInterface = leak_guest_interface(contract_id);
     let descriptor: PluginDescriptor = PluginDescriptor {
@@ -796,8 +756,8 @@ fn register_guest_contract_duplicate_returns_duplicate_provider_code() {
     runtime.push_init_bundle_id(0xD0D0_u64);
     // SAFETY: host_abi is valid; descriptor and interface are valid 'static refs.
     let first: polyplug_abi::AbiError = unsafe {
-        (host_abi.register_guest_contract)(
-            host_abi as *const HostApi,
+        ((*host_abi).register_guest_contract)(
+            host_abi,
             &descriptor as *const PluginDescriptor,
             interface as *const GuestContractInterface,
         )
@@ -805,8 +765,8 @@ fn register_guest_contract_duplicate_returns_duplicate_provider_code() {
     assert_eq!(first.code, AbiErrorCode::Ok as u32, "first must register");
     // SAFETY: same as above — deliberate same-bundle duplicate registration.
     let second: polyplug_abi::AbiError = unsafe {
-        (host_abi.register_guest_contract)(
-            host_abi as *const HostApi,
+        ((*host_abi).register_guest_contract)(
+            host_abi,
             &descriptor as *const PluginDescriptor,
             interface as *const GuestContractInterface,
         )
@@ -821,12 +781,11 @@ fn register_guest_contract_duplicate_returns_duplicate_provider_code() {
 
     // The detail must be readable through get_last_error.
     // SAFETY: host_abi is valid for both error-introspection calls.
-    let len: usize = unsafe { (host_abi.get_error_len)(host_abi as *const HostApi) };
+    let len: usize = unsafe { ((*host_abi).get_error_len)(host_abi) };
     assert!(len > 0, "last error must be set on registration failure");
     let mut buf: Vec<u8> = vec![0_u8; len];
     // SAFETY: buf is valid for len bytes.
-    let written: usize =
-        unsafe { (host_abi.get_last_error)(host_abi as *const HostApi, buf.as_mut_ptr(), len) };
+    let written: usize = unsafe { ((*host_abi).get_last_error)(host_abi, buf.as_mut_ptr(), len) };
     let msg: String = String::from_utf8_lossy(&buf[..written]).into_owned();
     assert!(
         msg.contains("duplicate provider"),

@@ -429,17 +429,17 @@ fn bench_contention(c: &mut Criterion) {
     let contract_id: u64 = GuestContractId::new("bench.contract", 1_u32).id();
     register_native_provider(&runtime, contract_id, 0x2222_u64);
 
-    let host_abi: &'static HostApi = runtime.host_abi();
-    let shared: SharedHost = SharedHost(host_abi as *const HostApi);
+    let host_abi: *const HostApi = runtime.host_abi();
+    let shared: SharedHost = SharedHost(host_abi);
 
     // Resolve the interface pointer ONCE (the cache-the-handle pattern). This is
     // the pointer the cached workers dispatch through with no further lookup.
-    let host_ptr: *const HostApi = host_abi as *const HostApi;
+    let host_ptr: *const HostApi = host_abi;
     // SAFETY: host_ptr is the runtime's 'static HostApi; contract_id is registered.
-    let handle = unsafe { (host_abi.find_guest_contract)(host_ptr, contract_id, 0) };
+    let handle = unsafe { ((*host_abi).find_guest_contract)(host_ptr, contract_id, 0) };
     // SAFETY: handle was just returned for a registered contract.
     let interface_ptr: *const GuestContractInterface =
-        unsafe { (host_abi.resolve_guest_contract)(host_ptr, handle) };
+        unsafe { ((*host_abi).resolve_guest_contract)(host_ptr, handle) };
     assert!(
         !interface_ptr.is_null(),
         "cached interface must resolve for the contention bench"

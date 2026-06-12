@@ -36,7 +36,8 @@ use crate::runtime::Runtime;
 ///
 /// # Returns
 /// Pointer to HostApi on success, null on failure.
-/// The HostApi is valid until destroyed via `polyplug_runtime_destroy`.
+/// The HostApi is valid until destroyed via `polyplug_runtime_destroy`, which
+/// must be called **exactly once** for each non-null pointer returned here.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -> *const HostApi {
     std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
@@ -69,13 +70,20 @@ pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -
             Ok(rt) => {
                 // The HostApi.runtime field was already patched inside build()
                 // to point at the Arc's target. Hand ownership of the Arc to the caller
-                // via into_raw — destroy reclaims it.
-                let host_abi: &'static HostApi = rt.host_abi();
+                // via into_raw — destroy reclaims it. The HostApi is owned by the
+                // Runtime (its `host_abi` box), so this pointer stays valid until
+                // `polyplug_runtime_destroy` drops the Arc and, with it, the Runtime.
+                let host_abi: *const HostApi = rt.host_abi();
                 let runtime_ptr: *const Runtime = std::sync::Arc::into_raw(rt);
 
                 // The HostApi.runtime field must already equal the Arc target.
+                // SAFETY: `host_abi` is the runtime-owned HostApi pointer; the Arc
+                // (and thus the Runtime owning the box) is still alive here, so the
+                // read of its `runtime` field is in-bounds and valid.
+                let stored_runtime: *const Runtime =
+                    unsafe { (*host_abi).runtime as *const Runtime };
                 debug_assert_eq!(
-                    host_abi.runtime as *const Runtime, runtime_ptr,
+                    stored_runtime, runtime_ptr,
                     "HostApi.runtime must point at the Arc target"
                 );
 
@@ -90,44 +98,33 @@ pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -
 /// Destroys a runtime instance.
 ///
 /// # Safety
-/// `host` must be a non-null pointer previously returned by `polyplug_runtime_create`.
-///
-/// Calling this more than once for the same pointer — including from multiple
-/// threads concurrently — is safe. The `runtime` field is cleared with a single
-/// atomic swap, so exactly one caller observes the non-null pointer and reclaims
-/// the `Arc`; every other caller (concurrent or repeat) observes null and becomes a
-/// no-op. There is no double-free or use-after-free.
+/// Must be called **exactly once** with a `host` pointer previously returned by
+/// `polyplug_runtime_create`. A null `host` is ignored. Calling it more than once,
+/// or concurrently with itself on the same handle, is undefined behavior — the
+/// handle is freed, same as C `free()`. After this call the `HostApi` pointer is
+/// dangling and must not be used.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostApi) {
     std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
         if !host.is_null() {
-            // Atomically take ownership of the `runtime` field. Only the thread that
-            // swaps OUT a non-null pointer is responsible for reclaiming the Arc; a
-            // concurrent or repeat destroy swaps out null and does nothing. This
-            // closes the read-then-null race where two threads could both observe a
-            // non-null pointer and each reconstruct the Arc (double-free).
+            // Exactly-once contract: this is the sole legitimate destroy of `host`.
+            // Read the `runtime` field, reconstruct the `Arc<Runtime>` handed out by
+            // `Arc::into_raw` in `polyplug_runtime_create`, and drop it. The drop
+            // cascades into `Runtime`'s teardown, which frees the runtime-owned
+            // `HostApi` box last. No atomic arbiter is needed: the caller guarantees
+            // there is no second or concurrent destroy of this handle (any such call
+            // is undefined behavior, the caller's responsibility — like `free()`).
             //
-            // SAFETY: `host` is a valid, properly aligned HostApi pointer returned by
-            // polyplug_runtime_create. `AtomicPtr<c_void>` has the same size and
-            // alignment as `*mut c_void`, and the `runtime` field is exactly a
-            // `*mut c_void`, so viewing it through an `AtomicPtr` is layout-compatible.
-            // The field is in-bounds for the duration of the swap. The runtime owns its
-            // leaked 'static HostApi, so it outlives this access.
-            let runtime_field: *mut core::ffi::c_void = unsafe {
-                let field_ptr: *mut *mut core::ffi::c_void =
-                    core::ptr::addr_of!((*host).runtime) as *mut *mut core::ffi::c_void;
-                let atomic: &core::sync::atomic::AtomicPtr<core::ffi::c_void> =
-                    core::sync::atomic::AtomicPtr::from_ptr(field_ptr);
-                atomic.swap(core::ptr::null_mut(), core::sync::atomic::Ordering::AcqRel)
-            };
-
-            if !runtime_field.is_null() {
-                // SAFETY: runtime_field was produced by Arc::into_raw in
-                // polyplug_runtime_create. The atomic swap above guarantees exactly
-                // one caller observes this non-null pointer, so the Arc is
-                // reconstructed and dropped at most once.
+            // SAFETY: `(*host).runtime` was produced by `Arc::into_raw` in
+            // `polyplug_runtime_create` and `host` is a valid, properly aligned
+            // pointer returned by it. The runtime owns the `HostApi` box, so reading
+            // its `runtime` field here is in-bounds and valid; reconstructing and
+            // dropping the `Arc` exactly once balances the original `into_raw`.
+            let runtime_ptr: *const Runtime = unsafe { (*host).runtime as *const Runtime };
+            if !runtime_ptr.is_null() {
+                // SAFETY: see above — balances the `Arc::into_raw` from create.
                 let _runtime: std::sync::Arc<Runtime> =
-                    unsafe { std::sync::Arc::from_raw(runtime_field as *const Runtime) };
+                    unsafe { std::sync::Arc::from_raw(runtime_ptr) };
             }
         }
     }))
@@ -147,23 +144,6 @@ mod tests {
         assert!(!host.is_null());
         // SAFETY: host was returned by polyplug_runtime_create and is non-null.
         unsafe { polyplug_runtime_destroy(host) };
-    }
-
-    #[test]
-    fn double_destroy_is_a_safe_noop() {
-        // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
-        assert!(!host.is_null());
-
-        // SAFETY: host was returned by polyplug_runtime_create. The first destroy
-        // reclaims the runtime and nulls (*host).runtime; the second observes the
-        // null field and is a no-op (no double-free / UAF).
-        unsafe {
-            polyplug_runtime_destroy(host);
-            // The runtime field must be null after the first reclaim.
-            assert!((*host).runtime.is_null());
-            polyplug_runtime_destroy(host);
-        }
     }
 
     #[test]
