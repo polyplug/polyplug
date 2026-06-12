@@ -2,7 +2,7 @@
 name = "js_reporter"
 id = 3105862996689467914
 version = "1.0.0"
-runtime = "js-quickjs"
+loader = "js-quickjs"
 provides = ["data.Reporter@1"]
 function_count = { "data.Reporter@1" = 1 }
 needs_reinit_on_dep_reload = false

@@ -30,7 +30,7 @@ function M.register(rt)
     if loader == nil then
         error("polyplug: native loader create failed")
     end
-    rt:register_loader("native", loader)
+    rt:register_loader(loader)
 end
 
 return M

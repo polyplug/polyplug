@@ -134,7 +134,7 @@ mod tests {
         let bundle_dir: PathBuf = root.join(name);
         fs::create_dir_all(&bundle_dir).expect("create bundle dir");
         let manifest: String = format!(
-            "id = 1\nname = \"{name}\"\nruntime = \"native\"\nfile = \"{name}.so\"\nversion = \"1.0\"\n"
+            "id = 1\nname = \"{name}\"\nloader = \"native\"\nfile = \"{name}.so\"\nversion = \"1.0\"\n"
         );
         fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
     }

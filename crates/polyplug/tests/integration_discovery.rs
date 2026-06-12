@@ -42,7 +42,7 @@ fn chain_loads_in_dependency_order() {
         &ManifestData {
             id: 1,
             name: "bundle_a".to_owned(),
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             file: "bundle_a.so".to_owned(),
             provides: vec!["contract.X".to_owned()],
             ..empty_manifest()
@@ -54,7 +54,7 @@ fn chain_loads_in_dependency_order() {
         &ManifestData {
             id: 2,
             name: "bundle_b".to_owned(),
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             file: "bundle_b.so".to_owned(),
             provides: vec!["contract.Y".to_owned()],
             dependencies: vec![RawManifestDependency {
@@ -74,7 +74,7 @@ fn chain_loads_in_dependency_order() {
         &ManifestData {
             id: 3,
             name: "bundle_c".to_owned(),
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             file: "bundle_c.so".to_owned(),
             provides: vec![],
             dependencies: vec![RawManifestDependency {
@@ -120,7 +120,7 @@ fn empty_manifest() -> ManifestData {
     ManifestData {
         id: 0,
         name: String::new(),
-        runtime: "native".to_owned(),
+        loader: "native".to_owned(),
         file: String::new(),
         version: String::new(),
         provides: Vec::new(),
@@ -143,7 +143,7 @@ fn missing_dep_fails_before_load() {
         &ManifestData {
             id: 1,
             name: "bundle_b".to_owned(),
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             file: "bundle_b.so".to_owned(),
             provides: vec![],
             dependencies: vec![RawManifestDependency {
@@ -180,7 +180,7 @@ fn cycle_detected_with_clear_error() {
         &ManifestData {
             id: 1,
             name: "bundle_a".to_owned(),
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             file: "bundle_a.so".to_owned(),
             provides: vec!["contract.A".to_owned()],
             dependencies: vec![RawManifestDependency {
@@ -200,7 +200,7 @@ fn cycle_detected_with_clear_error() {
         &ManifestData {
             id: 2,
             name: "bundle_b".to_owned(),
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             file: "bundle_b.so".to_owned(),
             provides: vec!["contract.B".to_owned()],
             dependencies: vec![RawManifestDependency {
@@ -255,7 +255,7 @@ fn malformed_manifest_skips_bundle() {
         &ManifestData {
             id: 1,
             name: "bundle_a".to_owned(),
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             file: "bundle_a.so".to_owned(),
             ..empty_manifest()
         },
@@ -309,7 +309,7 @@ fn unknown_runtime_fails_build() {
             // (the build path now validates manifests via the shared load path).
             id: polyplug_utils::bundle_id("zigzag_plugin"),
             name: "zigzag_plugin".to_owned(),
-            runtime: "zigzag_unknown".to_owned(),
+            loader: "zigzag_unknown".to_owned(),
             file: "zigzag_plugin.so".to_owned(),
             ..empty_manifest()
         },

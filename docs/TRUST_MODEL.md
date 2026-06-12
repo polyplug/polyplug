@@ -73,7 +73,7 @@ A typical `bundle.toml` declaration looks like this:
 ```toml
 [bundle]
 name = "audio-engine"
-runtime = "native"
+loader = "native"
 
 [[dependency]]
 kind = "contract"

@@ -6,7 +6,7 @@
 name = "test_js_generated_bundle"
 version = "1.0.0"
 api = "../test_api.toml"
-runtime = "js-quickjs"
+loader = "js-quickjs"
 file = "plugin.js"
 
 [[plugin]]

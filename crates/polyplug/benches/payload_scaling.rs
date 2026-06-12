@@ -230,7 +230,6 @@ unsafe extern "C" fn stub_register_host_contract(
 
 unsafe extern "C" fn stub_register_loader(
     _this: *const HostApi,
-    _runtime_name: StringView,
     _loader_ptr: *mut c_void,
 ) -> AbiError {
     AbiError {

@@ -82,7 +82,7 @@ local FIND_ALL_FN_T = ffi.typeof(M.FIND_ALL_FN_SIGNATURE)
 local HOST_FREE_FN_T = ffi.typeof("void(*)(const HostApi*, void*, size_t, size_t)")
 local RESOLVE_GUEST_CONTRACT_FN_T = ffi.typeof("const GuestContractInterface*(*)(const HostApi*, GuestContractHandle)")
 local REGISTER_HOST_CONTRACT_FN_T = ffi.typeof("AbiError(*)(const HostApi*, const HostContractInterface*)")
-local REGISTER_LOADER_FN_T = ffi.typeof("AbiError(*)(const HostApi*, StringView, void*)")
+local REGISTER_LOADER_FN_T = ffi.typeof("AbiError(*)(const HostApi*, void*)")
 
 M.bundle_id = abi.bundle_id
 
@@ -467,17 +467,10 @@ end
 --- Register a language loader with the runtime.
 -- Calls through HostApi.register_loader field. The loader pointer is the
 -- opaque handle returned by a loader cdylib's `polyplug_<lang>_loader_create`.
--- @param runtime_name string  Runtime name the loader handles (e.g. "native", "lua").
 -- @param loader_ptr cdata     Opaque loader pointer from the loader create function.
-function M.Runtime:register_loader(runtime_name, loader_ptr)
-    local name_str = tostring(runtime_name)
-    local name_bytes = ffi.new("uint8_t[?]", #name_str, name_str)
-    local name_view = ffi.new("StringView")
-    name_view.ptr = name_bytes
-    name_view.len = #name_str
-    -- Cast function pointer; StringView is passed by value (ptr + len).
+function M.Runtime:register_loader(loader_ptr)
     local fn = ffi.cast(REGISTER_LOADER_FN_T, self._host_struct.register_loader)
-    local err = fn(self._host, name_view, loader_ptr)
+    local err = fn(self._host, loader_ptr)
     if err.code ~= ffi.C.AbiErrorCode_Ok then
         error("register_loader failed: " .. M.last_error(self._host, self._lib))
     end

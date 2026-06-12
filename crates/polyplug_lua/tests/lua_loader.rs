@@ -45,7 +45,7 @@ fn write_temp_bundle(name: &str, content: &[u8]) -> (tempfile::TempDir, PathBuf)
     let manifest: String = format!(
         r#"id = {}
 name = "{}"
-runtime = "lua"
+loader = "lua"
 file = "bundle.lua"
 "#,
         bundle_id, name
@@ -124,7 +124,7 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
     ManifestData {
         id: bundle_id,
         name: name.to_owned(),
-        runtime: "lua".to_owned(),
+        loader: "lua".to_owned(),
         file: path
             .file_name()
             .expect("bundle path must have a file name")
@@ -592,7 +592,7 @@ fn concurrent_loaders_do_not_race() {
                 let manifest: ManifestData = ManifestData {
                     id: polyplug_utils::bundle_id("lua_loader_thread_safety"),
                     name: "lua_loader_thread_safety".to_owned(),
-                    runtime: "lua".to_owned(),
+                    loader: "lua".to_owned(),
                     file: p
                         .file_name()
                         .expect("bundle path must have a file name")
@@ -746,7 +746,7 @@ fn fixture_manifest(path: &Path) -> ManifestData {
     ManifestData {
         id: polyplug_utils::bundle_id(name),
         name: name.to_owned(),
-        runtime: "lua".to_owned(),
+        loader: "lua".to_owned(),
         file: "test_plugin.lua".to_owned(),
         path: path.to_path_buf(),
         version: "1.0.0".to_owned(),

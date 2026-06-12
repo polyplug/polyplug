@@ -108,7 +108,7 @@ Assemble the bundle directory yourself — the entry module plus any required mo
 ```
 dist/my-plugin/
 ├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
-├── plugin.py              # the entry module (runtime = "python")
+├── plugin.py              # the entry module (loader = "python")
 └── guest/                 # generated helper modules imported by plugin.py
 ```
 

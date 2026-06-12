@@ -2,7 +2,7 @@
 name = "test_bundle"
 version = "1.0.0"
 api = "test_api.toml"
-runtime = "native"
+loader = "native"
 
 [bundle.file]
 linux.x86_64 = "libtest.x86_64.so"

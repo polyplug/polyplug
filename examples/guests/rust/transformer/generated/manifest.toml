@@ -2,7 +2,7 @@
 name = "rust_transformer"
 id = 6006498302996658435
 version = "1.0.0"
-runtime = "native"
+loader = "native"
 provides = ["data.Transformer@1"]
 function_count = { "data.Transformer@1" = 1 }
 needs_reinit_on_dep_reload = false

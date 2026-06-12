@@ -1,5 +1,5 @@
 bundle_name = "no_init_plugin"
-runtime     = "native"
+loader     = "native"
 
 [file]
 linux.x86_64   = "libno_init_plugin.so"

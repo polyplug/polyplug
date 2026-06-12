@@ -33,7 +33,6 @@ from polyplug_abi import (
     ReloadPhase,
     ReloadPhaseType,
     RuntimeConfig,
-    StringView,
 )
 
 # The ABI-level ReloadPhase ctypes Structure (the on_reload callback receives a
@@ -471,21 +470,12 @@ class Runtime:
             raise RuntimeError(f"duplicate host contract: contract_id={contract_id}")
         self._check_error(err.code, "register_host_contract")
 
-    def register_loader(self, runtime_name: str, loader_ptr: int) -> None:
+    def register_loader(self, loader_ptr: int) -> None:
         """Register a language loader with the runtime via HostApi.
 
         Args:
-            runtime_name: Runtime name the loader handles (e.g. "native", "python").
             loader_ptr: Opaque loader pointer from the loader cdylib's create function.
         """
         host: int = self._ensure_host()
-        name_bytes: bytes = runtime_name.encode("utf-8")
-        # Keep the buffer alive for the duration of the call; the host reads it synchronously.
-        name_buf: ctypes.Array[ctypes.c_char] = ctypes.create_string_buffer(
-            name_bytes, len(name_bytes)
-        )
-        name_view: StringView = StringView(
-            ptr=ctypes.cast(name_buf, ctypes.c_void_p), len=len(name_bytes)
-        )
-        err: AbiError = self._register_loader_fn(host, name_view, loader_ptr)
+        err: AbiError = self._register_loader_fn(host, loader_ptr)
         self._check_error(err.code, "register_loader")

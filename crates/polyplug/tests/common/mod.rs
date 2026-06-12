@@ -207,14 +207,12 @@ impl BundleLoader for TestNativeLoader {
 /// # Safety
 /// `host` must be a valid `HostApi` pointer returned by `polyplug_runtime_create`.
 pub unsafe fn register_native_loader(host: *const HostApi) {
-    let name: &[u8] = b"native";
     let loader: *mut c_void = Box::into_raw(Box::new(
         Box::new(TestNativeLoader::new()) as Box<dyn BundleLoader>
     )) as *mut c_void;
-    // SAFETY: host is valid; name is a valid byte slice for the duration of the call;
+    // SAFETY: host is valid;
     // loader is a `*mut Box<dyn BundleLoader>` erased to `*mut c_void` as host_register_loader expects.
-    let rc: AbiError =
-        unsafe { ((*host).register_loader)(host, StringView::from_static(name), loader) };
+    let rc: AbiError = unsafe { ((*host).register_loader)(host, loader) };
     assert_eq!(
         rc.code,
         AbiErrorCode::Ok as u32,

@@ -226,7 +226,7 @@ toolchains and assemble the bundle directory themselves.
    machinery (`polyplug::loader::parse_manifest` + `ManifestData::validate`) so
    the CLI accepts exactly what the runtime would: manifest parses;
    `id == fnv1a_64(name)` (tamper check); per-platform `[file]` entry resolves
-   and the artifact exists; extension matches declared `runtime`; `version`
+   and the artifact exists; extension matches declared `loader`; `version`
    parses.
 
 e2e proof: `crates/polyplugc/tests/generate_e2e.rs` (rust → cargo build),

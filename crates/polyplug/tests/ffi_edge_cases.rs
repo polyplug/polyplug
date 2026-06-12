@@ -228,7 +228,7 @@ fn test_find_all_guest_contracts_multiple_plugins() {
         .expect("failed to copy cpp so");
 
     let manifest_toml: String = format!(
-        "id = {}\nname = \"cpp_test_adder\"\nruntime = \"native\"\nfile = \"{}\"\nversion = \"1.0\"\nprovides = [\"test.add\"]\nfunction_count = {{ \"test.add@1\" = 1 }}\n",
+        "id = {}\nname = \"cpp_test_adder\"\nloader = \"native\"\nfile = \"{}\"\nversion = \"1.0\"\nprovides = [\"test.add\"]\nfunction_count = {{ \"test.add@1\" = 1 }}\n",
         bundle_id("cpp_test_adder"),
         cpp_so_filename
     );

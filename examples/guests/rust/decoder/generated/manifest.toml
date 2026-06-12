@@ -2,7 +2,7 @@
 name = "rust_decoder"
 id = 3275213133665043272
 version = "1.0.0"
-runtime = "native"
+loader = "native"
 provides = ["pipeline.Decoder@1"]
 function_count = { "pipeline.Decoder@1" = 1 }
 needs_reinit_on_dep_reload = false

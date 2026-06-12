@@ -162,7 +162,7 @@ using HostApi_get_dependencies_fn = Array(*)(const HostApi*);
 using HostApi_load_bundle_fn = AbiError(*)(const HostApi*, const uint8_t*, size_t);
 using HostApi_reload_bundle_fn = AbiError(*)(const HostApi*, const uint8_t*, size_t);
 using HostApi_register_host_contract_fn = AbiError(*)(const HostApi*, const HostContractInterface*);
-using HostApi_register_loader_fn = AbiError(*)(const HostApi*, StringView, void*);
+using HostApi_register_loader_fn = AbiError(*)(const HostApi*, void*);
 using HostApi_get_last_error_fn = size_t(*)(const HostApi*, uint8_t*, size_t);
 using HostApi_get_error_len_fn = size_t(*)(const HostApi*);
 using HostApi_call_guest_method_fn = AbiError(*)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
@@ -343,11 +343,13 @@ struct HostApi {
     ///
     ///  # Arguments
     ///  - `this`: HostApi pointer (self-passing)
-    ///  - `runtime_name`: Name of the runtime (e.g., "rust", "python")
     ///  - `loader_ptr`: Opaque pointer to the loader implementation
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
+    ///
+    ///  The loader's runtime name comes from its own `BundleLoader::runtime_name()`
+    ///  implementation — the single source of truth — so it is not passed here.
     HostApi_register_loader_fn register_loader;
     ///  Get last error message.
     ///

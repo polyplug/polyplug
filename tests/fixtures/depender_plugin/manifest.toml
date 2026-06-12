@@ -1,7 +1,7 @@
 id                         = 9221549014155646466
 name                       = "depender_plugin"
 version                    = "1.0"
-runtime                    = "native"
+loader                    = "native"
 needs_reinit_on_dep_reload = true
 provides                   = ["depender.test"]
 

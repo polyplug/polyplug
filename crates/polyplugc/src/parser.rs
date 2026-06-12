@@ -124,7 +124,7 @@ pub(crate) struct RawBundleMeta {
     #[serde(default)]
     pub api: Option<String>,
     #[serde(default)]
-    pub runtime: String,
+    pub loader: String,
     pub file: RawBundleFile,
     #[serde(default)]
     pub needs_reinit_on_dep_reload: bool,
@@ -963,8 +963,8 @@ fn lower_bundle(
         };
         resolved_deps.push(resolved);
     }
-    let runtime: String = raw.bundle.runtime.to_lowercase();
-    let is_native: bool = runtime == "rust" || runtime == "cpp" || runtime == "native";
+    let loader: String = raw.bundle.loader.to_lowercase();
+    let is_native: bool = loader == "rust" || loader == "cpp" || loader == "native";
     let resolved_file: ResolvedBundleFile = match &raw.bundle.file {
         RawBundleFile::PlatformMap(os_map) if is_native => {
             let mut map: std::collections::HashMap<PlatformKey, String> =
@@ -988,16 +988,16 @@ fn lower_bundle(
         RawBundleFile::PlatformMap(_) if !is_native => {
             return Err(PolyplugcError::ValidationFailed {
                 message: format!(
-                    "runtime '{}' requires a flat file field (file = \"path\"), not [bundle.file] table",
-                    runtime
+                    "loader '{}' requires a flat file field (file = \"path\"), not [bundle.file] table",
+                    loader
                 ),
             });
         }
         RawBundleFile::Single(_) if is_native => {
             return Err(PolyplugcError::ValidationFailed {
                 message: format!(
-                    "runtime '{}' requires [bundle.file] table with platform entries, not a flat file field",
-                    runtime
+                    "loader '{}' requires [bundle.file] table with platform entries, not a flat file field",
+                    loader
                 ),
             });
         }
@@ -1018,7 +1018,7 @@ fn lower_bundle(
         bundle: Some(ResolvedBundle {
             name: raw.bundle.name.clone(),
             version: bundle_version,
-            runtime: raw.bundle.runtime.clone(),
+            loader: raw.bundle.loader.clone(),
             file: resolved_file,
             bundle_id: dep_bundle_id,
             plugins,

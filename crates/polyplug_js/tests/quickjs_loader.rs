@@ -87,7 +87,7 @@ fn write_temp_bundle_with_name(
     let manifest: String = format!(
         r#"id = {}
 name = "{}"
-runtime = "js-quickjs"
+loader = "js-quickjs"
 file = "bundle.js"
 "#,
         bundle_id, name
@@ -131,7 +131,7 @@ fn make_manifest(path: &std::path::Path, name: &str) -> ManifestData {
     ManifestData {
         id: polyplug_utils::bundle_id(name),
         name: name.to_owned(),
-        runtime: "js-quickjs".to_owned(),
+        loader: "js-quickjs".to_owned(),
         file: path
             .file_name()
             .expect("bundle path must have a file name")
@@ -319,7 +319,7 @@ fn load_accepts_directory_path() {
     let manifest_toml: String = format!(
         r#"id = {}
 name = "test.dir"
-runtime = "js-quickjs"
+loader = "js-quickjs"
 file = "bundle.js"
 "#,
         bundle_id
@@ -332,7 +332,7 @@ file = "bundle.js"
     let manifest: ManifestData = ManifestData {
         id: bundle_id,
         name: "test.dir".to_owned(),
-        runtime: "js-quickjs".to_owned(),
+        loader: "js-quickjs".to_owned(),
         file: "bundle.js".to_owned(),
         path: dir.path().to_path_buf(),
         version: String::new(),
@@ -460,7 +460,7 @@ fn load_nonexistent_file_returns_error() {
     let manifest: ManifestData = ManifestData {
         id: 0,
         name: "nonexistent".to_owned(),
-        runtime: "js-quickjs".to_owned(),
+        loader: "js-quickjs".to_owned(),
         file: "bundle.js".to_owned(),
         path: path
             .parent()
@@ -1202,7 +1202,7 @@ fn fixture_manifest(bundle_dir: std::path::PathBuf) -> ManifestData {
     ManifestData {
         id: polyplug_utils::bundle_id("test_bundle"),
         name: "test_bundle".to_owned(),
-        runtime: "js-quickjs".to_owned(),
+        loader: "js-quickjs".to_owned(),
         file: "bundle.js".to_owned(),
         path: bundle_dir,
         version: "1.0.0".to_owned(),
@@ -1599,7 +1599,7 @@ fn make_manifest_named(name: &str) -> ManifestData {
     ManifestData {
         id: polyplug_utils::bundle_id(name),
         name: name.to_owned(),
-        runtime: "js-quickjs".to_owned(),
+        loader: "js-quickjs".to_owned(),
         file: "bundle.js".to_owned(),
         path: std::path::PathBuf::new(),
         version: "1.0.0".to_owned(),

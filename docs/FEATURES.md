@@ -54,7 +54,7 @@ See CLAUDE.md (Architecture) for the crate map and loader list.
 - **`validate --bundle-dir <dir>`** — drives the runtime loader's own manifest
   machinery so the CLI accepts exactly what the runtime would: manifest parses,
   `id == fnv1a_64(name)` (tamper check), the per-platform `[file]` entry resolves
-  and exists, the artifact extension matches the declared `runtime`, and `version`
+  and exists, the artifact extension matches the declared `loader`, and `version`
   parses.
 
 **Two separate codegen pipelines** (they share no language emitters by design,

@@ -20,7 +20,7 @@ use polyplug_native::NativeLoader;
 
 fn make_manifest(name: &str, file: &str) -> ManifestData {
     ManifestData {
-        runtime: "native".to_owned(),
+        loader: "native".to_owned(),
         id: 1,
         name: name.to_owned(),
         file: file.to_owned(),
@@ -63,7 +63,7 @@ fn test_loader_rejects_empty_file() {
     let runtime = make_runtime();
 
     let manifest = ManifestData {
-        runtime: "native".to_owned(),
+        loader: "native".to_owned(),
         id: 1,
         name: "empty_file_plugin".to_owned(),
         file: String::new(),
@@ -140,7 +140,7 @@ fn test_loader_rejects_zero_id() {
     let runtime = make_runtime();
 
     let manifest = ManifestData {
-        runtime: "native".to_owned(),
+        loader: "native".to_owned(),
         id: 0,
         name: "zero_id_plugin".to_owned(),
         file: "fake.so".to_owned(),

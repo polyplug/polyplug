@@ -2,7 +2,7 @@
 name = "python_transformer"
 id = 13882874362124349875
 version = "1.0.0"
-runtime = "python"
+loader = "python"
 provides = ["data.Transformer@1"]
 function_count = { "data.Transformer@1" = 1 }
 needs_reinit_on_dep_reload = false

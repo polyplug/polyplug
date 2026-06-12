@@ -53,7 +53,6 @@ use polyplug_abi::HostApi;
 use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_utils::BundleId;
@@ -129,7 +128,6 @@ unsafe extern "C" fn stub_register_host(
 
 unsafe extern "C" fn stub_register_loader(
     _this: *const HostApi,
-    _name: StringView,
     _loader: *mut core::ffi::c_void,
 ) -> AbiError {
     AbiError::ok()

@@ -77,7 +77,7 @@ fn build_probe_bundle(tmp: &Path) -> PathBuf {
          id = {id_val}\n\
          bundle_name = \"to_str_guard_probe\"\n\
          version = \"1.0.0\"\n\
-         runtime = \"lua\"\n\
+         loader = \"lua\"\n\
          file = \"probe.lua\"\n\
          provides = [\"test.probe@1\"]\n\
          needs_reinit_on_dep_reload = false\n\n\

@@ -290,7 +290,7 @@ mod tests {
     use crate::guest::{GuestContractInstance, GuestContractInterface};
     use crate::host::{HostContractInstance, HostContractInterface};
     use crate::plugin::{GuestContractHandle, PluginDescriptor};
-    use crate::types::{AbiError, Array, DependencyInfo, StringView};
+    use crate::types::{AbiError, Array, DependencyInfo};
     use polyplug_utils::BundleId;
 
     // ─── Counting host allocator for overflow tests ───────────────────────────
@@ -387,7 +387,6 @@ mod tests {
 
     unsafe extern "C" fn stub_register_loader(
         _this: *const HostApi,
-        _name: StringView,
         _loader: *mut core::ffi::c_void,
     ) -> AbiError {
         AbiError::ok()

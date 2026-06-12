@@ -145,7 +145,7 @@ fn build_lua_bundle(tmp: &Path) -> PathBuf {
          name = \"lua_host_contract\"\n\
          version = \"1.0.0\"\n\
          api = \"{api}\"\n\
-         runtime = \"lua\"\n\
+         loader = \"lua\"\n\
          file = \"transformer.lua\"\n\n\
          [[plugin]]\n\
          name = \"transformer\"\n\

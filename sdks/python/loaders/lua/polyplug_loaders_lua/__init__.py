@@ -34,7 +34,7 @@ def register_lua_loader(runtime: Runtime) -> None:
     if not loader_ptr:
         raise RuntimeError("polyplug: lua loader create failed")
 
-    runtime.register_loader(_RUNTIME_NAME, loader_ptr)
+    runtime.register_loader(loader_ptr)
 
 
 __all__ = ["register_lua_loader"]

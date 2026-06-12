@@ -250,7 +250,7 @@ fn write_temp_bundle(js_source: &str, bundle_name: &str) -> (tempfile::TempDir, 
 
     let bundle_id_val: u64 = polyplug_utils::bundle_id(bundle_name);
     let manifest: String = format!(
-        "id = {}\nname = \"{}\"\nruntime = \"js-quickjs\"\nfile = \"bundle.js\"\n",
+        "id = {}\nname = \"{}\"\nloader = \"js-quickjs\"\nfile = \"bundle.js\"\n",
         bundle_id_val, bundle_name,
     );
     std::fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");

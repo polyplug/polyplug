@@ -1,7 +1,7 @@
 //! Manifest — manifest.toml parsing for plugin bundles.
 //!
 //! Reads the companion `manifest.toml` for a plugin bundle before loading.
-//! The `runtime` field determines which `BundleLoader` handles the bundle.
+//! The `loader` field determines which `BundleLoader` handles the bundle.
 //! REQUIRED — must be explicitly set in the manifest, no default.
 
 // TODO: Move toml parse to host rust SDK
@@ -186,14 +186,15 @@ pub enum ManifestDependency {
 
 /// Data parsed from a bundle's `manifest.toml`.
 ///
-/// Only `runtime` is read in this epic. Additional fields are added in Epic 12.
+/// Only `loader` is read in this epic. Additional fields are added in Epic 12.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ManifestData {
-    /// The runtime required to load this bundle.
-    /// Matched against `BundleLoader::runtime_name()` during dispatch.
+    /// The loader required to load this bundle (e.g. `"native"`, `"lua"`,
+    /// `"js-quickjs"`). Matched against `BundleLoader::runtime_name()` during
+    /// dispatch.
     /// REQUIRED — must be explicitly set in the manifest, no default.
     #[serde(skip_serializing_if = "String::is_empty")]
-    pub runtime: String,
+    pub loader: String,
     /// Bundle name — human-readable identifier for this bundle.
     #[serde(default)]
     pub name: String,
@@ -271,16 +272,16 @@ impl ManifestData {
     /// Validate the manifest has all required fields and well-formed values.
     ///
     /// Checks performed:
-    /// - `runtime`, `name` are non-empty; `file` is present.
+    /// - `loader`, `name` are non-empty; `file` is present.
     /// - `id` is non-zero (folded in from the former inline load-path check).
     /// - `id` equals `polyplug_utils::bundle_id(name)` (TRUST_MODEL §2 identity).
     /// - every `provides` / `bundle_dependencies` entry matches `name[@version]`
     ///   grammar, with a parseable version when one is given.
     pub fn validate(&self) -> Result<(), crate::error::LoaderError> {
-        if self.runtime.is_empty() {
+        if self.loader.is_empty() {
             return Err(crate::error::LoaderError::ManifestParse {
                 path: self.path.display().to_string(),
-                reason: "runtime field is required but was empty".to_owned(),
+                reason: "loader field is required but was empty".to_owned(),
             });
         }
         if self.name.is_empty() {
@@ -449,7 +450,7 @@ mod tests {
 
     fn make_manifest(file: &str, name: &str) -> ManifestData {
         ManifestData {
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             name: name.to_owned(),
             dependencies: Vec::new(),
             id: 0,
@@ -671,7 +672,7 @@ mod tests {
         let toml = r#"
 name = "test"
 bundle_name = "test"
-runtime = "native"
+loader = "native"
 file = "fallback.so"
 provides = ["data.Test@1.0"]
 function_count = { "data.Test@1" = 1 }
@@ -693,7 +694,7 @@ function_count = { "data.Test@1" = 1 }
         let toml: &str = r#"
 name = "test"
 bundle_name = "test"
-runtime = "native"
+loader = "native"
 [file]
 linux.x86_64 = "libtest.so"
 macos.x86_64 = "libtest.dylib"
@@ -723,7 +724,7 @@ function_count = { "data.Test@1" = 1 }
         let toml: &str = r#"
 name = "test"
 bundle_name = "test"
-runtime = "native"
+loader = "native"
 [file]
 freebsd.riscv64 = "libtest.so"
 "#;

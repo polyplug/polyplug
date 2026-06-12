@@ -59,7 +59,7 @@ fn write_bundle_manifest(
 
     // Build TOML manifest string directly
     let mut manifest_toml: String = format!(
-        "id = {}\nname = \"{}\"\nruntime = \"test-noop\"\nfile = \"{}\"\nversion = \"{}\"\n",
+        "id = {}\nname = \"{}\"\nloader = \"test-noop\"\nfile = \"{}\"\nversion = \"{}\"\n",
         bundle_id(bundle_name),
         bundle_name,
         so_name,

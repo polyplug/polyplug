@@ -309,7 +309,7 @@ pub struct HostApi {
         interface: *const HostContractInterface,
     ) -> AbiError,
     pub register_loader: unsafe extern "C" fn(
-        this: *const HostApi, runtime_name: StringView, loader_ptr: *mut c_void,
+        this: *const HostApi, loader_ptr: *mut c_void,
     ) -> AbiError,
     pub get_last_error: unsafe extern "C" fn(
         this: *const HostApi, buf: *mut u8, buf_len: usize,
@@ -679,7 +679,7 @@ Assemble the bundle directory yourself:
 ```
 dist/my-plugin/
 ├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
-└── libmy_plugin.so        # the cdylib you compiled (.dylib on macOS, .dll on Windows; runtime = "native")
+└── libmy_plugin.so        # the cdylib you compiled (.dylib on macOS, .dll on Windows; loader = "native")
 ```
 
 Validate the assembled directory before shipping:

@@ -160,7 +160,6 @@ unsafe extern "C" fn noop_register_host_contract(
 /// No-op register_loader callback.
 unsafe extern "C" fn noop_register_loader(
     _this: *const HostApi,
-    _runtime_name: StringView,
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
     AbiError {
@@ -233,7 +232,7 @@ fn test_panic_returns_abi_error_panic() {
         "[bundle]\n\
          name = \"panic_plugin\"\n\
          version = \"1.0.0\"\n\
-         runtime = \"native\"\n\
+         loader = \"native\"\n\
          api = \"{}\"\n\
          \n\
          [bundle.file]\n\

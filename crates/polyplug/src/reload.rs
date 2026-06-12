@@ -121,10 +121,10 @@ impl Runtime {
 
         // Find the loader (lock released before reload() runs — see `loader_for`).
         let loader: &dyn crate::loader::BundleLoader =
-            self.loader_for(&manifest.runtime).ok_or_else(|| {
+            self.loader_for(&manifest.loader).ok_or_else(|| {
                 RuntimeError::Loader(crate::error::LoaderError::NoLoaderForRuntime {
                     bundle: path.display().to_string(),
-                    runtime_name: manifest.runtime.clone(),
+                    runtime_name: manifest.loader.clone(),
                 })
             })?;
 

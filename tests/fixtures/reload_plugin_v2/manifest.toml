@@ -1,7 +1,7 @@
 id                         = 16808897324254478442
 name                       = "reload_plugin_v1"
 version                    = "2.0"
-runtime                    = "native"
+loader                    = "native"
 needs_reinit_on_dep_reload = false
 provides                   = ["reload.test"]
 

@@ -154,7 +154,7 @@ fn write_bundle(
     let mut manifest: String = format!(
         "id = {bundle_id}\n\
          name = \"{bundle_name}\"\n\
-         runtime = \"{runtime_name}\"\n\
+         loader = \"{runtime_name}\"\n\
          file = \"dummy.so\"\n\
          version = \"1.0\"\n\
          needs_reinit_on_dep_reload = {needs_reinit}\n"

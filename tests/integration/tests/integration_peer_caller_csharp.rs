@@ -113,7 +113,7 @@ fn build_csharp_consumer(tmp_root: &Path) -> PathBuf {
          name = \"peer_consumer_csharp\"\n\
          version = \"1.0.0\"\n\
          api = \"{api}\"\n\
-         runtime = \"dotnet\"\n\
+         loader = \"dotnet\"\n\
          file = \"peer_consumer_csharp.dll\"\n\n\
          [[plugin]]\n\
          name = \"transformer\"\n\
@@ -287,7 +287,7 @@ fn build_lua_provider(tmp: &Path) -> PathBuf {
          id = {id_val}\n\
          bundle_name = \"peer_provider_lua_csharp\"\n\
          version = \"1.0.0\"\n\
-         runtime = \"lua\"\n\
+         loader = \"lua\"\n\
          file = \"provider.lua\"\n\
          provides = [\"pipeline.Validator@1\"]\n\
          needs_reinit_on_dep_reload = false\n\n\

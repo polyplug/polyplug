@@ -182,7 +182,7 @@ fn write_provider_bundle(dir: &std::path::Path, name: &str) -> PathBuf {
     let manifest: String = format!(
         "id = {id}\n\
          name = \"{name}\"\n\
-         runtime = \"dep-probe\"\n\
+         loader = \"dep-probe\"\n\
          file = \"dummy.so\"\n\
          version = \"1.0\"\n\
          provides = [\"declared.dep@1\"]\n\
@@ -200,7 +200,7 @@ fn write_dependent_bundle(dir: &std::path::Path, name: &str, declared_contract_i
     let manifest: String = format!(
         "id = {id}\n\
          name = \"{name}\"\n\
-         runtime = \"dep-probe\"\n\
+         loader = \"dep-probe\"\n\
          file = \"dummy.so\"\n\
          version = \"1.0\"\n\n\
          [[dependency]]\n\
@@ -583,7 +583,7 @@ fn manifest_with(
     deps: Vec<polyplug::loader::RawManifestDependency>,
 ) -> ManifestData {
     let mut m: ManifestData = ManifestData::parse_from_str(&format!(
-        "runtime=\"native\"\nname=\"{name}\"\nfile=\"x.so\"\n"
+        "loader=\"native\"\nname=\"{name}\"\nfile=\"x.so\"\n"
     ))
     .expect("parse base manifest");
     m.id = polyplug_utils::bundle_id(name);
@@ -661,7 +661,7 @@ fn reload_with_tampered_manifest_id_fails_and_fires_failed_callback() {
     let manifest: String = format!(
         "id = {bogus_id}\n\
          name = \"tampered\"\n\
-         runtime = \"reload-probe\"\n\
+         loader = \"reload-probe\"\n\
          file = \"plugin.so\"\n\
          version = \"1.0\"\n"
     );

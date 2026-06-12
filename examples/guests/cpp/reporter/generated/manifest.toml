@@ -2,7 +2,7 @@
 name = "cpp_reporter"
 id = 15350991390643604722
 version = "1.0.0"
-runtime = "native"
+loader = "native"
 provides = ["data.Reporter@1"]
 function_count = { "data.Reporter@1" = 1 }
 needs_reinit_on_dep_reload = false

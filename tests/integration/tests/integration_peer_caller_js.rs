@@ -53,7 +53,7 @@ fn write_js_bundle(dir: &std::path::Path, name: &str, js_src: &str, provides: &s
          id = {id_val}\n\
          bundle_name = \"{name}\"\n\
          version = \"1.0.0\"\n\
-         runtime = \"js-quickjs\"\n\
+         loader = \"js-quickjs\"\n\
          file = \"bundle.js\"\n\
          provides = [\"{provides}@{contract_version}\"]\n\
          needs_reinit_on_dep_reload = false\n\n\

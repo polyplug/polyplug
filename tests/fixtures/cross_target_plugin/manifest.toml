@@ -1,7 +1,7 @@
 id = 7678031446269378697
 name = "cross_target_plugin"
 version = "1.0"
-runtime = "native"
+loader = "native"
 provides = ["cross.target"]
 
 [file]

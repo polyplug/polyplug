@@ -94,7 +94,7 @@ After bundling, assemble the bundle directory yourself:
 ```
 dist/my-plugin/
 ├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
-└── bundle.js              # the entry script the QuickJS loader evaluates (runtime = "js-quickjs")
+└── bundle.js              # the entry script the QuickJS loader evaluates (loader = "js-quickjs")
 ```
 
 Validate the assembled directory before shipping:

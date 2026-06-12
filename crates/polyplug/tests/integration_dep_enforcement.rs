@@ -189,7 +189,7 @@ fn write_bundle(temp: &tempfile::TempDir, bundle_name: &str, declared_contract_i
     let manifest: String = format!(
         "id = {bundle_id}\n\
          name = \"{bundle_name}\"\n\
-         runtime = \"probe-enforce\"\n\
+         loader = \"probe-enforce\"\n\
          file = \"dummy.so\"\n\
          version = \"1.0\"\n\n\
          [[dependency]]\n\

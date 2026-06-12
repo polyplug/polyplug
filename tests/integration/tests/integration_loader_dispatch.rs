@@ -45,30 +45,30 @@ impl BundleLoader for StubLoader {
 // ─── ManifestData parsing ──────────────────────────────────────────────────────
 
 #[test]
-fn manifest_missing_runtime_field_is_error() {
+fn manifest_missing_loader_field_is_error() {
     let toml_src: &str = "";
     let result: Result<ManifestData, RuntimeError> =
         ManifestData::parse_from_str(toml_src).map_err(RuntimeError::from);
     match result {
         Err(RuntimeError::Loader(LoaderError::ManifestParse { .. })) => {}
-        other => panic!("expected ManifestParse error for absent runtime field, got: {other:?}"),
+        other => panic!("expected ManifestParse error for absent loader field, got: {other:?}"),
     }
 }
 
 #[test]
-fn manifest_reads_runtime_field() {
-    let toml_src: &str = r#"runtime = "lua""#;
+fn manifest_reads_loader_field() {
+    let toml_src: &str = r#"loader = "lua""#;
     let data: ManifestData = ManifestData::parse_from_str(toml_src)
-        .expect("TOML with runtime = \"lua\" should parse successfully");
-    assert_eq!(data.runtime, "lua");
+        .expect("TOML with loader = \"lua\" should parse successfully");
+    assert_eq!(data.loader, "lua");
 }
 
 #[test]
-fn manifest_reads_dotnet_runtime_field() {
-    let toml_src: &str = r#"runtime = "dotnet""#;
+fn manifest_reads_dotnet_loader_field() {
+    let toml_src: &str = r#"loader = "dotnet""#;
     let data: ManifestData = ManifestData::parse_from_str(toml_src)
-        .expect("TOML with runtime = \"dotnet\" should parse successfully");
-    assert_eq!(data.runtime, "dotnet");
+        .expect("TOML with loader = \"dotnet\" should parse successfully");
+    assert_eq!(data.loader, "dotnet");
 }
 
 // ─── RuntimeBuilder loader dispatch ─────────────────────────────────────────────────────
@@ -146,7 +146,7 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
     let manifest: ManifestData = ManifestData {
         id: 1,
         name: "dummy".to_owned(),
-        runtime: "dotnet".to_owned(),
+        loader: "dotnet".to_owned(),
         file: "dummy.dll".to_owned(),
         path: PathBuf::from("."),
         version: String::new(),
@@ -186,7 +186,7 @@ fn python_loader_loads_nonexistent_file_errors() {
     let manifest: ManifestData = ManifestData {
         id: 1,
         name: "dummy".to_owned(),
-        runtime: "python".to_owned(),
+        loader: "python".to_owned(),
         file: "dummy.py".to_owned(),
         path: PathBuf::from("."),
         version: String::new(),
@@ -226,7 +226,7 @@ fn lua_loader_returns_error_for_missing_file() {
     let manifest: ManifestData = ManifestData {
         id: 1,
         name: "dummy".to_owned(),
-        runtime: "lua".to_owned(),
+        loader: "lua".to_owned(),
         file: "dummy.lua".to_owned(),
         path: PathBuf::from("."),
         version: String::new(),

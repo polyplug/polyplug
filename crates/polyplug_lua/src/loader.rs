@@ -1136,7 +1136,7 @@ end
         let manifest: ManifestData = ManifestData {
             id: polyplug_utils::bundle_id(name),
             name: name.to_owned(),
-            runtime: "lua".to_owned(),
+            loader: "lua".to_owned(),
             file: "bundle.lua".to_owned(),
             path: dir.path().to_path_buf(),
             version: String::new(),

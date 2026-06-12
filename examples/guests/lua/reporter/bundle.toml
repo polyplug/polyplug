@@ -2,7 +2,7 @@
 name = "lua_reporter"
 version = "1.0.0"
 api = "../../../api.toml"
-runtime = "lua"
+loader = "lua"
 file = "reporter.lua"
 
 [[plugin]]

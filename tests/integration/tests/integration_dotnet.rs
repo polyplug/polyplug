@@ -298,7 +298,7 @@ fn integration_dotnet_guest_log_routes_to_host_logger() {
         "name = \"csharp_log_adder\"\n\
          id = {id_val}\n\
          version = \"1.0.0\"\n\
-         runtime = \"dotnet\"\n\
+         loader = \"dotnet\"\n\
          file = \"CsharpPlugin.dll\"\n\
          provides = [\"test.add@1\"]\n\n\
          [function_count]\n\

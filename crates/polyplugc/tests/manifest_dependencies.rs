@@ -69,7 +69,7 @@ fn bundle_toml_for_lang(lang: Lang) -> String {
         Lang::JsQuickJs => ("js-quickjs", "file = \"plugin.js\"\n"),
     };
     format!(
-        "[bundle]\nname = \"dep_roundtrip\"\nversion = \"1.0.0\"\napi = \"api.toml\"\nruntime = \"{runtime}\"\n{file_block}\n{DEPENDENCIES_TOML}"
+        "[bundle]\nname = \"dep_roundtrip\"\nversion = \"1.0.0\"\napi = \"api.toml\"\nloader = \"{runtime}\"\n{file_block}\n{DEPENDENCIES_TOML}"
     )
 }
 

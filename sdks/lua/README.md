@@ -83,7 +83,7 @@ Assemble the bundle directory yourself — the entry file plus any required modu
 ```
 dist/my-plugin/
 ├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
-├── init.lua               # the entry module (runtime = "lua")
+├── init.lua               # the entry module (loader = "lua")
 └── guest/                 # generated helper modules required by init.lua
 ```
 

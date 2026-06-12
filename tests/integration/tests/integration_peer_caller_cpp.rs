@@ -101,7 +101,7 @@ fn build_cpp_consumer(tmp: &Path) -> PathBuf {
          name = \"peer_consumer_cpp\"\n\
          version = \"1.0.0\"\n\
          api = \"{api}\"\n\
-         runtime = \"native\"\n\n\
+         loader = \"native\"\n\n\
          [bundle.file]\n\
          linux.x86_64 = \"libpeer_consumer_cpp.so\"\n\
          linux.aarch64 = \"libpeer_consumer_cpp.so\"\n\
@@ -251,7 +251,7 @@ fn build_lua_provider(tmp: &Path) -> PathBuf {
          id = {id_val}\n\
          bundle_name = \"peer_provider_lua\"\n\
          version = \"1.0.0\"\n\
-         runtime = \"lua\"\n\
+         loader = \"lua\"\n\
          file = \"provider.lua\"\n\
          provides = [\"pipeline.Validator@1\"]\n\
          needs_reinit_on_dep_reload = false\n\n\

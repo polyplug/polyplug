@@ -144,7 +144,7 @@ mod tests {
         };
 
         let manifest_a: ManifestData = ManifestData {
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             name: "bundle_a".to_owned(),
             dependencies: Vec::new(),
             id: 0,
@@ -158,7 +158,7 @@ mod tests {
         };
 
         let manifest_b: ManifestData = ManifestData {
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             name: "bundle_b".to_owned(),
             dependencies: vec![dep_b],
             id: 0,
@@ -172,7 +172,7 @@ mod tests {
         };
 
         let manifest_c: ManifestData = ManifestData {
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             name: "bundle_c".to_owned(),
             dependencies: vec![dep_c],
             id: 0,
@@ -227,7 +227,7 @@ mod tests {
         };
 
         let manifest_b: ManifestData = ManifestData {
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             name: "bundle_b".to_owned(),
             dependencies: vec![dep_b],
             id: 0,
@@ -260,7 +260,7 @@ mod tests {
         dep: Option<RawManifestDependency>,
     ) -> ManifestData {
         ManifestData {
-            runtime: "native".to_owned(),
+            loader: "native".to_owned(),
             name: name.to_owned(),
             dependencies: dep.into_iter().collect(),
             id: 0,

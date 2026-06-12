@@ -162,7 +162,7 @@ fn write_provider(temp: &tempfile::TempDir, bundle_name: &str) -> PathBuf {
     let manifest: String = format!(
         "id = {bundle_id}\n\
          name = \"{bundle_name}\"\n\
-         runtime = \"rust-provider\"\n\
+         loader = \"rust-provider\"\n\
          file = \"dummy.so\"\n\
          version = \"1.0\"\n"
     );
@@ -184,7 +184,7 @@ fn write_depender(
     let manifest: String = format!(
         "id = {bundle_id}\n\
          name = \"{bundle_name}\"\n\
-         runtime = \"lua-depender\"\n\
+         loader = \"lua-depender\"\n\
          file = \"dummy.lua\"\n\
          version = \"1.0\"\n\n\
          [[dependency]]\n\

@@ -2,7 +2,7 @@
 name = "test_js_generated_bundle"
 id = 10449047047582532112
 version = "1.0.0"
-runtime = "js-quickjs"
+loader = "js-quickjs"
 provides = ["test.add@1"]
 function_count = { "test.add@1" = 4 }
 needs_reinit_on_dep_reload = false

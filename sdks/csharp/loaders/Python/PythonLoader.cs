@@ -57,7 +57,7 @@ public static partial class PythonLoaderExtensions
                     throw new InvalidOperationException("polyplug: python loader create failed");
                 }
 
-                uint err = runtime.RegisterLoader("python", loaderPtr);
+                uint err = runtime.RegisterLoader(loaderPtr);
                 if (err != 0u)
                 {
                     Runtime.ThrowLastError($"polyplug: python loader register failed: {err}");

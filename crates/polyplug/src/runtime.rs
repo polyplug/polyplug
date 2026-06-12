@@ -516,10 +516,11 @@ impl Runtime {
     /// Reads the companion manifest, finds the matching loader, and dispatches.
     /// Does NOT perform graph pre-validation — intended for programmatic loads.
     pub fn load_bundle(&self, path: &Path) -> Result<(), RuntimeError> {
+        let compatibility: Compatibility = self.config.compatibility;
         self.load_bundle_with(
             path,
             LoadOptions {
-                compatibility: Compatibility::default(),
+                compatibility,
                 ignore_function_count_mismatch: false,
             },
         )
@@ -541,11 +542,12 @@ impl Runtime {
         manifest: ManifestData,
         source: crate::loader::BundleSource,
     ) -> Result<(), RuntimeError> {
+        let compatibility: Compatibility = self.config.compatibility;
         self.load_manifest_with_source(
             manifest,
             source,
             LoadOptions {
-                compatibility: Compatibility::default(),
+                compatibility,
                 ignore_function_count_mismatch: false,
             },
         )
@@ -671,7 +673,7 @@ impl Runtime {
 
     /// Look up the loader runtime-name string for a loaded bundle by name.
     ///
-    /// The original `manifest.runtime` string (e.g. `"lua"`, `"js-quickjs"`) is the
+    /// The original `manifest.loader` string (e.g. `"lua"`, `"js-quickjs"`) is the
     /// key the load path used to resolve the loader, and the only value that maps
     /// back to a `BundleLoader::runtime_name()`. It is read from `bundle_manifests`,
     /// which must be consulted BEFORE `invalidate_bundle` removes the bundle.
@@ -682,7 +684,7 @@ impl Runtime {
                 .recover_poisoned(self.logger, "runtime");
         manifests
             .get(bundle_name)
-            .map(|m: &ManifestData| m.runtime.clone())
+            .map(|m: &ManifestData| m.loader.clone())
     }
 
     /// Invoke the loader's `unload` reclaim hook for `bundle_id`.
@@ -850,9 +852,9 @@ impl Runtime {
             }
         }
 
-        // Find the loader for this runtime. The lock is released before load() runs
+        // Find the loader for this bundle. The lock is released before load() runs
         // (see `loader_for`) so a plugin init that registers a loader cannot deadlock.
-        let runtime_name: &str = &manifest.runtime;
+        let runtime_name: &str = &manifest.loader;
         let loader: &dyn BundleLoader = self.loader_for(runtime_name).ok_or_else(|| {
             RuntimeError::Loader(LoaderError::NoLoaderForRuntime {
                 bundle: manifest.name.clone(),
@@ -894,18 +896,18 @@ impl Runtime {
                 patch: 0,
             });
 
-            // Convert runtime string to RuntimeLanguage. An unrecognized runtime
+            // Convert loader string to RuntimeLanguage. An unrecognized loader
             // string falls back to Rust (see `runtime_language_from_str`); surface
-            // that as a warning so a typo'd `runtime` field is not silently coerced.
-            if !is_known_runtime_language(&manifest.runtime) {
+            // that as a warning so a typo'd `loader` field is not silently coerced.
+            if !is_known_runtime_language(&manifest.loader) {
                 self.logger.log(LogLevel::Warn, "runtime", || {
                     format!(
-                        "bundle `{}`: unknown runtime `{}`; defaulting RuntimeLanguage to Rust",
-                        manifest.name, manifest.runtime
+                        "bundle `{}`: unknown loader `{}`; defaulting RuntimeLanguage to Rust",
+                        manifest.name, manifest.loader
                     )
                 });
             }
-            let runtime_lang: RuntimeLanguage = runtime_language_from_str(&manifest.runtime);
+            let runtime_lang: RuntimeLanguage = runtime_language_from_str(&manifest.loader);
 
             // Register bundle metadata in RuntimeStore. A failure here means the
             // bundle loaded but its metadata could not be recorded, leaving the
@@ -2114,7 +2116,6 @@ pub(crate) unsafe extern "C" fn host_register_host_contract(
 ///   compiled against the same polyplug rlib
 pub(crate) unsafe extern "C" fn host_register_loader(
     this: *const HostApi,
-    _runtime_name: polyplug_abi::StringView,
     loader_ptr: *mut core::ffi::c_void,
 ) -> polyplug_abi::AbiError {
     if this.is_null() || loader_ptr.is_null() {
@@ -2614,7 +2615,7 @@ mod tests {
         }
         // Emit the canonical id = FNV1a-64(name) so the manifest passes validation.
         let manifest: String = format!(
-            "id = {}\nname = \"{}\"\nruntime = \"{}\"\nfile = \"dummy.so\"\n",
+            "id = {}\nname = \"{}\"\nloader = \"{}\"\nfile = \"dummy.so\"\n",
             BundleId::new(bundle_name).id(),
             bundle_name,
             runtime

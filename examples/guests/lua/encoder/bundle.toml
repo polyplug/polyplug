@@ -2,7 +2,7 @@
 name = "lua_encoder"
 version = "1.0.0"
 api = "../../../api.toml"
-runtime = "lua"
+loader = "lua"
 file = "encoder.lua"
 
 [[plugin]]

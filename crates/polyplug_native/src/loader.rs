@@ -827,7 +827,7 @@ mod unload_tests {
         std::fs::copy(&src_dll, &dest_dll).expect("copy fixture dll");
 
         let manifest_toml: String = format!(
-            "id = {}\nname = \"{}\"\nversion = \"{}\"\nruntime = \"native\"\nprovides = [\"test.add\"]\n\n[file]\nlinux.x86_64 = \"{}\"\nlinux.aarch64 = \"{}\"\nmacos.x86_64 = \"{}\"\nmacos.aarch64 = \"{}\"\n\n[function_count]\n\"test.add@1\" = 1\n",
+            "id = {}\nname = \"{}\"\nversion = \"{}\"\nloader = \"native\"\nprovides = [\"test.add\"]\n\n[file]\nlinux.x86_64 = \"{}\"\nlinux.aarch64 = \"{}\"\nmacos.x86_64 = \"{}\"\nmacos.aarch64 = \"{}\"\n\n[function_count]\n\"test.add@1\" = 1\n",
             src_manifest.id,
             src_manifest.name,
             src_manifest.version,
@@ -897,7 +897,7 @@ mod unload_tests {
         // Write a minimal manifest pointing at the copied DLL. std::fs::write closes
         // its handle before returning, so no write handle keeps the dir/file locked.
         let manifest_toml: String = format!(
-            "id = {}\nname = \"{}\"\nversion = \"{}\"\nruntime = \"native\"\nprovides = [\"test.add\"]\n\n[file]\nwindows.x86_64 = \"{}\"\n\n[function_count]\n\"test.add@1\" = 1\n",
+            "id = {}\nname = \"{}\"\nversion = \"{}\"\nloader = \"native\"\nprovides = [\"test.add\"]\n\n[file]\nwindows.x86_64 = \"{}\"\n\n[function_count]\n\"test.add@1\" = 1\n",
             src_manifest.id, src_manifest.name, src_manifest.version, dll_name
         );
         std::fs::write(temp_dir.join("manifest.toml"), manifest_toml).expect("write temp manifest");

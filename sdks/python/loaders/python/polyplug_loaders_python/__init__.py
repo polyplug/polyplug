@@ -38,7 +38,7 @@ def register_python_loader(runtime: Runtime, min_version: str = "3.11") -> None:
     if not loader_ptr:
         raise RuntimeError("polyplug: python loader create failed")
 
-    runtime.register_loader(_RUNTIME_NAME, loader_ptr)
+    runtime.register_loader(loader_ptr)
 
 
 def bridge_lib() -> ctypes.CDLL:

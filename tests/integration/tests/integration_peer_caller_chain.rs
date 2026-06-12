@@ -46,7 +46,7 @@ fn write_lua_bundle(tmp: &Path, name: &str, contract: &str, src: &str) -> PathBu
          id = {id_val}\n\
          bundle_name = \"{name}\"\n\
          version = \"1.0.0\"\n\
-         runtime = \"lua\"\n\
+         loader = \"lua\"\n\
          file = \"plugin.lua\"\n\
          provides = [\"{contract}@1\"]\n\
          needs_reinit_on_dep_reload = false\n\n\

@@ -2,7 +2,7 @@
 name = "python_reporter"
 id = 10292373060768050421
 version = "1.0.0"
-runtime = "python"
+loader = "python"
 provides = ["data.Reporter@1"]
 function_count = { "data.Reporter@1" = 1 }
 needs_reinit_on_dep_reload = false

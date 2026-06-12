@@ -2,7 +2,7 @@
 name = "js_transformer"
 id = 7585085109186569290
 version = "1.0.0"
-runtime = "js-quickjs"
+loader = "js-quickjs"
 provides = ["data.Transformer@1"]
 function_count = { "data.Transformer@1" = 1 }
 needs_reinit_on_dep_reload = false

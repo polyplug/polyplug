@@ -419,11 +419,13 @@ public struct HostApi
     ///
     ///  # Arguments
     ///  - `this`: HostApi pointer (self-passing)
-    ///  - `runtime_name`: Name of the runtime (e.g., "rust", "python")
     ///  - `loader_ptr`: Opaque pointer to the loader implementation
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
+    ///
+    ///  The loader's runtime name comes from its own `BundleLoader::runtime_name()`
+    ///  implementation — the single source of truth — so it is not passed here.
     public IntPtr RegisterLoader;
     ///  Get last error message.
     ///

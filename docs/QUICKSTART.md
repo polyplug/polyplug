@@ -59,7 +59,7 @@ and which contracts it implements.
 name = "my_greeter"
 version = "1.0.0"
 api = "../api.toml"        # path to the api.toml, relative to this file
-runtime = "native"
+loader = "native"
 
 [bundle.file]
 linux.x86_64   = "libmy_greeter.so"
@@ -73,7 +73,7 @@ version = "1.0.0"
 implements = ["greeter.Hello@1.0"]
 ```
 
-`implements` references the contract as `name@major_version`. The `runtime`
+`implements` references the contract as `name@major_version`. The `loader`
 field must be one of: `native`, `lua`, `python`, `js-quickjs`, `dotnet`.
 
 ---

@@ -87,7 +87,7 @@ fn write_lua_provider(tmp: &std::path::Path) -> PathBuf {
          id = {id_val}\n\
          bundle_name = \"rust_peer_test_provider\"\n\
          version = \"1.0.0\"\n\
-         runtime = \"lua\"\n\
+         loader = \"lua\"\n\
          file = \"provider.lua\"\n\
          provides = [\"test.peer@1\"]\n\
          needs_reinit_on_dep_reload = false\n\n\

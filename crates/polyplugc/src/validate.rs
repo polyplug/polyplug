@@ -82,14 +82,14 @@ pub fn validate_bundle_dir(dir: &Path) -> Result<(), PolyplugcError> {
     Ok(())
 }
 
-/// Verify the entry file's extension is one the declared `runtime` would load.
+/// Verify the entry file's extension is one the declared `loader` would load.
 fn check_extension_matches_runtime(manifest: &ManifestData) -> Result<(), PolyplugcError> {
     let extension: &str = Path::new(&manifest.file)
         .extension()
         .and_then(|e: &std::ffi::OsStr| e.to_str())
         .unwrap_or("");
 
-    let allowed: &[&str] = match manifest.runtime.as_str() {
+    let allowed: &[&str] = match manifest.loader.as_str() {
         "native" => &["so", "dylib", "dll"],
         "lua" => &["lua"],
         "python" => &["py"],
@@ -105,9 +105,9 @@ fn check_extension_matches_runtime(manifest: &ManifestData) -> Result<(), Polypl
     if !allowed.contains(&extension) {
         return Err(PolyplugcError::ValidationFailed {
             message: format!(
-                "manifest.toml: field `file` = \"{}\" has extension `.{extension}`, which is not valid for runtime `{}` (expected one of: {})",
+                "manifest.toml: field `file` = \"{}\" has extension `.{extension}`, which is not valid for loader `{}` (expected one of: {})",
                 manifest.file,
-                manifest.runtime,
+                manifest.loader,
                 allowed
                     .iter()
                     .map(|e: &&str| format!(".{e}"))

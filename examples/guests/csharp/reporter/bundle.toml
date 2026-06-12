@@ -2,7 +2,7 @@
 name = "csharp_reporter"
 version = "1.0.0"
 api = "../../../api.toml"
-runtime = "dotnet"
+loader = "dotnet"
 file = "reporter.dll"
 
 [[plugin]]

@@ -1,7 +1,7 @@
 id                         = 7240583466091758751
 name                       = "cross_caller_plugin"
 version                    = "1.0"
-runtime                    = "native"
+loader                    = "native"
 needs_reinit_on_dep_reload = false
 provides                   = ["cross.caller"]
 

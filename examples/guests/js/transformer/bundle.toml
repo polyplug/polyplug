@@ -2,7 +2,7 @@
 name = "js_transformer"
 version = "1.0.0"
 api = "../../../api.toml"
-runtime = "js-quickjs"
+loader = "js-quickjs"
 file = "transformer.js"
 
 [[plugin]]

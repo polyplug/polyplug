@@ -74,7 +74,7 @@ Working reference hosts for all six languages live in `examples/hosts/`.
 │    name    = "decoder"                                            │
 │    version = "1.0.0"                                              │
 │    api     = "../api.toml"                                        │
-│    runtime = "native"        # or lua | python | js-quickjs |     │
+│    loader  = "native"        # or lua | python | js-quickjs |     │
 │    file    = "libdecoder.so" #    dotnet                          │
 │                                                                   │
 │    [[plugin]]                                                     │

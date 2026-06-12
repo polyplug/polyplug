@@ -2,7 +2,7 @@
 name = "cpp_encoder"
 id = 13988810111245972125
 version = "1.0.0"
-runtime = "native"
+loader = "native"
 provides = ["pipeline.Encoder@1"]
 function_count = { "pipeline.Encoder@1" = 1 }
 needs_reinit_on_dep_reload = false

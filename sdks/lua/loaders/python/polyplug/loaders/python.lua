@@ -38,7 +38,7 @@ function M.register(rt, min_version)
     if loader == nil then
         error("polyplug: python loader create failed")
     end
-    rt:register_loader("python", loader)
+    rt:register_loader(loader)
 end
 
 return M

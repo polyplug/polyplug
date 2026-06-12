@@ -55,7 +55,7 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
     ManifestData {
         id: polyplug_utils::bundle_id(name),
         name: name.to_owned(),
-        runtime: "dotnet".to_owned(),
+        loader: "dotnet".to_owned(),
         file: path.file_name().unwrap().to_string_lossy().into_owned(),
         path: path.parent().unwrap().to_path_buf(),
         version: String::new(),
@@ -476,7 +476,7 @@ fn make_csharp_fixture_manifest(dir: &Path) -> ManifestData {
     ManifestData {
         id: polyplug_utils::bundle_id(name),
         name: name.to_owned(),
-        runtime: "dotnet".to_owned(),
+        loader: "dotnet".to_owned(),
         file: "CsharpPlugin.dll".to_owned(),
         path: dir.to_path_buf(),
         version: "1.0.0".to_owned(),
@@ -666,7 +666,7 @@ fn make_named_fixture_manifest(dir: &Path, name: &str) -> ManifestData {
     ManifestData {
         id: polyplug_utils::bundle_id(name),
         name: name.to_owned(),
-        runtime: "dotnet".to_owned(),
+        loader: "dotnet".to_owned(),
         file: "CsharpPlugin.dll".to_owned(),
         path: dir.to_path_buf(),
         version: "1.0.0".to_owned(),

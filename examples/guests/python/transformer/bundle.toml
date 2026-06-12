@@ -2,7 +2,7 @@
 name = "python_transformer"
 version = "1.0.0"
 api = "../../../api.toml"
-runtime = "python"
+loader = "python"
 file = "transformer.py"
 
 [[plugin]]

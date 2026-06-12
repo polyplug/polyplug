@@ -259,7 +259,7 @@ fn integration_lua_init_function_missing_returns_typed_error() {
 name = "noinit_test"
 id = {}
 version = "1.0.0"
-runtime = "lua"
+loader = "lua"
 file = "plugin.lua"
 provides = ["test.noinit@1"]
 
@@ -426,7 +426,6 @@ unsafe extern "C" fn arena_stub_register_host(
 
 unsafe extern "C" fn arena_stub_register_loader(
     _this: *const HostApi,
-    _name: StringView,
     _loader: *mut core::ffi::c_void,
 ) -> AbiError {
     AbiError::ok()

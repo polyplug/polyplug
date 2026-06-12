@@ -12,7 +12,7 @@ use core::ffi::c_void;
 
 use polyplug::ffi::{polyplug_runtime_create, polyplug_runtime_destroy};
 use polyplug::loader::BundleLoader;
-use polyplug_abi::{Array, GuestContractHandle, GuestContractInterface, HostApi, StringView};
+use polyplug_abi::{Array, GuestContractHandle, GuestContractInterface, HostApi};
 use polyplug_native::NativeLoader;
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
@@ -39,10 +39,9 @@ fn register_native_loader(host: *const HostApi) {
     // Double-box so the fat trait-object pointer survives the thin `*mut c_void`.
     let trait_obj: Box<dyn BundleLoader> = Box::new(NativeLoader::new(Default::default()));
     let loader_ptr: *mut c_void = Box::into_raw(Box::new(trait_obj)) as *mut c_void;
-    let runtime_name: StringView = StringView::from_static(b"native");
-    // SAFETY: host is valid, runtime_name borrows a 'static slice, loader_ptr is a freshly
-    // leaked Box<Box<dyn BundleLoader>> that the runtime takes ownership of.
-    let err = unsafe { ((*host).register_loader)(host, runtime_name, loader_ptr) };
+    // SAFETY: host is valid, loader_ptr is a freshly leaked Box<Box<dyn BundleLoader>>
+    // that the runtime takes ownership of.
+    let err = unsafe { ((*host).register_loader)(host, loader_ptr) };
     assert_eq!(
         err.code,
         polyplug_abi::AbiErrorCode::Ok as u32,

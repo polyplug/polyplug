@@ -2,7 +2,7 @@
 name = "python_validator"
 id = 18443061158531352966
 version = "1.0.0"
-runtime = "python"
+loader = "python"
 provides = ["pipeline.Validator@1"]
 function_count = { "pipeline.Validator@1" = 1 }
 needs_reinit_on_dep_reload = false

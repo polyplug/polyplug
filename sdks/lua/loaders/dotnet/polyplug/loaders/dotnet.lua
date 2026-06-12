@@ -38,7 +38,7 @@ function M.register(rt, min_framework)
     if loader == nil then
         error("polyplug: dotnet loader create failed")
     end
-    rt:register_loader("dotnet", loader)
+    rt:register_loader(loader)
 end
 
 return M

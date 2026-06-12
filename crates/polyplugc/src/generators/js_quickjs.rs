@@ -774,7 +774,7 @@ fn generate_manifest_toml(ir: &ValidatedIr) -> String {
 
     let reinit: bool = bundle.needs_reinit_on_dep_reload;
     let file_field: String = super::format_manifest_file_field(&bundle.file);
-    let runtime: &str = &bundle.runtime;
+    let loader: &str = &bundle.loader;
 
     let dep_toml: String = super::emit_manifest_dependencies(&bundle.dependencies);
 
@@ -783,7 +783,7 @@ fn generate_manifest_toml(ir: &ValidatedIr) -> String {
          name = \"{name}\"\n\
          id = {bundle_id}\n\
          version = \"{version}\"\n\
-         runtime = \"{runtime}\"\n\
+         loader = \"{loader}\"\n\
          provides = {provides_toml}\n\
          function_count = {function_count_toml}\n\
          needs_reinit_on_dep_reload = {reinit}\n\
@@ -3716,7 +3716,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
-                runtime: "js-quickjs".to_owned(),
+                loader: "js-quickjs".to_owned(),
                 file: polyplug_codegen::ResolvedBundleFile::Single("libtransformer.so".to_owned()),
                 plugins: vec![],
                 bundle_id: 0,

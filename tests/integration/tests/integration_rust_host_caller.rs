@@ -289,7 +289,6 @@ unsafe extern "C" fn caller_stub_register_host(
 
 unsafe extern "C" fn caller_stub_register_loader(
     _this: *const HostApi,
-    _name: StringView,
     _loader: *mut core::ffi::c_void,
 ) -> AbiError {
     AbiError::ok()

@@ -2,7 +2,7 @@
 name = "js_encoder"
 id = 10906851461988050421
 version = "1.0.0"
-runtime = "js-quickjs"
+loader = "js-quickjs"
 provides = ["pipeline.Encoder@1"]
 function_count = { "pipeline.Encoder@1" = 1 }
 needs_reinit_on_dep_reload = false

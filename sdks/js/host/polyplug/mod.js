@@ -886,34 +886,24 @@ export class Runtime {
 
   /**
    * Register a language loader with the runtime.
-   * Calls through HostApi.register_loader field. The StringView runtime
-   * name is passed by value (ptr + len); the AbiError return is read as a
-   * struct by value (code is the first u32).
-   * @param {string} runtimeName - Runtime name the loader handles (e.g. "native", "lua").
+   * Calls through HostApi.register_loader field. The loader's runtime name
+   * comes from its own BundleLoader::runtime_name(); the AbiError return is
+   * read as a struct by value (code is the first u32).
    * @param {Deno.PointerValue} loaderPtr - Opaque loader pointer from the loader cdylib's create function.
    */
-  registerLoader(runtimeName, loaderPtr) {
-    const encoded = _encoder.encode(runtimeName);
-    const namePtr = Deno.UnsafePointer.of(encoded);
-
-    // Build the StringView { ptr, len } as a 16-byte struct passed by value.
-    const nameView = new Uint8Array(16);
-    const nameDv = new DataView(nameView.buffer);
-    nameDv.setBigUint64(0, BigInt(Deno.UnsafePointer.value(namePtr)), true);
-    nameDv.setBigUint64(8, BigInt(encoded.length), true);
-
+  registerLoader(loaderPtr) {
     const result = callHostMethod(
       this.#host,
       HOST_API_OFFSETS.register_loader,
-      ["pointer", { struct: ["pointer", "usize"] }, "pointer"],
+      ["pointer", "pointer"],
       { struct: ["u32", "u32", "pointer", "usize"] },
-      [this.#host, nameView, loaderPtr]
+      [this.#host, loaderPtr]
     );
 
     // AbiError struct returned by value; code is the first u32 field.
     const code = new DataView(result.buffer, result.byteOffset, result.byteLength).getUint32(0, true);
     if (code !== 0) {
-      throw new Error(`registerLoader(${runtimeName}) failed: ${this.lastError()}`);
+      throw new Error(`registerLoader failed: ${this.lastError()}`);
     }
   }
 }

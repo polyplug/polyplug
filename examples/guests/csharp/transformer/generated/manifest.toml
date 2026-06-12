@@ -2,7 +2,7 @@
 name = "csharp_transformer"
 id = 7440798660444139762
 version = "1.0.0"
-runtime = "dotnet"
+loader = "dotnet"
 provides = ["data.Transformer@1"]
 function_count = { "data.Transformer@1" = 1 }
 needs_reinit_on_dep_reload = false

@@ -20,7 +20,7 @@ function getLib(): Deno.DynamicLibrary<typeof DOTNET_SYMBOLS> {
 /**
  * Register the .NET loader with a Runtime.
  * Opens the loader cdylib, creates the loader, then registers it through the
- * Runtime's HostApi.register_loader path under the "dotnet" runtime name.
+ * Runtime's HostApi.register_loader path.
  */
 export function registerDotnetLoader(rt: Runtime, minFramework: string = "10.0"): void {
     const lib = getLib();
@@ -36,5 +36,5 @@ export function registerDotnetLoader(rt: Runtime, minFramework: string = "10.0")
     if (loaderPtr === null) {
         throw new Error("polyplug: dotnet loader create failed");
     }
-    rt.registerLoader("dotnet", loaderPtr);
+    rt.registerLoader(loaderPtr);
 }

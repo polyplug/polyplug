@@ -38,7 +38,7 @@ def register_dotnet_loader(runtime: Runtime, min_framework: str = "10.0") -> Non
     if not loader_ptr:
         raise RuntimeError("polyplug: dotnet loader create failed")
 
-    runtime.register_loader(_RUNTIME_NAME, loader_ptr)
+    runtime.register_loader(loader_ptr)
 
 
 __all__ = ["register_dotnet_loader"]

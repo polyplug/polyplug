@@ -2,7 +2,7 @@
 name = "python_encoder"
 version = "1.0.0"
 api = "../../../api.toml"
-runtime = "python"
+loader = "python"
 file = "encoder.py"
 
 [[plugin]]

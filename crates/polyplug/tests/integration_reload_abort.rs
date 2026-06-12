@@ -143,7 +143,7 @@ fn write_bundle(temp: &tempfile::TempDir, bundle_name: &str) -> PathBuf {
     let manifest: String = format!(
         "id = {bundle_id}\n\
          name = \"{bundle_name}\"\n\
-         runtime = \"abort-loader\"\n\
+         loader = \"abort-loader\"\n\
          file = \"dummy.so\"\n\
          version = \"1.0\"\n"
     );

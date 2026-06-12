@@ -61,7 +61,7 @@ fn write_bundle(name: &str, content: &str) -> (TempDir, PathBuf) {
     let manifest: String = format!(
         r#"id = {}
 name = "{}"
-runtime = "python"
+loader = "python"
 file = "bundle.py"
 "#,
         bundle_id, name
@@ -82,7 +82,7 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
     ManifestData {
         id: bundle_id(name),
         name: name.to_owned(),
-        runtime: "python".to_owned(),
+        loader: "python".to_owned(),
         file: path
             .file_name()
             .expect("bundle path must have a file name")

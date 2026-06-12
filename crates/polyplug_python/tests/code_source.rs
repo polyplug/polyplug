@@ -59,7 +59,7 @@ fn inline_manifest(name: &str) -> ManifestData {
     ManifestData {
         id: bundle_id(name),
         name: name.to_owned(),
-        runtime: "python".to_owned(),
+        loader: "python".to_owned(),
         // `file` is ignored for in-memory sources, but `ManifestData::validate()`
         // (run by `load_bundle_from_source`) requires a non-empty placeholder.
         file: "<inline>".to_owned(),

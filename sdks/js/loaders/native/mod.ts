@@ -20,7 +20,7 @@ function getLib(): Deno.DynamicLibrary<typeof NATIVE_SYMBOLS> {
 /**
  * Register the native loader with a Runtime.
  * Opens the loader cdylib, creates the loader, then registers it through the
- * Runtime's HostApi.register_loader path under the "native" runtime name.
+ * Runtime's HostApi.register_loader path.
  */
 export function registerNativeLoader(rt: Runtime): void {
     const lib = getLib();
@@ -30,5 +30,5 @@ export function registerNativeLoader(rt: Runtime): void {
     if (loaderPtr === null) {
         throw new Error("polyplug: native loader create failed");
     }
-    rt.registerLoader("native", loaderPtr);
+    rt.registerLoader(loaderPtr);
 }

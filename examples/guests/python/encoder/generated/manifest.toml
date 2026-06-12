@@ -2,7 +2,7 @@
 name = "python_encoder"
 id = 7023565710763889440
 version = "1.0.0"
-runtime = "python"
+loader = "python"
 provides = ["pipeline.Encoder@1"]
 function_count = { "pipeline.Encoder@1" = 1 }
 needs_reinit_on_dep_reload = false

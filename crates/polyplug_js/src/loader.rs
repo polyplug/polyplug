@@ -1918,7 +1918,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         let manifest: ManifestData = ManifestData {
             id: polyplug_utils::bundle_id(name),
             name: name.to_owned(),
-            runtime: "js-quickjs".to_owned(),
+            loader: "js-quickjs".to_owned(),
             file: "bundle.js".to_owned(),
             path: dir.path().to_path_buf(),
             version: String::new(),
@@ -2106,7 +2106,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         let manifest: ManifestData = ManifestData {
             id: polyplug_utils::bundle_id("js_f64_round_trip"),
             name: "js_f64_round_trip".to_owned(),
-            runtime: "js-quickjs".to_owned(),
+            loader: "js-quickjs".to_owned(),
             file: "bundle.js".to_owned(),
             path: dir.path().to_path_buf(),
             version: String::new(),

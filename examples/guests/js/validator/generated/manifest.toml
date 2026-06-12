@@ -2,7 +2,7 @@
 name = "js_validator"
 id = 7860051743776807347
 version = "1.0.0"
-runtime = "js-quickjs"
+loader = "js-quickjs"
 provides = ["pipeline.Validator@1"]
 function_count = { "pipeline.Validator@1" = 1 }
 needs_reinit_on_dep_reload = false

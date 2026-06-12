@@ -28,7 +28,7 @@ function M.register(rt)
     if loader == nil then
         error("polyplug: lua loader create failed")
     end
-    rt:register_loader("lua", loader)
+    rt:register_loader(loader)
 end
 
 --- Handle to the lua loader cdylib for the host-contract bridge.

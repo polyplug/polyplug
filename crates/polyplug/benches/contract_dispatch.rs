@@ -237,7 +237,6 @@ unsafe extern "C" fn bench_register_host_contract(
 /// register_loader stub — returns error (not used in benches).
 unsafe extern "C" fn bench_register_loader(
     _this: *const HostApi,
-    _runtime_name: StringView,
     _loader_ptr: *mut core::ffi::c_void,
 ) -> AbiError {
     AbiError {

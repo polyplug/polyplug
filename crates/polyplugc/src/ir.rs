@@ -301,7 +301,7 @@ pub struct ResolvedPlugin {
 pub struct ResolvedBundle {
     pub name: String,
     pub version: Version,
-    pub runtime: String,
+    pub loader: String,
     pub file: polyplug_codegen::ResolvedBundleFile,
     pub plugins: Vec<ResolvedPlugin>,
     pub bundle_id: u64,

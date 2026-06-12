@@ -73,7 +73,7 @@ public sealed class Runtime
     private delegate AbiError RegisterHostContractDelegate(nint host, nint interfacePtr);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate AbiError RegisterLoaderDelegate(nint host, StringView runtimeName, nint loaderPtr);
+    private delegate AbiError RegisterLoaderDelegate(nint host, nint loaderPtr);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeDelegate(nint host, nint ptr, nuint size, nuint align);
@@ -458,23 +458,18 @@ public sealed class Runtime
 
     /// <summary>
     /// Register a language loader with the runtime.
+    /// The loader's runtime name comes from its own BundleLoader.runtime_name();
+    /// it is not passed here.
     /// </summary>
-    /// <param name="runtimeName">Runtime name the loader handles (e.g. "native", "python").</param>
     /// <param name="loaderPtr">Opaque loader pointer from the loader cdylib's create function.</param>
     /// <returns>Zero on success, non-zero AbiError code on failure.</returns>
-    public uint RegisterLoader(string runtimeName, nint loaderPtr)
+    public uint RegisterLoader(nint loaderPtr)
     {
         EnsureHost();
 
-        uint result = 0u;
-        InvokeWithUtf8(runtimeName, (ptr, len) =>
-        {
-            StringView name = new StringView { Ptr = ptr, Len = len };
-            AbiError error = _registerLoaderFn!(_host, name, loaderPtr);
-            // AbiError.Message is static or runtime-owned; the receiver never frees it.
-            result = error.Code;
-        });
-        return result;
+        AbiError error = _registerLoaderFn!(_host, loaderPtr);
+        // AbiError.Message is static or runtime-owned; the receiver never frees it.
+        return error.Code;
     }
 
     private static void InvokeWithUtf8(string value, Action<nint, nuint> action)

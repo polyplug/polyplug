@@ -111,7 +111,7 @@ After building, assemble the bundle directory yourself:
 ```
 dist/my-plugin/
 ├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
-└── MyPlugin.dll           # the assembly you compiled (runtime = "dotnet")
+└── MyPlugin.dll           # the assembly you compiled (loader = "dotnet")
 ```
 
 Validate the assembled directory before shipping:

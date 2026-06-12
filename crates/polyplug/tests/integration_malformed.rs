@@ -29,7 +29,7 @@ fn cleanup(dir: &PathBuf) {
 
 fn write_manifest(dir: &Path, name: &str, runtime: &str, file: &str) {
     let manifest_toml: String = format!(
-        "id = {}\nname = \"{}\"\nruntime = \"{}\"\nfile = \"{}\"\n",
+        "id = {}\nname = \"{}\"\nloader = \"{}\"\nfile = \"{}\"\n",
         bundle_id(name),
         name,
         runtime,

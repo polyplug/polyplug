@@ -278,7 +278,7 @@ fn integration_python_exception_returns_abi_error() {
 name = "exception_test"
 id = {}
 version = "1.0.0"
-runtime = "python"
+loader = "python"
 file = "plugin.py"
 provides = ["test.exception@1"]
 
@@ -371,7 +371,7 @@ fn integration_python_version_too_old() {
 name = "version_test"
 id = {}
 version = "1.0.0"
-runtime = "python"
+loader = "python"
 file = "plugin.py"
 provides = ["test.version@1"]
 
@@ -481,7 +481,7 @@ fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
          id = {id_val}\n\
          bundle_name = \"log_demo_python\"\n\
          version = \"1.0.0\"\n\
-         runtime = \"python\"\n\
+         loader = \"python\"\n\
          file = \"logdemo.py\"\n\
          provides = [\"test.logdemo@1\"]\n\
          needs_reinit_on_dep_reload = false\n\n\
