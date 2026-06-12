@@ -35,7 +35,6 @@ enum class ContractType : uint32_t;
 enum class DispatchType : uint32_t;
 enum class Compatibility : uint32_t;
 enum class ReloadPhaseType : uint32_t;
-enum class UnloadMode : uint32_t;
 enum class RuntimeLanguage : uint32_t;
 enum class AbiErrorCode : uint32_t;
 enum class LogLevel : uint32_t;
@@ -527,8 +526,6 @@ using RuntimeConfig_log_fn = void(*)(void*, uint32_t, StringView, StringView);
 struct RuntimeConfig {
     ///  Compatibility mode for version resolution.
     Compatibility compatibility;
-    ///  How a bundle's loader-owned resources are reclaimed on unload.
-    UnloadMode unload_mode;
     ///  Whether hot-reload is enabled.
     bool hot_reload_enabled;
     ///  Optional hot-reload callback, or null for no callback.
@@ -592,7 +589,7 @@ struct RuntimeConfig {
     ///  [`LogLevel::Warn`].
     uint32_t log_max_level;
 };
-static_assert(sizeof(RuntimeConfig) == 56, "RuntimeConfig size mismatch");
+static_assert(sizeof(RuntimeConfig) == 48, "RuntimeConfig size mismatch");
 
 ///  FFI-safe array with caller-frees ownership model.
 ///
@@ -789,19 +786,6 @@ enum class ReloadPhaseType : uint32_t {
     Failed = 2,
     ///  Bundle is being unloaded.
     Unloading = 3,
-};
-
-///  How a bundle's loader-owned resources are handled when it is unloaded.
-enum class UnloadMode : uint32_t {
-    ///  Retire-not-drop: the loader keeps the bundle's library/VM mapped for the
-    ///  runtime's lifetime after unload. Any raw function pointer already resolved
-    ///  from the bundle stays valid. This is the default, fully-safe behaviour.
-    Retire = 0,
-    ///  Reclaim: the loader frees the bundle's library/VM at unload (e.g. native
-    ///  `dlclose`), releasing OS resources and the on-disk file lock so a developer
-    ///  can rebuild and reload the bundle. Host-coordinated: the host must guarantee
-    ///  no thread is calling, or holds a pointer into, the bundle when it is unloaded.
-    Reclaim = 1,
 };
 
 ///  Runtime type identifier — identifies the language/runtime hosting plugins.

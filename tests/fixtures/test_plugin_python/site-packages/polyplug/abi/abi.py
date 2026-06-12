@@ -296,12 +296,6 @@ class ReloadPhaseType(enum.IntEnum):
     Unloading = 3
 
 
-class UnloadMode(enum.IntEnum):
-    """ How a bundle's loader-owned resources are handled when it is unloaded."""
-    Retire = 0
-    Reclaim = 1
-
-
 class RuntimeLanguage(enum.IntEnum):
     """ Runtime type identifier — identifies the language/runtime hosting plugins."""
     Rust = 0
@@ -421,7 +415,6 @@ class RuntimeConfig(ctypes.Structure):
     """
     _fields_ = [
         ("compatibility", ctypes.c_uint32),
-        ("unload_mode", ctypes.c_uint32),
         ("hot_reload_enabled", ctypes.c_bool),
         ("on_reload", _runtime_config_on_reload_t),
         ("on_reload_user_data", ctypes.c_void_p),
@@ -430,8 +423,8 @@ class RuntimeConfig(ctypes.Structure):
         ("log_max_level", ctypes.c_uint32),
     ]
 
-# Expected size: 56 bytes
-assert ctypes.sizeof(RuntimeConfig) == 56, f"RuntimeConfig expected 56 bytes, got {ctypes.sizeof(RuntimeConfig)}"
+# Expected size: 48 bytes
+assert ctypes.sizeof(RuntimeConfig) == 48, f"RuntimeConfig expected 48 bytes, got {ctypes.sizeof(RuntimeConfig)}"
 
 
 class AbiError(ctypes.Structure):

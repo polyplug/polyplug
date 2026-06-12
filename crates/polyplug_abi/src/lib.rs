@@ -20,7 +20,7 @@ pub use runtime_language::RuntimeLanguage;
 
 // ─── Runtime exports ──────────────────────────────────────────────────────────
 
-pub use runtime::{Compatibility, ReloadPhase, ReloadPhaseType, RuntimeConfig, UnloadMode};
+pub use runtime::{Compatibility, ReloadPhase, ReloadPhaseType, RuntimeConfig};
 
 // ─── Type exports ───────────────────────────────────────────────────────────
 

@@ -24,7 +24,7 @@ use polyplug::Runtime;
 use polyplug::compatibility::CapabilityGraph;
 use polyplug::error::RuntimeError;
 use polyplug::loader::{BundleLoader, ManifestData};
-use polyplug_abi::runtime::{Compatibility, ReloadPhaseType, RuntimeConfig, UnloadMode};
+use polyplug_abi::runtime::{Compatibility, ReloadPhaseType, RuntimeConfig};
 use polyplug_abi::{
     AbiErrorCode, CallArena, DispatchMechanisms, DispatchType, GuestContractInstance,
     GuestContractInterface, HostApi, HostContractInstance, HostContractInterface, NativeDispatch,
@@ -632,7 +632,6 @@ fn reload_with_tampered_manifest_id_fails_and_fires_failed_callback() {
 
     let config: RuntimeConfig = RuntimeConfig {
         compatibility: Compatibility::Strict,
-        unload_mode: UnloadMode::Retire,
         hot_reload_enabled: true,
         on_reload: None,
         on_reload_user_data: core::ptr::null_mut(),

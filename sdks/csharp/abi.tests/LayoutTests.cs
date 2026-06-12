@@ -45,7 +45,7 @@ namespace Polyplug.Abi.Tests
         public void ReloadPhaseIs48Bytes() => Assert.Equal(48, Marshal.SizeOf<ReloadPhase>());
 
         [Fact]
-        public void RuntimeConfigIs56Bytes() => Assert.Equal(56, Marshal.SizeOf<RuntimeConfig>());
+        public void RuntimeConfigIs48Bytes() => Assert.Equal(48, Marshal.SizeOf<RuntimeConfig>());
 
         [Fact]
         public void AbiErrorIs24Bytes() => Assert.Equal(24, Marshal.SizeOf<AbiError>());
@@ -81,13 +81,13 @@ namespace Polyplug.Abi.Tests
         public void HostApiReservedAtOffset160() => Assert.Equal((nint)160, Marshal.OffsetOf<HostApi>(nameof(HostApi.Reserved)));
 
         [Fact]
-        public void RuntimeConfigLogAtOffset32() => Assert.Equal((nint)32, Marshal.OffsetOf<RuntimeConfig>(nameof(RuntimeConfig.Log)));
+        public void RuntimeConfigLogAtOffset24() => Assert.Equal((nint)24, Marshal.OffsetOf<RuntimeConfig>(nameof(RuntimeConfig.Log)));
 
         [Fact]
-        public void RuntimeConfigLogUserDataAtOffset40() => Assert.Equal((nint)40, Marshal.OffsetOf<RuntimeConfig>(nameof(RuntimeConfig.LogUserData)));
+        public void RuntimeConfigLogUserDataAtOffset32() => Assert.Equal((nint)32, Marshal.OffsetOf<RuntimeConfig>(nameof(RuntimeConfig.LogUserData)));
 
         [Fact]
-        public void RuntimeConfigLogMaxLevelAtOffset48() => Assert.Equal((nint)48, Marshal.OffsetOf<RuntimeConfig>(nameof(RuntimeConfig.LogMaxLevel)));
+        public void RuntimeConfigLogMaxLevelAtOffset40() => Assert.Equal((nint)40, Marshal.OffsetOf<RuntimeConfig>(nameof(RuntimeConfig.LogMaxLevel)));
 
     }
 }

@@ -35,8 +35,6 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
-use polyplug_abi::RuntimeConfig;
-use polyplug_abi::UnloadMode;
 use polyplug_abi::dispatch::DispatchType;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
@@ -823,7 +821,7 @@ from _splitmod_helper import polyplug_init
     assert_eq!(out_buf, 0x2A, "callable should write 0x2A into out");
 }
 
-// ─── Unload: sys.modules purge under UnloadMode::Reclaim ─────────────────────────
+// ─── Unload: sys.modules purge ───────────────────────────────────────────────────
 
 /// Count `sys.modules` keys that are re-keyed bundle modules (prefix
 /// `__polyplug_bundle_`) AND reference `helper_substr` (the bundle's sibling
@@ -878,62 +876,16 @@ def polyplug_init(host_interface: int, ctx: int) -> None:
     (dir, entry_path)
 }
 
-/// Under `UnloadMode::Reclaim`, unloading a bundle purges its re-keyed
-/// `sys.modules` entries so a later load re-imports fresh source.
+/// Unloading a bundle ALWAYS purges its re-keyed `sys.modules` entries so a later
+/// load re-imports fresh source. Purge is uniform: there is no retire-not-drop
+/// branch, so unload reclaims rather than parking the import cache.
 #[test]
-fn unload_reclaim_purges_bundle_modules_from_sys_modules() {
+fn unload_purges_bundle_modules_from_sys_modules() {
     let bundle_name: &str = "reclaim_purge";
     let helper_module: &str = "_reclaim_purge_helper";
     let (_dir, path) = write_split_bundle(bundle_name, helper_module, "reclaimpurge@1");
 
     let loader: PythonLoader = PythonLoader::default();
-    let runtime: Arc<Runtime> = RuntimeBuilder::new()
-        .loader(PythonLoader::default())
-        .config(RuntimeConfig {
-            unload_mode: UnloadMode::Reclaim,
-            ..RuntimeConfig::default()
-        })
-        .build()
-        .expect("runtime build must succeed");
-    let manifest: ManifestData = make_manifest(&path, bundle_name);
-
-    loader
-        .load(
-            &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect("load must succeed");
-
-    let before: usize = count_bundle_modules(helper_module);
-    assert!(
-        before > 0,
-        "bundle's helper module must be re-keyed into sys.modules after load"
-    );
-
-    loader
-        .unload(BundleId::from_u64(bundle_id(bundle_name)), &runtime, true)
-        .expect("unload must succeed");
-
-    let after: usize = count_bundle_modules(helper_module);
-    assert_eq!(
-        after, 0,
-        "Reclaim unload must purge the bundle's re-keyed sys.modules entries"
-    );
-}
-
-/// `UnloadMode::Retire` is ignored: unloading ALWAYS purges the bundle's re-keyed
-/// `sys.modules` entries (no retire-not-drop branch). Even with the default `Retire`
-/// mode, the entries are gone after unload — proving the uniform purge behaviour
-/// rather than forever-retention.
-#[test]
-fn unload_ignores_unload_mode_and_purges_bundle_modules() {
-    let bundle_name: &str = "retire_keep";
-    let helper_module: &str = "_retire_keep_helper";
-    let (_dir, path) = write_split_bundle(bundle_name, helper_module, "retirekeep@1");
-
-    let loader: PythonLoader = PythonLoader::default();
-    // Default config => UnloadMode::Retire, which the loader now ignores.
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, bundle_name);
 
@@ -952,13 +904,13 @@ fn unload_ignores_unload_mode_and_purges_bundle_modules() {
     );
 
     loader
-        .unload(BundleId::from_u64(bundle_id(bundle_name)), &runtime, true)
+        .unload(BundleId::from_u64(bundle_id(bundle_name)), &runtime)
         .expect("unload must succeed");
 
     let after: usize = count_bundle_modules(helper_module);
     assert_eq!(
         after, 0,
-        "unload must purge the bundle's re-keyed sys.modules entries even under Retire"
+        "unload must purge the bundle's re-keyed sys.modules entries"
     );
 }
 

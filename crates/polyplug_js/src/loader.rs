@@ -1835,14 +1835,8 @@ impl BundleLoader for JsLoader {
     /// bundle's contracts concurrently with unloading it (see `Runtime::unload_bundle`
     /// and docs/TRUST_MODEL.md).
     ///
-    /// `_reclaim_safe` and the runtime's `UnloadMode` are ignored: the VM is always
-    /// epoch-reclaimed (never parked alive forever).
-    fn unload(
-        &self,
-        bundle_id: BundleId,
-        _runtime: &PolyplugRuntime,
-        _reclaim_safe: bool,
-    ) -> Result<(), RuntimeError> {
+    /// The VM is always epoch-reclaimed (never parked alive forever).
+    fn unload(&self, bundle_id: BundleId, _runtime: &PolyplugRuntime) -> Result<(), RuntimeError> {
         let state: Vec<SendVm> = {
             let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
                 self.live.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1915,14 +1909,10 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     }
 
     /// Unload removes the bundle from the loader's live map and SCHEDULES its VM state
-    /// for epoch-deferred reclaim (uniform behaviour, independent of `UnloadMode` /
-    /// `reclaim_safe`).
-    ///
-    /// This consolidates the coverage of the old quiescent-vs-deferred split
-    /// (`unload_non_quiescent_defers_reclaim`): the `in_dispatch_threads`-gated
-    /// retire-not-drop branch no longer exists on the unload path — every unload
-    /// epoch-reclaims, so even an in-flight call schedules reclaim (the epoch keeps
-    /// the VM alive until that reader's pin clears).
+    /// for epoch-deferred reclaim. The `in_dispatch_threads`-gated retire-not-drop
+    /// branch no longer exists on the unload path — every unload epoch-reclaims, so
+    /// even an in-flight call schedules reclaim (the epoch keeps the VM alive until
+    /// that reader's pin clears).
     #[test]
     fn unload_removes_live_and_schedules_reclaim() {
         let loader: JsLoader = JsLoader::new(JsConfig {});
@@ -1948,7 +1938,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         );
 
         loader
-            .unload(bundle_id, &runtime, true)
+            .unload(bundle_id, &runtime)
             .expect("unload must succeed");
         assert_eq!(
             loader.live_vm_count(bundle_id),
@@ -1989,7 +1979,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
                 "live map must hold exactly one entry per load"
             );
             loader
-                .unload(bundle_id, &runtime, true)
+                .unload(bundle_id, &runtime)
                 .expect("unload must succeed");
             // Driving the loader directly bypasses `Runtime::unload_bundle`'s registry
             // invalidation, so the test mirrors it explicitly.
@@ -2051,7 +2041,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         }
 
         loader
-            .unload(bundle_id, &runtime, true)
+            .unload(bundle_id, &runtime)
             .expect("unload must succeed even when marked in-flight");
         assert_eq!(
             loader.live_vm_count(bundle_id),

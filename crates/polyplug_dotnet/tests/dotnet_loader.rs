@@ -678,12 +678,9 @@ fn make_named_fixture_manifest(dir: &Path, name: &str) -> ManifestData {
     }
 }
 
-/// Load the C# fixture (Bytes source) under a chosen `name`/`unload_mode`, returning the runtime
+/// Load the C# fixture (Bytes source) under a chosen `name`, returning the runtime
 /// and bundle id, or `None` (soft-skip) if the fixture/dependency is not built.
-fn load_named_fixture(
-    name: &str,
-    unload_mode: polyplug_abi::runtime::UnloadMode,
-) -> Option<(Arc<Runtime>, u64)> {
+fn load_named_fixture(name: &str) -> Option<(Arc<Runtime>, u64)> {
     let dll: PathBuf = csharp_fixture_dll_path();
     if !dll.exists() {
         eprintln!("skipping: CsharpPlugin.dll fixture not built at {dll:?}");
@@ -696,10 +693,6 @@ fn load_named_fixture(
 
     let runtime: Arc<Runtime> = RuntimeBuilder::new()
         .loader(DotnetLoader::new(DotnetConfig::default()))
-        .config(polyplug_abi::runtime::RuntimeConfig {
-            unload_mode,
-            ..Default::default()
-        })
         .build()
         .expect("failed to build runtime");
 
@@ -754,15 +747,13 @@ fn assert_add_dispatch_works(runtime: &Runtime) {
     assert_eq!(out, 8, "add(3,5) must equal 8 before unload");
 }
 
-/// Under host-attested `UnloadMode::Reclaim`, unloading a .NET bundle truly unloads its
-/// collectible `AssemblyLoadContext` — the managed assemblies become eligible for GC and the
-/// liveness probe reports the ALC reclaimed. The contract is also gone from the registry.
+/// Unloading a .NET bundle truly unloads its collectible `AssemblyLoadContext` — the
+/// managed assemblies become eligible for GC and the liveness probe reports the ALC
+/// reclaimed. The contract is also gone from the registry. Reclaim is uniform: there is
+/// no retire-not-drop branch, so unload always reclaims rather than parking the ALC.
 #[test]
-fn unload_reclaim_mode_collects_alc() {
-    let Some((runtime, bundle_id)) = load_named_fixture(
-        "csharp_reclaim_probe",
-        polyplug_abi::runtime::UnloadMode::Reclaim,
-    ) else {
+fn unload_reclaims_alc() {
+    let Some((runtime, bundle_id)) = load_named_fixture("csharp_reclaim_probe") else {
         return; // soft-skip: fixture not built
     };
 
@@ -778,37 +769,12 @@ fn unload_reclaim_mode_collects_alc() {
 
     assert!(
         !polyplug_dotnet::bundle_alc_alive(&runtime, bundle_id).expect("alc probe"),
-        "ALC must be reclaimed after a host-attested Reclaim unload"
+        "ALC must be reclaimed after unload"
     );
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
     assert!(
         runtime.find_guest_contract(contract_id, 0).is_err(),
         "the contract must no longer resolve after unload"
-    );
-}
-
-/// `UnloadMode::Retire` is ignored: unloading ALWAYS unloads the bundle's collectible
-/// `AssemblyLoadContext` (no retire-not-drop branch). Even built with the default
-/// `Retire` mode, the ALC is reclaimed and the liveness probe reports it gone — proving
-/// the uniform reclaim behaviour rather than forever-retention.
-#[test]
-fn unload_ignores_unload_mode_and_reclaims_alc() {
-    let Some((runtime, bundle_id)) = load_named_fixture(
-        "csharp_retire_probe",
-        polyplug_abi::runtime::UnloadMode::Retire,
-    ) else {
-        return; // soft-skip: fixture not built
-    };
-
-    assert_add_dispatch_works(&runtime);
-
-    runtime
-        .unload_bundle(polyplug_utils::BundleId::from_u64(bundle_id))
-        .expect("unload_bundle must succeed");
-
-    assert!(
-        !polyplug_dotnet::bundle_alc_alive(&runtime, bundle_id).expect("alc probe"),
-        "ALC must be reclaimed on unload even under UnloadMode::Retire (mode ignored)"
     );
 }
 
@@ -833,18 +799,10 @@ fn two_runtimes_same_bundle_id_have_isolated_alcs() {
 
     let rt_a: Arc<Runtime> = RuntimeBuilder::new()
         .loader(DotnetLoader::new(DotnetConfig::default()))
-        .config(polyplug_abi::runtime::RuntimeConfig {
-            unload_mode: polyplug_abi::runtime::UnloadMode::Reclaim,
-            ..Default::default()
-        })
         .build()
         .expect("failed to build runtime A");
     let rt_b: Arc<Runtime> = RuntimeBuilder::new()
         .loader(DotnetLoader::new(DotnetConfig::default()))
-        .config(polyplug_abi::runtime::RuntimeConfig {
-            unload_mode: polyplug_abi::runtime::UnloadMode::Reclaim,
-            ..Default::default()
-        })
         .build()
         .expect("failed to build runtime B");
 
@@ -892,7 +850,7 @@ fn two_runtimes_same_bundle_id_have_isolated_alcs() {
 
     assert!(
         !polyplug_dotnet::bundle_alc_alive(&rt_a, bundle_id).expect("alc probe A"),
-        "runtime A's ALC must be reclaimed after its Reclaim unload"
+        "runtime A's ALC must be reclaimed after its unload"
     );
     assert!(
         polyplug_dotnet::bundle_alc_alive(&rt_b, bundle_id).expect("alc probe B"),

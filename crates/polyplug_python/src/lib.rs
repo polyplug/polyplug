@@ -600,20 +600,14 @@ impl BundleLoader for PythonLoader {
         Err(polyplug::error::RuntimeError::HotReloadDisabled)
     }
 
-    // `reclaim_safe` and the runtime's `UnloadMode` are both ignored, like the Lua
-    // and JS VM loaders. Unlike native `dlclose`, purging `sys.modules` is
-    // memory-safe regardless of any in-flight call: CPython refcounts/GC keep every
-    // still-referenced module object alive, so deleting a `sys.modules` entry only
-    // drops the import cache, never the object a running dispatch is using. Python
-    // therefore ALWAYS purges this bundle's module entries on unload — no
-    // retire-not-drop branch, no quiescence hint, no crossbeam-epoch (CPython owns
-    // object liveness, there is no raw resource for the epoch to govern).
-    fn unload(
-        &self,
-        bundle_id: BundleId,
-        _runtime: &Runtime,
-        _reclaim_safe: bool,
-    ) -> Result<(), RuntimeError> {
+    // Unlike native `dlclose`, purging `sys.modules` is memory-safe regardless of any
+    // in-flight call: CPython refcounts/GC keep every still-referenced module object
+    // alive, so deleting a `sys.modules` entry only drops the import cache, never the
+    // object a running dispatch is using. Python therefore ALWAYS purges this bundle's
+    // module entries on unload — no retire-not-drop branch, no quiescence hint, no
+    // crossbeam-epoch (CPython owns object liveness, there is no raw resource for the
+    // epoch to govern).
+    fn unload(&self, bundle_id: BundleId, _runtime: &Runtime) -> Result<(), RuntimeError> {
         // Drain this bundle's prefixes and delete every matching `sys.modules` key so
         // a subsequent load re-imports fresh source.
         let prefixes: Vec<String> = {

@@ -124,7 +124,6 @@ impl BundleLoader for CascadeLoader {
 fn hot_reload_config() -> RuntimeConfig {
     RuntimeConfig {
         compatibility: Compatibility::Yolo,
-        unload_mode: polyplug_abi::UnloadMode::Retire,
         hot_reload_enabled: true,
         on_reload: None,
         on_reload_user_data: core::ptr::null_mut(),

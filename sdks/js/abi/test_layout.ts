@@ -73,8 +73,8 @@ Deno.test("ReloadPhase is 48 bytes", () => {
     assert(RELOAD_PHASE_SIZE === 48);
 });
 
-Deno.test("RuntimeConfig is 56 bytes", () => {
-    assert(RUNTIME_CONFIG_SIZE === 56);
+Deno.test("RuntimeConfig is 48 bytes", () => {
+    assert(RUNTIME_CONFIG_SIZE === 48);
 });
 
 Deno.test("AbiError is 24 bytes", () => {

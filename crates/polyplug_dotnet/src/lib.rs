@@ -387,16 +387,14 @@ impl BundleLoader for DotnetLoader {
     /// for crossbeam-epoch to govern (unlike the native `dlclose` loader); the .NET GC
     /// keeps any still-referenced managed object alive until it is truly unreachable.
     ///
-    /// `reclaim_safe` and the runtime's `UnloadMode` are both ignored: like the native
-    /// `dlclose` loader, the runtime is structurally blind to in-flight native dispatch
-    /// into managed code, so unloading is sound under the documented trusted-same-process
-    /// host contract — the host MUST NOT call, or hold a pointer into, a bundle
-    /// concurrently with unloading it (docs/TRUST_MODEL.md).
+    /// Like the native `dlclose` loader, the runtime is structurally blind to in-flight
+    /// native dispatch into managed code, so unloading is sound under the documented
+    /// trusted-same-process host contract — the host MUST NOT call, or hold a pointer
+    /// into, a bundle concurrently with unloading it (docs/TRUST_MODEL.md).
     fn unload(
         &self,
         bundle_id: polyplug_utils::BundleId,
         runtime: &Runtime,
-        _reclaim_safe: bool,
     ) -> Result<(), RuntimeError> {
         let context: Arc<DotnetContext> = match CLR_CONTEXT.get() {
             Some(c) => Arc::clone(c),

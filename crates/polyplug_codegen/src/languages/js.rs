@@ -94,9 +94,7 @@ impl JsGenerator {
             "Array" => Some((24, 8)),      // { items(8), len(8), align(8) }
             // All #[repr(u32)] enums — 4 bytes, 4-aligned
             "AbiErrorCode" | "DispatchType" | "Compatibility" | "ReloadPhaseType"
-            | "UnloadMode" | "ContractType" | "RuntimeLanguage" | "ParseVersionError" => {
-                Some((4, 4))
-            }
+            | "ContractType" | "RuntimeLanguage" | "ParseVersionError" => Some((4, 4)),
             _ => None,
         }
     }

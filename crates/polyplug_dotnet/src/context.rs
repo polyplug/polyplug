@@ -528,9 +528,9 @@ impl DotnetContext {
     ///
     /// Unload is cooperative and asynchronous: this drops the bridge's rooting reference and
     /// requests teardown; actual managed memory reclaim completes after the next GC once all
-    /// references and native frames into the ALC have cleared. The host is responsible for
-    /// attesting (via `UnloadMode::Reclaim`) that no thread is calling or holding a pointer
-    /// into the bundle before this is invoked.
+    /// references and native frames into the ALC have cleared. Under the documented
+    /// trusted-same-process host contract, the host MUST NOT call or hold a pointer into
+    /// the bundle before this is invoked.
     pub(crate) fn unload_bundle_alc(
         &self,
         runtime_id: u64,

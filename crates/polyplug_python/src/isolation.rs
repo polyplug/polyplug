@@ -254,7 +254,7 @@ pub(crate) fn isolate_bundle_modules(
     }
 
     // Return the prefix the bundle's modules were re-keyed under so the loader can
-    // track it and purge those `sys.modules` entries on `UnloadMode::Reclaim`.
+    // track it and purge those `sys.modules` entries on unload.
     Ok(prefix)
 }
 

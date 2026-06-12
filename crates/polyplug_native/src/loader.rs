@@ -483,14 +483,8 @@ impl BundleLoader for NativeLoader {
     /// This is the same contract hot-reload's `Preparing` phase relies on and the
     /// documented price of zero-overhead native dispatch — not a bug.
     ///
-    /// `reclaim_safe` and the runtime's `UnloadMode` are ignored on this path: the
-    /// library is always epoch-reclaimed (never parked alive forever).
-    fn unload(
-        &self,
-        bundle_id: BundleId,
-        runtime: &Runtime,
-        _reclaim_safe: bool,
-    ) -> Result<(), RuntimeError> {
+    /// The library is always epoch-reclaimed (never parked alive forever).
+    fn unload(&self, bundle_id: BundleId, runtime: &Runtime) -> Result<(), RuntimeError> {
         // Remove the live handle; nothing to do if this bundle isn't loaded by us.
         let library: libloading::Library = match self
             .libraries
@@ -534,8 +528,6 @@ mod unload_tests {
 
     use polyplug::Runtime;
     use polyplug::loader::{BundleLoader, BundleSource, ManifestData, parse_manifest};
-    use polyplug_abi::UnloadMode;
-    use polyplug_abi::runtime::RuntimeConfig;
     use polyplug_utils::BundleId;
 
     use crate::config::NativeConfig;
@@ -555,15 +547,10 @@ mod unload_tests {
             .join("test_plugin_dir")
     }
 
-    /// Build a `Runtime` with the given `unload_mode`. No loader is registered: the
-    /// test drives a directly-constructed `NativeLoader`, using the runtime only for
-    /// `host_abi()` / `config().unload_mode`.
-    fn runtime_with_mode(mode: UnloadMode) -> Arc<Runtime> {
+    /// Build a default `Runtime`. No loader is registered: the test drives a
+    /// directly-constructed `NativeLoader`, using the runtime only for `host_abi()`.
+    fn test_runtime() -> Arc<Runtime> {
         Runtime::builder()
-            .config(RuntimeConfig {
-                unload_mode: mode,
-                ..Default::default()
-            })
             .build()
             .expect("runtime build should succeed")
     }
@@ -584,23 +571,18 @@ mod unload_tests {
     }
 
     /// Unload removes the live handle and SCHEDULES the library for epoch-deferred
-    /// reclaim (uniform behaviour, independent of `UnloadMode` / `reclaim_safe`).
-    ///
-    /// This consolidates the coverage of the old policy-specific tests
-    /// (`retire_mode_keeps_library_mapped`, `reclaim_mode_drops_quiescent_library`,
-    /// `reclaim_mode_defers_when_not_safe`): the retire-not-drop / reclaim-vs-defer
-    /// branches no longer exist — every unload epoch-reclaims.
+    /// reclaim. Every unload epoch-reclaims uniformly: the retire-not-drop /
+    /// reclaim-vs-defer branches no longer exist.
     #[test]
     #[cfg(not(miri))]
     fn unload_removes_live_and_schedules_reclaim() {
-        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Retire);
+        let runtime: Arc<Runtime> = test_runtime();
         let (loader, bundle_id): (NativeLoader, BundleId) = load_test_plugin(&runtime);
         assert_eq!(loader.live_library_count(), 1);
         assert_eq!(loader.scheduled_reclaim_count(), 0);
 
-        // reclaim_safe and unload_mode are ignored now; pass true to prove it.
         loader
-            .unload(bundle_id, &runtime, true)
+            .unload(bundle_id, &runtime)
             .expect("unload should succeed");
 
         assert_eq!(loader.live_library_count(), 0, "live handle removed");
@@ -608,26 +590,6 @@ mod unload_tests {
             loader.scheduled_reclaim_count(),
             1,
             "unload must schedule the library for epoch-deferred reclaim"
-        );
-    }
-
-    /// `reclaim_safe = false` and `UnloadMode::Reclaim` are both ignored: unload still
-    /// schedules the library for epoch-deferred reclaim, never parks it forever.
-    #[test]
-    #[cfg(not(miri))]
-    fn unload_ignores_reclaim_safe_and_mode() {
-        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Reclaim);
-        let (loader, bundle_id): (NativeLoader, BundleId) = load_test_plugin(&runtime);
-
-        loader
-            .unload(bundle_id, &runtime, false)
-            .expect("unload should succeed");
-
-        assert_eq!(loader.live_library_count(), 0, "live handle removed");
-        assert_eq!(
-            loader.scheduled_reclaim_count(),
-            1,
-            "reclaim_safe=false must still schedule epoch-deferred reclaim"
         );
     }
 
@@ -656,7 +618,7 @@ mod unload_tests {
     #[test]
     #[cfg(not(miri))]
     fn failed_load_after_register_schedules_reclaim_and_invalidates() {
-        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Retire);
+        let runtime: Arc<Runtime> = test_runtime();
         let dir: PathBuf = register_fail_plugin_dir();
         let manifest: ManifestData =
             parse_manifest(&dir).expect("parse_manifest for register_fail_plugin");
@@ -713,7 +675,7 @@ mod unload_tests {
     #[test]
     #[cfg(not(miri))]
     fn double_load_schedules_superseded_library_reclaim() {
-        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Retire);
+        let runtime: Arc<Runtime> = test_runtime();
         let dir: PathBuf = test_plugin_dir();
         let manifest: ManifestData =
             parse_manifest(&dir).expect("parse_manifest for test_plugin_dir");
@@ -794,7 +756,7 @@ mod unload_tests {
         let manifest: ManifestData =
             parse_manifest(&temp_dir).expect("parse_manifest for non-utf8 bundle");
         let source: BundleSource = BundleSource::Path(manifest.path.clone());
-        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Retire);
+        let runtime: Arc<Runtime> = test_runtime();
         let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
 
         let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -812,8 +774,8 @@ mod unload_tests {
     }
 
     /// On Windows, a mapped DLL holds an exclusive file lock, so `remove_file`
-    /// fails with `ERROR_SHARING_VIOLATION` while the DLL is loaded. After an unload
-    /// under `UnloadMode::Reclaim` (dlclose), the lock is released and removal
+    /// fails with `ERROR_SHARING_VIOLATION` while the DLL is loaded. After unload
+    /// runs the epoch-deferred `dlclose`, the lock is released and removal
     /// succeeds. This proves real OS-resource reclaim.
     ///
     /// Linux/macOS unlink a mapped file happily, so the assertion proves nothing
@@ -859,7 +821,7 @@ mod unload_tests {
         let bundle_id: BundleId = BundleId::new(&manifest.name);
         let source: BundleSource = BundleSource::Path(manifest.path.clone());
 
-        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Reclaim);
+        let runtime: Arc<Runtime> = test_runtime();
         let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
         loader
             .load(&manifest, &source, &runtime)
@@ -872,7 +834,7 @@ mod unload_tests {
         );
 
         loader
-            .unload(bundle_id, &runtime, true)
+            .unload(bundle_id, &runtime)
             .expect("unload should succeed");
 
         // unload schedules the `dlclose` for epoch-deferred reclaim. This test is

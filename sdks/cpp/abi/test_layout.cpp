@@ -15,7 +15,7 @@ static_assert(sizeof(GuestContractHandle) == 8, "GuestContractHandle size mismat
 static_assert(sizeof(BundleInitContext) == 24, "BundleInitContext size mismatch");
 static_assert(sizeof(PluginDescriptor) == 48, "PluginDescriptor size mismatch");
 static_assert(sizeof(ReloadPhase) == 48, "ReloadPhase size mismatch");
-static_assert(sizeof(RuntimeConfig) == 56, "RuntimeConfig size mismatch");
+static_assert(sizeof(RuntimeConfig) == 48, "RuntimeConfig size mismatch");
 static_assert(sizeof(AbiError) == 24, "AbiError size mismatch");
 static_assert(sizeof(Buffer) == 24, "Buffer size mismatch");
 static_assert(sizeof(ArenaOverflowBlock) == 24, "ArenaOverflowBlock size mismatch");

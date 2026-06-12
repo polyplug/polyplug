@@ -41,7 +41,6 @@ import {
   HOST_API_GET_LAST_ERROR_OFFSET,
   HOST_API_GET_ERROR_LEN_OFFSET,
   RUNTIME_CONFIG_COMPATIBILITY_OFFSET,
-  RUNTIME_CONFIG_UNLOAD_MODE_OFFSET,
   RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET,
   RUNTIME_CONFIG_ON_RELOAD_OFFSET,
   RUNTIME_CONFIG_ON_RELOAD_USER_DATA_OFFSET,
@@ -925,16 +924,15 @@ export function openPolyplug(soPath) {
  * runtimes). The FFI callbacks created for `onReload` / `logger` are owned by
  * the returned Runtime and closed by {@link Runtime#destroy}.
  *
- * RuntimeConfig is the full 56-byte ABI struct: compatibility (u32 @ 0),
- * unload_mode (u32 @ 4), hot_reload_enabled (bool @ 8), on_reload (fn @ 16),
- * on_reload_user_data (ptr @ 24), log (fn @ 32), log_user_data (ptr @ 40),
- * log_max_level (u32 @ 48). Offsets/size come from the abi.ts constants.
+ * RuntimeConfig is the full 48-byte ABI struct: compatibility (u32 @ 0),
+ * hot_reload_enabled (bool @ 4), on_reload (fn @ 8), on_reload_user_data (ptr @ 16),
+ * log (fn @ 24), log_user_data (ptr @ 32), log_max_level (u32 @ 40). Offsets/size
+ * come from the abi.ts constants.
  *
  * @param {Deno.DynamicLibrary} lib - Dynamic library
  * @param {Object} [options] - Per-runtime options
  * @param {Object} [options.config] - RuntimeConfig fields
  * @param {number} [options.config.compatibility=0] - Compatibility mode (COMPATIBILITY_STRICT=0, RELAXED=1, YOLO=2)
- * @param {number} [options.config.unloadMode=0] - Unload mode discriminant (0 = Retire)
  * @param {boolean} [options.config.hotReloadEnabled=false] - Whether hot-reload is enabled
  * @param {number} [options.config.logMaxLevel=5] - Max LogLevel (1=Error … 5=Trace) delivered to `logger`
  * @param {function(ReloadPhase): void} [options.onReload] - Hot-reload phase callback
@@ -955,7 +953,6 @@ export function runtimeNew(lib, options = {}) {
     const configView = new DataView(configBuf.buffer);
 
     configView.setUint32(RUNTIME_CONFIG_COMPATIBILITY_OFFSET, config?.compatibility ?? COMPATIBILITY_STRICT, true);
-    configView.setUint32(RUNTIME_CONFIG_UNLOAD_MODE_OFFSET, config?.unloadMode ?? 0, true);
     configView.setUint8(RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET, config?.hotReloadEnabled ? 1 : 0);
 
     if (onReloadCallback) {

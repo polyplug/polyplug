@@ -598,10 +598,9 @@ impl Runtime {
     /// Then the matching loader's reclaim hook runs:
     /// - **VM loaders (Lua, JS):** the bundle's VM is *freed* (true reclaim) once it is
     ///   quiescent — see the host-coordination contract below.
-    /// - **Native loader:** under `UnloadMode::Reclaim` it `dlclose`s the dylib (drops
-    ///   the `libloading::Library`), releasing OS resources and the on-disk file lock;
-    ///   under `UnloadMode::Retire` (default) it keeps the dylib mapped (retire-not-drop).
-    ///   Native `dlclose` is host-attested — see [`crate::loader::BundleLoader::unload`].
+    /// - **Native loader:** it `dlclose`s the dylib (drops the `libloading::Library`)
+    ///   once epoch-safe, releasing OS resources and the on-disk file lock. Reclamation
+    ///   is always epoch-deferred — see [`crate::loader::BundleLoader::unload`].
     /// - **Python / .NET loaders:** invalidate-only (retire-not-drop); the interpreter /
     ///   CLR state is kept mapped.
     ///
@@ -668,18 +667,10 @@ impl Runtime {
 
         let _count: u32 = self.registry.invalidate_bundle(bundle_id)?;
 
-        // reclaim_safe is forced false here: the interface lifetime is now
-        // epoch-governed (true unload of interface memory), and loader/library
-        // reclamation is coordinated through epoch in its own path. Until that path
-        // lands, the loader keeps the library mapped (reclaim_safe=false), which is
-        // always sound. The accurate live-instance signal arrives with the
-        // host-mediated instance counter.
-        let reclaim_safe: bool = false;
-
         // Invalidate-then-reclaim: now that the bundle is gone from the registry
         // indices, no new dispatch can reach it. Ask the loader to free its
         // per-bundle resources at a quiescence point (no-op for non-VM loaders).
-        self.reclaim_via_loader(bundle_id, loader_name.as_deref(), reclaim_safe)?;
+        self.reclaim_via_loader(bundle_id, loader_name.as_deref())?;
         Ok(())
     }
 
@@ -722,21 +713,18 @@ impl Runtime {
     /// or missing loader is not an error: a bundle with no recoverable loader simply
     /// has nothing to reclaim (the invalidate already retired its interfaces).
     ///
-    /// `reclaim_safe` is the runtime's best-effort hint (derived from the retired
-    /// interfaces' `Arc::strong_count`) forwarded to the loader's `unload` hook. See
-    /// [`crate::loader::BundleLoader::unload`] for its precise meaning and limits.
+    /// See [`crate::loader::BundleLoader::unload`] for the loader-side reclaim contract.
     fn reclaim_via_loader(
         &self,
         bundle_id: BundleId,
         loader_name: Option<&str>,
-        reclaim_safe: bool,
     ) -> Result<(), RuntimeError> {
         let name: &str = match loader_name {
             Some(n) => n,
             None => return Ok(()),
         };
         match self.loader_for(name) {
-            Some(loader) => loader.unload(bundle_id, self, reclaim_safe),
+            Some(loader) => loader.unload(bundle_id, self),
             None => Ok(()),
         }
     }
@@ -800,15 +788,7 @@ impl Runtime {
 
         let _count: u32 = self.registry.invalidate_bundle(bundle_id)?;
 
-        // reclaim_safe is forced false here: the interface lifetime is now
-        // epoch-governed (true unload of interface memory), and loader/library
-        // reclamation is coordinated through epoch in its own path. Until that path
-        // lands, the loader keeps the library mapped (reclaim_safe=false), which is
-        // always sound. The accurate live-instance signal arrives with the
-        // host-mediated instance counter.
-        let reclaim_safe: bool = false;
-
-        self.reclaim_via_loader(bundle_id, loader_name.as_deref(), reclaim_safe)?;
+        self.reclaim_via_loader(bundle_id, loader_name.as_deref())?;
         Ok(())
     }
 

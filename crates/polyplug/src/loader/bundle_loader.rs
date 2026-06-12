@@ -76,29 +76,13 @@ pub trait BundleLoader: Send + Sync {
     /// point: if no thread is mid-dispatch on the VM the VM state is dropped (true
     /// reclaim); otherwise it is retired (kept alive) to avoid a use-after-free.
     ///
-    /// The native loader overrides it to optionally `dlclose` under
-    /// [`UnloadMode::Reclaim`](polyplug_abi::runtime::UnloadMode::Reclaim).
-    ///
-    /// # `reclaim_safe`
-    /// A best-effort hint computed by the runtime from the retired interfaces'
-    /// `Arc::strong_count`: `true` means no *Arc-holding* path still references the
-    /// bundle's interfaces, so true reclaim is safe from that angle. It does NOT — and
-    /// cannot — account for raw in-flight native calls: native dispatch is zero-overhead
-    /// and the runtime keeps no native-call counter, so it is structurally blind to a
-    /// thread executing inside the library. Loaders that truly free OS resources
-    /// (native `dlclose`) therefore rely on the host attestation of `UnloadMode::Reclaim`
-    /// for that case, using `reclaim_safe` only as an additional defer signal. VM
-    /// loaders ignore it because their own `in_dispatch_threads` quiescence tracking is
-    /// authoritative.
+    /// The native loader overrides it to `dlclose` the dylib once it is epoch-safe
+    /// to do so; reclamation is always epoch-deferred so previously resolved
+    /// pointers stay valid until no in-flight dispatch can reference the bundle.
     ///
     /// # Errors
     /// Returns `Err(RuntimeError::...)` if reclamation fails.
-    fn unload(
-        &self,
-        _bundle_id: BundleId,
-        _runtime: &Runtime,
-        _reclaim_safe: bool,
-    ) -> Result<(), RuntimeError> {
+    fn unload(&self, _bundle_id: BundleId, _runtime: &Runtime) -> Result<(), RuntimeError> {
         Ok(())
     }
 }
