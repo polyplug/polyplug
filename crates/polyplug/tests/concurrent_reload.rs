@@ -12,13 +12,14 @@
 //! Why this is sound: `find_guest_contract` followed by `resolve_guest_contract`
 //! reads the slot's `Arc<GuestContractInterface>` under the read lock. The swap
 //! (`swap_guest_contract_interface`) takes the write lock, replaces the slot's
-//! `Arc`, and *retires* (does not drop) the old `Arc` for the runtime lifetime.
-//! A reader therefore observes either the complete old interface or the complete
-//! new one — never a half-swapped struct — and any interface memory it touched
-//! stays alive because the retired `Arc` is never freed. The same retire-not-drop
-//! mechanism backs `apply_reload_swap`, the reconciliation step the reload driver
-//! runs after a bundle re-initializes; `swap_guest_contract_interface` is its
-//! single-slot, publicly reachable equivalent.
+//! `Arc`, and hands the superseded published snapshot (which still owns the old
+//! `Arc`) to crossbeam-epoch for deferred reclamation. A reader therefore observes
+//! either the complete old interface or the complete new one — never a half-swapped
+//! struct — and any interface memory it touched stays alive until it unpins, because
+//! the deferred free runs only after every reader pinned in the prior epoch has
+//! unpinned. The same epoch reclamation backs `apply_reload_swap`, the reconciliation
+//! step the reload driver runs after a bundle re-initializes;
+//! `swap_guest_contract_interface` is its single-slot, publicly reachable equivalent.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -143,6 +144,11 @@ fn dispatch_concurrent_with_reload_is_safe() {
                 scope.spawn(move || -> usize {
                     let mut completed: usize = 0;
                     for _ in 0..ITERATIONS {
+                        // Pin the epoch across find→resolve→deref so the resolved
+                        // interface stays alive across the deref while the swapper thread
+                        // republishes concurrently — true unload epoch-reclaims the
+                        // superseded interface only after every pinned reader unpins.
+                        let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
                         let resolved: GuestContractHandle = registry_ref
                             .find_guest_contract(contract_id, 0)
                             .expect("contract must always resolve during reload");
@@ -153,10 +159,9 @@ fn dispatch_concurrent_with_reload_is_safe() {
                             .expect("interface must always resolve during reload");
                         assert!(!interface_ptr.is_null(), "interface pointer must be valid");
 
-                        // SAFETY: interface_ptr was returned by resolve_guest_contract
-                        // and points at a slot interface whose Arc is retained
-                        // (retire-not-drop) for the registry's lifetime, so it stays
-                        // valid even if the slot is swapped concurrently.
+                        // SAFETY: the epoch guard pinned above keeps the resolved slot
+                        // interface alive across this deref even if the slot is swapped
+                        // concurrently on another thread.
                         unsafe {
                             let create_fn: unsafe extern "C" fn(
                                 *const HostApi,

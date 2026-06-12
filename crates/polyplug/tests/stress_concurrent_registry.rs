@@ -231,13 +231,20 @@ fn stress_concurrent_swaps_with_resolvers() {
             // the test's "must observe at least one resolve" assertion.
             let mut local_resolves: usize = 0_usize;
             loop {
+                // Pin the epoch across find→resolve→deref. Under true unload the
+                // superseded interface is reclaimed via epoch-deferred reclamation once
+                // no reader is pinned; pinning before resolving keeps the interface this
+                // iteration touches alive across the deref even if the swapper thread
+                // republishes concurrently.
+                let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
                 let handle_result: Result<GuestContractHandle, RegistryError> = reg_clone
                     .find_guest_contract(GuestContractId::from_u64(SWAP_CONTRACT_ID), 0_u32);
                 if let Ok(found) = handle_result {
                     let resolve_result: Result<*const GuestContractInterface, RegistryError> =
                         reg_clone.resolve_guest_contract(found);
                     if let Ok(interface_ptr) = resolve_result {
-                        // SAFETY: interface_ptr is valid.
+                        // SAFETY: the epoch guard pinned above keeps the resolved
+                        // interface alive across this deref despite a concurrent swap.
                         let version: &Version = unsafe { &(*interface_ptr).contract_version };
                         assert!(
                             *version == VERSION_V1 || *version == VERSION_V2,
@@ -294,13 +301,13 @@ const UNLOAD_ROUNDS: usize = 24_usize;
 /// continuously `find` + `resolve` + read the interface while one thread
 /// repeatedly invalidates (unloads) and re-registers the bundle.
 ///
-/// The invariant under test is the retire-not-drop guarantee: a handle observed
-/// concurrently with an unload must EITHER resolve successfully — in which case
-/// the returned pointer stays valid for the runtime lifetime even though the
-/// bundle was invalidated — OR fail cleanly with `StaleHandle`/`PluginNotFound`.
-/// It must never produce a use-after-free. Run this under ThreadSanitizer (see
-/// `.github/workflows/nightly.yml`) to also assert the registry's locking is
-/// race-free.
+/// The invariant under test is the epoch-reclamation guarantee: a reader that pins
+/// the epoch and observes a handle concurrently with an unload must EITHER resolve
+/// successfully — in which case the resolved interface stays alive for as long as the
+/// reader holds its pin, even though the bundle was invalidated — OR fail cleanly with
+/// `StaleHandle`/`PluginNotFound`. It must never produce a use-after-free. Run this
+/// under ThreadSanitizer (see `.github/workflows/nightly.yml`) to also assert the
+/// registry's locking is race-free.
 #[test]
 fn stress_concurrent_unload_with_resolvers() {
     let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::new());
@@ -336,15 +343,20 @@ fn stress_concurrent_unload_with_resolvers() {
             // make progress before exiting.
             let mut local_resolves: usize = 0_usize;
             loop {
+                // Pin the epoch across find→resolve→deref so the resolved interface
+                // stays alive across the deref even though another thread unloads the
+                // bundle concurrently — under true unload the superseded interface is
+                // epoch-reclaimed only after every pinned reader has unpinned.
+                let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
                 let handle_result: Result<GuestContractHandle, RegistryError> = reg_clone
                     .find_guest_contract(GuestContractId::from_u64(UNLOAD_CONTRACT_ID), 0_u32);
                 if let Ok(found) = handle_result {
                     let resolve_result: Result<*const GuestContractInterface, RegistryError> =
                         reg_clone.resolve_guest_contract(found);
                     if let Ok(interface_ptr) = resolve_result {
-                        // SAFETY: a resolved pointer remains valid for the runtime
-                        // lifetime under retire-not-drop, even after the bundle is
-                        // invalidated on another thread.
+                        // SAFETY: the epoch guard pinned above keeps the resolved
+                        // interface alive across this deref even after a concurrent
+                        // unload on another thread.
                         let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
                         assert_eq!(contract_id.id(), UNLOAD_CONTRACT_ID);
                         resolve_counter.fetch_add(1_usize, Ordering::Relaxed);

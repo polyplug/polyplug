@@ -172,12 +172,15 @@ fn make_hot_reload_runtime() -> Arc<Runtime> {
 }
 
 fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
+    // Pin the epoch across resolve + the interface deref so the interface stays alive
+    // while we read its native function table, even if a reload republishes concurrently.
+    let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
     let handle: polyplug_abi::GuestContractHandle = rt.find_guest_contract(contract_id, 0).ok()?;
     let interface_ptr: *const GuestContractInterface = rt.resolve_guest_contract(handle).ok()?;
-    // SAFETY: interface_ptr was returned by resolve_guest_contract and points at a retained
-    // (retire-not-drop) interface valid for the runtime's lifetime. dispatch.native is the
-    // active variant for these native test interfaces, and functions[0] is the version fn
-    // matching the `extern "C" fn() -> u32` signature the test plugins export.
+    // SAFETY: the epoch guard pinned above keeps the resolved interface alive across this
+    // deref. dispatch.native is the active variant for these native test interfaces, and
+    // functions[0] is the version fn matching the `extern "C" fn() -> u32` signature the
+    // test plugins export.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*interface_ptr).dispatch.native.functions;
         core::mem::transmute(*fns)
@@ -322,6 +325,11 @@ fn stress_direct_swap_under_concurrent_reader_load() {
 
         let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
+                // Pin the epoch across find→resolve→deref so the resolved interface
+                // stays alive across the deref while the reloader thread republishes
+                // concurrently (true unload epoch-reclaims the superseded interface
+                // only after every pinned reader has unpinned).
+                let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
                 let find_result: Result<
                     polyplug_abi::GuestContractHandle,
                     polyplug::error::RegistryError,
@@ -335,7 +343,8 @@ fn stress_direct_swap_under_concurrent_reader_load() {
                         polyplug::error::RegistryError,
                     > = reg_clone.resolve_guest_contract(resolved_handle);
                     if let Ok(interface_ptr) = resolve_result {
-                        // SAFETY: interface_ptr is valid
+                        // SAFETY: the epoch guard pinned above keeps the resolved
+                        // interface alive across this deref despite a concurrent reload.
                         let version: &Version = unsafe { &(*interface_ptr).contract_version };
                         assert!(
                             version.major == 1 || version.major == 2,
@@ -402,6 +411,11 @@ fn stress_interface_handoff_correctness_no_torn_reads() {
 
         let dispatcher_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
+                // Pin the epoch across find→resolve→dispatch so the resolved interface
+                // (and its native function table) stays alive across the call while the
+                // reloader thread republishes concurrently — true unload epoch-reclaims
+                // the superseded interface only after every pinned reader has unpinned.
+                let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
                 let handle_result: Result<
                     polyplug_abi::GuestContractHandle,
                     polyplug::error::RegistryError,
@@ -414,10 +428,11 @@ fn stress_interface_handoff_correctness_no_torn_reads() {
                     > = rt_clone.resolve_guest_contract(plugin_handle);
 
                     if let Ok(vt_ptr) = resolve_result {
-                        // SAFETY: vt_ptr was returned by resolve_guest_contract and points at a
-                        // retained (retire-not-drop) interface valid for the runtime's lifetime.
-                        // dispatch.native is the active variant and functions[0] is the version fn
-                        // matching the `extern "C" fn() -> u32` signature the test plugins export.
+                        // SAFETY: the epoch guard pinned above keeps the resolved
+                        // interface and its native function table alive across this
+                        // dispatch despite a concurrent reload. dispatch.native is the
+                        // active variant and functions[0] is the version fn matching the
+                        // `extern "C" fn() -> u32` signature the test plugins export.
                         let version: u32 = unsafe {
                             let fn_ptr: *const () = *(*vt_ptr).dispatch.native.functions;
                             let version_fn: extern "C" fn() -> u32 = core::mem::transmute(fn_ptr);
@@ -588,8 +603,8 @@ fn stress_concurrent_reload_threads_no_panic() {
 /// it straddle `loader.reload()`; the registry lock is dropped between them. Two
 /// reloads of the same bundle that overlap in that window can leave one reload
 /// with a stale snapshot, whose swap then finds no freshly-registered slot for a
-/// contract the other reload already consumed, takes the retire-not-drop path,
-/// and removes the contract's only live slot from the find index — leaving a
+/// contract the other reload already consumed, tears down that contract's only live
+/// slot and removes it from the find index — leaving a
 /// contract BOTH versions provide intermittently unresolvable.
 ///
 /// The reload callback fires `Preparing` at the start of a reload's critical

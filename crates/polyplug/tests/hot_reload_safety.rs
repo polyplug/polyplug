@@ -108,6 +108,13 @@ fn test_swap_interface_changes_interface_pointer() {
     }
     .expect("registration should succeed");
 
+    // Pin the epoch for the whole resolve→swap→deref sequence. The registry copies
+    // each registered interface into an Arc, so a pointer resolved before the swap
+    // points into the Arc the swap supersedes; holding this guard keeps that Arc alive
+    // (epoch reclamation cannot run while a reader is pinned), so the pre-swap pointer
+    // stays valid across the swap and its deref below.
+    let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+
     // The handle should be valid before the swap.
     let resolve_result_before: Result<*const GuestContractInterface, _> =
         registry.resolve_guest_contract(handle);
@@ -118,8 +125,8 @@ fn test_swap_interface_changes_interface_pointer() {
 
     let interface_ptr_before: *const GuestContractInterface =
         resolve_result_before.expect("resolve before swap should succeed");
-    // SAFETY: interface_ptr_before was returned by resolve_guest_contract and points at
-    // a retained (retire-not-drop) interface that stays valid for the registry's lifetime.
+    // SAFETY: the epoch guard pinned above keeps the pre-swap interface Arc alive across
+    // this deref even though the swap below supersedes it.
     let version_before: &Version = unsafe { &(*interface_ptr_before).contract_version };
     assert_eq!(
         version_before.major, 1,
@@ -146,8 +153,8 @@ fn test_swap_interface_changes_interface_pointer() {
 
     let interface_ptr_after: *const GuestContractInterface =
         resolve_result_after.expect("resolve after swap should succeed");
-    // SAFETY: interface_ptr_after was returned by resolve_guest_contract and points at
-    // a retained (retire-not-drop) interface that stays valid for the registry's lifetime.
+    // SAFETY: interface_ptr_after points at the live post-swap interface Arc, kept alive
+    // by the epoch guard pinned above.
     let version_after: &Version = unsafe { &(*interface_ptr_after).contract_version };
     assert_eq!(version_after.major, 2, "after swap: should have version 2");
 }
@@ -171,12 +178,17 @@ fn test_direct_swap_interface() {
     }
     .expect("registration should succeed");
 
+    // Pin the epoch across resolve→swap→deref so the pre-swap interface Arc the
+    // registry copied stays alive across the swap that supersedes it.
+    let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+
     // Resolve before swap
     let interface_ptr_before: *const GuestContractInterface = registry
         .resolve_guest_contract(handle)
         .expect("resolve should succeed before swap");
 
-    // SAFETY: interface_ptr_before points to INTERFACE_V1 which is 'static.
+    // SAFETY: the epoch guard pinned above keeps the pre-swap interface Arc alive
+    // across this deref.
     let version_before: &Version = unsafe { &(*interface_ptr_before).contract_version };
     assert_eq!(version_before.major, 1, "before swap: V1");
 
@@ -191,7 +203,8 @@ fn test_direct_swap_interface() {
         .resolve_guest_contract(handle)
         .expect("resolve should succeed after swap");
 
-    // SAFETY: interface_ptr_after points to INTERFACE_V2 which is 'static.
+    // SAFETY: interface_ptr_after points at the live post-swap interface Arc, kept
+    // alive by the epoch guard pinned above.
     let version_after: &Version = unsafe { &(*interface_ptr_after).contract_version };
     assert_eq!(version_after.major, 2, "after swap: V2");
 }

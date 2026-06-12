@@ -5,13 +5,13 @@
 //!
 //! ─── What this proves ────────────────────────────────────────────────────────
 //!
-//! polyplug uses a **retire-not-drop** model: within a SINGLE live `Runtime`,
-//! unloading or hot-reloading a bundle *retires* the superseded interface +
-//! library (keeps it mapped for the runtime's lifetime) so any raw pointer a
-//! caller already resolved stays valid. Reclaim of that retired memory happens
-//! at **`Runtime` teardown** (`Drop`) — and, for .NET, via the collectible ALC
-//! reclaim path (#68). A naive loop that loads+unloads inside *one* long-lived
-//! runtime would therefore show RSS climb — that growth is BY DESIGN, not a leak.
+//! polyplug **truly unloads** bundles: unloading or hot-reloading a bundle hands the
+//! superseded interface + library/VM to crossbeam-epoch, which frees them once no
+//! reader is still pinned in the prior epoch (.NET goes via the collectible-ALC reclaim
+//! path, #68). RSS therefore returns to a flat baseline rather than climbing within a
+//! long-lived runtime. This soak additionally builds a fresh `Runtime` each cycle and
+//! drops it fully, so a non-flat RSS line is an unambiguous leak signal that also covers
+//! the runtime lifecycle itself.
 //!
 //! So this soak measures the **reclaim/teardown** path, which is the honest
 //! leak test: every cycle builds a FRESH `Runtime`, loads a native bundle,

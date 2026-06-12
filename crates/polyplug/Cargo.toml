@@ -32,6 +32,7 @@ criterion = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
 libloading = { workspace = true }
+crossbeam-epoch = { workspace = true }
 
 [[bench]]
 name = "contract_dispatch"
