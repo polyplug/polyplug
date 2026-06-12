@@ -1572,6 +1572,7 @@ name = "polyplug_js"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "crossbeam-epoch",
  "polyplug",
  "polyplug_abi",
  "polyplug_utils",
@@ -1585,6 +1586,7 @@ name = "polyplug_lua"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "crossbeam-epoch",
  "mlua",
  "polyplug",
  "polyplug_abi",
@@ -1596,6 +1598,7 @@ dependencies = [
 name = "polyplug_native"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-epoch",
  "libloading",
  "polyplug",
  "polyplug_abi",

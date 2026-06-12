@@ -381,37 +381,28 @@ impl BundleLoader for DotnetLoader {
         Err(RuntimeError::HotReloadDisabled)
     }
 
-    /// Unload a .NET bundle. Under `UnloadMode::Retire` (default) the bundle's collectible
-    /// `AssemblyLoadContext` is kept rooted by the managed bridge (retire-not-drop), so any
-    /// raw managed function pointer already resolved into it stays valid. Under host-attested
-    /// `UnloadMode::Reclaim` with `reclaim_safe`, the ALC is truly unloaded — its assemblies
-    /// become eligible for GC reclamation once all references and native frames into it clear.
+    /// Unload a .NET bundle by ALWAYS unloading its collectible `AssemblyLoadContext`:
+    /// the ALC's assemblies become eligible for GC reclamation once all references and
+    /// native frames into it clear. ALC unload is GC-driven, so there is no raw resource
+    /// for crossbeam-epoch to govern (unlike the native `dlclose` loader); the .NET GC
+    /// keeps any still-referenced managed object alive until it is truly unreachable.
     ///
-    /// SAFETY discipline mirrors the native `dlclose` loader: the runtime is structurally blind
-    /// to in-flight native dispatch into managed code, so true reclaim is sound ONLY because the
-    /// host selected `Reclaim`, attesting no thread is calling — or holds a pointer into — this
-    /// bundle. `reclaim_safe` is an additional best-effort defer signal.
+    /// `reclaim_safe` and the runtime's `UnloadMode` are both ignored: like the native
+    /// `dlclose` loader, the runtime is structurally blind to in-flight native dispatch
+    /// into managed code, so unloading is sound under the documented trusted-same-process
+    /// host contract — the host MUST NOT call, or hold a pointer into, a bundle
+    /// concurrently with unloading it (docs/TRUST_MODEL.md).
     fn unload(
         &self,
         bundle_id: polyplug_utils::BundleId,
         runtime: &Runtime,
-        reclaim_safe: bool,
+        _reclaim_safe: bool,
     ) -> Result<(), RuntimeError> {
-        let mode: polyplug_abi::runtime::UnloadMode = runtime.config().unload_mode;
-        match mode {
-            polyplug_abi::runtime::UnloadMode::Retire => Ok(()),
-            polyplug_abi::runtime::UnloadMode::Reclaim => {
-                if !reclaim_safe {
-                    // A resolver may still hold the interface; keep the ALC rooted (deferred).
-                    return Ok(());
-                }
-                let context: Arc<DotnetContext> = match CLR_CONTEXT.get() {
-                    Some(c) => Arc::clone(c),
-                    None => return Ok(()),
-                };
-                context.unload_bundle_alc(runtime_alc_id(runtime), bundle_id.id())
-            }
-        }
+        let context: Arc<DotnetContext> = match CLR_CONTEXT.get() {
+            Some(c) => Arc::clone(c),
+            None => return Ok(()),
+        };
+        context.unload_bundle_alc(runtime_alc_id(runtime), bundle_id.id())
     }
 }
 

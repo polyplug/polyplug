@@ -17,6 +17,7 @@ polyplug_abi = { workspace = true }
 polyplug_utils = { workspace = true }
 
 libloading = { workspace = true }
+crossbeam-epoch = { workspace = true }
 
 [lints]
 workspace = true

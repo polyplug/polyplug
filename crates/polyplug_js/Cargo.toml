@@ -17,6 +17,7 @@ polyplug_abi = { workspace = true }
 polyplug_utils = { workspace = true }
 rquickjs = { workspace = true, features = ["parallel"] }
 thiserror = { workspace = true }
+crossbeam-epoch = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

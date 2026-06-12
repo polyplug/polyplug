@@ -44,7 +44,6 @@ use polyplug::runtime::Runtime;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
-use polyplug_abi::UnloadMode;
 use polyplug_utils::BundleId;
 
 use crate::context::ensure_python_initialized;
@@ -61,9 +60,9 @@ pub struct PythonLoader {
     ///
     /// A bundle may be loaded more than once (reload re-runs `load`), each load
     /// minting a fresh prefix via the process-global nonce, so the prefixes
-    /// accumulate in a `Vec`. On `UnloadMode::Reclaim` the loader drains this entry
-    /// and purges every matching `sys.modules` key so a later load re-imports the
-    /// fresh source instead of a cached module.
+    /// accumulate in a `Vec`. On `unload` the loader drains this entry and purges
+    /// every matching `sys.modules` key so a later load re-imports the fresh source
+    /// instead of a cached module.
     module_prefixes: Mutex<HashMap<BundleId, Vec<String>>>,
 }
 
@@ -77,8 +76,7 @@ impl PythonLoader {
     }
 
     /// Record the `sys.modules` re-key `prefix` minted for `bundle_id` during a
-    /// successful load, so [`PythonLoader::unload`] can purge those entries under
-    /// `UnloadMode::Reclaim`.
+    /// successful load, so [`PythonLoader::unload`] can purge those entries.
     fn track_module_prefix(&self, bundle_id: u64, prefix: String) {
         let mut map: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<String>>> = self
             .module_prefixes
@@ -293,8 +291,8 @@ impl PythonLoader {
             // Isolate this bundle's freshly imported modules. With no bundle
             // directory ("") no imported module is classified as in-bundle, so this
             // is a no-op for single-file inline sources — by design. The returned
-            // prefix is still tracked for `UnloadMode::Reclaim` symmetry, even
-            // though no `sys.modules` entry carries it for inline sources.
+            // prefix is still tracked for unload-purge symmetry, even though no
+            // `sys.modules` entry carries it for inline sources.
             let prefix: String = crate::isolation::isolate_bundle_modules(
                 py,
                 &bundle_name,
@@ -587,8 +585,8 @@ impl BundleLoader for PythonLoader {
         // Pop bundle_id from the runtime's per-thread init stack after init completes.
         runtime.pop_init_bundle_id();
 
-        // Record the re-key prefix so `unload` under `UnloadMode::Reclaim` can purge
-        // this bundle's `sys.modules` entries and force a fresh re-import next load.
+        // Record the re-key prefix so `unload` can purge this bundle's `sys.modules`
+        // entries and force a fresh re-import next load.
         self.track_module_prefix(bundle_id, prefix);
 
         Ok(())
@@ -602,29 +600,22 @@ impl BundleLoader for PythonLoader {
         Err(polyplug::error::RuntimeError::HotReloadDisabled)
     }
 
-    // `reclaim_safe` is ignored, like the Lua and JS VM loaders. Unlike native
-    // `dlclose`, purging `sys.modules` is memory-safe regardless of any in-flight
-    // call: CPython refcounts/GC keep every still-referenced module object alive,
-    // so deleting a `sys.modules` entry only drops the import cache, never the
-    // object a running dispatch is using. Python may therefore purge under
-    // `Reclaim` without consulting the runtime's Arc-based quiescence hint.
+    // `reclaim_safe` and the runtime's `UnloadMode` are both ignored, like the Lua
+    // and JS VM loaders. Unlike native `dlclose`, purging `sys.modules` is
+    // memory-safe regardless of any in-flight call: CPython refcounts/GC keep every
+    // still-referenced module object alive, so deleting a `sys.modules` entry only
+    // drops the import cache, never the object a running dispatch is using. Python
+    // therefore ALWAYS purges this bundle's module entries on unload — no
+    // retire-not-drop branch, no quiescence hint, no crossbeam-epoch (CPython owns
+    // object liveness, there is no raw resource for the epoch to govern).
     fn unload(
         &self,
         bundle_id: BundleId,
-        runtime: &Runtime,
+        _runtime: &Runtime,
         _reclaim_safe: bool,
     ) -> Result<(), RuntimeError> {
-        let mode: UnloadMode = runtime.config().unload_mode;
-
-        // Retire (default): keep the bundle's modules mapped under their re-key
-        // prefix — current retire-not-drop behaviour. The tracking entry is left in
-        // place; it is harmless and a later Reclaim of the same id is not expected.
-        if mode == UnloadMode::Retire {
-            return Ok(());
-        }
-
-        // Reclaim: drain this bundle's prefixes and delete every matching
-        // `sys.modules` key so a subsequent load re-imports fresh source.
+        // Drain this bundle's prefixes and delete every matching `sys.modules` key so
+        // a subsequent load re-imports fresh source.
         let prefixes: Vec<String> = {
             let mut map: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<String>>> = self
                 .module_prefixes

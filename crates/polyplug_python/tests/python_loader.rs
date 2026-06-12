@@ -922,16 +922,18 @@ fn unload_reclaim_purges_bundle_modules_from_sys_modules() {
     );
 }
 
-/// Under `UnloadMode::Retire` (default), unloading a bundle keeps its re-keyed
-/// `sys.modules` entries mapped (retire-not-drop).
+/// `UnloadMode::Retire` is ignored: unloading ALWAYS purges the bundle's re-keyed
+/// `sys.modules` entries (no retire-not-drop branch). Even with the default `Retire`
+/// mode, the entries are gone after unload — proving the uniform purge behaviour
+/// rather than forever-retention.
 #[test]
-fn unload_retire_keeps_bundle_modules_in_sys_modules() {
+fn unload_ignores_unload_mode_and_purges_bundle_modules() {
     let bundle_name: &str = "retire_keep";
     let helper_module: &str = "_retire_keep_helper";
     let (_dir, path) = write_split_bundle(bundle_name, helper_module, "retirekeep@1");
 
     let loader: PythonLoader = PythonLoader::default();
-    // Default config => UnloadMode::Retire.
+    // Default config => UnloadMode::Retire, which the loader now ignores.
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, bundle_name);
 
@@ -955,8 +957,8 @@ fn unload_retire_keeps_bundle_modules_in_sys_modules() {
 
     let after: usize = count_bundle_modules(helper_module);
     assert_eq!(
-        after, before,
-        "Retire unload must keep the bundle's re-keyed sys.modules entries"
+        after, 0,
+        "unload must purge the bundle's re-keyed sys.modules entries even under Retire"
     );
 }
 

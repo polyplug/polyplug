@@ -5,6 +5,8 @@
 //! between bundles and between polyplug Runtime instances.
 //! Uses VM dispatch to call JS functions through the QuickJS API.
 
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -136,8 +138,9 @@ pub struct JsLoaderData {
 /// `JsLoaderData` is `!Send`/`!Sync` because `Persistent<Function>` carries a raw
 /// `*mut JSRuntime`. The previous design laundered this by leaking the box behind a
 /// raw `*mut c_void` inside `VmLoaderData`; this newtype instead owns the box so it
-/// can be dropped on unload, while restoring `Send + Sync` so the loader's `live` /
-/// `retired` collections (and therefore `JsLoader`) stay `Send + Sync`.
+/// can be dropped on unload, while restoring `Send + Sync` so the loader's `live`
+/// collection (and therefore `JsLoader`) stays `Send + Sync` and a box can be moved
+/// into the `Send + 'static` epoch-deferred reclaim closure on unload.
 ///
 /// The pointer stored in the dispatch `bridge_data` is `self.0`'s stable heap
 /// address; it is dereferenced only inside `js_dispatch`, which enters
@@ -165,6 +168,11 @@ impl SendVm {
     }
 
     /// Borrow the wrapped [`JsLoaderData`] (e.g. to inspect `in_dispatch_threads`).
+    ///
+    /// Test-only since unload became uniform epoch-deferred reclaim: production code no
+    /// longer inspects per-VM state at unload time (the epoch governs liveness), so the
+    /// only remaining caller is the in-flight-marking unit test.
+    #[cfg(test)]
     fn data(&self) -> &JsLoaderData {
         &self.0
     }
@@ -1384,11 +1392,13 @@ pub struct JsLoader {
     /// guarantee the old leak provided. Reload appends rather than replaces so a
     /// superseded VM stays alive for any in-flight dispatch.
     live: Mutex<HashMap<BundleId, Vec<SendVm>>>,
-    /// VM state that could not be dropped at unload because a dispatch was still in
-    /// flight on the VM (non-quiescent). Held for the loader's lifetime so the raw
-    /// `bridge_data` pointer the in-flight dispatch still dereferences stays valid —
-    /// dropping it would be a use-after-free. This is the deferred-reclaim fallback.
-    retired: Mutex<Vec<SendVm>>,
+    /// Count of VM-state boxes scheduled for epoch-deferred reclamation.
+    ///
+    /// Test/diagnostic only: epoch collection timing is non-deterministic, but this
+    /// counter is incremented the instant a box is handed to
+    /// `crossbeam_epoch::pin().defer(...)`, so it deterministically proves the VM was
+    /// scheduled for reclaim — NOT parked alive forever. Instance state (Rule 12).
+    scheduled_reclaims: AtomicU64,
 }
 
 impl JsLoader {
@@ -1396,7 +1406,27 @@ impl JsLoader {
         JsLoader {
             _config: config,
             live: Mutex::new(HashMap::new()),
-            retired: Mutex::new(Vec::new()),
+            scheduled_reclaims: AtomicU64::new(0),
+        }
+    }
+
+    /// Schedule one bundle's VM-state boxes for epoch-deferred drop and record the
+    /// scheduling.
+    ///
+    /// SAFETY/why: each `SendVm` box is already unreachable by any *new* dispatch (the
+    /// bundle has been removed from `live` / the registry before this is called). Any
+    /// in-flight runtime-mediated call holds a crossbeam-epoch pin, so `defer` runs the
+    /// drop — freeing the QuickJS `Context` and `Runtime` — only once no such reader
+    /// remains; the global epoch coordinates that with the runtime's reader pins. Direct
+    /// FFI host→VM callers must quiesce before unload per the documented host contract
+    /// (docs/TRUST_MODEL.md). `SendVm` is `Send + 'static` (see its `unsafe impl Send`),
+    /// so moving it into the deferred closure is sound — the box is reachable only from
+    /// the deferred closure, and rquickjs's `parallel` lock still serializes the drop's
+    /// VM teardown.
+    fn schedule_reclaim(&self, state: Vec<SendVm>) {
+        for vm in state {
+            self.scheduled_reclaims.fetch_add(1, Ordering::Relaxed);
+            crossbeam_epoch::pin().defer(move || drop(vm));
         }
     }
 
@@ -1696,9 +1726,10 @@ impl JsLoader {
 
         if !abi_result.is_ok() {
             // The registry copy made during register_guest_contract may already point
-            // at this box's heap address; retire it (keep it alive) rather than
-            // dropping it here, which would dangle the registry's bridge_data.
-            self.retire_vm_state(vec![loader_data]);
+            // at this box's heap address; schedule it for epoch-deferred drop rather
+            // than dropping it inline here, which would dangle the registry's
+            // bridge_data while a reader is pinned.
+            self.schedule_reclaim(vec![loader_data]);
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: format!(
@@ -1720,18 +1751,6 @@ impl JsLoader {
         Ok(())
     }
 
-    /// Move per-bundle VM state into the loader's `retired` list, keeping it alive
-    /// for the loader's lifetime. Used when a box must not be dropped because the
-    /// registry (or an in-flight dispatch) still references its heap address.
-    fn retire_vm_state(&self, mut state: Vec<SendVm>) {
-        if state.is_empty() {
-            return;
-        }
-        let mut retired: std::sync::MutexGuard<'_, Vec<SendVm>> =
-            self.retired.lock().unwrap_or_else(PoisonError::into_inner);
-        retired.append(&mut state);
-    }
-
     /// Number of live VM-state entries currently owned for `bundle_id`.
     #[cfg(test)]
     fn live_vm_count(&self, bundle_id: BundleId) -> usize {
@@ -1740,12 +1759,12 @@ impl JsLoader {
         live.get(&bundle_id).map(Vec::len).unwrap_or(0)
     }
 
-    /// Number of VM-state entries retired (deferred reclaim) by this loader.
+    /// Number of VM-state boxes scheduled for epoch-deferred reclaim. Deterministic
+    /// (incremented at scheduling time), so tests assert the resource was handed to
+    /// the epoch collector without depending on its non-deterministic timing.
     #[cfg(test)]
-    fn retired_vm_count(&self) -> usize {
-        let retired: std::sync::MutexGuard<'_, Vec<SendVm>> =
-            self.retired.lock().unwrap_or_else(PoisonError::into_inner);
-        retired.len()
+    fn scheduled_reclaim_count(&self) -> u64 {
+        self.scheduled_reclaims.load(Ordering::Relaxed)
     }
 }
 
@@ -1800,41 +1819,28 @@ impl BundleLoader for JsLoader {
         self.load_inner(manifest, &bundle_js, Some(&manifest.path), runtime)
     }
 
-    /// Reclaim the bundle's QuickJS VM at a quiescence point.
+    /// Reclaim the bundle's QuickJS VM via epoch-deferred drop.
     ///
     /// Called by the runtime AFTER `invalidate_bundle` has removed the bundle from
     /// the registry, so no dispatch can *resolve* this contract anew.
     ///
-    /// # Host-coordination contract (best-effort quiescence)
-    /// `call_guest_method` deliberately releases the registry lock between resolving
-    /// an interface and the moment this VM registers the call in
-    /// `in_dispatch_threads` (runtime.rs — no lock is held across guest dispatch, for
-    /// concurrency/reentrancy). A call that resolved *just before* `invalidate_bundle`
-    /// is therefore not guaranteed to be visible in `in_dispatch_threads` here. So,
-    /// exactly like hot-reload, the host MUST NOT call a bundle's contracts
-    /// concurrently with unloading it (see `Runtime::unload_bundle` and the
-    /// trusted-same-process model in docs/TRUST_MODEL.md). `in_dispatch_threads` is a
-    /// best-effort defense-in-depth, not a complete guarantee.
+    /// # Host-coordination contract
+    /// The bundle's VM-state boxes are removed from `live` and scheduled for
+    /// epoch-deferred drop (see [`JsLoader::schedule_reclaim`]): each box's QuickJS
+    /// `Context` and `Runtime` are freed only once no crossbeam-epoch reader is pinned,
+    /// so any in-flight *runtime-mediated* call (which holds an epoch pin across
+    /// `call_guest_method` dispatch) keeps the VM alive until it completes. Direct FFI
+    /// host→VM callers the runtime does not mediate are covered by the documented
+    /// trusted-same-process contract: exactly like hot-reload, the host MUST NOT call a
+    /// bundle's contracts concurrently with unloading it (see `Runtime::unload_bundle`
+    /// and docs/TRUST_MODEL.md).
     ///
-    /// For each `JsLoaderData` owned by the bundle:
-    /// - if its `in_dispatch_threads` is EMPTY (the expected case when the host has
-    ///   honored the contract), the box is dropped here, dropping its QuickJS
-    ///   `Context` and `Runtime` — true reclaim;
-    /// - if it is NON-EMPTY (a dispatch is visibly in flight on another thread),
-    ///   dropping the box would free the VM out from under that dispatch (a UAF), so
-    ///   the box is moved into the loader-owned `retired` list instead and a single
-    ///   line is logged. Reclaim is deferred; the VM stays alive for the loader's
-    ///   lifetime.
-    ///
-    /// Spin-waiting is deliberately NOT used: a same-thread re-entrant unload would
-    /// deadlock against its own in-flight dispatch.
-    // `_reclaim_safe` is ignored: VM dispatch is mediated and quiescence-tracked via
-    // `in_dispatch_threads`, so this loader makes its own reclaim-vs-retire decision
-    // independent of the runtime's Arc-based hint (unlike zero-overhead native dispatch).
+    /// `_reclaim_safe` and the runtime's `UnloadMode` are ignored: the VM is always
+    /// epoch-reclaimed (never parked alive forever).
     fn unload(
         &self,
         bundle_id: BundleId,
-        runtime: &PolyplugRuntime,
+        _runtime: &PolyplugRuntime,
         _reclaim_safe: bool,
     ) -> Result<(), RuntimeError> {
         let state: Vec<SendVm> = {
@@ -1846,30 +1852,7 @@ impl BundleLoader for JsLoader {
             }
         };
 
-        for data in state {
-            let in_flight: bool = {
-                let threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = data
-                    .data()
-                    .in_dispatch_threads
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                !threads.is_empty()
-            };
-
-            if in_flight {
-                runtime.logger().log(LogLevel::Warn, "loader.js", || {
-                    format!(
-                        "unload of bundle {:#x} deferred: a dispatch is in flight on this VM; retiring its state to avoid a use-after-free",
-                        bundle_id.id()
-                    )
-                });
-                self.retire_vm_state(vec![data]);
-            } else {
-                // Quiescent: dropping `data` drops the QuickJS Context and Runtime —
-                // true reclaim.
-                drop(data);
-            }
-        }
+        self.schedule_reclaim(state);
 
         Ok(())
     }
@@ -1931,10 +1914,17 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         (dir, manifest)
     }
 
-    /// A quiescent unload (no in-flight dispatch) drops the bundle's VM state from
-    /// the loader's owned map — true reclaim — and does not retire anything.
+    /// Unload removes the bundle from the loader's live map and SCHEDULES its VM state
+    /// for epoch-deferred reclaim (uniform behaviour, independent of `UnloadMode` /
+    /// `reclaim_safe`).
+    ///
+    /// This consolidates the coverage of the old quiescent-vs-deferred split
+    /// (`unload_non_quiescent_defers_reclaim`): the `in_dispatch_threads`-gated
+    /// retire-not-drop branch no longer exists on the unload path — every unload
+    /// epoch-reclaims, so even an in-flight call schedules reclaim (the epoch keeps
+    /// the VM alive until that reader's pin clears).
     #[test]
-    fn unload_quiescent_reclaims_vm_state() {
+    fn unload_removes_live_and_schedules_reclaim() {
         let loader: JsLoader = JsLoader::new(JsConfig {});
         let runtime: Arc<PolyplugRuntime> = polyplug::runtime::RuntimeBuilder::new()
             .loader(JsLoader::new(JsConfig {}))
@@ -1963,12 +1953,12 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         assert_eq!(
             loader.live_vm_count(bundle_id),
             0,
-            "quiescent unload must drop the bundle's VM state (true reclaim)"
+            "unload must remove the bundle's VM state from the live map"
         );
         assert_eq!(
-            loader.retired_vm_count(),
-            0,
-            "quiescent unload must NOT retire any state"
+            loader.scheduled_reclaim_count(),
+            1,
+            "unload must schedule the VM state for epoch-deferred reclaim"
         );
     }
 
@@ -2014,17 +2004,19 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
             );
         }
         assert_eq!(
-            loader.retired_vm_count(),
-            0,
-            "no iteration should have deferred reclaim"
+            loader.scheduled_reclaim_count(),
+            5,
+            "each of the 5 unloads must schedule its VM state for epoch-deferred reclaim"
         );
     }
 
-    /// When a dispatch is in flight (the bundle's `in_dispatch_threads` is marked
-    /// non-empty), unload must DEFER reclaim: the state is moved to the retired list
-    /// (kept alive, no UAF) rather than dropped.
+    /// Even when a dispatch is marked in flight (the bundle's `in_dispatch_threads`
+    /// is non-empty), unload behaves uniformly: it removes the bundle from `live` and
+    /// SCHEDULES its VM state for epoch-deferred reclaim. The in-flight reader's epoch
+    /// pin — not an `in_dispatch_threads`-gated retire branch — is what keeps the VM
+    /// alive until the call completes, so unload never parks the state forever.
     #[test]
-    fn unload_non_quiescent_defers_reclaim() {
+    fn unload_schedules_reclaim_even_when_in_flight() {
         let loader: JsLoader = JsLoader::new(JsConfig {});
         let runtime: Arc<PolyplugRuntime> = polyplug::runtime::RuntimeBuilder::new()
             .loader(JsLoader::new(JsConfig {}))
@@ -2042,9 +2034,10 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
             )
             .expect("load must succeed");
 
-        // Simulate an in-flight dispatch by registering a fake thread id in the
-        // bundle's tracking vec — exactly the state the dispatch guard leaves while
-        // a call is mid-flight on another thread.
+        // Mark a fake in-flight dispatch in the bundle's tracking vec — exactly the
+        // state the dispatch guard leaves while a call is mid-flight on another
+        // thread. Under the old policy this forced retire-not-drop; now it must not
+        // change the uniform epoch-reclaim outcome.
         {
             let live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
                 loader.live.lock().unwrap_or_else(PoisonError::into_inner);
@@ -2059,16 +2052,16 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
 
         loader
             .unload(bundle_id, &runtime, true)
-            .expect("unload must succeed even when non-quiescent");
+            .expect("unload must succeed even when marked in-flight");
         assert_eq!(
             loader.live_vm_count(bundle_id),
             0,
             "unload must remove the bundle from the live map"
         );
         assert_eq!(
-            loader.retired_vm_count(),
+            loader.scheduled_reclaim_count(),
             1,
-            "non-quiescent unload must RETIRE the state (deferred reclaim), not drop it"
+            "unload must schedule epoch-deferred reclaim even when marked in-flight"
         );
     }
 

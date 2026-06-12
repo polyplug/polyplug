@@ -787,11 +787,12 @@ fn unload_reclaim_mode_collects_alc() {
     );
 }
 
-/// Under the default `UnloadMode::Retire`, unloading does NOT free managed memory: the bundle's
-/// collectible ALC is kept rooted (retire-not-drop) so already-resolved managed pointers stay
-/// valid. The probe still reports the ALC alive after unload.
+/// `UnloadMode::Retire` is ignored: unloading ALWAYS unloads the bundle's collectible
+/// `AssemblyLoadContext` (no retire-not-drop branch). Even built with the default
+/// `Retire` mode, the ALC is reclaimed and the liveness probe reports it gone — proving
+/// the uniform reclaim behaviour rather than forever-retention.
 #[test]
-fn unload_retire_mode_keeps_alc() {
+fn unload_ignores_unload_mode_and_reclaims_alc() {
     let Some((runtime, bundle_id)) = load_named_fixture(
         "csharp_retire_probe",
         polyplug_abi::runtime::UnloadMode::Retire,
@@ -805,10 +806,9 @@ fn unload_retire_mode_keeps_alc() {
         .unload_bundle(polyplug_utils::BundleId::from_u64(bundle_id))
         .expect("unload_bundle must succeed");
 
-    // The contract is invalidated in the registry, but the ALC stays rooted (retired).
     assert!(
-        polyplug_dotnet::bundle_alc_alive(&runtime, bundle_id).expect("alc probe"),
-        "ALC must remain alive under Retire (retire-not-drop)"
+        !polyplug_dotnet::bundle_alc_alive(&runtime, bundle_id).expect("alc probe"),
+        "ALC must be reclaimed on unload even under UnloadMode::Retire (mode ignored)"
     );
 }
 

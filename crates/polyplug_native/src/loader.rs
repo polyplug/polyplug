@@ -1,5 +1,7 @@
 //! Native bundle loader — loads .so/.dll/.dylib plugins.
 
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -10,11 +12,9 @@ use polyplug::loader::{BundleLoader, BundleSource, ManifestData};
 use polyplug::logger::RecoverPoisoned;
 use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
-use polyplug_abi::UnloadMode;
 use polyplug_abi::plugin::BundleInitContext;
 use polyplug_abi::types::AbiError;
 use polyplug_abi::types::AbiErrorCode;
-use polyplug_abi::types::LogLevel;
 use polyplug_utils::BundleId;
 
 use crate::config::NativeConfig;
@@ -26,15 +26,15 @@ use crate::config::NativeConfig;
 pub struct NativeLoader {
     /// Active library handles, keyed by BundleId.
     libraries: Mutex<HashMap<BundleId, libloading::Library>>,
-    /// Libraries superseded by a hot-reload, retained for the loader's lifetime.
+    /// Count of libraries scheduled for epoch-deferred reclamation (unload,
+    /// reload-superseded, and failed-init paths).
     ///
-    /// On reload the old library is NOT `dlclose`d: a concurrent caller may still
-    /// hold a raw function pointer resolved from the old version's vtable, and
-    /// unmapping its code pages would turn that pointer into a dangling one
-    /// (SIGSEGV). Retaining the handle keeps the code pages mapped, honoring the
-    /// documented guarantee that the old vtable stays alive until all in-flight
-    /// calls complete (docs/TRUST_MODEL.md §Hot-Reload Safety Guarantees).
-    retired: Mutex<Vec<libloading::Library>>,
+    /// Test/diagnostic only: epoch collection timing is non-deterministic, but
+    /// this counter is incremented the instant a library is handed to
+    /// `crossbeam_epoch::pin().defer(...)`, so it deterministically proves the
+    /// resource was scheduled for reclaim — NOT parked alive forever. Instance
+    /// state (Rule 12).
+    scheduled_reclaims: AtomicU64,
 }
 
 impl NativeLoader {
@@ -45,8 +45,24 @@ impl NativeLoader {
     pub fn new(_config: NativeConfig) -> Self {
         Self {
             libraries: Mutex::new(HashMap::new()),
-            retired: Mutex::new(Vec::new()),
+            scheduled_reclaims: AtomicU64::new(0),
         }
+    }
+
+    /// Schedule `library` for epoch-deferred `dlclose` and record the scheduling.
+    ///
+    /// SAFETY/why: the library is already unreachable by any *new* dispatch (the
+    /// bundle has been removed from the registry indices / the loader's live map
+    /// before this is called). Any in-flight runtime-mediated call holds a
+    /// crossbeam-epoch pin, so `defer` runs the drop (the `dlclose`) only once no
+    /// such reader remains; the global epoch coordinates that with the runtime's
+    /// reader pins. FFI host callers into native dispatch must quiesce before
+    /// unload per the documented host contract (docs/TRUST_MODEL.md). The handle
+    /// is an owned `libloading::Library` (`Send + 'static`), so moving it into the
+    /// deferred closure is sound.
+    fn schedule_reclaim(&self, library: libloading::Library) {
+        self.scheduled_reclaims.fetch_add(1, Ordering::Relaxed);
+        crossbeam_epoch::pin().defer(move || drop(library));
     }
 
     /// Handle a `load()` failure that occurred AFTER `polyplug_init` was invoked.
@@ -57,10 +73,12 @@ impl NativeLoader {
     /// 1. Invalidate whatever the failed init registered so the runtime retires
     ///    those interfaces (the generation bump makes any published handle stale).
     ///    `invalidate_bundle` returns `Ok(0)` when nothing was registered.
-    /// 2. RETIRE the library instead of dropping it. A library whose init ran must
-    ///    never be `dlclose`d here: its 'static registration data (descriptor /
-    ///    function-pointer arrays) backs the now-retired interface, and unmapping
-    ///    its code/data pages would dangle pointers the registry still holds.
+    /// 2. SCHEDULE the library for epoch-deferred `dlclose` instead of dropping it
+    ///    inline. A library whose init ran must never be `dlclose`d eagerly: its
+    ///    'static registration data (descriptor / function-pointer arrays) backs
+    ///    the now-invalidated interface, which the runtime keeps epoch-owned in its
+    ///    published `ReadView` until quiescent. The global epoch keeps both the
+    ///    interface and this library alive together until no reader is pinned.
     fn retire_failed_init(
         &self,
         bundle_name: &str,
@@ -70,10 +88,7 @@ impl NativeLoader {
         let bundle_id: BundleId = BundleId::new(bundle_name);
         // Ignore the slot count / retired Arcs: we only need the interfaces retired.
         let _ = runtime.registry().invalidate_bundle(bundle_id);
-        self.retired
-            .lock()
-            .recover_poisoned(runtime.logger(), "loader.native")
-            .push(library);
+        self.schedule_reclaim(library);
     }
 }
 
@@ -228,8 +243,9 @@ impl BundleLoader for NativeLoader {
             Ok(result) => result,
             Err(_panic) => {
                 // init ran (and may have registered a live interface) before panicking:
-                // invalidate its registrations and RETIRE the library — never dlclose a
-                // library whose init ran, its statics may back a retired interface.
+                // invalidate its registrations and schedule the library for epoch-deferred
+                // dlclose — never dlclose inline a library whose init ran, its statics may
+                // back an interface the runtime still epoch-owns.
                 self.retire_failed_init(&manifest.name, library, runtime);
                 return Err(RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
@@ -249,7 +265,8 @@ impl BundleLoader for NativeLoader {
                 String::from_utf8_lossy(bytes).into_owned()
             };
             // init ran and may have registered a contract before reporting failure:
-            // invalidate those registrations and retire (do not dlclose) the library.
+            // invalidate those registrations and schedule the library for epoch-deferred
+            // dlclose (do not dlclose inline).
             self.retire_failed_init(&manifest.name, library, runtime);
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
@@ -259,9 +276,10 @@ impl BundleLoader for NativeLoader {
 
         // ─── Step 8: Store library handle ─────────────────────────────────────────────
         // If a bundle with the same id was already loaded (e.g. its file was replaced
-        // on disk → a different mapping), RETIRE the superseded handle instead of
-        // dropping it: old registry slots may still resolve raw fn pointers into the
-        // prior mapping, and dlclosing it would dangle them.
+        // on disk → a different mapping), SCHEDULE the superseded handle for
+        // epoch-deferred `dlclose` instead of dropping it inline: old registry slots
+        // may still resolve raw fn pointers into the prior mapping, so it is reclaimed
+        // only once no reader is pinned.
         let bundle_id: BundleId = BundleId::new(&manifest.name);
         let superseded: Option<libloading::Library> = self
             .libraries
@@ -269,10 +287,7 @@ impl BundleLoader for NativeLoader {
             .recover_poisoned(runtime.logger(), "loader.native")
             .insert(bundle_id, library);
         if let Some(old_library) = superseded {
-            self.retired
-                .lock()
-                .recover_poisoned(runtime.logger(), "loader.native")
-                .push(old_library);
+            self.schedule_reclaim(old_library);
         }
 
         Ok(())
@@ -423,23 +438,20 @@ impl BundleLoader for NativeLoader {
             }));
         }
 
-        // ─── Step 8: Remove and RETIRE old library ───────────────────────────────────────
-        // The old library is retained (not dlclose'd): a concurrent caller may
-        // still hold a raw function pointer resolved from the old vtable, and
-        // unmapping its code pages would dangle that pointer (SIGSEGV). Moving the
-        // handle into `retired` keeps the code pages mapped for the loader's
-        // lifetime, honoring the documented hot-reload guarantee that the old
-        // vtable stays alive until all in-flight calls complete.
+        // ─── Step 8: Remove and SCHEDULE old library for reclaim ──────────────────────────
+        // The old library is NOT dlclose'd inline: a concurrent caller may still hold
+        // a raw function pointer resolved from the old vtable, and unmapping its code
+        // pages would dangle that pointer (SIGSEGV). Scheduling it for epoch-deferred
+        // `dlclose` runs the unmap only once no reader is pinned, honoring the
+        // documented hot-reload guarantee that the old vtable stays alive until all
+        // in-flight calls complete — then the code pages are actually reclaimed.
         if let Some(old_library) = self
             .libraries
             .lock()
             .recover_poisoned(runtime.logger(), "loader.native")
             .remove(&bundle_id)
         {
-            self.retired
-                .lock()
-                .recover_poisoned(runtime.logger(), "loader.native")
-                .push(old_library);
+            self.schedule_reclaim(old_library);
         }
 
         // ─── Step 9: Store new library ───────────────────────────────────────────────────
@@ -451,40 +463,34 @@ impl BundleLoader for NativeLoader {
         Ok(())
     }
 
-    /// Reclaim the bundle's `libloading::Library` according to the runtime's
-    /// [`UnloadMode`].
+    /// Reclaim the bundle's `libloading::Library` via epoch-deferred `dlclose`.
     ///
-    /// # Safety model — host-attested, NOT runtime-verified
+    /// # Safety model — epoch-deferred, host-attested for raw native calls
     /// Native dispatch is zero-overhead by design: once the host resolves a contract,
     /// it calls a RAW function pointer that points directly into this library's code
     /// pages. The runtime never mediates those calls and keeps NO native-call counter,
     /// so it is *structurally blind* to whether a thread is executing inside the
     /// library right now. `dlclose` (dropping the `Library`) while such a call is in
-    /// flight unmaps the code pages out from under it — a use-after-free (SIGSEGV).
+    /// flight would unmap the code pages out from under it — a use-after-free (SIGSEGV).
     ///
-    /// Consequently `UnloadMode::Reclaim` for a native bundle is an explicit HOST
-    /// ATTESTATION: by selecting it the host guarantees that no thread is calling — or
-    /// holds a raw pointer into — this bundle at unload time. This is the same
-    /// trusted-same-process contract that hot-reload's `Preparing` phase relies on, and
-    /// it is the documented price of zero-overhead native dispatch — not a bug.
+    /// This hook removes the live handle and schedules it for epoch-deferred `dlclose`
+    /// (see [`NativeLoader::schedule_reclaim`]): the library is reclaimed only once no
+    /// crossbeam-epoch reader is pinned, so any in-flight *runtime-mediated* call (which
+    /// holds an epoch pin across dispatch) keeps the code pages mapped until it
+    /// completes. RAW native calls the runtime cannot see are covered by the documented
+    /// trusted-same-process host contract: the host MUST NOT call — or hold a raw
+    /// pointer into — a bundle concurrently with unloading it (docs/TRUST_MODEL.md).
+    /// This is the same contract hot-reload's `Preparing` phase relies on and the
+    /// documented price of zero-overhead native dispatch — not a bug.
     ///
-    /// `reclaim_safe` is a best-effort secondary net computed by the runtime from the
-    /// retired interfaces' `Arc::strong_count`. It catches *Arc-holding* paths (e.g. a
-    /// future instance counter) and defers reclaim when one is found. It CANNOT see raw
-    /// in-flight native calls — only the host attestation above covers those. When the
-    /// hint says "unsafe", this loader retires the library instead of dropping it.
-    ///
-    /// Under `UnloadMode::Retire` (the default) the library is always kept mapped
-    /// (retire-not-drop), exactly as before this hook existed, so previously resolved
-    /// raw function pointers remain valid for the loader's lifetime.
+    /// `reclaim_safe` and the runtime's `UnloadMode` are ignored on this path: the
+    /// library is always epoch-reclaimed (never parked alive forever).
     fn unload(
         &self,
         bundle_id: BundleId,
         runtime: &Runtime,
-        reclaim_safe: bool,
+        _reclaim_safe: bool,
     ) -> Result<(), RuntimeError> {
-        let mode: UnloadMode = runtime.config().unload_mode;
-
         // Remove the live handle; nothing to do if this bundle isn't loaded by us.
         let library: libloading::Library = match self
             .libraries
@@ -496,45 +502,7 @@ impl BundleLoader for NativeLoader {
             None => return Ok(()),
         };
 
-        match mode {
-            UnloadMode::Retire => {
-                // Keep the library mapped (retire-not-drop) — the current default.
-                // Any raw function pointer already resolved into its code pages stays
-                // valid for the loader's lifetime.
-                self.retired
-                    .lock()
-                    .recover_poisoned(runtime.logger(), "loader.native")
-                    .push(library);
-            }
-            UnloadMode::Reclaim => {
-                if reclaim_safe {
-                    // dlclose: dropping the Library unmaps its code pages and releases
-                    // the on-disk file lock (on Windows) so the developer can rebuild
-                    // and reload the bundle.
-                    //
-                    // SAFETY (host-attested): this is sound ONLY because the host
-                    // selected `UnloadMode::Reclaim`, attesting that no thread is
-                    // calling — or holds a raw pointer into — this bundle. The runtime
-                    // cannot verify that for native dispatch (it is structurally blind
-                    // to in-flight raw calls); `reclaim_safe` only rules out Arc-holding
-                    // paths. See the impl-level doc comment for the full safety model.
-                    drop(library);
-                } else {
-                    // Best-effort defer: an Arc holder still references this bundle's
-                    // interface. Retire instead of risking a use-after-free.
-                    runtime.logger().log(LogLevel::Warn, "loader.native", || {
-                        format!(
-                            "reclaim of bundle {:#x} deferred: an interface still has an extra holder; retiring its library to avoid a use-after-free",
-                            bundle_id.id()
-                        )
-                    });
-                    self.retired
-                        .lock()
-                        .recover_poisoned(runtime.logger(), "loader.native")
-                        .push(library);
-                }
-            }
-        }
+        self.schedule_reclaim(library);
 
         Ok(())
     }
@@ -550,12 +518,11 @@ impl NativeLoader {
             .len()
     }
 
-    /// Number of retired (kept-mapped) library handles. Test-only accessor.
-    pub(crate) fn retired_library_count(&self) -> usize {
-        self.retired
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .len()
+    /// Number of libraries scheduled for epoch-deferred reclamation. Deterministic
+    /// (incremented at scheduling time), so tests assert the resource was handed to
+    /// the epoch collector without depending on its non-deterministic timing.
+    pub(crate) fn scheduled_reclaim_count(&self) -> u64 {
+        self.scheduled_reclaims.load(Ordering::Relaxed)
     }
 }
 
@@ -616,54 +583,39 @@ mod unload_tests {
         (loader, bundle_id)
     }
 
-    /// Under `UnloadMode::Retire`, unload keeps the library mapped (retire-not-drop).
+    /// Unload removes the live handle and SCHEDULES the library for epoch-deferred
+    /// reclaim (uniform behaviour, independent of `UnloadMode` / `reclaim_safe`).
+    ///
+    /// This consolidates the coverage of the old policy-specific tests
+    /// (`retire_mode_keeps_library_mapped`, `reclaim_mode_drops_quiescent_library`,
+    /// `reclaim_mode_defers_when_not_safe`): the retire-not-drop / reclaim-vs-defer
+    /// branches no longer exist — every unload epoch-reclaims.
     #[test]
     #[cfg(not(miri))]
-    fn retire_mode_keeps_library_mapped() {
+    fn unload_removes_live_and_schedules_reclaim() {
         let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Retire);
         let (loader, bundle_id): (NativeLoader, BundleId) = load_test_plugin(&runtime);
         assert_eq!(loader.live_library_count(), 1);
-        assert_eq!(loader.retired_library_count(), 0);
+        assert_eq!(loader.scheduled_reclaim_count(), 0);
 
-        // reclaim_safe is irrelevant under Retire; pass true to prove it is ignored.
+        // reclaim_safe and unload_mode are ignored now; pass true to prove it.
         loader
             .unload(bundle_id, &runtime, true)
             .expect("unload should succeed");
 
         assert_eq!(loader.live_library_count(), 0, "live handle removed");
         assert_eq!(
-            loader.retired_library_count(),
+            loader.scheduled_reclaim_count(),
             1,
-            "Retire mode must keep the library mapped"
+            "unload must schedule the library for epoch-deferred reclaim"
         );
     }
 
-    /// Under `UnloadMode::Reclaim` with a quiescent (reclaim_safe) bundle, unload
-    /// DROPS the library (dlclose) rather than retiring it.
+    /// `reclaim_safe = false` and `UnloadMode::Reclaim` are both ignored: unload still
+    /// schedules the library for epoch-deferred reclaim, never parks it forever.
     #[test]
     #[cfg(not(miri))]
-    fn reclaim_mode_drops_quiescent_library() {
-        let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Reclaim);
-        let (loader, bundle_id): (NativeLoader, BundleId) = load_test_plugin(&runtime);
-        assert_eq!(loader.live_library_count(), 1);
-
-        loader
-            .unload(bundle_id, &runtime, true)
-            .expect("unload should succeed");
-
-        assert_eq!(loader.live_library_count(), 0, "live handle removed");
-        assert_eq!(
-            loader.retired_library_count(),
-            0,
-            "Reclaim mode with a safe bundle must dlclose (drop) the library"
-        );
-    }
-
-    /// Directly exercise the loader decision under `UnloadMode::Reclaim`:
-    /// `reclaim_safe = false` defers (retires) the library to avoid a use-after-free.
-    #[test]
-    #[cfg(not(miri))]
-    fn reclaim_mode_defers_when_not_safe() {
+    fn unload_ignores_reclaim_safe_and_mode() {
         let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Reclaim);
         let (loader, bundle_id): (NativeLoader, BundleId) = load_test_plugin(&runtime);
 
@@ -673,9 +625,9 @@ mod unload_tests {
 
         assert_eq!(loader.live_library_count(), 0, "live handle removed");
         assert_eq!(
-            loader.retired_library_count(),
+            loader.scheduled_reclaim_count(),
             1,
-            "reclaim_safe=false must retire (defer) instead of dropping"
+            "reclaim_safe=false must still schedule epoch-deferred reclaim"
         );
     }
 
@@ -692,16 +644,18 @@ mod unload_tests {
     }
 
     /// A failed `load()` whose init had already registered a contract must NOT
-    /// `dlclose` the library (its registered statics back the published, still-
-    /// resolvable interface). The loader instead retires the library and
-    /// invalidates whatever the failed init registered.
+    /// `dlclose` the library inline (its registered statics back the published,
+    /// still-resolvable interface). The loader instead SCHEDULES the library for
+    /// epoch-deferred reclaim and invalidates whatever the failed init registered;
+    /// the global epoch keeps the library alive alongside the runtime's epoch-owned
+    /// invalidated interface until no reader is pinned.
     ///
     /// Regression for the HIGH finding: previously the local `library` dropped on
     /// the error return → `dlclose` while the registry still held live interfaces
     /// whose fn pointers dangled into unmapped pages.
     #[test]
     #[cfg(not(miri))]
-    fn failed_load_after_register_retires_library_and_invalidates() {
+    fn failed_load_after_register_schedules_reclaim_and_invalidates() {
         let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Retire);
         let dir: PathBuf = register_fail_plugin_dir();
         let manifest: ManifestData =
@@ -717,17 +671,18 @@ mod unload_tests {
             "init returns a non-Ok error, so load() must fail"
         );
 
-        // The library must be RETIRED, never dropped: its registered statics may be
-        // referenced by the (now invalidated) interface still living in the registry.
+        // The library must be SCHEDULED for epoch-deferred reclaim, never dropped
+        // inline: its registered statics may be referenced by the (now invalidated)
+        // interface still epoch-owned by the runtime.
         assert_eq!(
             loader.live_library_count(),
             0,
             "no live handle after a failed load"
         );
         assert_eq!(
-            loader.retired_library_count(),
+            loader.scheduled_reclaim_count(),
             1,
-            "a library whose init ran must be retired, not dlclose'd"
+            "a library whose init ran must be scheduled for reclaim, not dropped inline"
         );
 
         // The failed init's registration must have been invalidated: re-invalidating
@@ -742,10 +697,10 @@ mod unload_tests {
         );
     }
 
-    /// A second `load()` that re-inserts the same `BundleId` must RETIRE the
-    /// superseded `Library` handle (push into `retired`) rather than dropping it:
-    /// old registry slots may still resolve raw fn pointers into the prior mapping,
-    /// so dlclosing the old mapping would dangle them.
+    /// A second `load()` that re-inserts the same `BundleId` must SCHEDULE the
+    /// superseded `Library` handle for epoch-deferred reclaim rather than dropping it
+    /// inline: old registry slots may still resolve raw fn pointers into the prior
+    /// mapping, so it is reclaimed only once no reader is pinned.
     ///
     /// Regression for the double-load MEDIUM finding (Step 8 `insert` returning the
     /// old handle was previously dropped).
@@ -757,7 +712,7 @@ mod unload_tests {
     /// level and re-inserts the same `BundleId`, exercising the supersede path.
     #[test]
     #[cfg(not(miri))]
-    fn double_load_retires_superseded_library() {
+    fn double_load_schedules_superseded_library_reclaim() {
         let runtime: Arc<Runtime> = runtime_with_mode(UnloadMode::Retire);
         let dir: PathBuf = test_plugin_dir();
         let manifest: ManifestData =
@@ -770,7 +725,7 @@ mod unload_tests {
             .load(&manifest, &source, &runtime)
             .expect("first native load should succeed");
         assert_eq!(loader.live_library_count(), 1);
-        assert_eq!(loader.retired_library_count(), 0);
+        assert_eq!(loader.scheduled_reclaim_count(), 0);
 
         // Drop the registry-side registration (the loader still holds the library
         // handle) so the second load's register_guest_contract is not a duplicate.
@@ -789,9 +744,9 @@ mod unload_tests {
             "the new handle replaces the old live handle"
         );
         assert_eq!(
-            loader.retired_library_count(),
+            loader.scheduled_reclaim_count(),
             1,
-            "the superseded library must be retired, not dropped"
+            "the superseded library must be scheduled for reclaim, not dropped inline"
         );
     }
 
@@ -920,9 +875,23 @@ mod unload_tests {
             .unload(bundle_id, &runtime, true)
             .expect("unload should succeed");
 
-        // After dlclose the lock is released — removal must now succeed.
-        std::fs::remove_file(&dest_dll)
-            .expect("DLL must be removable after Reclaim-mode unload (dlclose)");
+        // unload schedules the `dlclose` for epoch-deferred reclaim. This test is
+        // single-threaded with no epoch reader pinned, so advancing the global epoch
+        // by repeatedly pinning + flushing deterministically runs the deferred drop;
+        // once it does, the OS file lock is released and removal succeeds. The loop is
+        // bounded so a failure to reclaim surfaces as a hard test failure, not a hang.
+        let mut removed: bool = false;
+        for _ in 0..1024 {
+            crossbeam_epoch::pin().flush();
+            if std::fs::remove_file(&dest_dll).is_ok() {
+                removed = true;
+                break;
+            }
+        }
+        assert!(
+            removed,
+            "DLL must be removable after the epoch-deferred dlclose runs"
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
