@@ -947,6 +947,73 @@ amortizes away — and the [registry scale sweep](../crates/polyplug/benches/REA
 shows resolve stays flat (~9.7 ns) whether 10 or 1000 contracts are registered, so
 the cold cost does not grow with how many plugins a host has loaded.
 
+## Load → unload churn soak (retire vs reclaim, and a leak this surfaced)
+
+![memory across many load/unload/drop cycles](assets/benches/soak_rss.svg)
+
+The microbenches above all measure *latency*. The **soak** measures *memory over
+time*: an env-gated harness
+([`crates/polyplug/tests/soak_load_unload.rs`](../crates/polyplug/tests/soak_load_unload.rs),
+gated behind `POLYPLUG_SOAK_ITERS`) runs many full **load → dispatch → unload →
+drop** cycles and samples process RSS, to prove the runtime does not leak across
+bundle churn.
+
+### Retire-not-drop vs reclaim — read this before reading the chart
+
+polyplug uses a **retire-not-drop** model. Within a **single live `Runtime`**,
+unloading or hot-reloading a bundle *retires* the superseded interface + library
+— it keeps them mapped for the runtime's lifetime so any raw pointer a caller
+already resolved stays valid (see "Resolve once, reuse the interface pointer"
+above). So a loop that loads and unloads inside *one* long-lived runtime is
+**expected** to grow RSS — that retained growth is by design, not a leak.
+**Reclaim** of retired memory happens at **`Runtime` teardown** (`Drop`), and for
+.NET via the collectible-ALC reclaim path. The honest leak test therefore tears
+the whole runtime down every cycle: each iteration builds a *fresh* `Runtime`,
+loads, dispatches, unloads, then **drops the runtime fully** (dropping the loader,
+which `dlclose`s its libraries). Under full-teardown cycling, RSS must return to a
+flat baseline — a rising line means a true leak.
+
+### Measured (one developer machine, this run)
+
+Run the soak:
+
+```bash
+cargo build --release -p polyplug --tests
+POLYPLUG_SOAK_ITERS=100000 POLYPLUG_SOAK_SAMPLE_EVERY=2000 \
+  POLYPLUG_SOAK_OUT=$PWD/target/soak/soak_rss.txt \
+  cargo test --release -p polyplug --test soak_load_unload -- \
+  --nocapture --exact soak_load_unload_churn
+python3 scripts/gen_bench_charts.py --soak target/soak/soak_rss.txt \
+  target/criterion docs/assets/benches
+```
+
+- **Churn throughput:** ~17,500–18,600 full load→dispatch→unload→drop cycles/sec
+  (100,000 cycles in ~5.4–5.7 s across runs).
+- **RSS series:** climbs **linearly** from ~3.1 MiB to ~20.6 MiB over 100,000
+  cycles — slope ~0.17 KiB/cycle, **constant** across the first and second halves
+  (no plateau). That straight-line, non-decaying growth under *full teardown* is a
+  real leak signal, not allocator/`dlclose` retention.
+
+### Leak found (flagged, not fixed here — out of bench scope)
+
+The soak surfaced a genuine **core leak in the `Runtime` lifecycle**, ~168 bytes
+per runtime built-and-dropped. It is **not** in load, unload, dispatch, or the
+`dlopen`/`dlclose` machinery (a build-and-drop-only bisection leaks at the same
+slope; a pure `dlopen`+`dlclose` loop with no runtime is flat). Root cause:
+`RuntimeBuilder::build` does `Box::leak(Box::new(HostApi { … }))` to obtain the
+`&'static HostApi` the FFI requires, and there is **no `impl Drop for Runtime`**
+that reclaims it — `Arc<Runtime>` teardown frees the `Runtime` but not the leaked
+`HostApi` (168 bytes, matching the observed per-cycle growth). A long-running host
+that creates and destroys many short-lived runtimes (or repeatedly calls
+`polyplug_runtime_create` / `polyplug_runtime_destroy`) leaks one `HostApi` per
+runtime. **This is filed for a core fix; the bench task does not touch core.** The
+chart shows the leak (a rising amber line) on purpose — once the core fix lands and
+reclaims the `HostApi` at teardown, the same soak should redraw it flat (green).
+
+The default `cargo test` run of this harness uses a tiny built-in cycle count
+(env unset), so it stays fast and green and does not assert flatness — it is a
+diagnostic, not a regression gate, until the leak is fixed.
+
 ## See Also
 
 - [Profiling Guide](./PROFILING.md) — flamegraph any hot path locally

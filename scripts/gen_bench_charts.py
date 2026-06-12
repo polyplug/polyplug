@@ -727,6 +727,114 @@ def chart_cross_language_host(data_path: Path, out: Path) -> bool:
     return True
 
 
+def _read_soak(path: Path) -> list:
+    """Parse `<cycle> <rss_kib>` lines from the load/unload soak harness.
+
+    Produced by the gated `soak_load_unload_churn` test
+    (`crates/polyplug/tests/soak_load_unload.rs`) when `POLYPLUG_SOAK_OUT` is
+    set. Returns a list of (cycle, rss_kib) tuples in file order.
+    """
+    rows: list = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts: list = line.split()
+        if len(parts) == 2:
+            try:
+                rows.append((int(parts[0]), int(parts[1])))
+            except ValueError:
+                continue
+    return rows
+
+
+def chart_soak_rss(data_path: Path, out: Path) -> bool:
+    """Process RSS over a load → dispatch → unload → drop soak (linear axes).
+
+    Reads `<cycle> <rss_kib>` rows produced by the gated soak harness. A
+    *linear* y axis is used on purpose: a leak shows as a straight upward slope
+    and a steady-state run shows as a flat line — both must be read at face
+    value, which a log axis would distort. Without a data file the chart is left
+    untouched (it never regenerates from assumptions). Returns True if written.
+    """
+    if not data_path.is_file():
+        print(
+            f"  skip {out.name}: no soak data file at {data_path} "
+            "(run the gated soak with POLYPLUG_SOAK_OUT set)",
+            file=sys.stderr,
+        )
+        return False
+    rows: list = _read_soak(data_path)
+    if len(rows) < 2:
+        print(f"  skip {out.name}: not enough soak samples in {data_path}", file=sys.stderr)
+        return False
+
+    width: int = 720
+    title: str = "Memory across many load → unload → drop cycles"
+    subtitle: str = (
+        "process RSS sampled over a full-teardown soak — each cycle builds a fresh "
+        "Runtime, loads a native plugin, dispatches it, unloads, then drops the Runtime"
+    )
+    header_svg, extra_y = _header(title, subtitle, width)
+    height: int = 420 + extra_y
+    pad_l: int = 72
+    pad_r: int = 24
+    pad_t: int = 64 + extra_y
+    pad_b: int = 56
+    plot_w: int = width - pad_l - pad_r
+    plot_h: int = height - pad_t - pad_b
+
+    xs: list = [c for c, _ in rows]
+    ys: list = [r for _, r in rows]
+    x_max: int = max(xs) if max(xs) > 0 else 1
+    y_lo: int = 0
+    y_hi: float = max(ys) * 1.1 if max(ys) > 0 else 1.0
+
+    def x_of(c: int) -> float:
+        return pad_l + plot_w * c / x_max
+
+    def y_of(v: float) -> float:
+        return pad_t + plot_h * (1 - (v - y_lo) / (y_hi - y_lo))
+
+    parts: list = [header_svg]
+
+    # Horizontal grid + y labels (KiB), 4 steps.
+    for i in range(5):
+        v: float = y_lo + (y_hi - y_lo) * i / 4
+        gy: float = y_of(v)
+        parts.append(_line(pad_l, gy, pad_l + plot_w, gy, _GRID, 1))
+        parts.append(_text(pad_l - 8, gy + 4, f"{v / 1024:.1f}", 10, _MUTED, "end"))
+    parts.append(_text(24, pad_t + plot_h / 2, "MiB", 11, _MUTED, "start"))
+
+    # Vertical grid + x labels (cycles), 4 steps.
+    for i in range(5):
+        c: int = round(x_max * i / 4)
+        gx: float = x_of(c)
+        parts.append(_line(gx, pad_t, gx, pad_t + plot_h, _GRID, 1))
+        parts.append(_text(gx, pad_t + plot_h + 18, f"{c:,}", 10, _MUTED, "middle"))
+    parts.append(_text(pad_l + plot_w / 2, height - 8, "load/unload cycles", 11, _MUTED, "middle"))
+
+    # The RSS polyline. A rising slope here is a leak signal; the color flags it.
+    drift: float = (ys[-1] - ys[0]) / ys[0] if ys[0] else 0.0
+    line_color: str = _SLOW if drift > 0.10 else _HILITE
+    pts: list = [f"{x_of(c):.1f},{y_of(v):.1f}" for c, v in rows]
+    parts.append(
+        f"<polyline points='{' '.join(pts)}' fill='none' stroke='{line_color}' stroke-width='2.5'/>"
+    )
+    for c, v in rows:
+        parts.append(f"<circle cx='{x_of(c):.1f}' cy='{y_of(v):.1f}' r='2.5' fill='{line_color}'/>")
+
+    verdict: str = (
+        f"RSS climbs {drift * 100:+.0f}% across the run (a flat line would mean no leak)."
+        if drift > 0.10
+        else f"RSS stays flat ({drift * 100:+.0f}%) — full-teardown cycling reclaims each Runtime."
+    )
+    parts.append(_text(pad_l + 12, pad_t + 14, verdict, 10, line_color, "start"))
+
+    out.write_text(_svg(width, height, "".join(parts)))
+    return True
+
+
 # ─── entry point ──────────────────────────────────────────────────────────────
 
 
@@ -749,6 +857,14 @@ def main() -> int:
         "`<host> <ns>` data file (no criterion data required — used by "
         "examples/hosts/roundtrip_bench.sh --hostcall)",
     )
+    parser.add_argument(
+        "--soak",
+        type=Path,
+        metavar="DATAFILE",
+        help="render ONLY the load/unload soak chart (soak_rss.svg) from a "
+        "`<cycle> <rss_kib>` data file (no criterion data required — produced by "
+        "the gated soak_load_unload_churn test with POLYPLUG_SOAK_OUT set)",
+    )
     args = parser.parse_args()
 
     criterion_dir: Path = args.criterion_dir
@@ -765,6 +881,10 @@ def main() -> int:
     if args.hostcall is not None:
         if chart_cross_language_host(args.hostcall, out_dir / "cross_lang_host.svg"):
             print(f"wrote {out_dir / 'cross_lang_host.svg'}")
+        return 0
+    if args.soak is not None:
+        if chart_soak_rss(args.soak, out_dir / "soak_rss.svg"):
+            print(f"wrote {out_dir / 'soak_rss.svg'}")
         return 0
 
     if not criterion_dir.is_dir():

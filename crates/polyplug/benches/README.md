@@ -568,6 +568,51 @@ path, because an uncontended GIL re-attach is nearly free. See
 
 ---
 
+### `soak_load_unload` — load/unload churn + RSS over time (the leak detector)
+
+Unlike every criterion bench above, this is **not** a latency microbench — it is a
+memory soak, and criterion is the wrong tool for "RSS over time." It lives as an
+**env-gated `#[test]`** (`tests/soak_load_unload.rs`), following the same opt-in
+convention as `examples/hosts/roundtrip_bench.sh`'s `POLYPLUG_BENCH_ITERS`: with
+the env var unset it runs a tiny built-in cycle count so a normal `cargo test`
+stays fast and green; set `POLYPLUG_SOAK_ITERS` high to run a real soak.
+
+Each cycle does a **full teardown**: build a *fresh* `Runtime` (native loader),
+load `test_plugin`, dispatch `test.add` a few times, unload the bundle, then
+**drop the whole runtime**. It samples process RSS (`/proc/self/status` `VmRSS`)
+every `POLYPLUG_SOAK_SAMPLE_EVERY` cycles and reports two things: **churn
+throughput** (cycles/sec) and the **RSS-over-time series**.
+
+**Why full teardown is the whole point.** polyplug is **retire-not-drop**: within
+*one* live runtime, unload/reload *retires* (keeps mapped) the superseded
+interface + library so already-resolved pointers stay valid — so RSS growth inside
+a single long-lived runtime is **by design, not a leak**. Reclaim happens at
+runtime `Drop`. This soak tears the runtime down every cycle precisely so that a
+non-flat RSS line means a **true** leak, not retire-retention.
+
+```bash
+cargo build --release -p polyplug --tests
+POLYPLUG_SOAK_ITERS=100000 POLYPLUG_SOAK_SAMPLE_EVERY=2000 \
+  POLYPLUG_SOAK_OUT=$PWD/target/soak/soak_rss.txt \
+  cargo test --release -p polyplug --test soak_load_unload -- \
+  --nocapture --exact soak_load_unload_churn
+python3 scripts/gen_bench_charts.py --soak target/soak/soak_rss.txt \
+  target/criterion docs/assets/benches   # → soak_rss.svg
+```
+
+> **Honest finding (measured this run, one developer machine).** Churn is
+> ~17,500–18,600 full load→dispatch→unload→drop cycles/sec. RSS does **not** stay flat:
+> it climbs **linearly** (~3.1 → ~20.6 MiB over 100,000 cycles, ~0.17 KiB/cycle,
+> constant slope across both halves). A build-and-drop-only bisection leaks at the
+> *same* slope, while a pure `dlopen`+`dlclose` loop with no runtime is flat — so
+> this is a **real core leak in the `Runtime` lifecycle** (~168 bytes/runtime),
+> not the loader or libc. Root cause: `RuntimeBuilder::build` `Box::leak`s the
+> `&'static HostApi` the FFI needs and there is no `impl Drop for Runtime` to
+> reclaim it. **Filed for a core fix; this bench task does not modify core.** The
+> chart (`docs/assets/benches/soak_rss.svg`) draws the rising line on purpose;
+> once the leak is fixed the same soak should redraw it flat. See
+> `docs/PERFORMANCE.md` (load/unload churn soak) for the full write-up.
+
 ## Future benchmark ideas (documented, not yet built)
 
 These are worth building, but each has a caveat that keeps it from being a clean
@@ -585,7 +630,8 @@ aren't lost. **Priority: benches for what we currently ship come first.**
 > call_arena,cold_start}.svg`
 > (criterion-sourced, `just bench-charts`) plus the live-sweep pair
 > `cross_lang_host.svg` (`just bench-hostcall`) and `cross_lang_matrix.svg`
-> (`just bench-roundtrip`).
+> (`just bench-roundtrip`), and the env-gated soak chart `soak_rss.svg`
+> (`soak_load_unload`, `--soak` data file — see the soak section above).
 
 > The **runtime-level** guest→host and peer-caller paths are now built too:
 > `guest_host_call` (host-contract call + host→log funnel) and `cross_call`'s
@@ -596,7 +642,6 @@ aren't lost. **Priority: benches for what we currently ship come first.**
 | Idea | What it would show | The caveat ("it can be argued against") |
 |---|---|---|
 | **per-language guest→host / peer-caller marshalling** | The generated-caller overhead *on top of* the runtime entry point `guest_host_call` / `cross_call::peer` already measure — what a plugin pays in its own language's glue (QuickJS/CPython/CLR…) to call back into the host or a peer contract. | Needs per-language **generated** caller fixtures, so any number conflates the language runtime with polyplug's marshalling. The native rows would be honest; the VM rows mostly measure the interpreter — same two-tier caveat as the dispatch matrix. |
-| **unload/load churn soak** | Time drift across many `load → unload → load` loops, to surface retired-resource accumulation (the retire-not-drop model keeps superseded interfaces/libs alive for the runtime lifetime). | It's a **leak detector dressed as a bench** — the signal is *time stability* across iterations, not speed. A flat line means "no creeping cost," which reads as a non-result to anyone expecting a throughput number; it needs a drift/regression lens (or a memory probe), not a median-ns headline. |
 
 If you build any of these, keep them **local-only** (this folder), keep the
 payload-isolation discipline above, and state the caveat next to the number so
