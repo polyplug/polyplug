@@ -201,20 +201,6 @@ pub unsafe extern "C" fn polyplug_get_last_bundle_path() -> StringView {
     }
 }
 
-// ─── Panic test ───────────────────────────────────────────────────────────────
-
-/// A function that always panics — used to verify panic isolation.
-///
-/// This function is NOT registered in the interface. The panic test calls it
-/// directly via `dlsym` to test the panic behavior.
-///
-/// # Safety
-/// `_args` and `_out` are ignored but must follow standard ABI conventions.
-#[unsafe(no_mangle)]
-pub extern "C" fn polyplug_panicking_fn(_args: *const (), _out: *mut ()) -> AbiError {
-    panic!("intentional test panic");
-}
-
 // ─── Bench symbol ───────────────────────────────────────────────────────────────
 
 /// A bare by-value `inc` exported under a stable symbol name.
