@@ -327,6 +327,14 @@ test-integration:
     @echo "=== Running Integration Tests ==="
     cargo test --{{profile}} -p integration
 
+# Model-check the epoch publish/reclaim protocol with loom.
+# Exhaustively verifies the lock-free read path's pin→load→deref against
+# concurrent publish→swap→defer-reclaim (loom_epoch_model crate; compiled only
+# under --cfg loom, so the normal build never pulls loom in).
+loom:
+    @echo "=== Loom-checking the epoch publish/reclaim protocol ==="
+    RUSTFLAGS="--cfg loom" cargo test -p loom_epoch_model --release
+
 # Run C++ SDK test programs (ABI layout static_asserts + reload runtime)
 test-sdk-cpp:
     @echo "=== Running C++ SDK Tests ==="

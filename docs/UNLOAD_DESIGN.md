@@ -120,6 +120,28 @@ Because these enter the epoch before resolving and stay pinned across the call, 
 racing one of them cannot free the interface or library out from under the in-flight
 dispatch.
 
+### Model-checked with loom
+
+The `loom_epoch_model` crate exhaustively model-checks the protocol above with
+[loom](https://docs.rs/loom). It reproduces the published-`AtomicPtr` read path and the
+pin / defer / reclaim collector, then explores every thread interleaving of a reader
+racing a writer that swaps the published view and defers the old one:
+
+- **`pinned_reader_never_observes_reclaim`** — a reader that holds its guard across the
+  dereference (the shipped `RuntimeStore` read path) never observes a reclaimed view,
+  under every interleaving.
+- **`unpinned_reader_race_is_detected_by_loom`** — a reader that drops its guard *before*
+  the dereference races reclamation, and loom finds the use-after-free. This is the exact
+  bug fixed by pinning the epoch across resolve→deref; the test asserts loom still
+  detects it, so the proof keeps its teeth.
+
+Scope: this verifies the safety *contract* `crossbeam-epoch` provides and that polyplug
+relies on. `crossbeam-epoch`'s *implementation* of that contract is loom-checked upstream
+in the crossbeam repo; it cannot be driven by loom from a downstream crate without
+rebuilding the whole crossbeam stack under its internal `--cfg crossbeam_loom`. The crate
+is compiled only under `--cfg loom`, so a normal build never pulls loom in. Run it with
+`just loom` (or `RUSTFLAGS="--cfg loom" cargo test -p loom_epoch_model --release`).
+
 ---
 
 ## Handles and Resolution

@@ -105,3 +105,18 @@ jobs:
           --target x86_64-unknown-linux-gnu
         env:
           RUSTFLAGS: -Zsanitizer=thread
+
+  loom:
+    name: Loom (epoch publish/reclaim model)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Exhaustively model-checks the lock-free read path's pin->load->deref
+      # against concurrent publish->swap->defer-reclaim. Compiled only under
+      # --cfg loom, so it never affects the normal build.
+      - name: cargo test (loom)
+        run: cargo test -p loom_epoch_model --release
+        env:
+          RUSTFLAGS: --cfg loom

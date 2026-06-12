@@ -73,6 +73,10 @@ petgraph = { version = "0.8", default-features = false, features = [
 # Lock-free epoch reclamation
 crossbeam-epoch = { version = "0.9" }
 
+# Model checker for the epoch publish/reclaim protocol (loom_epoch_model crate,
+# pulled in only under `--cfg loom`).
+loom = { version = "0.7" }
+
 # CLI (polyplugc only)
 clap = { version = "4.6", features = ["derive"] }
 

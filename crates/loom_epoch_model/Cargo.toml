@@ -1,0 +1,21 @@
+[package]
+name = "loom_epoch_model"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+
+# This crate is a loom model of polyplug's epoch publish/reclaim protocol. It has
+# NO contents unless built with `--cfg loom` (see `src/lib.rs`), so a normal
+# workspace `cargo build` / `clippy` / `test` compiles it to an empty library and
+# never pulls `loom` into the dependency graph. Run the model with:
+#
+#   RUSTFLAGS="--cfg loom" cargo test -p loom_epoch_model --release
+#
+# `loom` is therefore declared only for the `cfg(loom)` target.
+[target.'cfg(loom)'.dependencies]
+loom = { workspace = true }
+
+[lints]
+workspace = true

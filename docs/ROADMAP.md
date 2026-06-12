@@ -330,6 +330,12 @@ Reads are lock-free: a reader takes a pin guard over the immutable published
 once all old-epoch guards unpin. A reader pinned before the unload keeps the old
 interface `Arc` and its still-mapped library alive until it unpins.
 
+This publish/reclaim protocol is model-checked with loom (`loom_epoch_model`
+crate, run via `just loom`): one test proves the pinned read path is
+use-after-free-free across every interleaving, a second proves loom still
+detects the UAF when a reader drops its guard before the dereference. See
+`docs/UNLOAD_DESIGN.md` → *Epoch Model* → *Model-checked with loom*.
+
 Two caller contracts:
 
 - **Runtime-mediated calls are safe under concurrent unload.** `call_guest_method`
