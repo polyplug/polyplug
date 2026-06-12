@@ -1,23 +1,19 @@
 //! Reload — callback-based hot-reload framework for all loaders.
 //!
 //! Provides:
-//! - Warning check for potential instance leaks after Preparing callback
 //! - Explicit interface swap after init succeeds
 //!
 //! Hot-reload flow (callback-based model):
 //! 1. Fire `ReloadPhase::preparing()` — host destroys all instances here
-//! 2. Check Arc::strong_count — emit warning if refs remain (informational only)
-//! 3. Call loader.reload() — load new library, init (registers new interfaces)
-//! 4. Swap interfaces — for each slot, find new interface and swap atomically
-//! 5. Fire `ReloadPhase::reloaded()` — host can create new instances
+//! 2. Call loader.reload() — load new library, init (registers new interfaces)
+//! 3. Swap interfaces — for each slot, find new interface and swap atomically
+//! 4. Fire `ReloadPhase::reloaded()` — host can create new instances
 //!
 //! If init fails: Fire `ReloadPhase::failed()`, no interface swap.
 //!
 //! Safety contract: Host MUST destroy all instances in Preparing callback.
-//! Runtime emits warning if instances may remain but proceeds with reload.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use polyplug_abi::runtime::ReloadPhase;
 use polyplug_abi::types::{LogLevel, StringView};
@@ -170,7 +166,7 @@ impl Runtime {
             return Err(err);
         }
 
-        // Store slot indices before reload (for warning check and interface swap)
+        // Store slot indices before reload (for the interface swap)
         let slot_indices: Vec<u32> = self.registry.get_bundle_plugin_slots(bundle_id);
 
         // Fire Preparing callback
@@ -179,25 +175,6 @@ impl Runtime {
                 self.config().on_reload_user_data,
                 ReloadPhase::preparing(bundle_id, string_view(&manifest.name)),
             );
-        }
-
-        // ─── Warning Check: Informational only, not blocking ─────────────────
-        // Check Arc::strong_count after Preparing callback returned.
-        // If > 1, host may not have destroyed all instances - emit UB warning.
-        for slot_idx in &slot_indices {
-            if let Some(arc) = self.registry.get_guest_contract_interface_arc(*slot_idx) {
-                if Arc::strong_count(&arc) > 1 {
-                    self.logger.log(LogLevel::Warn, "reload", || {
-                        format!(
-                            "Potential UB: Arc refs still exist for bundle '{}' after Preparing callback. \
-                             Host may not have destroyed all instances. Proceeding with reload anyway.",
-                            manifest.name
-                        )
-                    });
-                    // Only emit once per bundle, not per slot
-                    break;
-                }
-            }
         }
 
         // Open the reload window: interfaces registered during loader.reload() are

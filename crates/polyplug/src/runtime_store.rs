@@ -46,8 +46,8 @@ pub enum SingleProviderResolution {
     /// refuse with `DuplicateProvider` (it never dispatches in this case).
     Multiple,
     /// Exactly one live provider matched; the contained pointer is its interface,
-    /// borrowed from the slot's `Arc` (valid for the runtime lifetime under the
-    /// retire-not-drop model, exactly as `resolve_guest_contract` returns).
+    /// borrowed from the published snapshot's `Arc` and valid while the loading
+    /// guard is pinned, exactly as `resolve_guest_contract` returns.
     Resolved(*const GuestContractInterface),
 }
 
@@ -198,18 +198,6 @@ struct RuntimeStoreData {
     bundle_name_index: HashMap<String, Vec<BundleId>>,
     /// Maps bundle_id to the set of contract_ids it has declared as dependencies.
     bundle_declared_deps: HashMap<BundleId, HashSet<GuestContractId>>,
-    /// Interface `Arc`s retired by hot-reload swaps, kept alive for the lifetime
-    /// of the runtime.
-    ///
-    /// `resolve_guest_contract` hands out a raw `*const GuestContractInterface`
-    /// borrowed from the slot's `Arc`. A concurrent reload that swaps the slot
-    /// would otherwise drop the old `Arc` and free the interface struct while a
-    /// reader still dereferences that pointer — a use-after-free. Retaining the
-    /// old `Arc` here keeps the interface memory valid for any in-flight reader.
-    /// This mirrors the documented hot-reload guarantee that the old vtable is
-    /// held alive until all in-flight calls complete (docs/TRUST_MODEL.md §Hot-Reload
-    /// Safety Guarantees).
-    retired_interfaces: Vec<Arc<GuestContractInterface>>,
     /// Bundles currently inside a hot-reload's re-init phase.
     ///
     /// While a bundle id is present here, contracts registered by that bundle are
@@ -232,7 +220,6 @@ impl RuntimeStoreData {
             bundle_data: HashMap::new(),
             bundle_name_index: HashMap::new(),
             bundle_declared_deps: HashMap::new(),
-            retired_interfaces: Vec::new(),
             reloading_bundles: HashSet::new(),
         }
     }
@@ -247,10 +234,9 @@ impl RuntimeStoreData {
     /// For the slot at `slot_idx` it:
     /// - bumps `slot.generation` (so every handle minted against the old generation
     ///   now resolves to [`RegistryError::StaleHandle`]);
-    /// - **retires** the slot's interface `Arc` into `retired_interfaces` rather than
-    ///   dropping it (retire-not-drop), so any raw `*const GuestContractInterface`
-    ///   already handed out by `resolve_guest_contract` stays valid for the runtime
-    ///   lifetime;
+    /// - drops the slot's interface `Arc`. The published epoch snapshot owns the
+    ///   interface until reclaimed, so an in-flight reader (holding a pinned guard)
+    ///   stays valid, and the memory is freed once no snapshot references it;
     /// - clears the slot `entry`;
     /// - removes the slot index from `guest_contract_index` for its contract_id,
     ///   dropping the now-empty key.
@@ -264,16 +250,10 @@ impl RuntimeStoreData {
     /// instead of calling this helper — that path keeps the slot live (same
     /// generation) so a handle stays resolvable to the new interface. Routing it
     /// through `retire_slot` would break that continuity guarantee.
-    ///
-    /// Returns `Some(Arc::clone(&retired))` — an extra reference to the interface
-    /// `Arc` that was just retired — so callers (notably `invalidate_bundle`) can
-    /// inspect its `Arc::strong_count` to decide whether the underlying library can
-    /// be safely reclaimed. Returns `None` when the slot was out of bounds or already
-    /// held no interface.
-    fn retire_slot(&mut self, slot_idx: u32) -> Option<Arc<GuestContractInterface>> {
+    fn retire_slot(&mut self, slot_idx: u32) {
         let slot_idx_usize: usize = slot_idx as usize;
         if slot_idx_usize >= self.slots.len() {
-            return None;
+            return;
         }
 
         // Read contract_id before clearing the slot.
@@ -292,23 +272,13 @@ impl RuntimeStoreData {
             }
         }
 
-        // Bump generation so old handles go stale, retire (never drop) the interface
-        // so raw pointers stay valid, and vacate the slot entry.
+        // Bump generation so old handles go stale, drop the slot's interface Arc (the
+        // published snapshot owns it until reclaimed), and vacate the slot entry.
         self.slots[slot_idx_usize].generation =
             self.slots[slot_idx_usize].generation.wrapping_add(1);
-        let retired: Option<Arc<GuestContractInterface>> =
+        let _dropped: Option<Arc<GuestContractInterface>> =
             self.slots[slot_idx_usize].interface.take();
         self.slots[slot_idx_usize].entry = None;
-        match retired {
-            Some(arc) => {
-                // Hand the caller an extra reference (for strong_count inspection)
-                // while the original is held alive in `retired_interfaces`.
-                let returned: Arc<GuestContractInterface> = Arc::clone(&arc);
-                self.retired_interfaces.push(arc);
-                Some(returned)
-            }
-            None => None,
-        }
     }
 }
 
@@ -320,10 +290,11 @@ impl RuntimeStoreData {
 /// distinction `resolve_guest_contract` draws (generation is checked before
 /// interface presence).
 struct SlotIfaceView {
-    /// Borrowed from the slot's live `Arc<GuestContractInterface>`. Kept valid for
-    /// the runtime lifetime by retire-not-drop (the slot's Arc — or its retired
-    /// successor — is never freed), so this raw pointer never dangles.
-    interface: *const GuestContractInterface,
+    /// An owning clone of the slot's live `Arc<GuestContractInterface>`. The
+    /// snapshot owns the interface, so it stays alive exactly as long as some live
+    /// snapshot references it; epoch reclamation frees it once the last superseding
+    /// snapshot is reclaimed.
+    interface: Arc<GuestContractInterface>,
     contract_version_major: u32,
 }
 
@@ -351,13 +322,17 @@ struct ReadView {
     contract_index: HashMap<GuestContractId, Vec<u32>>,
 }
 
-// SAFETY: `ReadView` holds raw `*const GuestContractInterface` pointers, so it is
-// not auto-`Send`/`Sync`. Sharing `&ReadView` (and the contained pointers) across
-// threads is sound because: (1) each pointed-to `GuestContractInterface` is
-// immutable after registration and is kept alive for the runtime lifetime by
-// retire-not-drop (the slot's `Arc`, or its retired successor, is never freed);
-// and (2) a `ReadView` is never mutated after publish — writers replace it wholesale
-// and epoch reclamation frees the old view only once no reader can observe it.
+// SAFETY: `ReadView` now OWNS `Arc<GuestContractInterface>` clones, which are not
+// auto-`Send`/`Sync` (`GuestContractInterface` holds fn pointers plus a `dispatch`
+// union of raw pointers). Sharing `&ReadView` (and the contained `Arc`s) across
+// threads is sound because: (1) each `GuestContractInterface` is immutable after
+// registration and its backing library stays mapped for at least as long as any
+// reader can observe it (library lifetime becomes epoch-coordinated in a later
+// slice; today libraries are kept mapped); (2) the interface stays alive exactly as
+// long as some live snapshot references it, and epoch frees it once the last
+// superseding snapshot is reclaimed; and (3) a `ReadView` is never mutated after
+// publish — writers replace it wholesale and epoch reclamation frees the old view
+// only once no reader can observe it.
 unsafe impl Send for ReadView {}
 // SAFETY: see the `Send` justification above — the same immutability and lifetime
 // guarantees make concurrent shared reads of a `ReadView` sound.
@@ -385,7 +360,7 @@ impl ReadView {
         for slot in data.slots.iter() {
             let iface: Option<SlotIfaceView> = match (&slot.entry, &slot.interface) {
                 (Some(_), Some(arc)) => Some(SlotIfaceView {
-                    interface: arc.as_ref() as *const GuestContractInterface,
+                    interface: Arc::clone(arc),
                     contract_version_major: arc.contract_version.major,
                 }),
                 _ => None,
@@ -971,9 +946,11 @@ impl RuntimeStore {
     /// The liveness + version filtering mirrors `count_guest_contracts` /
     /// `find_guest_contract` exactly (slot entry present, interface present,
     /// `interface.contract_version.major >= min_version`). The returned pointer is
-    /// borrowed from the slot's `Arc`; under the retire-not-drop model it stays valid
-    /// for the runtime lifetime even across a concurrent reload, matching
-    /// `resolve_guest_contract`'s guarantee.
+    /// borrowed from the snapshot's `Arc` and is valid while the loading guard is
+    /// pinned. The runtime-mediated `call_guest_method` holds its guard across use,
+    /// so the pointer stays valid across a concurrent unload; FFI host callers drop
+    /// the guard before use and rely on the documented quiesce-before-unload host
+    /// contract.
     pub fn resolve_single_provider(
         &self,
         contract_id: GuestContractId,
@@ -1007,7 +984,7 @@ impl RuntimeStore {
                 && iface.contract_version_major >= min_version
             {
                 if count == 0 {
-                    first_interface = iface.interface;
+                    first_interface = iface.interface.as_ref() as *const GuestContractInterface;
                 }
                 count += 1;
                 if count > 1 {
@@ -1113,6 +1090,12 @@ impl RuntimeStore {
     /// a later registration) after this handle was minted. The generation is checked
     /// before the interface presence so a handle whose bundle was unloaded resolves
     /// to StaleHandle even though the slot was vacated.
+    ///
+    /// The returned raw pointer is borrowed from the snapshot's `Arc` and is valid
+    /// while the loading guard is pinned. The runtime-mediated `call_guest_method`
+    /// holds its guard across use, so the pointer stays valid across a concurrent
+    /// unload; FFI host callers drop the guard before use and rely on the documented
+    /// quiesce-before-unload host contract.
     pub fn resolve_guest_contract(
         &self,
         handle: GuestContractHandle,
@@ -1147,7 +1130,7 @@ impl RuntimeStore {
             });
         }
         match entry.iface {
-            Some(ref iface) => Ok(iface.interface),
+            Some(ref iface) => Ok(iface.interface.as_ref() as *const GuestContractInterface),
             None => Err(RegistryError::InvalidHandle {
                 index: handle.index,
             }),
@@ -1183,9 +1166,10 @@ impl RuntimeStore {
                 return Err(RegistryError::InvalidHandle { index: slot_index });
             }
         };
-        // Retire (do not drop) the old interface so any in-flight reader holding a
-        // raw pointer into it stays valid.
-        data.retired_interfaces.push(old_interface);
+        // Drop the old interface Arc. The published snapshot owns its clone until
+        // reclaimed, so an in-flight reader holding a pinned guard stays valid and
+        // the memory is freed once no snapshot references it.
+        let _old: Arc<GuestContractInterface> = old_interface;
         self.publish(&data);
         Ok(())
     }
@@ -1205,14 +1189,14 @@ impl RuntimeStore {
     /// readers always observe either the complete old state or the complete new
     /// state — never a half-swapped registry with duplicate or orphaned slots.
     ///
-    /// # Dropped contracts (retire-not-drop)
+    /// # Dropped contracts
     /// If a contract that the old version provided is no longer provided by the new
     /// version (no newly-registered slot matches its `contract_id`), the reload does
-    /// NOT fail. Instead the old slot is retired: its interface `Arc` is moved into
-    /// `retired_interfaces` (kept alive for in-flight readers holding raw pointers),
-    /// and the slot is removed from the find index so the dropped contract becomes
-    /// unresolvable via `find_*`. Previously-resolved raw pointers stay valid; new
-    /// lookups for the dropped contract simply return nothing.
+    /// NOT fail. Instead the old slot is retired: its interface `Arc` is dropped (the
+    /// published snapshot owns its clone until reclaimed, so an in-flight reader
+    /// holding a pinned guard stays valid), and the slot is removed from the find
+    /// index so the dropped contract becomes unresolvable via `find_*`. New lookups
+    /// for the dropped contract simply return nothing.
     ///
     /// # Errors
     /// Returns `Err(RegistryError::InvalidHandle)` if any old slot has no interface.
@@ -1331,15 +1315,15 @@ impl RuntimeStore {
             let new_idx: u32 = match matching_new_idx {
                 Some(idx) => idx,
                 None => {
-                    // Retire-not-drop: the new bundle version no longer provides this
-                    // contract. Do NOT fail the whole reload. Route through the canonical
-                    // teardown atom so the dropped contract is retired with identical
-                    // unload semantics — generation bumped (old handles go stale),
-                    // interface retired (in-flight raw pointers stay valid), and the slot
-                    // removed from the find index so the contract is no longer resolvable.
-                    // The returned extra Arc reference is irrelevant to reload (only
-                    // unload's reclaim decision inspects it), so it is discarded.
-                    let _discarded: Option<Arc<GuestContractInterface>> = data.retire_slot(old_idx);
+                    // The new bundle version no longer provides this contract. Do NOT
+                    // fail the whole reload. Route through the canonical teardown atom
+                    // so the dropped contract is torn down with identical unload
+                    // semantics — generation bumped (old handles go stale), interface
+                    // Arc dropped (the published snapshot owns its clone until reclaimed,
+                    // so an in-flight reader holding a pinned guard stays valid), and
+                    // the slot removed from the find index so the contract is no longer
+                    // resolvable.
+                    data.retire_slot(old_idx);
                     if let Some(bd) = data.bundle_data.get_mut(&bundle_id) {
                         bd.plugin_slots.retain(|&idx| idx != old_idx);
                     }
@@ -1347,9 +1331,10 @@ impl RuntimeStore {
                 }
             };
 
-            // Move the new interface into the old slot, retiring (not dropping)
-            // the old interface so any in-flight reader holding a raw pointer
-            // into it stays valid.
+            // Move the new interface into the old slot, dropping the old interface
+            // Arc. The published snapshot owns its clone until reclaimed, so an
+            // in-flight reader holding a pinned guard stays valid and the memory is
+            // freed once no snapshot references it.
             let new_interface: Arc<GuestContractInterface> = data.slots[new_idx as usize]
                 .interface
                 .take()
@@ -1358,16 +1343,16 @@ impl RuntimeStore {
                 .interface
                 .replace(new_interface)
             {
-                data.retired_interfaces.push(old_interface);
+                let _old: Arc<GuestContractInterface> = old_interface;
             }
 
             // Vacate the now-orphaned new slot. Its interface Arc was already moved
-            // out into the old slot above, so there is nothing to retire here (do NOT
-            // push to `retired_interfaces`). Bump the generation so any handle minted
-            // against this slot during the reload window — e.g. a pending handle the
-            // registration returned — is recognised as stale once the index is recycled
-            // by a later registration (ABA protection), mirroring `retire_slot`'s
-            // generation bump without the (now absent) Arc retirement.
+            // out into the old slot above, so there is nothing to drop here. Bump the
+            // generation so any handle minted against this slot during the reload
+            // window — e.g. a pending handle the registration returned — is recognised
+            // as stale once the index is recycled by a later registration (ABA
+            // protection), mirroring `retire_slot`'s generation bump without the (now
+            // absent) Arc teardown.
             data.slots[new_idx as usize].generation =
                 data.slots[new_idx as usize].generation.wrapping_add(1);
             data.slots[new_idx as usize].entry = None;
@@ -1589,34 +1574,28 @@ impl RuntimeStore {
         Ok(())
     }
 
-    /// Invalidate a bundle: retire its interfaces, bump generations, and remove it
+    /// Invalidate a bundle: tear down its interfaces, bump generations, and remove it
     /// from every index structure.
     ///
-    /// This is the invalidate-only unload primitive (retire-not-drop). Each owned slot
-    /// is torn down via the canonical [`RuntimeStoreData::retire_slot`] helper, which:
+    /// This is the invalidate-only unload primitive. Each owned slot is torn down via
+    /// the canonical [`RuntimeStoreData::retire_slot`] helper, which:
     /// - bumps `slot.generation` (so every handle minted against the old generation now
     ///   resolves to [`RegistryError::StaleHandle`]);
-    /// - **retires** the slot's interface `Arc` into `retired_interfaces` rather than
-    ///   dropping it, so any raw `*const GuestContractInterface` already handed out by
-    ///   `resolve_guest_contract` stays valid for the lifetime of the runtime;
+    /// - drops the slot's interface `Arc`. The published epoch snapshot owns its clone
+    ///   until reclaimed, so an in-flight reader holding a pinned guard stays valid and
+    ///   the memory is freed once no snapshot references it;
     /// - clears the slot `entry` and removes the slot index from `guest_contract_index`.
     ///
     /// It then removes the bundle from `bundle_data`, `bundle_name_index`, and
     /// `bundle_declared_deps`, so `find_*` and `list_bundles` no longer observe it.
     ///
-    /// The combination of retire-not-drop and the generation bump is what makes unload
-    /// sound: old raw pointers remain dereferenceable (the memory is never freed here),
-    /// while every old handle is recognised as stale on its next resolve.
+    /// The combination of epoch-owned interface memory and the generation bump is what
+    /// makes unload sound: a snapshot still observed by an in-flight reader keeps the
+    /// interface alive until that reader's pin drops, while every old handle is
+    /// recognised as stale on its next resolve.
     ///
-    /// Returns `(count, retired_arcs)` where `count` is the number of slots that were
-    /// invalidated and `retired_arcs` holds one extra `Arc<GuestContractInterface>`
-    /// reference per retired interface. The runtime inspects `Arc::strong_count` on
-    /// these to decide whether a loader may reclaim (e.g. `dlclose`) the bundle's
-    /// backing library or must defer (retire) it — see [`crate::runtime::Runtime::unload_bundle`].
-    pub fn invalidate_bundle(
-        &self,
-        bundle_id: BundleId,
-    ) -> Result<(u32, Vec<Arc<GuestContractInterface>>), RegistryError> {
+    /// Returns the number of slots that were invalidated.
+    pub fn invalidate_bundle(&self, bundle_id: BundleId) -> Result<u32, RegistryError> {
         let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
 
@@ -1624,18 +1603,13 @@ impl RuntimeStore {
         let (slot_indices, bundle_name): (Vec<u32>, String) = match data.bundle_data.get(&bundle_id)
         {
             Some(bd) => (bd.plugin_slots.clone(), bd.descriptor.name.clone()),
-            None => return Ok((0, Vec::new())),
+            None => return Ok(0),
         };
 
-        // Tear down each slot via the canonical teardown atom, collecting each retired
-        // interface's extra Arc reference so the runtime can inspect strong_count.
-        // Bundle-level metadata is removed in bulk below (no per-slot plugin_slots
-        // edit needed here).
-        let mut retired_arcs: Vec<Arc<GuestContractInterface>> = Vec::new();
+        // Tear down each slot via the canonical teardown atom. Bundle-level metadata is
+        // removed in bulk below (no per-slot plugin_slots edit needed here).
         for slot_idx in &slot_indices {
-            if let Some(arc) = data.retire_slot(*slot_idx) {
-                retired_arcs.push(arc);
-            }
+            data.retire_slot(*slot_idx);
         }
 
         // Remove from bundle_data.
@@ -1654,7 +1628,7 @@ impl RuntimeStore {
 
         self.publish(&data);
 
-        Ok((slot_indices.len() as u32, retired_arcs))
+        Ok(slot_indices.len() as u32)
     }
 
     /// List all loaded bundle IDs.
@@ -1697,18 +1671,6 @@ impl RuntimeStore {
             .get(bundle_name)
             .cloned()
             .unwrap_or_default()
-    }
-
-    /// Get a clone of the Arc<GuestContractInterface> for `slot_index` to check strong_count.
-    /// Returns None if the slot is empty or has no interface.
-    pub(crate) fn get_guest_contract_interface_arc(
-        &self,
-        slot_index: u32,
-    ) -> Option<Arc<GuestContractInterface>> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
-            self.data.read().recover_poisoned(self.logger, "store");
-        let slot: &PluginSlot = data.slots.get(slot_index as usize)?;
-        slot.interface.as_ref().map(Arc::clone)
     }
 
     /// Clear all registrations for testing.
@@ -2236,7 +2198,7 @@ mod tests {
 
         // Begin a reload that registers NO new slot for this contract (it is dropped).
         registry.begin_reload(bundle_id);
-        // apply_reload_swap must succeed (retire-not-drop), not error.
+        // apply_reload_swap must succeed (dropped-contract teardown), not error.
         registry
             .apply_reload_swap(bundle_id, &old_slots)
             .expect("apply_reload_swap must not fail when a contract is dropped");
@@ -2454,7 +2416,9 @@ mod tests {
     }
 
     #[test]
-    fn unload_retires_interface_keeping_pointer_valid() {
+    fn interface_handle_goes_stale_after_unload() {
+        // In-flight-call safety (an interface used under a held epoch pin across a
+        // concurrent unload) is covered by the runtime concurrency suite, not here.
         let registry: RuntimeStore = RuntimeStore::new();
         let descriptor: PluginDescriptor = make_descriptor("unload_plugin", "render.frame");
         let raw_contract_id: u64 = 0x0BAD_F00D_0000_0003;
@@ -2472,9 +2436,7 @@ mod tests {
         }
         .expect("registration should succeed");
 
-        // Resolve a raw pointer BEFORE unload. Retire-not-drop guarantees it stays
-        // valid afterwards because the interface Arc is moved to retire storage.
-        let resolved: *const GuestContractInterface = registry
+        registry
             .resolve_guest_contract(handle)
             .expect("resolve before unload should succeed");
 
@@ -2482,13 +2444,11 @@ mod tests {
             .invalidate_bundle(bundle_id)
             .expect("invalidate should succeed");
 
-        // SAFETY: `resolved` was obtained before unload; invalidate retires (does not
-        // drop) the interface Arc, so the memory remains valid for this read.
-        let observed_id: GuestContractId = unsafe { (*resolved).contract_id };
-        assert_eq!(
-            observed_id,
-            GuestContractId::from_u64(raw_contract_id),
-            "retired interface must still be readable through the pre-unload pointer"
+        let result: Result<*const GuestContractInterface, RegistryError> =
+            registry.resolve_guest_contract(handle);
+        assert!(
+            matches!(result, Err(RegistryError::StaleHandle { .. })),
+            "resolve after unload must report StaleHandle, got {result:?}"
         );
     }
 }

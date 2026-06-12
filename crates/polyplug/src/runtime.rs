@@ -135,8 +135,8 @@ pub struct Runtime {
     /// is dropped between steps, so two concurrent reloads of the SAME bundle can
     /// interleave such that one reload's snapshot goes stale — its swap then finds
     /// no freshly-registered slot for a contract the other reload already
-    /// consumed, takes the retire-not-drop path, and removes that contract's only
-    /// live slot from the find index, leaving a contract BOTH versions provide
+    /// consumed, takes the dropped-contract teardown path, and removes that
+    /// contract's only live slot from the find index, leaving a contract BOTH versions provide
     /// unresolvable. Holding this mutex across the entire `reload_bundle` call
     /// (including its cascade tree) makes each reload's snapshot↔swap atomic with
     /// respect to any other reload.
@@ -666,19 +666,15 @@ impl Runtime {
         // is owned by `descriptor`, which outlives this synchronous call.
         self.fire_unloading(bundle_id, &descriptor.name);
 
-        let (_count, retired_arcs): (u32, Vec<Arc<GuestContractInterface>>) =
-            self.registry.invalidate_bundle(bundle_id)?;
+        let _count: u32 = self.registry.invalidate_bundle(bundle_id)?;
 
-        // Reclaim-safety hint: after invalidate, each underlying interface allocation
-        // has exactly 2 strong refs — one owned by the registry's `retired_interfaces`
-        // vec, one owned by this local `retired_arcs` vec. `> 2` means some other path
-        // (e.g. a future instance counter) still holds the Arc, so true reclaim is
-        // deferred. Raw in-flight native calls are NOT counted (the runtime is
-        // structurally blind to them); `UnloadMode::Reclaim`'s host attestation covers
-        // that case. `retired_arcs` must stay alive until after this computation.
-        let reclaim_safe: bool = retired_arcs
-            .iter()
-            .all(|a: &Arc<GuestContractInterface>| Arc::strong_count(a) <= 2);
+        // reclaim_safe is forced false here: the interface lifetime is now
+        // epoch-governed (true unload of interface memory), and loader/library
+        // reclamation is coordinated through epoch in its own path. Until that path
+        // lands, the loader keeps the library mapped (reclaim_safe=false), which is
+        // always sound. The accurate live-instance signal arrives with the
+        // host-mediated instance counter.
+        let reclaim_safe: bool = false;
 
         // Invalidate-then-reclaim: now that the bundle is gone from the registry
         // indices, no new dispatch can reach it. Ask the loader to free its
@@ -802,13 +798,15 @@ impl Runtime {
         // Fire Unloading before invalidate so the host can quiesce (mirrors unload_bundle).
         self.fire_unloading(bundle_id, &bundle_name);
 
-        let (_count, retired_arcs): (u32, Vec<Arc<GuestContractInterface>>) =
-            self.registry.invalidate_bundle(bundle_id)?;
+        let _count: u32 = self.registry.invalidate_bundle(bundle_id)?;
 
-        // See unload_bundle for the strong_count <= 2 baseline reasoning.
-        let reclaim_safe: bool = retired_arcs
-            .iter()
-            .all(|a: &Arc<GuestContractInterface>| Arc::strong_count(a) <= 2);
+        // reclaim_safe is forced false here: the interface lifetime is now
+        // epoch-governed (true unload of interface memory), and loader/library
+        // reclamation is coordinated through epoch in its own path. Until that path
+        // lands, the loader keeps the library mapped (reclaim_safe=false), which is
+        // always sound. The accurate live-instance signal arrives with the
+        // host-mediated instance counter.
+        let reclaim_safe: bool = false;
 
         self.reclaim_via_loader(bundle_id, loader_name.as_deref(), reclaim_safe)?;
         Ok(())
@@ -2312,11 +2310,11 @@ pub(crate) unsafe extern "C" fn host_call_guest_method(
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     let registry: &RuntimeStore = &runtime.registry;
 
-    // Re-resolve the target contract by id on EVERY call. find_guest_contract +
-    // resolve_guest_contract both drop their read guard before returning, so no
-    // registry lock is held across the guest dispatch below. The returned pointer
-    // stays valid even across a concurrent hot-reload because retired interfaces
-    // are kept alive (retire-not-drop) for the runtime lifetime.
+    // Re-resolve the target contract by id on EVERY call. The resolve drops its own
+    // internal read guard before returning, so no registry lock is held across the
+    // guest dispatch below. The returned pointer stays valid across a concurrent
+    // unload because the outer epoch pin taken below keeps the snapshot whose Arc
+    // backs the interface alive for the duration of the dispatch.
     let contract_id: u64 = instance.contract_id.id();
 
     // Conservative routing guard for multi-provider contracts. Routing is keyed
@@ -2329,14 +2327,22 @@ pub(crate) unsafe extern "C" fn host_call_guest_method(
     //
     // The count, the single-provider check, and the resolve all happen under ONE
     // registry read guard via `resolve_single_provider` (was three separate guard
-    // acquisitions: count + find + resolve). The guard is dropped before the guest
-    // dispatch below, so no registry lock is held across the call; the returned
-    // pointer stays valid even across a concurrent hot-reload because retired
-    // interfaces are kept alive (retire-not-drop) for the runtime lifetime.
+    // acquisitions: count + find + resolve). That internal guard is dropped before
+    // the guest dispatch below, so no registry lock is held across the call; the
+    // returned pointer stays valid across a concurrent unload because the outer epoch
+    // pin taken below keeps the snapshot whose Arc backs the interface alive for the
+    // duration of the dispatch.
     //
     // NOTE: the matching `call_guest_method` field doc on `HostApi` in the
     // `polyplug_abi` crate should be updated to document this DuplicateProvider
     // outcome (that crate is owned by another agent — follow-up).
+    //
+    // The outer pin keeps the snapshot whose Arc backs `interface_ptr` from being
+    // epoch-reclaimed for the duration of the dispatch, so a concurrent unload
+    // cannot free the interface mid-call. It must outlive the native/vm dispatch
+    // below, so it is bound to a named guard (not `let _ =`, which drops immediately)
+    // that lives to the end of this function.
+    let _dispatch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
     let interface_ptr: *const GuestContractInterface = match registry
         .resolve_single_provider(GuestContractId::from_u64(contract_id), 0)
     {
@@ -2372,8 +2378,9 @@ pub(crate) unsafe extern "C" fn host_call_guest_method(
         }
     };
 
-    // SAFETY: interface_ptr is non-null and points to a 'static (retire-not-drop)
-    // GuestContractInterface registered by the loader; reading its fields is sound.
+    // SAFETY: interface_ptr is non-null and points to a GuestContractInterface owned
+    // by a published snapshot kept alive by the outer epoch pin (`_dispatch_guard`)
+    // for the duration of this dispatch; reading its fields is sound.
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     match interface.dispatch_type {

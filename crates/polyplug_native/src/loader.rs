@@ -56,7 +56,7 @@ impl NativeLoader {
     ///
     /// 1. Invalidate whatever the failed init registered so the runtime retires
     ///    those interfaces (the generation bump makes any published handle stale).
-    ///    `invalidate_bundle` returns `Ok((0, _))` when nothing was registered.
+    ///    `invalidate_bundle` returns `Ok(0)` when nothing was registered.
     /// 2. RETIRE the library instead of dropping it. A library whose init ran must
     ///    never be `dlclose`d here: its 'static registration data (descriptor /
     ///    function-pointer arrays) backs the now-retired interface, and unmapping
@@ -732,10 +732,7 @@ mod unload_tests {
 
         // The failed init's registration must have been invalidated: re-invalidating
         // the same bundle now reports zero slots (idempotent — nothing left to retire).
-        let (count, _retired): (
-            u32,
-            Vec<std::sync::Arc<polyplug_abi::GuestContractInterface>>,
-        ) = runtime
+        let count: u32 = runtime
             .registry()
             .invalidate_bundle(bundle_id)
             .expect("invalidate_bundle should succeed");
