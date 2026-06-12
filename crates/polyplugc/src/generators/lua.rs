@@ -273,11 +273,12 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push('\n');
 
     // Cached FFI types for hot path performance.
-    // Native guest dispatch functions take the instance by value and return an
-    // AbiError (24-byte struct), matching GuestContractInterface native dispatch.
+    // Native guest dispatch functions take the instance by value and write the
+    // AbiError through a trailing out_err pointer (out-param ABI), matching
+    // GuestContractInterface native dispatch.
     out.push_str("-- Cached FFI types for hot path performance\n");
     out.push_str(
-        "local NativeDispatchFnType = ffi.typeof(\"AbiError (*)(GuestContractInstance, const void*, void*)\")\n\n",
+        "local NativeDispatchFnType = ffi.typeof(\"void (*)(GuestContractInstance, const void*, void*, AbiError*)\")\n\n",
     );
 
     for contract in &ir.contracts {
@@ -401,7 +402,9 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
     out.push_str("    reset = function(self)\n");
     out.push_str("        self:destroy()\n");
     out.push_str("        if self._interface ~= nil then\n");
-    out.push_str("            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)\n");
+    out.push_str("            local new_instance = ffi.new(\"GuestContractInstance\")\n");
+    out.push_str("            self._host.create_guest_instance(self._host, self._interface, nil, new_instance)\n");
+    out.push_str("            self._instance = new_instance\n");
     out.push_str("            self._destroyed = false\n");
     out.push_str("        end\n");
     out.push_str("    end,\n\n");
@@ -458,7 +461,9 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
         "    -- dispatch token. Validity is keyed off the interface pointer, not the instance.\n",
     );
     out.push_str("    -- Route creation through the host so the runtime tracks the instance.\n");
-    out.push_str("    local instance = host.create_guest_instance(host, interface, nil)\n");
+    out.push_str("    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.\n");
+    out.push_str("    local instance = ffi.new(\"GuestContractInstance\")\n");
+    out.push_str("    host.create_guest_instance(host, interface, nil, instance)\n");
     out.push_str("    local wrapper = {\n");
     out.push_str("        _interface = interface,\n");
     out.push_str("        _instance = instance,\n");
@@ -499,7 +504,10 @@ fn generate_host_caller_method(
     // Python) call the function pointer directly; VM guests (Lua, JS) route
     // through the loader's vm.call trampoline. Both return an AbiError by value.
     // DispatchType: 0 == Native, 1 == VirtualMachine.
-    out.push_str("        local err\n");
+    out.push_str(
+        "        -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.\n",
+    );
+    out.push_str("        local err = ffi.new(\"AbiError\")\n");
     out.push_str("        if self._interface.dispatch_type == 0 then\n");
     // Function-id bounds check inside the Native arm only: on a VM interface
     // dispatch.native.function_count aliases bits of dispatch.vm.call through
@@ -514,7 +522,7 @@ fn generate_host_caller_method(
         "            local fn_ptr = self._interface.dispatch.native.functions[{fn_id}]\n"
     ));
     out.push_str("            local fn = ffi.cast(NativeDispatchFnType, fn_ptr)\n");
-    out.push_str("            err = fn(self._instance, args_ptr, out_ptr)\n");
+    out.push_str("            fn(self._instance, args_ptr, out_ptr, err)\n");
     out.push_str("        else\n");
     // The arena is nil: a Lua host caller cannot soundly hold a per-caller
     // CallArena (the 40-byte arena owns a borrowed primary buffer plus a host
@@ -523,7 +531,7 @@ fn generate_host_caller_method(
     // to per-value host->alloc — correct, just not zero-allocation. Native Rust/C++
     // hosts (rust.rs fn_needs_arena) carry real per-caller arenas.
     out.push_str(&format!(
-        "            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, nil)\n"
+        "            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
     ));
     out.push_str("        end\n");
     out.push_str("        if err.code ~= AbiErrorCode.Ok then\n");
@@ -1445,7 +1453,10 @@ fn generate_lua_guest_host_contract_method(
     emit_lua_guest_host_contract_args_setup(out, func, class_name, enums);
     emit_lua_guest_host_contract_out_setup(out, &func.returns, enums);
 
-    out.push_str("    local err\n");
+    out.push_str(
+        "    -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.\n",
+    );
+    out.push_str("    local err = ffi.new(\"AbiError\")\n");
     out.push_str("    if dispatch_type == 0 then\n");
     // Function-id bounds check inside the Native arm only: on a VM interface
     // dispatch.native.function_count aliases bits of dispatch.vm.call through
@@ -1469,7 +1480,7 @@ fn generate_lua_guest_host_contract_method(
     out.push_str("        local impl_ptr = nil\n");
     out.push_str("        if self._instance ~= nil then impl_ptr = self._instance.data end\n");
     out.push_str("        local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
-    out.push_str("        err = fn(impl_ptr, args_ptr, out_ptr)\n");
+    out.push_str("        fn(impl_ptr, args_ptr, out_ptr, err)\n");
     out.push_str("    elseif dispatch_type == 1 then\n");
     // The VM dispatch ABI signature is fn(loader_data, instance, fn_id, args, out,
     // arena). Host contracts carry no guest instance, so a null GuestContractInstance
@@ -1478,7 +1489,7 @@ fn generate_lua_guest_host_contract_method(
     // caller has no per-caller arena, so the bridge falls back to host->alloc.
     out.push_str("        local _null_instance = ffi.new(\"GuestContractInstance\")\n");
     out.push_str(&format!(
-        "        err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, {fn_id}, args_ptr, out_ptr, nil)\n"
+        "        interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
     ));
     out.push_str("    else\n");
     if has_return {
@@ -1864,7 +1875,9 @@ fn generate_lua_guest_peer_caller(
     // return a null handle from create_instance and use it as an opaque dispatch token.
     // Validity is keyed off the interface pointer, not the instance.
     out.push_str("    -- Route creation through the host so the runtime tracks the instance.\n");
-    out.push_str("    local instance = host.create_guest_instance(host, interface, nil)\n");
+    out.push_str("    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.\n");
+    out.push_str("    local instance = ffi.new(\"GuestContractInstance\")\n");
+    out.push_str("    host.create_guest_instance(host, interface, nil, instance)\n");
     out.push_str(
         "    -- Stamp the peer contract id so call_guest_method routes by it even when a\n",
     );
@@ -1933,7 +1946,10 @@ fn generate_lua_guest_peer_method(
     emit_lua_guest_host_contract_args_setup(out, func, class_name, enums);
     emit_lua_guest_host_contract_out_setup(out, &func.returns, enums);
 
-    out.push_str("    local err\n");
+    out.push_str(
+        "    -- Out-param ABI: call_guest_method writes the AbiError through a trailing pointer.\n",
+    );
+    out.push_str("    local err = ffi.new(\"AbiError\")\n");
     out.push_str("    if dispatch_type == 0 then\n");
     // Function-id bounds check inside the Native arm only: on a VM interface
     // dispatch.native.function_count aliases bits of dispatch.vm.call through
@@ -1953,13 +1969,13 @@ fn generate_lua_guest_peer_method(
     // bridge falls back to host->alloc (same convention as the host caller's nil
     // arena comment).
     out.push_str(&format!(
-        "        err = self._host.call_guest_method(self._host, self._instance, {fn_id}, args_ptr, out_ptr, nil)\n"
+        "        self._host.call_guest_method(self._host, self._instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
     ));
     out.push_str("    elseif dispatch_type == 1 then\n");
     // VM dispatch path: call_guest_method still applies; the host routes it through
     // the loader vm.call trampoline internally. Arena is nil for the same reason.
     out.push_str(&format!(
-        "        err = self._host.call_guest_method(self._host, self._instance, {fn_id}, args_ptr, out_ptr, nil)\n"
+        "        self._host.call_guest_method(self._host, self._instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
     ));
     out.push_str("    else\n");
     if has_return {
@@ -2022,7 +2038,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     // This mirrors the canonical Rust host-contract caller's native fn signature.
     out.push_str("-- Cached FFI types for hot path performance\n");
     out.push_str(
-        "local DispatchFnType = ffi.typeof(\"AbiError (*)(const void*, const void*, void*)\")\n\n",
+        "local DispatchFnType = ffi.typeof(\"void (*)(const void*, const void*, void*, AbiError*)\")\n\n",
     );
 
     for contract in &ir.host_contracts {
@@ -2933,8 +2949,8 @@ mod tests {
             "must call resolve_guest_contract: {out}"
         );
         assert!(
-            out.contains("host.create_guest_instance(host, interface, nil)"),
-            "must call create_guest_instance: {out}"
+            out.contains("host.create_guest_instance(host, interface, nil, instance)"),
+            "must call create_guest_instance with out-param: {out}"
         );
         assert!(
             out.contains("function PipelineValidatorPeer:validate(input)"),
@@ -2945,9 +2961,10 @@ mod tests {
             "method must dispatch via call_guest_method: {out}"
         );
         // Arena must be nil — Lua peer callers have no per-caller CallArena.
+        // Out-param ABI: call_guest_method takes a trailing out_err pointer after the arena.
         assert!(
-            out.contains(", nil)"),
-            "call_guest_method must pass nil arena: {out}"
+            out.contains(", nil, err)"),
+            "call_guest_method must pass nil arena and out_err: {out}"
         );
         assert!(
             out.contains("return out_val"),

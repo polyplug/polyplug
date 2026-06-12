@@ -1011,7 +1011,9 @@ fn generate_guest_abi_wrapper(
     out.push_str("        Err(_) => AbiError::panic_caught(),\n");
     out.push_str("    }\n");
     out.push_str("    })();\n");
-    out.push_str("    // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.\n");
+    out.push_str(
+        "    // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.\n",
+    );
     out.push_str("    if !out_err.is_null() { unsafe { out_err.write(__result_err); } }\n");
     out.push_str("}\n\n");
 
@@ -1175,7 +1177,9 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "        version: Version {{ major: {version_major}, minor: {version_minor}, patch: 0 }},\n"
             ));
             out.push_str("    };\n");
-            out.push_str("    // SAFETY: desc and interface are 'static; &mut err is a valid out-param.\n");
+            out.push_str(
+                "    // SAFETY: desc and interface are 'static; &mut err is a valid out-param.\n",
+            );
             out.push_str(&format!(
                 "    let mut err_{plugin_upper}: AbiError = AbiError {{ code: AbiErrorCode::Ok as u32, message: StringView::null() }};\n"
             ));
@@ -1214,7 +1218,9 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "        version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"
             ));
             out.push_str("    };\n");
-            out.push_str("    // SAFETY: desc and interface are 'static; &mut err is a valid out-param.\n");
+            out.push_str(
+                "    // SAFETY: desc and interface are 'static; &mut err is a valid out-param.\n",
+            );
             out.push_str(&format!("    let mut err_{upper}: AbiError = AbiError {{ code: AbiErrorCode::Ok as u32, message: StringView::null() }};\n"));
             out.push_str("    unsafe {\n");
             out.push_str(&format!(
@@ -1402,7 +1408,9 @@ fn generate_host_contract_caller(
     out.push_str(
         "        // handle from `create_instance` and use it as an opaque dispatch token.\n",
     );
-    out.push_str("        let mut instance: GuestContractInstance = GuestContractInstance::null();\n");
+    out.push_str(
+        "        let mut instance: GuestContractInstance = GuestContractInstance::null();\n",
+    );
     out.push_str("        unsafe {\n");
     out.push_str("            let host_api: &HostApi = host.as_ref()?;\n");
     out.push_str(
@@ -1452,7 +1460,9 @@ fn generate_host_contract_caller(
     );
     out.push_str("            }\n");
     out.push_str("        }\n");
-    out.push_str("        let mut new_instance: GuestContractInstance = GuestContractInstance::null();\n");
+    out.push_str(
+        "        let mut new_instance: GuestContractInstance = GuestContractInstance::null();\n",
+    );
     out.push_str("        unsafe {\n");
     out.push_str(
         "            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null(), &mut new_instance);\n",
@@ -1582,7 +1592,9 @@ fn generate_host_fn_caller(
         "        // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.\n",
     );
     out.push_str("        let mut err: AbiError = AbiError::ok();\n");
-    out.push_str("        // SAFETY: args_ptr/out_ptr/&mut err match the ABI contract; instance is valid.\n");
+    out.push_str(
+        "        // SAFETY: args_ptr/out_ptr/&mut err match the ABI contract; instance is valid.\n",
+    );
     out.push_str("        unsafe {\n");
     out.push_str("            match interface.dispatch_type {\n");
     // The function-id bounds check lives INSIDE the Native arm: reading
@@ -1603,7 +1615,9 @@ fn generate_host_fn_caller(
     out.push_str("                        // - The interface guarantees that the function at this index is a native dispatch function\n");
     out.push_str("                        //   with the exact signature: unsafe extern \"C\" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)\n");
     out.push_str("                        let dispatch_fn: unsafe extern \"C\" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) = core::mem::transmute(fn_ptr);\n");
-    out.push_str("                        dispatch_fn(self.instance, args_ptr, out_ptr, &mut err);\n");
+    out.push_str(
+        "                        dispatch_fn(self.instance, args_ptr, out_ptr, &mut err);\n",
+    );
     out.push_str("                    }\n");
     out.push_str("                }\n");
     out.push_str("                DispatchType::VirtualMachine => {\n");
@@ -2175,7 +2189,9 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(
         "        // `user_data` holds the implementation pointer stored at registration, and\n",
     );
-    out.push_str("        // `out_instance` is a valid, writable out-param per the ABI contract.\n");
+    out.push_str(
+        "        // `out_instance` is a valid, writable out-param per the ABI contract.\n",
+    );
     out.push_str("        unsafe { out_instance.write(HostContractInstance { data: (*this).user_data }); }\n");
     out.push_str("    }\n\n");
 
@@ -2286,7 +2302,9 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(
         "        // SAFETY: `this` is a valid HostContractInterface pointer per ABI contract;\n",
     );
-    out.push_str("        // `user_data` holds the bridge_data stored at registration, and `out_instance`\n");
+    out.push_str(
+        "        // `user_data` holds the bridge_data stored at registration, and `out_instance`\n",
+    );
     out.push_str("        // is a valid, writable out-param per the ABI contract.\n");
     out.push_str("        unsafe { out_instance.write(HostContractInstance { data: (*this).user_data }); }\n");
     out.push_str("    }\n\n");
@@ -2417,7 +2435,9 @@ fn generate_host_thunk(
     ));
     out.push_str("            },\n");
     out.push_str("        };\n");
-    out.push_str("        // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.\n");
+    out.push_str(
+        "        // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.\n",
+    );
     out.push_str("        if !out_err.is_null() { unsafe { out_err.write(__thunk_err); } }\n");
     out.push_str("    }\n\n");
 }
@@ -2831,7 +2851,9 @@ fn generate_guest_host_contract_method(
     emit_guest_host_contract_out_setup(out, &func.returns);
 
     out.push_str("        let mut err: AbiError = AbiError::ok();\n");
-    out.push_str("        // SAFETY: args_ptr/out_ptr/&mut err match the host-contract ABI contract.\n");
+    out.push_str(
+        "        // SAFETY: args_ptr/out_ptr/&mut err match the host-contract ABI contract.\n",
+    );
     out.push_str("        unsafe {\n");
     out.push_str("            match interface.dispatch_type {\n");
     out.push_str("                DispatchType::Native => {\n");
@@ -3304,7 +3326,9 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
     out.push_str(
         "        // Route creation through the host so the runtime tracks the instance.\n",
     );
-    out.push_str("        let mut created: GuestContractInstance = GuestContractInstance::null();\n");
+    out.push_str(
+        "        let mut created: GuestContractInstance = GuestContractInstance::null();\n",
+    );
     out.push_str("        unsafe {\n");
     out.push_str(
         "            (iface_api.create_guest_instance)(host, interface, core::ptr::null(), &mut created);\n",

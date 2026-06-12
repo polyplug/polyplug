@@ -390,18 +390,17 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("        ('message_len', ctypes.c_size_t),\n");
     out.push_str("    ]\n\n");
 
-    // Native dispatch function type matching the canonical ABI signature
-    //   fn(instance: GuestContractInstance, args, out) -> AbiError
-    // emitted by the rust / cpp guest generators. The 24-byte AbiError return uses
-    // the System V sret convention; ctypes synthesizes the hidden sret pointer when
-    // the restype is a ctypes.Structure, so the logical signature is declared here.
-    // GuestContractInstance is the canonical type from polyplug_abi so it matches the
-    // instance returned by create_instance.
+    // Native dispatch function type matching the canonical out-param ABI signature
+    //   fn(instance: GuestContractInstance, args, out, out_err: *mut AbiError) -> void
+    // emitted by the rust / cpp guest generators. The result AbiError is written
+    // through the trailing out_err pointer; the caller passes a _AbiError by ref and
+    // reads it back. GuestContractInstance is the canonical type from polyplug_abi so
+    // it matches the instance returned by create_instance.
     out.push_str(
-        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)\n",
+        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n",
     );
     out.push_str(
-        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p], _AbiError]\n\n"
+        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], None]\n\n"
     );
 
     for contract in &ir.contracts {
@@ -790,7 +789,9 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
         "        # handle and use it as an opaque dispatch token. Validity is keyed off\n",
     );
     out.push_str("        # the interface pointer, never off instance data.\n");
-    out.push_str("        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)\n");
+    // create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> None.
+    out.push_str("        self._instance = GuestContractInstance()\n");
+    out.push_str("        host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))\n");
     out.push_str("        self._host: ctypes.c_void_p = host\n");
     out.push_str(
         "        # Pin the runtime: refcounting then guarantees the owner outlives this\n",
@@ -879,8 +880,9 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
     );
     out.push_str("        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))\n");
     out.push_str("        host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)\n");
+    out.push_str("        self._instance = GuestContractInstance()\n");
     out.push_str(
-        "        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)\n\n",
+        "        host_iface.contents.create_guest_instance(self._host, self._interface, None, ctypes.byref(self._instance))\n\n",
     );
 
     out.push_str("    def __bool__(self) -> bool:\n");
@@ -927,7 +929,10 @@ fn generate_host_caller_method(
     out.push_str("        # SAFETY: the interface pointer is valid for the wrapper lifetime.\n");
     out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
     out.push_str("        interface: GuestContractInterface = iface_ptr.contents\n");
-    out.push_str("        err: Any\n");
+    out.push_str(
+        "        # Out-param ABI: dispatch writes the AbiError through a trailing pointer.\n",
+    );
+    out.push_str("        err: _AbiError = _AbiError()\n");
     out.push_str("        if interface.dispatch_type == DispatchType.Native:\n");
     // Function-id bounds check inside the Native arm only: on a VM interface
     // dispatch.native.function_count aliases bits of dispatch.vm.call through
@@ -952,7 +957,7 @@ fn generate_host_caller_method(
     out.push_str(
         "            # to valid args, out_ptr to a valid return-type buffer per the ABI contract.\n",
     );
-    out.push_str("            err = dispatch_fn(self._instance, args_ptr, out_ptr)\n");
+    out.push_str("            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))\n");
     out.push_str("        else:\n");
     // VM dispatch: call through interface.dispatch.vm.call with the canonical 6-arg
     // signature (loader_data, instance, fn_id, args, out, arena). Arena-backed
@@ -968,14 +973,14 @@ fn generate_host_caller_method(
             "            # are valid per the ABI contract. The arena was reset at call start.\n",
         );
         out.push_str(&format!(
-            "            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, ctypes.byref(self._arena))\n"
+            "            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))\n"
         ));
     } else {
         out.push_str(
             "            # are valid per the ABI contract. The null arena selects the host->alloc fallback.\n",
         );
         out.push_str(&format!(
-            "            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, None)\n"
+            "            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, None, ctypes.byref(err))\n"
         ));
     }
     out.push_str("        if err.code != AbiErrorCode.Ok:\n");
@@ -2177,7 +2182,8 @@ fn generate_python_guest_host_contract_method(
     emit_python_guest_host_contract_args_setup(out, func, enums);
     emit_python_guest_host_contract_out_setup(out, &func.returns, enums);
 
-    out.push_str("        err: AbiError\n");
+    // Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+    out.push_str("        err: AbiError = AbiError()\n");
     out.push_str("        if dispatch_type == DispatchType.Native:\n");
     // Function-id bounds check inside the Native arm only: on a VM interface
     // dispatch.native.function_count aliases bits of dispatch.vm.call through
@@ -2198,7 +2204,9 @@ fn generate_python_guest_host_contract_method(
     );
     // The native thunk receives the per-instance state (instance.data) as its
     // first argument — mirrors rust.rs `dispatch_fn(self.instance.data, ...)`.
-    out.push_str("            err = dispatch_fn(self._instance.data, args_ptr, out_ptr)\n");
+    out.push_str(
+        "            dispatch_fn(self._instance.data, args_ptr, out_ptr, ctypes.byref(err))\n",
+    );
     out.push_str("        elif dispatch_type == DispatchType.VirtualMachine:\n");
     // The VM dispatch ABI signature is call(loader_data, instance, fn_id, args, out,
     // arena). Host contracts carry no guest instance, so a null GuestContractInstance
@@ -2206,7 +2214,7 @@ fn generate_python_guest_host_contract_method(
     // caller (which passes GuestContractInstance::null()). The arena is None: this
     // caller has no per-caller arena, so the bridge falls back to host->alloc.
     out.push_str(&format!(
-        "            err = iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), {fn_id}, args_ptr, out_ptr, None)\n"
+        "            iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), {fn_id}, args_ptr, out_ptr, None, ctypes.byref(err))\n"
     ));
     out.push_str("        else:\n");
     if has_return {
@@ -2398,8 +2406,9 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
         out.push_str(&format!("from guest.types import {}\n\n", import_list));
     }
 
+    // Out-param native dispatch: fn(instance, args, out, out_err) -> void.
     out.push_str(
-        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n\n",
+        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n\n",
     );
 
     for contract in &ir.host_contracts {
@@ -3116,6 +3125,7 @@ fn generate_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract
 
     if any_arena {
         out.push_str("from polyplug_abi import (\n");
+        out.push_str("    AbiError,\n");
         out.push_str("    AbiErrorCode,\n");
         out.push_str("    ArenaOverflowBlock,\n");
         out.push_str("    CallArena,\n");
@@ -3128,6 +3138,7 @@ fn generate_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract
         out.push_str(")\n\n");
     } else {
         out.push_str("from polyplug_abi import (\n");
+        out.push_str("    AbiError,\n");
         out.push_str("    AbiErrorCode,\n");
         out.push_str("    DispatchType,\n");
         out.push_str("    GuestContractHandle,\n");
@@ -3181,9 +3192,9 @@ fn generate_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract
         out.push_str("    arena.first_overflow = None\n\n");
     }
 
-    // Native dispatch function type: fn(instance, args, out) -> AbiError.
+    // Native dispatch function type: fn(instance, args, out, out_err) -> void.
     out.push_str(
-        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)\n\n",
+        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n\n",
     );
 
     for contract in peers {
@@ -3325,7 +3336,11 @@ fn generate_peer_caller_class(
     out.push_str("        # A null instance is valid for stateless contracts.\n");
     out.push_str("        # Route creation through the host so the runtime tracks the instance.\n");
     out.push_str(
-        "        instance: GuestContractInstance = host.contents.create_guest_instance(host_ptr, interface, None)\n",
+        "        # create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> None.\n",
+    );
+    out.push_str("        instance: GuestContractInstance = GuestContractInstance()\n");
+    out.push_str(
+        "        host.contents.create_guest_instance(host_ptr, interface, None, ctypes.byref(instance))\n",
     );
     out.push_str(
         "        # Stamp the peer contract id so call_guest_method routes by it even when\n",
@@ -3400,13 +3415,15 @@ fn generate_peer_caller_method(
 
     // Dispatch via call_guest_method (host-mediated, guarded).
     out.push_str("        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))\n");
+    // Out-param ABI: call_guest_method writes the AbiError through a trailing pointer.
+    out.push_str("        err: AbiError = AbiError()\n");
     if needs_arena {
         out.push_str(&format!(
-            "        err: Any = host.contents.call_guest_method(self._host_ptr, self._instance, {fn_id}, args_ptr, out_ptr, ctypes.byref(self._arena))\n"
+            "        host.contents.call_guest_method(self._host_ptr, self._instance, {fn_id}, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))\n"
         ));
     } else {
         out.push_str(&format!(
-            "        err: Any = host.contents.call_guest_method(self._host_ptr, self._instance, {fn_id}, args_ptr, out_ptr, None)\n"
+            "        host.contents.call_guest_method(self._host_ptr, self._instance, {fn_id}, args_ptr, out_ptr, None, ctypes.byref(err))\n"
         ));
     }
     out.push_str("        if err.code != AbiErrorCode.Ok:\n");
@@ -4079,8 +4096,8 @@ mod tests {
         // The native dispatch passes instance.data first; NativeDispatch has no
         // impl_ptr field.
         assert!(
-            out.contains("err = dispatch_fn(self._instance.data, args_ptr, out_ptr)"),
-            "native dispatch must pass instance.data: {out}"
+            out.contains("dispatch_fn(self._instance.data, args_ptr, out_ptr, ctypes.byref(err))"),
+            "native dispatch must pass instance.data and out_err: {out}"
         );
         assert!(
             !out.contains("impl_ptr"),

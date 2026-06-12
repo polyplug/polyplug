@@ -719,7 +719,9 @@ fn emit_cs_guest_instance_machinery(
     out.push_str("        try {\n");
     out.push_str(&format!("            var factory = _factory_{lower};\n"));
     out.push_str("            if (host == IntPtr.Zero || factory is null) {\n");
-    out.push_str("                *outInstance = new GuestContractInstance { Data = IntPtr.Zero };\n");
+    out.push_str(
+        "                *outInstance = new GuestContractInstance { Data = IntPtr.Zero };\n",
+    );
     out.push_str("                return;\n");
     out.push_str("            }\n");
     out.push_str(&format!(
@@ -1141,7 +1143,8 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         // HostApi struct. Route the instance lifecycle through the host so the runtime
         // tracks every live instance. Cast them to the host-mediated signature before
         // calling.
-        let create_cast: &str = "((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)";
+        // create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
+        let create_cast: &str = "((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)";
         let destroy_cast: &str = "((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)";
 
         // Factory method
@@ -1166,8 +1169,9 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         // A null instance handle is valid: stateless contracts return a null handle
         // from create_instance and use it as an opaque dispatch token.
         // Route creation through the host so the runtime tracks the instance.
-        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;\n");
-        out.push_str("        var inst = createFn(host, iface, null);\n");
+        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;\n");
+        out.push_str("        GuestContractInstance inst = default;\n");
+        out.push_str("        createFn(host, iface, null, &inst);\n");
         out.push_str(&format!(
             "        return new {caller_name}(iface, inst, host);\n"
         ));
@@ -1187,9 +1191,11 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
             "            {destroy_cast}(_host, _interface, _instance);\n"
         ));
         out.push_str("        }\n");
+        out.push_str("        GuestContractInstance newInst = default;\n");
         out.push_str(&format!(
-            "        _instance = {create_cast}(_host, _interface, null);\n"
+            "        {create_cast}(_host, _interface, null, &newInst);\n"
         ));
+        out.push_str("        _instance = newInst;\n");
         out.push_str("    }\n\n");
 
         // Dispose pattern
@@ -2244,11 +2250,12 @@ fn generate_cs_host_interface_factory(
     // static field, so the instance handle is an unused opaque token (null).
     out.push_str("[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
-        "private static HostContractInstance {}(IntPtr self, IntPtr args) {{\n",
+        "private static unsafe void {}(IntPtr self, IntPtr args, HostContractInstance* outInstance) {{\n",
         create_stub
     ));
     out.push_str("    _ = self; _ = args;\n");
-    out.push_str("    return new HostContractInstance { Data = IntPtr.Zero };\n");
+    out.push_str("    if (outInstance == null) return;\n");
+    out.push_str("    *outInstance = new HostContractInstance { Data = IntPtr.Zero };\n");
     out.push_str("}\n\n");
     out.push_str("[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
@@ -2286,7 +2293,7 @@ fn generate_cs_host_interface_factory(
             func.name
         );
         out.push_str(&format!(
-            "        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)&{},\n",
+            "        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError*, void>)&{},\n",
             thunk_name
         ));
     }
@@ -2313,7 +2320,7 @@ fn generate_cs_host_interface_factory(
     );
     out.push_str("        UserData = IntPtr.Zero,\n");
     out.push_str(&format!(
-        "        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&{},\n",
+        "        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance*, void>)&{},\n",
         create_stub
     ));
     out.push_str(&format!(
@@ -2356,7 +2363,7 @@ fn generate_cs_host_interface_factory(
     out.push_str("        Runtime = IntPtr.Zero,\n");
     out.push_str("        UserData = loaderData,  // registrant-owned VM bridge data\n");
     out.push_str(&format!(
-        "        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&{},\n",
+        "        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance*, void>)&{},\n",
         create_stub
     ));
     out.push_str(&format!(
@@ -2410,10 +2417,11 @@ fn generate_cs_host_thunk(
 
     out.push_str("[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
-        "private static AbiError {}(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr) {{\n",
+        "private static unsafe void {}(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {{\n",
         thunk_name
     ));
     out.push_str("    _ = implPtr;\n");
+    out.push_str("    if (outErr == null) return;\n");
     out.push_str("    try {\n");
     out.push_str(&format!(
         "        var impl = s_{}_impl ?? throw new InvalidOperationException(\"implementation not set\");\n",
@@ -2442,11 +2450,11 @@ fn generate_cs_host_thunk(
         out.push_str("        _ = outPtr;\n");
     }
 
-    out.push_str("        return new AbiError { Code = (uint)AbiErrorCode.Ok };\n");
+    out.push_str("        *outErr = new AbiError { Code = (uint)AbiErrorCode.Ok };\n");
     out.push_str("    } catch (Exception ex) {\n");
     out.push_str("        var msg = StringViewHelper.StaticMessage(ex.Message);\n");
     out.push_str(
-        "        return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };\n",
+        "        *outErr = new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };\n",
     );
     out.push_str("    }\n");
     out.push_str("}\n\n");
@@ -2774,10 +2782,11 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         out.push_str("        var resolveFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractHandle, GuestContractInterface*>)host->ResolveGuestContract;\n");
         out.push_str("        GuestContractInterface* iface = resolveFn(hostPtr, handle);\n");
         out.push_str("        if (iface == null) { return null; }\n");
-        // CreateGuestInstance: (this, interface, user_data) → GuestContractInstance.
+        // CreateGuestInstance is an out-param ABI fn: (this, interface, args, out_instance) → void.
         // Route creation through the host so the runtime tracks the instance.
-        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;\n");
-        out.push_str("        GuestContractInstance inst = createFn(hostPtr, iface, null);\n");
+        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;\n");
+        out.push_str("        GuestContractInstance inst = default;\n");
+        out.push_str("        createFn(hostPtr, iface, null, &inst);\n");
         out.push_str(
             "        // Stamp the peer contract id so CallGuestMethod routes by it even when a\n",
         );
@@ -2837,10 +2846,10 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
 ///
 /// The canonical `call_guest_method` ABI signature (offset 136 on HostApi):
 ///   `(host: *HostApi, instance: GuestContractInstance, fn_id: u32,
-///     args: *const u8, out: *mut u8, arena: *mut CallArena) → AbiError`
+///     args: *const u8, out: *mut u8, arena: *mut CallArena, out_err: *mut AbiError) → void`
 ///
 /// C# cast used here:
-///   `delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>`
+///   `delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>`
 fn generate_peer_fn_caller_cs(
     out: &mut String,
     func: &ResolvedFunction,
@@ -2941,18 +2950,18 @@ fn generate_peer_fn_caller_cs(
         "            // Dispatch via CallGuestMethod (host-mediated, offset 136 on HostApi).\n",
     );
     out.push_str(
-        "            var callFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_host->CallGuestMethod;\n",
+        "            var callFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_host->CallGuestMethod;\n",
     );
+    out.push_str("            AbiError err = default;\n");
     if needs_arena && peer_needs_arena {
-        out.push_str("            AbiError err;\n");
         out.push_str("            fixed (CallArena* arenaPtr = &_arena) {\n");
         out.push_str(&format!(
-            "                err = callFn((IntPtr)_host, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr);\n"
+            "                callFn((IntPtr)_host, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr, &err);\n"
         ));
         out.push_str("            }\n");
     } else {
         out.push_str(&format!(
-            "            AbiError err = callFn((IntPtr)_host, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null);\n"
+            "            callFn((IntPtr)_host, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null, &err);\n"
         ));
     }
 
