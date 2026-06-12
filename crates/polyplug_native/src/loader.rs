@@ -223,36 +223,26 @@ impl BundleLoader for NativeLoader {
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(expected_bundle_id.id());
 
-        // ─── Step 6: Get HostApi and call init (panic-isolated) ──────────────────
-        // A panicking plugin init must not unwind across the C ABI (UB / process abort).
-        // catch_unwind contains it and maps it to a proper LoaderError. The init stack
-        // is popped on BOTH the success and panic paths so it never leaks an entry.
+        // ─── Step 6: Get HostApi and call init ────────────────────────────────────
+        // The runtime does NOT wrap this call in catch_unwind. Each language's
+        // generated glue converts its own failures into an AbiError return before
+        // crossing this boundary (the responsibility contract — docs/TRUST_MODEL.md).
+        // A guard here would be a false promise: it cannot catch a C/C++ exception
+        // (only Rust panics), and a modern Rust plugin's own `extern "C"` boundary
+        // aborts on a panic that escapes its glue (that abort fires first). So an
+        // unwind or exception leaking across this ABI call is a plugin defect with a
+        // defined outcome — process abort — not something the runtime absorbs. The
+        // only correctness obligation here is that the init-stack push is balanced by
+        // the pop below on the normal return path; an aborting plugin tears down the
+        // whole process, so no cleanup can or needs to run.
         let host_abi: *const HostApi = runtime.host_abi();
-        let init_outcome: Result<AbiError, Box<dyn core::any::Any + Send>> =
-            std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
-                // SAFETY: host_abi is a valid HostApi pointer obtained from the runtime.
-                // init_fn_ptr is a valid function pointer resolved from the plugin library.
-                // ctx is a stack-allocated BundleInitContext that outlives the call.
-                unsafe { init_fn_ptr(host_abi, &ctx) }
-            }));
+        // SAFETY: host_abi is a valid HostApi pointer obtained from the runtime.
+        // init_fn_ptr is a valid function pointer resolved from the plugin library.
+        // ctx is a stack-allocated BundleInitContext that outlives the call.
+        let init_result: AbiError = unsafe { init_fn_ptr(host_abi, &ctx) };
 
-        // ─── Step 7: Pop bundle_id (always, including panic path) ──────────────────────
+        // ─── Step 7: Pop bundle_id ────────────────────────────────────────────────
         runtime.pop_init_bundle_id();
-
-        let init_result: AbiError = match init_outcome {
-            Ok(result) => result,
-            Err(_panic) => {
-                // init ran (and may have registered a live interface) before panicking:
-                // invalidate its registrations and schedule the library for epoch-deferred
-                // dlclose — never dlclose inline a library whose init ran, its statics may
-                // back an interface the runtime still epoch-owns.
-                self.retire_failed_init(&manifest.name, library, runtime);
-                return Err(RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: manifest.name.clone(),
-                    error: "plugin polyplug_init panicked".to_owned(),
-                }));
-            }
-        };
 
         if init_result.code != AbiErrorCode::Ok as u32 {
             let error_msg: String = if init_result.message.ptr.is_null() {
@@ -397,30 +387,20 @@ impl BundleLoader for NativeLoader {
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(expected_bundle_id.id());
 
-        // ─── Step 6: Get HostApi and call init (panic-isolated) ────────────────────
-        // A panicking plugin init must not unwind across the C ABI. catch_unwind contains
-        // it; the init stack is popped on both the success and panic paths.
+        // ─── Step 6: Get HostApi and call init ────────────────────────────────────
+        // No catch_unwind — same responsibility contract as load(): an unwind or
+        // exception escaping a plugin's own generated glue across this ABI call is a
+        // plugin defect with a defined outcome (process abort), not something the
+        // runtime absorbs. The init-stack push is balanced by the pop below on the
+        // normal return path.
         let host_abi: *const HostApi = runtime.host_abi();
-        let init_outcome: Result<AbiError, Box<dyn core::any::Any + Send>> =
-            std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
-                // SAFETY: host_abi is a valid HostApi pointer obtained from the runtime.
-                // init_fn_ptr is a valid function pointer resolved from the new plugin library.
-                // ctx is a stack-allocated BundleInitContext that outlives the call.
-                unsafe { init_fn_ptr(host_abi, &ctx) }
-            }));
+        // SAFETY: host_abi is a valid HostApi pointer obtained from the runtime.
+        // init_fn_ptr is a valid function pointer resolved from the new plugin library.
+        // ctx is a stack-allocated BundleInitContext that outlives the call.
+        let init_result: AbiError = unsafe { init_fn_ptr(host_abi, &ctx) };
 
-        // ─── Step 7: Pop bundle_id (always, including panic path) ────────────────────────
+        // ─── Step 7: Pop bundle_id ────────────────────────────────────────────────
         runtime.pop_init_bundle_id();
-
-        let init_result: AbiError = match init_outcome {
-            Ok(result) => result,
-            Err(_panic) => {
-                return Err(RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: manifest.name.clone(),
-                    error: "plugin polyplug_init panicked".to_owned(),
-                }));
-            }
-        };
 
         if init_result.code != AbiErrorCode::Ok as u32 {
             let error_msg: String = if init_result.message.ptr.is_null() {

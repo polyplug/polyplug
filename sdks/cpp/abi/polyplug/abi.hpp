@@ -834,7 +834,10 @@ enum class AbiErrorCode : uint32_t {
     Generic = 1,
     ///  Buffer too small — caller must reallocate (see Buffer protocol).
     BufferTooSmall = 2,
-    ///  Panic — plugin panicked (caught by catch_unwind).
+    ///  Panic — a plugin failed and its generated glue self-caught the failure
+    ///  (Rust `catch_unwind`, C++ `catch(...)`, C# `try/catch`, Lua/JS `pcall`/`try`)
+    ///  and converted it before crossing the ABI. A failure that *escapes* a
+    ///  plugin's glue is undefined (process abort), never this code.
     Panic = 3,
     ///  Not found — plugin/contract not found.
     NotFound = 4,

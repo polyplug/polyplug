@@ -20,7 +20,7 @@ _Last updated: 2026-06-08._
 | Goal 3 — Call arena for VM dispatch | ✅ Done (perf refinement deferred) |
 | Platform support — Windows | ✅ Done |
 | Unload — true unload (epoch-deferred reclaim) | ✅ Done |
-| FFI panic safety (`catch_unwind` at boundary) | ✅ Done |
+| FFI panic safety (per-language self-catch + embedder-guarded exports) | ✅ Done |
 | **Fuzzing the ABI boundary** | ✅ Done (3 targets + nightly smoke) |
 | **Miri + ASAN in CI** | ✅ Done (nightly) |
 | **TSAN for the resolve→dispatch race** | ✅ Done (nightly, concurrent unload stress test) |
@@ -368,10 +368,22 @@ Per-loader reclaim:
 
 ## FFI panic safety ✅ Done
 
-Guest panics/exceptions are caught at the FFI boundary (`catch_unwind` in
-`crates/polyplug/src/ffi.rs` and the loaders) and converted to `AbiError`
-instead of unwinding across the C ABI (undefined behavior). Covered by
-`crates/polyplug/tests/integration_panic.rs`.
+Failure-to-`AbiError` conversion is owned per-language, not by a runtime-side
+catch-all (see "Failure responsibility at the ABI boundary" in
+`docs/TRUST_MODEL.md`):
+
+- **Each language's generated glue self-catches** its own failures (Rust
+  `catch_unwind`, C++ `catch(...)`, C# `try/catch`, Lua/JS `pcall`/`try`) and
+  returns `AbiError { code: Panic }` *before* crossing the C ABI — zero
+  happy-path cost. Covered by `crates/polyplug/tests/integration_panic.rs`,
+  which drives a generated dispatch wrapper through a real plugin panic and
+  asserts the host sees `AbiErrorCode::Panic` with no process abort.
+- **The two C ABI exports** (`polyplug_runtime_create` / `polyplug_runtime_destroy`
+  in `crates/polyplug/src/ffi.rs`) wrap their bodies in `catch_unwind` solely for
+  the *embedder guarantee* — a bug in polyplug's own create/destroy path never
+  aborts the host process. The runtime does **not** wrap calls *into* a plugin
+  (`polyplug_init`, native dispatch): an unwind/exception escaping a plugin's own
+  glue is a plugin defect with a defined outcome (process abort).
 
 ## Hardening — fuzz, Miri, ASAN, supply-chain ✅ Done
 

@@ -1,7 +1,16 @@
 //! FFI — public `#[no_mangle]` C ABI entry points for host language bindings.
 //!
-//! All functions use `catch_unwind` to prevent Rust panics from unwinding across
-//! the C ABI boundary. Errors are stored per-runtime in the Runtime's last_error field.
+//! The two exports below (`polyplug_runtime_create` / `polyplug_runtime_destroy`)
+//! each wrap their body in `catch_unwind`. This is the **embedder guarantee**: a
+//! defect in polyplug's own create/destroy path surfaces as a null return (or a
+//! no-op destroy), never as a panic unwinding across the C ABI that would abort the
+//! embedding host process. These two are the *only* runtime-side panic guards — the
+//! `HostApi` field operations (`load_bundle`, `find_guest_contract`, …) are
+//! intentionally NOT guarded: a bug in the runtime there fails fast. Foreign-plugin
+//! failures are the plugin's own responsibility — each language's generated glue
+//! converts them to an `AbiError` before the boundary (see docs/TRUST_MODEL.md);
+//! the runtime does not absorb a panic/exception that escapes a plugin's glue.
+//! Per-runtime errors are stored in the Runtime's `last_error` field.
 //!
 //! # FFI Surface (18-02)
 //! Only two exports remain:

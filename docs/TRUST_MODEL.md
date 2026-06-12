@@ -296,6 +296,14 @@ Isolating plugin crashes requires either:
 
 polyplug's position: the hot path must be a single indirect call. Plugin crash isolation is incompatible with that goal. App developers who need crash isolation must run untrusted plugins in a separate worker process with their own IPC layer. polyplug is not the right tool for untrusted plugin execution.
 
+### Failure responsibility at the ABI boundary
+
+Who is responsible for turning a failure into an `AbiError` is fixed by contract, not by a catch-all guard somewhere in the runtime:
+
+- **Each language converts its own failures.** A plugin's generated glue is responsible for catching *its own* language's failures (Rust `panic!` → `catch_unwind`; C++ `throw` → `catch(...)`; C# exception → `try/catch`; Lua/JS error → `pcall`/`try`) and returning `AbiError { code: Panic, … }`. This conversion happens *inside* the plugin, before control returns across the C ABI. It is zero happy-path cost — table-driven exception handling adds nothing to the ~2.4 ns native dispatch when no failure occurs.
+- **The runtime never absorbs foreign failures.** polyplug does **not** wrap calls *into* a plugin (`polyplug_init`, native dispatch) in `catch_unwind`. Such a guard would be a false promise: it cannot catch a C/C++ exception (only Rust panics), and a modern Rust plugin's own `extern "C"` boundary aborts on a panic that escapes its glue — that abort fires first. An unwind or exception that *leaks across* the ABI is therefore a plugin defect with a defined outcome — **process abort** — identical to the SIGSEGV case above. The native loader pushes/pops its init-window bundle id around the `polyplug_init` call for dependency enforcement; it does not, and cannot meaningfully, contain a foreign unwind.
+- **The two runtime exports are the only runtime-side guards.** `polyplug_runtime_create` and `polyplug_runtime_destroy` each wrap their body in `catch_unwind`. These guards exist solely for the **embedder guarantee**: a bug in polyplug's *own* create/destroy code surfaces as a null/no-op result (plus a recorded `last_error`), never as a panic that aborts the embedding host process. They do not — and are not meant to — catch plugin failures. The `HostApi` field operations are intentionally unguarded: a bug in the runtime there fails fast.
+
 ### Input validation at the host boundary
 
 Even with trusted plugins, malformed or corrupted plugin binaries are a real scenario. polyplug defends against these at load time:
