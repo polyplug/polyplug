@@ -767,28 +767,32 @@ a `find_guest_contract` + `resolve_guest_contract` registry lookup before dispat
 
 | Benchmark | Time | Description |
 |-----------|------|-------------|
-| `gil_acquire_and_call` | **~12-14 µs** | What the arm literally times: attach to the interpreter **+ define `noop_dispatch` from source (`py.run`) + look it up + call it**, all per iteration |
-| `gil_acquire_and_10_calls` | ~12-13 µs | Same arm with 10 calls inside one acquisition (per-call cost amortizes) |
+| `gil_acquire_and_call` | **~56 ns** | `Python::attach` (re-acquire the GIL on a thread not holding it) **+ one cached `noop_dispatch` call** — the cost of attaching fresh per call |
+| `gil_acquire_and_10_calls` | ~272 ns | Same attach, 10 cached calls inside it (~27 ns/call once the attach is amortized) |
 | `gil_acquire_only` | ~35-37 ns | GIL acquisition alone |
-| `cached_python_single_call` | **~60-67 ns** | Cached function (GIL already held) |
-| `cached_python_10_calls` | ~290-335 ns | 10 cached calls (~29-34 ns/call) |
+| `cached_python_single_call` | **~60 ns** | Cached function, single attach held across the call |
+| `cached_python_10_calls` | ~278 ns | 10 cached calls under one attach (~28 ns/call) |
 
 > The Python warm-dispatch arm is named `cached_python_*` (not `cached_function_*`)
 > so it does not collide with the Lua bench's identically-grouped `cached_function_*`
 > — both write to the shared `cached_dispatch` criterion group, and a shared id would
 > overwrite the other loader's data.
 
-**Key insight — and an open discrepancy**: the measured numbers do not add up
-to a "the GIL costs ~13 µs" story. `gil_acquire_and_call` measures ~12-14 µs,
-but `gil_acquire_only` measures only ~35-37 ns and a cached call with the GIL
-held is ~60-67 ns — so GIL acquisition alone cannot explain the ~12 µs arm.
-Reading the bench source, that arm also *defines its Python function from
-source (`py.run`) on every iteration*, so it times far more than "acquire +
-call"; exactly how the ~12 µs splits is **under investigation** (a follow-up
-benchmark task will isolate it). What the data does support: warm cached
-dispatch is ~60-67 ns, and batching many calls inside one acquisition
-amortizes the expensive arm (`gil_acquire_and_10_calls` ≈
-`gil_acquire_and_call`).
+**Correction — the "GIL costs ~13 µs" number was a benchmark bug, now fixed.**
+Earlier revisions of this table quoted `gil_acquire_and_call` at ~12-14 µs and
+called the discrepancy "under investigation". The cause is now known and
+repaired: that arm *re-defined its Python function from source (`py.run`) inside
+`b.iter()` on every iteration*, so it timed **Python source compilation**, not
+GIL-acquire + dispatch — the entire ~13 µs was the compiler. The bench now
+compiles `noop_dispatch` exactly **once** before the timed loop (caching a
+`Py<PyAny>`) and measures only `attach` + `call`. The honest result:
+
+- **attach-per-call (`gil_acquire_and_call`) ≈ ~56 ns**, almost identical to the
+  cached fast path (~60 ns) — because an *uncontended* GIL re-attach is nearly
+  free, so the dominant cost is the Python function call itself, not the GIL.
+- The gap the old myth implied (a multi-µs "GIL tax") **does not exist** on this
+  path; warm Python guest dispatch is ~56-60 ns, and batching many calls under
+  one attach amortizes the attach to ~27-28 ns/call.
 
 ### .NET (CLR Guest Plugins)
 
@@ -808,7 +812,7 @@ amortizes the expensive arm (`gil_acquire_and_10_calls` ≈
 | **.NET** | ~7-11 ns | Near-native with CLR ecosystem |
 | **Lua** | ~35 ns | Fastest VM dispatch, embedded scripting |
 | **QuickJS** | ~80–100 ns (`cached_context_single_call`) | Fast VM dispatch, JS ecosystem |
-| **Python** | ~60 ns warm (cached, GIL held); cold arm ~12-14 µs (under investigation) | Data science, ML ecosystem |
+| **Python** | ~56-60 ns (cached, GIL held; attach-per-call is within a few ns) | Data science, ML ecosystem |
 
 ### Performance Insights
 
@@ -816,8 +820,54 @@ amortizes the expensive arm (`gil_acquire_and_10_calls` ≈
 2. **.NET is near-native** - `[UnmanagedCallersOnly]` enables ~7-11 ns dispatch through CLR
 3. **Lua is the fastest VM loader** - LuaJIT's FFI provides ~35 ns dispatch
 4. **QuickJS follows closely** - ~80–100 ns with cached context architecture
-5. **Python warm dispatch is ~60 ns** - the cold `gil_acquire_and_call` arm measures ~12-14 µs, which GIL acquisition alone (~37 ns) does not explain; under investigation
-6. **All VM loaders are "fast enough"** - even a ~12-14 µs cold call is negligible for functions >100 µs
+5. **Python warm dispatch is ~56-60 ns** - attach-per-call (`gil_acquire_and_call`, ~56 ns) is within a few ns of the cached fast path; an uncontended GIL re-attach is nearly free. (The old ~12-14 µs figure was a recompile-per-iteration bug in the bench, now fixed.)
+6. **All VM loaders are "fast enough"** - even the slowest VM dispatch here (~60-100 ns) is negligible for functions >100 µs
+
+---
+
+## Calling back into the host (guest → host)
+
+Everything above measures host → guest (running a plugin) and guest → guest
+(`cross_call`). The reverse direction — a guest calling a **host-registered
+contract** or emitting a log into the host — is measured by the
+`guest_host_call` core bench (`cargo bench -p polyplug --bench guest_host_call`).
+Both arms drive the real `HostApi` callbacks on a real `Runtime` (a hand-built
+native `HostContractInterface`, no bundle required):
+
+| Arm | What it measures | ~cost (local) |
+|---|---|---|
+| `host_contract_call/native` | Guest resolves the host interface **once** (real `HostApi.resolve_host_contract_interface`), then dispatches its native function — the path a generated guest-side host caller bottoms out in | **~1.8 ns** |
+| `host_log/delivered` | One **delivered** log record through the `RuntimeConfig.log` funnel: level filter → message build → `StringView` construction → the installed `extern "C"` callback → boxed sink | **~6.9 ns** |
+
+The host-contract call is the native dispatch floor (~1.8 ns — one cached
+indirect call, same as any resolved native dispatch). The log funnel is ~6.9 ns
+*per delivered line* and is paid **only** for records that pass `log_max_level`;
+filtered levels are a near-free early return and the dispatch hot path never
+touches the logger at all.
+
+> **Per-language host→log trampolines.** A LuaJIT host cannot receive the
+> by-value `StringView`s of `RuntimeConfig.log`, so the Lua loader exports
+> `polyplug_lua_log_trampoline` to bridge them to a scalar callback. Its
+> **Rust-side** cost (bridge read + StringView decomposition + indirect call) is
+> ~2.5 ns (`lua_log/trampoline_delivery` in the Lua loader bench). The *full* Lua
+> path — including the LuaJIT-callback transition and two `ffi.string` copies into
+> a user Lua function — is ~255 ns/line, measured by the `POLYPLUG_BENCH_ITERS`
+> arm in `sdks/lua/host/tests/test_log_runtime.lua` (the trampoline itself is a
+> rounding error; the cost is the VM crossing).
+
+### Guest → guest peer calls
+
+The `cross_call` bench now carries a second arm, `peer/stateless_route`, next to
+`native/single_provider`. It measures the runtime path a generated **peer caller**
+(guest contract → another guest contract) bottoms out in: a stateless instance
+(null `data`, target `contract_id`) dispatched through `HostApi.call_guest_method`,
+routed solely by `contract_id`. It lands at ~25 ns — **identical** to the
+host-mediated cross-call — because they share the same `host_call_guest_method`
+resolve chain (count + find + resolve). The honest takeaway: at the runtime level
+a peer call costs the same as a host-mediated cross-call; any extra a real peer
+caller pays is its language's marshalling, not the dispatch. (The per-language
+generated marshalling cannot be measured in-process without a per-language bundle
+— the same two-tier caveat as the dispatch matrix.)
 
 ---
 

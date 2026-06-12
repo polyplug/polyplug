@@ -76,3 +76,7 @@ harness = false
 name = "call_arena"
 harness = false
 
+[[bench]]
+name = "guest_host_call"
+harness = false
+

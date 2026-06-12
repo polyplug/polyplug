@@ -7,10 +7,14 @@
 
 #![allow(clippy::expect_used)]
 
+use core::ffi::c_void;
 use core::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 use mlua::Function;
 use mlua::Lua;
+use polyplug_abi::StringView;
+use polyplug_lua::ffi::PolyplugLuaLogBridge;
+use polyplug_lua::ffi::polyplug_lua_log_trampoline;
 
 /// Benchmark Lua VM dispatch overhead.
 ///
@@ -212,12 +216,73 @@ fn bench_cached_dispatch(c: &mut Criterion) {
     group.finish();
 }
 
+/// Scalar log sink standing in for the LuaJIT-created callback.
+///
+/// Same signature the Lua host SDK installs:
+/// `(user_data, level, scope_ptr, scope_len, msg_ptr, msg_len)`. It `black_box`es
+/// its inputs so the optimizer cannot prove the trampoline's work is dead — but
+/// does NOT cross into a real Lua VM, so this measures the *Rust-side* trampoline
+/// cost (bridge read + StringView decomposition + the indirect callback call),
+/// not the LuaJIT-callback + `ffi.string` cost (that full path is measured by the
+/// `POLYPLUG_BENCH_ITERS` arm in `sdks/lua/host/tests/test_log_runtime.lua`,
+/// ~255 ns/line locally).
+unsafe extern "C" fn scalar_log_sink(
+    user_data: *mut c_void,
+    level: u32,
+    scope_ptr: *const u8,
+    scope_len: usize,
+    msg_ptr: *const u8,
+    msg_len: usize,
+) {
+    black_box((user_data, level, scope_ptr, scope_len, msg_ptr, msg_len));
+}
+
+/// Benchmark the Lua host custom-logger delivery trampoline (Rust side).
+///
+/// One `polyplug_lua_log_trampoline` call — the exact `RuntimeConfig::log`
+/// signature (StringViews by value) — through a real `PolyplugLuaLogBridge` into
+/// a scalar Rust callback. This is the cost the runtime pays per *delivered* log
+/// line to bridge the by-value-StringView `RuntimeConfig::log` ABI down to the
+/// scalar-only signature a LuaJIT FFI callback can implement. Disabled levels are
+/// filtered inside the runtime before any of this runs, so this cost is paid only
+/// for records that pass `log_max_level`.
+fn bench_lua_log_trampoline(c: &mut Criterion) {
+    let mut bridge: PolyplugLuaLogBridge = PolyplugLuaLogBridge {
+        callback: Some(scalar_log_sink),
+        user_data: core::ptr::null_mut(),
+    };
+    let bridge_ptr: *mut c_void = &mut bridge as *mut PolyplugLuaLogBridge as *mut c_void;
+    let scope: StringView = StringView::from_static(b"loader.lua");
+    let message: StringView = StringView::from_static(b"bundle dep 'x' has no bundle_id");
+
+    let mut group = c.benchmark_group("lua_log");
+
+    group.bench_function("trampoline_delivery", |b| {
+        b.iter(|| {
+            // SAFETY: bridge_ptr points to a live PolyplugLuaLogBridge on this
+            // function's stack with a valid scalar callback; the StringViews point
+            // at 'static byte literals, satisfying the trampoline's contract.
+            unsafe {
+                polyplug_lua_log_trampoline(
+                    black_box(bridge_ptr),
+                    black_box(2_u32),
+                    black_box(scope),
+                    black_box(message),
+                );
+            }
+        })
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_lua_dispatch,
     bench_lua_vm_creation,
     bench_native_baseline,
     bench_lua_computation,
-    bench_cached_dispatch
+    bench_cached_dispatch,
+    bench_lua_log_trampoline
 );
 criterion_main!(benches);

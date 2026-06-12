@@ -198,13 +198,91 @@ fn bench_cross_call_native(c: &mut Criterion) {
     core::mem::forget(runtime);
 }
 
+// ─── Benchmark — guest→guest peer-caller path ────────────────────────────────
+
+/// Measures the runtime-level path a generated **peer caller** bottoms out in: a
+/// guest contract instance calling *another* guest contract through the runtime,
+/// keyed solely on the target `contract_id`.
+///
+/// A generated peer caller (rust/cpp/csharp/lua/js/python) resolves its peer by
+/// creating a stateless instance — `create_instance` returns a null `data` handle
+/// — and then dispatches through `HostApi.call_guest_method` with that instance's
+/// `contract_id` (see the #72 fix: the runtime accepts a null `data` and routes by
+/// `contract_id`). The *language-specific* marshalling on top of this is the
+/// generated glue; the runtime work it shares — the contract_id-routed resolve +
+/// native dispatch — is exactly this arm.
+///
+/// The only difference from `bench_cross_call_native` is the caller's vantage
+/// point: there the instance is the *target's own* handle; here it is a peer's
+/// stateless token (null `data`, target `contract_id`) — the shape a peer caller
+/// produces. Both exercise the same `host_call_guest_method` resolve chain, so the
+/// gap between the two bars is noise, which is the honest finding: at the runtime
+/// level a peer call and a host-mediated cross-call cost the same; any extra a
+/// real peer caller pays is its language's marshalling, not the dispatch.
+fn bench_peer_caller_native(c: &mut Criterion) {
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .build()
+        .expect("bare runtime build should succeed");
+    let contract_id: u64 = GuestContractId::new("bench.contract", 1_u32).id();
+    register_native_provider(&runtime, contract_id, 0x2222_u64);
+
+    let host_abi: &'static HostApi = runtime.host_abi();
+    let host_ptr: *const HostApi = host_abi as *const HostApi;
+    // Peer vantage point: a stateless instance — null `data`, target contract_id —
+    // exactly what a generated peer caller obtains from a VM/stateless peer's
+    // create_instance and routes on.
+    let peer_instance: GuestContractInstance = GuestContractInstance {
+        data: core::ptr::null_mut(),
+        contract_id: GuestContractId::from_u64(contract_id),
+    };
+    let args: AddArgs = AddArgs {
+        a: 42_u32,
+        b: 57_u32,
+    };
+    let mut out: u32 = 0_u32;
+
+    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
+        c.benchmark_group("cross_call");
+    group.throughput(Throughput::Elements(1));
+
+    group.bench_function(BenchmarkId::new("peer", "stateless_route"), |b| {
+        b.iter(|| {
+            // SAFETY: host_ptr is the runtime's valid 'static HostApi; peer_instance
+            // carries a registered contract_id with a null data handle (valid for a
+            // stateless peer); args/out match bench_add's layout.
+            let err: AbiError = unsafe {
+                (host_abi.call_guest_method)(
+                    black_box(host_ptr),
+                    black_box(peer_instance),
+                    black_box(0_u32),
+                    black_box(&args as *const AddArgs as *const core::ffi::c_void),
+                    black_box(&mut out as *mut u32 as *mut core::ffi::c_void),
+                    black_box(core::ptr::null_mut::<CallArena>()),
+                )
+            };
+            black_box(err);
+            black_box(out);
+        });
+    });
+
+    group.finish();
+    // The runtime owns the leaked interface for the process lifetime; keep it
+    // alive for the whole bench. Never dropped (the leaked interface is 'static).
+    core::mem::forget(runtime);
+}
+
 // ─── criterion_group / criterion_main ────────────────────────────────────────
 
-// Only a native-dispatch target is benched: building a VM-dispatch fixture would
+// Only native-dispatch targets are benched: building a VM-dispatch fixture would
 // require a language loader + bundle, which this crate's bench harness does not
 // set up cheaply (the existing benches are native-only for the same reason). The
 // resolve chain inside `host_call_guest_method` — count + find + resolve — is
-// dispatch-type-independent, so the native bench fully covers the lock-path work
+// dispatch-type-independent, so the native benches fully cover the lock-path work
 // that the single-lock-resolve and init-stack changes target.
-criterion_group!(benches, bench_cross_call_native);
+//
+// `peer` measures the runtime work a generated guest→guest peer caller bottoms
+// out in (contract_id-routed dispatch with a stateless instance); the per-language
+// marshalling layered on top is generated glue and cannot be exercised here
+// without a per-language bundle — the same two-tier caveat as the dispatch matrix.
+criterion_group!(benches, bench_cross_call_native, bench_peer_caller_native);
 criterion_main!(benches);

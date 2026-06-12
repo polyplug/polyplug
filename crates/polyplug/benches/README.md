@@ -364,18 +364,76 @@ alive across iterations; its `Drop` frees every retained overflow block at
 teardown, so the bench does not leak (the `drop_frees_all_blocks` unit test in
 `polyplug_abi` proves the teardown path).
 
+### `cross_call` — host-mediated cross-dispatch + the peer-caller path
+
+Measures the end-to-end cost of the `HostApi.call_guest_method` callback — the
+plugin→plugin cross-dispatch path — through the real `Runtime`, exercising the
+full resolve chain inside `host_call_guest_method` (count providers → find first
+→ resolve → native dispatch). Two arms:
+
+- `native/single_provider` — the common case: an instance carrying the target
+  contract's own handle, one cross-call to the single registered provider (~25 ns
+  locally).
+- `peer/stateless_route` — the runtime path a generated **guest→guest peer
+  caller** bottoms out in: a *stateless* instance (null `data`, target
+  `contract_id`) dispatched through `call_guest_method`, routed solely by
+  `contract_id` (the #72 fix accepts a null `data` and routes by id). It lands at
+  ~25 ns — **identical** to `native/single_provider`, because both share the same
+  resolve chain; the gap is noise. The honest finding: at the runtime level a peer
+  call and a host-mediated cross-call cost the same. The per-language **generated**
+  marshalling layered on top (QuickJS/CPython/CLR…) is glue that cannot be
+  exercised in a pure in-process bench without a per-language bundle — the same
+  two-tier caveat as the dispatch matrix.
+
+### `guest_host_call` — the guest → host direction
+
+The reverse of every other dispatch bench: a guest reaching back into the host.
+Drives the real `HostApi` callbacks on a real `Runtime` (a hand-built native
+`HostContractInterface`, no bundle required). Two arms:
+
+- `host_contract_call/native` — a guest resolves a host-registered contract
+  interface **once** through the real `HostApi.resolve_host_contract_interface`
+  (a real caller caches it for its lifetime), then dispatches its native function.
+  Only the cached dispatch is timed — the native floor (~1.8 ns locally, one
+  indirect call). This is the path a generated guest-side host-contract caller
+  bottoms out in (polyplugc `generate_host_fn_caller`).
+- `host_log/delivered` — one **delivered** log record through the
+  `RuntimeConfig.log` funnel: `LoggerHandle::enabled` filter → message build →
+  `StringView` construction → the installed `extern "C"` callback → boxed Rust
+  sink (a no-op `black_box`, so the bar measures the funnel, not the sink). ~6.9 ns
+  locally, paid **only** for records that pass `log_max_level`. This is the
+  language-neutral host→log baseline a guest's `host->log(...)` call pays.
+
+There is **no arena arm** here: the guest→host arena slot is already covered end
+to end by `call_arena` (`overflow/warm_reuse`, `per_call/*`) — duplicating it
+would be a second copy of the same measurement.
+
+A VM host-contract fixture (a Lua/JS/Python host *providing* the contract) would
+need a language loader + bundle, which this crate's bench harness does not set up
+cheaply — the same native-only caveat the other in-process benches carry.
+
 ---
 
-### Lua custom-logger delivery path (measured in the Lua SDK test, not criterion)
+### Lua custom-logger delivery path (criterion arm + the full-VM SDK test)
 
-`sdks/lua/host/tests/test_log_runtime.lua` carries an opt-in
-(`POLYPLUG_BENCH_ITERS`-gated) measurement of the Lua host custom-logger
-delivery path: one `polyplug_lua_log_trampoline` call (the exact
-`RuntimeConfig.log` signature, StringViews by value) → `PolyplugLuaLogBridge`
+The Lua loader bench (`cargo bench -p polyplug_lua --bench dispatch_benchmark`)
+carries the `lua_log/trampoline_delivery` arm: one `polyplug_lua_log_trampoline`
+call (the exact `RuntimeConfig.log` signature, StringViews by value) → a
+`PolyplugLuaLogBridge` read → a scalar Rust callback. This is the **Rust-side**
+trampoline cost only (bridge read + StringView decomposition + indirect call):
+**~2.5 ns** locally. It does *not* cross into a LuaJIT VM, so it isolates the
+bridging cost from the VM-callback cost.
+
+The **full** Lua path — including the LuaJIT-callback transition and two
+`ffi.string` copies into a user Lua function — is measured separately by the
+opt-in (`POLYPLUG_BENCH_ITERS`-gated) arm in
+`sdks/lua/host/tests/test_log_runtime.lua`:
+one `polyplug_lua_log_trampoline` call → `PolyplugLuaLogBridge`
 read → LuaJIT scalar callback → two `ffi.string` copies → user Lua function.
 
 - **~255 ns per delivered log line** locally (`LOGPATH_NS=254–261`,
-  2M iterations, release build).
+  2M iterations, release build) — the trampoline itself (~2.5 ns) is a rounding
+  error; the cost is the VM crossing + the `ffi.string` copies.
 - This cost is paid **only for delivered records**: levels above
   `log_max_level` are filtered inside the runtime before any formatting work,
   so disabled levels stay zero-cost, and dispatch hot paths never touch the
@@ -390,6 +448,19 @@ POLYPLUG_LIB=$PWD/target/release/libpolyplug.so \
 POLYPLUG_LUA_LIB=$PWD/target/release/libpolyplug_lua.so \
 luajit sdks/lua/host/tests/test_log_runtime.lua
 ```
+
+### Python guest dispatch — the corrected `gil_acquire_and_call` arm
+
+The Python loader bench (`cargo bench -p polyplug_python --bench
+dispatch_benchmark`) `python_dispatch/gil_acquire_and_call` arm used to
+**re-define its no-op Python function from source (`py.run`) inside `b.iter()`
+every iteration**, so it timed Python *source compilation* (~12-14 µs), not GIL
+acquire + dispatch — the origin of the inflated "GIL costs ~13 µs" myth. The arm
+now compiles the function exactly **once** before the loop (caching a
+`Py<PyAny>`, like `cached_python_single_call` already did) and measures only
+`Python::attach` + `call`: **~56 ns**, almost identical to the ~60 ns cached fast
+path, because an uncontended GIL re-attach is nearly free. See
+`docs/PERFORMANCE.md` (Python guest dispatch) for the full reconciliation.
 
 ---
 
@@ -411,9 +482,15 @@ aren't lost. **Priority: benches for what we currently ship come first.**
 > `cross_lang_host.svg` (`just bench-hostcall`) and `cross_lang_matrix.svg`
 > (`just bench-roundtrip`).
 
+> The **runtime-level** guest→host and peer-caller paths are now built too:
+> `guest_host_call` (host-contract call + host→log funnel) and `cross_call`'s
+> `peer/stateless_route` arm. What remains future is only the *per-language
+> generated marshalling on top* of those runtime entry points (the table row
+> below), which needs per-language bundles.
+
 | Idea | What it would show | The caveat ("it can be argued against") |
 |---|---|---|
-| **guest→host / peer-caller marshalling** | The generated-caller overhead *on top of* the ABI entry point — what a plugin pays to call back into the host or call a peer contract through generated glue, vs the raw `call_guest_method` figure `cross_call` already measures. | Needs per-language **generated** caller fixtures, so any number conflates the language runtime (QuickJS, CPython, CLR…) with polyplug's marshalling. The native rows would be honest; the VM rows mostly measure the interpreter — same two-tier caveat as the dispatch matrix. |
+| **per-language guest→host / peer-caller marshalling** | The generated-caller overhead *on top of* the runtime entry point `guest_host_call` / `cross_call::peer` already measure — what a plugin pays in its own language's glue (QuickJS/CPython/CLR…) to call back into the host or a peer contract. | Needs per-language **generated** caller fixtures, so any number conflates the language runtime with polyplug's marshalling. The native rows would be honest; the VM rows mostly measure the interpreter — same two-tier caveat as the dispatch matrix. |
 | **unload/load churn soak** | Time drift across many `load → unload → load` loops, to surface retired-resource accumulation (the retire-not-drop model keeps superseded interfaces/libs alive for the runtime lifetime). | It's a **leak detector dressed as a bench** — the signal is *time stability* across iterations, not speed. A flat line means "no creeping cost," which reads as a non-result to anyone expecting a throughput number; it needs a drift/regression lens (or a memory probe), not a median-ns headline. |
 
 If you build any of these, keep them **local-only** (this folder), keep the

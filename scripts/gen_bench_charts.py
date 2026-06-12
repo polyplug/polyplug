@@ -501,8 +501,8 @@ def chart_hero(criterion_dir: Path, out: Path) -> None:
         rows,
         "All bars measured live by cargo bench on one machine. A native plugin costs about "
         "one extra nanosecond over a raw function call; VM plugins add their interpreter's "
-        "warm per-call cost (Python: GIL held, function cached — its cold arm is slower, "
-        "see PERFORMANCE.md). A bar twice as long is 10x slower (log scale).",
+        "warm per-call cost (Python: GIL held, function cached — its attach-per-call arm is "
+        "close behind, see PERFORMANCE.md). A bar twice as long is 10x slower (log scale).",
     )
 
 
@@ -545,8 +545,9 @@ def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
         "warm per-call cost the runtime pays to run a plugin written in each language (log scale, lower is better)",
         rows,
         "All bars measured live: native from counter_inc; .NET/Lua/Python/JS from each loader's "
-        "warm cached-dispatch bench. Python's cold-call arm (gil_acquire_and_call) measures ~12-14 µs; "
-        "what it pays for is under investigation (see PERFORMANCE.md).",
+        "warm cached-dispatch bench. Python's attach-per-call arm (gil_acquire_and_call) measures "
+        "~56 ns — almost the same as the cached bar, since an uncontended GIL re-attach is nearly "
+        "free; the old ~13 µs figure was a recompile-per-iteration artifact (see PERFORMANCE.md).",
     )
 
 

@@ -18,59 +18,64 @@ use pyo3::types::PyAnyMethods;
 use pyo3::types::PyDictMethods;
 use pyo3::types::PyModule;
 
-/// Benchmark Python GIL acquisition and function call overhead.
+/// Benchmark Python GIL re-attach + function call overhead.
 ///
-/// Measures the time to acquire the GIL and call a no-op Python function.
-/// This simulates the dispatch path used by polyplug_python.
+/// Measures the cost of `Python::attach` (re-acquiring the GIL on a thread that
+/// is not currently holding it) PLUS one no-op Python function call — the cost a
+/// dispatch path pays when it attaches fresh per call.
+///
+/// The no-op function is COMPILED EXACTLY ONCE before the timed loop and cached
+/// as a `Py<PyAny>` (a GIL-independent handle). The previous version re-ran
+/// `py.run("def noop_dispatch...")` *inside* `b.iter()` every iteration, so it
+/// measured Python source compilation, not GIL-acquire + dispatch — that is the
+/// origin of the inflated "~13 µs GIL cost" myth. With the function cached, this
+/// arm now isolates the real per-call attach + invoke cost; pair it with
+/// `bench_cached_dispatch` (`cached_python_single_call`), which holds one attach
+/// across the call to show the warm fast path.
 fn bench_python_dispatch(c: &mut Criterion) {
     // Initialize Python interpreter once.
     Python::initialize();
 
+    // Compile the no-op function ONCE (not measured) and keep a GIL-independent
+    // handle. Inside the timed loops only `attach` + `call` run.
+    let noop_fn: pyo3::Py<pyo3::PyAny> = Python::attach(|py| {
+        let code: &std::ffi::CStr = c"def noop_dispatch(args, out): return 0";
+        let globals: pyo3::Bound<'_, pyo3::types::PyDict> = pyo3::types::PyDict::new(py);
+        py.run(code, Some(&globals), None)
+            .expect("Failed to run code");
+        globals
+            .get_item("noop_dispatch")
+            .expect("Failed to get noop_dispatch")
+            .expect("noop_dispatch not found")
+            .unbind()
+    });
+
     let mut group = c.benchmark_group("python_dispatch");
 
-    // Measure GIL acquisition + function call.
+    // Measure GIL re-attach + one cached function call.
     group.bench_function("gil_acquire_and_call", |b| {
         b.iter(|| {
             Python::attach(|py| {
-                // Use PyDict::new and py.run to define a simple no-op function.
-                let code: &std::ffi::CStr = c"def noop_dispatch(args, out): return 0";
-                let globals: pyo3::Bound<'_, pyo3::types::PyDict> = pyo3::types::PyDict::new(py);
-                py.run(code, Some(&globals), None)
-                    .expect("Failed to run code");
-
-                let noop_fn: pyo3::Bound<'_, pyo3::PyAny> = globals
-                    .get_item("noop_dispatch")
-                    .expect("Failed to get noop_dispatch")
-                    .expect("noop_dispatch not found");
-
+                let fn_bound: &pyo3::Bound<'_, pyo3::PyAny> = noop_fn.bind(py);
                 let args_i64: i64 = 0;
                 let out_i64: i64 = 0;
                 let _: Result<pyo3::Bound<'_, pyo3::PyAny>, pyo3::PyErr> =
-                    noop_fn.call((args_i64, out_i64), None);
+                    fn_bound.call((args_i64, out_i64), None);
                 black_box(())
             })
         })
     });
 
-    // Measure 10 calls with single GIL acquisition.
+    // Measure 10 cached calls under a single GIL re-attach.
     group.bench_function("gil_acquire_and_10_calls", |b| {
         b.iter(|| {
             Python::attach(|py| {
-                let code: &std::ffi::CStr = c"def noop_dispatch(args, out): return 0";
-                let globals: pyo3::Bound<'_, pyo3::types::PyDict> = pyo3::types::PyDict::new(py);
-                py.run(code, Some(&globals), None)
-                    .expect("Failed to run code");
-
-                let noop_fn: pyo3::Bound<'_, pyo3::PyAny> = globals
-                    .get_item("noop_dispatch")
-                    .expect("Failed to get noop_dispatch")
-                    .expect("noop_dispatch not found");
-
+                let fn_bound: &pyo3::Bound<'_, pyo3::PyAny> = noop_fn.bind(py);
                 let args_i64: i64 = 0;
                 let out_i64: i64 = 0;
                 for _ in 0..10 {
                     let _: Result<pyo3::Bound<'_, pyo3::PyAny>, pyo3::PyErr> =
-                        noop_fn.call((args_i64, out_i64), None);
+                        fn_bound.call((args_i64, out_i64), None);
                 }
                 black_box(())
             })
