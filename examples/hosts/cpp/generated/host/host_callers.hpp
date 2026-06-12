@@ -173,10 +173,10 @@ public:
         if (iface == nullptr) {
             return std::nullopt;
         }
-        // Create instance via factory function.
+        // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        GuestContractInstance instance = iface->create_instance(host, nullptr);
+        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
         return PipelineDecoderContract(iface, instance, host);
     }
 
@@ -190,7 +190,7 @@ public:
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         if (instance_.data != nullptr) {
-            interface_->destroy_instance(host_, instance_);
+            host_->destroy_guest_instance(host_, interface_, instance_);
             instance_.data = nullptr;  // Prevent reuse after cleanup.
         }
     }
@@ -212,7 +212,7 @@ public:
             }
             // Destroy current instance first
             if (instance_.data != nullptr) {
-                interface_->destroy_instance(host_, instance_);
+                host_->destroy_guest_instance(host_, interface_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
             arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
@@ -234,9 +234,9 @@ public:
     /// Useful for recovering from plugin errors.
     void reset() noexcept {
         if (instance_.data != nullptr) {
-            interface_->destroy_instance(host_, instance_);
+            host_->destroy_guest_instance(host_, interface_, instance_);
         }
-        instance_ = interface_->create_instance(host_, nullptr);
+        instance_ = host_->create_guest_instance(host_, interface_, nullptr);
     }
 
     /// Call `decode` (function_id=0)
@@ -330,10 +330,10 @@ public:
         if (iface == nullptr) {
             return std::nullopt;
         }
-        // Create instance via factory function.
+        // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        GuestContractInstance instance = iface->create_instance(host, nullptr);
+        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
         return DataTransformerContract(iface, instance, host);
     }
 
@@ -347,7 +347,7 @@ public:
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         if (instance_.data != nullptr) {
-            interface_->destroy_instance(host_, instance_);
+            host_->destroy_guest_instance(host_, interface_, instance_);
             instance_.data = nullptr;  // Prevent reuse after cleanup.
         }
     }
@@ -369,7 +369,7 @@ public:
             }
             // Destroy current instance first
             if (instance_.data != nullptr) {
-                interface_->destroy_instance(host_, instance_);
+                host_->destroy_guest_instance(host_, interface_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
             arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
@@ -391,9 +391,9 @@ public:
     /// Useful for recovering from plugin errors.
     void reset() noexcept {
         if (instance_.data != nullptr) {
-            interface_->destroy_instance(host_, instance_);
+            host_->destroy_guest_instance(host_, interface_, instance_);
         }
-        instance_ = interface_->create_instance(host_, nullptr);
+        instance_ = host_->create_guest_instance(host_, interface_, nullptr);
     }
 
     /// Call `transform` (function_id=0)
@@ -487,10 +487,10 @@ public:
         if (iface == nullptr) {
             return std::nullopt;
         }
-        // Create instance via factory function.
+        // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        GuestContractInstance instance = iface->create_instance(host, nullptr);
+        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
         return PipelineEncoderContract(iface, instance, host);
     }
 
@@ -504,7 +504,7 @@ public:
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         if (instance_.data != nullptr) {
-            interface_->destroy_instance(host_, instance_);
+            host_->destroy_guest_instance(host_, interface_, instance_);
             instance_.data = nullptr;  // Prevent reuse after cleanup.
         }
     }
@@ -526,7 +526,7 @@ public:
             }
             // Destroy current instance first
             if (instance_.data != nullptr) {
-                interface_->destroy_instance(host_, instance_);
+                host_->destroy_guest_instance(host_, interface_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
             arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
@@ -548,9 +548,9 @@ public:
     /// Useful for recovering from plugin errors.
     void reset() noexcept {
         if (instance_.data != nullptr) {
-            interface_->destroy_instance(host_, instance_);
+            host_->destroy_guest_instance(host_, interface_, instance_);
         }
-        instance_ = interface_->create_instance(host_, nullptr);
+        instance_ = host_->create_guest_instance(host_, interface_, nullptr);
     }
 
     /// Call `encode` (function_id=0)
@@ -644,10 +644,10 @@ public:
         if (iface == nullptr) {
             return std::nullopt;
         }
-        // Create instance via factory function.
+        // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        GuestContractInstance instance = iface->create_instance(host, nullptr);
+        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
         return DataReporterContract(iface, instance, host);
     }
 
@@ -661,7 +661,7 @@ public:
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         if (instance_.data != nullptr) {
-            interface_->destroy_instance(host_, instance_);
+            host_->destroy_guest_instance(host_, interface_, instance_);
             instance_.data = nullptr;  // Prevent reuse after cleanup.
         }
     }
@@ -683,7 +683,7 @@ public:
             }
             // Destroy current instance first
             if (instance_.data != nullptr) {
-                interface_->destroy_instance(host_, instance_);
+                host_->destroy_guest_instance(host_, interface_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
             arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
@@ -705,9 +705,9 @@ public:
     /// Useful for recovering from plugin errors.
     void reset() noexcept {
         if (instance_.data != nullptr) {
-            interface_->destroy_instance(host_, instance_);
+            host_->destroy_guest_instance(host_, interface_, instance_);
         }
-        instance_ = interface_->create_instance(host_, nullptr);
+        instance_ = host_->create_guest_instance(host_, interface_, nullptr);
     }
 
     /// Call `report` (function_id=0)
@@ -801,10 +801,10 @@ public:
         if (iface == nullptr) {
             return std::nullopt;
         }
-        // Create instance via factory function.
+        // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        GuestContractInstance instance = iface->create_instance(host, nullptr);
+        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
         return PipelineValidatorContract(iface, instance, host);
     }
 
@@ -818,7 +818,7 @@ public:
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
         if (instance_.data != nullptr) {
-            interface_->destroy_instance(host_, instance_);
+            host_->destroy_guest_instance(host_, interface_, instance_);
             instance_.data = nullptr;  // Prevent reuse after cleanup.
         }
     }
@@ -840,7 +840,7 @@ public:
             }
             // Destroy current instance first
             if (instance_.data != nullptr) {
-                interface_->destroy_instance(host_, instance_);
+                host_->destroy_guest_instance(host_, interface_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
             arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
@@ -862,9 +862,9 @@ public:
     /// Useful for recovering from plugin errors.
     void reset() noexcept {
         if (instance_.data != nullptr) {
-            interface_->destroy_instance(host_, instance_);
+            host_->destroy_guest_instance(host_, interface_, instance_);
         }
-        instance_ = interface_->create_instance(host_, nullptr);
+        instance_ = host_->create_guest_instance(host_, interface_, nullptr);
     }
 
     /// Call `validate` (function_id=0)

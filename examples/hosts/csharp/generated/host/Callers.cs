@@ -101,8 +101,8 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;
-        var inst = createFn(host, null);
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
+        var inst = createFn(host, iface, null);
         return new PipelineDecoderContractCaller(iface, inst, host);
     }
 
@@ -112,15 +112,15 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
+        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)(_host, _interface, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
             _instance.Data = nint.Zero;
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
@@ -215,8 +215,8 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;
-        var inst = createFn(host, null);
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
+        var inst = createFn(host, iface, null);
         return new DataTransformerContractCaller(iface, inst, host);
     }
 
@@ -226,15 +226,15 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
+        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)(_host, _interface, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
             _instance.Data = nint.Zero;
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
@@ -329,8 +329,8 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;
-        var inst = createFn(host, null);
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
+        var inst = createFn(host, iface, null);
         return new PipelineEncoderContractCaller(iface, inst, host);
     }
 
@@ -340,15 +340,15 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
+        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)(_host, _interface, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
             _instance.Data = nint.Zero;
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
@@ -443,8 +443,8 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;
-        var inst = createFn(host, null);
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
+        var inst = createFn(host, iface, null);
         return new DataReporterContractCaller(iface, inst, host);
     }
 
@@ -454,15 +454,15 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
+        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)(_host, _interface, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
             _instance.Data = nint.Zero;
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
@@ -557,8 +557,8 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;
-        var inst = createFn(host, null);
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
+        var inst = createFn(host, iface, null);
         return new PipelineValidatorContractCaller(iface, inst, host);
     }
 
@@ -568,15 +568,15 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)(_host, null);
+        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)(_host, _interface, null);
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)(_host, _instance);
+            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
             _instance.Data = nint.Zero;
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {

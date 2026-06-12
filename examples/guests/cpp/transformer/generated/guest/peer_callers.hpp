@@ -196,7 +196,8 @@ public:
         }
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        GuestContractInstance instance = iface->create_instance(host, nullptr);
+        // Route creation through the host so the runtime tracks the instance.
+        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
         // Stamp the peer contract id so `host->call_guest_method` routes by it
         // even when a stateless peer's create_instance returns a null (null-id)
         // handle. The host-mediated path keys routing on contract_id.
@@ -214,7 +215,7 @@ public:
         // SAFETY: instance was created by create_instance on the resolved interface.
         // We guard on instance.data to skip the call for stateless (null-data) contracts.
         if (instance_.data != nullptr) {
-            iface_->destroy_instance(host_, instance_);
+            host_->destroy_guest_instance(host_, iface_, instance_);
             instance_.data = nullptr;  // Prevent reuse after cleanup.
         }
     }
@@ -234,7 +235,7 @@ public:
                 polyplug_arena_reset(&arena_);
             }
             if (instance_.data != nullptr) {
-                iface_->destroy_instance(host_, instance_);
+                host_->destroy_guest_instance(host_, iface_, instance_);
             }
             iface_ = other.iface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
             arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;

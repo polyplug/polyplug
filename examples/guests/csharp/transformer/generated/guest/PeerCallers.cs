@@ -105,8 +105,8 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
         var resolveFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractHandle, GuestContractInterface*>)host->ResolveGuestContract;
         GuestContractInterface* iface = resolveFn(hostPtr, handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, void*, GuestContractInstance>)iface->CreateInstance;
-        GuestContractInstance inst = createFn(hostPtr, null);
+        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
+        GuestContractInstance inst = createFn(hostPtr, iface, null);
         // Stamp the peer contract id so CallGuestMethod routes by it even when a
         // stateless peer's create_instance returns a null (null-id) handle.
         inst.ContractId = 0x45173A959EEC57C5UL;
@@ -116,10 +116,10 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
     /// <summary>True while this peer holds a live interface and has not been disposed.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
-    /// <summary>Dispose pattern — calls destroy_instance and frees arena memory.</summary>
+    /// <summary>Dispose pattern — calls destroy_guest_instance and frees arena memory.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)_interface->DestroyInstance)((IntPtr)_host, _instance);
+            ((delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)((IntPtr)_host, _interface, _instance);
             _instance.Data = nint.Zero;
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {

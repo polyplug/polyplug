@@ -1373,13 +1373,18 @@ fn generate_host_contract_caller(
     out.push_str("        if interface.is_null() {\n");
     out.push_str("            return None;\n");
     out.push_str("        }\n");
-    out.push_str("        // Create instance via factory function.\n");
+    out.push_str(
+        "        // Create instance via host-mediated lifecycle so the runtime tracks it.\n",
+    );
     out.push_str("        // A null `instance.data` is valid: stateless contracts return a null\n");
     out.push_str(
         "        // handle from `create_instance` and use it as an opaque dispatch token.\n",
     );
     out.push_str("        let instance: GuestContractInstance = unsafe {\n");
-    out.push_str("            ((*interface).create_instance)(host, core::ptr::null())\n");
+    out.push_str("            let host_api: &HostApi = host.as_ref()?;\n");
+    out.push_str(
+        "            (host_api.create_guest_instance)(host, interface, core::ptr::null())\n",
+    );
     out.push_str("        };\n");
     if needs_arena {
         out.push_str(
@@ -1408,15 +1413,26 @@ fn generate_host_contract_caller(
     out.push_str("    /// Destroy current instance and create a new one.\n");
     out.push_str("    /// Useful for recovering from plugin errors.\n");
     out.push_str("    pub fn reset(&mut self) {\n");
+    out.push_str(
+        "        // Route create/destroy through the host so the runtime's live-instance\n",
+    );
+    out.push_str("        // accounting stays accurate. If the host pointer is null there is no\n");
+    out.push_str("        // runtime to mediate the lifecycle, so leave the instance untouched.\n");
+    out.push_str("        let host_api: &HostApi = match unsafe { self.host.as_ref() } {\n");
+    out.push_str("            Some(api) => api,\n");
+    out.push_str("            None => return,\n");
+    out.push_str("        };\n");
     out.push_str("        if !self.instance.data.is_null() {\n");
     out.push_str("            unsafe {\n");
     out.push_str(
-        "                ((*self.interface).destroy_instance)(self.host, self.instance);\n",
+        "                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);\n",
     );
     out.push_str("            }\n");
     out.push_str("        }\n");
     out.push_str("        self.instance = unsafe {\n");
-    out.push_str("            ((*self.interface).create_instance)(self.host, core::ptr::null())\n");
+    out.push_str(
+        "            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null())\n",
+    );
     out.push_str("        };\n");
     out.push_str("    }\n\n");
 
@@ -1435,13 +1451,25 @@ fn generate_host_contract_caller(
         );
         out.push_str("        self.arena.reset();\n");
     }
-    out.push_str("        // Destroy instance via factory\n");
-    out.push_str("        // SAFETY: instance was created by create_instance and is valid.\n");
+    out.push_str(
+        "        // Destroy instance via host-mediated lifecycle so the runtime drops it\n",
+    );
+    out.push_str(
+        "        // from its live-instance accounting. A null host pointer means there is\n",
+    );
+    out.push_str("        // no runtime to mediate the lifecycle, so skip the destroy.\n");
+    out.push_str("        let host_api: &HostApi = match unsafe { self.host.as_ref() } {\n");
+    out.push_str("            Some(api) => api,\n");
+    out.push_str("            None => return,\n");
+    out.push_str("        };\n");
+    out.push_str(
+        "        // SAFETY: instance was created by create_guest_instance and is valid.\n",
+    );
     out.push_str("        // The interface pointer is stored for the lifetime of this wrapper.\n");
     out.push_str("        if !self.instance.data.is_null() {\n");
     out.push_str("            unsafe {\n");
     out.push_str(
-        "                ((*self.interface).destroy_instance)(self.host, self.instance);\n",
+        "                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);\n",
     );
     out.push_str("            }\n");
     out.push_str("        }\n");
@@ -3232,8 +3260,13 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
         "        // SAFETY: interface is non-null (checked above) and points to a valid\n",
     );
     out.push_str("        // GuestContractInterface produced by resolve_guest_contract.\n");
+    out.push_str(
+        "        // Route creation through the host so the runtime tracks the instance.\n",
+    );
     out.push_str("        let created: GuestContractInstance = unsafe {\n");
-    out.push_str("            ((*interface).create_instance)(host, core::ptr::null())\n");
+    out.push_str(
+        "            (iface_api.create_guest_instance)(host, interface, core::ptr::null())\n",
+    );
     out.push_str("        };\n");
     out.push_str(
         "        // Stamp the peer contract id so `host->call_guest_method` routes by it\n",
@@ -3293,14 +3326,25 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
         out.push_str("        self.arena.reset();\n");
     }
     out.push_str(
-        "        // SAFETY: instance was created by create_instance on the resolved interface.\n",
+        "        // Route destruction through the host so the runtime drops the instance from\n",
+    );
+    out.push_str(
+        "        // its live-instance accounting. A null host pointer means there is no\n",
+    );
+    out.push_str("        // runtime to mediate the lifecycle, so skip the destroy.\n");
+    out.push_str("        let host_api: &HostApi = match unsafe { self.host.as_ref() } {\n");
+    out.push_str("            Some(api) => api,\n");
+    out.push_str("            None => return,\n");
+    out.push_str("        };\n");
+    out.push_str(
+        "        // SAFETY: instance was created by create_guest_instance on the resolved interface.\n",
     );
     out.push_str("        // The interface pointer is stored for the lifetime of this wrapper and is valid.\n");
     out.push_str("        // We guard on instance.data to skip the call for stateless (null-data) contracts.\n");
     out.push_str("        if !self.instance.data.is_null() {\n");
     out.push_str("            unsafe {\n");
     out.push_str(
-        "                ((*self.interface).destroy_instance)(self.host, self.instance);\n",
+        "                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);\n",
     );
     out.push_str("            }\n");
     out.push_str("        }\n");

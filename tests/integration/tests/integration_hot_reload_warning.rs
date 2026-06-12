@@ -1,13 +1,17 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
-//! Test for HR-06: Warning emission when Arc refs remain after Preparing callback.
+//! Reload warning behavior: the runtime warns when the host still holds live guest
+//! instances of a bundle's contracts at reload time (a use-after-free hazard, since
+//! reload swaps the interface). The warning is driven by the runtime's accurate
+//! per-contract live-instance counter and fires only when a live stateful instance
+//! exists; a clean reload with no live instances emits no warning.
 //!
-//! This test verifies that:
-//! 1. The warning callback mechanism works correctly during reload
-//! 2. The warning check happens AFTER Preparing callback, BEFORE loader.reload()
-//! 3. The warning message contains expected content when it fires
-//! 4. Reload works even without a warning callback (falls back to stderr)
+//! These tests use the stateless `reload_plugin_v1` fixture (its instances carry no
+//! state), so a clean reload here must NOT emit the live-instance warning — they
+//! assert the warning does not false-fire and that reload phase ordering holds. The
+//! POSITIVE case (a leaked live instance triggering the warning) is covered by
+//! `integration_live_instance_warning.rs`.
 //!
 //! Run with:
 //!   cargo test -p integration --test integration_hot_reload_warning -- --test-threads=1
@@ -57,7 +61,7 @@ fn make_hot_reload_runtime() -> Arc<Runtime> {
 
 // ─── HR-06 Tests ─────────────────────────────────────────────────────────────
 
-/// Test that warning callback mechanism works during reload.
+/// A clean reload with no live instances must not emit the live-instance warning.
 ///
 /// HR-06: Host sees UB warning if Arc refs remain after Preparing callback returns.
 ///
@@ -87,21 +91,22 @@ fn test_warning_callback_invoked_during_reload() {
     // Clear any existing warnings
     warnings.lock().unwrap().clear();
 
-    // Call reload_bundle - the warning check happens after Preparing callback
-    // Due to implementation (get_guest_contract_interface_arc clones Arc), strong_count > 1 triggers warning
+    // Reload with no live instances held: the live-instance warning must not fire.
     rt.reload_bundle(v2_so_path().as_path())
         .expect("reload should succeed");
 
-    // Check that warnings were captured (callback mechanism works)
     let captured_warnings: Vec<String> = warnings.lock().unwrap().clone();
 
-    // The warning should have been emitted with "Potential UB" substring
-    let has_potential_ub_warning: bool =
-        captured_warnings.iter().any(|w| w.contains("Potential UB"));
+    // No host-held instances exist, so the runtime must not emit the live-instance
+    // use-after-free warning (no false positive). The positive case is covered by
+    // integration_live_instance_warning.rs.
+    let has_live_instance_warning: bool = captured_warnings
+        .iter()
+        .any(|w: &String| w.contains("live guest instance"));
 
     assert!(
-        has_potential_ub_warning,
-        "Expected 'Potential UB' warning. Captured warnings: {:?}",
+        !has_live_instance_warning,
+        "a clean reload with no live instances must not emit the live-instance warning; captured: {:?}",
         captured_warnings
     );
 }
@@ -166,7 +171,7 @@ fn test_warning_timing_after_preparing_before_reloaded() {
 
     let warning_idx: Option<usize> = captured_events
         .iter()
-        .position(|e| e.starts_with("WARNING: Potential UB"));
+        .position(|e| e.contains("live guest instance"));
 
     let reloaded_idx: Option<usize> = captured_events
         .iter()
@@ -204,78 +209,17 @@ fn test_warning_timing_after_preparing_before_reloaded() {
     }
 }
 
-/// Test that warning message contains expected content when it fires.
-///
-/// The warning message should:
-/// - Mention "Potential UB"
-/// - Mention the bundle name
-/// - Be informational (reload proceeds anyway)
-#[test]
-fn test_warning_message_content_structure() {
-    // Capture warning messages
-    let warnings: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let warnings_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&warnings);
-
-    // Create runtime with warning callback
-    let rt: Arc<Runtime> = Runtime::builder()
-        .loader(NativeLoader::new(NativeConfig::default()))
-        .config(hot_reload_config())
-        .logger(move |_level: LogLevel, _scope: &str, msg: &str| {
-            warnings_clone.lock().unwrap().push(msg.to_owned());
-        })
-        .build()
-        .expect("build runtime");
-
-    // Load the v1 bundle
-    rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
-        .expect("load v1");
-
-    // Clear warnings
-    warnings.lock().unwrap().clear();
-
-    // Call reload_bundle
-    let result = rt.reload_bundle(v2_so_path().as_path());
-
-    // Reload should succeed regardless of warning (informational only)
-    assert!(
-        result.is_ok(),
-        "reload should succeed even if warning fires (informational only)"
-    );
-
-    // Check captured warnings
-    let captured_warnings: Vec<String> = warnings.lock().unwrap().clone();
-
-    // Find the Potential UB warning
-    let ub_warning: Option<&String> = captured_warnings
-        .iter()
-        .find(|w| w.contains("Potential UB"));
-
-    if let Some(warning) = ub_warning {
-        // Check for expected message components:
-        // 1. "Potential UB" substring
-        // 2. Bundle name reference
-        // 3. "Proceeding" indicating informational nature
-        assert!(
-            warning.contains("Potential UB"),
-            "Warning should contain 'Potential UB'"
-        );
-        assert!(
-            warning.contains("reload_plugin_v1"),
-            "Warning should mention bundle name. Got: {}",
-            warning
-        );
-        assert!(
-            warning.contains("Proceeding"),
-            "Warning should indicate reload proceeds anyway. Got: {}",
-            warning
-        );
-    }
-}
+// The POSITIVE warning case — that the live-instance warning message names the
+// contract and the use-after-free hazard when an instance is actually held across a
+// reclaim — is covered by `integration_live_instance_warning.rs`, which loads a
+// stateful bundle, leaks a live instance, and asserts the warning content. There is
+// no stateful reload fixture here, so the warning's content is not re-asserted in
+// this file (it would be vacuous against the stateless `reload_plugin_v1` fixture).
 
 /// Test that reload works without a warning callback.
 ///
-/// When no warning callback is registered, emit_warning falls back to stderr.
-/// This test verifies that reload works even without a warning callback.
+/// When no warning callback is registered, the runtime falls back to its stderr
+/// logger. This test verifies that reload works even without a callback installed.
 #[test]
 fn test_reload_works_without_warning_callback() {
     // Create runtime WITHOUT warning callback
@@ -288,8 +232,7 @@ fn test_reload_works_without_warning_callback() {
     // Call reload_bundle - should work even without warning callback
     let result = rt.reload_bundle(v2_so_path().as_path());
 
-    // Reload should succeed - warning callback is optional
-    // Note: The warning about Arc refs may still be printed to stderr
+    // Reload should succeed - a logger callback is optional (stderr fallback).
     assert!(
         result.is_ok(),
         "reload should succeed without warning callback: {:?}",

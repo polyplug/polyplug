@@ -29,7 +29,8 @@ function PipelineValidatorPeer.resolve()
     if interface == nil then
         return nil
     end
-    local instance = interface.create_instance(host, nil)
+    -- Route creation through the host so the runtime tracks the instance.
+    local instance = host.create_guest_instance(host, interface, nil)
     -- Stamp the peer contract id so call_guest_method routes by it even when a
     -- stateless peer's create_instance returns a null (null-id) handle.
     instance.contract_id = 0x45173A959EEC57C5ULL

@@ -385,10 +385,11 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
     out.push_str("        return self._interface ~= nil and not self._destroyed\n");
     out.push_str("    end,\n\n");
 
-    // destroy method - calls destroy_instance and marks the wrapper destroyed.
+    // destroy method - routes destruction through the host so the runtime drops the
+    // instance from its live-instance accounting, then marks the wrapper destroyed.
     out.push_str("    destroy = function(self)\n");
     out.push_str("        if self._interface ~= nil and not self._destroyed then\n");
-    out.push_str("            self._interface.destroy_instance(self._host, self._instance)\n");
+    out.push_str("            self._host.destroy_guest_instance(self._host, self._interface, self._instance)\n");
     out.push_str("            self._destroyed = true\n");
     out.push_str("        end\n");
     out.push_str("    end,\n\n");
@@ -399,7 +400,7 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
     out.push_str("    reset = function(self)\n");
     out.push_str("        self:destroy()\n");
     out.push_str("        if self._interface ~= nil then\n");
-    out.push_str("            self._instance = self._interface.create_instance(self._host, nil)\n");
+    out.push_str("            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)\n");
     out.push_str("            self._destroyed = false\n");
     out.push_str("        end\n");
     out.push_str("    end,\n\n");
@@ -455,7 +456,8 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
     out.push_str(
         "    -- dispatch token. Validity is keyed off the interface pointer, not the instance.\n",
     );
-    out.push_str("    local instance = interface.create_instance(host, nil)\n");
+    out.push_str("    -- Route creation through the host so the runtime tracks the instance.\n");
+    out.push_str("    local instance = host.create_guest_instance(host, interface, nil)\n");
     out.push_str("    local wrapper = {\n");
     out.push_str("        _interface = interface,\n");
     out.push_str("        _instance = instance,\n");
@@ -1860,7 +1862,8 @@ fn generate_lua_guest_peer_caller(
     // A null instance.data is valid: stateless contracts and all VM-dispatch guests
     // return a null handle from create_instance and use it as an opaque dispatch token.
     // Validity is keyed off the interface pointer, not the instance.
-    out.push_str("    local instance = interface.create_instance(host, nil)\n");
+    out.push_str("    -- Route creation through the host so the runtime tracks the instance.\n");
+    out.push_str("    local instance = host.create_guest_instance(host, interface, nil)\n");
     out.push_str(
         "    -- Stamp the peer contract id so call_guest_method routes by it even when a\n",
     );
@@ -2929,8 +2932,8 @@ mod tests {
             "must call resolve_guest_contract: {out}"
         );
         assert!(
-            out.contains("interface.create_instance(host, nil)"),
-            "must call create_instance: {out}"
+            out.contains("host.create_guest_instance(host, interface, nil)"),
+            "must call create_guest_instance: {out}"
         );
         assert!(
             out.contains("function PipelineValidatorPeer:validate(input)"),

@@ -338,11 +338,12 @@ fn test_csharp_host_callers_use_real_runtime_api() {
         !callers.contains("if (inst.Data == nint.Zero) { return null; }"),
         "a null instance handle is valid for stateless contracts and must not abort Create: {callers}"
     );
-    // create_instance / destroy_instance are IntPtr fields and must be cast to
-    // function pointers before invocation, not called directly.
+    // create_guest_instance / destroy_guest_instance are IntPtr fields on HostApi
+    // and must be cast to function pointers before invocation. The instance
+    // lifecycle is host-mediated so the runtime tracks every live instance.
     assert!(
-        callers.contains("(delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance"),
-        "Create must cast the IntPtr CreateInstance field to a function pointer: {callers}"
+        callers.contains("(delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance"),
+        "Create must cast the IntPtr CreateGuestInstance field to a function pointer: {callers}"
     );
 
     println!("test_csharp_host_callers_use_real_runtime_api: passed ✓");

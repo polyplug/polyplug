@@ -37,7 +37,7 @@ local PipelineDecoderContract_methods = {
 
     destroy = function(self)
         if self._interface ~= nil and not self._destroyed then
-            self._interface.destroy_instance(self._host, self._instance)
+            self._host.destroy_guest_instance(self._host, self._interface, self._instance)
             self._destroyed = true
         end
     end,
@@ -45,7 +45,7 @@ local PipelineDecoderContract_methods = {
     reset = function(self)
         self:destroy()
         if self._interface ~= nil then
-            self._instance = self._interface.create_instance(self._host, nil)
+            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)
             self._destroyed = false
         end
     end,
@@ -98,7 +98,8 @@ function M.PipelineDecoderContract_create(runtime, host)
     -- A null `instance.data` is valid: stateless contracts (and all VM-dispatch
     -- guests) return a null handle from create_instance and use it as an opaque
     -- dispatch token. Validity is keyed off the interface pointer, not the instance.
-    local instance = interface.create_instance(host, nil)
+    -- Route creation through the host so the runtime tracks the instance.
+    local instance = host.create_guest_instance(host, interface, nil)
     local wrapper = {
         _interface = interface,
         _instance = instance,
@@ -117,7 +118,7 @@ local DataTransformerContract_methods = {
 
     destroy = function(self)
         if self._interface ~= nil and not self._destroyed then
-            self._interface.destroy_instance(self._host, self._instance)
+            self._host.destroy_guest_instance(self._host, self._interface, self._instance)
             self._destroyed = true
         end
     end,
@@ -125,7 +126,7 @@ local DataTransformerContract_methods = {
     reset = function(self)
         self:destroy()
         if self._interface ~= nil then
-            self._instance = self._interface.create_instance(self._host, nil)
+            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)
             self._destroyed = false
         end
     end,
@@ -178,7 +179,8 @@ function M.DataTransformerContract_create(runtime, host)
     -- A null `instance.data` is valid: stateless contracts (and all VM-dispatch
     -- guests) return a null handle from create_instance and use it as an opaque
     -- dispatch token. Validity is keyed off the interface pointer, not the instance.
-    local instance = interface.create_instance(host, nil)
+    -- Route creation through the host so the runtime tracks the instance.
+    local instance = host.create_guest_instance(host, interface, nil)
     local wrapper = {
         _interface = interface,
         _instance = instance,
@@ -197,7 +199,7 @@ local PipelineEncoderContract_methods = {
 
     destroy = function(self)
         if self._interface ~= nil and not self._destroyed then
-            self._interface.destroy_instance(self._host, self._instance)
+            self._host.destroy_guest_instance(self._host, self._interface, self._instance)
             self._destroyed = true
         end
     end,
@@ -205,7 +207,7 @@ local PipelineEncoderContract_methods = {
     reset = function(self)
         self:destroy()
         if self._interface ~= nil then
-            self._instance = self._interface.create_instance(self._host, nil)
+            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)
             self._destroyed = false
         end
     end,
@@ -258,7 +260,8 @@ function M.PipelineEncoderContract_create(runtime, host)
     -- A null `instance.data` is valid: stateless contracts (and all VM-dispatch
     -- guests) return a null handle from create_instance and use it as an opaque
     -- dispatch token. Validity is keyed off the interface pointer, not the instance.
-    local instance = interface.create_instance(host, nil)
+    -- Route creation through the host so the runtime tracks the instance.
+    local instance = host.create_guest_instance(host, interface, nil)
     local wrapper = {
         _interface = interface,
         _instance = instance,
@@ -277,7 +280,7 @@ local DataReporterContract_methods = {
 
     destroy = function(self)
         if self._interface ~= nil and not self._destroyed then
-            self._interface.destroy_instance(self._host, self._instance)
+            self._host.destroy_guest_instance(self._host, self._interface, self._instance)
             self._destroyed = true
         end
     end,
@@ -285,7 +288,7 @@ local DataReporterContract_methods = {
     reset = function(self)
         self:destroy()
         if self._interface ~= nil then
-            self._instance = self._interface.create_instance(self._host, nil)
+            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)
             self._destroyed = false
         end
     end,
@@ -338,7 +341,8 @@ function M.DataReporterContract_create(runtime, host)
     -- A null `instance.data` is valid: stateless contracts (and all VM-dispatch
     -- guests) return a null handle from create_instance and use it as an opaque
     -- dispatch token. Validity is keyed off the interface pointer, not the instance.
-    local instance = interface.create_instance(host, nil)
+    -- Route creation through the host so the runtime tracks the instance.
+    local instance = host.create_guest_instance(host, interface, nil)
     local wrapper = {
         _interface = interface,
         _instance = instance,
@@ -357,7 +361,7 @@ local PipelineValidatorContract_methods = {
 
     destroy = function(self)
         if self._interface ~= nil and not self._destroyed then
-            self._interface.destroy_instance(self._host, self._instance)
+            self._host.destroy_guest_instance(self._host, self._interface, self._instance)
             self._destroyed = true
         end
     end,
@@ -365,7 +369,7 @@ local PipelineValidatorContract_methods = {
     reset = function(self)
         self:destroy()
         if self._interface ~= nil then
-            self._instance = self._interface.create_instance(self._host, nil)
+            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)
             self._destroyed = false
         end
     end,
@@ -418,7 +422,8 @@ function M.PipelineValidatorContract_create(runtime, host)
     -- A null `instance.data` is valid: stateless contracts (and all VM-dispatch
     -- guests) return a null handle from create_instance and use it as an opaque
     -- dispatch token. Validity is keyed off the interface pointer, not the instance.
-    local instance = interface.create_instance(host, nil)
+    -- Route creation through the host so the runtime tracks the instance.
+    local instance = host.create_guest_instance(host, interface, nil)
     local wrapper = {
         _interface = interface,
         _instance = instance,

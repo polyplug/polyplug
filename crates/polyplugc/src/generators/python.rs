@@ -784,13 +784,13 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
     out.push_str("        self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)\n");
     out.push_str("        if not self._interface:\n");
     out.push_str("            raise ValueError(\"Contract not found\")\n");
-    out.push_str("        # Cast to GuestContractInterface pointer\n");
-    out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
-    out.push_str("        # Create instance via factory function. A null instance is valid:\n");
-    out.push_str("        # stateless contracts return a null handle and use it as an opaque\n");
-    out.push_str("        # dispatch token. Validity is keyed off the interface pointer, never\n");
-    out.push_str("        # off instance data.\n");
-    out.push_str("        self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)\n");
+    out.push_str("        # Create instance via host-mediated lifecycle so the runtime tracks\n");
+    out.push_str("        # it. A null instance is valid: stateless contracts return a null\n");
+    out.push_str(
+        "        # handle and use it as an opaque dispatch token. Validity is keyed off\n",
+    );
+    out.push_str("        # the interface pointer, never off instance data.\n");
+    out.push_str("        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)\n");
     out.push_str("        self._host: ctypes.c_void_p = host\n");
     out.push_str(
         "        # Pin the runtime: refcounting then guarantees the owner outlives this\n",
@@ -822,12 +822,16 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
 
     // __del__ destructor: calls destroy_instance
     out.push_str("    def __del__(self) -> None:\n");
-    out.push_str("        \"\"\"Destroy instance via destroy_instance factory.\"\"\"\n");
+    out.push_str(
+        "        \"\"\"Destroy instance via host-mediated destroy_guest_instance.\"\"\"\n",
+    );
     out.push_str("        # SAFETY: the interface pointer is valid for the wrapper lifetime;\n");
-    out.push_str("        # destroy_instance tolerates a null instance for stateless contracts.\n");
+    out.push_str(
+        "        # destroy_guest_instance tolerates a null instance for stateless contracts.\n",
+    );
     out.push_str("        if getattr(self, \"_interface\", None):\n");
-    out.push_str("            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
-    out.push_str("            iface_ptr.contents.destroy_instance(self._host, self._instance)\n");
+    out.push_str("            host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))\n");
+    out.push_str("            host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)\n");
     out.push_str("            self._interface = None  # Prevent reuse after cleanup.\n");
     if needs_arena {
         out.push_str("        # Free any overflow blocks the arena still holds before teardown.\n");
@@ -870,11 +874,13 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
 
     // reset method
     out.push_str("    def reset(self) -> None:\n");
-    out.push_str("        \"\"\"Destroy current instance and create a new one.\"\"\"\n");
-    out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
-    out.push_str("        iface_ptr.contents.destroy_instance(self._host, self._instance)\n");
     out.push_str(
-        "        self._instance = iface_ptr.contents.create_instance(self._host, None)\n\n",
+        "        \"\"\"Destroy current instance and create a new one (host-mediated).\"\"\"\n",
+    );
+    out.push_str("        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))\n");
+    out.push_str("        host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)\n");
+    out.push_str(
+        "        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)\n\n",
     );
 
     out.push_str("    def __bool__(self) -> bool:\n");
@@ -3316,12 +3322,10 @@ fn generate_peer_caller_class(
     );
     out.push_str("        if not interface:\n");
     out.push_str("            return None\n");
-    out.push_str(
-        "        iface_ptr: Any = ctypes.cast(interface, ctypes.POINTER(GuestContractInterface))\n",
-    );
     out.push_str("        # A null instance is valid for stateless contracts.\n");
+    out.push_str("        # Route creation through the host so the runtime tracks the instance.\n");
     out.push_str(
-        "        instance: GuestContractInstance = iface_ptr.contents.create_instance(host_ptr, None)\n",
+        "        instance: GuestContractInstance = host.contents.create_guest_instance(host_ptr, interface, None)\n",
     );
     out.push_str(
         "        # Stamp the peer contract id so call_guest_method routes by it even when\n",
@@ -3335,11 +3339,13 @@ fn generate_peer_caller_class(
 
     // __del__: destroy instance
     out.push_str("    def __del__(self) -> None:\n");
-    out.push_str("        \"\"\"Destroy the peer instance via destroy_instance.\"\"\"\n");
+    out.push_str(
+        "        \"\"\"Destroy the peer instance via host-mediated destroy_guest_instance.\"\"\"\n",
+    );
     out.push_str("        if not getattr(self, \"_interface\", None):\n");
     out.push_str("            return\n");
-    out.push_str("        iface_ptr: Any = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
-    out.push_str("        iface_ptr.contents.destroy_instance(self._host_ptr, self._instance)\n");
+    out.push_str("        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))\n");
+    out.push_str("        host.contents.destroy_guest_instance(self._host_ptr, self._interface, self._instance)\n");
     out.push_str("        self._interface = 0\n");
     if needs_arena {
         out.push_str("        if getattr(self, \"_arena\", None) is not None:\n");

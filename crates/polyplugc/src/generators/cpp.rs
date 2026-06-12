@@ -1320,13 +1320,15 @@ fn generate_cpp_host_contract(
     out.push_str("        if (iface == nullptr) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
-    out.push_str("        // Create instance via factory function.\n");
+    out.push_str(
+        "        // Create instance via host-mediated lifecycle so the runtime tracks it.\n",
+    );
     out.push_str("        // A null `instance.data` is valid: stateless contracts return a null\n");
     out.push_str(
         "        // handle from `create_instance` and use it as an opaque dispatch token.\n",
     );
     out.push_str(
-        "        GuestContractInstance instance = iface->create_instance(host, nullptr);\n",
+        "        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);\n",
     );
     out.push_str(&format!(
         "        return {}(iface, instance, host);\n",
@@ -1349,7 +1351,7 @@ fn generate_cpp_host_contract(
     out.push_str("        // Destroy instance via factory\n");
     out.push_str("        // SAFETY: instance was created by create_instance and is valid.\n");
     out.push_str("        if (instance_.data != nullptr) {\n");
-    out.push_str("            interface_->destroy_instance(host_, instance_);\n");
+    out.push_str("            host_->destroy_guest_instance(host_, interface_, instance_);\n");
     out.push_str("            instance_.data = nullptr;  // Prevent reuse after cleanup.\n");
     out.push_str("        }\n");
     out.push_str("    }\n\n");
@@ -1386,7 +1388,7 @@ fn generate_cpp_host_contract(
     }
     out.push_str("            // Destroy current instance first\n");
     out.push_str("            if (instance_.data != nullptr) {\n");
-    out.push_str("                interface_->destroy_instance(host_, instance_);\n");
+    out.push_str("                host_->destroy_guest_instance(host_, interface_, instance_);\n");
     out.push_str("            }\n");
     out.push_str("            interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;\n");
     if needs_arena {
@@ -1422,9 +1424,9 @@ fn generate_cpp_host_contract(
     out.push_str("    /// Useful for recovering from plugin errors.\n");
     out.push_str("    void reset() noexcept {\n");
     out.push_str("        if (instance_.data != nullptr) {\n");
-    out.push_str("            interface_->destroy_instance(host_, instance_);\n");
+    out.push_str("            host_->destroy_guest_instance(host_, interface_, instance_);\n");
     out.push_str("        }\n");
-    out.push_str("        instance_ = interface_->create_instance(host_, nullptr);\n");
+    out.push_str("        instance_ = host_->create_guest_instance(host_, interface_, nullptr);\n");
     out.push_str("    }\n\n");
 
     // Generate method callers
@@ -2896,7 +2898,10 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         "        // handle from `create_instance` and use it as an opaque dispatch token.\n",
     );
     out.push_str(
-        "        GuestContractInstance instance = iface->create_instance(host, nullptr);\n",
+        "        // Route creation through the host so the runtime tracks the instance.\n",
+    );
+    out.push_str(
+        "        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);\n",
     );
     out.push_str(
         "        // Stamp the peer contract id so `host->call_guest_method` routes by it\n",
@@ -2932,7 +2937,7 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
     );
     out.push_str("        // We guard on instance.data to skip the call for stateless (null-data) contracts.\n");
     out.push_str("        if (instance_.data != nullptr) {\n");
-    out.push_str("            iface_->destroy_instance(host_, instance_);\n");
+    out.push_str("            host_->destroy_guest_instance(host_, iface_, instance_);\n");
     out.push_str("            instance_.data = nullptr;  // Prevent reuse after cleanup.\n");
     out.push_str("        }\n");
     out.push_str("    }\n\n");
@@ -2965,7 +2970,7 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         out.push_str("            }\n");
     }
     out.push_str("            if (instance_.data != nullptr) {\n");
-    out.push_str("                iface_->destroy_instance(host_, instance_);\n");
+    out.push_str("                host_->destroy_guest_instance(host_, iface_, instance_);\n");
     out.push_str("            }\n");
     out.push_str(
         "            iface_ = other.iface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;\n",
@@ -3410,20 +3415,20 @@ mod tests {
             "missing reset method: {out}"
         );
 
-        // Check destructor calls destroy_instance
+        // Check destructor calls host-mediated destroy_guest_instance
         assert!(
             out.contains("~TestAddContract() noexcept"),
             "missing destructor: {out}"
         );
         assert!(
-            out.contains("interface_->destroy_instance(host_, instance_)"),
-            "missing destroy_instance call in destructor: {out}"
+            out.contains("host_->destroy_guest_instance(host_, interface_, instance_)"),
+            "missing destroy_guest_instance call in destructor: {out}"
         );
 
-        // Check factory calls create_instance
+        // Check factory calls host-mediated create_guest_instance
         assert!(
-            out.contains("iface->create_instance(host, nullptr)"),
-            "missing create_instance call in factory: {out}"
+            out.contains("host->create_guest_instance(host, iface, nullptr)"),
+            "missing create_guest_instance call in factory: {out}"
         );
 
         // Check move constructor (not default, explicit transfer)

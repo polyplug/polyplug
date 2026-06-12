@@ -87,8 +87,9 @@ impl PipelineValidatorContractPeer {
         // handle from create_instance and use it as an opaque dispatch token.
         // SAFETY: interface is non-null (checked above) and points to a valid
         // GuestContractInterface produced by resolve_guest_contract.
+        // Route creation through the host so the runtime tracks the instance.
         let created: GuestContractInstance =
-            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+            unsafe { (iface_api.create_guest_instance)(host, interface, core::ptr::null()) };
         // Stamp the peer contract id so `host->call_guest_method` routes by it
         // even when a stateless peer's create_instance returns a null handle
         // (null contract_id). The host-mediated path keys routing on contract_id.
@@ -172,12 +173,19 @@ impl Drop for PipelineValidatorContractPeer {
     fn drop(&mut self) {
         // Free any overflow blocks the arena still holds before dropping.
         self.arena.reset();
-        // SAFETY: instance was created by create_instance on the resolved interface.
+        // Route destruction through the host so the runtime drops the instance from
+        // its live-instance accounting. A null host pointer means there is no
+        // runtime to mediate the lifecycle, so skip the destroy.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
+        // SAFETY: instance was created by create_guest_instance on the resolved interface.
         // The interface pointer is stored for the lifetime of this wrapper and is valid.
         // We guard on instance.data to skip the call for stateless (null-data) contracts.
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
     }

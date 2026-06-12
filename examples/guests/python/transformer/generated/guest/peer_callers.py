@@ -90,20 +90,20 @@ class PipelineValidatorPeer:
         interface: int = host.contents.resolve_guest_contract(host_ptr, handle)
         if not interface:
             return None
-        iface_ptr: Any = ctypes.cast(interface, ctypes.POINTER(GuestContractInterface))
         # A null instance is valid for stateless contracts.
-        instance: GuestContractInstance = iface_ptr.contents.create_instance(host_ptr, None)
+        # Route creation through the host so the runtime tracks the instance.
+        instance: GuestContractInstance = host.contents.create_guest_instance(host_ptr, interface, None)
         # Stamp the peer contract id so call_guest_method routes by it even when
         # a stateless peer's create_instance returns a null (null-id) handle.
         instance.contract_id = 0x45173A959EEC57C5
         return cls(host_ptr, interface, instance)
 
     def __del__(self) -> None:
-        """Destroy the peer instance via destroy_instance."""
+        """Destroy the peer instance via host-mediated destroy_guest_instance."""
         if not getattr(self, "_interface", None):
             return
-        iface_ptr: Any = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-        iface_ptr.contents.destroy_instance(self._host_ptr, self._instance)
+        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))
+        host.contents.destroy_guest_instance(self._host_ptr, self._interface, self._instance)
         self._interface = 0
         if getattr(self, "_arena", None) is not None:
             _arena_free_all(self._arena, self._host_ptr)

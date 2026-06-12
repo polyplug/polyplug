@@ -92,13 +92,11 @@ class PipelineDecoderContractCaller:
         self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)
         if not self._interface:
             raise ValueError("Contract not found")
-        # Cast to GuestContractInterface pointer
-        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-        # Create instance via factory function. A null instance is valid:
-        # stateless contracts return a null handle and use it as an opaque
-        # dispatch token. Validity is keyed off the interface pointer, never
-        # off instance data.
-        self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
+        # Create instance via host-mediated lifecycle so the runtime tracks
+        # it. A null instance is valid: stateless contracts return a null
+        # handle and use it as an opaque dispatch token. Validity is keyed off
+        # the interface pointer, never off instance data.
+        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)
         self._host: ctypes.c_void_p = host
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
@@ -116,12 +114,12 @@ class PipelineDecoderContractCaller:
         )
 
     def __del__(self) -> None:
-        """Destroy instance via destroy_instance factory."""
+        """Destroy instance via host-mediated destroy_guest_instance."""
         # SAFETY: the interface pointer is valid for the wrapper lifetime;
-        # destroy_instance tolerates a null instance for stateless contracts.
+        # destroy_guest_instance tolerates a null instance for stateless contracts.
         if getattr(self, "_interface", None):
-            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-            iface_ptr.contents.destroy_instance(self._host, self._instance)
+            host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+            host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
@@ -156,10 +154,10 @@ class PipelineDecoderContractCaller:
         return bool(getattr(self, "_interface", None))
 
     def reset(self) -> None:
-        """Destroy current instance and create a new one."""
-        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-        iface_ptr.contents.destroy_instance(self._host, self._instance)
-        self._instance = iface_ptr.contents.create_instance(self._host, None)
+        """Destroy current instance and create a new one (host-mediated)."""
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
+        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -225,13 +223,11 @@ class DataTransformerContractCaller:
         self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)
         if not self._interface:
             raise ValueError("Contract not found")
-        # Cast to GuestContractInterface pointer
-        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-        # Create instance via factory function. A null instance is valid:
-        # stateless contracts return a null handle and use it as an opaque
-        # dispatch token. Validity is keyed off the interface pointer, never
-        # off instance data.
-        self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
+        # Create instance via host-mediated lifecycle so the runtime tracks
+        # it. A null instance is valid: stateless contracts return a null
+        # handle and use it as an opaque dispatch token. Validity is keyed off
+        # the interface pointer, never off instance data.
+        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)
         self._host: ctypes.c_void_p = host
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
@@ -249,12 +245,12 @@ class DataTransformerContractCaller:
         )
 
     def __del__(self) -> None:
-        """Destroy instance via destroy_instance factory."""
+        """Destroy instance via host-mediated destroy_guest_instance."""
         # SAFETY: the interface pointer is valid for the wrapper lifetime;
-        # destroy_instance tolerates a null instance for stateless contracts.
+        # destroy_guest_instance tolerates a null instance for stateless contracts.
         if getattr(self, "_interface", None):
-            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-            iface_ptr.contents.destroy_instance(self._host, self._instance)
+            host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+            host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
@@ -289,10 +285,10 @@ class DataTransformerContractCaller:
         return bool(getattr(self, "_interface", None))
 
     def reset(self) -> None:
-        """Destroy current instance and create a new one."""
-        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-        iface_ptr.contents.destroy_instance(self._host, self._instance)
-        self._instance = iface_ptr.contents.create_instance(self._host, None)
+        """Destroy current instance and create a new one (host-mediated)."""
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
+        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -358,13 +354,11 @@ class PipelineEncoderContractCaller:
         self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)
         if not self._interface:
             raise ValueError("Contract not found")
-        # Cast to GuestContractInterface pointer
-        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-        # Create instance via factory function. A null instance is valid:
-        # stateless contracts return a null handle and use it as an opaque
-        # dispatch token. Validity is keyed off the interface pointer, never
-        # off instance data.
-        self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
+        # Create instance via host-mediated lifecycle so the runtime tracks
+        # it. A null instance is valid: stateless contracts return a null
+        # handle and use it as an opaque dispatch token. Validity is keyed off
+        # the interface pointer, never off instance data.
+        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)
         self._host: ctypes.c_void_p = host
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
@@ -382,12 +376,12 @@ class PipelineEncoderContractCaller:
         )
 
     def __del__(self) -> None:
-        """Destroy instance via destroy_instance factory."""
+        """Destroy instance via host-mediated destroy_guest_instance."""
         # SAFETY: the interface pointer is valid for the wrapper lifetime;
-        # destroy_instance tolerates a null instance for stateless contracts.
+        # destroy_guest_instance tolerates a null instance for stateless contracts.
         if getattr(self, "_interface", None):
-            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-            iface_ptr.contents.destroy_instance(self._host, self._instance)
+            host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+            host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
@@ -422,10 +416,10 @@ class PipelineEncoderContractCaller:
         return bool(getattr(self, "_interface", None))
 
     def reset(self) -> None:
-        """Destroy current instance and create a new one."""
-        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-        iface_ptr.contents.destroy_instance(self._host, self._instance)
-        self._instance = iface_ptr.contents.create_instance(self._host, None)
+        """Destroy current instance and create a new one (host-mediated)."""
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
+        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -491,13 +485,11 @@ class DataReporterContractCaller:
         self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)
         if not self._interface:
             raise ValueError("Contract not found")
-        # Cast to GuestContractInterface pointer
-        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-        # Create instance via factory function. A null instance is valid:
-        # stateless contracts return a null handle and use it as an opaque
-        # dispatch token. Validity is keyed off the interface pointer, never
-        # off instance data.
-        self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
+        # Create instance via host-mediated lifecycle so the runtime tracks
+        # it. A null instance is valid: stateless contracts return a null
+        # handle and use it as an opaque dispatch token. Validity is keyed off
+        # the interface pointer, never off instance data.
+        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)
         self._host: ctypes.c_void_p = host
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
@@ -515,12 +507,12 @@ class DataReporterContractCaller:
         )
 
     def __del__(self) -> None:
-        """Destroy instance via destroy_instance factory."""
+        """Destroy instance via host-mediated destroy_guest_instance."""
         # SAFETY: the interface pointer is valid for the wrapper lifetime;
-        # destroy_instance tolerates a null instance for stateless contracts.
+        # destroy_guest_instance tolerates a null instance for stateless contracts.
         if getattr(self, "_interface", None):
-            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-            iface_ptr.contents.destroy_instance(self._host, self._instance)
+            host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+            host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
@@ -555,10 +547,10 @@ class DataReporterContractCaller:
         return bool(getattr(self, "_interface", None))
 
     def reset(self) -> None:
-        """Destroy current instance and create a new one."""
-        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-        iface_ptr.contents.destroy_instance(self._host, self._instance)
-        self._instance = iface_ptr.contents.create_instance(self._host, None)
+        """Destroy current instance and create a new one (host-mediated)."""
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
+        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -624,13 +616,11 @@ class PipelineValidatorContractCaller:
         self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)
         if not self._interface:
             raise ValueError("Contract not found")
-        # Cast to GuestContractInterface pointer
-        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-        # Create instance via factory function. A null instance is valid:
-        # stateless contracts return a null handle and use it as an opaque
-        # dispatch token. Validity is keyed off the interface pointer, never
-        # off instance data.
-        self._instance: GuestContractInstance = iface_ptr.contents.create_instance(host, None)
+        # Create instance via host-mediated lifecycle so the runtime tracks
+        # it. A null instance is valid: stateless contracts return a null
+        # handle and use it as an opaque dispatch token. Validity is keyed off
+        # the interface pointer, never off instance data.
+        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)
         self._host: ctypes.c_void_p = host
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
@@ -648,12 +638,12 @@ class PipelineValidatorContractCaller:
         )
 
     def __del__(self) -> None:
-        """Destroy instance via destroy_instance factory."""
+        """Destroy instance via host-mediated destroy_guest_instance."""
         # SAFETY: the interface pointer is valid for the wrapper lifetime;
-        # destroy_instance tolerates a null instance for stateless contracts.
+        # destroy_guest_instance tolerates a null instance for stateless contracts.
         if getattr(self, "_interface", None):
-            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-            iface_ptr.contents.destroy_instance(self._host, self._instance)
+            host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+            host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
         # Free any overflow blocks the arena still holds before teardown.
         if getattr(self, "_arena", None) is not None:
@@ -688,10 +678,10 @@ class PipelineValidatorContractCaller:
         return bool(getattr(self, "_interface", None))
 
     def reset(self) -> None:
-        """Destroy current instance and create a new one."""
-        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
-        iface_ptr.contents.destroy_instance(self._host, self._instance)
-        self._instance = iface_ptr.contents.create_instance(self._host, None)
+        """Destroy current instance and create a new one (host-mediated)."""
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
+        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)
 
     def __bool__(self) -> bool:
         return self.is_valid()

@@ -90,11 +90,13 @@ impl PipelineDecoderContract {
         if interface.is_null() {
             return None;
         }
-        // Create instance via factory function.
+        // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        let instance: GuestContractInstance =
-            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        let instance: GuestContractInstance = unsafe {
+            let host_api: &HostApi = host.as_ref()?;
+            (host_api.create_guest_instance)(host, interface, core::ptr::null())
+        };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
@@ -116,13 +118,21 @@ impl PipelineDecoderContract {
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     pub fn reset(&mut self) {
+        // Route create/destroy through the host so the runtime's live-instance
+        // accounting stays accurate. If the host pointer is null there is no
+        // runtime to mediate the lifecycle, so leave the instance untouched.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
-        self.instance =
-            unsafe { ((*self.interface).create_instance)(self.host, core::ptr::null()) };
+        self.instance = unsafe {
+            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null())
+        };
     }
 
     /// Call `decode` (function_id=0)
@@ -205,12 +215,18 @@ impl Drop for PipelineDecoderContract {
     fn drop(&mut self) {
         // Free any overflow blocks the arena still holds before dropping.
         self.arena.reset();
-        // Destroy instance via factory
-        // SAFETY: instance was created by create_instance and is valid.
+        // Destroy instance via host-mediated lifecycle so the runtime drops it
+        // from its live-instance accounting. A null host pointer means there is
+        // no runtime to mediate the lifecycle, so skip the destroy.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
+        // SAFETY: instance was created by create_guest_instance and is valid.
         // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
     }
@@ -263,11 +279,13 @@ impl DataTransformerContract {
         if interface.is_null() {
             return None;
         }
-        // Create instance via factory function.
+        // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        let instance: GuestContractInstance =
-            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        let instance: GuestContractInstance = unsafe {
+            let host_api: &HostApi = host.as_ref()?;
+            (host_api.create_guest_instance)(host, interface, core::ptr::null())
+        };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
@@ -289,13 +307,21 @@ impl DataTransformerContract {
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     pub fn reset(&mut self) {
+        // Route create/destroy through the host so the runtime's live-instance
+        // accounting stays accurate. If the host pointer is null there is no
+        // runtime to mediate the lifecycle, so leave the instance untouched.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
-        self.instance =
-            unsafe { ((*self.interface).create_instance)(self.host, core::ptr::null()) };
+        self.instance = unsafe {
+            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null())
+        };
     }
 
     /// Call `transform` (function_id=0)
@@ -378,12 +404,18 @@ impl Drop for DataTransformerContract {
     fn drop(&mut self) {
         // Free any overflow blocks the arena still holds before dropping.
         self.arena.reset();
-        // Destroy instance via factory
-        // SAFETY: instance was created by create_instance and is valid.
+        // Destroy instance via host-mediated lifecycle so the runtime drops it
+        // from its live-instance accounting. A null host pointer means there is
+        // no runtime to mediate the lifecycle, so skip the destroy.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
+        // SAFETY: instance was created by create_guest_instance and is valid.
         // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
     }
@@ -436,11 +468,13 @@ impl PipelineEncoderContract {
         if interface.is_null() {
             return None;
         }
-        // Create instance via factory function.
+        // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        let instance: GuestContractInstance =
-            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        let instance: GuestContractInstance = unsafe {
+            let host_api: &HostApi = host.as_ref()?;
+            (host_api.create_guest_instance)(host, interface, core::ptr::null())
+        };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
@@ -462,13 +496,21 @@ impl PipelineEncoderContract {
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     pub fn reset(&mut self) {
+        // Route create/destroy through the host so the runtime's live-instance
+        // accounting stays accurate. If the host pointer is null there is no
+        // runtime to mediate the lifecycle, so leave the instance untouched.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
-        self.instance =
-            unsafe { ((*self.interface).create_instance)(self.host, core::ptr::null()) };
+        self.instance = unsafe {
+            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null())
+        };
     }
 
     /// Call `encode` (function_id=0)
@@ -551,12 +593,18 @@ impl Drop for PipelineEncoderContract {
     fn drop(&mut self) {
         // Free any overflow blocks the arena still holds before dropping.
         self.arena.reset();
-        // Destroy instance via factory
-        // SAFETY: instance was created by create_instance and is valid.
+        // Destroy instance via host-mediated lifecycle so the runtime drops it
+        // from its live-instance accounting. A null host pointer means there is
+        // no runtime to mediate the lifecycle, so skip the destroy.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
+        // SAFETY: instance was created by create_guest_instance and is valid.
         // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
     }
@@ -609,11 +657,13 @@ impl DataReporterContract {
         if interface.is_null() {
             return None;
         }
-        // Create instance via factory function.
+        // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        let instance: GuestContractInstance =
-            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        let instance: GuestContractInstance = unsafe {
+            let host_api: &HostApi = host.as_ref()?;
+            (host_api.create_guest_instance)(host, interface, core::ptr::null())
+        };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
@@ -635,13 +685,21 @@ impl DataReporterContract {
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     pub fn reset(&mut self) {
+        // Route create/destroy through the host so the runtime's live-instance
+        // accounting stays accurate. If the host pointer is null there is no
+        // runtime to mediate the lifecycle, so leave the instance untouched.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
-        self.instance =
-            unsafe { ((*self.interface).create_instance)(self.host, core::ptr::null()) };
+        self.instance = unsafe {
+            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null())
+        };
     }
 
     /// Call `report` (function_id=0)
@@ -724,12 +782,18 @@ impl Drop for DataReporterContract {
     fn drop(&mut self) {
         // Free any overflow blocks the arena still holds before dropping.
         self.arena.reset();
-        // Destroy instance via factory
-        // SAFETY: instance was created by create_instance and is valid.
+        // Destroy instance via host-mediated lifecycle so the runtime drops it
+        // from its live-instance accounting. A null host pointer means there is
+        // no runtime to mediate the lifecycle, so skip the destroy.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
+        // SAFETY: instance was created by create_guest_instance and is valid.
         // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
     }
@@ -782,11 +846,13 @@ impl PipelineValidatorContract {
         if interface.is_null() {
             return None;
         }
-        // Create instance via factory function.
+        // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        let instance: GuestContractInstance =
-            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        let instance: GuestContractInstance = unsafe {
+            let host_api: &HostApi = host.as_ref()?;
+            (host_api.create_guest_instance)(host, interface, core::ptr::null())
+        };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
@@ -808,13 +874,21 @@ impl PipelineValidatorContract {
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     pub fn reset(&mut self) {
+        // Route create/destroy through the host so the runtime's live-instance
+        // accounting stays accurate. If the host pointer is null there is no
+        // runtime to mediate the lifecycle, so leave the instance untouched.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
-        self.instance =
-            unsafe { ((*self.interface).create_instance)(self.host, core::ptr::null()) };
+        self.instance = unsafe {
+            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null())
+        };
     }
 
     /// Call `validate` (function_id=0)
@@ -897,12 +971,18 @@ impl Drop for PipelineValidatorContract {
     fn drop(&mut self) {
         // Free any overflow blocks the arena still holds before dropping.
         self.arena.reset();
-        // Destroy instance via factory
-        // SAFETY: instance was created by create_instance and is valid.
+        // Destroy instance via host-mediated lifecycle so the runtime drops it
+        // from its live-instance accounting. A null host pointer means there is
+        // no runtime to mediate the lifecycle, so skip the destroy.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
+        // SAFETY: instance was created by create_guest_instance and is valid.
         // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
     }

@@ -1121,10 +1121,12 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
             out.push_str("    }\n\n");
         }
 
-        // create_instance / destroy_instance are IntPtr fn pointers in the ABI struct.
-        // Cast them to the canonical native dispatch signature before calling.
-        let create_cast: &str = "((delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)_interface->CreateInstance)";
-        let destroy_cast: &str = "((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInstance, void>)_interface->DestroyInstance)";
+        // create_guest_instance / destroy_guest_instance are IntPtr fn pointers in the
+        // HostApi struct. Route the instance lifecycle through the host so the runtime
+        // tracks every live instance. Cast them to the host-mediated signature before
+        // calling.
+        let create_cast: &str = "((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)";
+        let destroy_cast: &str = "((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)";
 
         // Factory method
         out.push_str(
@@ -1147,8 +1149,9 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("        if (iface == null) { return null; }\n");
         // A null instance handle is valid: stateless contracts return a null handle
         // from create_instance and use it as an opaque dispatch token.
-        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, void*, GuestContractInstance>)iface->CreateInstance;\n");
-        out.push_str("        var inst = createFn(host, null);\n");
+        // Route creation through the host so the runtime tracks the instance.
+        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;\n");
+        out.push_str("        var inst = createFn(host, iface, null);\n");
         out.push_str(&format!(
             "        return new {caller_name}(iface, inst, host);\n"
         ));
@@ -1164,10 +1167,12 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         );
         out.push_str("    public void Reset() {\n");
         out.push_str("        if (!_disposed) {\n");
-        out.push_str(&format!("            {destroy_cast}(_host, _instance);\n"));
+        out.push_str(&format!(
+            "            {destroy_cast}(_host, _interface, _instance);\n"
+        ));
         out.push_str("        }\n");
         out.push_str(&format!(
-            "        _instance = {create_cast}(_host, null);\n"
+            "        _instance = {create_cast}(_host, _interface, null);\n"
         ));
         out.push_str("    }\n\n");
 
@@ -1177,7 +1182,9 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         );
         out.push_str("    public void Dispose() {\n");
         out.push_str("        if (!_disposed) {\n");
-        out.push_str(&format!("            {destroy_cast}(_host, _instance);\n"));
+        out.push_str(&format!(
+            "            {destroy_cast}(_host, _interface, _instance);\n"
+        ));
         out.push_str("            _instance.Data = nint.Zero;\n");
         if needs_arena {
             out.push_str(
@@ -2751,9 +2758,10 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         out.push_str("        var resolveFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractHandle, GuestContractInterface*>)host->ResolveGuestContract;\n");
         out.push_str("        GuestContractInterface* iface = resolveFn(hostPtr, handle);\n");
         out.push_str("        if (iface == null) { return null; }\n");
-        // CreateInstance: (this, user_data) → GuestContractInstance
-        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, void*, GuestContractInstance>)iface->CreateInstance;\n");
-        out.push_str("        GuestContractInstance inst = createFn(hostPtr, null);\n");
+        // CreateGuestInstance: (this, interface, user_data) → GuestContractInstance.
+        // Route creation through the host so the runtime tracks the instance.
+        out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;\n");
+        out.push_str("        GuestContractInstance inst = createFn(hostPtr, iface, null);\n");
         out.push_str(
             "        // Stamp the peer contract id so CallGuestMethod routes by it even when a\n",
         );
@@ -2775,15 +2783,15 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         );
         out.push_str("    public bool IsValid => !_disposed && _interface != null;\n\n");
 
-        // Dispose
-        let destroy_cast: &str = "((delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)_interface->DestroyInstance)";
+        // Dispose — route destruction through the host so the runtime drops the instance.
+        let destroy_cast: &str = "((delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)";
         out.push_str(
-            "    /// <summary>Dispose pattern — calls destroy_instance and frees arena memory.</summary>\n",
+            "    /// <summary>Dispose pattern — calls destroy_guest_instance and frees arena memory.</summary>\n",
         );
         out.push_str("    public void Dispose() {\n");
         out.push_str("        if (!_disposed) {\n");
         out.push_str(&format!(
-            "            {destroy_cast}((IntPtr)_host, _instance);\n"
+            "            {destroy_cast}((IntPtr)_host, _interface, _instance);\n"
         ));
         out.push_str("            _instance.Data = nint.Zero;\n");
         if needs_arena {
