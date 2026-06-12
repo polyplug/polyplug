@@ -70,6 +70,9 @@ petgraph = { version = "0.8", default-features = false, features = [
     "stable_graph",
 ] }
 
+# Lock-free epoch reclamation
+crossbeam-epoch = { version = "0.9" }
+
 # CLI (polyplugc only)
 clap = { version = "4.6", features = ["derive"] }
 

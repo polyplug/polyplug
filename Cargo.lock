@@ -1513,6 +1513,7 @@ name = "polyplug"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "crossbeam-epoch",
  "libloading",
  "petgraph",
  "polyplug_abi",

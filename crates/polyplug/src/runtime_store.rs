@@ -9,6 +9,7 @@
 //! find_all_guest_contracts(). DuplicateProvider is only raised when the SAME bundle_id
 //! tries to register the SAME contract_id twice (outside a reload window).
 
+use core::sync::atomic::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -311,14 +312,114 @@ impl RuntimeStoreData {
     }
 }
 
+/// The published, lock-free-readable image of a single slot's resolvable state.
+///
+/// Mirrors the fields of a live slot that the read path needs. Vacant slots still
+/// record `iface = None` (so the slot is unresolvable) while carrying the slot's
+/// current `generation`, preserving the exact `StaleHandle`-vs-`InvalidHandle`
+/// distinction `resolve_guest_contract` draws (generation is checked before
+/// interface presence).
+struct SlotIfaceView {
+    /// Borrowed from the slot's live `Arc<GuestContractInterface>`. Kept valid for
+    /// the runtime lifetime by retire-not-drop (the slot's Arc — or its retired
+    /// successor — is never freed), so this raw pointer never dangles.
+    interface: *const GuestContractInterface,
+    contract_version_major: u32,
+}
+
+/// Per-slot immutable view used by the lock-free read path.
+///
+/// One entry per slot in `RuntimeStoreData.slots`. The `generation` is recorded
+/// for every slot — live or vacant — so the read path reproduces the current
+/// readers' ordering exactly: generation is compared first, then interface
+/// presence. A vacant slot has `iface = None` but a current `generation`.
+struct SlotEntryView {
+    generation: u32,
+    iface: Option<SlotIfaceView>,
+}
+
+/// Immutable, lock-free-readable snapshot of the registry's resolvable state.
+///
+/// Rebuilt from `RuntimeStoreData` under the write lock on every mutation and
+/// published into `RuntimeStore.published`. Readers pin an epoch guard, atomically
+/// load the current view, and serve resolve/find/count without taking any lock.
+struct ReadView {
+    /// Indexed by slot index; mirrors `RuntimeStoreData.slots` but only the fields
+    /// the read path needs.
+    slots: Vec<SlotEntryView>,
+    /// contract_id -> published live slot indices (mirror of `guest_contract_index`).
+    contract_index: HashMap<GuestContractId, Vec<u32>>,
+}
+
+// SAFETY: `ReadView` holds raw `*const GuestContractInterface` pointers, so it is
+// not auto-`Send`/`Sync`. Sharing `&ReadView` (and the contained pointers) across
+// threads is sound because: (1) each pointed-to `GuestContractInterface` is
+// immutable after registration and is kept alive for the runtime lifetime by
+// retire-not-drop (the slot's `Arc`, or its retired successor, is never freed);
+// and (2) a `ReadView` is never mutated after publish — writers replace it wholesale
+// and epoch reclamation frees the old view only once no reader can observe it.
+unsafe impl Send for ReadView {}
+// SAFETY: see the `Send` justification above — the same immutability and lifetime
+// guarantees make concurrent shared reads of a `ReadView` sound.
+unsafe impl Sync for ReadView {}
+
+impl ReadView {
+    /// An empty snapshot — no slots, no published contracts.
+    fn empty() -> ReadView {
+        ReadView {
+            slots: Vec::new(),
+            contract_index: HashMap::new(),
+        }
+    }
+
+    /// Rebuild the read snapshot from the currently write-locked registry data.
+    ///
+    /// Reproduces the read path's visibility rules exactly: every slot contributes a
+    /// `SlotEntryView` carrying its `generation`, and an `iface` sub-view only when
+    /// the slot is live (`entry.is_some() && interface.is_some()`). `contract_index`
+    /// is a direct clone of `data.guest_contract_index`, which is already the
+    /// published-visibility index — pending reload slots are deliberately absent from
+    /// it, so cloning preserves the reload-window semantics for free.
+    fn rebuild(data: &RuntimeStoreData) -> ReadView {
+        let mut slots: Vec<SlotEntryView> = Vec::with_capacity(data.slots.len());
+        for slot in data.slots.iter() {
+            let iface: Option<SlotIfaceView> = match (&slot.entry, &slot.interface) {
+                (Some(_), Some(arc)) => Some(SlotIfaceView {
+                    interface: arc.as_ref() as *const GuestContractInterface,
+                    contract_version_major: arc.contract_version.major,
+                }),
+                _ => None,
+            };
+            slots.push(SlotEntryView {
+                generation: slot.generation,
+                iface,
+            });
+        }
+        ReadView {
+            slots,
+            contract_index: data.guest_contract_index.clone(),
+        }
+    }
+}
+
 /// Thread-safe plugin registry.
 //
 //  Uses a single RwLock to protect all mutable state, reducing lock acquisition
-//  overhead on the hot path. Writes (registration/unload) are rare, so contention
-//  is minimal. Reads (find, resolve_guest_contract) take a read guard and are concurrent.
+//  overhead on the cold (write) path. Writes (registration/unload) are rare, so
+//  contention is minimal. The hot read methods (find, resolve_guest_contract) serve
+//  from a lock-free published `ReadView` snapshot under an epoch guard.
 pub struct RuntimeStore {
     /// Single RwLock protecting all mutable registry state.
     data: RwLock<RuntimeStoreData>,
+    /// Lock-free read snapshot of the registry's resolvable state.
+    ///
+    /// Hot read methods pin an epoch guard, atomically load this view, and serve
+    /// resolve/find/count without taking the RwLock. Writers rebuild it from the
+    /// freshly-mutated `RuntimeStoreData` and republish it (via [`RuntimeStore::publish`])
+    /// at the end of every mutation, while still holding the write guard — so the
+    /// published view always mirrors `data`. The superseded view is deferred for
+    /// epoch reclamation so any reader still observing it stays valid.
+    published: crossbeam_epoch::Atomic<ReadView>,
     /// Instance-owned copy of the host logging configuration. The store has no
     /// back-reference to its `Runtime`, so the handle is copied in at
     /// construction (Rule 12: instance state, no globals).
@@ -330,6 +431,7 @@ impl RuntimeStore {
     pub fn new() -> RuntimeStore {
         RuntimeStore {
             data: RwLock::new(RuntimeStoreData::new()),
+            published: crossbeam_epoch::Atomic::new(ReadView::empty()),
             logger: LoggerHandle::default_stderr(),
         }
     }
@@ -338,7 +440,30 @@ impl RuntimeStore {
     pub(crate) fn with_logger(logger: LoggerHandle) -> RuntimeStore {
         RuntimeStore {
             data: RwLock::new(RuntimeStoreData::new()),
+            published: crossbeam_epoch::Atomic::new(ReadView::empty()),
             logger,
+        }
+    }
+
+    /// Rebuild the lock-free read snapshot from the freshly-mutated `data` and
+    /// publish it, deferring destruction of the superseded view.
+    ///
+    /// Called at the end of every mutation, while the write guard is still held, so
+    /// the published view always mirrors `data`.
+    fn publish(&self, data: &RuntimeStoreData) {
+        let view: ReadView = ReadView::rebuild(data);
+        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+        let new_shared: crossbeam_epoch::Shared<'_, ReadView> =
+            crossbeam_epoch::Owned::new(view).into_shared(&guard);
+        let old: crossbeam_epoch::Shared<'_, ReadView> =
+            self.published.swap(new_shared, Ordering::AcqRel, &guard);
+        if !old.is_null() {
+            // SAFETY: the swapped-out view is no longer reachable by new readers; any
+            // reader that loaded it still holds a pin, so defer_destroy frees it only
+            // once all such pins are dropped.
+            unsafe {
+                guard.defer_destroy(old);
+            }
         }
     }
 
@@ -551,6 +676,8 @@ impl RuntimeStore {
             .plugin_slots
             .push(slot_idx);
 
+        self.publish(&data);
+
         Ok(GuestContractHandle {
             index: slot_idx,
             generation: slot_generation,
@@ -573,6 +700,7 @@ impl RuntimeStore {
         for cid in contract_ids {
             set.insert(cid);
         }
+        self.publish(&data);
         Ok(())
     }
 
@@ -600,39 +728,40 @@ impl RuntimeStore {
         contract_id: GuestContractId,
         min_version: u32,
     ) -> Result<GuestContractHandle, RegistryError> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
-            self.data.read().recover_poisoned(self.logger, "store");
+        let not_found: RegistryError = RegistryError::PluginNotFound {
+            contract_id: contract_id.id(),
+            min_version,
+        };
 
-        let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
+        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+        let shared: crossbeam_epoch::Shared<'_, ReadView> =
+            self.published.load(Ordering::Acquire, &guard);
+        // SAFETY: `published` is never null while the store is alive (it is set to a
+        // non-null view at construction and on every republish; only `Drop` nulls it,
+        // under `&mut self` with no concurrent readers). The view is kept alive for the
+        // duration of this guard's pin by epoch reclamation.
+        let view: &ReadView = match unsafe { shared.as_ref() } {
             Some(v) => v,
-            None => {
-                return Err(RegistryError::PluginNotFound {
-                    contract_id: contract_id.id(),
-                    min_version,
-                });
-            }
+            None => return Err(not_found),
+        };
+
+        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
+            Some(v) => v,
+            None => return Err(not_found),
         };
 
         for &slot_idx in indices.iter() {
-            let slot: &PluginSlot = &data.slots[slot_idx as usize];
-            if slot.entry.is_some()
-                && let Some(ref interface) = slot.interface
+            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
+            if let Some(ref iface) = entry.iface
+                && iface.contract_version_major >= min_version
             {
-                // SAFETY: interface points to 'static GuestContractInterface, valid for Registry lifetime.
-                // The pointer is written once at registration and never mutated.
-                let version: u32 = interface.contract_version.major;
-                if version >= min_version {
-                    return Ok(GuestContractHandle {
-                        index: slot_idx,
-                        generation: slot.generation,
-                    });
-                }
+                return Ok(GuestContractHandle {
+                    index: slot_idx,
+                    generation: entry.generation,
+                });
             }
         }
-        Err(RegistryError::PluginNotFound {
-            contract_id: contract_id.id(),
-            min_version,
-        })
+        Err(not_found)
     }
 
     /// Find the plugin registered by a specific bundle_id that satisfies contract_id + min_version.
@@ -704,36 +833,39 @@ impl RuntimeStore {
         min_version: u32,
         out: &mut [GuestContractHandle],
     ) -> usize {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
-            self.data.read().recover_poisoned(self.logger, "store");
+        if out.is_empty() {
+            return 0usize;
+        }
 
-        let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
+        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+        let shared: crossbeam_epoch::Shared<'_, ReadView> =
+            self.published.load(Ordering::Acquire, &guard);
+        // SAFETY: `published` is never null while the store is alive (see
+        // `find_guest_contract`). The view stays valid for this guard's pin.
+        let view: &ReadView = match unsafe { shared.as_ref() } {
             Some(v) => v,
             None => return 0usize,
         };
 
-        if out.is_empty() {
-            return 0usize;
-        }
+        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
+            Some(v) => v,
+            None => return 0usize,
+        };
+
         let mut write_count: usize = 0usize;
         for &slot_idx in indices.iter() {
             if write_count >= out.len() {
                 break;
             }
-            let slot: &PluginSlot = &data.slots[slot_idx as usize];
-            if slot.entry.is_some()
-                && let Some(ref interface) = slot.interface
+            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
+            if let Some(ref iface) = entry.iface
+                && iface.contract_version_major >= min_version
             {
-                // SAFETY: interface is 'static GuestContractInterface valid for Registry lifetime.
-                // Read-only access after registration.
-                let version: u32 = interface.contract_version.major;
-                if version >= min_version {
-                    out[write_count] = GuestContractHandle {
-                        index: slot_idx,
-                        generation: slot.generation,
-                    };
-                    write_count += 1usize;
-                }
+                out[write_count] = GuestContractHandle {
+                    index: slot_idx,
+                    generation: entry.generation,
+                };
+                write_count += 1usize;
             }
         }
         write_count
@@ -754,34 +886,37 @@ impl RuntimeStore {
         min_version: u32,
         out: &mut [u64],
     ) -> usize {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
-            self.data.read().recover_poisoned(self.logger, "store");
+        if out.is_empty() {
+            return 0usize;
+        }
 
-        let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
+        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+        let shared: crossbeam_epoch::Shared<'_, ReadView> =
+            self.published.load(Ordering::Acquire, &guard);
+        // SAFETY: `published` is never null while the store is alive (see
+        // `find_guest_contract`). The view stays valid for this guard's pin.
+        let view: &ReadView = match unsafe { shared.as_ref() } {
             Some(v) => v,
             None => return 0usize,
         };
 
-        if out.is_empty() {
-            return 0usize;
-        }
+        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
+            Some(v) => v,
+            None => return 0usize,
+        };
+
         let mut write_count: usize = 0usize;
         for &slot_idx in indices.iter() {
             if write_count >= out.len() {
                 break;
             }
-            let slot: &PluginSlot = &data.slots[slot_idx as usize];
-            if slot.entry.is_some()
-                && let Some(ref interface) = slot.interface
+            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
+            if let Some(ref iface) = entry.iface
+                && iface.contract_version_major >= min_version
             {
-                // SAFETY: interface is 'static GuestContractInterface valid for Registry lifetime.
-                // Read-only access after registration.
-                let version: u32 = interface.contract_version.major;
-                if version >= min_version {
-                    // Pack handle directly: generation in the high 32 bits, index low.
-                    out[write_count] = ((slot.generation as u64) << 32) | (slot_idx as u64);
-                    write_count += 1usize;
-                }
+                // Pack handle directly: generation in the high 32 bits, index low.
+                out[write_count] = ((entry.generation as u64) << 32) | (slot_idx as u64);
+                write_count += 1usize;
             }
         }
         write_count
@@ -789,20 +924,26 @@ impl RuntimeStore {
 
     /// Count plugins satisfying the given contract_id and minimum version.
     pub fn count_guest_contracts(&self, contract_id: GuestContractId, min_version: u32) -> usize {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
-            self.data.read().recover_poisoned(self.logger, "store");
-
-        let indices = match data.guest_contract_index.get(&contract_id) {
+        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+        let shared: crossbeam_epoch::Shared<'_, ReadView> =
+            self.published.load(Ordering::Acquire, &guard);
+        // SAFETY: `published` is never null while the store is alive (see
+        // `find_guest_contract`). The view stays valid for this guard's pin.
+        let view: &ReadView = match unsafe { shared.as_ref() } {
             Some(v) => v,
             None => return 0,
         };
 
-        let mut count = 0;
+        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
+            Some(v) => v,
+            None => return 0,
+        };
+
+        let mut count: usize = 0;
         for &slot_idx in indices.iter() {
-            let slot = &data.slots[slot_idx as usize];
-            if slot.entry.is_some()
-                && let Some(ref interface) = slot.interface
-                && interface.contract_version.major >= min_version
+            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
+            if let Some(ref iface) = entry.iface
+                && iface.contract_version_major >= min_version
             {
                 count += 1;
             }
@@ -838,10 +979,17 @@ impl RuntimeStore {
         contract_id: GuestContractId,
         min_version: u32,
     ) -> SingleProviderResolution {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
-            self.data.read().recover_poisoned(self.logger, "store");
+        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+        let shared: crossbeam_epoch::Shared<'_, ReadView> =
+            self.published.load(Ordering::Acquire, &guard);
+        // SAFETY: `published` is never null while the store is alive (see
+        // `find_guest_contract`). The view stays valid for this guard's pin.
+        let view: &ReadView = match unsafe { shared.as_ref() } {
+            Some(v) => v,
+            None => return SingleProviderResolution::NotFound,
+        };
 
-        let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
+        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
             Some(v) => v,
             None => return SingleProviderResolution::NotFound,
         };
@@ -854,13 +1002,12 @@ impl RuntimeStore {
         let mut count: usize = 0;
         let mut first_interface: *const GuestContractInterface = core::ptr::null();
         for &slot_idx in indices.iter() {
-            let slot: &PluginSlot = &data.slots[slot_idx as usize];
-            if slot.entry.is_some()
-                && let Some(ref interface) = slot.interface
-                && interface.contract_version.major >= min_version
+            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
+            if let Some(ref iface) = entry.iface
+                && iface.contract_version_major >= min_version
             {
                 if count == 0 {
-                    first_interface = interface.as_ref() as *const GuestContractInterface;
+                    first_interface = iface.interface;
                 }
                 count += 1;
                 if count > 1 {
@@ -897,24 +1044,30 @@ impl RuntimeStore {
         contract_id: GuestContractId,
         min_version: u32,
     ) -> Vec<GuestContractHandle> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
-            self.data.read().recover_poisoned(self.logger, "store");
+        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+        let shared: crossbeam_epoch::Shared<'_, ReadView> =
+            self.published.load(Ordering::Acquire, &guard);
+        // SAFETY: `published` is never null while the store is alive (see
+        // `find_guest_contract`). The view stays valid for this guard's pin.
+        let view: &ReadView = match unsafe { shared.as_ref() } {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
 
-        let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
+        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
             Some(v) => v,
             None => return Vec::new(),
         };
 
         let mut collected: Vec<GuestContractHandle> = Vec::with_capacity(indices.len());
         for &slot_idx in indices.iter() {
-            let slot: &PluginSlot = &data.slots[slot_idx as usize];
-            if slot.entry.is_some()
-                && let Some(ref interface) = slot.interface
-                && interface.contract_version.major >= min_version
+            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
+            if let Some(ref iface) = entry.iface
+                && iface.contract_version_major >= min_version
             {
                 collected.push(GuestContractHandle {
                     index: slot_idx,
-                    generation: slot.generation,
+                    generation: entry.generation,
                 });
             }
         }
@@ -964,24 +1117,37 @@ impl RuntimeStore {
         &self,
         handle: GuestContractHandle,
     ) -> Result<*const GuestContractInterface, RegistryError> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
-            self.data.read().recover_poisoned(self.logger, "store");
+        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+        let shared: crossbeam_epoch::Shared<'_, ReadView> =
+            self.published.load(Ordering::Acquire, &guard);
+        // SAFETY: `published` is never null while the store is alive (see
+        // `find_guest_contract`). The view stays valid for this guard's pin.
+        let view: &ReadView = match unsafe { shared.as_ref() } {
+            Some(v) => v,
+            None => {
+                return Err(RegistryError::InvalidHandle {
+                    index: handle.index,
+                });
+            }
+        };
 
         let slot_idx: usize = handle.index as usize;
-        if slot_idx >= data.slots.len() {
+        if slot_idx >= view.slots.len() {
             return Err(RegistryError::InvalidHandle {
                 index: handle.index,
             });
         }
 
-        let slot: &PluginSlot = &data.slots[slot_idx];
-        if handle.generation != slot.generation {
+        // Generation is compared before interface presence so a handle whose bundle
+        // was unloaded (slot vacated but generation bumped) resolves to StaleHandle.
+        let entry: &SlotEntryView = &view.slots[slot_idx];
+        if handle.generation != entry.generation {
             return Err(RegistryError::StaleHandle {
                 index: handle.index,
             });
         }
-        match slot.interface {
-            Some(ref interface) => Ok(interface.as_ref() as *const GuestContractInterface),
+        match entry.iface {
+            Some(ref iface) => Ok(iface.interface),
             None => Err(RegistryError::InvalidHandle {
                 index: handle.index,
             }),
@@ -1020,6 +1186,7 @@ impl RuntimeStore {
         // Retire (do not drop) the old interface so any in-flight reader holding a
         // raw pointer into it stays valid.
         data.retired_interfaces.push(old_interface);
+        self.publish(&data);
         Ok(())
     }
 
@@ -1059,6 +1226,7 @@ impl RuntimeStore {
         let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
         data.reloading_bundles.insert(bundle_id);
+        self.publish(&data);
     }
 
     /// Abort the reload window for `bundle_id`, purging any pending slots.
@@ -1118,6 +1286,8 @@ impl RuntimeStore {
                 bd.plugin_slots.retain(|&idx| idx != pending_idx);
             }
         }
+
+        self.publish(&data);
     }
 
     pub(crate) fn apply_reload_swap(
@@ -1230,6 +1400,8 @@ impl RuntimeStore {
                 }
             }
         }
+
+        self.publish(&data);
 
         Ok(())
     }
@@ -1412,6 +1584,8 @@ impl RuntimeStore {
             name_entries.push(bundle_id);
         }
 
+        self.publish(&data);
+
         Ok(())
     }
 
@@ -1477,6 +1651,8 @@ impl RuntimeStore {
 
         // Remove from bundle_declared_deps.
         data.bundle_declared_deps.remove(&bundle_id);
+
+        self.publish(&data);
 
         Ok((slot_indices.len() as u32, retired_arcs))
     }
@@ -1547,12 +1723,29 @@ impl RuntimeStore {
         data.bundle_name_index.clear();
         data.bundle_declared_deps.clear();
         data.reloading_bundles.clear();
+        self.publish(&data);
     }
 }
 
 impl Default for RuntimeStore {
     fn default() -> RuntimeStore {
         RuntimeStore::new()
+    }
+}
+
+impl Drop for RuntimeStore {
+    fn drop(&mut self) {
+        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+        let shared: crossbeam_epoch::Shared<'_, ReadView> =
+            self.published
+                .swap(crossbeam_epoch::Shared::null(), Ordering::SeqCst, &guard);
+        if !shared.is_null() {
+            // SAFETY: `&mut self` proves exclusive access — no other thread can hold a
+            // pin observing this view — so reclaiming it immediately is sound.
+            unsafe {
+                drop(shared.into_owned());
+            }
+        }
     }
 }
 
