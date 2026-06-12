@@ -975,14 +975,19 @@ impl LuaLoader {
             }));
         }
 
-        // Take ownership of this bundle's VM state. Reload appends to any existing
-        // entry instead of replacing it, so a superseded VM stays alive for an
-        // in-flight dispatch (retire-not-drop across reload).
-        let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
-            self.live.lock().unwrap_or_else(PoisonError::into_inner);
-        live.entry(BundleId::from_u64(bundle_id))
-            .or_default()
-            .append(&mut bundle_vm_state);
+        // Take ownership of this bundle's VM state. A reload of the same bundle id
+        // REPLACES the prior VM set and schedules the superseded VMs for epoch-deferred
+        // reclaim (mirroring the native loader): the global epoch keeps the old VMs
+        // alive for any in-flight dispatch and frees them once no reader is pinned,
+        // rather than parking them until unload.
+        let superseded: Option<Vec<LuaVm>> = {
+            let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
+                self.live.lock().unwrap_or_else(PoisonError::into_inner);
+            live.insert(BundleId::from_u64(bundle_id), bundle_vm_state)
+        };
+        if let Some(old_state) = superseded {
+            self.schedule_reclaim(old_state);
+        }
 
         Ok(())
     }
@@ -1123,10 +1128,9 @@ end
     }
 
     /// Unload removes the bundle from the loader's live map and SCHEDULES its VM state
-    /// for epoch-deferred reclaim. The `in_dispatch_threads`-gated retire-not-drop
-    /// branch no longer exists on the unload path — every unload epoch-reclaims, so
-    /// even an in-flight call schedules reclaim (the epoch keeps the VM alive until
-    /// that reader's pin clears).
+    /// for epoch-deferred reclaim. Unload is uniform regardless of `in_dispatch_threads`:
+    /// every unload epoch-reclaims, so even an in-flight call schedules reclaim (the
+    /// epoch keeps the VM alive until that reader's pin clears).
     #[test]
     fn unload_removes_live_and_schedules_reclaim() {
         let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
@@ -1214,6 +1218,71 @@ end
         );
     }
 
+    /// A reload of the same bundle id must REPLACE the live VM set and schedule the
+    /// superseded VMs for epoch-deferred reclaim — not park them in the live map until
+    /// unload. This mirrors the native loader's reload-reclaim and keeps a reload loop
+    /// from leaking the bundle's VM set per reload.
+    ///
+    /// Driving the loader directly bypasses `Runtime`'s reload orchestration, so the
+    /// test invalidates the prior registry registration between loads (so the second
+    /// `register_guest_contract` is not rejected as a duplicate provider) — exactly the
+    /// supersede path a real reload takes.
+    #[test]
+    fn reload_replaces_live_and_reclaims_superseded_vm() {
+        let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+        let runtime: std::sync::Arc<polyplug::Runtime> = polyplug::runtime::RuntimeBuilder::new()
+            .loader(LuaLoader::new(LuaConfig::default()))
+            .build()
+            .expect("runtime build must succeed");
+        let (_dir, manifest): (tempfile::TempDir, ManifestData) =
+            write_unload_bundle("lua_reload_reclaim");
+        let bundle_id: BundleId = BundleId::from_u64(manifest.id);
+
+        loader
+            .load(
+                &manifest,
+                &BundleSource::Path(manifest.path.clone()),
+                &runtime,
+            )
+            .expect("first load must succeed");
+        assert_eq!(
+            loader.live_vm_count(bundle_id),
+            1,
+            "first load installs exactly one live VM entry"
+        );
+        assert_eq!(
+            loader.scheduled_reclaim_count(),
+            0,
+            "nothing is superseded by the first load"
+        );
+
+        // Drop the registry-side registration so the second load's
+        // register_guest_contract is not a duplicate, exercising the supersede path.
+        runtime
+            .registry()
+            .invalidate_bundle(bundle_id)
+            .expect("invalidate must succeed");
+
+        loader
+            .load(
+                &manifest,
+                &BundleSource::Path(manifest.path.clone()),
+                &runtime,
+            )
+            .expect("second load (reload) must succeed");
+
+        assert_eq!(
+            loader.live_vm_count(bundle_id),
+            1,
+            "reload replaces the live VM set — the live map must not grow"
+        );
+        assert_eq!(
+            loader.scheduled_reclaim_count(),
+            1,
+            "reload must schedule the superseded VM set for epoch-deferred reclaim"
+        );
+    }
+
     /// Even when a dispatch is marked in flight (the bundle's `in_dispatch_threads`
     /// is non-empty), unload behaves uniformly: it removes the bundle from `live` and
     /// SCHEDULES its VM state for epoch-deferred reclaim. The in-flight reader's epoch
@@ -1240,8 +1309,7 @@ end
 
         // Mark a fake in-flight dispatch in the bundle's tracking vec — exactly the
         // state the dispatch guard would leave while a call is mid-flight on another
-        // thread. Under the old policy this forced retire-not-drop; now it must not
-        // change the uniform epoch-reclaim outcome.
+        // thread. An in-flight mark must not change the uniform epoch-reclaim outcome.
         {
             let live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
                 loader.live.lock().unwrap_or_else(PoisonError::into_inner);
