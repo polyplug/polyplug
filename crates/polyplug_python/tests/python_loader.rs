@@ -121,8 +121,8 @@ unsafe fn dispatch(
         .registry()
         .resolve_guest_contract(handle)
         .expect("contract must resolve to an interface");
-    // SAFETY: resolved interface is a non-null, runtime-owned, retire-not-drop
-    // GuestContractInterface; reading it and its VM dispatch fields is sound.
+    // SAFETY: resolved interface is a non-null, runtime-owned GuestContractInterface
+    // leaked for the runtime lifetime; reading it and its VM dispatch fields is sound.
     let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
     assert_eq!(
         interface.dispatch_type,
@@ -877,8 +877,8 @@ def polyplug_init(host_interface: int, ctx: int) -> None:
 }
 
 /// Unloading a bundle ALWAYS purges its re-keyed `sys.modules` entries so a later
-/// load re-imports fresh source. Purge is uniform: there is no retire-not-drop
-/// branch, so unload reclaims rather than parking the import cache.
+/// load re-imports fresh source. Purge is uniform: unload always reclaims the import
+/// cache rather than parking it alive.
 #[test]
 fn unload_purges_bundle_modules_from_sys_modules() {
     let bundle_name: &str = "reclaim_purge";

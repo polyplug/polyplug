@@ -201,7 +201,7 @@ unsafe extern "C" fn python_destroy_instance(
 ///
 /// # Safety
 /// - `loader_data` must wrap a valid pointer to a [`PythonLoaderData`] created by
-///   the loader (and leaked for the runtime lifetime — retire-not-drop).
+///   the loader (and leaked for the runtime lifetime).
 /// - `args` and `out` must be valid pointers for this ABI call.
 /// - `arena`, when non-null, must point to a valid [`CallArena`] reset by the
 ///   caller for this call; values the guest writes into it are valid until the
@@ -215,7 +215,7 @@ unsafe extern "C" fn python_vm_dispatch(
     arena: *mut CallArena,
 ) -> AbiError {
     // SAFETY: loader_data wraps a valid PythonLoaderData pointer created by the
-    // loader; it is leaked (retire-not-drop) so the borrow is valid for the call.
+    // loader; it is leaked for the runtime lifetime so the borrow is valid for the call.
     let data: &PythonLoaderData = unsafe { &*(loader_data.data as *const PythonLoaderData) };
 
     let callable: &Py<PyAny> = match data.callables.get(fn_id as usize) {
@@ -456,11 +456,11 @@ pub(crate) fn collect_registrations(
 /// self-passing pattern, building a VM-dispatch [`GuestContractInterface`] per
 /// contract.
 ///
-/// Each contract gets its own leaked [`PythonLoaderData`] (retire-not-drop:
-/// previously resolved dispatch pointers must stay valid for the runtime
-/// lifetime), and the interface plus descriptor strings are leaked to `'static`
-/// for the same reason. Returns the number of contracts registered, or an error
-/// if registration of any contract fails or none were registered.
+/// Each contract gets its own leaked [`PythonLoaderData`] (leaked for the runtime
+/// lifetime so any resolved dispatch pointer stays valid), and the interface plus
+/// descriptor strings are leaked to `'static` for the same reason. Returns the
+/// number of contracts registered, or an error if registration of any contract
+/// fails or none were registered.
 pub(crate) fn register_contracts(
     registrations: Vec<ContractRegistration>,
     host_interface: *const HostApi,

@@ -571,8 +571,8 @@ mod unload_tests {
     }
 
     /// Unload removes the live handle and SCHEDULES the library for epoch-deferred
-    /// reclaim. Every unload epoch-reclaims uniformly: the retire-not-drop /
-    /// reclaim-vs-defer branches no longer exist.
+    /// reclaim. Every unload epoch-reclaims uniformly — there is no opt-out branch that
+    /// parks the library alive.
     #[test]
     #[cfg(not(miri))]
     fn unload_removes_live_and_schedules_reclaim() {

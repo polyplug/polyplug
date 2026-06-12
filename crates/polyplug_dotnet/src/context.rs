@@ -91,7 +91,8 @@ pub(crate) struct DotnetContext {
 
 /// Resolved entry points of the managed byte-load bridge, plus the temp file the bridge
 /// assembly was staged to (kept alive so the CLR's on-disk copy is never removed while the
-/// process runs — the retire-not-drop discipline the rest of the loader follows).
+/// process runs — the bridge assembly lives for the whole process lifetime, since the CLR
+/// initializes once per process and is never torn down).
 struct ByteBridge {
     load_and_get_init: BridgeLoadAndGetInitFn,
     load_from_path_and_get_init: BridgeLoadFromPathAndGetInitFn,
@@ -99,7 +100,7 @@ struct ByteBridge {
     unload: BridgeUnloadFn,
     is_alc_alive: BridgeIsAlcAliveFn,
     /// Owns the directory holding the staged bridge dll; kept alive for the process lifetime
-    /// so the CLR's loaded image is never removed (retire-not-drop). Never read after init.
+    /// so the CLR's loaded image is never removed while the process runs. Never read after init.
     _staged_dir: tempfile::TempDir,
 }
 

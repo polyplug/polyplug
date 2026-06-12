@@ -749,8 +749,8 @@ fn assert_add_dispatch_works(runtime: &Runtime) {
 
 /// Unloading a .NET bundle truly unloads its collectible `AssemblyLoadContext` — the
 /// managed assemblies become eligible for GC and the liveness probe reports the ALC
-/// reclaimed. The contract is also gone from the registry. Reclaim is uniform: there is
-/// no retire-not-drop branch, so unload always reclaims rather than parking the ALC.
+/// reclaimed. The contract is also gone from the registry. Reclaim is uniform: every
+/// unload reclaims the ALC (epoch-deferred) rather than parking it alive.
 #[test]
 fn unload_reclaims_alc() {
     let Some((runtime, bundle_id)) = load_named_fixture("csharp_reclaim_probe") else {

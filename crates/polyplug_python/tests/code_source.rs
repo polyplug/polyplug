@@ -102,7 +102,7 @@ fn code_source_loads_resolves_and_dispatches() {
         "resolved interface must be non-null"
     );
 
-    // SAFETY: runtime-owned, retire-not-drop interface; reading its fields is sound.
+    // SAFETY: runtime-owned interface leaked for the runtime lifetime; reading its fields is sound.
     let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
     assert_eq!(
         interface.contract_id.id(),

@@ -604,7 +604,7 @@ impl BundleLoader for PythonLoader {
     // in-flight call: CPython refcounts/GC keep every still-referenced module object
     // alive, so deleting a `sys.modules` entry only drops the import cache, never the
     // object a running dispatch is using. Python therefore ALWAYS purges this bundle's
-    // module entries on unload — no retire-not-drop branch, no quiescence hint, no
+    // module entries on unload — no deferred-reclaim branch, no quiescence hint, no
     // crossbeam-epoch (CPython owns object liveness, there is no raw resource for the
     // epoch to govern).
     fn unload(&self, bundle_id: BundleId, _runtime: &Runtime) -> Result<(), RuntimeError> {
