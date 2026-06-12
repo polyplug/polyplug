@@ -15,10 +15,12 @@
 //                              is forbidden to inline (#[inline(never)]). This is
 //                              the theoretical floor: a direct, statically-linked
 //                              function call with no ABI boundary.
-//   2. native/abi_marshalled — an `extern "C" fn(*const (), *mut ())` called
-//                              through a function pointer, still statically linked
-//                              (no dynamic library). Isolates the cost of
-//                              polyplug's pointer-in / pointer-out marshalling
+//   2. native/abi_marshalled — an `extern "C" fn(GuestContractInstance, *const (),
+//                              *mut ())` called through a function pointer, still
+//                              statically linked (no dynamic library). Mirrors
+//                              the current native dispatch convention (leading
+//                              instance handle), isolating the cost of polyplug's
+//                              instance + pointer-in / pointer-out marshalling
 //                              convention from the cost of crossing a .so border.
 //   3. ffi/by_value         — `inc(u32) -> u32` resolved by symbol name via
 //                              `dlsym` from a dynamically-loaded cdylib and called
@@ -108,13 +110,16 @@ fn inc_native(x: u32) -> u32 {
 
 // ─── Arm 2 — polyplug's ABI shape, statically linked ─────────────────────────
 
-/// Same pointer-in / pointer-out convention as a dispatched contract function,
-/// but a normal statically-linked Rust fn — no dynamic library, no registry.
+/// Same instance + pointer-in / pointer-out convention as a dispatched contract
+/// function, but a normal statically-linked Rust fn — no dynamic library, no
+/// registry. The leading `GuestContractInstance` mirrors the native dispatch ABI
+/// (`fn(GuestContractInstance, *const (), *mut ()) -> AbiError`); this stateless
+/// arm ignores it, exactly as the stateless fixture does.
 ///
 /// # Safety
 /// `args` must point to a valid `u32`; `out` must point to a writable `u32`.
 #[inline(never)]
-extern "C" fn inc_abi(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn inc_abi(_instance: GuestContractInstance, args: *const (), out: *mut ()) -> AbiError {
     // SAFETY: the bench passes `&u32` as `args`; it is non-null and aligned.
     let x: u32 = unsafe { *(args as *const u32) };
     // SAFETY: the bench passes `&mut u32` as `out`; it is non-null and aligned.
@@ -320,7 +325,7 @@ fn load_dispatch_fn(
     so_path: &str,
 ) -> (
     libloading::Library,
-    unsafe extern "C" fn(*const (), *mut ()) -> AbiError,
+    unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError,
 ) {
     // SAFETY: so_path is a valid cdylib built by tests/fixtures/build_all.sh.
     let library: libloading::Library =
@@ -355,8 +360,9 @@ fn load_dispatch_fn(
     );
     // SAFETY: fn 0 is in range (function_count == 1 for test.add).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: the registered fn has the generic dispatch signature.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    // SAFETY: the registered fn has the native dispatch signature
+    // `fn(GuestContractInstance, *const (), *mut ()) -> AbiError`.
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
     (library, dispatch_fn)
@@ -382,15 +388,18 @@ fn bench_counter_inc(c: &mut Criterion) {
     });
 
     // ── Arm 2: ABI-shaped call (ptr-in/ptr-out), statically linked ─────────────
-    let abi_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = inc_abi;
+    let abi_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+        inc_abi;
     group.bench_function(BenchmarkId::new("native", "abi_marshalled"), |b| {
         b.iter(|| {
             let mut counter: u32 = 0;
             for _ in 0..COUNT {
                 let mut out: u32 = 0;
-                // SAFETY: &counter is a valid u32 in, &mut out is a valid u32 out.
+                // SAFETY: &counter is a valid u32 in, &mut out is a valid u32 out;
+                // the instance handle is ignored by this stateless arm.
                 let err: AbiError = unsafe {
                     black_box(abi_fn)(
+                        black_box(GuestContractInstance::null()),
                         black_box(&counter as *const u32 as *const ()),
                         black_box(&mut out as *mut u32 as *mut ()),
                     )
@@ -433,7 +442,7 @@ fn bench_counter_inc(c: &mut Criterion) {
     {
         let (library, dispatch_fn): (
             libloading::Library,
-            unsafe extern "C" fn(*const (), *mut ()) -> AbiError,
+            unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError,
         ) = load_dispatch_fn(TEST_PLUGIN_SO);
 
         group.bench_function(BenchmarkId::new("polyplug", "dispatch"), |b| {
@@ -443,9 +452,11 @@ fn bench_counter_inc(c: &mut Criterion) {
                     let args: AddArgs = AddArgs { a: counter, b: 1 };
                     let mut out: u32 = 0;
                     // SAFETY: args is a valid AddArgs, out is a valid u32; the
-                    // registered `add` reads (a, b) and writes the u32 sum.
+                    // registered `add` reads (a, b) and writes the u32 sum. The
+                    // stateless contract ignores the null instance handle.
                     let err: AbiError = unsafe {
                         black_box(dispatch_fn)(
+                            black_box(GuestContractInstance::null()),
                             black_box(&args as *const AddArgs as *const ()),
                             black_box(&mut out as *mut u32 as *mut ()),
                         )
@@ -466,7 +477,7 @@ fn bench_counter_inc(c: &mut Criterion) {
     {
         let (library, dispatch_fn): (
             libloading::Library,
-            unsafe extern "C" fn(*const (), *mut ()) -> AbiError,
+            unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError,
         ) = load_dispatch_fn(TEST_PLUGIN_CPP_SO);
 
         group.bench_function(BenchmarkId::new("polyplug", "dispatch_cpp"), |b| {
@@ -476,9 +487,11 @@ fn bench_counter_inc(c: &mut Criterion) {
                     let args: AddArgs = AddArgs { a: counter, b: 1 };
                     let mut out: u32 = 0;
                     // SAFETY: args is a valid AddArgs, out is a valid u32; the
-                    // C++ `test.add` reads (a, b) and writes the u32 sum.
+                    // C++ `test.add` reads (a, b) and writes the u32 sum. The
+                    // stateless contract ignores the null instance handle.
                     let err: AbiError = unsafe {
                         black_box(dispatch_fn)(
+                            black_box(GuestContractInstance::null()),
                             black_box(&args as *const AddArgs as *const ()),
                             black_box(&mut out as *mut u32 as *mut ()),
                         )

@@ -4,6 +4,7 @@ use core::cell::RefCell;
 use std::sync::Arc;
 
 use polyplug::runtime_store::RuntimeStore;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::{
@@ -330,13 +331,14 @@ fn test_misaligned_buffer_fill() {
 
     // SAFETY: fn_ptr is function 0 in the interface (memory_fill_preallocated_buffer).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature.
         unsafe { core::mem::transmute(fn_ptr) };
 
     // SAFETY: args is a valid FillArgs, out is a valid u32 location.
     let call_result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const FillArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -375,13 +377,14 @@ fn test_stringview_cross_thread_echo() {
 
             // SAFETY: fn_ptr is function 2 in the interface (memory_echo_string_view).
             let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
-            let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+            let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
                 // SAFETY: fn_ptr is cast to the generic dispatch signature.
                 unsafe { core::mem::transmute(fn_ptr) };
 
             // SAFETY: input_sv is valid for the call; out_sv is a valid output location.
             let call_result: AbiError = unsafe {
                 dispatch_fn(
+                    GuestContractInstance::null(),
                     &input_sv as *const StringView as *const (),
                     &mut out_sv as *mut StringView as *mut (),
                 )
@@ -433,13 +436,14 @@ fn test_buffer_cap_less_than_len() {
 
     // SAFETY: fn_ptr is function 0 in the interface (memory_fill_preallocated_buffer).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature.
         unsafe { core::mem::transmute(fn_ptr) };
 
     // SAFETY: args is a valid FillArgs, out is a valid u32 location.
     let call_result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const FillArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )

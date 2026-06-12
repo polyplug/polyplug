@@ -12,6 +12,7 @@ use libloading::os::unix::RTLD_GLOBAL;
 use libloading::os::unix::RTLD_LAZY;
 
 use polyplug::runtime_store::RuntimeStore;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
@@ -445,7 +446,7 @@ fn stress_error_code_and_message_received_correctly() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
     // enforced by the test (fn 0 writes AbiError to *out, ignores args).
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
     let host_interface: HostApi = make_host_interface();
@@ -461,6 +462,7 @@ fn stress_error_code_and_message_received_correctly() {
     // SAFETY: message_args carries a live HostApi; out is a valid AbiError location.
     let call_result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &message_args as *const MessageArgs as *const (),
             &mut out as *mut AbiError as *mut (),
         )
@@ -516,12 +518,18 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(1) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. fn 1 ignores both
     // args and out -- it catches the panic internally and returns Panic directly.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
     // fn 1 returns the AbiError directly (not via out pointer). Both args and out are null.
     // SAFETY: fn 1 ignores args and out entirely (no pointer dereferences).
-    let result: AbiError = unsafe { dispatch_fn(core::ptr::null(), core::ptr::null_mut()) };
+    let result: AbiError = unsafe {
+        dispatch_fn(
+            GuestContractInstance::null(),
+            core::ptr::null(),
+            core::ptr::null_mut(),
+        )
+    };
 
     assert_eq!(
         result.code,
@@ -606,7 +614,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Args is *const ChainArgs,
     // out is *mut AbiError -- types enforced by this test.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
     // SAFETY: chain_args is a valid ChainArgs with a live HostApi.
@@ -614,6 +622,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     // interface and writes the returned AbiError (Panic) to *out.
     let call_result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &chain_args as *const ChainArgs as *const (),
             &mut out as *mut AbiError as *mut (),
         )
@@ -658,7 +667,7 @@ fn stress_error_message_lifetime_valid_during_read() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
     // enforced by the test (fn 0 writes AbiError to *out, ignores args).
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
     let host_interface: HostApi = make_host_interface();
@@ -674,6 +683,7 @@ fn stress_error_message_lifetime_valid_during_read() {
     // SAFETY: message_args carries a live HostApi; out is a valid AbiError location.
     let call_result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &message_args as *const MessageArgs as *const (),
             &mut out as *mut AbiError as *mut (),
         )

@@ -94,8 +94,8 @@ class GuestContractHandle(ctypes.Structure):
     
      The handle pairs the slot `index` with the `generation` the slot held when the
      handle was minted. `resolve_guest_contract` rejects a handle whose `generation`
-     no longer matches the slot's current generation (the slot was retired and the
-     index possibly reused), returning `StaleHandle`. Out-of-bounds or empty-slot
+     no longer matches the slot's current generation (the slot was vacated on unload
+     and the index possibly reused), returning `StaleHandle`. Out-of-bounds or empty-slot
      indices return InvalidHandle.
     
      # Naming

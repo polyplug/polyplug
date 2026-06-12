@@ -4,8 +4,8 @@
 // fixture exactly. It implements the "test.add" contract: add(a, b) -> a + b.
 //
 // The dispatch entry stored in `functions[0]` uses the polyplug native calling
-// convention `extern "C" AbiError(const void* args, void* out)` — the same
-// 2-argument shape the Rust fixture exports and that the tests transmute to.
+// convention `AbiError(GuestContractInstance, const void* args, void* out)` — the
+// same 3-argument shape the Rust fixture exports and that the runtime dispatches.
 //
 // ABI types come from the real C++ ABI SDK header (sdks/cpp/abi/polyplug/abi.hpp)
 // so the fixture can never drift from the frozen layouts; build_all.sh passes
@@ -40,7 +40,7 @@ struct AddArgs {
     uint32_t b;
 };
 
-AbiError cpp_test_add(const void* args, void* out) noexcept {
+AbiError cpp_test_add(GuestContractInstance, const void* args, void* out) noexcept {
     const AddArgs* in = static_cast<const AddArgs*>(args);
     *static_cast<uint32_t*>(out) = in->a + in->b;
     return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};

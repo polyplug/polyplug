@@ -307,7 +307,7 @@ fn capture_host() -> HostApi {
 /// for `memory.test` fn 0 (`fill_preallocated_buffer`) plus the kept-alive lib.
 fn load_fill_dispatch() -> (
     libloading::Library,
-    unsafe extern "C" fn(*const (), *mut ()) -> AbiError,
+    unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError,
 ) {
     // SAFETY: MEMORY_PLUGIN_SO is a valid cdylib built by build_all.sh.
     let library: libloading::Library =
@@ -340,7 +340,7 @@ fn load_fill_dispatch() -> (
     // SAFETY: fn 0 (fill) is in range (function_count == 4 for memory.test).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: the registered fn has the generic dispatch signature.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
     (library, dispatch_fn)
@@ -356,7 +356,7 @@ fn bench_payload_scaling(c: &mut Criterion) {
 
     let (library, dispatch_fn): (
         libloading::Library,
-        unsafe extern "C" fn(*const (), *mut ()) -> AbiError,
+        unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError,
     ) = load_fill_dispatch();
 
     let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
@@ -405,6 +405,7 @@ fn bench_payload_scaling(c: &mut Criterion) {
                     // memory.test fn 0 fills cap bytes and writes the count to out.
                     let err: AbiError = unsafe {
                         black_box(dispatch_fn)(
+                            black_box(GuestContractInstance::null()),
                             black_box(args as *const FillArgs as *const ()),
                             black_box(&mut out as *mut u32 as *mut ()),
                         )

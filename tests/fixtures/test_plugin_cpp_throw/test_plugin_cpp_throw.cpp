@@ -7,7 +7,7 @@
 // (the process must survive, see test_exception_isolation_cpp).
 //
 // The dispatch entry stored in `functions[0]` uses the polyplug native calling
-// convention `extern "C" AbiError(const void* args, void* out)`.
+// convention `AbiError(GuestContractInstance, const void* args, void* out)`.
 //
 // ABI types come from the real C++ ABI SDK header (sdks/cpp/abi/polyplug/abi.hpp)
 // so the fixture can never drift from the frozen layouts; build_all.sh passes
@@ -43,7 +43,7 @@ void throwing_impl() {
     throw std::runtime_error("intentional test exception");
 }
 
-AbiError cpp_throw_abi(const void* args, void* out) noexcept {
+AbiError cpp_throw_abi(GuestContractInstance, const void* args, void* out) noexcept {
     (void)args;
     (void)out;
     try {

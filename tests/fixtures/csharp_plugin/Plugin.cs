@@ -70,10 +70,10 @@ public static class Plugin
     {
         unsafe
         {
-            s_functions[0] = (IntPtr)(delegate* unmanaged<nint, nint, AbiError>)&Add;
-            s_functions[1] = (IntPtr)(delegate* unmanaged<nint, nint, AbiError>)&AddPrimitive;
-            s_functions[2] = (IntPtr)(delegate* unmanaged<nint, nint, AbiError>)&Version;
-            s_functions[3] = (IntPtr)(delegate* unmanaged<nint, nint, AbiError>)&Reset;
+            s_functions[0] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, AbiError>)&Add;
+            s_functions[1] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, AbiError>)&AddPrimitive;
+            s_functions[2] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, AbiError>)&Version;
+            s_functions[3] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, AbiError>)&Reset;
 
             s_functionsPin = GCHandle.Alloc(s_functions, GCHandleType.Pinned);
             s_functionsPtr = s_functionsPin.AddrOfPinnedObject();
@@ -105,7 +105,7 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly]
-    public static AbiError Add(nint args, nint result)
+    public static AbiError Add(GuestContractInstance instance, nint args, nint result)
     {
         unsafe
         {
@@ -117,7 +117,7 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly]
-    public static AbiError AddPrimitive(nint args, nint result)
+    public static AbiError AddPrimitive(GuestContractInstance instance, nint args, nint result)
     {
         unsafe
         {
@@ -129,7 +129,7 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly]
-    public static AbiError Version(nint args, nint result)
+    public static AbiError Version(GuestContractInstance instance, nint args, nint result)
     {
         unsafe
         {
@@ -143,7 +143,7 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly]
-    public static AbiError Reset(nint args, nint result)
+    public static AbiError Reset(GuestContractInstance instance, nint args, nint result)
     {
         // Deterministic guest→host log probe: routes through HostApi.Log via the
         // plugin-owned host pointer captured in PolyplugInit (the SDK stores no

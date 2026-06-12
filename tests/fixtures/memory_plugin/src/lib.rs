@@ -60,7 +60,11 @@ pub struct ZeroResult {
 /// # Safety
 /// `args` must point to a valid `FillArgs`. `out` must point to a valid `u32`.
 /// The `buf.ptr` in `FillArgs` must be valid for writes of at least `buf.cap` bytes.
-extern "C" fn memory_fill_preallocated_buffer(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn memory_fill_preallocated_buffer(
+    _instance: GuestContractInstance,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
     // SAFETY: args points to a valid FillArgs per the ABI contract.
     // out points to a valid u32 per the ABI contract.
     let fill_args: &FillArgs = unsafe { &*(args as *const FillArgs) };
@@ -108,7 +112,11 @@ extern "C" fn memory_fill_preallocated_buffer(args: *const (), out: *mut ()) -> 
 /// # Safety
 /// `args` must point to a valid `AllocArgs`. `out` must point to a valid `Buffer`.
 /// `alloc_args.host` must be a valid `HostApi` pointer.
-extern "C" fn memory_alloc_buffer_via_host(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn memory_alloc_buffer_via_host(
+    _instance: GuestContractInstance,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
     // SAFETY: args points to a valid AllocArgs per the ABI contract.
     let alloc_args: &AllocArgs = unsafe { &*(args as *const AllocArgs) };
     // SAFETY: host is a valid non-null HostApi pointer provided by the caller per ABI contract.
@@ -149,7 +157,11 @@ extern "C" fn memory_alloc_buffer_via_host(args: *const (), out: *mut ()) -> Abi
 /// # Safety
 /// `args` must point to a valid `StringView`. `out` must point to a valid `StringView`.
 /// `sv.ptr` must be valid for reads of `sv.len` bytes.
-extern "C" fn memory_echo_string_view(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn memory_echo_string_view(
+    _instance: GuestContractInstance,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
     // SAFETY: args points to a valid StringView per the ABI contract.
     let sv: StringView = unsafe { *(args as *const StringView) };
     // SAFETY: sv.ptr is valid for sv.len bytes per the ABI contract.
@@ -173,7 +185,11 @@ extern "C" fn memory_echo_string_view(args: *const (), out: *mut ()) -> AbiError
 ///
 /// # Safety
 /// `args` must point to a valid `ZeroArgs`. `out` must point to a valid `ZeroResult`.
-extern "C" fn memory_zero_length_roundtrip(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn memory_zero_length_roundtrip(
+    _instance: GuestContractInstance,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
     // SAFETY: args points to a valid ZeroArgs per the ABI contract.
     // out points to a valid ZeroResult per the ABI contract.
     let zero_args: &ZeroArgs = unsafe { &*(args as *const ZeroArgs) };
@@ -195,7 +211,11 @@ extern "C" fn memory_zero_length_roundtrip(args: *const (), out: *mut ()) -> Abi
 ///
 /// # Safety
 /// `args` must point to a valid `StringView`. `out` must point to a valid `StringView`.
-extern "C" fn memory_return_borrowed(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn memory_return_borrowed(
+    _instance: GuestContractInstance,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
     // SAFETY: args points to a valid StringView per the ABI contract.
     let sv: StringView = unsafe { *(args as *const StringView) };
     // SAFETY: out points to a valid StringView per the ABI contract.
@@ -214,7 +234,11 @@ extern "C" fn memory_return_borrowed(args: *const (), out: *mut ()) -> AbiError 
 /// `args` must point to a valid `CopyArgs`. `out` must point to a valid `Buffer`.
 /// `copy_args.host` must be a valid `HostApi` pointer and `copy_args.sv` must be
 /// valid for reads of `sv.len` bytes.
-extern "C" fn memory_return_owned(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn memory_return_owned(
+    _instance: GuestContractInstance,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
     // SAFETY: args points to a valid CopyArgs per the ABI contract.
     let copy_args: &CopyArgs = unsafe { &*(args as *const CopyArgs) };
     // SAFETY: host is a valid non-null HostApi pointer provided by the caller per ABI contract.

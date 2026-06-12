@@ -482,7 +482,7 @@ fn test_cpp_plugin_dispatch() {
 
     // SAFETY: fn_ptr is transmuted to the generic dispatch signature. Argument
     // types are enforced: AddArgs matches what cpp_test_add expects.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
     // ── 7. Call fn_ptr(args_ptr, out_ptr) — add(10, 20) → 30 ─────────────────
@@ -495,6 +495,7 @@ fn test_cpp_plugin_dispatch() {
     // SAFETY: args is a valid AddArgs; out is a valid u32 location.
     let call_result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -682,12 +683,13 @@ fn test_exception_isolation_cpp() {
     // SAFETY: functions[0] is the cpp_throw_abi with noexcept wrapper
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr layout matches the target function signature per ABI contract.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
     // SAFETY: args and out are valid
     let call_result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )

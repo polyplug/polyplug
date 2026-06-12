@@ -40,7 +40,11 @@ pub struct ChainArgs {
 /// # Safety
 /// `args` must point to a valid `MessageArgs` carrying a live HostApi.
 /// `out` must point to a valid `AbiError`.
-extern "C" fn error_return_with_message(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn error_return_with_message(
+    _instance: GuestContractInstance,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
     // SAFETY: args points to MessageArgs per the ABI contract.
     let message_args: &MessageArgs = unsafe { &*(args as *const MessageArgs) };
     // SAFETY: message_args.host is a valid HostApi pointer provided by the caller.
@@ -79,7 +83,11 @@ extern "C" fn error_return_with_message(args: *const (), out: *mut ()) -> AbiErr
 ///
 /// # Safety
 /// `_args` and `_out` are ignored but must follow standard ABI conventions.
-extern "C" fn error_panic(_args: *const (), _out: *mut ()) -> AbiError {
+extern "C" fn error_panic(
+    _instance: GuestContractInstance,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
     let result: Result<(), Box<dyn core::any::Any + Send>> = std::panic::catch_unwind(|| {
         panic!("intentional error_plugin panic");
     });
@@ -99,7 +107,11 @@ extern "C" fn error_panic(_args: *const (), _out: *mut ()) -> AbiError {
 ///
 /// # Safety
 /// `args` must point to a valid `ChainArgs`. `out` must point to a valid `AbiError`.
-extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn error_chain_propagate(
+    _instance: GuestContractInstance,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
     // SAFETY: args points to ChainArgs per the ABI contract.
     let chain_args: &ChainArgs = unsafe { &*(args as *const ChainArgs) };
     // SAFETY: chain_args.host is a valid HostApi pointer provided by the host runtime.
@@ -136,11 +148,20 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
                     .functions
                     .add(chain_args.target_fn_id as usize)
             };
-            // SAFETY: Transmuted to generic dispatch signature; types enforced by generated callers.
-            let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-                unsafe { core::mem::transmute(fn_ptr) };
-            // SAFETY: null args/out is valid for fns that don't require them.
-            unsafe { dispatch_fn(core::ptr::null(), core::ptr::null_mut()) }
+            // SAFETY: Transmuted to the native dispatch signature; types enforced by generated callers.
+            let dispatch_fn: unsafe extern "C" fn(
+                GuestContractInstance,
+                *const (),
+                *mut (),
+            ) -> AbiError = unsafe { core::mem::transmute(fn_ptr) };
+            // SAFETY: null instance/args/out is valid for fns that don't require them.
+            unsafe {
+                dispatch_fn(
+                    GuestContractInstance::null(),
+                    core::ptr::null(),
+                    core::ptr::null_mut(),
+                )
+            }
         }
     };
     // SAFETY: out points to a valid AbiError per the ABI contract.
