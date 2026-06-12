@@ -29,10 +29,10 @@ polyplug is designed for **zero-overhead hot path calls**. The architecture ensu
 │          *const GuestContractInterface (no RAII guard)           │
 │                                                                  │
 │   Hot path (per call):                                           │
-│   3. interface.functions[fn_id](args, out)                      │
+│   3. interface.functions[fn_id](instance, args, out)            │
 │      └─> Direct indirect call                                   │
 │                                                                  │
-│   Total overhead: ~2.3 ns measured (native guests); VM guests    │
+│   Total overhead: ~2.4 ns measured (native guests); VM guests    │
 │   add tens of ns to µs depending on language — see the           │
 │   cross-language matrix below                                    │
 │                                                                  │
@@ -304,7 +304,7 @@ explicitly wants to pick up a swapped-in version.
 
 | Operation | Cost | Impact |
 |-----------|------|--------|
-| Cached interface pointer (the hot path) | ~2 ns dispatch | Keeps serving the version it resolved (valid while the bundle is loaded) |
+| Cached interface pointer (the hot path) | ~2.4 ns dispatch | Keeps serving the version it resolved (valid while the bundle is loaded) |
 | Re-find + re-resolve | ~20-30 ns (`amortization/find_and_resolve` measures ~22 ns) | Picks up the swapped-in interface |
 
 For typical plugin calls (>1µs), even an explicit re-resolve every call is <5%.
@@ -365,11 +365,11 @@ the Rust and C++ polyplug arms is the plugin's source language.
 
 | Arm | Mechanism | ns/call | Throughput | vs floor |
 |---|---|---|---|---|
-| `native/inline_never` | direct Rust call, `#[inline(never)]`, no ABI boundary | ~1.1–1.5 ns | ~650–900 M/s | 1.0× (floor) |
-| `ffi/by_value` | raw `dlsym` `extern "C" inc(u32)->u32`, by value | ~1.8–2.0 ns | ~500–550 M/s | ~1.5× |
-| `native/abi_marshalled` | ptr-in / ptr-out ABI convention, **statically linked** | ~2.1 ns | ~480 M/s | ~1.6× |
-| `polyplug/dispatch` | **resolved contract dispatch over a loaded Rust `.so`** | ~2.3 ns | ~430 M/s | ~1.8× |
-| `polyplug/dispatch_cpp` | the same, dispatching a **C++**-authored plugin | ~2.5 ns | ~400 M/s | ~1.9× |
+| `native/inline_never` | direct Rust call, `#[inline(never)]`, no ABI boundary | ~1.1 ns | ~920 M/s | 1.0× (floor) |
+| `ffi/by_value` | raw `dlsym` `extern "C" inc(u32)->u32`, by value | ~2.0 ns | ~515 M/s | ~1.8× |
+| `native/abi_marshalled` | instance + ptr-in / ptr-out ABI convention, **statically linked** | ~2.2 ns | ~450 M/s | ~2.1× |
+| `polyplug/dispatch` | **resolved contract dispatch over a loaded Rust `.so`** | ~2.4 ns | ~415 M/s | ~2.2× |
+| `polyplug/dispatch_cpp` | the same, dispatching a **C++**-authored plugin | ~2.6 ns | ~385 M/s | ~2.4× |
 
 _(Numbers from one developer machine — treat the **ratios**, not the absolute
 ns, as the result; they move with CPU but the ordering and gaps are stable. The
@@ -378,17 +378,17 @@ chart above is regenerated from the same run by `scripts/gen_bench_charts.py`.)_
 **What the numbers say:**
 
 - **polyplug's safe dispatch costs ~0.3–0.5 ns more than hand-rolled raw FFI**
-  (~2.3 ns vs ~1.8–2.0 ns) — roughly a single L1 cache hit — for full type-checked
+  (~2.4 ns vs ~2.0 ns) — roughly a single L1 cache hit — for full type-checked
   registration, lifecycle management, hot-reload, and lock-free epoch-guarded
   unload safety.
 - **Most of that gap is the calling convention, not dispatch.** The
-  `abi_marshalled` arm pays 2.1 ns with *no dynamic library at all*: passing a
-  struct by pointer and writing the result through an out-pointer is inherently
-  a touch more than passing a `u32` in a register. Crossing the `.so` boundary
-  on top of that adds only ~0.2 ns.
-- Both FFI paths are within **~2×** of a function call the compiler is *forbidden
-  to inline*. At **~430 million calls/second**, the safety boundary is free for
-  any workload that does real work per call.
+  `abi_marshalled` arm pays ~2.2 ns with *no dynamic library at all*: passing the
+  instance handle plus a struct by pointer and writing the result through an
+  out-pointer is inherently a touch more than passing a `u32` in a register.
+  Crossing the `.so` boundary on top of that adds only ~0.2 ns.
+- Both FFI paths land within **~2–2.5×** of a function call the compiler is
+  *forbidden to inline*. At **~415 million calls/second**, the safety boundary is
+  free for any workload that does real work per call.
 
 The honest framing: a *direct* call (arm 1) is genuinely cheaper — it has no
 ABI boundary — and we don't claim parity with it. The real-world comparison is
@@ -821,7 +821,7 @@ compiles `noop_dispatch` exactly **once** before the timed loop (caching a
   cached fast path (~60 ns) — because an *uncontended* GIL re-attach is nearly
   free, so the dominant cost is the Python function call itself, not the GIL.
 - The gap the old myth implied (a multi-µs "GIL tax") **does not exist** on this
-  path; warm Python guest dispatch is ~56-60 ns, and batching many calls under
+  path; warm Python guest dispatch is ~56-62 ns, and batching many calls under
   one attach amortizes the attach to ~27-28 ns/call.
 
 ### .NET (CLR Guest Plugins)
