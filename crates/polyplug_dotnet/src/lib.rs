@@ -6,6 +6,8 @@ pub mod ffi;
 pub mod version;
 pub use config::DotnetConfig;
 pub use config::HostfxrLocation;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::StringView;
 
@@ -352,18 +354,29 @@ impl BundleLoader for DotnetLoader {
         runtime.push_init_bundle_id(bundle_id);
 
         // SAFETY: managed_init is a valid fn ptr from CLR. host_interface and ctx are non-null and valid.
-        // InitFn signature: (host, ctx) -> u32
+        // InitFn signature: (host, ctx) -> AbiError (canonical 24-byte struct, same as every generator).
         // The HostApi pointer is passed directly (self-passing pattern).
-        let result: u32 = unsafe { managed_init(host_interface, &ctx) };
+        let result: AbiError = unsafe { managed_init(host_interface, &ctx) };
 
         // Pop bundle_id from the init stack after init completes (always, including
         // the error path) so the stack does not leak an entry.
         runtime.pop_init_bundle_id();
 
-        if result != 0 {
+        if result.code != AbiErrorCode::Ok as u32 {
+            // Read the canonical AbiError message view if the guest provided one;
+            // otherwise report the bare code.
+            let error: String = if result.message.ptr.is_null() {
+                format!("PolyplugInit returned error code {}", result.code)
+            } else {
+                // SAFETY: per the ABI contract a non-null message.ptr points to
+                // message.len bytes of UTF-8 valid for the duration of this call.
+                let bytes: &[u8] =
+                    unsafe { core::slice::from_raw_parts(result.message.ptr, result.message.len) };
+                String::from_utf8_lossy(bytes).into_owned()
+            };
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name,
-                error: format!("PolyplugInit returned {result}"),
+                error,
             }));
         }
 

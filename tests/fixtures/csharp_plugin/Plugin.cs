@@ -154,12 +154,12 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly(EntryPoint = "PolyplugInit")]
-    public static uint PolyplugInit(nint hostPtr, nint ctxPtr)
+    public static AbiError PolyplugInit(nint hostPtr, nint ctxPtr)
     {
         unsafe
         {
             if (hostPtr == nint.Zero)
-                return 1;
+                return new AbiError { Code = (uint)AbiErrorCode.Generic };
 
             // Capture the host pointer in PLUGIN-OWNED state for the Reset log
             // probe — the guest SDK holds no process-wide host storage.
@@ -172,8 +172,8 @@ public static class Plugin
             {
                 var registerContract =
                     (delegate* unmanaged[Cdecl]<nint, nint, nint, AbiError>)host->RegisterGuestContract;
-                AbiError result = registerContract((nint)host, (nint)descPtr, (nint)ifacePtr);
-                return (uint)result.Code;
+                // Surface the canonical AbiError straight through (code + message).
+                return registerContract((nint)host, (nint)descPtr, (nint)ifacePtr);
             }
         }
     }

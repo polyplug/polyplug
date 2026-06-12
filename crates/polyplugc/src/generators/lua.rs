@@ -334,14 +334,15 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     out.push_str("\n-- Registration entry point called by the LuaLoader.\n");
     out.push_str("function polyplug_init(host_ptr, ctx_ptr)\n");
     out.push_str("    if host_ptr == nil or ctx_ptr == nil then\n");
-    out.push_str("        return polyplug_guest.AbiErrorCode.Generic\n");
+    out.push_str("        return { code = polyplug_guest.AbiErrorCode.Generic, message = \"null host or ctx pointer in polyplug_init\" }\n");
     out.push_str("    end\n");
     out.push_str("    polyplug_guest.store_host_interface(host_ptr)\n");
     for (plugin_name, _contract) in &registrations {
         let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
         out.push_str(&format!("    M._register_{plugin_var}()\n"));
     }
-    out.push_str("    return polyplug_guest.AbiErrorCode.Ok\n");
+    out.push_str("    -- Canonical AbiError shape (code + message); the LuaLoader reads both.\n");
+    out.push_str("    return { code = polyplug_guest.AbiErrorCode.Ok }\n");
     out.push_str("end\n\n");
 
     out.push_str("return M\n");

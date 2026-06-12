@@ -27,13 +27,17 @@ use crate::config::HostfxrLocation;
 /// Uses `extern "system"` because `netcorehost::ManagedFunction<F>` requires `F: ManagedFnPtr`
 /// which requires `<F as FnPtr>::Abi == System`. On Linux/macOS `"system"` is identical to `"C"`.
 ///
-/// New ABI signature: (host, ctx) -> u32
+/// Canonical ABI signature: `(host, ctx) -> AbiError`
 /// - host: HostApi pointer (self-passing pattern)
 /// - ctx: BundleInitContext with bundle_path, bundle_id
+/// - returns the canonical 24-byte `AbiError` (code + message StringView) by
+///   value, identical to every other generator's `polyplug_init`. The C#
+///   `[UnmanagedCallersOnly]` cdecl thunk returns the struct via the platform
+///   C ABI (sret), which `extern "system"` matches on every supported target.
 pub(crate) type InitFn = unsafe extern "system" fn(
     *const polyplug_abi::HostApi,
     *const polyplug_abi::BundleInitContext,
-) -> u32;
+) -> polyplug_abi::types::AbiError;
 
 /// Embedded bytes of the managed byte-load bridge assembly, staged by `build.rs` into
 /// `OUT_DIR/byte_bridge.dll`. When the .NET SDK is unavailable at build time the staged file
@@ -475,7 +479,7 @@ impl DotnetContext {
             }));
         }
         // SAFETY: a non-null return is the native entry of the guest's `[UnmanagedCallersOnly]`
-        // PolyplugInit, whose ABI matches `InitFn` (host, ctx) -> u32. Transmuting a raw fn
+        // PolyplugInit, whose ABI matches `InitFn` (host, ctx) -> AbiError. Transmuting a raw fn
         // pointer of identical ABI is sound; the CLR keeps the method alive for the run.
         let init_fn: InitFn =
             unsafe { core::mem::transmute::<*const core::ffi::c_void, InitFn>(raw) };
@@ -518,7 +522,7 @@ impl DotnetContext {
             }));
         }
         // SAFETY: a non-null return is the native entry of the guest's `[UnmanagedCallersOnly]`
-        // PolyplugInit, whose ABI matches `InitFn` (host, ctx) -> u32. Transmuting a raw fn
+        // PolyplugInit, whose ABI matches `InitFn` (host, ctx) -> AbiError. Transmuting a raw fn
         // pointer of identical ABI is sound; the ALC keeps the method alive until Unload.
         let init_fn: InitFn =
             unsafe { core::mem::transmute::<*const core::ffi::c_void, InitFn>(raw) };

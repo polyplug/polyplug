@@ -325,8 +325,9 @@ unsafe extern "C" fn lua_dispatch(
 
 /// Lua plugin loader — loads Lua plugin bundles via the embedded LuaJIT VM.
 ///
-/// The Lua script must define a global function `polyplug_init(registrar_ptr: integer)`
-/// which populates `_G._polyplug_handlers` with plugin metadata and function tables.
+/// The Lua script must define a global function `polyplug_init(host_ptr, ctx_ptr)`
+/// which populates `_G._polyplug_handlers` with plugin metadata and function tables
+/// and returns the canonical `AbiError` shape (a `{ code, message }` table).
 pub struct LuaLoader {
     /// Configuration for this loader instance.
     pub config: LuaConfig,
@@ -755,21 +756,29 @@ impl LuaLoader {
             })
         })?;
 
-        // Honor the AbiError code returned by polyplug_init. Generated guests
-        // return an AbiErrorCode number (Ok = 0); handler-table-only fixtures
-        // return nothing (nil), which is treated as success. A non-zero code
-        // means the guest refused to initialize — fail the load with that code
-        // instead of silently treating the bundle as loaded.
-        let init_code: u32 = match &init_value {
-            Value::Integer(code) => *code as u32,
-            Value::Number(code) => *code as u32,
-            Value::Table(t) => t.get::<u32>("code").unwrap_or(0_u32),
-            _ => 0_u32,
+        // Honor the AbiError returned by polyplug_init. Generated guests return
+        // the canonical AbiError shape — a `{ code, message }` table (Ok = 0).
+        // Handler-table-only fixtures return nothing (nil), treated as success;
+        // a bare numeric code is also accepted for backward tolerance. A non-zero
+        // code means the guest refused to initialize — fail the load, surfacing
+        // the guest's own `message` when present rather than just the code.
+        let (init_code, init_message): (u32, Option<String>) = match &init_value {
+            Value::Integer(code) => (*code as u32, None),
+            Value::Number(code) => (*code as u32, None),
+            Value::Table(t) => (
+                t.get::<u32>("code").unwrap_or(0_u32),
+                t.get::<String>("message").ok().filter(|s| !s.is_empty()),
+            ),
+            _ => (0_u32, None),
         };
         if init_code != AbiErrorCode::Ok as u32 {
+            let error: String = match init_message {
+                Some(msg) => msg,
+                None => format!("Lua polyplug_init returned error code {}", init_code),
+            };
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.clone(),
-                error: format!("Lua polyplug_init returned error code {}", init_code),
+                error,
             }));
         }
 

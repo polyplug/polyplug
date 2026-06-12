@@ -10,8 +10,9 @@ namespace encoder;
 
 public static class Plugin {
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "polyplug_init")]
-    public static AbiErrorCode PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {
-        if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;
+    public static AbiError PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {
+        if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero)
+            return new AbiError { Code = (uint)AbiErrorCode.Generic, Message = StringViewHelper.StaticMessage("null host or ctx pointer in polyplug_init") };
         // No process-wide host storage: the host pointer reaches each
         // implementation through CreateInstance -> author factory.
         System.Threading.Thread.BeginThreadAffinity();
@@ -32,16 +33,16 @@ public static class Plugin {
                 var host = (HostApi*)hostPtr;
                 var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;
                 var err_encoder = registerFn(hostPtr, &desc_encoder, interfacePtr_encoder);
-                if (err_encoder.Code != (uint)AbiErrorCode.Ok) return (AbiErrorCode)err_encoder.Code;
+                if (err_encoder.Code != (uint)AbiErrorCode.Ok) return err_encoder;
             }
             } finally {
                 nameHandle_encoder.Free();
                 contractHandle_encoder.Free();
             }
-            return AbiErrorCode.Ok;
+            return new AbiError { Code = (uint)AbiErrorCode.Ok };
         } // unsafe
         } catch {
-            return AbiErrorCode.Panic;
+            return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = StringViewHelper.StaticMessage("plugin panicked") };
         } finally {
             System.Threading.Thread.EndThreadAffinity();
         }

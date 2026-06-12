@@ -884,8 +884,9 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
 
     out.push_str("public static class Plugin {\n");
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = \"polyplug_init\")]\n");
-    out.push_str("    public static AbiErrorCode PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {\n");
-    out.push_str("        if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;\n");
+    out.push_str("    public static AbiError PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {\n");
+    out.push_str("        if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero)\n");
+    out.push_str("            return new AbiError { Code = (uint)AbiErrorCode.Generic, Message = StringViewHelper.StaticMessage(\"null host or ctx pointer in polyplug_init\") };\n");
     out.push_str("        // No process-wide host storage: the host pointer reaches each\n");
     out.push_str("        // implementation through CreateInstance -> author factory.\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
@@ -955,7 +956,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                     out.push_str(&format!(
                         "                var err_{plugin_lower} = registerFn(hostPtr, &desc_{plugin_lower}, interfacePtr_{plugin_lower});\n"
                     ));
-                    out.push_str(&format!("                if (err_{plugin_lower}.Code != (uint)AbiErrorCode.Ok) return (AbiErrorCode)err_{plugin_lower}.Code;\n"));
+                    out.push_str(&format!("                if (err_{plugin_lower}.Code != (uint)AbiErrorCode.Ok) return err_{plugin_lower};\n"));
                     out.push_str("            }\n");
                     out.push_str("            } finally {\n");
                     out.push_str(&format!(
@@ -1012,7 +1013,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "                var err_{lower} = registerFn(hostPtr, &desc_{lower}, interfacePtr_{lower});\n"
             ));
-            out.push_str(&format!("                if (err_{lower}.Code != (uint)AbiErrorCode.Ok) return (AbiErrorCode)err_{lower}.Code;\n"));
+            out.push_str(&format!("                if (err_{lower}.Code != (uint)AbiErrorCode.Ok) return err_{lower};\n"));
             out.push_str("            }\n");
             out.push_str("            } finally {\n");
             out.push_str(&format!("                nameHandle_{lower}.Free();\n"));
@@ -1021,10 +1022,10 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
         }
     }
 
-    out.push_str("            return AbiErrorCode.Ok;\n");
+    out.push_str("            return new AbiError { Code = (uint)AbiErrorCode.Ok };\n");
     out.push_str("        } // unsafe\n");
     out.push_str("        } catch {\n");
-    out.push_str("            return AbiErrorCode.Panic;\n");
+    out.push_str("            return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = StringViewHelper.StaticMessage(\"plugin panicked\") };\n");
     out.push_str("        } finally {\n");
     out.push_str("            System.Threading.Thread.EndThreadAffinity();\n");
     out.push_str("        }\n");

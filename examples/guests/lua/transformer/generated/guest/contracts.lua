@@ -40,11 +40,12 @@ end
 -- Registration entry point called by the LuaLoader.
 function polyplug_init(host_ptr, ctx_ptr)
     if host_ptr == nil or ctx_ptr == nil then
-        return polyplug_guest.AbiErrorCode.Generic
+        return { code = polyplug_guest.AbiErrorCode.Generic, message = "null host or ctx pointer in polyplug_init" }
     end
     polyplug_guest.store_host_interface(host_ptr)
     M._register_TRANSFORMER()
-    return polyplug_guest.AbiErrorCode.Ok
+    -- Canonical AbiError shape (code + message); the LuaLoader reads both.
+    return { code = polyplug_guest.AbiErrorCode.Ok }
 end
 
 return M
