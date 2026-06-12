@@ -105,7 +105,9 @@ impl HostLoggerCaller {
             .unwrap_or_else(|_| string_view_null());
         let args_ptr: *const () = &message_view as *const StringView as *const ();
         let out_ptr: *mut () = core::ptr::null_mut();
-        let err: AbiError = unsafe {
+        let mut err: AbiError = AbiError::ok();
+        // SAFETY: args_ptr/out_ptr/&mut err match the host-contract ABI contract.
+        unsafe {
             match interface.dispatch_type {
                 DispatchType::Native => {
                     if interface.dispatch.native.function_count < 0_u32 + 1 {
@@ -115,24 +117,28 @@ impl HostLoggerCaller {
                     // SAFETY: Transmuting *const () to a function pointer is sound because:
                     // - Function pointers have the same size and alignment as data pointers
                     // - The interface guarantees that the function at this index is a native dispatch
-                    //   with the exact signature: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError
+                    //   with the exact signature: unsafe extern "C" fn(*const (), *const (), *mut (), *mut AbiError)
                     let dispatch_fn: unsafe extern "C" fn(
                         *const (),
                         *const (),
                         *mut (),
-                    ) -> AbiError = core::mem::transmute(fn_ptr);
+                        *mut AbiError,
+                    ) = core::mem::transmute(fn_ptr);
                     // The native thunk receives the per-instance state as its first
                     // argument and dereferences it as the implementation pointer.
-                    dispatch_fn(self.instance.data as *const (), args_ptr, out_ptr)
+                    dispatch_fn(self.instance.data as *const (), args_ptr, out_ptr, &mut err);
                 }
-                DispatchType::VirtualMachine => (interface.dispatch.vm.call)(
-                    interface.dispatch.vm.loader_data,
-                    GuestContractInstance::null(),
-                    0_u32,
-                    args_ptr,
-                    out_ptr,
-                    core::ptr::null_mut(),
-                ),
+                DispatchType::VirtualMachine => {
+                    (interface.dispatch.vm.call)(
+                        interface.dispatch.vm.loader_data,
+                        GuestContractInstance::null(),
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                        core::ptr::null_mut(),
+                        &mut err,
+                    );
+                }
             }
         };
 
@@ -183,7 +189,9 @@ impl HostLoggerCaller {
         };
         let args_ptr: *const () = &args_val as *const HostLoggerLogWithLevelArgs as *const ();
         let out_ptr: *mut () = core::ptr::null_mut();
-        let err: AbiError = unsafe {
+        let mut err: AbiError = AbiError::ok();
+        // SAFETY: args_ptr/out_ptr/&mut err match the host-contract ABI contract.
+        unsafe {
             match interface.dispatch_type {
                 DispatchType::Native => {
                     if interface.dispatch.native.function_count < 1_u32 + 1 {
@@ -193,24 +201,28 @@ impl HostLoggerCaller {
                     // SAFETY: Transmuting *const () to a function pointer is sound because:
                     // - Function pointers have the same size and alignment as data pointers
                     // - The interface guarantees that the function at this index is a native dispatch
-                    //   with the exact signature: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError
+                    //   with the exact signature: unsafe extern "C" fn(*const (), *const (), *mut (), *mut AbiError)
                     let dispatch_fn: unsafe extern "C" fn(
                         *const (),
                         *const (),
                         *mut (),
-                    ) -> AbiError = core::mem::transmute(fn_ptr);
+                        *mut AbiError,
+                    ) = core::mem::transmute(fn_ptr);
                     // The native thunk receives the per-instance state as its first
                     // argument and dereferences it as the implementation pointer.
-                    dispatch_fn(self.instance.data as *const (), args_ptr, out_ptr)
+                    dispatch_fn(self.instance.data as *const (), args_ptr, out_ptr, &mut err);
                 }
-                DispatchType::VirtualMachine => (interface.dispatch.vm.call)(
-                    interface.dispatch.vm.loader_data,
-                    GuestContractInstance::null(),
-                    1_u32,
-                    args_ptr,
-                    out_ptr,
-                    core::ptr::null_mut(),
-                ),
+                DispatchType::VirtualMachine => {
+                    (interface.dispatch.vm.call)(
+                        interface.dispatch.vm.loader_data,
+                        GuestContractInstance::null(),
+                        1_u32,
+                        args_ptr,
+                        out_ptr,
+                        core::ptr::null_mut(),
+                        &mut err,
+                    );
+                }
             }
         };
 

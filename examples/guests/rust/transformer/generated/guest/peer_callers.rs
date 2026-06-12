@@ -88,8 +88,10 @@ impl PipelineValidatorContractPeer {
         // SAFETY: interface is non-null (checked above) and points to a valid
         // GuestContractInterface produced by resolve_guest_contract.
         // Route creation through the host so the runtime tracks the instance.
-        let created: GuestContractInstance =
-            unsafe { (iface_api.create_guest_instance)(host, interface, core::ptr::null()) };
+        let mut created: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
+            (iface_api.create_guest_instance)(host, interface, core::ptr::null(), &mut created);
+        };
         // Stamp the peer contract id so `host->call_guest_method` routes by it
         // even when a stateless peer's create_instance returns a null handle
         // (null contract_id). The host-mediated path keys routing on contract_id.
@@ -135,7 +137,9 @@ impl PipelineValidatorContractPeer {
             &mut out_val as *mut StringView as *mut core::ffi::c_void;
         // SAFETY: host is non-null (set in resolve()); self.host is stored for the
         // lifetime of the wrapper. instance and args_ptr/out_ptr match the ABI.
-        let err: AbiError = unsafe {
+        let mut err: AbiError = AbiError::ok();
+        // SAFETY: host is non-null; instance and args_ptr/out_ptr/&mut err match the ABI.
+        unsafe {
             let iface_api: &HostApi = &*self.host;
             (iface_api.call_guest_method)(
                 self.host,
@@ -144,7 +148,8 @@ impl PipelineValidatorContractPeer {
                 args_ptr as *const core::ffi::c_void,
                 out_ptr,
                 &mut self.arena as *mut CallArena,
-            )
+                &mut err,
+            );
         };
         if err.code != AbiErrorCode::Ok as u32 {
             let message: String = if err.message.ptr.is_null() || err.message.len == 0 {

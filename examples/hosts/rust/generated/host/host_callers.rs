@@ -93,9 +93,10 @@ impl PipelineDecoderContract {
         // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        let instance: GuestContractInstance = unsafe {
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
             let host_api: &HostApi = host.as_ref()?;
-            (host_api.create_guest_instance)(host, interface, core::ptr::null())
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
@@ -130,9 +131,16 @@ impl PipelineDecoderContract {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
-        self.instance = unsafe {
-            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null())
+        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
+            (host_api.create_guest_instance)(
+                self.host,
+                self.interface,
+                core::ptr::null(),
+                &mut new_instance,
+            );
         };
+        self.instance = new_instance;
     }
 
     /// Call `decode` (function_id=0)
@@ -152,28 +160,31 @@ impl PipelineDecoderContract {
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
-        let err: AbiError = unsafe {
+        let mut err: AbiError = AbiError::ok();
+        // SAFETY: args_ptr/out_ptr/&mut err match the ABI contract; instance is valid.
+        unsafe {
             match interface.dispatch_type {
                 DispatchType::Native => {
                     if 0_u32 >= interface.dispatch.native.function_count {
-                        AbiError {
+                        err = AbiError {
                             code: AbiErrorCode::FunctionNotAvailable as u32,
                             message: polyplug_abi::string_view_from_static(
                                 b"function not available in interface",
                             ),
-                        }
+                        };
                     } else {
                         let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
                         // - The interface guarantees that the function at this index is a native dispatch function
-                        //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
+                        //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)
                         let dispatch_fn: unsafe extern "C" fn(
                             GuestContractInstance,
                             *const (),
                             *mut (),
-                        ) -> AbiError = core::mem::transmute(fn_ptr);
-                        dispatch_fn(self.instance, args_ptr, out_ptr)
+                            *mut AbiError,
+                        ) = core::mem::transmute(fn_ptr);
+                        dispatch_fn(self.instance, args_ptr, out_ptr, &mut err);
                     }
                 }
                 DispatchType::VirtualMachine => {
@@ -184,7 +195,8 @@ impl PipelineDecoderContract {
                         args_ptr,
                         out_ptr,
                         &mut self.arena as *mut CallArena,
-                    )
+                        &mut err,
+                    );
                 }
             }
         };
@@ -282,9 +294,10 @@ impl DataTransformerContract {
         // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        let instance: GuestContractInstance = unsafe {
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
             let host_api: &HostApi = host.as_ref()?;
-            (host_api.create_guest_instance)(host, interface, core::ptr::null())
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
@@ -319,9 +332,16 @@ impl DataTransformerContract {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
-        self.instance = unsafe {
-            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null())
+        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
+            (host_api.create_guest_instance)(
+                self.host,
+                self.interface,
+                core::ptr::null(),
+                &mut new_instance,
+            );
         };
+        self.instance = new_instance;
     }
 
     /// Call `transform` (function_id=0)
@@ -341,28 +361,31 @@ impl DataTransformerContract {
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
-        let err: AbiError = unsafe {
+        let mut err: AbiError = AbiError::ok();
+        // SAFETY: args_ptr/out_ptr/&mut err match the ABI contract; instance is valid.
+        unsafe {
             match interface.dispatch_type {
                 DispatchType::Native => {
                     if 0_u32 >= interface.dispatch.native.function_count {
-                        AbiError {
+                        err = AbiError {
                             code: AbiErrorCode::FunctionNotAvailable as u32,
                             message: polyplug_abi::string_view_from_static(
                                 b"function not available in interface",
                             ),
-                        }
+                        };
                     } else {
                         let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
                         // - The interface guarantees that the function at this index is a native dispatch function
-                        //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
+                        //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)
                         let dispatch_fn: unsafe extern "C" fn(
                             GuestContractInstance,
                             *const (),
                             *mut (),
-                        ) -> AbiError = core::mem::transmute(fn_ptr);
-                        dispatch_fn(self.instance, args_ptr, out_ptr)
+                            *mut AbiError,
+                        ) = core::mem::transmute(fn_ptr);
+                        dispatch_fn(self.instance, args_ptr, out_ptr, &mut err);
                     }
                 }
                 DispatchType::VirtualMachine => {
@@ -373,7 +396,8 @@ impl DataTransformerContract {
                         args_ptr,
                         out_ptr,
                         &mut self.arena as *mut CallArena,
-                    )
+                        &mut err,
+                    );
                 }
             }
         };
@@ -471,9 +495,10 @@ impl PipelineEncoderContract {
         // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        let instance: GuestContractInstance = unsafe {
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
             let host_api: &HostApi = host.as_ref()?;
-            (host_api.create_guest_instance)(host, interface, core::ptr::null())
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
@@ -508,9 +533,16 @@ impl PipelineEncoderContract {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
-        self.instance = unsafe {
-            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null())
+        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
+            (host_api.create_guest_instance)(
+                self.host,
+                self.interface,
+                core::ptr::null(),
+                &mut new_instance,
+            );
         };
+        self.instance = new_instance;
     }
 
     /// Call `encode` (function_id=0)
@@ -530,28 +562,31 @@ impl PipelineEncoderContract {
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
-        let err: AbiError = unsafe {
+        let mut err: AbiError = AbiError::ok();
+        // SAFETY: args_ptr/out_ptr/&mut err match the ABI contract; instance is valid.
+        unsafe {
             match interface.dispatch_type {
                 DispatchType::Native => {
                     if 0_u32 >= interface.dispatch.native.function_count {
-                        AbiError {
+                        err = AbiError {
                             code: AbiErrorCode::FunctionNotAvailable as u32,
                             message: polyplug_abi::string_view_from_static(
                                 b"function not available in interface",
                             ),
-                        }
+                        };
                     } else {
                         let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
                         // - The interface guarantees that the function at this index is a native dispatch function
-                        //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
+                        //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)
                         let dispatch_fn: unsafe extern "C" fn(
                             GuestContractInstance,
                             *const (),
                             *mut (),
-                        ) -> AbiError = core::mem::transmute(fn_ptr);
-                        dispatch_fn(self.instance, args_ptr, out_ptr)
+                            *mut AbiError,
+                        ) = core::mem::transmute(fn_ptr);
+                        dispatch_fn(self.instance, args_ptr, out_ptr, &mut err);
                     }
                 }
                 DispatchType::VirtualMachine => {
@@ -562,7 +597,8 @@ impl PipelineEncoderContract {
                         args_ptr,
                         out_ptr,
                         &mut self.arena as *mut CallArena,
-                    )
+                        &mut err,
+                    );
                 }
             }
         };
@@ -660,9 +696,10 @@ impl DataReporterContract {
         // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        let instance: GuestContractInstance = unsafe {
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
             let host_api: &HostApi = host.as_ref()?;
-            (host_api.create_guest_instance)(host, interface, core::ptr::null())
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
@@ -697,9 +734,16 @@ impl DataReporterContract {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
-        self.instance = unsafe {
-            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null())
+        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
+            (host_api.create_guest_instance)(
+                self.host,
+                self.interface,
+                core::ptr::null(),
+                &mut new_instance,
+            );
         };
+        self.instance = new_instance;
     }
 
     /// Call `report` (function_id=0)
@@ -719,28 +763,31 @@ impl DataReporterContract {
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
-        let err: AbiError = unsafe {
+        let mut err: AbiError = AbiError::ok();
+        // SAFETY: args_ptr/out_ptr/&mut err match the ABI contract; instance is valid.
+        unsafe {
             match interface.dispatch_type {
                 DispatchType::Native => {
                     if 0_u32 >= interface.dispatch.native.function_count {
-                        AbiError {
+                        err = AbiError {
                             code: AbiErrorCode::FunctionNotAvailable as u32,
                             message: polyplug_abi::string_view_from_static(
                                 b"function not available in interface",
                             ),
-                        }
+                        };
                     } else {
                         let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
                         // - The interface guarantees that the function at this index is a native dispatch function
-                        //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
+                        //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)
                         let dispatch_fn: unsafe extern "C" fn(
                             GuestContractInstance,
                             *const (),
                             *mut (),
-                        ) -> AbiError = core::mem::transmute(fn_ptr);
-                        dispatch_fn(self.instance, args_ptr, out_ptr)
+                            *mut AbiError,
+                        ) = core::mem::transmute(fn_ptr);
+                        dispatch_fn(self.instance, args_ptr, out_ptr, &mut err);
                     }
                 }
                 DispatchType::VirtualMachine => {
@@ -751,7 +798,8 @@ impl DataReporterContract {
                         args_ptr,
                         out_ptr,
                         &mut self.arena as *mut CallArena,
-                    )
+                        &mut err,
+                    );
                 }
             }
         };
@@ -849,9 +897,10 @@ impl PipelineValidatorContract {
         // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        let instance: GuestContractInstance = unsafe {
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
             let host_api: &HostApi = host.as_ref()?;
-            (host_api.create_guest_instance)(host, interface, core::ptr::null())
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
@@ -886,9 +935,16 @@ impl PipelineValidatorContract {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
-        self.instance = unsafe {
-            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null())
+        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
+            (host_api.create_guest_instance)(
+                self.host,
+                self.interface,
+                core::ptr::null(),
+                &mut new_instance,
+            );
         };
+        self.instance = new_instance;
     }
 
     /// Call `validate` (function_id=0)
@@ -908,28 +964,31 @@ impl PipelineValidatorContract {
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
-        let err: AbiError = unsafe {
+        let mut err: AbiError = AbiError::ok();
+        // SAFETY: args_ptr/out_ptr/&mut err match the ABI contract; instance is valid.
+        unsafe {
             match interface.dispatch_type {
                 DispatchType::Native => {
                     if 0_u32 >= interface.dispatch.native.function_count {
-                        AbiError {
+                        err = AbiError {
                             code: AbiErrorCode::FunctionNotAvailable as u32,
                             message: polyplug_abi::string_view_from_static(
                                 b"function not available in interface",
                             ),
-                        }
+                        };
                     } else {
                         let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
                         // - The interface guarantees that the function at this index is a native dispatch function
-                        //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
+                        //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)
                         let dispatch_fn: unsafe extern "C" fn(
                             GuestContractInstance,
                             *const (),
                             *mut (),
-                        ) -> AbiError = core::mem::transmute(fn_ptr);
-                        dispatch_fn(self.instance, args_ptr, out_ptr)
+                            *mut AbiError,
+                        ) = core::mem::transmute(fn_ptr);
+                        dispatch_fn(self.instance, args_ptr, out_ptr, &mut err);
                     }
                 }
                 DispatchType::VirtualMachine => {
@@ -940,7 +999,8 @@ impl PipelineValidatorContract {
                         args_ptr,
                         out_ptr,
                         &mut self.arena as *mut CallArena,
-                    )
+                        &mut err,
+                    );
                 }
             }
         };

@@ -72,13 +72,21 @@ struct EncoderPluginState {
 }
 
 /// Create a new instance: calls the author factory and boxes the payload.
-/// Returns a null handle when `host` is null or the factory panics.
+/// Writes a null handle through `out_instance` when `host` is null or the factory panics.
 unsafe extern "C" fn ENCODER_create_instance(
     host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
+    out_instance: *mut GuestContractInstance,
+) {
+    if out_instance.is_null() {
+        return;
+    }
     if host.is_null() {
-        return GuestContractInstance::null();
+        // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.
+        unsafe {
+            out_instance.write(GuestContractInstance::null());
+        }
+        return;
     }
     // SAFETY: host is non-null (checked above) and valid per the ABI contract
     // for create_instance; it stays valid for the runtime's lifetime.
@@ -91,15 +99,24 @@ unsafe extern "C" fn ENCODER_create_instance(
             unsafe { polyplug_create_encoder(host_ctx) }
         })) {
             Ok(i) => i,
-            Err(_) => return GuestContractInstance::null(),
+            Err(_) => {
+                // SAFETY: out_instance is non-null and writable per the ABI contract.
+                unsafe {
+                    out_instance.write(GuestContractInstance::null());
+                }
+                return;
+            }
         };
     let state: Box<EncoderPluginState> = Box::new(EncoderPluginState {
         host: host_ctx,
         implementation,
     });
-    GuestContractInstance {
-        data: Box::into_raw(state) as *mut c_void,
-        contract_id: GuestContractId::from_u64(ENCODER_CONTRACT_ID),
+    // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.
+    unsafe {
+        out_instance.write(GuestContractInstance {
+            data: Box::into_raw(state) as *mut c_void,
+            contract_id: GuestContractId::from_u64(ENCODER_CONTRACT_ID),
+        });
     }
 }
 
@@ -124,45 +141,54 @@ extern "C" fn encoder_encode_abi(
     instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    if instance.data.is_null() {
-        return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
-            message: string_view_from_static(b"instance is null"),
-        };
-    }
-    // SAFETY: instance.data was produced by create_instance via Box::into_raw
-    // and stays valid until destroy_instance; the host never mutates it.
-    let state: &EncoderPluginState = unsafe { &*(instance.data as *const EncoderPluginState) };
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ref: &dyn PipelineEncoderGuestContract = state.implementation.as_ref();
-        if args.is_null() {
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        if instance.data.is_null() {
             return AbiError {
                 code: AbiErrorCode::InvalidPointer as u32,
-                message: string_view_from_static(b"args pointer is null"),
+                message: string_view_from_static(b"instance is null"),
             };
         }
-        if out.is_null() {
-            return AbiError {
-                code: AbiErrorCode::InvalidPointer as u32,
-                message: string_view_from_static(b"out pointer is null"),
-            };
-        }
-        // SAFETY: args is a valid *const StringView per ABI contract.
-        let result = impl_ref.encode(unsafe { *(args as *const StringView) });
-        match result {
-            Ok(val) => {
-                // SAFETY: out is a valid *mut StringView per ABI contract.
-                unsafe {
-                    std::ptr::write(out as *mut StringView, val);
-                }
-                abi_error_ok()
+        // SAFETY: instance.data was produced by create_instance via Box::into_raw
+        // and stays valid until destroy_instance; the host never mutates it.
+        let state: &EncoderPluginState = unsafe { &*(instance.data as *const EncoderPluginState) };
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let impl_ref: &dyn PipelineEncoderGuestContract = state.implementation.as_ref();
+            if args.is_null() {
+                return AbiError {
+                    code: AbiErrorCode::InvalidPointer as u32,
+                    message: string_view_from_static(b"args pointer is null"),
+                };
             }
-            Err(e) => plugin_error_to_abi_error(state.host, e),
+            if out.is_null() {
+                return AbiError {
+                    code: AbiErrorCode::InvalidPointer as u32,
+                    message: string_view_from_static(b"out pointer is null"),
+                };
+            }
+            // SAFETY: args is a valid *const StringView per ABI contract.
+            let result = impl_ref.encode(unsafe { *(args as *const StringView) });
+            match result {
+                Ok(val) => {
+                    // SAFETY: out is a valid *mut StringView per ABI contract.
+                    unsafe {
+                        std::ptr::write(out as *mut StringView, val);
+                    }
+                    abi_error_ok()
+                }
+                Err(e) => plugin_error_to_abi_error(state.host, e),
+            }
+        })) {
+            Ok(err) => err,
+            Err(_) => AbiError::panic_caught(),
         }
-    })) {
-        Ok(err) => err,
-        Err(_) => AbiError::panic_caught(),
+    })();
+    // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.
+    if !out_err.is_null() {
+        unsafe {
+            out_err.write(__result_err);
+        }
     }
 }
 

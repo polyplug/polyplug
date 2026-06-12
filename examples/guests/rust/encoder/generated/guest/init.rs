@@ -72,13 +72,18 @@ pub unsafe extern "C" fn polyplug_init(
             patch: 0,
         },
     };
-    // SAFETY: desc and interface are 'static.
-    let err_ENCODER: AbiError = unsafe {
+    // SAFETY: desc and interface are 'static; &mut err is a valid out-param.
+    let mut err_ENCODER: AbiError = AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: StringView::null(),
+    };
+    unsafe {
         (host.register_guest_contract)(
             host,
             &desc_ENCODER as *const PluginDescriptor,
             &ENCODER_INTERFACE as *const GuestContractInterface,
-        )
+            &mut err_ENCODER,
+        );
     };
     if err_ENCODER.code != AbiErrorCode::Ok as u32 {
         return err_ENCODER;

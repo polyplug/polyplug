@@ -72,13 +72,18 @@ pub unsafe extern "C" fn polyplug_init(
             patch: 0,
         },
     };
-    // SAFETY: desc and interface are 'static.
-    let err_TRANSFORMER: AbiError = unsafe {
+    // SAFETY: desc and interface are 'static; &mut err is a valid out-param.
+    let mut err_TRANSFORMER: AbiError = AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: StringView::null(),
+    };
+    unsafe {
         (host.register_guest_contract)(
             host,
             &desc_TRANSFORMER as *const PluginDescriptor,
             &TRANSFORMER_INTERFACE as *const GuestContractInterface,
-        )
+            &mut err_TRANSFORMER,
+        );
     };
     if err_TRANSFORMER.code != AbiErrorCode::Ok as u32 {
         return err_TRANSFORMER;
