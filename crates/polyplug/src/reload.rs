@@ -68,7 +68,28 @@ impl Runtime {
     /// reloads fire their own `Preparing`/`Reloaded`/`Failed` callbacks. A cascade
     /// failure does not fail the primary reload: it is logged as a warning and the
     /// caller still observes `Ok(())` for the primary bundle.
+    ///
+    /// # Concurrency & reentrancy
+    /// Reloads are serialized per `Runtime` via `reload_serialize`: concurrent
+    /// reloads run one at a time so each one's snapshot↔swap is atomic. The lock is
+    /// not reentrant, so a reload callback (`Preparing`/`Reloaded`/`Failed`) must
+    /// not synchronously trigger another reload on the same runtime — doing so
+    /// deadlocks. Cascade reloads are driven internally *after* the swap via the
+    /// lock-free `reload_bundle_with_visited`, so they are unaffected.
     pub fn reload_bundle(&self, path: &std::path::Path) -> Result<(), RuntimeError> {
+        // Serialize this reload against any other concurrent reload. A reload's
+        // pre-reload slot snapshot and the `apply_reload_swap` that consumes it
+        // straddle `loader.reload()`, so the registry `RwLock` (dropped between
+        // those steps) does not make the sequence atomic. Without this guard, two
+        // reloads of the same bundle can interleave so that one reload's snapshot
+        // goes stale and its swap retires a contract's only live slot — see the
+        // `reload_serialize` field docs. The guard is held across the entire
+        // cascade tree; the recursive `reload_bundle_with_visited` (also used for
+        // cascade dependents) never re-acquires it, so cascades cannot self-deadlock.
+        let _reload_guard: RecoveringGuard<std::sync::MutexGuard<'_, ()>> = self
+            .reload_serialize
+            .lock()
+            .recover_poisoned(self.logger, "reload");
         let mut visited: HashSet<BundleId> = HashSet::new();
         self.reload_bundle_with_visited(path, &mut visited)
     }

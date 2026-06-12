@@ -10,6 +10,7 @@
 //! - Warning emitted if Arc refs remain (informational only)
 //! - Reloaded callback fires after reload (host creates new instances)
 
+use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use core::time::Duration;
@@ -573,6 +574,125 @@ fn stress_concurrent_reload_threads_no_panic() {
     // Final interface must still be callable.
     let final_fn: extern "C" fn() -> u32 = resolve_version_fn(&rt, contract_id)
         .expect("interface must be resolvable after concurrent reloads");
+    let version: u32 = final_fn();
+    assert!(
+        version == 100_u32 || version == 200_u32,
+        "final version must be 100 or 200, got {version}"
+    );
+}
+
+/// Deterministic enforcement that concurrent reloads of the same bundle are
+/// mutually exclusive — the invariant the `reload_serialize` mutex establishes
+/// and the root cause of the historical concurrent-reload flake.
+///
+/// A reload's pre-reload slot snapshot and the `apply_reload_swap` that consumes
+/// it straddle `loader.reload()`; the registry lock is dropped between them. Two
+/// reloads of the same bundle that overlap in that window can leave one reload
+/// with a stale snapshot, whose swap then finds no freshly-registered slot for a
+/// contract the other reload already consumed, takes the retire-not-drop path,
+/// and removes the contract's only live slot from the find index — leaving a
+/// contract BOTH versions provide intermittently unresolvable.
+///
+/// The reload callback fires `Preparing` at the start of a reload's critical
+/// section and `Reloaded`/`Failed` at its end, both *inside* `reload_serialize`.
+/// We use that bracket as a probe with no production instrumentation: a shared
+/// counter is incremented on `Preparing` and decremented on `Reloaded`/`Failed`.
+/// The fixture bundle has no cascade dependents, so the callbacks bracket 1:1
+/// with no same-thread nesting. If the counter ever exceeds 1, two reloads were
+/// in their critical sections at once — the precise corrupting interleave.
+///
+/// With the mutex the counter never exceeds 1 (deterministic: a thread cannot
+/// fire `Preparing` until the previous reload fired `Reloaded`/`Failed` and
+/// released the lock) and the contract is resolvable after every reload. Without
+/// it, the counter reaches 2 under this barrier-synchronized contention and the
+/// per-round resolution intermittently fails.
+#[test]
+fn concurrent_reloads_are_mutually_exclusive() {
+    const THREADS: usize = 4_usize;
+    const ROUNDS_PER_THREAD: u32 = 50_u32;
+
+    let in_section: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0_usize));
+    let max_seen: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0_usize));
+    let overlap: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
+    let cb_in: Arc<AtomicUsize> = Arc::clone(&in_section);
+    let cb_max: Arc<AtomicUsize> = Arc::clone(&max_seen);
+    let cb_overlap: Arc<AtomicBool> = Arc::clone(&overlap);
+
+    let rt: Arc<Runtime> = Runtime::builder()
+        .config(hot_reload_config())
+        .loader(TestNativeLoader::new())
+        .on_reload(move |_ud: *mut core::ffi::c_void, phase: ReloadPhase| {
+            match phase.phase_type {
+                ReloadPhaseType::Preparing => {
+                    let now: usize = cb_in.fetch_add(1_usize, Ordering::SeqCst) + 1_usize;
+                    if now > 1_usize {
+                        cb_overlap.store(true, Ordering::SeqCst);
+                    }
+                    cb_max.fetch_max(now, Ordering::SeqCst);
+                }
+                ReloadPhaseType::Reloaded | ReloadPhaseType::Failed => {
+                    // Saturating: the manifest-validate and missing-file fast-fail
+                    // paths fire `Failed` without a preceding `Preparing`; never
+                    // underflow the counter (those paths do not occur here, but the
+                    // probe must stay sound regardless).
+                    let _: Result<usize, usize> =
+                        cb_in.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v: usize| {
+                            Some(v.saturating_sub(1_usize))
+                        });
+                }
+                _ => {}
+            }
+        })
+        .build()
+        .expect("runtime build must succeed");
+
+    rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
+        .expect("load v1");
+    let contract_id: u64 = GuestContractId::new("reload.test", 1).id();
+
+    let barrier: Arc<std::sync::Barrier> = Arc::new(std::sync::Barrier::new(THREADS));
+    let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(THREADS);
+    for t in 0_usize..THREADS {
+        let rt_t: Arc<Runtime> = Arc::clone(&rt);
+        let bar: Arc<std::sync::Barrier> = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            bar.wait();
+            for i in 0_u32..ROUNDS_PER_THREAD {
+                let so_path: PathBuf = if (i as usize + t) % 2_usize == 0_usize {
+                    v2_so_path()
+                } else {
+                    v1_so_path()
+                };
+                let _: Result<(), RuntimeError> = rt_t.reload_bundle(so_path.as_path());
+                // The contract is provided by BOTH versions, so under correct
+                // serialization the old slot is never removed from the find index
+                // (only swapped in place). It must therefore resolve after every
+                // reload, even while another thread is mid-reload.
+                assert!(
+                    resolve_version_fn(&rt_t, contract_id).is_some(),
+                    "thread {t} round {i}: contract must stay resolvable across concurrent reloads"
+                );
+            }
+        }));
+    }
+    for handle in handles {
+        handle.join().expect("reloader thread must not panic");
+    }
+
+    assert_eq!(
+        in_section.load(Ordering::SeqCst),
+        0_usize,
+        "every reload critical section must have exited"
+    );
+    assert!(
+        !overlap.load(Ordering::SeqCst),
+        "two reloads were in their critical sections at once (max concurrency = {}) — reload serialization is broken",
+        max_seen.load(Ordering::SeqCst)
+    );
+
+    let final_fn: extern "C" fn() -> u32 =
+        resolve_version_fn(&rt, contract_id).expect("final interface must resolve");
     let version: u32 = final_fn();
     assert!(
         version == 100_u32 || version == 200_u32,

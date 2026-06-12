@@ -126,6 +126,27 @@ pub struct Runtime {
     /// make the counter *larger* than this thread needs; the worst case is taking the
     /// Mutex and finding no entry for this thread (returning `0`), which is correct.
     pub(crate) active_init_count: AtomicUsize,
+    /// Serializes whole-reload sequences against one another.
+    ///
+    /// A reload is a non-atomic read-modify-write: it snapshots the bundle's
+    /// pre-reload slots, runs `loader.reload()` (which registers the new
+    /// interfaces into fresh slots), then `apply_reload_swap` consumes that
+    /// snapshot. The registry `RwLock` makes each individual step atomic, but it
+    /// is dropped between steps, so two concurrent reloads of the SAME bundle can
+    /// interleave such that one reload's snapshot goes stale — its swap then finds
+    /// no freshly-registered slot for a contract the other reload already
+    /// consumed, takes the retire-not-drop path, and removes that contract's only
+    /// live slot from the find index, leaving a contract BOTH versions provide
+    /// unresolvable. Holding this mutex across the entire `reload_bundle` call
+    /// (including its cascade tree) makes each reload's snapshot↔swap atomic with
+    /// respect to any other reload.
+    ///
+    /// Instance-owned (Rule 12): each `Runtime` has its own lock, so multiple
+    /// runtimes in one process never serialize against each other. Readers
+    /// (`find`/`resolve`/dispatch) never take this lock — they hold the registry
+    /// `RwLock` and stay fully concurrent with an in-flight reload; only
+    /// writer-vs-writer reloads serialize here.
+    pub(crate) reload_serialize: Mutex<()>,
     /// The owned HostApi handed to plugins. A `Box` gives it a stable heap
     /// address independent of where the `Runtime` value lives, so the pointer
     /// captured by plugins survives the runtime's move into its `Arc`.

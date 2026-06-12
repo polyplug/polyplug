@@ -16,6 +16,35 @@ This document uses the following terminology (current as of v1.1):
 
 Interfaces are stored in `RuntimeStore` as interface slots guarded by a single `RwLock`. On reload, the slot is swapped in place via `apply_reload_swap` under the write guard.
 
+### Concurrency model
+
+Two independent locks cooperate, with distinct jobs:
+
+- **Registry `RwLock`** (per `RuntimeStore`) — protects *readers* from observing a
+  half-swapped registry. `find` / `resolve` / dispatch take the read guard; each individual
+  reload step (`begin_reload`, registration, `apply_reload_swap`, `abort_reload`) takes the
+  write guard. The reload window (pending, unpublished slots) keeps freshly-registered
+  interfaces out of the find index until the swap reconciles them, so a concurrent reader
+  never sees two live slots for one contract.
+- **`Runtime::reload_serialize` mutex** (per `Runtime`) — protects *writers* from racing each
+  other. A reload is a non-atomic read-modify-write: it snapshots the bundle's pre-reload
+  slots, runs `loader.reload()` (which registers the new interfaces), then `apply_reload_swap`
+  consumes that snapshot. The registry lock is dropped between those steps, so two reloads of
+  the same bundle could interleave such that one reload's snapshot goes stale — its swap then
+  finds no freshly-registered slot for a contract the other reload already consumed, takes the
+  retire-not-drop path, and removes that contract's only live slot from the find index, leaving
+  a contract *both* versions provide unresolvable. `reload_bundle` holds `reload_serialize`
+  across the whole call (including the cascade tree) so each reload's snapshot↔swap is atomic
+  with respect to any other reload. The recursive cascade path does not re-acquire it, so
+  cascades cannot self-deadlock.
+
+Readers never take `reload_serialize`; they stay fully concurrent with an in-flight reload.
+Only writer-vs-writer reloads serialize. The invariant this establishes — *a contract provided
+by both the old and new versions is resolvable after every reload, under any interleaving* — is
+enforced deterministically by `concurrent_reloads_are_mutually_exclusive` in
+`crates/polyplug/tests/stress_hot_reload.rs`, which uses the reload callback bracket as a
+mutual-exclusion probe.
+
 ---
 
 ## Core Concepts
@@ -312,6 +341,19 @@ PipelineDecoder decoder(rt);  // Throws on error? Inconsistent with C++ patterns
 - Those that do must implement the callback pattern
 - Forces conscious decision to accept the complexity
 - Prevents accidental misuse where reload silently fails
+
+### 7. Why Serialize Reloads with a Dedicated Mutex?
+
+- **Atomic snapshot↔swap**: A reload's pre-reload slot snapshot and the `apply_reload_swap`
+  that consumes it straddle `loader.reload()`; the registry `RwLock` is dropped between them,
+  so the sequence is not atomic on its own
+- **Correctness over reload throughput**: Reload is a control-plane operation, not a hot path —
+  serializing writers is cheap, and it removes a class of stale-snapshot races that could
+  retire a live contract's only slot
+- **Readers stay concurrent**: The mutex guards only writer-vs-writer; `find` / `resolve` /
+  dispatch never take it, so a reload never blocks the call path
+- **Instance-owned (Rule 12)**: Each `Runtime` owns its mutex, so multiple runtimes in one
+  process never serialize against each other
 
 ---
 

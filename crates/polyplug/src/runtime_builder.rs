@@ -243,6 +243,7 @@ impl RuntimeBuilder {
             host_runtime: self.host_runtime,
             init_bundle_stack: std::sync::Mutex::new(HashMap::new()),
             active_init_count: core::sync::atomic::AtomicUsize::new(0),
+            reload_serialize: std::sync::Mutex::new(()),
         };
 
         let runtime: Arc<Runtime> = Arc::new(runtime);
