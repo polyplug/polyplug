@@ -19,13 +19,18 @@ use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
+use polyplug_abi::DispatchMechanisms;
+use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
+use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::types::Version;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
 
@@ -445,12 +450,142 @@ fn bench_ffi_find_all_empty_result(c: &mut Criterion) {
     core::mem::forget(library);
 }
 
+// ─── Synthetic-interface helpers for the registry scale sweep ─────────────────
+
+/// Stub create_instance for the synthetic sweep interfaces.
+unsafe extern "C" fn sweep_create_instance(
+    _host: *const HostApi,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Stub destroy_instance for the synthetic sweep interfaces.
+unsafe extern "C" fn sweep_destroy_instance(
+    _host: *const HostApi,
+    _instance: GuestContractInstance,
+) {
+}
+
+/// Build a leaked `'static` native interface for `contract_id` (no functions —
+/// the sweep only counts + collects handles, it never dispatches).
+fn leak_sweep_interface(contract_id: u64) -> &'static GuestContractInterface {
+    Box::leak(Box::new(GuestContractInterface {
+        contract_id: GuestContractId::from_u64(contract_id),
+        contract_version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
+        dispatch_type: DispatchType::Native,
+        create_instance: sweep_create_instance,
+        destroy_instance: sweep_destroy_instance,
+        dispatch: DispatchMechanisms {
+            native: NativeDispatch {
+                function_count: 0,
+                functions: core::ptr::null(),
+            },
+        },
+    }))
+}
+
+// ─── Benchmark: find_all scaling across registry sizes (10 / 100 / 1000) ──────
+
+/// Registers `size` distinct contracts into BENCH_REGISTRY, then times the FFI
+/// `find_all_guest_contracts` of one target contract that has a single matching
+/// provider. find_all looks the contract up by id (a HashMap probe) and then
+/// counts + collects only that contract's providers, so the per-call cost is
+/// dominated by the single-match path, not the total registry size — this sweep
+/// is the evidence for that. The result Array is host-allocated and freed each
+/// iteration so the loop does not grow.
+fn bench_ffi_find_all_registry_sweep(c: &mut Criterion) {
+    let host_interface: HostApi = build_host_interface();
+    let sizes: [u64; 3] = [10, 100, 1000];
+
+    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
+        c.benchmark_group("ffi");
+    group.throughput(Throughput::Elements(1));
+
+    for &size in &sizes {
+        // Fresh registry holding `size` distinct contracts; the LAST id is the
+        // single-match target the bench looks up.
+        BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+            *cell.borrow_mut() = Some(RuntimeStore::new());
+        });
+
+        let base_id: u64 = 0x6000_0000_0000_0000_u64;
+        for i in 0..size {
+            let interface: &'static GuestContractInterface = leak_sweep_interface(base_id + i);
+            let descriptor: PluginDescriptor = PluginDescriptor {
+                name: StringView::from_static(b"sweep_plugin"),
+                contract_name: StringView::from_static(b"sweep.contract"),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+            };
+            BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+                let borrowed = cell.borrow();
+                let registry: &RuntimeStore = borrowed.as_ref().expect("registry not initialized");
+                // SAFETY: interface is leaked ('static), valid for the registry lifetime.
+                unsafe {
+                    registry
+                        .register_guest_contract(
+                            descriptor,
+                            interface,
+                            format!("sweep.contract.{}", i),
+                            BundleId::from_u64(i),
+                        )
+                        .expect("registration should succeed");
+                }
+            });
+        }
+
+        let target_id: u64 = base_id + size - 1;
+
+        group.bench_with_input(
+            BenchmarkId::new("find_all_by_contract", format!("registry_{}", size)),
+            &target_id,
+            |b, &target_id| {
+                b.iter(|| {
+                    // SAFETY: bench_find_all_guest_contracts is backed by BENCH_REGISTRY.
+                    let arr: Array<GuestContractHandle> = unsafe {
+                        (host_interface.find_all_guest_contracts)(
+                            black_box(&host_interface as *const HostApi),
+                            black_box(target_id),
+                            black_box(0_u32),
+                        )
+                    };
+                    if !arr.items.is_null() {
+                        let size_bytes: usize =
+                            arr.len * core::mem::size_of::<GuestContractHandle>();
+                        // SAFETY: arr.items was host-allocated by bench_alloc with this size/align.
+                        unsafe {
+                            (host_interface.free)(
+                                &host_interface as *const HostApi,
+                                arr.items as *mut u8,
+                                size_bytes,
+                                arr.align,
+                            );
+                        }
+                    }
+                    black_box(arr.len);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 // ─── criterion_group / criterion_main ────────────────────────────────────────
 
 criterion_group!(
     benches,
     bench_ffi_find_all_single_match,
-    bench_ffi_find_all_empty_result
+    bench_ffi_find_all_empty_result,
+    bench_ffi_find_all_registry_sweep,
 );
 criterion_main!(benches);
 

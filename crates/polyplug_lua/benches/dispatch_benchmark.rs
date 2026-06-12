@@ -9,10 +9,19 @@
 
 use core::ffi::c_void;
 use core::hint::black_box;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use mlua::Function;
 use mlua::Lua;
+use polyplug::runtime::Runtime;
+use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::StringView;
+use polyplug_abi::runtime::Compatibility;
+use polyplug_abi::runtime::RuntimeConfig;
+use polyplug_lua::LuaConfig;
+use polyplug_lua::LuaLoader;
 use polyplug_lua::ffi::PolyplugLuaLogBridge;
 use polyplug_lua::ffi::polyplug_lua_log_trampoline;
 
@@ -276,6 +285,81 @@ fn bench_lua_log_trampoline(c: &mut Criterion) {
     group.finish();
 }
 
+/// A minimal valid Lua plugin script implementing `test.loader@1` with one
+/// no-op function — the same shape the loader's reload integration test uses.
+fn reload_plugin_script() -> &'static [u8] {
+    br#"
+local ffi = require("ffi")
+local function impl_noop(_args_ptr, _out_ptr)
+end
+function polyplug_init(_registrar_ptr, _ctx_ptr)
+    _G._polyplug_handlers = {
+        ["test.loader"] = {
+            contract_version = 1,
+            plugin_name      = "lua-reload-bench",
+            functions        = { [0] = impl_noop },
+        },
+    }
+end
+"#
+}
+
+/// Write `content` to a temp bundle directory with a `manifest.toml` naming the
+/// Lua loader. Returns the dir (kept alive) and the bundle dir path.
+fn write_temp_lua_bundle(name: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("bundle.lua"), reload_plugin_script())
+        .expect("write bundle.lua");
+    let bundle_id: u64 = polyplug_utils::bundle_id(name);
+    let manifest: String = format!(
+        "id = {}\nname = \"{}\"\nloader = \"lua\"\nfile = \"bundle.lua\"\n",
+        bundle_id, name
+    );
+    std::fs::write(dir.path().join("manifest.toml"), manifest).expect("write manifest.toml");
+    let bundle_dir: PathBuf = dir.path().to_path_buf();
+    (dir, bundle_dir)
+}
+
+/// Benchmark the Lua loader hot-reload swap path.
+///
+/// `Runtime::reload_bundle` for a Lua bundle re-reads the on-disk entry file,
+/// rebuilds (or reuses) the per-bundle Lua VM, re-runs `polyplug_init`, registers
+/// the contract, and atomically swaps the live interface (retiring the old one).
+/// This is the one-time cost a host pays to swap a Lua plugin's code WITHOUT
+/// restarting — amortized over every subsequent dispatch (see benches/README.md
+/// for the amortization curve). Hot-reload is gated on `hot_reload_enabled`.
+fn bench_lua_reload(c: &mut Criterion) {
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
+        .config(RuntimeConfig {
+            compatibility: Compatibility::Strict,
+            hot_reload_enabled: true,
+            ..Default::default()
+        })
+        .loader(LuaLoader::new(LuaConfig::default()))
+        .build()
+        .expect("runtime build must succeed");
+
+    let (_dir, bundle_dir): (tempfile::TempDir, PathBuf) =
+        write_temp_lua_bundle("lua_reload_bench");
+    runtime
+        .load_bundle(&bundle_dir)
+        .expect("initial bundle load must succeed");
+
+    let mut group = c.benchmark_group("lua_reload");
+
+    group.bench_function("hot_reload_swap", |b| {
+        b.iter(|| {
+            runtime
+                .reload_bundle(black_box(bundle_dir.as_path()))
+                .expect("reload_bundle must succeed");
+        })
+    });
+
+    group.finish();
+    // Keep the temp dir alive for the whole bench (the bundle is read on reload).
+    drop(_dir);
+}
+
 criterion_group!(
     benches,
     bench_lua_dispatch,
@@ -283,6 +367,7 @@ criterion_group!(
     bench_native_baseline,
     bench_lua_computation,
     bench_cached_dispatch,
-    bench_lua_log_trampoline
+    bench_lua_log_trampoline,
+    bench_lua_reload
 );
 criterion_main!(benches);

@@ -19,13 +19,18 @@ use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
+use polyplug_abi::DispatchMechanisms;
+use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
+use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::types::Version;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
 
@@ -403,12 +408,130 @@ fn bench_ffi_resolve_null_handle(c: &mut Criterion) {
     core::mem::forget(library);
 }
 
+// ─── Synthetic-interface helpers for the registry scale sweep ─────────────────
+
+/// Stub create_instance for the synthetic sweep interfaces.
+unsafe extern "C" fn sweep_create_instance(
+    _host: *const HostApi,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Stub destroy_instance for the synthetic sweep interfaces.
+unsafe extern "C" fn sweep_destroy_instance(
+    _host: *const HostApi,
+    _instance: GuestContractInstance,
+) {
+}
+
+/// Build a leaked `'static` native interface for `contract_id` (no functions —
+/// the sweep only resolves the interface pointer, it never dispatches).
+fn leak_sweep_interface(contract_id: u64) -> &'static GuestContractInterface {
+    Box::leak(Box::new(GuestContractInterface {
+        contract_id: GuestContractId::from_u64(contract_id),
+        contract_version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
+        dispatch_type: DispatchType::Native,
+        create_instance: sweep_create_instance,
+        destroy_instance: sweep_destroy_instance,
+        dispatch: DispatchMechanisms {
+            native: NativeDispatch {
+                function_count: 0,
+                functions: core::ptr::null(),
+            },
+        },
+    }))
+}
+
+// ─── Benchmark: resolve scaling across registry sizes (10 / 100 / 1000) ───────
+
+/// Registers `size` distinct contracts into BENCH_REGISTRY, then times the FFI
+/// `resolve_guest_contract` of a middle handle. `resolve` is a generation-checked
+/// slot index, so the cost should be flat across registry sizes — this sweep is
+/// the evidence that resolve does NOT scale with the number of registered
+/// contracts (unlike a linear scan would).
+fn bench_ffi_resolve_registry_sweep(c: &mut Criterion) {
+    let host_interface: HostApi = build_host_interface();
+    let sizes: [u64; 3] = [10, 100, 1000];
+
+    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
+        c.benchmark_group("ffi");
+    group.throughput(Throughput::Elements(1));
+
+    for &size in &sizes {
+        // Fresh registry holding exactly `size` distinct contracts.
+        BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+            *cell.borrow_mut() = Some(RuntimeStore::new());
+        });
+
+        let base_id: u64 = 0x5000_0000_0000_0000_u64;
+        for i in 0..size {
+            let interface: &'static GuestContractInterface = leak_sweep_interface(base_id + i);
+            let descriptor: PluginDescriptor = PluginDescriptor {
+                name: StringView::from_static(b"sweep_plugin"),
+                contract_name: StringView::from_static(b"sweep.contract"),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+            };
+            BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+                let borrowed = cell.borrow();
+                let registry: &RuntimeStore = borrowed.as_ref().expect("registry not initialized");
+                // SAFETY: interface is leaked ('static), valid for the registry lifetime.
+                unsafe {
+                    registry
+                        .register_guest_contract(
+                            descriptor,
+                            interface,
+                            format!("sweep.contract.{}", i),
+                            BundleId::from_u64(i),
+                        )
+                        .expect("registration should succeed");
+                }
+            });
+        }
+
+        // Resolve a middle contract's handle once (find is not timed here).
+        let middle_id: u64 = base_id + size / 2;
+        // SAFETY: bench_find_guest_contract is backed by BENCH_REGISTRY.
+        let handle: GuestContractHandle = unsafe {
+            (host_interface.find_guest_contract)(&host_interface as *const HostApi, middle_id, 0)
+        };
+
+        group.bench_with_input(
+            BenchmarkId::new("resolve_plugin", format!("registry_{}", size)),
+            &handle,
+            |b, &handle| {
+                b.iter(|| {
+                    // SAFETY: bench_resolve_guest_contract returns a 'static pointer.
+                    let interface_ptr: *const GuestContractInterface = unsafe {
+                        (host_interface.resolve_guest_contract)(
+                            black_box(&host_interface as *const HostApi),
+                            black_box(handle),
+                        )
+                    };
+                    black_box(interface_ptr);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 // ─── criterion_group / criterion_main ────────────────────────────────────────
 
 criterion_group!(
     benches,
     bench_ffi_resolve_plugin,
-    bench_ffi_resolve_null_handle
+    bench_ffi_resolve_null_handle,
+    bench_ffi_resolve_registry_sweep,
 );
 criterion_main!(benches);
 

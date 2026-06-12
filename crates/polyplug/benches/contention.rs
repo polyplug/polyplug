@@ -36,6 +36,18 @@
 // lock or contended mutex has crept onto the resolve path — that is the
 // finding this bench exists to surface. Per-thread throughput (aggregate / N)
 // falling toward zero is the same signal viewed per-worker.
+//
+// TWO GROUPS — `contention/uncached/*` and `contention/cached/*`.
+//   * `uncached` (the original sentinel) re-runs the full resolve chain
+//     (`find_guest_contract` + a `call_guest_method` cross-call) every iteration,
+//     so every dispatch takes several `RwLock` read acquire/release cycles. This
+//     is the PESSIMAL path and the curve falls as threads rise.
+//   * `cached` resolves the interface pointer ONCE before the timed loop (the
+//     documented cache-the-handle pattern that `counter_inc/polyplug` uses) and
+//     then dispatches each iteration straight through the cached pointer with
+//     ZERO registry-lock traffic. The contrast is the point: with no shared
+//     reader counter on the hot path, the `cached` curve should scale up where
+//     the `uncached` one falls.
 
 use core::hint::black_box;
 use core::time::Duration;
@@ -174,6 +186,29 @@ unsafe impl Send for SharedHost {}
 // SAFETY: see Send — read-only concurrent access to an internally synchronized table.
 unsafe impl Sync for SharedHost {}
 
+/// A `'static` interface pointer resolved ONCE before the timed loop, shared
+/// read-only across the cached-dispatch workers. The interface is leaked, so the
+/// pointer is `'static` and never moves; concurrent native dispatch through it
+/// touches no shared mutable state.
+#[derive(Clone, Copy)]
+struct SharedInterface(*const GuestContractInterface);
+
+// SAFETY: the interface is leaked ('static) and immutable; native dispatch
+// through it reads only the function table and writes to caller-owned out slots,
+// so concurrent read-only sharing across worker threads is sound.
+unsafe impl Send for SharedInterface {}
+// SAFETY: see Send — read-only concurrent access to an immutable 'static interface.
+unsafe impl Sync for SharedInterface {}
+
+/// Which hot path a worker pool drives.
+#[derive(Clone, Copy)]
+enum DispatchMode {
+    /// Full uncached resolve chain every call (the pessimal sentinel path).
+    Uncached(SharedHost),
+    /// Dispatch through a pre-resolved, cached interface pointer (zero lock).
+    Cached(SharedInterface),
+}
+
 /// One unit of dispatch work: find the contract handle, resolve it to an
 /// interface pointer, then dispatch fn 0 through the runtime — the full
 /// per-call hot path a host pays when it does NOT cache the handle. Returns the
@@ -220,6 +255,46 @@ unsafe fn resolve_and_dispatch(host: *const HostApi, contract_id: u64) -> u32 {
     out
 }
 
+/// One unit of CACHED dispatch work: dispatch fn 0 straight through an
+/// already-resolved interface pointer, with NO registry lookup and NO registry
+/// lock. This is the documented cache-the-handle hot path — the interface
+/// pointer is resolved once before the timed loop and stays valid for the
+/// runtime lifetime (retire-not-drop). Returns the sum so the work survives DCE.
+///
+/// # Safety
+/// `interface` must point to a valid `'static` `GuestContractInterface` whose
+/// native dispatch table has at least one function (fn 0 = `bench_add`).
+#[inline]
+unsafe fn cached_dispatch(interface: *const GuestContractInterface, contract_id: u64) -> u32 {
+    // SAFETY: interface is the runtime's 'static interface pointer for the bench.
+    let iface: &GuestContractInterface = unsafe { &*interface };
+    // SAFETY: dispatch_type is Native (registered as such); fn 0 is in range.
+    let fn_ptr: *const () = unsafe { *iface.dispatch.native.functions };
+    // SAFETY: transmute to the native dispatch signature bench_add was built with.
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+        unsafe { core::mem::transmute(fn_ptr) };
+
+    let instance: GuestContractInstance = GuestContractInstance {
+        data: core::ptr::null_mut(),
+        contract_id: GuestContractId::from_u64(contract_id),
+    };
+    let args: AddArgs = AddArgs {
+        a: 42_u32,
+        b: 57_u32,
+    };
+    let mut out: u32 = 0_u32;
+    // SAFETY: instance carries the registered contract_id; args/out match bench_add.
+    let err: AbiError = unsafe {
+        dispatch_fn(
+            instance,
+            &args as *const AddArgs as *const (),
+            &mut out as *mut u32 as *mut (),
+        )
+    };
+    black_box(err);
+    out
+}
+
 /// Message sent to a parked worker: how many iterations to run, plus the shared
 /// start barrier so all workers begin the timed region together.
 struct WorkBatch {
@@ -239,8 +314,9 @@ struct WorkerPool {
 
 impl WorkerPool {
     /// Spawn `n_threads` workers, each parked on its own channel and pinned to
-    /// the shared runtime + contract.
-    fn new(n_threads: usize, host: SharedHost, contract_id: u64) -> WorkerPool {
+    /// the shared runtime + contract. `mode` selects the uncached resolve chain
+    /// or the cached pre-resolved interface pointer for every worker.
+    fn new(n_threads: usize, mode: DispatchMode, contract_id: u64) -> WorkerPool {
         let mut senders: Vec<mpsc::Sender<WorkBatch>> = Vec::with_capacity(n_threads);
         let mut handles: Vec<thread::JoinHandle<()>> = Vec::with_capacity(n_threads);
         let (done_tx, done_rx): (mpsc::Sender<()>, mpsc::Receiver<()>) = mpsc::channel();
@@ -249,24 +325,32 @@ impl WorkerPool {
             let (work_tx, work_rx): (mpsc::Sender<WorkBatch>, mpsc::Receiver<WorkBatch>) =
                 mpsc::channel();
             let done_tx_worker: mpsc::Sender<()> = done_tx.clone();
-            let host_for_worker: SharedHost = host;
+            let mode_for_worker: DispatchMode = mode;
 
             let handle: thread::JoinHandle<()> = thread::spawn(move || {
                 // Re-bind the whole wrapper inside the closure so the Send capture
-                // is `SharedHost` (which is Send), not the disjoint `.0` raw pointer
-                // field (which is not) — Rust 2021 closures capture fields directly.
-                let worker_host: SharedHost = host_for_worker;
+                // is `DispatchMode` (which is Send via its Send members), not a
+                // disjoint raw pointer field — Rust 2021 closures capture fields directly.
+                let worker_mode: DispatchMode = mode_for_worker;
                 // Park until a batch arrives; an Err means the pool was dropped.
                 while let Ok(batch) = work_rx.recv() {
                     // Synchronize the start so all workers run concurrently.
                     batch.barrier.wait();
                     let mut acc: u32 = 0;
                     for _ in 0..batch.iters {
-                        // SAFETY: worker_host wraps the runtime's 'static HostApi
-                        // and contract_id names a registered provider (both fixed for
-                        // the pool lifetime). Concurrent reads are RwLock-synchronized.
-                        acc = acc.wrapping_add(unsafe {
-                            resolve_and_dispatch(worker_host.0, contract_id)
+                        acc = acc.wrapping_add(match worker_mode {
+                            // SAFETY: host wraps the runtime's 'static HostApi and
+                            // contract_id names a registered provider (both fixed for
+                            // the pool lifetime). Concurrent reads are RwLock-synchronized.
+                            DispatchMode::Uncached(host) => unsafe {
+                                resolve_and_dispatch(host.0, contract_id)
+                            },
+                            // SAFETY: interface is the runtime's 'static interface
+                            // pointer resolved before the loop; native dispatch through
+                            // it touches no shared mutable state across threads.
+                            DispatchMode::Cached(interface) => unsafe {
+                                cached_dispatch(interface.0, contract_id)
+                            },
                         });
                     }
                     black_box(acc);
@@ -334,8 +418,10 @@ impl Drop for WorkerPool {
 // ─── Benchmark — scaling across thread counts ─────────────────────────────────
 
 /// Builds one shared runtime, registers a single native provider, then measures
-/// aggregate resolve-and-dispatch throughput at 1, 2, 4, and 8 threads. A clean
-/// read path scales near-linearly; a flattening curve flags a lock regression.
+/// aggregate dispatch throughput at 1, 2, 4, and 8 threads for BOTH the uncached
+/// resolve chain and the cached pre-resolved interface pointer. The uncached
+/// curve flattens under shared-reader-counter contention; the cached curve,
+/// touching no registry lock, should scale up — that contrast is the result.
 fn bench_contention(c: &mut Criterion) {
     let runtime: Arc<Runtime> = Runtime::builder()
         .build()
@@ -346,7 +432,25 @@ fn bench_contention(c: &mut Criterion) {
     let host_abi: &'static HostApi = runtime.host_abi();
     let shared: SharedHost = SharedHost(host_abi as *const HostApi);
 
+    // Resolve the interface pointer ONCE (the cache-the-handle pattern). This is
+    // the pointer the cached workers dispatch through with no further lookup.
+    let host_ptr: *const HostApi = host_abi as *const HostApi;
+    // SAFETY: host_ptr is the runtime's 'static HostApi; contract_id is registered.
+    let handle = unsafe { (host_abi.find_guest_contract)(host_ptr, contract_id, 0) };
+    // SAFETY: handle was just returned for a registered contract.
+    let interface_ptr: *const GuestContractInterface =
+        unsafe { (host_abi.resolve_guest_contract)(host_ptr, handle) };
+    assert!(
+        !interface_ptr.is_null(),
+        "cached interface must resolve for the contention bench"
+    );
+    let cached: SharedInterface = SharedInterface(interface_ptr);
+
     let thread_counts: [usize; 4] = [1, 2, 4, 8];
+    let modes: [(&str, DispatchMode); 2] = [
+        ("uncached", DispatchMode::Uncached(shared)),
+        ("cached", DispatchMode::Cached(cached)),
+    ];
 
     let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
         c.benchmark_group("contention");
@@ -354,31 +458,33 @@ fn bench_contention(c: &mut Criterion) {
     // sample count so a full run stays in the low-seconds range per thread count.
     group.sample_size(30);
 
-    for &n_threads in &thread_counts {
-        // Aggregate throughput: report one "element" per thread per criterion
-        // iteration, so the throughput line reads as total calls/sec across all
-        // workers. Per-thread throughput is this figure divided by n_threads.
-        group.throughput(Throughput::Elements(n_threads as u64));
+    for &(mode_label, mode) in &modes {
+        for &n_threads in &thread_counts {
+            // Aggregate throughput: report one "element" per thread per criterion
+            // iteration, so the throughput line reads as total calls/sec across all
+            // workers. Per-thread throughput is this figure divided by n_threads.
+            group.throughput(Throughput::Elements(n_threads as u64));
 
-        let pool: WorkerPool = WorkerPool::new(n_threads, shared, contract_id);
+            let pool: WorkerPool = WorkerPool::new(n_threads, mode, contract_id);
 
-        group.bench_with_input(
-            BenchmarkId::new("threads", n_threads),
-            &n_threads,
-            |b, &n_threads| {
-                b.iter_custom(|criterion_iters: u64| {
-                    // Each criterion "iteration" = one round of n_threads dispatches.
-                    // Total dispatch work = criterion_iters * n_threads, split across
-                    // the pool so every thread runs `criterion_iters` calls.
-                    let total: u64 = criterion_iters * n_threads as u64;
-                    pool.run(black_box(total))
-                });
-            },
-        );
+            group.bench_with_input(
+                BenchmarkId::new(mode_label, n_threads),
+                &n_threads,
+                |b, &n_threads| {
+                    b.iter_custom(|criterion_iters: u64| {
+                        // Each criterion "iteration" = one round of n_threads dispatches.
+                        // Total dispatch work = criterion_iters * n_threads, split across
+                        // the pool so every thread runs `criterion_iters` calls.
+                        let total: u64 = criterion_iters * n_threads as u64;
+                        pool.run(black_box(total))
+                    });
+                },
+            );
 
-        // Drop the pool (join its threads) before building the next, larger pool
-        // so thread counts never overlap on the cores.
-        drop(pool);
+            // Drop the pool (join its threads) before building the next pool so
+            // thread counts never overlap on the cores.
+            drop(pool);
+        }
     }
 
     group.finish();

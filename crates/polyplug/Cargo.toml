@@ -80,3 +80,7 @@ harness = false
 name = "guest_host_call"
 harness = false
 
+[[bench]]
+name = "cold_start"
+harness = false
+

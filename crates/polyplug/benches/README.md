@@ -229,6 +229,44 @@ cannot offer at all. Its value is the capability, not the nanoseconds.
 > *warm* load costs; a real "reload after the file changed on disk" pays the cold
 > mmap once on top.
 
+#### VM-loader reload arms (Lua + QuickJS)
+
+Native (`amortization::hot_reload_swap`, ~17 µs) is not the only reloadable tier:
+the **Lua** and **QuickJS** loaders also support hot-reload, and each ships a
+reload arm in its own loader-crate bench (run them locally):
+
+```bash
+cargo bench -p polyplug_lua --bench dispatch_benchmark lua_reload   # lua_reload/hot_reload_swap
+cargo bench -p polyplug_js  --bench dispatch_benchmark js_reload    # js_reload/hot_reload_swap
+```
+
+Each builds a `Runtime` with its loader registered and `hot_reload_enabled`,
+loads a path-backed bundle, then times `reload_bundle` — re-reading the on-disk
+source, rebuilding/re-running the per-bundle VM through `polyplug_init`,
+re-registering the contract, and atomically swapping the live interface (retiring
+the old one). Measured locally:
+
+| Loader | `hot_reload_swap` ~cost (local) |
+|---|---|
+| native (cdylib) | ~17 µs (`amortization::hot_reload_swap`) |
+| Lua (LuaJIT) | ~107 µs |
+| QuickJS | ~158 µs |
+
+The VM reloads cost more than native because the swap rebuilds/re-evaluates the
+interpreter's per-bundle state, not just an `mmap` + symbol lookup. As with every
+one-time cost, the value is the **amortization curve**: a Lua reload at ~107 µs
+spread over *N* subsequent dispatches contributes `107 µs / N` per call — past a
+few thousand calls it is below the per-call dispatch cost, and the **capability**
+(swap a plugin's code without restarting the host) is the point, not the µs.
+
+> Honesty notes: (1) like the native arm these re-read the *same* file each
+> iteration, so they are *warm* reload costs (the first reload's cold page-in is
+> amortized away across the loop). (2) Reloading on a live runtime with no host
+> destroying instances prints the runtime's own `Potential UB: Arc refs still
+> exist … Proceeding with reload anyway` warning each iteration — expected in a
+> microbench (the same retire-not-drop path the integration tests exercise); the
+> reload still succeeds and the measured number is the swap cost.
+
 ### `contract_dispatch` — dispatch overhead by argument shape
 
 Calls a registered contract function directly through its resolved interface
@@ -257,11 +295,56 @@ This is the measured cost behind borrowed-view returns (`&str` / `string_view` /
 `ReadOnlySpan` / `memoryview`) versus owned native `String` / `bytes`, and why
 the call arena exists for VM guests (`docs/PERFORMANCE.md`).
 
+### `cold_start` — first dispatch (cache-cold) vs warm dispatch
+
+`counter_inc` measures the steady-state hot path; this one measures the **first**
+dispatch into a just-registered contract, when everything is cache-cold (the
+registry slot was just inserted, the interface pointer has never been chased, the
+dispatch code has never run on this data). Three arms, all over the same trivial
+`add(42, 57)` so they isolate the dispatch path, not the work:
+
+- `cold/first_dispatch` — a fresh runtime with one freshly-registered native
+  provider is built in **untimed** `iter_batched` setup; the timed body is the
+  first `find_guest_contract` + `resolve_guest_contract` + native dispatch on it.
+- `warm/find_resolve_dispatch` — the same find + resolve + dispatch on a
+  long-lived runtime hammered in a tight loop, so every line is hot in cache.
+- `warm/cached_dispatch` — resolve **once** before the loop, then dispatch
+  through the cached interface pointer (what `counter_inc/polyplug` does).
+
+Measured locally (chart: `docs/assets/benches/cold_start.svg`):
+
+| Arm | ~cost (local) | what it isolates |
+|---|---|---|
+| `cold/first_dispatch` | ~143 ns | cold HashMap probe + cold interface chase + cold-icache dispatch |
+| `warm/find_resolve_dispatch` | ~27 ns | the same path, hot in cache (the pessimal re-resolve steady state) |
+| `warm/cached_dispatch` | ~1.8 ns | the floor — resolve once, dispatch many |
+
+The cold tax (~143 ns − ~27 ns) is paid roughly **once per contract** on its very
+first call, then amortizes away as the registry slot, interface pointer, and
+dispatch code stay hot. The provider is a synthetic in-process native interface
+(the same shape `contention.rs` uses, canonical 3-arg native ABI), so the only
+thing that varies between cold and warm is cache warmth — no on-disk bundle or
+loader is involved. (Honesty note: the cold registry holds a single contract, so
+the cold figure is the first-touch cost of a *small* registry; a host that loaded
+the contract among hundreds pays the same flat resolve — see the `ffi/*/registry_*`
+sweep below — plus its own cold-cache page-ins.)
+
 ### `ffi_resolve` — `HostApi.resolve_guest_contract`
 
 Time from the FFI call to the returned interface pointer. Pure handle →
 pointer, no allocation. This is the per-call cost a host pays if it resolves
 once and caches (the recommended pattern).
+
+The `resolve_plugin/registry_{10,100,1000}` arms register that many distinct
+contracts and resolve a middle handle, to show **resolve does not scale with
+registry size** — it is a generation-checked slot index, not a scan. Measured
+locally it is **flat across three orders of magnitude**:
+
+| Registered contracts | `resolve` ~cost (local) |
+|---|---|
+| 10 | ~9.7 ns |
+| 100 | ~9.8 ns |
+| 1000 | ~9.6 ns |
 
 ### `ffi_find_all` — `HostApi.find_all_guest_contracts`
 
@@ -269,6 +352,17 @@ Time to count, allocate, and populate an `Array<GuestContractHandle>`. Unlike
 the others this one **does allocate** (the result array), so it is the natural
 home for watching host-allocator cost — its "unfairness" is the opposite
 direction: it includes an allocation a single-contract lookup wouldn't.
+
+The `find_all_by_contract/registry_{10,100,1000}` arms register that many
+distinct contracts and `find_all` a single-match target, to show find_all's
+per-call cost is dominated by the by-id HashMap probe + the single-match
+collect, **not** the total registry size. Measured locally it is **flat**:
+
+| Registered contracts | `find_all` (single match) ~cost (local) |
+|---|---|
+| 10 | ~47 ns |
+| 100 | ~48 ns |
+| 1000 | ~47 ns |
 
 ### `registry_resolve` — `Registry::resolve` hot path
 
@@ -303,34 +397,43 @@ throughput line reads as **aggregate calls/sec across all threads**
 (per-thread = aggregate / N). Sample count is trimmed (`sample_size(30)`) so a
 full run stays in the low seconds per thread count.
 
+It runs **two groups** so the contrast is explicit:
+`contention/uncached/*` re-runs the full resolve chain every call (the pessimal
+sentinel), and `contention/cached/*` resolves the interface pointer **once**
+before the loop and dispatches straight through it (the documented cache-the-handle
+pattern `counter_inc/polyplug` uses) with **zero** registry-lock traffic.
+
 **How to read it.** The signal is the **shape of the 1→8 curve**, not any single
 number. A clean read-only path should scale up: aggregate throughput at 8
 threads approaching some multiple of the 1-thread figure. If aggregate
 throughput **flattens or collapses** as threads rise, contention has crept onto
 the resolve path — that is the regression this bench exists to catch.
 
-> **Honest finding (one developer machine).** Today the curve does **not** scale
-> up — aggregate throughput *falls* from ~20 M/s at 1 thread to ~6.7 M/s at 8:
+> **Honest finding (one developer machine, measured this run).** The two groups
+> tell the whole story. The `uncached` curve does **not** scale up — aggregate
+> throughput *falls* from ~21 M/s at 1 thread to ~8 M/s at 8. The `cached` curve
+> scales **near-linearly** — ~185 M/s at 1 thread to ~1.40 G/s at 8 (~7.5×):
 >
-> | Threads | ~time / round | aggregate ~throughput |
-> |---|---|---|
-> | 1 | ~49 ns | ~20 M/s |
-> | 2 | ~191 ns | ~10.5 M/s |
-> | 4 | ~536 ns | ~7.5 M/s |
-> | 8 | ~1.19 µs | ~6.7 M/s |
+> | Threads | uncached time/round | uncached aggregate | cached time/round | cached aggregate |
+> |---|---|---|---|---|
+> | 1 | ~47 ns | ~21 M/s | ~5.4 ns | ~185 M/s |
+> | 2 | ~167 ns | ~12.0 M/s | ~5.6 ns | ~359 M/s |
+> | 4 | ~433 ns | ~9.2 M/s | ~5.7 ns | ~706 M/s |
+> | 8 | ~985 ns | ~8.1 M/s | ~5.7 ns | ~1.40 G/s |
 >
-> This is **not** a write-lock bug (the whole hot path — `find_guest_contract`,
-> `count`, `resolve_single_provider`, `resolve_guest_contract` — takes `read()`
-> locks, verified in `runtime_store.rs`). It is `std::sync::RwLock`'s shared
-> reader counter: every `read()` acquire/release is an atomic RMW on one
-> cache line, and an uncached dispatch takes **several** acquire/release cycles
-> per call (find, then count + resolve inside `call_guest_method`). Eight cores
-> bouncing that line serialize on it, so more threads buy *less* aggregate
-> throughput. The realistic mitigation is the documented cache-the-handle
-> pattern (`counter_inc/polyplug` resolves once, then dispatches with **zero**
-> lock traffic) — which is exactly why this bench measures the *pessimal*
-> uncached path. Treat the table as a baseline: a future change that pushed a
-> *write* onto this path would turn the gentle decay into a cliff.
+> The `uncached` decay is **not** a write-lock bug (the whole hot path —
+> `find_guest_contract`, `count`, `resolve_single_provider`,
+> `resolve_guest_contract` — takes `read()` locks, verified in
+> `runtime_store.rs`). It is `std::sync::RwLock`'s shared reader counter: every
+> `read()` acquire/release is an atomic RMW on one cache line, and an uncached
+> dispatch takes **several** acquire/release cycles per call (find, then count +
+> resolve inside `call_guest_method`). Eight cores bouncing that line serialize on
+> it, so more threads buy *less* aggregate throughput. The `cached` group is the
+> proof of the mitigation: with the handle resolved once, the hot path touches
+> **no** registry lock, the shared reader counter never moves, and per-round time
+> stays flat (~5.4 → ~5.7 ns) while aggregate throughput scales with cores. Treat
+> the `uncached` table as a baseline: a future change that pushed a *write* onto
+> that path would turn the gentle decay into a cliff.
 
 ### `call_arena` — the per-call bump allocator (`CallArena`)
 
@@ -342,27 +445,28 @@ none of them; this microbench covers each:
 - `primary/alloc_64` — a warm 64-byte bump from the primary block (align + add),
   resetting each iteration so it never overflows. The floor (~2.7 ns locally).
 - `reset/primary_only` — `reset()` with no overflow chain: just rewinding `cur`
-  to `base` (~0.46 ns locally — effectively free).
+  to `base` (~0.45 ns locally — effectively free).
 - `overflow/cold_first_block` — an alloc that spills past the primary region,
   with the overflow block **freed every iteration** (fresh arena, dropped in the
-  timed body) so each call pays a host `malloc`. ~40 ns locally.
+  timed body) so each call pays a host `malloc`. ~34 ns locally.
 - `overflow/warm_reuse` — the **same** overflowing alloc, but the arena is reused
   and `reset()` **retains** the block (retain-and-rewind), so every iteration
-  after the first reuses it with no host call. ~4 ns locally.
+  after the first reuses it with no host call. ~3.4 ns locally.
 - `per_call/{64,65536}` — a realistic per-call shape: `reset()` + a header
   (16 B) + payload + trailer (32 B), at a primary-resident size (64 B) and an
-  overflow size (64 KiB). Both land near ~8–9 ns because the 64 KiB arm hits the
-  *warm retained block*, not a fresh malloc.
+  overflow size (64 KiB). Both land near ~7.6–7.8 ns because the 64 KiB arm hits
+  the *warm retained block*, not a fresh malloc.
 
 **How to read it.** The headline is `overflow/cold_first_block` **vs**
-`overflow/warm_reuse` — the ~10× gap (~40 ns → ~4 ns locally) is exactly what
+`overflow/warm_reuse` — the ~10× gap (~34 ns → ~3.4 ns locally) is exactly what
 retain-and-rewind buys: after the first call that overflows, every later call
 reuses the retained block instead of mallocing again. That `per_call/65536` sits
 right next to `per_call/64` (rather than 10× higher) is the same win in the
 realistic pattern. The arena is constructed once per benchmark function and kept
 alive across iterations; its `Drop` frees every retained overflow block at
 teardown, so the bench does not leak (the `drop_frees_all_blocks` unit test in
-`polyplug_abi` proves the teardown path).
+`polyplug_abi` proves the teardown path). Charted as
+`docs/assets/benches/call_arena.svg`.
 
 ### `cross_call` — host-mediated cross-dispatch + the peer-caller path
 
@@ -477,7 +581,8 @@ aren't lost. **Priority: benches for what we currently ship come first.**
 > resolve / hot-reload), **dispatch by argument shape** (`contract_dispatch`),
 > and **return marshalling** (`contract_dispatch::marshalling` — borrowed view vs
 > owned copy). Charts: `docs/assets/benches/{hero,counter_inc,dispatch_by_shape,
-> payload_scaling,marshalling,native_round_trip,amortization,cross_lang_guest}.svg`
+> payload_scaling,marshalling,native_round_trip,amortization,cross_lang_guest,
+> call_arena,cold_start}.svg`
 > (criterion-sourced, `just bench-charts`) plus the live-sweep pair
 > `cross_lang_host.svg` (`just bench-hostcall`) and `cross_lang_matrix.svg`
 > (`just bench-roundtrip`).

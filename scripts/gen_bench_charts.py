@@ -472,6 +472,61 @@ def chart_amortization(criterion_dir: Path, out: Path) -> None:
     )
 
 
+def chart_call_arena(criterion_dir: Path, out: Path) -> None:
+    """Per-call CallArena costs — the retain-and-rewind win (linear bars).
+
+    Every bar is read live from the `call_arena` criterion group. The headline is
+    `overflow/cold_first_block` vs `overflow/warm_reuse`: the gap is exactly what
+    retain-and-rewind buys — after the first overflowing call, every later call
+    reuses the retained block instead of paying a host malloc again.
+    """
+    bars: list = [
+        ("reset (rewind cursor)", "reset/primary_only", _HILITE),
+        ("warm bump (64 B, primary)", "primary/alloc_64", _HILITE),
+        ("overflow — warm reuse (retained)", "overflow/warm_reuse", _HILITE),
+        ("per-call shape (64 B)", "per_call/64", _NEUTRAL),
+        ("per-call shape (64 KiB, warm)", "per_call/65536", _NEUTRAL),
+        ("overflow — cold first block (malloc)", "overflow/cold_first_block", _SLOW),
+    ]
+    rows: list = [
+        (label, per_call_ns(criterion_dir, f"call_arena/{fid}"), color)
+        for label, fid, color in bars
+    ]
+    _chart_hbar_linear(
+        out,
+        "Per-call return buffer: the retain-and-rewind win",
+        "CallArena costs — a warm bump is ~free; the first overflow mallocs once, "
+        "then every later call reuses the retained block (lower is better)",
+        rows,
+    )
+
+
+def chart_cold_start(criterion_dir: Path, out: Path) -> None:
+    """First dispatch into a just-registered contract vs warm dispatch (log bars).
+
+    All bars live from the `cold_start` group: the cold bar is the FIRST find +
+    resolve + dispatch on a freshly populated registry (everything cache-cold);
+    the warm bars are the same path hot in cache, and the cached-pointer hot path.
+    """
+    rows: list = [
+        ("cold — first dispatch (cache-cold)", per_call_ns(criterion_dir, "cold_start/cold/first_dispatch"), _SLOW),
+        ("warm — find + resolve + dispatch", per_call_ns(criterion_dir, "cold_start/warm/find_resolve_dispatch"), _NEUTRAL),
+        ("warm — cached pointer dispatch", per_call_ns(criterion_dir, "cold_start/warm/cached_dispatch"), _HILITE),
+    ]
+    _chart_hbar_log(
+        out,
+        "First call is cold; steady state is warm",
+        "the very first dispatch into a just-loaded contract pays a cold-cache tax; "
+        "every call after is warm (log scale, lower is better)",
+        rows,
+        "The cold bar is the first find + resolve + dispatch on a freshly populated "
+        "registry — a cold HashMap probe + cold interface chase + cold-icache run of "
+        "the dispatch path. Warm find+resolve+dispatch is the same work hot in cache; "
+        "caching the resolved pointer (resolve once, dispatch many) is the floor. The "
+        "cold tax is paid roughly once per contract, then amortizes away.",
+    )
+
+
 def chart_hero(criterion_dir: Path, out: Path) -> None:
     """README hero: one plugin call end to end, every bar live from criterion.
 
@@ -728,6 +783,8 @@ def main() -> int:
         ("native_round_trip.svg", chart_native_round_trip),
         ("amortization.svg", chart_amortization),
         ("cross_lang_guest.svg", chart_cross_language_guest),
+        ("call_arena.svg", chart_call_arena),
+        ("cold_start.svg", chart_cold_start),
     ]
     for name, render in charts:
         target: Path = out_dir / name

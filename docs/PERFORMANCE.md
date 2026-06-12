@@ -637,6 +637,28 @@ back to per-value `host->alloc`. Host callers that cannot hold a per-caller aren
 correct — just not zero-allocation. Every loader passes the arena slot, so the
 signature is uniform across all languages.
 
+### Measured arena costs
+
+![per-call return buffer: the retain-and-rewind win](assets/benches/call_arena.svg)
+
+The `call_arena` microbench (`cargo bench -p polyplug --bench call_arena`) reads
+every bar live from criterion. Measured locally:
+
+| Path | ~cost (local) | what it shows |
+|---|---|---|
+| `reset/primary_only` | ~0.45 ns | a `reset()` with no overflow is just a cursor rewind — effectively free |
+| `primary/alloc_64` | ~2.7 ns | a warm bump inside the primary region (align + add) |
+| `overflow/warm_reuse` | ~3.4 ns | an overflowing alloc that **reuses the retained block** — no host call |
+| `per_call/64`, `per_call/65536` | ~7.6 ns, ~7.8 ns | a realistic header + payload + trailer at primary and overflow sizes |
+| `overflow/cold_first_block` | ~34 ns | the **first** overflow — pays a host `malloc` |
+
+The headline is `overflow/cold_first_block` (~34 ns) **vs** `overflow/warm_reuse`
+(~3.4 ns): the ~10× gap is exactly what **retain-and-rewind** buys — after the
+first call that overflows, `reset()` retains the host-allocated block and every
+later call reuses it instead of mallocing again. That `per_call/65536` (64 KiB
+payload) sits right next to `per_call/64` (rather than 10× higher) is the same
+win in the realistic per-call shape.
+
 ---
 
 ## VM Loader Performance
@@ -884,11 +906,46 @@ bench measures.)
 - **look up a plugin (~20 ns)** is the only one a caller might repeat — and it is a
   `HashMap` lookup plus a pointer read. Look it up once and reuse the result (see
   [Optimization Tips](#optimization-tips)) and even this disappears from the loop.
-- **load a plugin (~13 µs)** and **hot-reload swap (~17 µs)** are dominated by the
-  operating system loading the shared library (`dlopen`/`mmap`), not by polyplug
-  code — a flamegraph of the load path shows our own frames under 1% (see
+- **load a plugin (~13 µs)** and **native hot-reload swap (~17 µs)** are dominated
+  by the operating system loading the shared library (`dlopen`/`mmap`), not by
+  polyplug code — a flamegraph of the load path shows our own frames under 1% (see
   [PROFILING.md](./PROFILING.md)). The only lever is doing *fewer* loads, which the
   retire-not-drop model already does.
+
+### VM-loader hot-reload (Lua + QuickJS)
+
+Native is not the only reloadable tier — the **Lua** and **QuickJS** loaders also
+support hot-reload, each measured by a reload arm in its loader-crate bench
+(`cargo bench -p polyplug_lua --bench dispatch_benchmark lua_reload` /
+`-p polyplug_js … js_reload`). Each builds a `Runtime` with the loader registered
+and `hot_reload_enabled`, loads a path-backed bundle, then times `reload_bundle`.
+Measured locally:
+
+| Loader | `hot_reload_swap` ~cost (local) |
+|---|---|
+| native (cdylib) | ~17 µs |
+| Lua (LuaJIT) | ~107 µs |
+| QuickJS | ~158 µs |
+
+The VM reloads cost more than native because the swap rebuilds and re-evaluates
+the interpreter's per-bundle state, not just an `mmap` + symbol lookup. Like every
+one-time cost they amortize away — a ~107 µs Lua reload spread over *N* later
+dispatches contributes `107 µs / N` per call — and the value is the **capability**
+(swap a plugin's code without restarting), not the µs.
+
+### First call is cold; steady state is warm
+
+![first call is cold; steady state is warm](assets/benches/cold_start.svg)
+
+The `cold_start` bench separates the **first** dispatch into a just-registered
+contract (everything cache-cold) from the warm steady state. Measured locally: the
+first find + resolve + dispatch costs ~143 ns (a cold `HashMap` probe + cold
+interface chase + cold-icache dispatch); the same path hot in cache is ~27 ns; and
+the cache-the-handle hot path (resolve once, dispatch many) is the ~1.8 ns floor.
+The cold tax is paid roughly **once per contract** on its very first call, then
+amortizes away — and the [registry scale sweep](../crates/polyplug/benches/README.md#ffi_resolve--hostapiresolve_guest_contract)
+shows resolve stays flat (~9.7 ns) whether 10 or 1000 contracts are registered, so
+the cold cost does not grow with how many plugins a host has loaded.
 
 ## See Also
 

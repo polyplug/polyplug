@@ -13,8 +13,15 @@
 #![allow(clippy::expect_used)]
 
 use core::hint::black_box;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use rquickjs::{Context, Function, Object, Persistent, Runtime};
+
+// `rquickjs::Runtime` and `polyplug::runtime::Runtime` collide on the bare name,
+// so the polyplug runtime types are referenced through fully-qualified paths in
+// the reload arm below rather than imported.
 
 fn bench_js_dispatch(c: &mut Criterion) {
     let runtime: Runtime = Runtime::new().expect("Failed to create runtime");
@@ -700,12 +707,97 @@ fn bench_dispatch_comparison(c: &mut Criterion) {
     group.finish();
 }
 
+/// Build a minimal QuickJS bundle that registers `test.reload.contract@1` with a
+/// single no-op function via `polyplug.registerVtable` — the same registration
+/// shape the loader's reload integration test uses.
+fn make_reload_bundle_js(contract_id: u64, contract_name: &str) -> String {
+    let contract_lo: u32 = contract_id as u32;
+    let contract_hi: u32 = (contract_id >> 32) as u32;
+    format!(
+        r#"
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
+    var vtable = {{
+        contractLo: {contract_lo},
+        contractHi: {contract_hi},
+        fnCount: 1,
+        contractName: "{contract_name}",
+        version: 0x00010000,
+        functions: [ function(args, out) {{ return 0; }} ]
+    }};
+    polyplug.registerVtable(
+        vtable.contractLo, vtable.contractHi, vtable,
+        vtable.fnCount, vtable.contractName, vtable.version
+    );
+}}
+"#
+    )
+}
+
+/// Write a JS bundle + manifest naming the QuickJS loader to a temp dir. Returns
+/// the dir (kept alive) and the bundle dir path.
+fn write_temp_js_bundle(name: &str, content: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("bundle.js"), content).expect("write bundle.js");
+    let bundle_id: u64 = polyplug_utils::bundle_id(name);
+    let manifest: String = format!(
+        "id = {}\nname = \"{}\"\nloader = \"js-quickjs\"\nfile = \"bundle.js\"\n",
+        bundle_id, name
+    );
+    std::fs::write(dir.path().join("manifest.toml"), manifest).expect("write manifest.toml");
+    let bundle_dir: PathBuf = dir.path().to_path_buf();
+    (dir, bundle_dir)
+}
+
+/// Benchmark the QuickJS loader hot-reload swap path.
+///
+/// `Runtime::reload_bundle` for a JS bundle re-reads the on-disk source, rebuilds
+/// the per-bundle QuickJS context, re-runs `polyplug_init`, registers the
+/// contract, and atomically swaps the live interface (retiring the old one). This
+/// is the one-time cost a host pays to swap a JS plugin's code WITHOUT restarting
+/// — amortized over every subsequent dispatch (see benches/README.md for the
+/// amortization curve). Hot-reload is gated on `hot_reload_enabled`.
+fn bench_js_reload(c: &mut Criterion) {
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.reload.contract", 1);
+    let bundle: String = make_reload_bundle_js(contract_id, "test.reload.contract");
+    let (_dir, bundle_dir): (tempfile::TempDir, PathBuf) =
+        write_temp_js_bundle("test.reload.contract", &bundle);
+
+    let runtime: Arc<polyplug::runtime::Runtime> = polyplug::runtime::RuntimeBuilder::new()
+        .loader(polyplug_js::JsLoader::new(polyplug_js::JsConfig {}))
+        .config(polyplug_abi::RuntimeConfig {
+            compatibility: polyplug_abi::Compatibility::Strict,
+            hot_reload_enabled: true,
+            ..Default::default()
+        })
+        .build()
+        .expect("runtime build must succeed");
+
+    runtime
+        .load_bundle(bundle_dir.as_path())
+        .expect("initial bundle load must succeed");
+
+    let mut group = c.benchmark_group("js_reload");
+
+    group.bench_function("hot_reload_swap", |b| {
+        b.iter(|| {
+            runtime
+                .reload_bundle(black_box(bundle_dir.as_path()))
+                .expect("reload_bundle must succeed");
+        })
+    });
+
+    group.finish();
+    // Keep the temp dir alive for the whole bench (the bundle is read on reload).
+    drop(_dir);
+}
+
 criterion_group!(
     benches,
     bench_js_dispatch,
     bench_native_baseline,
     bench_js_computation,
     bench_cached_dispatch,
-    bench_dispatch_comparison
+    bench_dispatch_comparison,
+    bench_js_reload
 );
 criterion_main!(benches);
