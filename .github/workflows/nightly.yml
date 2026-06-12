@@ -96,13 +96,23 @@ jobs:
         with:
           components: rust-src
       - uses: Swatinem/rust-cache@v2
-      # TSAN over the concurrent registry stress tests (pure Rust, no dlopen) —
-      # exercises the resolve<->invalidate (resolve->dispatch) race for data races.
+      # TSAN over the pure-Rust epoch race surface of the concurrency suite:
+      # RuntimeStore register/find/resolve/swap/unload plus the swap-vs-dispatch
+      # races — no dlopen, so the test binary is fully instrumented. The
+      # Runtime-level reload tests in the same suite load real .so bundles, which
+      # are uninstrumented under -Zbuild-std; they are deliberately out of TSAN
+      # scope (their races are caught by their own deterministic probes under
+      # normal `cargo test`). Positive filters, not `--skip`, keep the scope
+      # explicit.
       - name: cargo test (TSAN)
         run: >
           cargo +nightly test -Zbuild-std
-          -p polyplug --test stress_concurrent_registry
+          -p polyplug --test concurrency
           --target x86_64-unknown-linux-gnu
+          --
+          registry:: load_unload::
+          dispatch::dispatch_concurrent_with_reload_is_safe
+          dispatch::stress_direct_swap_under_concurrent_reader_load
         env:
           RUSTFLAGS: -Zsanitizer=thread
 
