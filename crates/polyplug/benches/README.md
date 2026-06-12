@@ -88,7 +88,7 @@ The honest, like-for-like comparison is **arm 4 vs arm 3**: polyplug's *safe*
 dispatch versus the *raw, unsafe FFI a user would otherwise hand-write* to load
 a plugin at runtime. Both load the **same** `libtest_plugin.so`; the only
 difference is polyplug's safety machinery (type-checked registration, lifecycle,
-hot-reload, retire-not-drop). That gap is **~0.5 ns** — about one L1 cache hit.
+hot-reload, epoch-reclaimed unload). That gap is **~0.5 ns** — about one L1 cache hit.
 
 And arm 2 explains *where* that 0.5 ns goes: it pays ~2.1 ns with **no dynamic
 library at all**, just the pointer-in / pointer-out convention. So most of
@@ -261,11 +261,11 @@ few thousand calls it is below the per-call dispatch cost, and the **capability*
 
 > Honesty notes: (1) like the native arm these re-read the *same* file each
 > iteration, so they are *warm* reload costs (the first reload's cold page-in is
-> amortized away across the loop). (2) Reloading on a live runtime with no host
-> destroying instances prints the runtime's own `Potential UB: Arc refs still
-> exist … Proceeding with reload anyway` warning each iteration — expected in a
-> microbench (the same retire-not-drop path the integration tests exercise); the
-> reload still succeeds and the measured number is the swap cost.
+> amortized away across the loop). (2) If a reload happens while the host still
+> holds a live stateful instance of the bundle, the runtime logs its own `live
+> guest instance … Proceeding with reload anyway` warning (the same path the
+> integration tests exercise); the reload still succeeds and the measured number
+> is the swap cost.
 
 ### `contract_dispatch` — dispatch overhead by argument shape
 
@@ -583,12 +583,12 @@ load `test_plugin`, dispatch `test.add` a few times, unload the bundle, then
 every `POLYPLUG_SOAK_SAMPLE_EVERY` cycles and reports two things: **churn
 throughput** (cycles/sec) and the **RSS-over-time series**.
 
-**Why full teardown is the whole point.** polyplug is **retire-not-drop**: within
-*one* live runtime, unload/reload *retires* (keeps mapped) the superseded
-interface + library so already-resolved pointers stay valid — so RSS growth inside
-a single long-lived runtime is **by design, not a leak**. Reclaim happens at
-runtime `Drop`. This soak tears the runtime down every cycle precisely so that a
-non-flat RSS line means a **true** leak, not retire-retention.
+**Why full teardown is the whole point.** polyplug **truly unloads** bundles:
+unload and reload hand the superseded interface + library/VM to crossbeam-epoch,
+which frees them once no reader is still pinned in the prior epoch. This soak builds
+a fresh runtime each cycle and **drops it fully** so that a non-flat RSS line is an
+unambiguous leak signal — covering both per-bundle reclamation and the runtime
+lifecycle itself (the `HostApi` table leak this soak caught).
 
 ```bash
 cargo build --release -p polyplug --tests

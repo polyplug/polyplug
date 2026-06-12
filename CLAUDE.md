@@ -44,7 +44,7 @@ void* polyplug_runtime_create(const void* config);   // returns HostApi pointer
 void  polyplug_runtime_destroy(void* host);
 ```
 
-All other operations go through **`HostApi` struct fields** (function pointers). `HostApi` is `168 bytes` (1 opaque runtime pointer + 19 function pointer fields + 1 trailing `reserved` data pointer: `call_guest_method` at offset 136, `unload_bundle` at offset 144, `log` at offset 152, and `reserved` at offset 160), `align = 8`. The `reserved` pointer carries no meaning — producers set it to null, consumers must not read it; it exists only to keep the frozen struct size expandable later. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostApi` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.
+All other operations go through **`HostApi` struct fields** (function pointers). `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 trailing `reserved` data pointer: `call_guest_method` at offset 136, `unload_bundle` at offset 144, `log` at offset 152, `create_guest_instance` at offset 160, `destroy_guest_instance` at offset 168, and `reserved` at offset 176), `align = 8`. `create_guest_instance` / `destroy_guest_instance` are host-mediated so the runtime can pin the epoch across construction/destruction and attribute each live instance to its contract. The `reserved` pointer carries no meaning — producers set it to null, consumers must not read it; it exists only to keep the frozen struct size expandable later. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostApi` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.
 
 ### `polyplug_init` — the plugin entry point
 
@@ -95,7 +95,7 @@ sdks/
 
 ### Hot-Reload
 
-Native (`cdylib`), Lua, and JS (QuickJS) bundles support hot-reload — their `reload()` re-reads the on-disk source and swaps the live interface (gated on `hot_reload_enabled`). Python and .NET loaders return `RuntimeError::HotReloadDisabled` from `reload()` unconditionally. The retire-not-drop model keeps superseded interfaces and libraries alive for the runtime lifetime so previously resolved pointers stay valid.
+Native (`cdylib`), Lua, and JS (QuickJS) bundles support hot-reload — their `reload()` re-reads the on-disk source and swaps the live interface (gated on `hot_reload_enabled`). Python and .NET loaders return `RuntimeError::HotReloadDisabled` from `reload()` unconditionally. Registry reads are lock-free: readers pin a crossbeam-epoch guard and serve from an immutable published `ReadView`. Reload and unload republish that view and reclaim the superseded interface `Arc` and the underlying dylib/VM through epoch-deferred reclamation — the memory is freed once no reader is still pinned in the prior epoch. A reader pinned before the swap therefore keeps both the old interface and its still-mapped library alive until it unpins; a raw interface pointer cached and used after the owning bundle is unloaded is documented undefined behaviour (the host must quiesce first), whereas runtime-mediated calls pin the epoch across dispatch.
 
 ### Runtime Isolation Known Limitations
 

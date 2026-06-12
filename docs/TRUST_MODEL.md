@@ -176,7 +176,7 @@ Polyplug allows multiple bundles to implement the same contract, enabling a rich
 ### Implementation Integrity
 - **DuplicateProvider Rule**: The same `bundle_id` cannot register the same `contract_id` twice. This prevents internal ambiguity within a single bundle.
 - **Cross-Bundle Multi-impl**: Different bundles *can* implement the same contract. The registry tracks these in a `Vec<u32>` of slot indices per contract ID.
-- **Handle Validation**: A `GuestContractHandle` is `{ index: u32, generation: u32 }` (8 bytes, align 4). `resolve_guest_contract` bounds-checks the index, confirms the slot still holds an interface, and then compares the handle's `generation` to the slot's current generation — returning `AbiErrorCode::StaleHandle` (5) on mismatch. An out-of-bounds index or an empty slot returns `RegistryError::InvalidHandle`. The slot generation is bumped when a bundle is unloaded, so any handle minted before the unload resolves to `StaleHandle` afterwards. Use-after-unload is therefore actively caught by the generation check. After a hot-reload swap (which does not bump the generation) the same handle remains valid and resolves to the interface now occupying that slot (under the retire-not-drop model, the previously resolved raw pointer also remains valid and continues to serve the old version). The null handle is `{ index: u32::MAX, generation: 0 }`.
+- **Handle Validation**: A `GuestContractHandle` is `{ index: u32, generation: u32 }` (8 bytes, align 4). `resolve_guest_contract` bounds-checks the index, confirms the slot still holds an interface, and then compares the handle's `generation` to the slot's current generation — returning `AbiErrorCode::StaleHandle` (5) on mismatch. An out-of-bounds index or an empty slot returns `RegistryError::InvalidHandle`. The slot generation is bumped when a bundle is unloaded, so any handle minted before the unload resolves to `StaleHandle` afterwards. Use-after-unload is therefore actively caught by the generation check. After a hot-reload swap (which does not bump the generation) the same handle remains valid and resolves to the interface now occupying that slot. The null handle is `{ index: u32::MAX, generation: 0 }`.
 
 ### Multi-impl Scenario
 Consider an application that supports multiple audio decoders. Both `flac-bundle` and `mp3-bundle` might register the same `audio.Decoder` contract.
@@ -190,9 +190,11 @@ Consider an application that supports multiple audio decoders. Both `flac-bundle
 `HostApi::call_guest_method(host, instance, fn_id, args, out, arena)` lets one
 plugin invoke a method on another plugin's guest contract through the host. The
 caller passes a `GuestContractInstance` it already resolved; the host re-resolves
-the target through the registry via `instance.contract_id` on **every** call. This
-means a call issued after a hot-reload routes to the live (swapped-in) interface,
-while the retire-not-drop model keeps any previously resolved pointer valid.
+the target through the registry via `instance.contract_id` on **every** call. The
+host pins the epoch across dispatch (`crossbeam_epoch::pin()`), so a call issued
+after a hot-reload routes to the live (swapped-in) interface and a call racing a
+concurrent unload keeps the resolved interface and its mapping alive until the
+guard unpins.
 
 - **Arena forwarding**: the `arena` argument is passed straight to VM dispatch
   (Lua, JS); native dispatch ignores it (native function pointers carry no arena
@@ -222,20 +224,22 @@ The following table summarizes the sizes and alignments of the core ABI types on
 
 | Type | Size (bytes) | Alignment (bytes) | Key Fields |
 |------|--------------|-------------------|------------|
-| `HostApi` | 168 | 8 | `runtime` opaque ptr + 19 function pointers + trailing `reserved` data ptr |
+| `HostApi` | 184 | 8 | `runtime` opaque ptr + 21 function pointers + trailing `reserved` data ptr |
 | `GuestContractInterface` | 56 | 8 | `contract_id`, `contract_version`, `dispatch_type`, `create_instance`, `destroy_instance`, `dispatch` union |
 | `GuestContractHandle` | 8 | 4 | `index: u32`, `generation: u32` |
 | `StringView` | 16 | 8 | `ptr`, `len` |
 | `AbiError` | 24 | 8 | `code`, `message` (StringView) |
 
-`HostApi`'s 19 function pointers (offsets verified in
+`HostApi`'s 21 function pointers (offsets verified in
 `crates/polyplug_abi/src/host/host_api.rs`): `register_guest_contract` (8), `alloc` (16),
 `free` (24), `find_guest_contract` (32), `find_all_guest_contracts` (40),
 `resolve_guest_contract` (48), `get_host_contract` (56),
 `resolve_host_contract_interface` (64), `list_bundles` (72), `get_dependencies` (80),
 `load_bundle` (88), `reload_bundle` (96), `register_host_contract` (104),
 `register_loader` (112), `get_last_error` (120), `get_error_len` (128),
-`call_guest_method` (136), `unload_bundle` (144), `log` (152), `reserved` (160, data pointer — always null). There is no
+`call_guest_method` (136), `unload_bundle` (144), `log` (152),
+`create_guest_instance` (160), `destroy_guest_instance` (168),
+`reserved` (176, data pointer — always null). There is no
 `find_by_bundle` or `resolve_plugin` pointer in `HostApi`.
 
 ### Pointer Validity After Resolution
@@ -244,13 +248,20 @@ The C ABI deals in raw handles and pointers: `find_guest_contract` returns a
 validates the generation then turns it into a `*const GuestContractInterface` borrowed
 from the slot's `Arc<GuestContractInterface>`.
 
-There is no `PluginGuard`/`VTableSlot` RAII guard in the runtime. Pointer validity is
-guaranteed instead by the retire-not-drop model: the runtime never frees a superseded
-interface `Arc` (it is moved into `retired_interfaces`) or a superseded native library (it
-is moved into the loader's `retired` list) while the runtime lives. Consequently a
-`*const GuestContractInterface` stays valid for the runtime's lifetime even across reloads
-and unloads, continuing to serve the version it resolved. To observe a new version after a
+There is no `PluginGuard`/`VTableSlot` RAII guard in the runtime. Pointer validity for
+runtime-mediated calls is guaranteed instead by crossbeam-epoch. A reader pins the epoch
+(`crossbeam_epoch::pin()`), atomically loads the immutable published `ReadView`, and serves
+the call lock-free; a writer republishes a new `ReadView` under the write lock and
+`defer_destroy`s the old one, whose deferred free runs only after every guard pinned in the
+old epoch unpins. A reader pinned before a reload or unload therefore keeps both the old
+interface `Arc` and the still-mapped library alive until it unpins — there is no window in
+which a live interface points at an unmapped library. To observe a new version after a
 reload, a caller must re-`find_guest_contract` and re-`resolve_guest_contract`.
+
+Direct FFI host-callers do **not** pin per call — they take the fast path and rely on the
+documented quiesce-before-unload contract. Caching a raw `*const GuestContractInterface`
+and using it after the owning bundle is unloaded is **undefined behaviour**; the host must
+quiesce all callers of a bundle before unloading it.
 ## 6. Threat Model
 
 The polyplug trust model is a **Software Architecture Enforcement Tool**, not a security sandbox. It is designed to prevent architectural erosion in large-scale systems.
@@ -311,7 +322,7 @@ The core polyplug ABI **freezes at v1.0**. There is no public release yet, so th
 
 ### Frozen Surface Areas
 The following structures have the layouts and sizes that will be frozen at v1.0. At/after v1.0, any modification to these (e.g., adding a field or changing field order) is a breaking change. Sizes are verified by the layout tests in `crates/polyplug_abi`.
-- **`HostApi` (168 bytes)**: An opaque `runtime` pointer followed by 19 function pointers and a trailing `reserved` data pointer (full list in §5).
+- **`HostApi` (184 bytes)**: An opaque `runtime` pointer followed by 21 function pointers and a trailing `reserved` data pointer (full list in §5).
 - **`GuestContractInterface` (56 bytes)**: `contract_id`, `contract_version`, `dispatch_type`, the `create_instance`/`destroy_instance` callbacks, and the `dispatch` union.
 - **`GuestContractHandle` (8 bytes)**: `index: u32` (offset 0) and `generation: u32` (offset 4), align 4.
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
@@ -321,53 +332,52 @@ To support future capabilities without breaking the ABI, the host exposes contra
 `HostApi::get_host_contract(contract_id, min_version)` (and
 `resolve_host_contract_interface`). New host-side capabilities are added as new host contracts
 that plugins resolve by ID, rather than by extending the frozen `HostApi` struct.
-The trailing `reserved: *const c_void` field (offset 160) is the only sanctioned
+The trailing `reserved: *const c_void` field (offset 176) is the only sanctioned
 post-freeze expansion slot; producers set it to null, consumers must not read it.
 
 ## Hot-Reload Safety Guarantees
 
-polyplug uses a **retire-not-drop** model for hot-reload. Superseded interfaces and
-libraries are never freed while the runtime lives — they are retained so that any
-raw pointer handed out before the reload stays valid for the lifetime of the runtime.
+polyplug uses **crossbeam-epoch** to make hot-reload and unload memory-safe without freezing
+the runtime. Readers serve calls lock-free against an immutable published `ReadView`; a
+superseded interface `Arc` and its mapping are freed only once no reader is still pinned in
+the prior epoch.
 
 - **Interface swap is a single write-locked operation.** `RuntimeStore::apply_reload_swap`
   moves each freshly-registered `Arc<GuestContractInterface>` into the bundle's existing
-  pre-reload slot under one write lock, so concurrent readers observe either the complete
-  old state or the complete new state — never a half-swapped registry.
-- **Superseded interfaces are retired, not dropped.** The old `Arc<GuestContractInterface>`
-  is pushed onto `RuntimeStore`'s `retired_interfaces` list and held alive for the lifetime
-  of the runtime. A `*const GuestContractInterface` obtained from `resolve_guest_contract`
-  therefore stays valid even across reloads; it keeps serving the old version. Callers must
-  re-find (`find_guest_contract`) and re-resolve to observe the new version.
-- **Superseded native libraries are retired, not `dlclose`d.** The native loader moves the
-  old `libloading::Library` into its `retired` list instead of unloading it, keeping the old
-  code pages mapped so any in-flight raw function pointer stays valid.
-- **Retired interfaces and libraries intentionally accumulate** for the lifetime of the
-  runtime. This is a deliberate trade of memory for pointer-validity safety in the absence
-  of generation/quiescence tracking.
+  pre-reload slot under one write lock, republishes a new `ReadView`, and `defer_destroy`s
+  the old one, so concurrent readers observe either the complete old state or the complete
+  new state — never a half-swapped registry.
+- **Pointer validity under epoch.** A reader pins the epoch (`crossbeam_epoch::pin()`) before
+  loading the `ReadView`. A `*const GuestContractInterface` resolved under a pin keeps both
+  the old interface `Arc` and the still-mapped library alive until the guard unpins, so there
+  is no live-interface/unmapped-library window. Callers must re-find (`find_guest_contract`)
+  and re-resolve to observe the new version.
+- **Superseded native libraries are epoch-reclaimed.** The native loader's old
+  `libloading::Library` is dropped through the same epoch path — `dlclose` / `FreeLibrary`
+  runs only after every reader pinned in the old epoch has unpinned.
 - **Reload failure leaves the active version untouched.** If `loader.reload()` (which calls
   `polyplug_init`) fails, no interface swap occurs and the pre-reload state remains live.
 - **Phase callbacks.** `reload_bundle` fires the host's `on_reload` callback with a
   `ReloadPhase { phase_type, bundle_id, bundle_name, reason }`: `Preparing` before the
   swap (host must destroy all live instances here), `Reloaded` after a successful swap, and
   `Failed` (with a reason string) on any failure. After the `Preparing` callback returns,
-  the runtime emits an informational warning if `Arc::strong_count > 1` for any slot
-  (instances may not have been destroyed) but proceeds with the reload regardless.
+  the runtime emits a "live guest instance" warning if any stateful instance (non-null
+  `instance.data`) for the bundle is still counted, naming the use-after-free hazard, but
+  proceeds with the reload regardless.
 - **Hot-reload must be enabled in config.** `reload_bundle` and the native loader's
   `reload()` both return `RuntimeError::HotReloadDisabled` when `hot_reload_enabled` is false.
-- **VM-backed bundles are not reloadable.** The Python, .NET, Lua, and JavaScript loaders all
-  return `RuntimeError::HotReloadDisabled` from `reload()` (Python and .NET due to
-  process-level single-initialization constraints of their interpreters/CLR; Lua and JS are
-  disabled in this version).
+- **Reloadability by loader.** Native, Lua, and JavaScript (QuickJS) bundles are reloadable.
+  The Python and .NET loaders return `RuntimeError::HotReloadDisabled` from `reload()` due to
+  the process-level single-initialization constraints of CPython and the CLR.
 
 > **Note:** `GuestContractHandle` carries a generation counter (bumped on unload; verified
-> by `resolve_guest_contract`), but there is no `ArcSwap`, no `PluginGuard`/`VTableSlot`
-> quiescence spin, no `QuiescenceTimeout`, and no cascade-depth cap in the current code. An
-> earlier ref-counted reclamation design that used those mechanisms was removed in favor of
-> the retire-not-drop model described above. Hot-reload remains retire-not-drop. **Unload**
-> defaults to retire-not-drop (`UnloadMode::Retire`) but can opt into true resource reclaim
-> (`UnloadMode::Reclaim` — native `dlclose`, Python `sys.modules` purge, Lua/JS VM drop);
-> see the Unload Reclaim Trust Model below.
+> by `resolve_guest_contract`). There is no `ArcSwap`, no `PluginGuard`/`VTableSlot`
+> quiescence spin, no `QuiescenceTimeout`, and no cascade-depth cap. Memory safety across
+> reload and unload comes from epoch-deferred reclamation: the immutable `ReadView` is
+> republished under the write lock and the old view `defer_destroy`d, so a superseded
+> interface `Arc`, native library, or VM is freed only after the last reader pinned in the
+> old epoch unpins. **Unload always reclaims when safe** — there is no opt-in mode and no
+> retain tier; see the Unload Trust Model below.
 
 ## 8. Future Work
 
@@ -380,46 +390,51 @@ The trust model continues to evolve as polyplug expands its reach into more dyna
 dependency on a contract this bundle provides (`RuntimeError::DependencyInUse`);
 `Runtime::unload_bundle_cascade(bundle_id)` unloads dependents first. Unload bumps the
 slot generation (all stale handles return `AbiErrorCode::StaleHandle`), removes the bundle
-from all registry indices, retires the interface `Arc`, and fires the `on_reload` callback
+from all registry indices, reclaims the superseded interface `Arc` and the loader-owned
+mapping / VM state via epoch-deferred reclamation, and fires the `on_reload` callback
 with `ReloadPhaseType::Unloading` (3) before invalidation so the host can quiesce. See
 `docs/UNLOAD_DESIGN.md`.
 
-#### Unload Reclaim Trust Model
+#### Unload Trust Model
 
-The invalidation above is unconditional and fully safe. Whether loader-owned resources are
-*freed* is governed by `RuntimeConfig.unload_mode` (`UnloadMode { Retire (default),
-Reclaim }`):
+Unload always reclaims when safe — there is no opt-in mode and no retain tier. The
+generation bump and index removal are unconditional and fully safe. Loader-owned resources
+are freed through crossbeam-epoch: the superseded interface `Arc` and the mapping / VM are
+`defer_destroy`d under the write lock and run only once no reader is still pinned in the
+prior epoch.
 
-- **`Retire` (default):** the library/VM stays mapped after unload — any raw pointer
-  resolved before the unload stays valid for the runtime's lifetime (retire-not-drop). No
-  new trust assumptions.
-- **`Reclaim` (opt-in) is host-coordinated**, exactly like hot-reload: the host must not
-  call a bundle concurrently with unloading it (trusted-same-process model). The runtime's
-  quiescence/leak checks are best-effort defense-in-depth, not a complete guarantee.
-  - **Native (`dlclose`) is host-attested.** Native dispatch is raw function pointers into
-    the library, so the runtime is **structurally blind** to in-flight native calls and
-    cannot verify safety. Selecting `Reclaim` is the host's attestation that no thread is
-    calling, or holds a pointer into, the bundle. A best-effort `Arc::strong_count` net
-    (`reclaim_safe`) defers to retire when an `Arc` holder remains, but it cannot see raw
-    in-flight calls. If the host's attestation is wrong, it is a host bug — the same posture
-    as hot-reload's `Preparing` contract.
-  - **VM reclaim (Lua/JS) is best-effort, not a guarantee.** The loaders drop a VM only
-    when `in_dispatch_threads` is observed empty. But `host_call_guest_method` releases the
-    registry lock *before* the VM registers the call in `in_dispatch_threads`, leaving a
-    resolve→dispatch window where a call racing a cross-thread unload could free a VM under
-    it. So VM unload relies on the same host-coordination contract; `in_dispatch_threads` is
-    defense-in-depth.
-  - **Python reclaim is memory-safe regardless of in-flight calls** — it only purges the
-    bundle's re-keyed `sys.modules` entries (the import cache); CPython refcounts/GC keep
-    any referenced objects alive.
+- **Runtime-mediated calls are epoch-safe.** `call_guest_method` (offset 136),
+  `create_guest_instance` (offset 160), and `destroy_guest_instance` (offset 168) pin the
+  epoch across dispatch, so a call racing a concurrent unload keeps the interface and its
+  mapping alive until the guard unpins.
+- **Direct FFI host-callers are host-coordinated.** Direct FFI callers do not pin per call;
+  they take the fast path and rely on the documented quiesce-before-unload contract. The
+  host must not call a bundle concurrently with unloading it (trusted-same-process model).
+  Caching a raw `*const GuestContractInterface` and using it after the bundle is unloaded is
+  **undefined behaviour** — the same posture as hot-reload's `Preparing` contract.
+  - **Native (`dlclose` / `FreeLibrary`).** The `libloading::Library` is dropped through the
+    epoch path. Native dispatch is raw function pointers into the library, so the host's
+    quiesce contract is what guarantees no thread is mid-call or holds a pointer into the
+    bundle when it is freed.
+  - **VM reclaim (Lua/JS).** The per-bundle VM is dropped through the same epoch path.
+    Runtime-mediated dispatch into the VM is epoch-pinned; a host that drives the VM through
+    direct FFI must quiesce first.
+  - **Python reclaim is memory-safe regardless of in-flight calls.** It only purges the
+    bundle's re-keyed `sys.modules` entries (a module-cache purge, not an interpreter
+    unload); CPython refcounts/GC keep any referenced objects alive.
+  - **.NET reclaim.** Each `(runtime, bundle)` pair owns a collectible
+    `AssemblyLoadContext`; unload calls `AssemblyLoadContext.Unload()` and the assemblies are
+    GC-reclaimed once references and native frames clear. C#-guest bundles register native
+    function pointers, so the host-cached-pointer UB caveat applies to them too.
 
 ### Hot-Reload ✅ done
-Hot-reload is implemented for native bundles using the retire-not-drop model: superseded
-interfaces and libraries are retained for the lifetime of the runtime so previously resolved
-pointers stay valid, and the active version is swapped under a single write lock. Reload is
-driven explicitly by `reload_bundle`; there is no file-watcher and no automatic retry (both
-were deliberately removed). VM-backed bundles (Python, .NET, Lua, JS) are not reloadable and
-return `HotReloadDisabled`. See the Hot-Reload Safety Guarantees section above.
+Hot-reload is implemented for native, Lua, and JavaScript (QuickJS) bundles using
+crossbeam-epoch: the active version is swapped under a single write lock that republishes an
+immutable `ReadView` and `defer_destroy`s the old one, so a pointer resolved under an epoch
+pin stays valid until its guard unpins. Reload is driven explicitly by
+`reload_bundle`; there is no file-watcher and no automatic retry. The Python and .NET loaders
+return `HotReloadDisabled` (CPython / CLR single-initialization constraints). See the
+Hot-Reload Safety Guarantees section above.
 
 ### Scripting and JS Bindings ✅ done (Epics 10–11, 11.5)
 Python, Lua, and JavaScript (QuickJS) plugins are implemented. All respect the same trust model rules — scripted plugins have their own bundle ID and declare dependencies in `bundle.toml`. The runtime enforces these through the same `INIT_BUNDLE_ID` mechanism used by native code.

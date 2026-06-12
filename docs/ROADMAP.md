@@ -19,7 +19,7 @@ _Last updated: 2026-06-08._
 | Cross-call dispatch (plugin → plugin) | ✅ Done |
 | Goal 3 — Call arena for VM dispatch | ✅ Done (perf refinement deferred) |
 | Platform support — Windows | ✅ Done |
-| Unload — invalidate + opt-in reclaim | ✅ Done |
+| Unload — true unload (epoch-deferred reclaim) | ✅ Done |
 | FFI panic safety (`catch_unwind` at boundary) | ✅ Done |
 | **Fuzzing the ABI boundary** | ✅ Done (3 targets + nightly smoke) |
 | **Miri + ASAN in CI** | ✅ Done (nightly) |
@@ -34,8 +34,8 @@ _Last updated: 2026-06-08._
 | ~~Benchmark regression gate in CI~~ | ❌ Reverted — benchmarks are local-only (owner ruling); run `cargo bench` locally |
 | **Comparison benchmark (`counter_inc`)** | ✅ Done — safe dispatch ~0.5 ns over raw FFI; see `benches/README.md` (local-only) |
 | **Call-arena retain-and-rewind (perf)** | ✅ Done (ArenaOverflowBlock +used cursor; reset rewinds & retains, free on Drop/teardown; all 6 SDKs + 4 lockstep impls) |
-| D11 live-instance counter | ✅ Resolved — host-coordinated, no counter (zero hot-path cost) |
-| .NET collectible ALC (true managed unload) | ✅ Done (#68) — per-bundle collectible ALC; Reclaim truly unloads, Retire keeps it |
+| Live-instance counter (per-contract, host-mediated) | ✅ Done — counts stateful instances; reload/unload-with-live warning |
+| .NET collectible ALC (true managed unload) | ✅ Done (#68) — per-bundle collectible ALC; unload always calls `AssemblyLoadContext.Unload()` |
 
 ---
 
@@ -53,9 +53,10 @@ owner is currently budget-constrained.
   (`parse_api_str`/`parse_bundle_str`), and `Version` parsing — in `fuzz/`, with
   a 60s/target nightly smoke run. See _Hardening_ in the shipped section.
 - **A2. Miri + ASAN. ✅ Done.** Nightly Miri on the pure-logic crates
-  (`polyplug_abi`, `polyplug_utils`) and ASAN (leak-detection off, because
-  retire-not-drop intentionally retains) on the core `--lib` tests. Fixed two
-  findings: arena pointer provenance + a leak-clean tracking test.
+  (`polyplug_abi`, `polyplug_utils`) and ASAN (leak-detection off, because a
+  reader pinned in the prior epoch keeps a superseded interface/library alive
+  until it unpins) on the core `--lib` tests. Fixed two findings: arena pointer
+  provenance + a leak-clean tracking test.
 - **A3. Cross-language differential parity. ✅ Done.** `examples/hosts/parity`
   loads each of the 6 guest languages' implementations of the 5 rich pipeline
   contracts and asserts every language returns byte-identical, golden output —
@@ -72,10 +73,11 @@ owner is currently budget-constrained.
   `HELPER_LUA` emitter + the hand-written guest SDK; runtime test added._
 - **A4. TSAN for the resolve→dispatch race. ✅ Done.** Added
   `stress_concurrent_unload_with_resolvers` (resolver threads `find`+`resolve`+
-  read while one thread invalidates+re-registers), proving the retire-not-drop
-  guarantee (resolve concurrent with unload → valid pointer or clean
-  `StaleHandle`, never a use-after-free). A nightly TSAN job runs it under
-  `-Zsanitizer=thread` — clean, no data races in the registry locking.
+  read while one thread unloads+re-registers), proving the epoch guarantee
+  (resolve concurrent with unload → valid pointer or clean `StaleHandle`, never a
+  use-after-free: a reader pinned before the unload keeps the old interface `Arc`
+  and still-mapped library alive until it unpins). A nightly TSAN job runs it
+  under `-Zsanitizer=thread` — clean, no data races in the registry locking.
 - **A5. Finalize the resolve→dispatch UAF window for 1.0. ✅ Resolved — Option A.**
   Owner ratified the host-coordinated, best-effort `in_dispatch_threads` defense as
   the permanent 1.0 contract (2026-06-09): unload is host-coordinated exactly like
@@ -168,31 +170,25 @@ scoping:
 
 ## Resolved (was deferred)
 
-- **D11 native live-instance counter. ✅ Resolved — host-coordinated, no counter (2026-06-09).**
-  The host owns the guest-instance lifecycle: generated `new()`/`drop()` host-caller
-  wrappers call `create_instance`/`destroy_instance` **directly** on the resolved
-  `GuestContractInterface`, so the runtime never sees instance create/destroy (it only
-  mediates host-contract singletons via `get_host_contract`). A runtime-visible counter
-  would therefore require a new `HostApi` callback (consuming the single free `reserved`
-  slot) **plus** an atomic increment/decrement on every instance create/destroy — a
-  measurable tax on the instance hot path. That cost is unjustified: the only consumer of
-  such a count is a *future* reclaim mode (truly freeing a dylib/VM on unload), and reclaim
-  safety is delegated to the host instead, exactly like hot-reload already requires ("all
-  instances must be destroyed before calling this") and consistent with the A5/Option-A
-  ruling (unload is host-coordinated). The host created the instances, so it already knows
-  the live count — a runtime counter would only duplicate host knowledge. **Zero ABI slot
-  consumed, zero hot-path cost.** Revisit only if a concrete reclaim-safety policy ever
-  needs runtime-visible counts (it would still be a pre-freeze ABI decision at that point).
+- **Live-instance counter (per-contract, host-mediated). ✅ Done.**
+  `Runtime` carries a per-contract live-instance counter keyed by contract id. Host-mediated
+  `create_guest_instance` (`HostApi` @160) and `destroy_guest_instance` (`HostApi` @168)
+  attribute each guest instance to its contract and keep the count current. Only stateful
+  instances (non-null `instance.data`) are counted; stateless/VM-singleton contracts add
+  nothing. When a reload or unload runs while a contract still has live stateful instances,
+  the runtime emits a "live guest instance" use-after-free warning so the host knows it
+  tore down a contract whose instances are still reachable. The count drives the true-unload
+  path's safety signalling and is delegated to the host for quiescing, consistent with the
+  A5/Option-A ruling (unload is host-coordinated).
 
-- **.NET collectible ALC (true managed unload). ✅ Done (#68).** `polyplug_dotnet` now
-  loads each bundle's assemblies into its own collectible `AssemblyLoadContext`, keyed by
-  bundle id (Path via `LoadFromAssemblyPath` + `AssemblyDependencyResolver`; Bytes via
-  `LoadFromStream`). `DotnetLoader::unload` is implemented: under host-attested
-  `UnloadMode::Reclaim` (+ `reclaim_safe`) it truly unloads the bundle's ALC so the managed
-  assemblies become GC-eligible (proven by a `WeakReference`-after-GC test); under the default
-  `Retire` it keeps the ALC rooted (retire-not-drop). `reload` stays disabled and the
-  CLR-inits-once-per-process limitation is unchanged — collectible ALC unloads the *bundle's
-  assemblies*, not the CLR.
+- **.NET collectible ALC (true managed unload). ✅ Done (#68).** `polyplug_dotnet`
+  loads each bundle's assemblies into its own per-(runtime, bundle) collectible
+  `AssemblyLoadContext`, keyed by bundle id (Path via `LoadFromAssemblyPath` +
+  `AssemblyDependencyResolver`; Bytes via `LoadFromStream`). `DotnetLoader::unload` always
+  calls `AssemblyLoadContext.Unload()` on the bundle's ALC, so the managed assemblies become
+  GC-eligible and are reclaimed once outstanding references and native frames clear (proven
+  by a `WeakReference`-after-GC test). `reload` stays disabled and the CLR-inits-once-per-process
+  limitation is unchanged — collectible ALC unloads the *bundle's assemblies*, not the CLR.
 
 ---
 
@@ -245,9 +241,11 @@ concept on every user and shipped zero consumers; anything they could carry is
 already an app-defined host contract.
 
 The `get_extension` slot on `HostApi` was replaced by a single trailing
-`reserved: *const c_void` (null) at the end of the struct (now offset 160,
-after `log`@152). The struct is 168 bytes; `reserved` is silent
-forward-compat room (it can later point to a versioned table) with no narrative.
+`reserved: *const c_void` (null) at the end of the struct (offset 176, after the
+instance-lifecycle callbacks). The struct is 184 bytes — the tail is
+`call_guest_method`@136, `unload_bundle`@144, `log`@152, `create_guest_instance`@160,
+`destroy_guest_instance`@168, `reserved`@176. `reserved` is silent forward-compat
+room (it can later point to a versioned table) with no narrative.
 
 ## Cross-call Dispatch (plugin → plugin) ✅ Done
 
@@ -259,8 +257,10 @@ pointer.
 Delivered: `call_guest_method` on `HostApi`; `AbiErrorCode::ReentrantCall = 9`;
 host callback re-resolves the target through the registry via
 `instance.contract_id` every call (post-reload calls route to the live
-interface; retire-not-drop preserved), forwards the arena to VM dispatch, guards
-re-entering a VM already dispatching; all 6 SDK ABIs + generators + validator.
+interface; runtime-mediated calls pin the epoch across dispatch, so a concurrent
+unload can't free the interface mid-call), forwards the arena to VM dispatch,
+guards re-entering a VM already dispatching; all 6 SDK ABIs + generators +
+validator.
 **Zero per-call authorization** — trust comes from load-phase declared-dependency
 verification (`TRUST_MODEL.md` §5).
 
@@ -309,37 +309,56 @@ Non-obvious constraints (do not regress):
 - `polyplug_dotnet/src/context.rs` uses `into_temp_path()` to close the
   runtimeconfig.json write handle before hostfxr reads it — Windows mandatory
   file sharing otherwise fails with `ERROR_SHARING_VIOLATION`.
-- Windows hot-reload: retire-not-drop loads each version from a distinct on-disk
-  filename, so reload never overwrites a mapped file.
+- Windows hot-reload: each version loads from a distinct on-disk filename, so
+  reload never overwrites a mapped file (the superseded mapping is freed later via
+  epoch-deferred reclamation, once no reader is still pinned in the prior epoch).
 
-## Unload — invalidate + opt-in reclaim ✅ Done
+## Unload — true unload (epoch-deferred reclaim) ✅ Done
 
-`HostApi.unload_bundle` (offset 144) invalidates a bundle (generation bump →
-`StaleHandle`, registry-index removal, dependent-refusal/cascade) and fires a
-`ReloadPhaseType::Unloading` callback before invalidation. Reclaim of
-loader-owned resources is opt-in via `RuntimeConfig.unload_mode`
-(`UnloadMode { Retire (default), Reclaim }`; `RuntimeConfig` is 56 bytes,
-`unload_mode` at offset 4). Full model: `docs/UNLOAD_DESIGN.md`; trust posture:
-`TRUST_MODEL.md`.
+`HostApi.unload_bundle` (offset 144) bumps slot generations (resolved handles go
+`StaleHandle`), removes the bundle from every registry index (with
+dependent-refusal/cascade), and fires a `ReloadPhaseType::Unloading` (= 3)
+callback before invalidation so the host can quiesce. It then reclaims the
+superseded interface `Arc` **and** the loader's dylib mapping / VM state via
+crossbeam-epoch deferred reclamation — freed once no reader is still pinned in
+the prior epoch. There is no opt-in mode and no retained tier:
+`RuntimeConfig` is 48 bytes with no unload-mode field. Full model:
+`docs/UNLOAD_DESIGN.md`; trust posture: `TRUST_MODEL.md`.
 
-Delivered:
+Reads are lock-free: a reader takes a pin guard over the immutable published
+`ReadView`; writers republish and `defer_destroy` the old view, which is freed
+once all old-epoch guards unpin. A reader pinned before the unload keeps the old
+interface `Arc` and its still-mapped library alive until it unpins.
 
-- **Native opt-in reclaim:** under `Reclaim` the native loader `dlclose`s the
-  dylib (releases OS resources + the on-disk file lock, notably the Windows DLL
-  lock, so a developer can rebuild and reload). Host-attested + best-effort
-  `reclaim_safe` (`Arc::strong_count`) net — native dispatch is structurally
-  blind to in-flight raw calls, so reclaim is the host's attestation, by design.
-- **Python reclaim:** under `Reclaim` the loader purges the bundle's re-keyed
-  `sys.modules` entries so a reload re-imports fresh source. Memory-safe
-  regardless of in-flight calls (CPython refcount/GC).
-- **Lua/JS VM reclaim:** drop the VM if quiescent (`in_dispatch_threads` empty),
-  else defer; these loaders govern reclaim by their own quiescence tracking.
-- **Reload reuses the unload teardown atom:** `RuntimeStoreData::retire_slot`
-  is the single canonical teardown (bump generation + retire-not-drop interface
-  + clear entry); both `invalidate_bundle` (unload) and `apply_reload_swap`'s
-  dropped-contract branch route through it. Hot-reload continuity preserved —
-  the surviving-contract in-place swap does not bump generation, so resolved
-  handles stay valid.
+Two caller contracts:
+
+- **Runtime-mediated calls are safe under concurrent unload.** `call_guest_method`
+  (@136), `create_guest_instance` (@160), and `destroy_guest_instance` (@168) pin
+  the epoch across dispatch, so the interface and library can't be freed mid-call.
+- **Direct FFI host-callers are fast and do not pin per call.** Quiesce-before-unload
+  is the documented contract; using a cached raw interface pointer after unload is
+  UB.
+
+Per-loader reclaim:
+
+- **Native:** the loader's `Library` is dropped via the epoch-deferred path, so
+  `dlclose`/`FreeLibrary` releases OS resources + the on-disk file lock (notably
+  the Windows DLL lock, so a developer can rebuild and reload) once no reader is
+  pinned in the prior epoch.
+- **Lua/JS:** the per-bundle VM is dropped through the same epoch-deferred path.
+- **Python:** unload always purges the bundle's re-keyed `sys.modules` entries so a
+  reload re-imports fresh source — a module-cache purge, because CPython's
+  single-init interpreter can't be torn down per bundle. Memory-safe regardless of
+  in-flight calls (CPython refcount/GC).
+- **.NET:** unload always calls `AssemblyLoadContext.Unload()` on the bundle's
+  per-(runtime, bundle) collectible ALC; the assemblies are GC-reclaimed once
+  outstanding references and native frames clear. `reload` stays disabled; the CLR
+  is single-init per process.
+- **Shared teardown:** reload and unload share one canonical teardown atom on the
+  store (bump generation + epoch-reclaim the superseded interface). Both
+  `invalidate_bundle` (unload) and `apply_reload_swap`'s dropped-contract branch
+  route through it. Hot-reload continuity is preserved — the surviving-contract
+  in-place swap does not bump generation, so resolved handles stay valid.
 
 ## FFI panic safety ✅ Done
 
@@ -363,14 +382,16 @@ per-PR Action minutes).
 - **Miri:** nightly UB detection on `polyplug_abi` + `polyplug_utils` (the
   crates with no `dlopen`/FFI execution, which Miri can't interpret).
 - **ASAN:** nightly use-after-free / overflow / double-free detection on the
-  core `--lib` tests. Leak detection is **off** by design — retire-not-drop
-  intentionally retains superseded interfaces/libraries for the runtime
-  lifetime, which LSAN would report as leaks.
+  core `--lib` tests. Leak detection is **off** by design — a reader pinned in
+  the prior epoch keeps a superseded interface/library alive until it unpins, and
+  in a short-lived test a still-pinned or not-yet-collected epoch garbage entry
+  reads to LSAN as a leak.
 - **TSAN:** nightly `-Zsanitizer=thread` over `stress_concurrent_registry`
   (pure Rust, no `dlopen`), including `stress_concurrent_unload_with_resolvers`
-  which exercises the resolve↔invalidate (resolve→dispatch) race. Confirms the
-  registry's `RwLock` access is data-race-free and the retire-not-drop pointer
-  guarantee holds under concurrent unload.
+  which exercises the resolve↔unload (resolve→dispatch) race. Confirms the
+  registry's `RwLock` access is data-race-free and the epoch guarantee holds under
+  concurrent unload (a reader pinned before the unload never observes a freed
+  interface).
 - **Supply-chain (`deny.toml`):** `cargo-deny` checks advisories (deny yanked +
   known CVEs), licenses (permissive allow-list; first-party workspace crates are
   `publish = false` + skipped), and sources (crates.io only).

@@ -31,9 +31,9 @@ Two independent locks cooperate, with distinct jobs:
   slots, runs `loader.reload()` (which registers the new interfaces), then `apply_reload_swap`
   consumes that snapshot. The registry lock is dropped between those steps, so two reloads of
   the same bundle could interleave such that one reload's snapshot goes stale — its swap then
-  finds no freshly-registered slot for a contract the other reload already consumed, takes the
-  retire-not-drop path, and removes that contract's only live slot from the find index, leaving
-  a contract *both* versions provide unresolvable. `reload_bundle` holds `reload_serialize`
+  finds no freshly-registered slot for a contract the other reload already consumed, reclaims
+  that contract's only live slot through the epoch path, and removes it from the find index,
+  leaving a contract *both* versions provide unresolvable. `reload_bundle` holds `reload_serialize`
   across the whole call (including the cascade tree) so each reload's snapshot↔swap is atomic
   with respect to any other reload. The recursive cascade path does not re-acquire it, so
   cascades cannot self-deadlock.
@@ -76,11 +76,12 @@ The runtime notifies the host before and after interface swap, plus failure case
 ### 4. Leak Check (Informational, Non-Blocking)
 
 The `Preparing` callback fires exactly **once**; there is no retry loop. After
-the callback returns, the runtime checks `Arc::strong_count` on each interface
-slot for the bundle. If any count is still greater than 1 — meaning the host may
-not have dropped all caller wrappers — the runtime emits a warning via
-`emit_warning` and **proceeds with the reload anyway**. The check is purely
-informational; it never blocks, retries, or aborts the reload.
+the callback returns, the runtime checks its per-contract live-instance counter
+for the bundle. If any stateful instance (non-null `instance.data`) is still
+counted — meaning the host may not have destroyed all caller wrappers — the
+runtime emits a "live guest instance" warning naming the use-after-free hazard
+and **proceeds with the reload anyway**. The check is purely informational; it
+never blocks, retries, or aborts the reload.
 
 The safety contract is therefore on the host: it MUST drop all instances inside
 the `Preparing` callback. A dangling wrapper that calls into a swapped interface
@@ -152,30 +153,26 @@ pub struct RuntimeConfig {
     /// Version compatibility policy for loaded bundles. (offset 0)
     pub compatibility: Compatibility,
 
-    /// How a bundle's loader-owned resources are reclaimed on unload. (offset 4)
-    /// `UnloadMode { Retire (default), Reclaim }`. See UNLOAD_DESIGN.md.
-    pub unload_mode: UnloadMode,
-
-    /// Whether hot-reload is enabled. Default: false (offset 8)
+    /// Whether hot-reload is enabled. Default: false (offset 4)
     pub hot_reload_enabled: bool,
 
-    /// Optional FFI callback invoked for each reload phase. (offset 16)
+    /// Optional FFI callback invoked for each reload phase. (offset 8)
     /// The first argument is the opaque `on_reload_user_data` pointer; the
     /// second is a const pointer to the phase — always non-null, valid only
     /// for the duration of the call.
     pub on_reload: Option<unsafe extern "C" fn(*mut core::ffi::c_void, *const ReloadPhase)>,
 
-    /// Opaque user-data pointer forwarded to `on_reload` as its first argument. (offset 24)
+    /// Opaque user-data pointer forwarded to `on_reload` as its first argument. (offset 16)
     /// Owned by the host; the runtime only forwards it, never reads or frees it.
     pub on_reload_user_data: *mut core::ffi::c_void,
 
-    /// Optional logger callback (offset 32), its user_data (offset 40), and the
-    /// maximum delivered LogLevel (u32, offset 48). See ABI_ARCHITECTURE.md.
+    /// Optional logger callback (offset 24), its user_data (offset 32), and the
+    /// maximum delivered LogLevel (u32, offset 40). See ABI_ARCHITECTURE.md.
     pub log: Option<unsafe extern "C" fn(*mut core::ffi::c_void, u32, StringView, StringView)>,
     pub log_user_data: *mut core::ffi::c_void,
     pub log_max_level: u32,
 }
-// sizeof(RuntimeConfig) == 56, align 8 on 64-bit.
+// sizeof(RuntimeConfig) == 48, align 8 on 64-bit.
 ```
 
 #### Why `hot_reload_enabled` Defaults to `false`
@@ -185,9 +182,9 @@ Hot-reload is **opt-in by design**, not because it's unsafe, but because it requ
 1. **Callback Registration**: The host must register an `on_reload` callback
 2. **Instance Tracking**: The host must track instances per bundle and destroy them on `Preparing`
 3. **Error Handling**: The host must handle `Failed` notifications
-4. **Per-Call Overhead**: Guards re-resolve interface on each call (~10-50ns)
+4. **Re-resolution**: After a swap the host must re-`find`/re-resolve to observe the new version
 
-If an application doesn't need hot-reload, it shouldn't pay these costs.
+If an application doesn't need hot-reload, it shouldn't take on this coordination burden.
 
 #### Error When Disabled
 
@@ -200,14 +197,15 @@ rt.reload_bundle(path)?;  // Returns Err(RuntimeError::HotReloadDisabled)
 
 ```rust
 use polyplug_abi::runtime::RuntimeConfig;
-use polyplug_abi::runtime::{Compatibility, ReloadPhaseType, UnloadMode};
+use polyplug_abi::runtime::{Compatibility, ReloadPhaseType};
 
 let config = RuntimeConfig {
     compatibility: Compatibility::Strict,
-    unload_mode: UnloadMode::Retire,  // default; Reclaim opts into dlclose/VM drop on unload
     hot_reload_enabled: true,  // REQUIRED for reload_bundle()
     on_reload: None,
     on_reload_user_data: core::ptr::null_mut(),
+    // log / log_user_data / log_max_level default to None / null / Warn.
+    ..RuntimeConfig::default()
 };
 
 let rt = Runtime::builder()
@@ -269,8 +267,8 @@ For language-specific API details and examples, see the SDK documentation:
 │     ├─ encoder_instance destroyed                                   │
 │     │                                                                │
 │     ▼                                                                │
-│  3. Runtime: Arc::strong_count check (informational only) — emits   │
-│     a warning if refs remain, then proceeds with the reload anyway. │
+│  3. Runtime: live-instance check (informational only) — emits a     │
+│     warning if instances remain, then proceeds with the reload.     │
 │     │                                                                │
 │     ▼                                                                │
 │  4. Runtime: loader.reload() → load + polyplug_init                 │
@@ -349,7 +347,7 @@ PipelineDecoder decoder(rt);  // Throws on error? Inconsistent with C++ patterns
   so the sequence is not atomic on its own
 - **Correctness over reload throughput**: Reload is a control-plane operation, not a hot path —
   serializing writers is cheap, and it removes a class of stale-snapshot races that could
-  retire a live contract's only slot
+  reclaim a live contract's only slot
 - **Readers stay concurrent**: The mutex guards only writer-vs-writer; `find` / `resolve` /
   dispatch never take it, so a reload never blocks the call path
 - **Instance-owned (Rule 12)**: Each `Runtime` owns its mutex, so multiple runtimes in one
@@ -359,7 +357,7 @@ PipelineDecoder decoder(rt);  // Throws on error? Inconsistent with C++ patterns
 
 ## See Also
 
-- [UNLOAD_DESIGN.md](./UNLOAD_DESIGN.md) — True unload design (generation-counted handles; Phases 1–4 shipped: invalidate-only unload, VM reclaim, native opt-in `dlclose` reclaim + Python `sys.modules` purge under `UnloadMode::Reclaim`; arena retain-and-rewind and D11 deferred)
+- [UNLOAD_DESIGN.md](./UNLOAD_DESIGN.md) — True unload design: generation-counted handles plus crossbeam-epoch reclamation. `unload_bundle` bumps slot generations, removes the bundle from every registry index, and reclaims the superseded interface `Arc` and the loader-owned mapping / VM (native `dlclose`/`FreeLibrary`, Lua/JS VM drop, Python `sys.modules` purge, .NET collectible-ALC unload) via epoch-deferred reclamation — freed once no reader is still pinned in the prior epoch.
 - [PERFORMANCE.md](./PERFORMANCE.md) — Hot-reload safety architecture and overhead
 - [ABI_ARCHITECTURE.md](./ABI_ARCHITECTURE.md) — ABI layer design
 - [SDK Examples](../examples/) — Working code for all languages

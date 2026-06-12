@@ -258,8 +258,8 @@ unsafe fn resolve_and_dispatch(host: *const HostApi, contract_id: u64) -> u32 {
 /// One unit of CACHED dispatch work: dispatch fn 0 straight through an
 /// already-resolved interface pointer, with NO registry lookup and NO registry
 /// lock. This is the documented cache-the-handle hot path — the interface
-/// pointer is resolved once before the timed loop and stays valid for the
-/// runtime lifetime (retire-not-drop). Returns the sum so the work survives DCE.
+/// pointer is resolved once before the timed loop and stays valid for as long as
+/// the bundle stays loaded. Returns the sum so the work survives DCE.
 ///
 /// # Safety
 /// `interface` must point to a valid `'static` `GuestContractInterface` whose

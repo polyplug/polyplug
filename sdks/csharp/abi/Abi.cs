@@ -465,10 +465,12 @@ public struct HostApi
     ///  The target contract is re-resolved through the registry via
     ///  `instance.contract_id` on EVERY call — the result is never cached. This is
     ///  deliberate: after a hot-reload, a fresh cross-call routes to the live
-    ///  interface, while any interface retired by the reload stays alive (the
-    ///  retire-not-drop model) so instances still held by in-flight callers remain
-    ///  valid. The caller therefore always reaches the current implementation
-    ///  without invalidating outstanding instances.
+    ///  interface, while the interface superseded by the reload stays alive under
+    ///  epoch reclamation until every reader pinned before the swap unpins. Each
+    ///  cross-call pins the epoch across its dispatch, so an in-flight call keeps
+    ///  the interface it resolved alive until it returns. The caller therefore
+    ///  always reaches the current implementation without invalidating outstanding
+    ///  instances.
     ///
     ///  # Multiple providers
     ///  Routing keys solely on `instance.contract_id`. If more than one live
@@ -502,14 +504,20 @@ public struct HostApi
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
     public IntPtr CallGuestMethod;
-    ///  Unload a guest bundle, invalidating its handles and removing it from the registry.
+    ///  Unload a guest bundle, invalidating its handles and freeing its resources.
     ///
-    ///  Today this performs **retire/invalidate-only** unload: the bundle's slots have
-    ///  their generation bumped and their active interface `Arc` moved to retire storage,
-    ///  then the bundle is removed from the registry indices. The underlying dylib mapping
-    ///  or VM state is **NOT** freed — that is a future Reclaim mode. Because the interface
-    ///  is retired rather than dropped, any raw `GuestContractInterface` pointer already
-    ///  resolved before the unload stays valid.
+    ///  This performs **true unload**: the bundle's slots have their generation bumped,
+    ///  the bundle is removed from the registry indices, and the superseded interface
+    ///  `Arc` together with the underlying dylib mapping or VM state are reclaimed through
+    ///  crossbeam-epoch deferred reclamation — the memory is freed once no reader is still
+    ///  pinned in the epoch that preceded the unload. There is no opt-in mode; unload
+    ///  always reclaims when safe.
+    ///
+    ///  A raw `GuestContractInterface` pointer cached before the unload and dereferenced
+    ///  after it is **undefined behaviour**: the host must quiesce the bundle (ensure no
+    ///  thread is calling into it or holds a pointer into it) before unloading. Runtime-
+    ///  mediated calls — `call_guest_method`, `create_guest_instance`, `destroy_guest_instance`
+    ///  — pin the epoch across dispatch and are therefore safe against a concurrent unload.
     ///
     ///  After unload, every handle that was minted for this bundle resolves to
     ///  `AbiErrorCode::StaleHandle`, and `find_guest_contract` / `find_all_guest_contracts`
@@ -694,8 +702,8 @@ public struct HostContractInterface
 ///
 ///  The handle pairs the slot `index` with the `generation` the slot held when the
 ///  handle was minted. `resolve_guest_contract` rejects a handle whose `generation`
-///  no longer matches the slot's current generation (the slot was retired and the
-///  index possibly reused), returning `StaleHandle`. Out-of-bounds or empty-slot
+///  no longer matches the slot's current generation (the slot was vacated on unload
+///  and the index possibly reused), returning `StaleHandle`. Out-of-bounds or empty-slot
 ///  indices return InvalidHandle.
 ///
 ///  # Naming

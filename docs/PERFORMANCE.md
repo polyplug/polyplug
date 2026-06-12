@@ -13,7 +13,7 @@ This document uses the following terminology (current as of v1.1):
 polyplug is designed for **zero-overhead hot path calls**. The architecture ensures:
 
 1. **Resolve once** - Find the contract handle, then resolve it to an interface pointer
-2. **Cache the pointer** - The resolved `*const GuestContractInterface` stays valid (retire-not-drop)
+2. **Cache the pointer** - The resolved `*const GuestContractInterface` stays valid while the bundle is loaded
 3. **One indirect call** - Dispatch to the plugin function
 
 ```
@@ -39,10 +39,13 @@ polyplug is designed for **zero-overhead hot path calls**. The architecture ensu
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The resolved pointer stays valid for the runtime's lifetime under the
-**retire-not-drop** model — superseded interfaces are retained, never freed — so
-a caller may cache it across calls. To observe a *new* version after a hot-reload,
-re-`find_guest_contract` + re-`resolve_guest_contract`.
+The resolved pointer stays valid for as long as the owning bundle is loaded, so a
+caller may cache it across calls; the runtime pins a crossbeam-epoch guard across
+every runtime-mediated dispatch, so concurrent unload cannot pull the memory out
+from under an in-flight call. Using a cached pointer **after** its owning bundle is
+unloaded is undefined behaviour — the host must quiesce (no thread calling into or
+holding a pointer into the bundle) before unloading it. To observe a *new* version
+after a hot-reload, re-`find_guest_contract` + re-`resolve_guest_contract`.
 
 ### Two boundaries, two charts
 
@@ -150,7 +153,7 @@ operation itself. Every other language reaches the runtime through the C ABI.
 **Already zero-overhead:**
 - `resolve_guest_contract` returns a raw interface pointer — no FFI on the hot path
 - The pointer is cached by the caller and reused across calls
-- Retire-not-drop keeps it valid for the runtime's lifetime
+- The pointer stays valid for as long as the bundle is loaded (quiesce before unload)
 
 ```cpp
 // Setup (once): resolve the interface pointer
@@ -161,7 +164,8 @@ interface->functions[fn_id](args, out);
 ```
 
 **Hot-reload safety:** re-`find_guest_contract` + `resolve_guest_contract` to
-observe a swapped-in version; the previously resolved pointer stays valid (retired, not freed).
+observe a swapped-in version; the previously resolved pointer stays valid for as
+long as the bundle is loaded.
 
 ### Lua (Fast)
 
@@ -270,9 +274,10 @@ All host libraries implement the same hot-reload safety pattern:
 │                                                                  │
 │   The caller MAY cache that pointer and reuse it, because:       │
 │   - A hot-reload swaps the slot to the new interface, but        │
-│   - the superseded interface is retired, not freed, so a         │
-│     previously resolved pointer stays valid (keeps serving the   │
-│     old version)                                                  │
+│   - the previously resolved pointer stays valid for as long as   │
+│     the bundle is loaded (keeps serving the old version);        │
+│     runtime-mediated calls pin an epoch guard so a concurrent    │
+│     unload cannot free it mid-dispatch                           │
 │                                                                  │
 │   To observe the NEW version after a reload, re-find +           │
 │   re-resolve the handle.                                         │
@@ -282,22 +287,24 @@ All host libraries implement the same hot-reload safety pattern:
 
 **Cache the pointer, or re-resolve — your choice.**
 
-When hot-reload happens, the Rust runtime, under the `RuntimeStore` RwLock write guard:
+When hot-reload happens, the Rust runtime republishes the slot's interface:
 1. Swaps the interface in the slot to the newly registered one (`apply_reload_swap`)
-2. Pushes the superseded interface onto `retired_interfaces`
+2. `defer_destroy`s the superseded interface `Arc` into the current crossbeam epoch
 
-The retire-not-drop model keeps superseded interfaces alive for the runtime lifetime,
-so a previously resolved pointer never dangles. This is the deliberate design choice
-behind the benchmarks: there is **no per-call guard** and no forced re-resolve. A
-long-lived caller resolves once and dispatches through the cached pointer at native
-speed; it only re-`find_guest_contract` + `resolve_guest_contract` when it explicitly
-wants to pick up a swapped-in version.
+Registry reads are **lock-free**: a reader pins a crossbeam-epoch guard, atomically
+loads the immutable published `ReadView`, and dispatches with no lock. The superseded
+interface's memory is reclaimed once every guard pinned in the old epoch has unpinned,
+so a pointer resolved before the swap never dangles mid-call. This is the deliberate
+design choice behind the benchmarks: there is **no per-call lock** and no forced
+re-resolve. A long-lived caller resolves once and dispatches through the cached pointer
+at native speed; it only re-`find_guest_contract` + `resolve_guest_contract` when it
+explicitly wants to pick up a swapped-in version.
 
 **Overhead:**
 
 | Operation | Cost | Impact |
 |-----------|------|--------|
-| Cached interface pointer (the hot path) | ~2 ns dispatch | Keeps serving the version it resolved (valid via retire-not-drop) |
+| Cached interface pointer (the hot path) | ~2 ns dispatch | Keeps serving the version it resolved (valid while the bundle is loaded) |
 | Re-find + re-resolve | ~20-30 ns (`amortization/find_and_resolve` measures ~22 ns) | Picks up the swapped-in interface |
 
 For typical plugin calls (>1µs), even an explicit re-resolve every call is <5%.
@@ -372,7 +379,8 @@ chart above is regenerated from the same run by `scripts/gen_bench_charts.py`.)_
 
 - **polyplug's safe dispatch costs ~0.3–0.5 ns more than hand-rolled raw FFI**
   (~2.3 ns vs ~1.8–2.0 ns) — roughly a single L1 cache hit — for full type-checked
-  registration, lifecycle management, hot-reload, and retire-not-drop safety.
+  registration, lifecycle management, hot-reload, and lock-free epoch-guarded
+  unload safety.
 - **Most of that gap is the calling convention, not dispatch.** The
   `abi_marshalled` arm pays 2.1 ns with *no dynamic library at all*: passing a
   struct by pointer and writing the result through an out-pointer is inherently
@@ -518,7 +526,7 @@ for data in dataset:
     interface = rt.resolve_guest_contract(handle)
     result = call_plugin(interface, data)
 
-# Good: Resolve once, call many times (the pointer stays valid — retire-not-drop)
+# Good: Resolve once, call many times (the pointer stays valid while the bundle is loaded)
 interface = rt.resolve_guest_contract(handle)
 for data in dataset:
     result = call_plugin(interface, data)
@@ -909,8 +917,9 @@ bench measures.)
 - **load a plugin (~13 µs)** and **native hot-reload swap (~17 µs)** are dominated
   by the operating system loading the shared library (`dlopen`/`mmap`), not by
   polyplug code — a flamegraph of the load path shows our own frames under 1% (see
-  [PROFILING.md](./PROFILING.md)). The only lever is doing *fewer* loads, which the
-  retire-not-drop model already does.
+  [PROFILING.md](./PROFILING.md)). The only lever is doing *fewer* loads — a live
+  bundle is never re-`dlopen`ed, so repeat resolves of an already-loaded bundle
+  pay nothing here.
 
 ### VM-loader hot-reload (Lua + QuickJS)
 
@@ -947,7 +956,7 @@ amortizes away — and the [registry scale sweep](../crates/polyplug/benches/REA
 shows resolve stays flat (~9.7 ns) whether 10 or 1000 contracts are registered, so
 the cold cost does not grow with how many plugins a host has loaded.
 
-## Load → unload churn soak (retire vs reclaim, and a leak this surfaced)
+## Load → unload churn soak (epoch reclamation, and a leak this surfaced)
 
 ![memory across many load/unload/drop cycles](assets/benches/soak_rss.svg)
 
@@ -958,20 +967,21 @@ gated behind `POLYPLUG_SOAK_ITERS`) runs many full **load → dispatch → unloa
 drop** cycles and samples process RSS, to prove the runtime does not leak across
 bundle churn.
 
-### Retire-not-drop vs reclaim — read this before reading the chart
+### Epoch reclamation — read this before reading the chart
 
-polyplug uses a **retire-not-drop** model. Within a **single live `Runtime`**,
-unloading or hot-reloading a bundle *retires* the superseded interface + library
-— it keeps them mapped for the runtime's lifetime so any raw pointer a caller
-already resolved stays valid (see "Resolve once, reuse the interface pointer"
-above). So a loop that loads and unloads inside *one* long-lived runtime is
-**expected** to grow RSS — that retained growth is by design, not a leak.
-**Reclaim** of retired memory happens at **`Runtime` teardown** (`Drop`), and for
-.NET via the collectible-ALC reclaim path. The honest leak test therefore tears
-the whole runtime down every cycle: each iteration builds a *fresh* `Runtime`,
+polyplug **truly unloads** bundles via crossbeam-epoch. Within a **single live
+`Runtime`**, unloading or hot-reloading a bundle `defer_destroy`s the superseded
+interface `Arc` **and** the backing dylib mapping / VM state into the current
+epoch; that memory is reclaimed once no reader is still pinned in the prior epoch
+(see "Resolve once, reuse the interface pointer" above). Native bundles `dlclose`
+/ `FreeLibrary` the `Library`, Lua/JS drop the per-bundle VM, Python purges its
+`sys.modules` entries, and .NET unloads its collectible `AssemblyLoadContext` —
+all on the same epoch-deferred path. A `Runtime`'s own `HostApi` table (184
+bytes) is owned by the `Runtime` and reclaimed at **`Runtime` teardown** (`Drop`).
+The leak test cycles the whole runtime: each iteration builds a *fresh* `Runtime`,
 loads, dispatches, unloads, then **drops the runtime fully** (dropping the loader,
-which `dlclose`s its libraries). Under full-teardown cycling, RSS must return to a
-flat baseline — a rising line means a true leak.
+which `dlclose`s its libraries). RSS must return to a flat baseline — a rising
+line means a true leak.
 
 ### Measured (one developer machine, this run)
 
@@ -997,14 +1007,14 @@ python3 scripts/gen_bench_charts.py --soak target/soak/soak_rss.txt \
 
 ### Leak found and fixed — `HostApi` is reclaimed at teardown
 
-The soak surfaced a genuine **core leak in the `Runtime` lifecycle**, ~168 bytes
+The soak surfaced a genuine **core leak in the `Runtime` lifecycle**, ~184 bytes
 per runtime built-and-dropped. It was **not** in load, unload, dispatch, or the
 `dlopen`/`dlclose` machinery (a build-and-drop-only bisection leaked at the same
 slope; a pure `dlopen`+`dlclose` loop with no runtime is flat). Root cause:
 `RuntimeBuilder::build` used `Box::leak(Box::new(HostApi { … }))` to obtain the
 `&'static HostApi` the FFI required, and there was no owner that reclaimed it —
 `Arc<Runtime>` teardown freed the `Runtime` but not the leaked `HostApi`
-(168 bytes, matching the observed per-cycle growth).
+(184 bytes, matching the observed per-cycle growth).
 
 **Fix:** the `Runtime` now *owns* its `HostApi` as a `Box<HostApi>` placed as the
 last struct field, so it drops after `registry`/`loaders` (whose teardown

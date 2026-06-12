@@ -81,11 +81,14 @@ pub struct PipelineValidatorContract {
 ```
 
 The wrapper holds the `*const GuestContractInterface` that `resolve_guest_contract`
-returned — there is no RAII guard type around the interface itself. The retire-not-drop
-model keeps every resolved interface (and its backing library) alive for the runtime's
-lifetime, so the stored pointer stays valid even across a hot-reload. The instance,
-by contrast, is owned by the wrapper: `new()` calls `create_instance`, `drop()` calls
-`destroy_instance`.
+returned — a plain raw pointer with no RAII guard around the interface itself. Its
+validity is governed by the epoch/quiesce contract: it stays valid for as long as
+the owning bundle is loaded (so the stored pointer survives a hot-reload, still
+serving the version it resolved), and runtime-mediated calls pin a crossbeam-epoch
+guard so a concurrent unload cannot free it mid-dispatch. Using the pointer **after**
+its owning bundle is unloaded is undefined behaviour — the host must quiesce before
+unloading. The instance, by contrast, is owned by the wrapper: `new()` calls
+`create_instance`, `drop()` calls `destroy_instance`.
 
 ---
 

@@ -1221,9 +1221,9 @@ impl RuntimeStore {
     /// pending slots were never published into `guest_contract_index`, so they are
     /// never-visible; purging them prevents unbounded accumulation across retries.
     ///
-    /// Retire-not-drop is respected: only pending (never-visible) slots are purged.
-    /// Pre-reload (live) and previously-retired slots are left untouched, so any
-    /// raw pointer a caller already resolved stays valid.
+    /// Only pending (never-visible) slots are purged. Pre-reload (live) slots are left
+    /// untouched, so a reader pinned on one keeps it alive and any raw pointer a caller
+    /// already resolved stays valid for the duration of that pin.
     pub(crate) fn abort_reload(&self, bundle_id: BundleId, old_slots: &[u32]) {
         let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");

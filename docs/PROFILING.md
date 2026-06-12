@@ -118,8 +118,8 @@ callgrind_annotate callgrind.out | head -50
    `just bench-check`) so a change that helps one path doesn't quietly regress
    another. `just bench-charts` refreshes the committed SVGs once you're done.
 3. **Keep the safety guarantees.** A faster hot path that drops a generation
-   check or the retire-not-drop guarantee is not faster — it's broken. See
-   `TRUST_MODEL.md`.
+   check or the epoch-guarded lock-free read/unload guarantee is not faster —
+   it's broken. See `TRUST_MODEL.md`.
 
 ---
 
@@ -142,10 +142,9 @@ path — the cost is the kernel loading a shared object.** Self-time, ranked:
 **Conclusion:** the ~14 µs `load_bundle` cost is **kernel-bound** (`dlopen`/`mmap`),
 not polyplug code. Manifest parsing, `polyplug_init`, and registration together are
 under ~1% of CPU. There is **no meaningful optimization headroom in our load
-logic** — the only lever is doing *fewer* loads, which the retire-not-drop model
-already does (it never re-`dlopen`s a live bundle). This matches the dispatch
-story: the costs that remain are physics (an OS load, an indirect call), not fat
-to trim.
+logic** — the only lever is doing *fewer* loads, and a live bundle is never
+re-`dlopen`ed. This matches the dispatch story: the costs that remain are physics
+(an OS load, an indirect call), not fat to trim.
 
 > **Harness caveat — read before trusting a microbench flamegraph.** Profiling a
 > criterion bench through `cargo flamegraph` pollutes the graph with two things

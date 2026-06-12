@@ -26,10 +26,11 @@ Key ABI facts (verified in `crates/polyplug_abi/src/host/host_api.rs`):
 - **FFI surface is exactly two `#[no_mangle]` exports** — `polyplug_runtime_create`
   and `polyplug_runtime_destroy` (`crates/polyplug/src/ffi.rs`). Everything else
   is reached through function-pointer fields on `HostApi`.
-- **`HostApi` is 168 bytes, align 8**: one opaque `runtime` pointer plus 19
+- **`HostApi` is 184 bytes, align 8**: one opaque `runtime` pointer plus 21
   function pointers (`call_guest_method` at offset 136, `unload_bundle` at
-  offset 144, `log` at offset 152) followed by a trailing
-  `reserved: *const c_void` data pointer at offset 160 (always null;
+  offset 144, `log` at offset 152, `create_guest_instance` at offset 160,
+  `destroy_guest_instance` at offset 168) followed by a trailing
+  `reserved: *const c_void` data pointer at offset 176 (always null;
   forward-compat room only).
   Layout is locked by `layout_host_api` in `host_api.rs`.
 - **Plugin entry point is `polyplug_init(const HostApi*, const BundleInitContext*)`**
@@ -121,17 +122,19 @@ section) for the full discussion.
 ## 4. Hot-reload
 
 Hot-reload is supported by the **native, Lua, and JS (QuickJS)** loaders — their
-`reload()` re-reads the on-disk source and swaps the live interface. The model is
-**retire-not-drop**: superseded interfaces and native libraries are never freed
-while the runtime lives, so any raw pointer handed out before a reload stays
-valid for the runtime's lifetime.
+`reload()` re-reads the on-disk source and swaps the live interface. Readers serve
+lock-free off an immutable published `ReadView`; a reload republishes a new
+`ReadView` under the write lock and `defer_destroy`s the old one through
+crossbeam-epoch, so the superseded interface and library are freed only after every
+reader that was pinned in the prior epoch unpins.
 
-- **Pointer-validity guarantee:** a `*const GuestContractInterface` from
-  `resolve_guest_contract` stays valid across reloads, continuing to serve the
-  version it resolved. The superseded `Arc` is moved into `retired_interfaces` and
-  the old `libloading::Library` into the loader's `retired` list (never
-  `dlclose`d). To observe a new version, re-`find_guest_contract` and
+- **Pinned-reader safety:** a reader holding a `crossbeam_epoch::pin()` guard
+  observes a consistent `ReadView` for the whole call; a reader pinned before a
+  reload keeps the old interface `Arc` and the still-mapped library alive until it
+  unpins. To observe a new version, re-`find_guest_contract` and
   re-`resolve_guest_contract`.
+- **Handle generations:** a `GuestContractHandle` survives a hot-reload swap (the
+  slot generation is unchanged) and resolves to the new interface.
 - **Swap is one write-locked operation** (`apply_reload_swap`): readers observe
   either the complete old or complete new state.
 - **Opt-in:** `reload_bundle` returns `RuntimeError::HotReloadDisabled` unless
@@ -143,59 +146,70 @@ valid for the runtime's lifetime.
 - **Python and .NET are not reloadable:** both loaders return
   `HotReloadDisabled` from `reload()` unconditionally (interpreter/CLR
   once-per-process constraints). Lua and JS (QuickJS) reload like native does.
-- **Windows-safe:** the retire-not-drop model loads each version from a distinct
-  on-disk filename (e.g. `reload_plugin_v1` vs `_v2`), so a reload never overwrites
-  a file while it is mapped — the Windows DLL file-lock that would break
-  overwrite-in-place reload does not apply.
+- **Windows-safe:** each version loads from a distinct on-disk filename (e.g.
+  `reload_plugin_v1` vs `_v2`), so a reload never overwrites a file while it is
+  mapped — the Windows DLL file-lock that would break overwrite-in-place reload
+  does not apply.
 
 Full design and flow: [`HOT_RELOAD_DESIGN.md`](./HOT_RELOAD_DESIGN.md);
 safety guarantees: [`TRUST_MODEL.md`](TRUST_MODEL.md) (Hot-Reload Safety).
 
 ---
 
-## 5. Unload (invalidate-only)
+## 5. Unload (true unload)
 
 `HostApi.unload_bundle(this, bundle_id)` is the 18th `HostApi` function pointer
-(offset 144). It invalidates a bundle at runtime without reloading it.
+(offset 144). It tears a bundle out of the runtime and reclaims its resources
+through epoch-deferred reclamation — there is no opt-in mode and no "keep mapped"
+tier; unload always reclaims once it is safe to do so.
 
-- **Invalidate semantics:** unload bumps the slot generation for every contract the
-  bundle registered. All previously minted `GuestContractHandle`s for those slots
-  return `AbiErrorCode::StaleHandle` (5) on the next `resolve_guest_contract` call.
-  The bundle is removed from all registry indices; `find_guest_contract` and
-  `list_bundles` no longer return it.
-- **Retire-not-drop:** the interface `Arc` is moved to retire storage rather than
-  freed, so any raw `*const GuestContractInterface` pointer resolved *before* the
-  unload stays valid for the runtime's lifetime (same guarantee as hot-reload).
+- **Index removal + generation bump:** unload bumps the slot generation for every
+  contract the bundle registered and removes the bundle from all registry indices.
+  All previously minted `GuestContractHandle`s for those slots return
+  `AbiErrorCode::StaleHandle` (5) on the next `resolve_guest_contract` call;
+  `find_guest_contract` and `list_bundles` no longer return it.
+- **Epoch reclamation:** the superseded interface `Arc` and the loader-owned
+  resource (dylib mapping or VM state) are handed to crossbeam-epoch via
+  `defer_destroy`. The deferred free runs only after every reader pinned in the
+  prior epoch unpins, so a reader that pinned (`crossbeam_epoch::pin()`) before the
+  unload keeps both the old interface `Arc` and the still-mapped library alive
+  until it unpins. No reader ever observes freed memory.
+- **Runtime-mediated calls are safe; raw FFI must quiesce:** calls that go through
+  the runtime — `call_guest_method` (offset 136), `create_guest_instance`
+  (offset 160), `destroy_guest_instance` (offset 168) — pin the epoch across
+  dispatch and are always safe against a concurrent unload. Direct FFI callers do
+  **not** pin per call (the fast path); they rely on the documented
+  quiesce-before-unload contract. Caching a raw `*const GuestContractInterface` and
+  using it after the owning bundle is unloaded is **undefined behaviour** — the
+  host must quiesce that bundle before unloading it.
+- **Live-instance warning:** the runtime keeps a per-contract live-instance counter
+  keyed by contract id. Because `create_guest_instance` / `destroy_guest_instance`
+  are host-mediated, every stateful instance (non-null `instance.data`) is
+  attributed to a contract. Unloading (or reloading) while stateful instances are
+  still live emits a "live guest instance" warning naming the use-after-free hazard.
 - **Dependency refusal:** `Runtime::unload_bundle(bundle_id)` returns
   `RuntimeError::DependencyInUse` if any still-loaded bundle declared a dependency on
   a contract this bundle provides. Use `Runtime::unload_bundle_cascade(bundle_id)` to
   unload dependents first.
 - **Unloading callback:** before invalidation the runtime fires the `on_reload`
   callback with `ReloadPhaseType::Unloading` (3) so the host can quiesce.
-- **Unload modes (`RuntimeConfig.unload_mode`, default `Retire`):** invalidation above
-  happens in every mode; what changes is whether loader-owned resources are freed.
-  - **`UnloadMode::Retire` (default):** loader keeps the library/VM mapped after
-    unload (retire-not-drop). Fully safe regardless of in-flight calls. Memory from
-    retired interfaces accumulates exactly as after a hot-reload.
-  - **`UnloadMode::Reclaim` (opt-in, host-coordinated):** the loader frees its
-    bundle resources on unload, per language:
-    - **Native (cdylib):** `dlclose`s the dylib (drops the `libloading::Library`),
-      releasing OS resources and the on-disk file lock (notably the Windows DLL lock)
-      so a developer can rebuild and reload. **Host-attested:** native dispatch is
-      raw fn pointers, so the runtime is structurally blind to in-flight native calls;
-      selecting Reclaim asserts no thread is calling / holds a pointer into the bundle.
-      A best-effort `Arc::strong_count` net (`reclaim_safe`) defers to retire when an
-      `Arc` holder remains.
-    - **Python:** purges the bundle's re-keyed `sys.modules` entries so a reload
-      re-imports fresh source. Memory-safe regardless of in-flight calls — CPython
-      refcounts/GC keep referenced objects alive; purging only drops the import cache.
-    - **Lua / JS (QuickJS):** drop the VM if quiescent (`in_dispatch_threads` empty),
-      else defer. These loaders govern reclaim by their own quiescence tracking and
-      ignore `unload_mode`/`reclaim_safe`.
-- **Host-coordinated, not auto-safe:** Reclaim (VM and native alike) relies on the
-  trusted-same-process contract — the host must not call a bundle concurrently with
-  unloading it. The quiescence/leak checks are best-effort defense-in-depth, not a
-  complete guarantee. See [`UNLOAD_DESIGN.md`](./UNLOAD_DESIGN.md) for the full model.
+- **Per-loader reclaim:**
+  - **Native (cdylib):** `dlclose` / `FreeLibrary` via the epoch-deferred drop of
+    the `libloading::Library`, releasing OS resources and the on-disk file lock
+    (notably the Windows DLL lock).
+  - **Lua / JS (QuickJS):** the per-bundle VM is dropped through the same epoch
+    path.
+  - **Python:** CPython is single-init per process, so unload purges the bundle's
+    re-keyed `sys.modules` entries (a module-cache purge, not an interpreter
+    unload). This is memory-safe regardless of in-flight calls — CPython
+    refcounts/GC keep referenced objects alive; only the import cache is dropped.
+  - **.NET/C#:** the CLR is single-init per process; each (runtime, bundle) pair
+    gets a collectible `AssemblyLoadContext`, and unload always calls
+    `AssemblyLoadContext.Unload()`, GC-reclaimed once references and native frames
+    clear. C#-guest bundles register native function pointers, so the
+    host-cached-pointer UB caveat above applies to them too.
+
+See [`UNLOAD_DESIGN.md`](./UNLOAD_DESIGN.md) for the full model.
 
 ---
 
@@ -234,8 +248,9 @@ without holding a raw interface pointer of its own.
   17th `HostApi` function pointer (offset 136). The caller passes a
   `GuestContractInstance` it already resolved; the host re-resolves the target
   through the registry via `instance.contract_id` on **every** call, so a call
-  made after a reload routes to the live (swapped-in) interface while the
-  retire-not-drop guarantees keep any previously resolved pointer valid.
+  made after a reload routes to the live (swapped-in) interface. The dispatch pins
+  the epoch for its duration, so the target interface and library stay alive for
+  the whole call even if an unload races it.
 - **Arena threading:** the `arena` argument is forwarded to VM dispatch (Lua, JS)
   exactly like the per-call arena in §4 of [`ROADMAP.md`](ROADMAP.md); native
   dispatch ignores it (native function pointers carry no arena slot). A **null

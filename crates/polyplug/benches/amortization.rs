@@ -17,7 +17,7 @@
 //               it (see `counter_inc`), so this is *not* a per-call cost.
 //   3. reload  — `Runtime::reload_bundle` (native-only hot-reload): dlopen the
 //               new dylib, re-run `polyplug_init`, atomically swap the interface,
-//               and retire the old library. A capability static linking
+//               and epoch-reclaim the old library. A capability static linking
 //               cannot offer at all.
 //
 // Honesty notes:
@@ -33,8 +33,8 @@
 //   * This bench cannot depend on `polyplug_native` — that crate depends on
 //     `polyplug`, so a dev-dependency would be a cycle. It reuses the
 //     `TestNativeLoader` the integration tests already use (dlopen + ABI check +
-//     `polyplug_init` + retire-not-drop), wired in through the shared test
-//     module below.
+//     `polyplug_init` + epoch-deferred reclaim on unload), wired in through the
+//     shared test module below.
 
 use core::hint::black_box;
 use std::path::Path;
@@ -130,7 +130,7 @@ fn bench_amortization(c: &mut Criterion) {
     // ── reload: native hot-reload swap (a capability static linking lacks) ─────
     //
     // A runtime preloaded with v1; each iteration reloads v2 over it (dlopen +
-    // init + atomic interface swap + retire the old library). Real work every
+    // init + atomic interface swap + epoch-reclaim the old library). Real work every
     // time — reload is never idempotent.
     let reload_runtime: Arc<Runtime> = fresh_hot_reload_runtime();
     reload_runtime

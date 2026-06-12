@@ -67,18 +67,17 @@ pub trait BundleLoader: Send + Sync {
     /// can resolve to this bundle, so the loader only has to account for dispatches
     /// already in flight.
     ///
-    /// The default implementation is a no-op: invalidate-only loaders (python,
-    /// dotnet) follow the retire-not-drop model and never tear down their per-bundle
-    /// state, so previously resolved raw pointers stay valid for the runtime's
-    /// lifetime. They must NOT override this hook.
-    ///
-    /// VM loaders (lua, js) override it to free the bundle's VM at a quiescence
-    /// point: if no thread is mid-dispatch on the VM the VM state is dropped (true
-    /// reclaim); otherwise it is retired (kept alive) to avoid a use-after-free.
-    ///
-    /// The native loader overrides it to `dlclose` the dylib once it is epoch-safe
-    /// to do so; reclamation is always epoch-deferred so previously resolved
-    /// pointers stay valid until no in-flight dispatch can reference the bundle.
+    /// The default implementation is a no-op, for a hypothetical loader with no
+    /// per-bundle resources to reclaim. Every shipped loader overrides it, and each
+    /// reclaim is epoch-deferred so the actual free runs only once no reader is still
+    /// pinned in the epoch that preceded the unload — previously resolved pointers stay
+    /// valid until no in-flight dispatch can reference the bundle:
+    /// - **Native loader:** `dlclose`s the dylib (drops the `libloading::Library`),
+    ///   releasing the on-disk file lock.
+    /// - **VM loaders (Lua, JS):** drop the bundle's per-bundle VM.
+    /// - **Python loader:** purges the bundle's re-keyed `sys.modules` entries (CPython
+    ///   is single-init per process and cannot be torn down).
+    /// - **.NET loader:** unloads the bundle's collectible `AssemblyLoadContext`.
     ///
     /// # Errors
     /// Returns `Err(RuntimeError::...)` if reclamation fails.

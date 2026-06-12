@@ -65,11 +65,11 @@ const HostApi* polyplug_runtime_create(const void* config);
 void polyplug_runtime_destroy(const HostApi* host);
 ```
 
-`config` points at a `RuntimeConfig` (`#[repr(C)]`, **56 bytes, align 8**):
-`compatibility: Compatibility` (u32, offset 0), `unload_mode: UnloadMode` (u32,
-offset 4), `hot_reload_enabled: bool` (offset 8), `on_reload` callback (offset 16),
-`on_reload_user_data` (offset 24), `log` callback (offset 32), `log_user_data`
-(offset 40), and `log_max_level` (u32, offset 48). The `log` callback —
+`config` points at a `RuntimeConfig` (`#[repr(C)]`, **48 bytes, align 8**):
+`compatibility: Compatibility` (u32, offset 0), `hot_reload_enabled: bool`
+(offset 4), `on_reload` callback (offset 8), `on_reload_user_data` (offset 16),
+`log` callback (offset 24), `log_user_data` (offset 32), and `log_max_level`
+(u32, offset 40). The `log` callback —
 `fn(user_data, level: u32, scope: StringView, message: StringView)` — receives
 every runtime diagnostic at or below `log_max_level` (`LogLevel { Error = 1,
 Warn = 2, Info = 3, Debug = 4, Trace = 5 }`); when null, Error/Warn messages go
@@ -80,9 +80,7 @@ path, no copies); LuaJIT FFI callbacks cannot receive structs by value, so the
 Lua host SDK installs the `polyplug_lua_log_trampoline` exported by the
 polyplug_lua loader cdylib as `log` and carries a scalar-callback
 `PolyplugLuaLogBridge` in `log_user_data` (see
-`crates/polyplug_lua/src/ffi.rs`). `UnloadMode { Retire = 0 (default), Reclaim = 1 }`
-selects whether `unload_bundle` frees loader-owned resources (e.g. native `dlclose`)
-or keeps them mapped (retire-not-drop). The `on_reload` callback —
+`crates/polyplug_lua/src/ffi.rs`). The `on_reload` callback —
 `fn(user_data, phase: *const ReloadPhase)` — receives a **const pointer** to a
 `ReloadPhase` whose `ReloadPhaseType` is one of `Preparing = 0`, `Reloaded = 1`,
 `Failed = 2`, or `Unloading = 3` (fired before a bundle is invalidated on unload).
@@ -103,18 +101,21 @@ void host->free(const HostApi* host, uint8_t* ptr, size_t size, size_t align);
 
 ### All Other Operations (via HostApi fields)
 
-`polyplug_runtime_create` returns a pointer to `HostApi`, a `168`-byte
-`#[repr(C)]` struct: one opaque runtime pointer plus 19 function-pointer fields
+`polyplug_runtime_create` returns a pointer to `HostApi`, a `184`-byte
+`#[repr(C)]` struct: one opaque runtime pointer plus 21 function-pointer fields
 (`call_guest_method` at offset 136, `unload_bundle` at offset 144, `log` at
-offset 152) followed by a trailing `reserved: *const c_void` data pointer at
-offset 160 (producers set null; consumers must not read it). Host applications
+offset 152, `create_guest_instance` at offset 160, `destroy_guest_instance` at
+offset 168) followed by a trailing `reserved: *const c_void` data pointer at
+offset 176 (producers set null; consumers must not read it). Host applications
 and plugins call these fields using the self-passing pattern, e.g.
 `host->load_bundle(host, path, path_len)`.
 The fields cover bundle lifecycle (`load_bundle`, `reload_bundle`, `unload_bundle`),
 contract discovery (`find_guest_contract`, `find_all_guest_contracts`,
-`resolve_guest_contract`), registration (`register_guest_contract`,
-`register_host_contract`, `register_loader`), and error handling
-(`get_last_error`, `get_error_len`), among others.
+`resolve_guest_contract`), instance lifecycle (`create_guest_instance`,
+`destroy_guest_instance`), runtime-mediated dispatch (`call_guest_method`),
+registration (`register_guest_contract`, `register_host_contract`,
+`register_loader`), and error handling (`get_last_error`, `get_error_len`),
+among others.
 
 ## Execution Flow
 

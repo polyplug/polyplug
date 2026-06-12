@@ -645,33 +645,38 @@ impl Runtime {
     }
 
     /// Unload a bundle: invalidate its handles, remove it from the registry, and
-    /// reclaim its per-loader resources where the loader supports it.
+    /// reclaim its interface and per-loader resources via epoch-deferred reclamation.
     ///
     /// First the registry is invalidated: the bundle's slots have their generation
-    /// bumped and their active interface `Arc` moved to retire storage, then the bundle
-    /// is removed from the registry indices. Because interfaces are *retired* rather
-    /// than dropped, any raw `GuestContractInterface` pointer resolved before the unload
-    /// stays valid; only future resolves of old handles fail with `StaleHandle`.
+    /// bumped and the bundle is removed from the registry indices, then the superseded
+    /// interface `Arc` is handed to crossbeam-epoch for deferred reclamation. After this,
+    /// every old handle fails to resolve with `StaleHandle` and no new resolve can hand
+    /// out a pointer into the bundle. A reader pinned before the unload keeps the old
+    /// interface `Arc` (and its backing library / VM) alive until it unpins; a raw
+    /// `GuestContractInterface` pointer cached before the unload and used after it is
+    /// undefined behaviour — see the host-coordination contract below.
     ///
-    /// Then the matching loader's reclaim hook runs:
-    /// - **VM loaders (Lua, JS):** the bundle's VM is *freed* (true reclaim) once it is
-    ///   quiescent — see the host-coordination contract below.
-    /// - **Native loader:** it `dlclose`s the dylib (drops the `libloading::Library`)
-    ///   once epoch-safe, releasing OS resources and the on-disk file lock. Reclamation
-    ///   is always epoch-deferred — see [`crate::loader::BundleLoader::unload`].
-    /// - **Python / .NET loaders:** invalidate-only (retire-not-drop); the interpreter /
-    ///   CLR state is kept mapped.
+    /// Then the matching loader's reclaim hook runs; reclamation is uniformly
+    /// epoch-deferred, so the actual free happens only once no reader is still pinned in
+    /// the epoch that preceded the unload (see [`crate::loader::BundleLoader::unload`]):
+    /// - **Native loader:** `dlclose`s the dylib (drops the `libloading::Library`),
+    ///   releasing OS resources and the on-disk file lock.
+    /// - **VM loaders (Lua, JS):** drop the bundle's per-bundle VM.
+    /// - **Python loader:** purges the bundle's re-keyed `sys.modules` entries so a later
+    ///   load re-imports fresh source (CPython is single-init per process and cannot be
+    ///   torn down).
+    /// - **.NET loader:** unloads the bundle's collectible `AssemblyLoadContext`; its
+    ///   assemblies are GC-reclaimed once all references and native frames clear.
     ///
     /// # Host-coordination contract
-    /// Unload is a host-coordinated operation, exactly like hot-reload: the host MUST
-    /// NOT call a bundle's contracts concurrently with unloading it. `call_guest_method`
-    /// resolves an interface and then dispatches WITHOUT holding the registry lock (for
-    /// concurrency/reentrancy), so a call racing an unload from another thread is the
-    /// host's responsibility to prevent — the same trusted-same-process posture
-    /// `docs/TRUST_MODEL.md` and the reload `Preparing` callback already assume. VM loaders
-    /// additionally defer reclaim (retire instead of free) if a dispatch is *visibly*
-    /// in flight, as best-effort defense-in-depth, but this is not a substitute for the
-    /// contract.
+    /// Runtime-mediated calls — `call_guest_method`, `create_guest_instance`, and
+    /// `destroy_guest_instance` — pin the epoch across dispatch, so a call racing an
+    /// unload from another thread keeps the interface and its backing library / VM alive
+    /// until the call returns. Direct FFI host callers do NOT pin per call (the fast
+    /// path): the host MUST NOT call a bundle's contracts through a cached raw interface
+    /// pointer concurrently with — or after — unloading it. This is the same
+    /// trusted-same-process posture `docs/TRUST_MODEL.md` and the reload `Preparing`
+    /// callback already assume.
     ///
     /// # Errors
     /// - `BundleNotFound`: the bundle is not currently loaded.
@@ -806,7 +811,8 @@ impl Runtime {
     /// Recursively unloads bundles that declared a dependency on a contract the target
     /// provides before unloading the target itself, so no `DependencyInUse` refusal is
     /// hit. A `visited` set breaks dependency cycles. Like [`Runtime::unload_bundle`],
-    /// this is retire/invalidate-only.
+    /// each unload is true unload: handles go stale and the interface and per-loader
+    /// resources are reclaimed via epoch-deferred reclamation.
     pub fn unload_bundle_cascade(&self, bundle_id: BundleId) -> Result<(), RuntimeError> {
         let mut visited: HashSet<BundleId> = HashSet::new();
         self.unload_bundle_cascade_with_visited(bundle_id, &mut visited)
@@ -2106,8 +2112,10 @@ pub unsafe extern "C" fn host_reload_bundle(
 
 /// HostApi.unload_bundle callback — invalidates a bundle and removes it from the registry.
 ///
-/// Performs retire/invalidate-only unload: the bundle's handles go stale and it is
-/// removed from the registry, but the underlying dylib/VM is not freed.
+/// Performs true unload: the bundle's handles go stale, it is removed from the
+/// registry, and the superseded interface `Arc` and the underlying dylib / VM are
+/// reclaimed via epoch-deferred reclamation (freed once no reader is still pinned in
+/// the prior epoch).
 ///
 /// # Safety
 /// - `this` must be a valid HostApi pointer with a valid runtime field.

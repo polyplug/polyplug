@@ -261,7 +261,7 @@ A minimal host that loads and calls the plugin:
 use polyplug_abi::runtime::RuntimeConfig;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
-use polyplug_abi::{Compatibility, GuestContractHandle, UnloadMode};
+use polyplug_abi::{Compatibility, GuestContractHandle};
 use polyplug_native::{NativeConfig, NativeLoader};
 use std::path::PathBuf;
 
@@ -274,10 +274,11 @@ use generated::host::types::GREETER_HELLO_CONTRACT_ID;
 fn main() {
     let config = RuntimeConfig {
         compatibility: Compatibility::Strict,
-        unload_mode: UnloadMode::Retire,
         hot_reload_enabled: false,
-        on_reload: None,
-        on_reload_user_data: core::ptr::null_mut(),
+        // on_reload / log callbacks and their user-data + log_max_level default to
+        // None / null / Warn — set them only if you want reload/unload phase or
+        // diagnostic callbacks.
+        ..RuntimeConfig::default()
     };
 
     let runtime: &'static Runtime = Box::leak(Box::new(

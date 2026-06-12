@@ -16,16 +16,16 @@
 //! # Lifetime
 //! Valid until the contract is unregistered or the bundle is unloaded. Each
 //! registry slot carries a generation counter that is bumped whenever the slot is
-//! retired, so a handle minted against an earlier generation can be detected as
-//! stale even after its index is recycled by a later registration.
+//! vacated on unload, so a handle minted against an earlier generation can be
+//! detected as stale even after its index is recycled by a later registration.
 //! Use `resolve_guest_contract` to check validity — returns null / StaleHandle if stale.
 
 /// Opaque handle to a registered guest contract.
 ///
 /// The handle pairs the slot `index` with the `generation` the slot held when the
 /// handle was minted. `resolve_guest_contract` rejects a handle whose `generation`
-/// no longer matches the slot's current generation (the slot was retired and the
-/// index possibly reused), returning `StaleHandle`. Out-of-bounds or empty-slot
+/// no longer matches the slot's current generation (the slot was vacated on unload
+/// and the index possibly reused), returning `StaleHandle`. Out-of-bounds or empty-slot
 /// indices return InvalidHandle.
 ///
 /// # Naming
