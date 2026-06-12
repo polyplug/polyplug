@@ -18,7 +18,11 @@ polyplug is a plugin runtime that enables seamless cross-language plugin develop
 - **Cross-Language** — Write plugins in Rust, Python, C#, Lua, JavaScript (QuickJS), or C++ (host applications can also be written in any of the six, including JS on Deno)
 - **Cross-Platform** — Linux (x64), macOS (x64/ARM64), and Windows (x64)
 - **Hot Reload** — Native, Lua, and JS (QuickJS) bundles reload at runtime; the host observes reloads through the `on_reload` phase callback (Python and .NET bundles do not hot-reload)
-- **Zero/Minimal-Overhead FFI** — Direct function pointer dispatch with no runtime overhead for native languages, minimal overhead for VM-based languages
+- **Zero/Minimal-Overhead FFI** — Direct function pointer dispatch with no runtime overhead for native languages (~2.4 ns/call measured), minimal overhead for VM-based languages
+- **Lock-Free Reads** — Contract resolution (`find`/`resolve`) serves from an immutable, epoch-published registry snapshot with no lock on the hot path; writers swap the published view atomically on each registration, unload, and reload
+- **True Unload** — Unloading a bundle marks its handles stale, removes it from the registry, and reclaims its interface **and** the backing library/VM once no in-flight reader is still pinned (crossbeam-epoch deferred reclamation) — never a retain-forever leak. Native/Lua/JS free the library/VM; Python purges its module cache; .NET unloads its collectible `AssemblyLoadContext`
+- **Runtime Isolation** — The `Runtime` holds no global or thread-local state, so multiple isolated runtimes coexist in one process (CPython and the .NET CLR are the documented once-per-process exceptions)
+- **Model-Checked Concurrency** — The epoch publish/reclaim protocol behind lock-free reads and safe unload is exhaustively model-checked with [loom](https://docs.rs/loom)
 - **Type-Safe Code Generation** — The `polyplugc` CLI generates type-safe bindings for all languages
 - **Multiple Loader Types** — Native, Python, Lua, JavaScript (QuickJS), and .NET loaders
 

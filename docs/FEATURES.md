@@ -139,6 +139,12 @@ reader that was pinned in the prior epoch unpins.
   either the complete old or complete new state.
 - **Opt-in:** `reload_bundle` returns `RuntimeError::HotReloadDisabled` unless
   `hot_reload_enabled` is set in `RuntimeConfig`.
+- **Model-checked:** the publish/reclaim protocol that underpins both lock-free
+  reads and safe unload is exhaustively model-checked with [loom](https://docs.rs/loom)
+  (the `loom_epoch_model` crate, run via `just loom`). It proves a reader that
+  pins across its dereference never observes reclaimed memory, and that dropping
+  the guard early would race reclamation — making the pin demonstrably necessary.
+  See [`UNLOAD_DESIGN.md`](./UNLOAD_DESIGN.md) → *Epoch Model* → *Model-checked with loom*.
 - **Three-phase callback:** `Preparing` (host destroys its caller wrappers),
   `Reloaded`, `Failed`. The post-`Preparing` leak check is informational and
   never blocks. Failure leaves the active version untouched.
@@ -334,9 +340,9 @@ isolation for untrusted code). Full detail: [`TRUST_MODEL.md`](TRUST_MODEL.md).
 ## 11. Performance posture
 
 - **Native path is near-zero overhead:** the hot path is one guard load, one
-  pointer dereference, and one indirect call (~2 ns for a trivial native
-  dispatch). VM loaders add bounded overhead (~8 ns .NET, ~35 ns Lua, ~95 ns
-  QuickJS; Python is dominated by GIL acquisition).
+  pointer dereference, and one indirect call (~2.4 ns for a trivial native
+  dispatch, measured). VM loaders add bounded overhead (~8 ns .NET, ~34 ns Lua,
+  ~98 ns QuickJS; Python ~62 ns, dominated by GIL acquisition).
 - **The Call Arena** removes the per-value `host->alloc` round trip from VM return
   paths (see §3), turning steady-state string returns into a pointer increment.
 - Native guest returns are already zero-allocation borrowed views, so no arena is

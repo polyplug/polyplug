@@ -160,7 +160,7 @@ operation itself. Every other language reaches the runtime through the C ABI.
 const GuestContractInterface* interface = rt.resolve_guest_contract(handle);
 
 // Hot path - direct indirect call, zero FFI overhead
-interface->functions[fn_id](args, out);
+interface->functions[fn_id](instance, args, out);
 ```
 
 **Hot-reload safety:** re-`find_guest_contract` + `resolve_guest_contract` to

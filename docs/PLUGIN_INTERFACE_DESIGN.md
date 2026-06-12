@@ -121,9 +121,9 @@ pub fn decode(&self, input: StringView) -> Result<StringView, ContractError> {
     if interface.dispatch_type == DispatchType::Native {
         // Native: Direct call, zero overhead
         let fn_ptr = *interface.dispatch.native.functions.add(0);
-        let f: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = 
+        let f: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
             core::mem::transmute(fn_ptr);
-        f(args_ptr, out_ptr)
+        f(GuestContractInstance::null(), args_ptr, out_ptr)
     } else {
         // VM: One dispatch call, no global lookup
         (interface.dispatch.vm.call)(
