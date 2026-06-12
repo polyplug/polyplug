@@ -121,7 +121,7 @@ ffi.cdef[[
     typedef AbiError (*HostApi_load_bundle_fn)(const HostApi*, const uint8_t*, size_t);
     typedef AbiError (*HostApi_reload_bundle_fn)(const HostApi*, const uint8_t*, size_t);
     typedef AbiError (*HostApi_register_host_contract_fn)(const HostApi*, const HostContractInterface*);
-    typedef AbiError (*HostApi_register_loader_fn)(const HostApi*, StringView, void*);
+    typedef AbiError (*HostApi_register_loader_fn)(const HostApi*, void*);
     typedef size_t (*HostApi_get_last_error_fn)(const HostApi*, uint8_t*, size_t);
     typedef size_t (*HostApi_get_error_len_fn)(const HostApi*);
     typedef AbiError (*HostApi_call_guest_method_fn)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
@@ -339,11 +339,13 @@ ffi.cdef[[
         // 
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
-        //  - `runtime_name`: Name of the runtime (e.g., "rust", "python")
         //  - `loader_ptr`: Opaque pointer to the loader implementation
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
+        // 
+        //  The loader's name comes from its own `BundleLoader::loader_name()`
+        //  implementation — the single source of truth — so it is not passed here.
         HostApi_register_loader_fn register_loader;
         //  Get last error message.
         // 
@@ -923,6 +925,14 @@ ffi.cdef[[
         //    from inside the callback may deadlock).
         //  - The `scope` and `message` `StringView`s are valid only for the
         //    duration of the call — copy the bytes to retain them.
+        // 
+        //  # Language note (LuaJIT hosts)
+        //  The by-value `StringView` parameters are deliberate — the hot path
+        //  stays copy-free. LuaJIT FFI callbacks cannot receive structs by value,
+        //  so a Lua host cannot implement this signature directly; the Lua host
+        //  SDK instead installs `polyplug_lua_log_trampoline` (exported by the
+        //  polyplug_lua loader cdylib) here and carries a scalar-callback bridge
+        //  in `log_user_data`.
         RuntimeConfig_log_fn log;
         //  Opaque user-data pointer forwarded to `log` as its first argument.
         // 

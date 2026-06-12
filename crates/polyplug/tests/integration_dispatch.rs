@@ -6,8 +6,8 @@
 
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::{
-    AbiError, AbiErrorCode, BundleInitContext, GuestContractHandle, GuestContractInterface,
-    HostApi, PluginDescriptor, StringView,
+    AbiError, AbiErrorCode, BundleInitContext, GuestContractHandle, GuestContractInstance,
+    GuestContractInterface, HostApi, PluginDescriptor, StringView,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -327,17 +327,24 @@ fn test_dispatch_add_function() {
     let mut out: u32 = 0_u32;
 
     // SAFETY: fn_ptr is function 0 in the interface. args and out are correctly typed.
-    // The function has signature: extern "C" fn(*const (), *mut ()) -> AbiError
+    // The function has the frozen native ABI signature:
+    //   extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
     // SAFETY: dispatch is a union, accessing .native requires unsafe since dispatch_type is Native.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
-        // enforced by the test (AddArgs matches what test_plugin expects).
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+    ) -> AbiError =
+        // SAFETY: fn_ptr is cast to the frozen native dispatch signature. Arg
+        // types are enforced by the test (AddArgs matches what test_plugin expects).
         unsafe { core::mem::transmute(fn_ptr) };
 
-    // SAFETY: args is a valid AddArgs, out is a valid u32 location.
+    // SAFETY: args is a valid AddArgs, out is a valid u32 location. The instance
+    // is a null stateless handle, which test.add's stateless add ignores.
     let call_result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -427,16 +434,21 @@ fn test_dispatch_add_with_zero() {
 
     // SAFETY: interface_ptr is valid.
     let fn_ptr: *const () = unsafe { *(*interface_ptr).dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: fn_ptr is the add function with compatible signature.
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+    ) -> AbiError =
+        // SAFETY: fn_ptr is the add function with the frozen native signature.
         unsafe { core::mem::transmute(fn_ptr) };
 
     let args: AddArgs = AddArgs { a: 0, b: 0 };
     let mut out: u32 = 99_u32;
 
-    // SAFETY: args and out are valid and correctly typed.
+    // SAFETY: args and out are valid and correctly typed; null stateless instance.
     let result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -520,17 +532,22 @@ fn test_dispatch_add_wrapping_overflow() {
 
     // SAFETY: interface_ptr is valid.
     let fn_ptr: *const () = unsafe { *(*interface_ptr).dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: fn_ptr is the add function with compatible signature.
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+    ) -> AbiError =
+        // SAFETY: fn_ptr is the add function with the frozen native signature.
         unsafe { core::mem::transmute(fn_ptr) };
 
     // u32::MAX + 1 wraps to 0 (wrapping_add).
     let args: AddArgs = AddArgs { a: u32::MAX, b: 1 };
     let mut out: u32 = 42_u32;
 
-    // SAFETY: args and out are valid and correctly typed.
+    // SAFETY: args and out are valid and correctly typed; null stateless instance.
     let result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )

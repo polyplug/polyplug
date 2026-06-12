@@ -91,9 +91,12 @@ impl TestAddContract {
                 }
             } else {
                 let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
-                let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-                    core::mem::transmute(fn_ptr);
-                dispatch_fn(args_ptr, out_ptr)
+                let dispatch_fn: unsafe extern "C" fn(
+                    GuestContractInstance,
+                    *const (),
+                    *mut (),
+                ) -> AbiError = core::mem::transmute(fn_ptr);
+                dispatch_fn(GuestContractInstance::null(), args_ptr, out_ptr)
             }
         };
         if err.code != AbiErrorCode::Ok as u32 {

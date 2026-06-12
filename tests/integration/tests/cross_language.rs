@@ -384,12 +384,13 @@ fn test_rust_host_rust_guest() {
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper with signature extern "C" fn(*const (), *mut ()) -> AbiError.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: fn_ptr is transmuted to generic dispatch signature; AddArgs matches the add function.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    // SAFETY: fn_ptr is transmuted to the frozen native dispatch signature; AddArgs matches the add function.
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args is a valid AddArgs; out is a valid u32 location.
+    // SAFETY: args is a valid AddArgs; out is a valid u32 location; null stateless instance.
     let result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -478,12 +479,13 @@ fn test_cpp_host_rust_guest() {
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
+    // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
     let result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -572,12 +574,13 @@ fn test_csharp_host_rust_guest() {
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
+    // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
     let result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -666,12 +669,13 @@ fn test_python_host_rust_guest() {
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
+    // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
     let result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -760,12 +764,13 @@ fn test_lua_host_rust_guest() {
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
+    // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
     let result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -854,12 +859,13 @@ fn test_js_host_rust_guest() {
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
+    // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
     let result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )

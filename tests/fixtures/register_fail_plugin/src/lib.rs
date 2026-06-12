@@ -24,16 +24,32 @@ pub struct AddArgs {
 
 /// The `add` function: returns a.wrapping_add(b).
 ///
+/// Uses the frozen native cross-dispatch ABI signature
+/// `extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError` — the
+/// exact shape the runtime's native dispatch transmutes each function-table slot
+/// to. This fixture's `regfail.add` is never dispatched (init reports failure
+/// after registration, so the loader invalidates it), but the signature is kept
+/// canonical for ABI consistency with every other native fixture.
+///
 /// # Safety
-/// `args` must point to a valid `AddArgs`. `out` must point to a valid `u32`.
-extern "C" fn plugin_add(args: *const (), out: *mut ()) -> AbiError {
-    // SAFETY: The host runtime guarantees args points to a valid AddArgs and out
-    // points to a valid u32, per the ABI dispatch contract.
-    let result: u32 = unsafe {
-        let add_args: &AddArgs = &*(args as *const AddArgs);
-        add_args.a.wrapping_add(add_args.b)
-    };
-    // SAFETY: out points to a valid u32 as guaranteed by the host caller.
+/// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`.
+unsafe extern "C" fn plugin_add(
+    _instance: GuestContractInstance,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
+    if args.is_null() || out.is_null() {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: string_view_null(),
+        };
+    }
+    // SAFETY: the caller guarantees `args` points to a valid `AddArgs` per the
+    // contract; non-null checked above.
+    let add_args: &AddArgs = unsafe { &*(args as *const AddArgs) };
+    let result: u32 = add_args.a.wrapping_add(add_args.b);
+    // SAFETY: the caller guarantees `out` points to a valid `u32`; non-null
+    // checked above.
     unsafe {
         core::ptr::write(out as *mut u32, result);
     }

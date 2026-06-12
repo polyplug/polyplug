@@ -16,6 +16,7 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::PluginDescriptor;
@@ -578,16 +579,17 @@ fn test_cpp_host_loads_rust_plugin() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
 
-    // SAFETY: functions[0] is the first ABI wrapper with signature
-    //   extern "C" fn(*const (), *mut ()) -> AbiError
+    // SAFETY: functions[0] is the first ABI wrapper with the frozen native signature
+    //   extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr layout matches the target function signature per ABI contract.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
-    // SAFETY: args and out are valid stack allocations
+    // SAFETY: args and out are valid stack allocations; null stateless instance.
     let call_result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )

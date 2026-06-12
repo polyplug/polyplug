@@ -40,6 +40,7 @@ const CROSS_TARGET_PLUGIN_DIR: &str = env!("CROSS_TARGET_PLUGIN_DIR");
 const CROSS_TARGET_PLUGIN_V2_DIR: &str = env!("CROSS_TARGET_PLUGIN_V2_DIR");
 const CROSS_TARGET_PLUGIN_V2_SO: &str = env!("CROSS_TARGET_PLUGIN_V2_SO");
 const LUA_PLUGIN: &str = env!("TEST_LUA_PLUGIN");
+const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
 
 /// Wire layout shared with both cross-dispatch fixtures' `add(a, b)`.
 #[repr(C)]
@@ -130,6 +131,64 @@ fn native_to_native_cross_call() {
     // SAFETY: `caller_instance` was produced by this contract's create_instance
     // and has not been destroyed; destroy it once.
     unsafe { (caller_iface.destroy_instance)(host, caller_instance) };
+}
+
+// ─── (a2) native test.add through the runtime's real dispatch path ─────────────
+
+/// Regression: dispatch `test_plugin`'s `test.add` function 0 through the
+/// runtime's genuine native-dispatch path (`Runtime::call_guest_method`), which
+/// transmutes every native slot to the frozen 3-arg signature
+/// `extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError`.
+///
+/// `test_plugin`'s `plugin_add` previously hand-wrote the stale 2-arg form
+/// `fn(*const (), *mut ())`. Dispatching it here would then call a 2-arg fn with
+/// 3 args: on the SysV ABI the instance handle lands in the first integer
+/// register and `args`/`out` shift, so `out` is written through the wrong
+/// pointer — silent memory corruption / SIGSEGV. No prior test dispatched
+/// `test.add` function 0 through the runtime, so the bug stayed latent. With the
+/// fixture corrected to the canonical 3-arg signature, this call returns Ok and
+/// writes `a + b` to the real `out`.
+///
+/// `test.add`'s `create_instance` is a stateless stub returning a fully-null
+/// handle (`contract_id == 0`), which the runtime would route to `NotFound`.
+/// Routing keys solely on `instance.contract_id`, so the instance here carries
+/// `test.add`'s id with a null `data` (an explicitly valid stateless handle) to
+/// reach the contract's interface and exercise the transmute-and-call path.
+#[test]
+fn native_test_add_through_runtime_dispatch() {
+    let rt: Arc<Runtime> = native_runtime();
+    rt.load_bundle(Path::new(TEST_PLUGIN_DIR))
+        .expect("load test_plugin");
+
+    let instance: GuestContractInstance = GuestContractInstance {
+        data: core::ptr::null_mut(),
+        contract_id: GuestContractId::new("test.add", 1),
+    };
+
+    let args: AddArgs = AddArgs { a: 3, b: 5 };
+    let mut out: u32 = 0;
+    // SAFETY: routing keys on `instance.contract_id` (test.add@1, a single loaded
+    // provider); a null `data` is a valid stateless handle. `args`/`out` match
+    // test.add's `add(a, b) -> u32` wire layout. The runtime transmutes slot 0 to
+    // the frozen native 3-arg signature and calls it — the production path.
+    let err: polyplug_abi::AbiError = unsafe {
+        rt.call_guest_method(
+            instance,
+            0,
+            &args as *const AddArgs as *const core::ffi::c_void,
+            &mut out as *mut u32 as *mut core::ffi::c_void,
+            core::ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        err.code,
+        AbiErrorCode::Ok as u32,
+        "test.add dispatch through the runtime must return Ok"
+    );
+    assert_eq!(
+        out, 8,
+        "add(3, 5) must write 8 to the real out pointer (proves 3-arg ABI parity)"
+    );
 }
 
 // ─── (b) NotFound path ────────────────────────────────────────────────────────
