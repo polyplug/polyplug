@@ -1750,7 +1750,7 @@ impl JsLoader {
 }
 
 impl BundleLoader for JsLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "js-quickjs"
     }
 
@@ -1886,9 +1886,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn js_quickjs_runtime_name() {
+    fn js_quickjs_loader_name() {
         let loader: JsLoader = JsLoader::new(JsConfig {});
-        assert_eq!(loader.runtime_name(), "js-quickjs");
+        assert_eq!(loader.loader_name(), "js-quickjs");
     }
 
     /// Minimal JS bundle registering one contract with a single no-op function.

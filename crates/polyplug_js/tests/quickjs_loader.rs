@@ -200,9 +200,9 @@ fn assert_vm_function_count(vtable: &GuestContractInterface, expected: u32) {
 // ── Runtime initialisation ────────────────────────────────────────────────────
 
 #[test]
-fn runtime_name_is_js_quickjs() {
+fn loader_name_is_js_quickjs() {
     let loader: JsLoader = make_loader();
-    assert_eq!(loader.runtime_name(), "js-quickjs");
+    assert_eq!(loader.loader_name(), "js-quickjs");
 }
 
 // ── Valid bundle evaluation + vtable registration ─────────────────────────────

@@ -1,7 +1,7 @@
 //! Loader — bundle loading via BundleLoader trait.
 //!
-//! The runtime dispatches each bundle to the loader whose `runtime_name()`
-//! matches the `runtime` field in the bundle's `manifest.toml`.
+//! The runtime dispatches each bundle to the loader whose `loader_name()`
+//! matches the `loader` field in the bundle's `manifest.toml`.
 
 mod bundle_loader;
 mod bundle_source;

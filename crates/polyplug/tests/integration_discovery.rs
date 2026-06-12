@@ -320,15 +320,15 @@ fn unknown_runtime_fails_build() {
         .build();
 
     match result {
-        Err(RuntimeError::Loader(LoaderError::NoLoaderForRuntime { runtime_name, .. })) => {
-            assert_eq!(runtime_name, "zigzag_unknown");
+        Err(RuntimeError::Loader(LoaderError::NoLoaderForName { loader_name, .. })) => {
+            assert_eq!(loader_name, "zigzag_unknown");
         }
         other => {
             let err_str: String = match other {
                 Err(e) => format!("wrong error variant: {:?}", e),
                 Ok(_) => "unexpected Ok(Runtime)".to_owned(),
             };
-            panic!("expected NoLoaderForRuntime, got: {}", err_str);
+            panic!("expected NoLoaderForName, got: {}", err_str);
         }
     }
 }

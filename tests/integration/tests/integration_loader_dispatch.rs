@@ -24,7 +24,7 @@ struct StubLoader {
 }
 
 impl BundleLoader for StubLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         self.name
     }
 
@@ -99,7 +99,7 @@ fn builder_builds_with_stub_loader() {
 
 #[test]
 fn duplicate_loader_detected_in_build() {
-    // Registering two loaders with the same runtime_name must fail at build().
+    // Registering two loaders with the same loader_name must fail at build().
     let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
         .loader(StubLoader {
             name: "conflict_runtime",
@@ -109,8 +109,8 @@ fn duplicate_loader_detected_in_build() {
         })
         .build();
     match result {
-        Err(RuntimeError::Loader(LoaderError::DuplicateLoader { runtime_name })) => {
-            assert_eq!(runtime_name, "conflict_runtime");
+        Err(RuntimeError::Loader(LoaderError::DuplicateLoader { loader_name })) => {
+            assert_eq!(loader_name, "conflict_runtime");
         }
         Err(e) => panic!("expected DuplicateLoader error, got: {e:?}"),
         Ok(_) => panic!("expected DuplicateLoader error, got Ok"),
@@ -137,7 +137,7 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
         min_framework: String::from("net10.0"),
         hostfxr: polyplug_dotnet::HostfxrLocation::Auto,
     });
-    assert_eq!(loader.runtime_name(), "dotnet");
+    assert_eq!(loader.loader_name(), "dotnet");
 
     let rt: Arc<Runtime> = Runtime::builder()
         .loader(DotnetLoader::new(polyplug_dotnet::DotnetConfig::default()))
@@ -177,7 +177,7 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
 #[test]
 fn python_loader_loads_nonexistent_file_errors() {
     let loader: PythonLoader = PythonLoader::new(polyplug_python::PythonConfig::default());
-    assert_eq!(loader.runtime_name(), "python");
+    assert_eq!(loader.loader_name(), "python");
 
     let rt: Arc<Runtime> = Runtime::builder()
         .loader(PythonLoader::new(polyplug_python::PythonConfig::default()))
@@ -217,7 +217,7 @@ fn python_loader_loads_nonexistent_file_errors() {
 #[test]
 fn lua_loader_returns_error_for_missing_file() {
     let loader: LuaLoader = LuaLoader::new(polyplug_lua::LuaConfig::default());
-    assert_eq!(loader.runtime_name(), "lua");
+    assert_eq!(loader.loader_name(), "lua");
 
     let rt: Arc<Runtime> = Runtime::builder()
         .loader(LuaLoader::new(polyplug_lua::LuaConfig::default()))
@@ -258,9 +258,9 @@ fn lua_loader_returns_error_for_missing_file() {
 
 #[test]
 fn no_loader_error_message_is_actionable() {
-    let err: LoaderError = LoaderError::NoLoaderForRuntime {
+    let err: LoaderError = LoaderError::NoLoaderForName {
         bundle: "my_plugin.dll".to_owned(),
-        runtime_name: "dotnet".to_owned(),
+        loader_name: "dotnet".to_owned(),
     };
     let msg: String = err.to_string();
     assert!(
@@ -278,9 +278,9 @@ fn no_loader_error_message_is_actionable() {
 }
 
 #[test]
-fn duplicate_loader_error_message_contains_runtime_name() {
+fn duplicate_loader_error_message_contains_loader_name() {
     let err: LoaderError = LoaderError::DuplicateLoader {
-        runtime_name: "lua".to_owned(),
+        loader_name: "lua".to_owned(),
     };
     let msg: String = err.to_string();
     assert!(

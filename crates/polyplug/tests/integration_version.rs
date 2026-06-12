@@ -21,7 +21,7 @@ use tempfile::TempDir;
 struct NoopLoader;
 
 impl BundleLoader for NoopLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "test-noop"
     }
 

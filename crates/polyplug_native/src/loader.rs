@@ -78,7 +78,7 @@ impl NativeLoader {
 }
 
 impl BundleLoader for NativeLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "native"
     }
 

@@ -77,7 +77,7 @@ struct CompatTestLoader {
 }
 
 impl BundleLoader for CompatTestLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "compat-test"
     }
 

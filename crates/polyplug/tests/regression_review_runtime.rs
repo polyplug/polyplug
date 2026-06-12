@@ -107,7 +107,7 @@ struct DepProbeLoader {
 }
 
 impl BundleLoader for DepProbeLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "dep-probe"
     }
 
@@ -634,7 +634,7 @@ fn capability_graph_bybundle_matches_versioned_provides() {
 struct NeverLoadsLoader;
 
 impl BundleLoader for NeverLoadsLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "reload-probe"
     }
     fn load(

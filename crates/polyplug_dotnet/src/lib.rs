@@ -289,7 +289,7 @@ pub(crate) fn check_version_compatibility(
 }
 
 impl BundleLoader for DotnetLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "dotnet"
     }
 

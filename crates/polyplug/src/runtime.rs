@@ -68,7 +68,7 @@ pub struct Runtime {
     pub(crate) registry: Arc<RuntimeStore>,
     /// The static HostApi given to plugins. Must be 'static.
     pub(crate) host_abi: &'static HostApi,
-    /// All registered loaders, keyed by runtime_name.
+    /// All registered loaders, keyed by loader_name.
     ///
     /// Interior-mutable (`RwLock`) so loaders can be registered after `build()`
     /// through a shared `&Runtime` (e.g. the `register_loader` HostApi
@@ -401,10 +401,10 @@ impl Runtime {
     /// either success or error — doing so would double-free.
     ///
     /// Returns `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))` if a
-    /// loader for the same runtime name is already registered. The passed loader is
+    /// loader for the same loader name is already registered. The passed loader is
     /// still consumed in that case.
     pub fn register_loader(&self, loader: Box<dyn BundleLoader>) -> Result<(), RuntimeError> {
-        let name: String = loader.runtime_name().to_string();
+        let name: String = loader.loader_name().to_string();
         let mut loaders: RecoveringGuard<
             std::sync::RwLockWriteGuard<'_, HashMap<String, Box<dyn BundleLoader>>>,
         > = self
@@ -413,7 +413,7 @@ impl Runtime {
             .recover_poisoned(self.logger, "runtime");
         if loaders.contains_key(&name) {
             return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
-                runtime_name: name,
+                loader_name: name,
             }));
         }
 
@@ -421,7 +421,7 @@ impl Runtime {
         Ok(())
     }
 
-    /// Resolve a loader by runtime name, returning a stable reference valid for the
+    /// Resolve a loader by loader name, returning a stable reference valid for the
     /// runtime's lifetime.
     ///
     /// The returned reference is obtained under a short-lived read guard and then
@@ -432,11 +432,11 @@ impl Runtime {
     /// because those run `polyplug_init`, which may call back into
     /// `host_register_loader` and take the `loaders` write guard — holding a read
     /// guard on the same thread would deadlock.
-    pub(crate) fn loader_for(&self, runtime_name: &str) -> Option<&dyn BundleLoader> {
+    pub(crate) fn loader_for(&self, loader_name: &str) -> Option<&dyn BundleLoader> {
         let loaders: RecoveringGuard<
             std::sync::RwLockReadGuard<'_, HashMap<String, Box<dyn BundleLoader>>>,
         > = self.loaders.read().recover_poisoned(self.logger, "runtime");
-        let loader_ptr: *const dyn BundleLoader = loaders.get(runtime_name).map(Box::as_ref)?;
+        let loader_ptr: *const dyn BundleLoader = loaders.get(loader_name).map(Box::as_ref)?;
         // SAFETY: loaders are append-only (never removed or replaced for the runtime
         // lifetime), so the `Box`'s heap allocation behind `loader_ptr` stays valid and
         // pinned for as long as `&self` lives. Detaching the reference from the guard
@@ -624,9 +624,9 @@ impl Runtime {
             });
         }
 
-        // Capture the loader runtime-name BEFORE invalidate: invalidate removes the
-        // bundle metadata, after which the runtime string is no longer recoverable.
-        let runtime_name: Option<String> = self.bundle_loader_name(&descriptor.name);
+        // Capture the loader name BEFORE invalidate: invalidate removes the
+        // bundle metadata, after which the loader string is no longer recoverable.
+        let loader_name: Option<String> = self.bundle_loader_name(&descriptor.name);
 
         // Fire the Unloading callback BEFORE invalidate so the host can quiesce its
         // own callers (the same window the reload Preparing phase gives it). The name
@@ -650,7 +650,7 @@ impl Runtime {
         // Invalidate-then-reclaim: now that the bundle is gone from the registry
         // indices, no new dispatch can reach it. Ask the loader to free its
         // per-bundle resources at a quiescence point (no-op for non-VM loaders).
-        self.reclaim_via_loader(bundle_id, runtime_name.as_deref(), reclaim_safe)?;
+        self.reclaim_via_loader(bundle_id, loader_name.as_deref(), reclaim_safe)?;
         Ok(())
     }
 
@@ -671,11 +671,11 @@ impl Runtime {
         }
     }
 
-    /// Look up the loader runtime-name string for a loaded bundle by name.
+    /// Look up the loader-name string for a loaded bundle by name.
     ///
     /// The original `manifest.loader` string (e.g. `"lua"`, `"js-quickjs"`) is the
     /// key the load path used to resolve the loader, and the only value that maps
-    /// back to a `BundleLoader::runtime_name()`. It is read from `bundle_manifests`,
+    /// back to a `BundleLoader::loader_name()`. It is read from `bundle_manifests`,
     /// which must be consulted BEFORE `invalidate_bundle` removes the bundle.
     fn bundle_loader_name(&self, bundle_name: &str) -> Option<String> {
         let manifests: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<String, ManifestData>>> =
@@ -689,7 +689,7 @@ impl Runtime {
 
     /// Invoke the loader's `unload` reclaim hook for `bundle_id`.
     ///
-    /// `runtime_name` is the loader key captured before invalidate. A missing name
+    /// `loader_name` is the loader key captured before invalidate. A missing name
     /// or missing loader is not an error: a bundle with no recoverable loader simply
     /// has nothing to reclaim (the invalidate already retired its interfaces).
     ///
@@ -699,10 +699,10 @@ impl Runtime {
     fn reclaim_via_loader(
         &self,
         bundle_id: BundleId,
-        runtime_name: Option<&str>,
+        loader_name: Option<&str>,
         reclaim_safe: bool,
     ) -> Result<(), RuntimeError> {
-        let name: &str = match runtime_name {
+        let name: &str = match loader_name {
             Some(n) => n,
             None => return Ok(()),
         };
@@ -764,7 +764,7 @@ impl Runtime {
             .get_bundle_descriptor(bundle_id)
             .map(|d: crate::runtime_store::BundleDescriptor| d.name)
             .unwrap_or_default();
-        let runtime_name: Option<String> = self.bundle_loader_name(&bundle_name);
+        let loader_name: Option<String> = self.bundle_loader_name(&bundle_name);
 
         // Fire Unloading before invalidate so the host can quiesce (mirrors unload_bundle).
         self.fire_unloading(bundle_id, &bundle_name);
@@ -777,7 +777,7 @@ impl Runtime {
             .iter()
             .all(|a: &Arc<GuestContractInterface>| Arc::strong_count(a) <= 2);
 
-        self.reclaim_via_loader(bundle_id, runtime_name.as_deref(), reclaim_safe)?;
+        self.reclaim_via_loader(bundle_id, loader_name.as_deref(), reclaim_safe)?;
         Ok(())
     }
 
@@ -854,11 +854,11 @@ impl Runtime {
 
         // Find the loader for this bundle. The lock is released before load() runs
         // (see `loader_for`) so a plugin init that registers a loader cannot deadlock.
-        let runtime_name: &str = &manifest.loader;
-        let loader: &dyn BundleLoader = self.loader_for(runtime_name).ok_or_else(|| {
-            RuntimeError::Loader(LoaderError::NoLoaderForRuntime {
+        let loader_name: &str = &manifest.loader;
+        let loader: &dyn BundleLoader = self.loader_for(loader_name).ok_or_else(|| {
+            RuntimeError::Loader(LoaderError::NoLoaderForName {
                 bundle: manifest.name.clone(),
-                runtime_name: runtime_name.to_owned(),
+                loader_name: loader_name.to_owned(),
             })
         })?;
 
@@ -3113,7 +3113,7 @@ mod tests {
     }
 
     impl crate::loader::BundleLoader for EnforceLoader {
-        fn runtime_name(&self) -> &'static str {
+        fn loader_name(&self) -> &'static str {
             "enforce"
         }
 
@@ -3143,7 +3143,7 @@ mod tests {
     }
 
     impl crate::loader::BundleLoader for ProbeLoader {
-        fn runtime_name(&self) -> &'static str {
+        fn loader_name(&self) -> &'static str {
             "probe"
         }
 
@@ -3174,7 +3174,7 @@ mod tests {
     struct PanicLoader;
 
     impl crate::loader::BundleLoader for PanicLoader {
-        fn runtime_name(&self) -> &'static str {
+        fn loader_name(&self) -> &'static str {
             "panic"
         }
 
@@ -3207,7 +3207,7 @@ mod tests {
     }
 
     impl crate::loader::BundleLoader for ReentrantLoader {
-        fn runtime_name(&self) -> &'static str {
+        fn loader_name(&self) -> &'static str {
             "reentrant"
         }
 
@@ -3272,7 +3272,7 @@ mod tests {
     }
 
     impl crate::loader::BundleLoader for LazyLoader {
-        fn runtime_name(&self) -> &'static str {
+        fn loader_name(&self) -> &'static str {
             "lazy"
         }
 

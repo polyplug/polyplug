@@ -118,9 +118,9 @@ unsafe fn call_vm_function(
 }
 
 #[test]
-fn integration_python_runtime_name() {
+fn integration_python_loader_name() {
     let loader: PythonLoader = PythonLoader::default();
-    assert_eq!(loader.runtime_name(), "python");
+    assert_eq!(loader.loader_name(), "python");
 }
 
 #[test]
@@ -412,9 +412,9 @@ provides = ["test.version@1"]
 }
 
 #[test]
-fn integration_python_runtime_name_is_python() {
+fn integration_python_loader_name_is_python() {
     let loader: PythonLoader = PythonLoader::new(PythonConfig::default());
-    assert_eq!(loader.runtime_name(), "python");
+    assert_eq!(loader.loader_name(), "python");
 }
 
 // ─── Guest logging (HostApi.log via the python guest SDK) ───────────────────────

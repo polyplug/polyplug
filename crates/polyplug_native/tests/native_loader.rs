@@ -162,9 +162,9 @@ fn test_loader_rejects_zero_id() {
 }
 
 #[test]
-fn test_loader_runtime_name() {
+fn test_loader_loader_name() {
     let loader = NativeLoader::new(NativeConfig::default());
-    assert_eq!(loader.runtime_name(), "native");
+    assert_eq!(loader.loader_name(), "native");
 }
 
 #[test]

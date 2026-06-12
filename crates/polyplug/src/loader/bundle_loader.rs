@@ -8,13 +8,13 @@ use crate::{
 
 /// Trait implemented by all bundle loaders (native, python, lua, js, .net).
 ///
-/// The runtime dispatches each bundle to the loader whose `runtime_name()`
-/// matches the `runtime` field in the bundle's `manifest.toml`.
+/// The runtime dispatches each bundle to the loader whose `loader_name()`
+/// matches the `loader` field in the bundle's `manifest.toml`.
 pub trait BundleLoader: Send + Sync {
-    /// The runtime identifier this loader handles.
+    /// The loader identifier this loader handles.
     ///
-    /// Must match the `runtime` field in `manifest.toml` exactly (case-sensitive).
-    fn runtime_name(&self) -> &'static str;
+    /// Must match the `loader` field in `manifest.toml` exactly (case-sensitive).
+    fn loader_name(&self) -> &'static str;
 
     /// Load a bundle for the first time.
     ///

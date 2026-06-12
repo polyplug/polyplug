@@ -990,7 +990,7 @@ impl LuaLoader {
 }
 
 impl BundleLoader for LuaLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "lua"
     }
 
@@ -1106,9 +1106,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lua_runtime_name() {
+    fn lua_loader_name() {
         let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-        assert_eq!(loader.runtime_name(), "lua");
+        assert_eq!(loader.loader_name(), "lua");
     }
 
     /// A minimal valid Lua plugin registering the `test.unload@1` contract.

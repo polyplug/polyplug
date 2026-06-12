@@ -213,9 +213,9 @@ fn dotnet_loader_new_does_not_panic() {
 }
 
 #[test]
-fn dotnet_loader_runtime_name_is_dotnet() {
+fn dotnet_loader_loader_name_is_dotnet() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
-    assert_eq!(loader.runtime_name(), "dotnet");
+    assert_eq!(loader.loader_name(), "dotnet");
 }
 
 // ---------------------------------------------------------------------------

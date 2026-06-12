@@ -314,7 +314,7 @@ impl PythonLoader {
 }
 
 impl BundleLoader for PythonLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "python"
     }
 

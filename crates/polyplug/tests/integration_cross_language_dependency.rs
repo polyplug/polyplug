@@ -8,7 +8,7 @@
 //! contracts by `BundleId`/`GuestContractId` and never inspects the bundle's
 //! language. This test proves that cross-language dependency resolution and
 //! load-order enforcement work by pairing a Rust-runtime provider with a
-//! Lua-runtime depender (distinct `runtime_name`s, distinct loaders).
+//! Lua-runtime depender (distinct `loader_name`s, distinct loaders).
 //!
 //! Two cases are covered:
 //!   (a) Provider (rust) loaded first, then depender (lua): the depender resolves
@@ -51,7 +51,7 @@ struct RustProviderLoader {
 }
 
 impl BundleLoader for RustProviderLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "rust-provider"
     }
 
@@ -116,7 +116,7 @@ struct LuaDependerLoader {
 }
 
 impl BundleLoader for LuaDependerLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "lua-depender"
     }
 

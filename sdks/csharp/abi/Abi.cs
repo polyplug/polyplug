@@ -424,7 +424,7 @@ public struct HostApi
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
     ///
-    ///  The loader's runtime name comes from its own `BundleLoader::runtime_name()`
+    ///  The loader's name comes from its own `BundleLoader::loader_name()`
     ///  implementation — the single source of truth — so it is not passed here.
     public IntPtr RegisterLoader;
     ///  Get last error message.

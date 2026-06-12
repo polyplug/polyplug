@@ -106,7 +106,7 @@ fn native_function_count(vtable: &GuestContractInterface) -> u32 {
 fn integration_dotnet_loader_registration() {
     skip_if_no_dotnet!();
     let loader: DotnetLoader = make_loader();
-    assert_eq!(loader.runtime_name(), "dotnet");
+    assert_eq!(loader.loader_name(), "dotnet");
 }
 
 #[test]

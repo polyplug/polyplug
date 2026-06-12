@@ -49,7 +49,7 @@ struct ProbeLoader {
 }
 
 impl BundleLoader for ProbeLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "probe-enforce"
     }
 

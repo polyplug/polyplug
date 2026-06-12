@@ -67,21 +67,18 @@ pub enum LoaderError {
     ManifestParse { path: String, reason: String },
 
     #[error(
-        "duplicate loader for runtime \"{runtime_name}\": \
-         a loader for this runtime is already registered"
+        "duplicate loader \"{loader_name}\": \
+         a loader with this name is already registered"
     )]
-    DuplicateLoader { runtime_name: String },
+    DuplicateLoader { loader_name: String },
 
     #[error(
-        "bundle \"{bundle}\" requires runtime \"{runtime_name}\" \
-         but no loader is registered for runtime \"{runtime_name}\".\n\
-         Add polyplug_{runtime_name} as a dependency and register \
+        "bundle \"{bundle}\" declares loader \"{loader_name}\" \
+         but no loader is registered for \"{loader_name}\".\n\
+         Add polyplug_{loader_name} as a dependency and register \
          the loader at init."
     )]
-    NoLoaderForRuntime {
-        bundle: String,
-        runtime_name: String,
-    },
+    NoLoaderForName { bundle: String, loader_name: String },
 
     #[error(
         "init symbol missing in assembly `{bundle}`: expected `[UnmanagedCallersOnly] polyplug_init`"
@@ -330,7 +327,7 @@ mod tests {
     #[test]
     fn loader_error_duplicate_loader_display() {
         let err: LoaderError = LoaderError::DuplicateLoader {
-            runtime_name: "python".to_owned(),
+            loader_name: "python".to_owned(),
         };
         let s: String = err.to_string();
         assert!(s.contains("duplicate loader"), "got: {s}");
@@ -338,10 +335,10 @@ mod tests {
     }
 
     #[test]
-    fn loader_error_no_loader_for_runtime_display() {
-        let err: LoaderError = LoaderError::NoLoaderForRuntime {
+    fn loader_error_no_loader_for_name_display() {
+        let err: LoaderError = LoaderError::NoLoaderForName {
             bundle: "my.bundle".to_owned(),
-            runtime_name: "lua".to_owned(),
+            loader_name: "lua".to_owned(),
         };
         let s: String = err.to_string();
         assert!(

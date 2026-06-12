@@ -79,10 +79,10 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Register a bundle loader for a runtime.
+    /// Register a bundle loader.
     ///
-    /// The loader is identified by `loader.runtime_name()`. Duplicate registrations
-    /// (same runtime name) are detected in `build()` and cause `build()` to return
+    /// The loader is identified by `loader.loader_name()`. Duplicate registrations
+    /// (same loader name) are detected in `build()` and cause `build()` to return
     /// `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))`.
     pub fn loader(mut self, loader: impl BundleLoader + 'static) -> RuntimeBuilder {
         self.loaders.push(Box::new(loader));
@@ -194,10 +194,10 @@ impl RuntimeBuilder {
 
         // Register user-provided loaders, checking for duplicates.
         for loader in self.loaders {
-            let name: &str = loader.runtime_name();
+            let name: &str = loader.loader_name();
             if loader_map.contains_key(name) {
                 return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
-                    runtime_name: name.to_string(),
+                    loader_name: name.to_string(),
                 }));
             }
 

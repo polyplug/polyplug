@@ -29,9 +29,9 @@ use polyplug_utils::guest_contract_id;
 use std::sync::Arc;
 
 #[test]
-fn js_quickjs_loader_runtime_name() {
+fn js_quickjs_loader_loader_name() {
     let loader: JsLoader = JsLoader::new(JsConfig {});
-    assert_eq!(loader.runtime_name(), "js-quickjs");
+    assert_eq!(loader.loader_name(), "js-quickjs");
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn js_quickjs_registered_in_runtime_builder() {
 }
 
 #[test]
-fn js_quickjs_duplicate_runtime_name_is_rejected() {
+fn js_quickjs_duplicate_loader_name_is_rejected() {
     let result: Result<Arc<polyplug::runtime::Runtime>, RuntimeError> =
         polyplug::runtime::Runtime::builder()
             .loader(JsLoader::new(JsConfig {}))

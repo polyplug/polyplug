@@ -281,7 +281,7 @@ pub struct HostApi {
     /// # Returns
     /// AbiError::OK on success, error code on failure.
     ///
-    /// The loader's runtime name comes from its own `BundleLoader::runtime_name()`
+    /// The loader's name comes from its own `BundleLoader::loader_name()`
     /// implementation — the single source of truth — so it is not passed here.
     pub register_loader:
         unsafe extern "C" fn(this: *const HostApi, loader_ptr: *mut c_void) -> AbiError,

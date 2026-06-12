@@ -160,9 +160,9 @@ fn load_script(path: &Path, name: &str) -> Result<(), RuntimeError> {
 // ── 1. Runtime name ──────────────────────────────────────────────────────────
 
 #[test]
-fn lua_loader_runtime_name_is_lua() {
+fn lua_loader_loader_name_is_lua() {
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    assert_eq!(loader.runtime_name(), "lua");
+    assert_eq!(loader.loader_name(), "lua");
 }
 
 // ── 2. Lua state initialization ──────────────────────────────────────────────

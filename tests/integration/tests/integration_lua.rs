@@ -89,9 +89,9 @@ unsafe fn call_vm_function(
 }
 
 #[test]
-fn integration_lua_runtime_name() {
+fn integration_lua_loader_name() {
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    assert_eq!(loader.runtime_name(), "lua");
+    assert_eq!(loader.loader_name(), "lua");
 }
 
 #[test]

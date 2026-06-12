@@ -95,7 +95,7 @@ impl AbortLoader {
 }
 
 impl BundleLoader for AbortLoader {
-    fn runtime_name(&self) -> &'static str {
+    fn loader_name(&self) -> &'static str {
         "abort-loader"
     }
 

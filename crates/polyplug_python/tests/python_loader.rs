@@ -649,9 +649,9 @@ fn test_empty_registrations_fails() {
 }
 
 #[test]
-fn test_runtime_name() {
+fn test_loader_name() {
     let loader: PythonLoader = PythonLoader::default();
-    assert_eq!(loader.runtime_name(), "python");
+    assert_eq!(loader.loader_name(), "python");
 }
 
 #[test]

@@ -49,7 +49,7 @@ unsafe extern "C" fn noop_destroy_instance(
 /// In-process loader that registers a single contract for its bundle during both
 /// `load` and `reload`, and records whether `reload` was ever called.
 struct CascadeLoader {
-    runtime_name: &'static str,
+    loader_name: &'static str,
     contract_id: u64,
     reload_called: Arc<AtomicBool>,
 }
@@ -98,8 +98,8 @@ impl CascadeLoader {
 }
 
 impl BundleLoader for CascadeLoader {
-    fn runtime_name(&self) -> &'static str {
-        self.runtime_name
+    fn loader_name(&self) -> &'static str {
+        self.loader_name
     }
 
     fn load(
@@ -142,7 +142,7 @@ fn hot_reload_config() -> RuntimeConfig {
 fn write_bundle(
     temp: &tempfile::TempDir,
     bundle_name: &str,
-    runtime_name: &str,
+    loader_name: &str,
     needs_reinit: bool,
     dep_contract: Option<&str>,
 ) -> PathBuf {
@@ -154,7 +154,7 @@ fn write_bundle(
     let mut manifest: String = format!(
         "id = {bundle_id}\n\
          name = \"{bundle_name}\"\n\
-         loader = \"{runtime_name}\"\n\
+         loader = \"{loader_name}\"\n\
          file = \"dummy.so\"\n\
          version = \"1.0\"\n\
          needs_reinit_on_dep_reload = {needs_reinit}\n"
@@ -185,12 +185,12 @@ fn cascade_reload_disabled_does_not_trigger() {
     let runtime: Arc<Runtime> = Runtime::builder()
         .config(hot_reload_config())
         .loader(CascadeLoader {
-            runtime_name: "cascade-a",
+            loader_name: "cascade-a",
             contract_id: a_contract_id,
             reload_called: Arc::new(AtomicBool::new(false)),
         })
         .loader(CascadeLoader {
-            runtime_name: "cascade-b",
+            loader_name: "cascade-b",
             contract_id: polyplug_utils::guest_contract_id("b.contract", 1_u32),
             reload_called: Arc::clone(&b_reload_called),
         })
@@ -224,12 +224,12 @@ fn cascade_reload_enabled_triggers_dependent() {
     let runtime: Arc<Runtime> = Runtime::builder()
         .config(hot_reload_config())
         .loader(CascadeLoader {
-            runtime_name: "cascade-a",
+            loader_name: "cascade-a",
             contract_id: a_contract_id,
             reload_called: Arc::new(AtomicBool::new(false)),
         })
         .loader(CascadeLoader {
-            runtime_name: "cascade-b",
+            loader_name: "cascade-b",
             contract_id: polyplug_utils::guest_contract_id("b.contract", 1_u32),
             reload_called: Arc::clone(&b_reload_called),
         })
@@ -266,12 +266,12 @@ fn cascade_reload_cycle_detection() {
     let runtime: Arc<Runtime> = Runtime::builder()
         .config(hot_reload_config())
         .loader(CascadeLoader {
-            runtime_name: "cycle-a",
+            loader_name: "cycle-a",
             contract_id: a_contract_id,
             reload_called: Arc::clone(&a_reload_called),
         })
         .loader(CascadeLoader {
-            runtime_name: "cycle-b",
+            loader_name: "cycle-b",
             contract_id: b_contract_id,
             reload_called: Arc::clone(&b_reload_called),
         })

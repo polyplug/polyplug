@@ -190,7 +190,7 @@ pub enum ManifestDependency {
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ManifestData {
     /// The loader required to load this bundle (e.g. `"native"`, `"lua"`,
-    /// `"js-quickjs"`). Matched against `BundleLoader::runtime_name()` during
+    /// `"js-quickjs"`). Matched against `BundleLoader::loader_name()` during
     /// dispatch.
     /// REQUIRED — must be explicitly set in the manifest, no default.
     #[serde(skip_serializing_if = "String::is_empty")]

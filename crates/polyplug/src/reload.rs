@@ -57,7 +57,7 @@ impl Runtime {
     /// - `path`: Path to the bundle directory or .so/.dll/.dylib file
     ///
     /// # Errors
-    /// - `NoLoaderForRuntime`: No loader registered for this runtime type
+    /// - `NoLoaderForName`: No loader registered for this loader name
     /// - `HotReloadDisabled`: Hot-reload disabled in config
     /// - Other errors from the loader's `reload()` implementation
     ///
@@ -122,9 +122,9 @@ impl Runtime {
         // Find the loader (lock released before reload() runs — see `loader_for`).
         let loader: &dyn crate::loader::BundleLoader =
             self.loader_for(&manifest.loader).ok_or_else(|| {
-                RuntimeError::Loader(crate::error::LoaderError::NoLoaderForRuntime {
+                RuntimeError::Loader(crate::error::LoaderError::NoLoaderForName {
                     bundle: path.display().to_string(),
-                    runtime_name: manifest.loader.clone(),
+                    loader_name: manifest.loader.clone(),
                 })
             })?;
 
