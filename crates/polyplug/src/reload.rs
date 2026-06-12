@@ -177,6 +177,24 @@ impl Runtime {
             );
         }
 
+        // After the Preparing callback (the host's window to destroy instances),
+        // warn if any of this bundle's contracts still have live guest instances.
+        // A retired interface keeps such instances valid today, but they must be
+        // destroyed before the bundle is truly freed — surface the hazard, do not
+        // block the reload (informational only).
+        let exported: Vec<GuestContractId> = self.registry.bundle_exported_contracts(bundle_id);
+        let live: u64 = self.live_instance_count_for_contracts(&exported);
+        if live > 0 {
+            let name: String = manifest.name.clone();
+            self.logger.log(LogLevel::Warn, "reload", || {
+                format!(
+                    "reload: bundle '{name}' still has {live} live guest instance(s) across its \
+                     contracts after the Preparing callback; destroy them before reload to avoid \
+                     use-after-free. Proceeding anyway."
+                )
+            });
+        }
+
         // Open the reload window: interfaces registered during loader.reload() are
         // kept out of the find index (pending) so readers never see two live slots
         // per contract during the swap window. apply_reload_swap closes it on success;

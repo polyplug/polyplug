@@ -147,6 +147,18 @@ pub struct Runtime {
     /// `RwLock` and stay fully concurrent with an in-flight reload; only
     /// writer-vs-writer reloads serialize here.
     pub(crate) reload_serialize: Mutex<()>,
+    /// Live stateful-instance counts per guest contract.
+    ///
+    /// Incremented by `host_create_guest_instance` and decremented by
+    /// `host_destroy_guest_instance` for stateful instances only (a null-`data`
+    /// instance is stateless — the host holds no state for it and it is not
+    /// counted). Drives the accurate reload/unload UB-warning: a bundle whose
+    /// contracts still have live instances when it is reloaded or unloaded is a
+    /// use-after-free hazard the runtime surfaces to the host.
+    ///
+    /// Instance-owned (Rule 12): each `Runtime` has its own map, so multiple
+    /// runtimes in one process never share instance accounting.
+    pub(crate) instance_counts: Mutex<HashMap<GuestContractId, u64>>,
     /// The owned HostApi handed to plugins. A `Box` gives it a stable heap
     /// address independent of where the `Runtime` value lives, so the pointer
     /// captured by plugins survives the runtime's move into its `Arc`.
@@ -390,6 +402,52 @@ impl Runtime {
             .lock()
             .recover_poisoned(self.logger, "runtime");
         **guard = msg.into();
+    }
+
+    /// Record that a stateful instance of `contract_id` was created.
+    ///
+    /// Increments the per-contract live count. Called by
+    /// `host_create_guest_instance` only for non-null (stateful) instances.
+    fn note_instance_created(&self, contract_id: GuestContractId) {
+        let mut guard: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<GuestContractId, u64>>> =
+            self.instance_counts
+                .lock()
+                .recover_poisoned(self.logger, "runtime");
+        let entry: &mut u64 = guard.entry(contract_id).or_insert(0);
+        *entry += 1;
+    }
+
+    /// Record that a stateful instance of `contract_id` was destroyed.
+    ///
+    /// Saturating decrement; the key is removed once its count reaches zero so the
+    /// map only ever holds contracts with live instances. Called by
+    /// `host_destroy_guest_instance` only for non-null (stateful) instances.
+    fn note_instance_destroyed(&self, contract_id: GuestContractId) {
+        let mut guard: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<GuestContractId, u64>>> =
+            self.instance_counts
+                .lock()
+                .recover_poisoned(self.logger, "runtime");
+        if let Some(entry) = guard.get_mut(&contract_id) {
+            *entry = entry.saturating_sub(1);
+            if *entry == 0 {
+                guard.remove(&contract_id);
+            }
+        }
+    }
+
+    /// Sum the live stateful-instance counts across the given contract ids.
+    ///
+    /// Used by the reload/unload UB-warning to report how many guest instances a
+    /// bundle's contracts still hold before its interfaces are retired or freed.
+    pub(crate) fn live_instance_count_for_contracts(&self, contracts: &[GuestContractId]) -> u64 {
+        let guard: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<GuestContractId, u64>>> = self
+            .instance_counts
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
+        contracts
+            .iter()
+            .map(|cid: &GuestContractId| guard.get(cid).copied().unwrap_or(0))
+            .sum()
     }
 
     /// Get the last error message for FFI error reporting.
@@ -665,6 +723,20 @@ impl Runtime {
         // is owned by `descriptor`, which outlives this synchronous call.
         self.fire_unloading(bundle_id, &descriptor.name);
 
+        // Unload truly frees the bundle's resources, so any still-live guest instance
+        // is a genuine use-after-free hazard. Warn (do not block) before invalidate.
+        let live: u64 = self
+            .live_instance_count_for_contracts(&self.registry.bundle_exported_contracts(bundle_id));
+        if live > 0 {
+            let name: String = descriptor.name.clone();
+            self.logger.log(LogLevel::Warn, "runtime", || {
+                format!(
+                    "unload: bundle '{name}' still has {live} live guest instance(s) across its \
+                     contracts; destroy them before unload to avoid use-after-free. Proceeding anyway."
+                )
+            });
+        }
+
         let _count: u32 = self.registry.invalidate_bundle(bundle_id)?;
 
         // Invalidate-then-reclaim: now that the bundle is gone from the registry
@@ -785,6 +857,20 @@ impl Runtime {
 
         // Fire Unloading before invalidate so the host can quiesce (mirrors unload_bundle).
         self.fire_unloading(bundle_id, &bundle_name);
+
+        // Warn (do not block) on still-live instances before the bundle is freed
+        // (mirrors unload_bundle).
+        let live: u64 = self
+            .live_instance_count_for_contracts(&self.registry.bundle_exported_contracts(bundle_id));
+        if live > 0 {
+            let name: String = bundle_name.clone();
+            self.logger.log(LogLevel::Warn, "runtime", || {
+                format!(
+                    "unload: bundle '{name}' still has {live} live guest instance(s) across its \
+                     contracts; destroy them before unload to avoid use-after-free. Proceeding anyway."
+                )
+            });
+        }
 
         let _count: u32 = self.registry.invalidate_bundle(bundle_id)?;
 
@@ -2422,6 +2508,95 @@ pub(crate) unsafe extern "C" fn host_call_guest_method(
     }
 }
 
+/// HostApi.create_guest_instance callback — host-mediated guest instance creation.
+///
+/// Invokes the interface's `create_instance` under an epoch pin so a concurrent
+/// unload cannot epoch-reclaim the snapshot backing `interface` while the
+/// constructor runs, then records the new instance in the runtime's live-instance
+/// accounting (stateful instances only — a null `data` is a stateless dispatch
+/// token the host holds no state for). See the `create_guest_instance` field doc
+/// on [`HostApi`].
+///
+/// # Safety
+/// - `this` must be a valid HostApi pointer with a valid runtime field, or null
+/// - `interface` must be a runtime-issued `GuestContractInterface` pointer (from
+///   `resolve_guest_contract`), or null
+/// - `args` must satisfy the contract's `create_instance` argument layout
+pub(crate) unsafe extern "C" fn host_create_guest_instance(
+    this: *const HostApi,
+    interface: *const GuestContractInterface,
+    args: *const core::ffi::c_void,
+) -> polyplug_abi::guest::GuestContractInstance {
+    if this.is_null() || interface.is_null() {
+        return polyplug_abi::guest::GuestContractInstance::null();
+    }
+
+    // SAFETY: this is a valid HostApi pointer passed by the host;
+    // (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+
+    // Pin the epoch for the duration of construction. A concurrent unload retires
+    // the interface's snapshot for epoch reclamation; holding this pin across the
+    // create call keeps that snapshot alive so `create_instance` cannot run against
+    // a freed interface. The guard is named (not `let _ =`) so it lives to the end.
+    let _g: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+
+    // SAFETY: interface is non-null and points to a runtime-issued
+    // GuestContractInterface kept alive by the pin above; reading its fields is sound.
+    let contract_id: GuestContractId = unsafe { (*interface).contract_id };
+
+    // SAFETY: `create_instance` is non-null by ABI contract (register_guest_contract
+    // rejects null bits); the interface stays alive across the call via the pin;
+    // `args` satisfies the contract's argument layout per the caller's contract.
+    let inst: polyplug_abi::guest::GuestContractInstance =
+        unsafe { ((*interface).create_instance)(this, args.cast::<()>()) };
+
+    if !inst.data.is_null() {
+        runtime.note_instance_created(contract_id);
+    }
+    inst
+}
+
+/// HostApi.destroy_guest_instance callback — host-mediated guest instance teardown.
+///
+/// Mirror of [`host_create_guest_instance`]: invokes the interface's
+/// `destroy_instance` under an epoch pin and updates the runtime's live-instance
+/// accounting. The decrement keys on `instance.contract_id` (not the interface's)
+/// so create/destroy match even if the resolved interface pointer has since changed.
+///
+/// # Safety
+/// - `this` must be a valid HostApi pointer with a valid runtime field, or null
+/// - `interface` must be a runtime-issued `GuestContractInterface` pointer, or null
+/// - `instance` must be an instance produced by this contract's `create_instance`
+pub(crate) unsafe extern "C" fn host_destroy_guest_instance(
+    this: *const HostApi,
+    interface: *const GuestContractInterface,
+    instance: polyplug_abi::guest::GuestContractInstance,
+) {
+    if this.is_null() || interface.is_null() {
+        return;
+    }
+
+    // SAFETY: this is a valid HostApi pointer passed by the host;
+    // (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+
+    let contract_id: GuestContractId = instance.contract_id;
+
+    // Pin the epoch across teardown for the same reason as creation: keep the
+    // interface's snapshot alive so `destroy_instance` cannot run against a freed
+    // interface during a concurrent unload.
+    let _g: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+
+    // SAFETY: `destroy_instance` is non-null by ABI contract; the interface stays
+    // alive across the call via the pin; `instance` was produced by this contract.
+    unsafe { ((*interface).destroy_instance)(this, instance) };
+
+    if !instance.data.is_null() {
+        runtime.note_instance_destroyed(contract_id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -2604,6 +2779,8 @@ mod tests {
             call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
+            create_guest_instance: host_create_guest_instance,
+            destroy_guest_instance: host_destroy_guest_instance,
             reserved: core::ptr::null(),
         };
 
@@ -2935,6 +3112,170 @@ mod tests {
         };
         assert!(err.is_ok(), "native dispatch should succeed");
         assert_eq!(output, 42);
+    }
+
+    // ─── host-mediated instance lifecycle (instance counter) ─────────────────
+
+    /// Contract id used by the stateful mock. The mock's `create_instance` stamps
+    /// this onto every instance (mirroring a real generated factory) so the
+    /// destroy-side decrement, which keys on `instance.contract_id`, matches the
+    /// create-side increment, which keys on `interface.contract_id`.
+    const STATEFUL_CONTRACT_ID: u64 = 0x0BAD_F00D_1234_5678;
+
+    /// Stateful create_instance: returns a non-null `data` (a leaked boxed unit)
+    /// so the runtime counts it as a live stateful instance, stamped with the
+    /// contract id like a real generated factory.
+    unsafe extern "C" fn stateful_create_instance(
+        _host: *const HostApi,
+        _args: *const (),
+    ) -> polyplug_abi::guest::GuestContractInstance {
+        let boxed: Box<u8> = Box::new(0u8);
+        polyplug_abi::guest::GuestContractInstance {
+            data: Box::into_raw(boxed) as *mut core::ffi::c_void,
+            contract_id: GuestContractId::from_u64(STATEFUL_CONTRACT_ID),
+        }
+    }
+
+    /// Destroy the boxed unit created by `stateful_create_instance`.
+    unsafe extern "C" fn stateful_destroy_instance(
+        _host: *const HostApi,
+        instance: polyplug_abi::guest::GuestContractInstance,
+    ) {
+        if !instance.data.is_null() {
+            // SAFETY: `data` was produced by `stateful_create_instance` via
+            // `Box::into_raw(Box<u8>)`, so reclaiming it as the same Box is sound.
+            drop(unsafe { Box::from_raw(instance.data as *mut u8) });
+        }
+    }
+
+    /// Register a native-dispatch contract whose `create_instance` returns a
+    /// non-null (stateful) instance, returning the leaked interface pointer so the
+    /// test can drive `host_create_guest_instance` / `host_destroy_guest_instance`.
+    fn register_stateful_contract(
+        registry: &crate::runtime_store::RuntimeStore,
+        contract_id: u64,
+        bundle_id: u64,
+    ) -> *const GuestContractInterface {
+        use polyplug_abi::{
+            DispatchMechanisms, DispatchType, GuestContractInterface, NativeDispatch,
+        };
+
+        let interface: &'static GuestContractInterface =
+            Box::leak(Box::new(GuestContractInterface {
+                contract_id: GuestContractId::from_u64(contract_id),
+                contract_version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                dispatch_type: DispatchType::Native,
+                create_instance: stateful_create_instance,
+                destroy_instance: stateful_destroy_instance,
+                dispatch: DispatchMechanisms {
+                    native: NativeDispatch {
+                        function_count: 0,
+                        functions: core::ptr::null(),
+                    },
+                },
+            }));
+        let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
+            name: polyplug_abi::StringView::from_static(b"stateful"),
+            contract_name: polyplug_abi::StringView::from_static(b"stateful.contract"),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+        };
+        // SAFETY: interface is leaked for the process lifetime.
+        let result: Result<GuestContractHandle, crate::error::RegistryError> = unsafe {
+            registry.register_guest_contract(
+                descriptor,
+                interface,
+                "stateful.contract".to_owned(),
+                BundleId::from_u64(bundle_id),
+            )
+        };
+        if let Err(e) = result {
+            panic!("failed to register stateful contract: {e}");
+        }
+        interface as *const GuestContractInterface
+    }
+
+    #[test]
+    fn host_instance_lifecycle_counts_stateful_instances() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let contract_id: u64 = STATEFUL_CONTRACT_ID;
+        let cid: GuestContractId = GuestContractId::from_u64(contract_id);
+        let interface: *const GuestContractInterface =
+            register_stateful_contract(&runtime.registry, contract_id, 0x1);
+        let host: *const HostApi = host_with_runtime(&runtime);
+
+        assert_eq!(
+            runtime.live_instance_count_for_contracts(&[cid]),
+            0,
+            "no instances created yet"
+        );
+
+        // Create two stateful instances through the host-mediated path.
+        // SAFETY: host and interface are valid; create_instance ignores args.
+        let inst_a: polyplug_abi::guest::GuestContractInstance =
+            unsafe { host_create_guest_instance(host, interface, core::ptr::null()) };
+        // SAFETY: as above.
+        let inst_b: polyplug_abi::guest::GuestContractInstance =
+            unsafe { host_create_guest_instance(host, interface, core::ptr::null()) };
+        assert!(!inst_a.data.is_null() && !inst_b.data.is_null());
+        assert_eq!(
+            runtime.live_instance_count_for_contracts(&[cid]),
+            2,
+            "two stateful instances counted"
+        );
+
+        // Destroy both through the host-mediated path; the count returns to zero.
+        // SAFETY: each instance was produced by this contract's create_instance.
+        unsafe { host_destroy_guest_instance(host, interface, inst_a) };
+        // SAFETY: as above.
+        unsafe { host_destroy_guest_instance(host, interface, inst_b) };
+        assert_eq!(
+            runtime.live_instance_count_for_contracts(&[cid]),
+            0,
+            "count returns to zero after destroy"
+        );
+    }
+
+    #[test]
+    fn host_instance_lifecycle_ignores_stateless_instances() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let contract_id: u64 = 0x0FED_CBA9_8765_4321;
+        let cid: GuestContractId = GuestContractId::from_u64(contract_id);
+        register_native_caller_contract(&runtime.registry, contract_id, 0x1);
+        let host: *const HostApi = host_with_runtime(&runtime);
+
+        // resolve the registered interface through the host vtable, mirroring the
+        // real create path (find -> resolve -> create_guest_instance).
+        // SAFETY: host is valid; find/resolve tolerate the inputs below.
+        let handle: GuestContractHandle = unsafe { host_find_guest_contract(host, contract_id, 0) };
+        // SAFETY: handle was just minted by find for a registered contract.
+        let interface: *const GuestContractInterface =
+            unsafe { host_resolve_guest_contract(host, handle) };
+        assert!(!interface.is_null(), "registered contract must resolve");
+
+        // The stateless contract's create_instance returns a null `data`, so the
+        // host must not count it.
+        // SAFETY: host and interface are valid.
+        let inst: polyplug_abi::guest::GuestContractInstance =
+            unsafe { host_create_guest_instance(host, interface, core::ptr::null()) };
+        assert!(inst.data.is_null(), "stateless instance has null data");
+        assert_eq!(
+            runtime.live_instance_count_for_contracts(&[cid]),
+            0,
+            "stateless instances are not counted"
+        );
+
+        // Destroying it is a no-op for the counter too.
+        // SAFETY: as above.
+        unsafe { host_destroy_guest_instance(host, interface, inst) };
+        assert_eq!(runtime.live_instance_count_for_contracts(&[cid]), 0);
     }
 
     // ─── init-stack fast path (active_init_count) ────────────────────────────
@@ -3758,6 +4099,8 @@ mod tests {
             call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
+            create_guest_instance: host_create_guest_instance,
+            destroy_guest_instance: host_destroy_guest_instance,
             reserved: core::ptr::null(),
         };
 
@@ -3801,6 +4144,8 @@ mod tests {
             call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
+            create_guest_instance: host_create_guest_instance,
+            destroy_guest_instance: host_destroy_guest_instance,
             reserved: core::ptr::null(),
         };
 
@@ -3916,6 +4261,8 @@ mod tests {
             call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
+            create_guest_instance: host_create_guest_instance,
+            destroy_guest_instance: host_destroy_guest_instance,
             reserved: core::ptr::null(),
         };
 
@@ -4005,6 +4352,8 @@ mod tests {
             call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
+            create_guest_instance: host_create_guest_instance,
+            destroy_guest_instance: host_destroy_guest_instance,
             reserved: core::ptr::null(),
         };
 
@@ -4105,6 +4454,8 @@ mod tests {
             call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
+            create_guest_instance: host_create_guest_instance,
+            destroy_guest_instance: host_destroy_guest_instance,
             reserved: core::ptr::null(),
         };
 

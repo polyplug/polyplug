@@ -487,12 +487,15 @@ _host_api_get_error_len_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p)
 _host_api_call_guest_method_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 _host_api_unload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_uint64)
 _host_api_log_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32, StringView, StringView)
+_host_api_create_guest_instance_t = ctypes.CFUNCTYPE(GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_host_api_destroy_guest_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, GuestContractInstance)
 class HostApi(ctypes.Structure):
     """ Host Interface — function table passed to guests during initialization.
     
      Contains an opaque runtime pointer and function pointers for guest calls.
      All functions use self-passing pattern (receive HostApi pointer as first parameter).
-     `HostApi` is `168 bytes` (1 opaque runtime pointer + 19 function pointer fields + 1 reserved data pointer).
+     `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
+     Tail offsets: `create_guest_instance` @160, `destroy_guest_instance` @168, `reserved` @176.
     
      # Who provides
      The runtime creates this struct and passes it to `polyplug_init()`.
@@ -500,7 +503,7 @@ class HostApi(ctypes.Structure):
     
      # Nullability
      Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
-     is the sole producer of this struct and populates all 19 callbacks at
+     is the sole producer of this struct and populates all 21 callbacks at
      creation. Consumers never construct or mutate a `HostApi`. Only the
      `runtime` pointer can become null (it is swapped to null by
      `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
@@ -547,11 +550,13 @@ class HostApi(ctypes.Structure):
         ("call_guest_method", _host_api_call_guest_method_t),
         ("unload_bundle", _host_api_unload_bundle_t),
         ("log", _host_api_log_t),
+        ("create_guest_instance", _host_api_create_guest_instance_t),
+        ("destroy_guest_instance", _host_api_destroy_guest_instance_t),
         ("reserved", ctypes.c_void_p),
     ]
 
-# Expected size: 168 bytes
-assert ctypes.sizeof(HostApi) == 168, f"HostApi expected 168 bytes, got {ctypes.sizeof(HostApi)}"
+# Expected size: 184 bytes
+assert ctypes.sizeof(HostApi) == 184, f"HostApi expected 184 bytes, got {ctypes.sizeof(HostApi)}"
 
 
 class DispatchMechanisms(ctypes.Union):

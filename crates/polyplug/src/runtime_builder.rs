@@ -190,6 +190,8 @@ impl RuntimeBuilder {
             call_guest_method: crate::runtime::host_call_guest_method,
             unload_bundle: crate::runtime::host_unload_bundle,
             log: crate::runtime::host_log,
+            create_guest_instance: crate::runtime::host_create_guest_instance,
+            destroy_guest_instance: crate::runtime::host_destroy_guest_instance,
             reserved: core::ptr::null(),
         });
 
@@ -244,6 +246,7 @@ impl RuntimeBuilder {
             init_bundle_stack: std::sync::Mutex::new(HashMap::new()),
             active_init_count: core::sync::atomic::AtomicUsize::new(0),
             reload_serialize: std::sync::Mutex::new(()),
+            instance_counts: std::sync::Mutex::new(HashMap::new()),
         };
 
         let runtime: Arc<Runtime> = Arc::new(runtime);

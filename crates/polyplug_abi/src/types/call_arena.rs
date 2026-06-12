@@ -428,6 +428,21 @@ mod tests {
     ) {
     }
 
+    unsafe extern "C" fn stub_create_guest_instance(
+        _this: *const crate::host::HostApi,
+        _interface: *const crate::guest::GuestContractInterface,
+        _args: *const core::ffi::c_void,
+    ) -> crate::guest::GuestContractInstance {
+        crate::guest::GuestContractInstance::null()
+    }
+
+    unsafe extern "C" fn stub_destroy_guest_instance(
+        _this: *const crate::host::HostApi,
+        _interface: *const crate::guest::GuestContractInterface,
+        _instance: crate::guest::GuestContractInstance,
+    ) {
+    }
+
     fn test_host() -> HostApi {
         HostApi {
             runtime: core::ptr::null_mut(),
@@ -450,6 +465,8 @@ mod tests {
             call_guest_method: stub_call_guest_method,
             unload_bundle: stub_unload,
             log: stub_host_log,
+            create_guest_instance: stub_create_guest_instance,
+            destroy_guest_instance: stub_destroy_guest_instance,
             reserved: core::ptr::null(),
         }
     }

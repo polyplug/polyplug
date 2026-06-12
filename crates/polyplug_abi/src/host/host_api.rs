@@ -38,7 +38,8 @@ use crate::{
 ///
 /// Contains an opaque runtime pointer and function pointers for guest calls.
 /// All functions use self-passing pattern (receive HostApi pointer as first parameter).
-/// `HostApi` is `168 bytes` (1 opaque runtime pointer + 19 function pointer fields + 1 reserved data pointer).
+/// `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
+/// Tail offsets: `create_guest_instance` @160, `destroy_guest_instance` @168, `reserved` @176.
 ///
 /// # Who provides
 /// The runtime creates this struct and passes it to `polyplug_init()`.
@@ -46,7 +47,7 @@ use crate::{
 ///
 /// # Nullability
 /// Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
-/// is the sole producer of this struct and populates all 19 callbacks at
+/// is the sole producer of this struct and populates all 21 callbacks at
 /// creation. Consumers never construct or mutate a `HostApi`. Only the
 /// `runtime` pointer can become null (it is swapped to null by
 /// `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
@@ -419,6 +420,28 @@ pub struct HostApi {
         scope: StringView,
         message: StringView,
     ),
+    /// Create a guest contract instance through the runtime (host-mediated).
+    ///
+    /// The host/peer caller passes the resolved `interface` pointer (from
+    /// `resolve_guest_contract`) and the constructor `args`. The runtime invokes the
+    /// interface's `create_instance` under an epoch pin (so a concurrent unload cannot
+    /// free the interface mid-construction) and tracks the resulting instance for its
+    /// live-instance accounting. Returns the new `GuestContractInstance` (a null
+    /// `data` denotes a stateless instance).
+    pub create_guest_instance: unsafe extern "C" fn(
+        this: *const HostApi,
+        interface: *const GuestContractInterface,
+        args: *const c_void,
+    ) -> GuestContractInstance,
+    /// Destroy a guest contract instance through the runtime (host-mediated).
+    ///
+    /// Mirror of `create_guest_instance`: the runtime invokes the interface's
+    /// `destroy_instance` under an epoch pin and updates its live-instance accounting.
+    pub destroy_guest_instance: unsafe extern "C" fn(
+        this: *const HostApi,
+        interface: *const GuestContractInterface,
+        instance: GuestContractInstance,
+    ),
     /// Reserved. Producers must set this to null; consumers must not read it.
     pub reserved: *const core::ffi::c_void,
 }
@@ -442,15 +465,15 @@ mod tests {
 
     #[test]
     fn layout_host_api() {
-        // HostApi: runtime pointer (8 bytes) + 19 extern "C" fn pointers (152 bytes) + 1 reserved data pointer (8 bytes).
-        // Total: 168 bytes (21 pointer-sized fields)
+        // HostApi: runtime pointer (8 bytes) + 21 extern "C" fn pointers (168 bytes) + 1 reserved data pointer (8 bytes).
+        // Total: 184 bytes (23 pointer-sized fields)
         // Fields: runtime, register_guest_contract, alloc, free, find_guest_contract,
         //         find_all_guest_contracts, resolve_guest_contract,
         //         get_host_contract, resolve_host_contract_interface, list_bundles,
         //         get_dependencies, load_bundle, reload_bundle, register_host_contract,
         //         register_loader, get_last_error, get_error_len, call_guest_method,
-        //         unload_bundle, log, reserved
-        assert_eq!(size_of::<HostApi>(), 168);
+        //         unload_bundle, log, create_guest_instance, destroy_guest_instance, reserved
+        assert_eq!(size_of::<HostApi>(), 184);
         assert_eq!(align_of::<HostApi>(), 8);
         // Existing fields (unchanged offsets)
         assert_eq!(offset_of!(HostApi, runtime), 0);
@@ -473,7 +496,9 @@ mod tests {
         assert_eq!(offset_of!(HostApi, call_guest_method), 136);
         assert_eq!(offset_of!(HostApi, unload_bundle), 144);
         assert_eq!(offset_of!(HostApi, log), 152);
-        assert_eq!(offset_of!(HostApi, reserved), 160);
+        assert_eq!(offset_of!(HostApi, create_guest_instance), 160);
+        assert_eq!(offset_of!(HostApi, destroy_guest_instance), 168);
+        assert_eq!(offset_of!(HostApi, reserved), 176);
     }
 
     /// Verify HostApi has runtime: *mut c_void field at offset 0.

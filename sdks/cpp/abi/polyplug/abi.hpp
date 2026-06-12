@@ -115,7 +115,8 @@ static_assert(sizeof(GuestContractInstance) == 16, "GuestContractInstance size m
 ///
 ///  Contains an opaque runtime pointer and function pointers for guest calls.
 ///  All functions use self-passing pattern (receive HostApi pointer as first parameter).
-///  `HostApi` is `168 bytes` (1 opaque runtime pointer + 19 function pointer fields + 1 reserved data pointer).
+///  `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
+///  Tail offsets: `create_guest_instance` @160, `destroy_guest_instance` @168, `reserved` @176.
 ///
 ///  # Who provides
 ///  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -123,7 +124,7 @@ static_assert(sizeof(GuestContractInstance) == 16, "GuestContractInstance size m
 ///
 ///  # Nullability
 ///  Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
-///  is the sole producer of this struct and populates all 19 callbacks at
+///  is the sole producer of this struct and populates all 21 callbacks at
 ///  creation. Consumers never construct or mutate a `HostApi`. Only the
 ///  `runtime` pointer can become null (it is swapped to null by
 ///  `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
@@ -167,6 +168,8 @@ using HostApi_get_error_len_fn = size_t(*)(const HostApi*);
 using HostApi_call_guest_method_fn = AbiError(*)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
 using HostApi_unload_bundle_fn = AbiError(*)(const HostApi*, uint64_t);
 using HostApi_log_fn = void(*)(const HostApi*, uint32_t, StringView, StringView);
+using HostApi_create_guest_instance_fn = GuestContractInstance(*)(const HostApi*, const GuestContractInterface*, const void*);
+using HostApi_destroy_guest_instance_fn = void(*)(const HostApi*, const GuestContractInterface*, GuestContractInstance);
 struct HostApi {
     ///  Opaque pointer to Runtime.
     ///
@@ -471,10 +474,24 @@ struct HostApi {
     ///  - `scope`: short UTF-8 subsystem tag
     ///  - `message`: UTF-8 log message
     HostApi_log_fn log;
+    ///  Create a guest contract instance through the runtime (host-mediated).
+    ///
+    ///  The host/peer caller passes the resolved `interface` pointer (from
+    ///  `resolve_guest_contract`) and the constructor `args`. The runtime invokes the
+    ///  interface's `create_instance` under an epoch pin (so a concurrent unload cannot
+    ///  free the interface mid-construction) and tracks the resulting instance for its
+    ///  live-instance accounting. Returns the new `GuestContractInstance` (a null
+    ///  `data` denotes a stateless instance).
+    HostApi_create_guest_instance_fn create_guest_instance;
+    ///  Destroy a guest contract instance through the runtime (host-mediated).
+    ///
+    ///  Mirror of `create_guest_instance`: the runtime invokes the interface's
+    ///  `destroy_instance` under an epoch pin and updates its live-instance accounting.
+    HostApi_destroy_guest_instance_fn destroy_guest_instance;
     ///  Reserved. Producers must set this to null; consumers must not read it.
     const void* reserved;
 };
-static_assert(sizeof(HostApi) == 168, "HostApi size mismatch");
+static_assert(sizeof(HostApi) == 184, "HostApi size mismatch");
 
 ///  Opaque handle to a host contract instance.
 ///

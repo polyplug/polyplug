@@ -240,7 +240,8 @@ export const GUEST_CONTRACT_INTERFACE_SIZE: number = 56;
  * 
  *  Contains an opaque runtime pointer and function pointers for guest calls.
  *  All functions use self-passing pattern (receive HostApi pointer as first parameter).
- *  `HostApi` is `168 bytes` (1 opaque runtime pointer + 19 function pointer fields + 1 reserved data pointer).
+ *  `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
+ *  Tail offsets: `create_guest_instance` @160, `destroy_guest_instance` @168, `reserved` @176.
  * 
  *  # Who provides
  *  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -248,7 +249,7 @@ export const GUEST_CONTRACT_INTERFACE_SIZE: number = 56;
  * 
  *  # Nullability
  *  Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
- *  is the sole producer of this struct and populates all 19 callbacks at
+ *  is the sole producer of this struct and populates all 21 callbacks at
  *  creation. Consumers never construct or mutate a `HostApi`. Only the
  *  `runtime` pointer can become null (it is swapped to null by
  *  `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
@@ -618,6 +619,24 @@ export interface HostApi {
      *  - `message`: UTF-8 log message
      */
     log: number;
+    /**
+     *  Create a guest contract instance through the runtime (host-mediated).
+     * 
+     *  The host/peer caller passes the resolved `interface` pointer (from
+     *  `resolve_guest_contract`) and the constructor `args`. The runtime invokes the
+     *  interface's `create_instance` under an epoch pin (so a concurrent unload cannot
+     *  free the interface mid-construction) and tracks the resulting instance for its
+     *  live-instance accounting. Returns the new `GuestContractInstance` (a null
+     *  `data` denotes a stateless instance).
+     */
+    create_guest_instance: number;
+    /**
+     *  Destroy a guest contract instance through the runtime (host-mediated).
+     * 
+     *  Mirror of `create_guest_instance`: the runtime invokes the interface's
+     *  `destroy_instance` under an epoch pin and updates its live-instance accounting.
+     */
+    destroy_guest_instance: number;
     /**  Reserved. Producers must set this to null; consumers must not read it. */
     reserved: bigint;
 }
@@ -642,8 +661,10 @@ export const HOST_API_GET_ERROR_LEN_OFFSET: number = 128;
 export const HOST_API_CALL_GUEST_METHOD_OFFSET: number = 136;
 export const HOST_API_UNLOAD_BUNDLE_OFFSET: number = 144;
 export const HOST_API_LOG_OFFSET: number = 152;
-export const HOST_API_RESERVED_OFFSET: number = 160;
-export const HOST_API_SIZE: number = 168;
+export const HOST_API_CREATE_GUEST_INSTANCE_OFFSET: number = 160;
+export const HOST_API_DESTROY_GUEST_INSTANCE_OFFSET: number = 168;
+export const HOST_API_RESERVED_OFFSET: number = 176;
+export const HOST_API_SIZE: number = 184;
 
 /**
  *  Opaque handle to a host contract instance.

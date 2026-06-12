@@ -486,6 +486,8 @@ fn counting_host() -> HostApi {
         call_guest_method: arena_stub_call_guest_method,
         unload_bundle: arena_stub_unload_bundle,
         log: stub_host_log,
+        create_guest_instance: stub_create_guest_instance,
+        destroy_guest_instance: stub_destroy_guest_instance,
         reserved: core::ptr::null(),
     }
 }
@@ -605,5 +607,20 @@ unsafe extern "C" fn stub_host_log(
     _level: u32,
     _scope: polyplug_abi::StringView,
     _message: polyplug_abi::StringView,
+) {
+}
+
+unsafe extern "C" fn stub_create_guest_instance(
+    _this: *const polyplug_abi::HostApi,
+    _interface: *const polyplug_abi::GuestContractInterface,
+    _args: *const core::ffi::c_void,
+) -> polyplug_abi::GuestContractInstance {
+    polyplug_abi::GuestContractInstance::null()
+}
+
+unsafe extern "C" fn stub_destroy_guest_instance(
+    _this: *const polyplug_abi::HostApi,
+    _interface: *const polyplug_abi::GuestContractInterface,
+    _instance: polyplug_abi::GuestContractInstance,
 ) {
 }

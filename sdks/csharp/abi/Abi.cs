@@ -209,7 +209,8 @@ public struct GuestContractInterface
 ///
 ///  Contains an opaque runtime pointer and function pointers for guest calls.
 ///  All functions use self-passing pattern (receive HostApi pointer as first parameter).
-///  `HostApi` is `168 bytes` (1 opaque runtime pointer + 19 function pointer fields + 1 reserved data pointer).
+///  `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
+///  Tail offsets: `create_guest_instance` @160, `destroy_guest_instance` @168, `reserved` @176.
 ///
 ///  # Who provides
 ///  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -217,7 +218,7 @@ public struct GuestContractInterface
 ///
 ///  # Nullability
 ///  Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
-///  is the sole producer of this struct and populates all 19 callbacks at
+///  is the sole producer of this struct and populates all 21 callbacks at
 ///  creation. Consumers never construct or mutate a `HostApi`. Only the
 ///  `runtime` pointer can become null (it is swapped to null by
 ///  `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
@@ -242,7 +243,7 @@ public struct GuestContractInterface
 ///  Each function receives the interface pointer as its first parameter,
 ///  allowing guests to call: `host->find_guest_contract(host, id, ver)`
 ///  SDKs hide this pattern: `host.find_guest_contract(id, ver)`
-[StructLayout(LayoutKind.Sequential, Size = 168)]
+[StructLayout(LayoutKind.Sequential, Size = 184)]
 public struct HostApi
 {
     ///  Opaque pointer to Runtime.
@@ -548,11 +549,25 @@ public struct HostApi
     ///  - `scope`: short UTF-8 subsystem tag
     ///  - `message`: UTF-8 log message
     public IntPtr Log;
+    ///  Create a guest contract instance through the runtime (host-mediated).
+    ///
+    ///  The host/peer caller passes the resolved `interface` pointer (from
+    ///  `resolve_guest_contract`) and the constructor `args`. The runtime invokes the
+    ///  interface's `create_instance` under an epoch pin (so a concurrent unload cannot
+    ///  free the interface mid-construction) and tracks the resulting instance for its
+    ///  live-instance accounting. Returns the new `GuestContractInstance` (a null
+    ///  `data` denotes a stateless instance).
+    public IntPtr CreateGuestInstance;
+    ///  Destroy a guest contract instance through the runtime (host-mediated).
+    ///
+    ///  Mirror of `create_guest_instance`: the runtime invokes the interface's
+    ///  `destroy_instance` under an epoch pin and updates its live-instance accounting.
+    public IntPtr DestroyGuestInstance;
     ///  Reserved. Producers must set this to null; consumers must not read it.
     public IntPtr Reserved;
 }
 
-/// Expected size: 168 bytes
+/// Expected size: 184 bytes
 
 ///  Opaque handle to a host contract instance.
 ///
