@@ -10,6 +10,7 @@ pub mod reload;
 pub mod runtime;
 pub mod runtime_builder;
 pub mod runtime_store;
+pub mod shared_state;
 
 pub use reload::ReloadEvent;
 

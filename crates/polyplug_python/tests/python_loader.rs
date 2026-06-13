@@ -1179,3 +1179,142 @@ fn test_concurrent_dispatch_distinct_arenas_isolated() {
         panic!("{e}");
     }
 }
+
+// ─── Multi-runtime isolation proof (process-global SharedState / nonce) ──────────
+
+/// Entry-module source for a bundle whose contract function 0 writes the integer
+/// returned by a **bundle-local** sibling module `shared_helper.VALUE` into `out`.
+///
+/// Two runtimes load two different bundles that share the *same name* (hence the
+/// same `bundle_id` name-hash) and each ship their *own* `shared_helper.py` with
+/// a different `VALUE`. Because CPython's `sys.modules` is process-global, the
+/// per-bundle module-isolation pass must re-key each bundle's `shared_helper`
+/// under a prefix made unique by the runtime-vended nonce — otherwise the second
+/// runtime would import the first's cached `shared_helper` and observe the wrong
+/// value. The `{contract}` placeholder lets each runtime register a distinct
+/// contract id so both contracts coexist in the (separate) registries.
+const SHARED_NAME_ENTRY_SRC: &str = r#"
+import ctypes
+from shared_helper import VALUE
+
+def _fn0(args_ptr, out_ptr, arena_ptr):
+    ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = VALUE
+
+def polyplug_init(host_interface: int, ctx: int) -> None:
+    global _polyplug_registrations
+    _polyplug_registrations = [
+        {"contract": "{contract}", "functions": [_fn0]},
+    ]
+"#;
+
+/// Write a same-named bundle whose `shared_helper.VALUE == value` and whose
+/// contract is `"{contract_name}@1"`. Returns the temp dir (kept alive by the
+/// caller) and the entry-file path.
+fn write_shared_name_bundle(contract_name: &str, value: i32) -> (TempDir, PathBuf) {
+    let dir: TempDir = TempDir::new().expect("tempdir");
+    let entry: PathBuf = dir.path().join("bundle.py");
+    let entry_src: String =
+        SHARED_NAME_ENTRY_SRC.replace("{contract}", &format!("{contract_name}@1"));
+    fs::write(&entry, entry_src).expect("write bundle.py");
+    fs::write(
+        dir.path().join("shared_helper.py"),
+        format!("VALUE = {value}\n"),
+    )
+    .expect("write shared_helper.py");
+
+    // Both bundles deliberately share the SAME name so their bundle_id collides.
+    let name: &str = "shared_name";
+    let manifest: String = format!(
+        r#"id = {}
+name = "{}"
+loader = "python"
+file = "bundle.py"
+"#,
+        bundle_id(name),
+        name
+    );
+    fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
+
+    (dir, entry)
+}
+
+/// Two `Runtime` instances in ONE process each load a same-named Python bundle
+/// (identical `bundle_id`) carrying its own `shared_helper.py`, then dispatch.
+///
+/// This is the runtime proof for Wave C1's static-free Python loader:
+/// - A double `Py_Initialize` (if the once-per-process init guard regressed)
+///   would panic/abort here.
+/// - A nonce collision (if the per-bundle `sys.modules` re-key prefix were not
+///   made unique by the runtime-vended nonce) would make runtime B import
+///   runtime A's cached `shared_helper`, so B would observe A's `VALUE`.
+///
+/// Both must dispatch their OWN value, proving the process-global `SharedState`
+/// vends a unique nonce per load across distinct runtimes.
+#[test]
+fn two_runtimes_same_named_bundle_do_not_collide_in_sys_modules() {
+    let name: &str = "shared_name";
+
+    let (_dir_a, path_a) = write_shared_name_bundle("alpha_contract", 0x11);
+    let (_dir_b, path_b) = write_shared_name_bundle("beta_contract", 0x22);
+
+    let loader_a: PythonLoader = PythonLoader::default();
+    let loader_b: PythonLoader = PythonLoader::default();
+    let runtime_a: Arc<Runtime> = make_runtime();
+    let runtime_b: Arc<Runtime> = make_runtime();
+
+    let manifest_a: ManifestData = make_manifest(&path_a, name);
+    let manifest_b: ManifestData = make_manifest(&path_b, name);
+
+    loader_a
+        .load(
+            &manifest_a,
+            &polyplug::loader::BundleSource::Path(manifest_a.path.clone()),
+            &runtime_a,
+        )
+        .expect("runtime A load must succeed");
+    loader_b
+        .load(
+            &manifest_b,
+            &polyplug::loader::BundleSource::Path(manifest_b.path.clone()),
+            &runtime_b,
+        )
+        .expect("runtime B load must succeed");
+
+    let alpha_cid: u64 = GuestContractId::new("alpha_contract", 1).id();
+    let beta_cid: u64 = GuestContractId::new("beta_contract", 1).id();
+
+    let mut out_a: i32 = 0;
+    // SAFETY: out_a is a valid i32; the callable writes a 4-byte int there.
+    let err_a: AbiError = unsafe {
+        dispatch(
+            &runtime_a,
+            alpha_cid,
+            0,
+            core::ptr::null(),
+            &mut out_a as *mut i32 as *mut (),
+        )
+    };
+    assert!(err_a.is_ok(), "A dispatch failed code={}", err_a.code);
+
+    let mut out_b: i32 = 0;
+    // SAFETY: out_b is a valid i32; the callable writes a 4-byte int there.
+    let err_b: AbiError = unsafe {
+        dispatch(
+            &runtime_b,
+            beta_cid,
+            0,
+            core::ptr::null(),
+            &mut out_b as *mut i32 as *mut (),
+        )
+    };
+    assert!(err_b.is_ok(), "B dispatch failed code={}", err_b.code);
+
+    assert_eq!(
+        out_a, 0x11,
+        "runtime A must read its OWN shared_helper.VALUE (0x11)"
+    );
+    assert_eq!(
+        out_b, 0x22,
+        "runtime B must read its OWN shared_helper.VALUE (0x22), not A's cached module"
+    );
+}

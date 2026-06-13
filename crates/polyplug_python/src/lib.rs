@@ -46,13 +46,16 @@ use polyplug_abi::StringView;
 use polyplug_abi::SupportedLanguage;
 use polyplug_utils::BundleId;
 
-use crate::context::ensure_python_initialized;
+use crate::context::check_python_version;
+use crate::context::run_python_init;
 use crate::loader::ContractRegistration;
 
 /// Loader for Python plugin bundles (`.py` files).
 ///
 /// Uses CPython embedding via pyo3 0.28. The interpreter is initialized
-/// exactly once per process via a `std::sync::OnceLock`.
+/// exactly once per process by the runtime's process-global `SharedState`
+/// (via [`Runtime::with_python_load`](polyplug::runtime::Runtime::with_python_load)),
+/// not by a loader-side static.
 pub struct PythonLoader {
     config: PythonConfig,
     /// Per-bundle list of the `sys.modules` re-key prefixes produced by each load
@@ -179,8 +182,6 @@ impl PythonLoader {
         code: &str,
         runtime: &Runtime,
     ) -> Result<(), LoaderError> {
-        ensure_python_initialized(&self.config)?;
-
         let bundle_name: String = synthetic_module_name(&manifest.name);
         let bundle_id: u64 = manifest.id;
 
@@ -214,90 +215,105 @@ impl PythonLoader {
         // (instance-owned; Rule 12 — no thread-locals).
         runtime.push_init_bundle_id(bundle_id);
 
-        // Serialize the snapshot→exec→isolate critical section against other
-        // concurrent Python loads sharing this process's interpreter (see the
-        // path-based load for the full rationale).
-        let _load_guard: std::sync::MutexGuard<'_, ()> = crate::context::acquire_load_lock();
+        // The runtime owns the once-per-process interpreter init, the load
+        // serialization, and the per-bundle isolation nonce via its
+        // process-global `SharedState`. `with_python_load` holds that single
+        // lock across init + the whole snapshot→exec→isolate critical section,
+        // subsuming the loader's former `PYTHON_LOAD_LOCK`.
+        let result: Result<String, LoaderError> =
+            runtime.with_python_load(SupportedLanguage::Python, run_python_init, |nonce: u64| {
+                // Verify the running interpreter meets this load's minimum
+                // version on every load (the once-per-process init above runs
+                // only on the first load of the process).
+                check_python_version(&self.config)?;
 
-        let result: Result<String, LoaderError> = Python::attach(|py| {
-            // Snapshot sys.modules before executing so the isolation pass can scope
-            // exactly the modules this bundle introduced.
-            let modules_before: std::collections::HashSet<String> =
-                crate::isolation::snapshot_loaded_modules(py, &bundle_name)?;
+                Python::attach(|py| {
+                    // Snapshot sys.modules before executing so the isolation pass can scope
+                    // exactly the modules this bundle introduced.
+                    let modules_before: std::collections::HashSet<String> =
+                        crate::isolation::snapshot_loaded_modules(py, &bundle_name)?;
 
-            // Compile and execute the source text as a module.
-            let module: pyo3::Bound<'_, PyModule> =
-                PyModule::from_code(py, &code_c, &file_name_c, &module_name_c).map_err(
-                    |e: pyo3::PyErr| LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!("inline module compile/exec failed: {}", e),
-                    },
-                )?;
+                    // Compile and execute the source text as a module.
+                    let module: pyo3::Bound<'_, PyModule> =
+                        PyModule::from_code(py, &code_c, &file_name_c, &module_name_c).map_err(
+                            |e: pyo3::PyErr| LoaderError::InitFailed {
+                                bundle: bundle_name.clone(),
+                                error: format!("inline module compile/exec failed: {}", e),
+                            },
+                        )?;
 
-            // Locate polyplug_init(host, ctx) — self-passing pattern.
-            let init_fn: pyo3::Bound<'_, pyo3::PyAny> =
-                module
-                    .getattr("polyplug_init")
-                    .map_err(|_| LoaderError::InitSymbolMissing {
-                        bundle: bundle_name.clone(),
-                    })?;
+                    // Locate polyplug_init(host, ctx) — self-passing pattern.
+                    let init_fn: pyo3::Bound<'_, pyo3::PyAny> = module
+                        .getattr("polyplug_init")
+                        .map_err(|_| LoaderError::InitSymbolMissing {
+                            bundle: bundle_name.clone(),
+                        })?;
 
-            // Inject the arena bridge before calling init so the guest can route
-            // per-call return buffers through the host CallArena during dispatch.
-            // Injected into the namespace of the module that *defines*
-            // polyplug_init (its __globals__) as well as the entry module, so
-            // split-module generated bundles resolve `_polyplug_arena_alloc` from
-            // the contracts module where their ABI functions are defined. Must run
-            // after init_fn is located (its __globals__ is the real namespace).
-            let module_any_bridge: Bound<'_, PyAny> = module.as_any().clone();
-            loader::inject_arena_bridge(
-                py,
-                &module_any_bridge,
-                &init_fn,
-                host_interface,
-                &bundle_name,
-            )?;
+                    // Inject the arena bridge before calling init so the guest can route
+                    // per-call return buffers through the host CallArena during dispatch.
+                    // Injected into the namespace of the module that *defines*
+                    // polyplug_init (its __globals__) as well as the entry module, so
+                    // split-module generated bundles resolve `_polyplug_arena_alloc` from
+                    // the contracts module where their ABI functions are defined. Must run
+                    // after init_fn is located (its __globals__ is the real namespace).
+                    let module_any_bridge: Bound<'_, PyAny> = module.as_any().clone();
+                    loader::inject_arena_bridge(
+                        py,
+                        &module_any_bridge,
+                        &init_fn,
+                        host_interface,
+                        &bundle_name,
+                    )?;
 
-            // The bundle path is empty for in-memory sources (no bundle directory).
-            // NOTE: Intentionally leaked; bundle_path_static outlives this call.
-            let bundle_path_static: &'static str = Box::leak(String::new().into_boxed_str());
-            let ctx: BundleInitContext = BundleInitContext {
-                bundle_id,
-                bundle_path: StringView {
-                    ptr: bundle_path_static.as_ptr(),
-                    len: bundle_path_static.len(),
-                },
-            };
+                    // The bundle path is empty for in-memory sources (no bundle directory).
+                    // NOTE: Intentionally leaked; bundle_path_static outlives this call.
+                    let bundle_path_static: &'static str =
+                        Box::leak(String::new().into_boxed_str());
+                    let ctx: BundleInitContext = BundleInitContext {
+                        bundle_id,
+                        bundle_path: StringView {
+                            ptr: bundle_path_static.as_ptr(),
+                            len: bundle_path_static.len(),
+                        },
+                    };
 
-            let host_interface_i64: i64 = host_interface as usize as i64;
-            let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
-            init_fn
-                .call((host_interface_i64, ctx_ptr), None)
-                .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
-                    bundle: bundle_name.clone(),
-                    error: format!("polyplug_init call failed: {}", e),
-                })?;
+                    let host_interface_i64: i64 = host_interface as usize as i64;
+                    let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
+                    init_fn.call((host_interface_i64, ctx_ptr), None).map_err(
+                        |e: pyo3::PyErr| LoaderError::InitFailed {
+                            bundle: bundle_name.clone(),
+                            error: format!("polyplug_init call failed: {}", e),
+                        },
+                    )?;
 
-            // Collect the guest's registration data and register every contract
-            // with VM dispatch.
-            let module_any: Bound<'_, PyAny> = module.as_any().clone();
-            Self::collect_and_register(py, &init_fn, &module_any, host_interface, &bundle_name)?;
+                    // Collect the guest's registration data and register every contract
+                    // with VM dispatch.
+                    let module_any: Bound<'_, PyAny> = module.as_any().clone();
+                    Self::collect_and_register(
+                        py,
+                        &init_fn,
+                        &module_any,
+                        host_interface,
+                        &bundle_name,
+                    )?;
 
-            // Isolate this bundle's freshly imported modules. With no bundle
-            // directory ("") no imported module is classified as in-bundle, so this
-            // is a no-op for single-file inline sources — by design. The returned
-            // prefix is still tracked for unload-purge symmetry, even though no
-            // `sys.modules` entry carries it for inline sources.
-            let prefix: String = crate::isolation::isolate_bundle_modules(
-                py,
-                &bundle_name,
-                bundle_id,
-                "",
-                &modules_before,
-            )?;
+                    // Isolate this bundle's freshly imported modules. With no bundle
+                    // directory ("") no imported module is classified as in-bundle, so this
+                    // is a no-op for single-file inline sources — by design. The returned
+                    // prefix is still tracked for unload-purge symmetry, even though no
+                    // `sys.modules` entry carries it for inline sources.
+                    let prefix: String = crate::isolation::isolate_bundle_modules(
+                        py,
+                        &bundle_name,
+                        bundle_id,
+                        nonce,
+                        "",
+                        &modules_before,
+                    )?;
 
-            Ok::<String, LoaderError>(prefix)
-        });
+                    Ok::<String, LoaderError>(prefix)
+                })
+            });
 
         runtime.pop_init_bundle_id();
         let prefix: String = result?;
@@ -364,8 +380,6 @@ impl BundleLoader for PythonLoader {
             });
         }
 
-        ensure_python_initialized(&self.config)?;
-
         let abs_path: std::path::PathBuf = bundle_path.canonicalize().map_err(|_| {
             LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
@@ -394,179 +408,195 @@ impl BundleLoader for PythonLoader {
         // enforcement during init (instance-owned; Rule 12 — no thread-locals).
         runtime.push_init_bundle_id(bundle_id);
 
-        // Serialize the snapshot→exec→isolate critical section against other
-        // concurrent Python loads sharing this process's interpreter. CPython
-        // releases the GIL during import I/O, so two parallel loads would
-        // otherwise interleave their sys.modules mutations and corrupt each
-        // other's per-bundle isolation. Held for the whole `Python::attach`.
-        let _load_guard: std::sync::MutexGuard<'_, ()> = crate::context::acquire_load_lock();
+        // The runtime owns the once-per-process interpreter init, the load
+        // serialization, and the per-bundle isolation nonce via its
+        // process-global `SharedState`. `with_python_load` holds that single
+        // lock across init + the whole snapshot→exec→isolate critical section.
+        // CPython releases the GIL during import I/O, so two parallel loads
+        // would otherwise interleave their sys.modules mutations and corrupt
+        // each other's per-bundle isolation; serializing the section makes it
+        // atomic. This subsumes the loader's former `PYTHON_LOAD_LOCK`.
+        let result: Result<String, LoaderError> =
+            runtime.with_python_load(SupportedLanguage::Python, run_python_init, |nonce: u64| {
+                // Verify the running interpreter meets this load's minimum
+                // version on every load (init above ran only on the first load).
+                check_python_version(&self.config)?;
 
-        // Step 3: Load the Python module and call polyplug_init.
-        let prefix: String = Python::attach(|py| {
-            // Step 3a: Prepend bundle directory (and site-packages) to sys.path.
-            let sys_mod: pyo3::Bound<'_, PyModule> =
-                PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
-                    bundle: bundle_name.clone(),
-                    error: format!("Python sys import failed: {}", e),
-                })?;
-            let sys_path: pyo3::Bound<'_, pyo3::PyAny> =
-                sys_mod
-                    .getattr("path")
-                    .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!("Python sys.path get failed: {}", e),
-                    })?;
-            sys_path
-                .call_method1("insert", (0usize, bundle_dir_str.as_str()))
-                .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
-                    bundle: bundle_name.clone(),
-                    error: format!("sys.path insert failed: {}", e),
-                })?;
-            let site_pkgs: std::path::PathBuf = bundle_dir.join("site-packages");
-            if site_pkgs.exists() {
-                let sp: String = site_pkgs.to_string_lossy().into_owned();
-                sys_path
-                    .call_method1("insert", (0usize, sp.as_str()))
-                    .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!("site-packages path insert failed: {}", e),
-                    })?;
-            }
-            // Step 3b: Import via importlib (no further sys.path mutation).
-            let importlib_util: pyo3::Bound<'_, PyModule> = PyModule::import(py, "importlib.util")
-                .map_err(|e| LoaderError::InitFailed {
-                    bundle: bundle_name.clone(),
-                    error: format!("importlib.util import failed: {}", e),
-                })?;
-
-            let spec: pyo3::Bound<'_, pyo3::PyAny> = importlib_util
-                .getattr("spec_from_file_location")
-                .map_err(|e| LoaderError::InitFailed {
-                    bundle: bundle_name.clone(),
-                    error: format!("spec_from_file_location not found: {}", e),
-                })?
-                .call1((&bundle_name, abs_path.to_string_lossy().as_ref()))
-                .map_err(|e| LoaderError::InitFailed {
-                    bundle: bundle_name.clone(),
-                    error: format!(
-                        "spec_from_file_location call failed for {}: {}",
-                        abs_path.to_string_lossy(),
-                        e
-                    ),
-                })?;
-
-            let module_from_spec: pyo3::Bound<'_, pyo3::PyAny> = importlib_util
-                .getattr("module_from_spec")
-                .map_err(|e| LoaderError::InitFailed {
-                    bundle: bundle_name.clone(),
-                    error: format!("module_from_spec not found: {}", e),
-                })?
-                .call1((&spec,))
-                .map_err(|e| LoaderError::InitFailed {
-                    bundle: bundle_name.clone(),
-                    error: format!(
-                        "module_from_spec call failed for {}: {}",
-                        abs_path.to_string_lossy(),
-                        e
-                    ),
-                })?;
-
-            // Snapshot sys.modules before executing the bundle so that, after
-            // init, exactly the modules this bundle introduced can be isolated.
-            let modules_before: std::collections::HashSet<String> =
-                crate::isolation::snapshot_loaded_modules(py, &bundle_name)?;
-
-            // Step 3b: Execute the module.
-            spec.getattr("loader")
-                .and_then(|loader: pyo3::Bound<'_, pyo3::PyAny>| loader.getattr("exec_module"))
-                .and_then(|exec_module: pyo3::Bound<'_, pyo3::PyAny>| {
-                    exec_module.call1((&module_from_spec,))
-                })
-                .map_err(|e| LoaderError::InitFailed {
-                    bundle: bundle_name.clone(),
-                    error: format!(
-                        "exec_module failed for {}: {}",
-                        abs_path.to_string_lossy(),
-                        e
-                    ),
-                })?;
-
-            // Step 3c: Locate polyplug_init(host, ctx).
-            // New signature: polyplug_init(host_interface, ctx) - self-passing pattern.
-            let init_fn: pyo3::Bound<'_, pyo3::PyAny> =
-                module_from_spec.getattr("polyplug_init").map_err(|_| {
-                    LoaderError::InitSymbolMissing {
-                        bundle: bundle_name.clone(),
+                // Step 3: Load the Python module and call polyplug_init.
+                Python::attach(|py| {
+                    // Step 3a: Prepend bundle directory (and site-packages) to sys.path.
+                    let sys_mod: pyo3::Bound<'_, PyModule> =
+                        PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| {
+                            LoaderError::InitFailed {
+                                bundle: bundle_name.clone(),
+                                error: format!("Python sys import failed: {}", e),
+                            }
+                        })?;
+                    let sys_path: pyo3::Bound<'_, pyo3::PyAny> =
+                        sys_mod.getattr("path").map_err(|e: pyo3::PyErr| {
+                            LoaderError::InitFailed {
+                                bundle: bundle_name.clone(),
+                                error: format!("Python sys.path get failed: {}", e),
+                            }
+                        })?;
+                    sys_path
+                        .call_method1("insert", (0usize, bundle_dir_str.as_str()))
+                        .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                            bundle: bundle_name.clone(),
+                            error: format!("sys.path insert failed: {}", e),
+                        })?;
+                    let site_pkgs: std::path::PathBuf = bundle_dir.join("site-packages");
+                    if site_pkgs.exists() {
+                        let sp: String = site_pkgs.to_string_lossy().into_owned();
+                        sys_path
+                            .call_method1("insert", (0usize, sp.as_str()))
+                            .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                                bundle: bundle_name.clone(),
+                                error: format!("site-packages path insert failed: {}", e),
+                            })?;
                     }
-                })?;
+                    // Step 3b: Import via importlib (no further sys.path mutation).
+                    let importlib_util: pyo3::Bound<'_, PyModule> =
+                        PyModule::import(py, "importlib.util").map_err(|e| {
+                            LoaderError::InitFailed {
+                                bundle: bundle_name.clone(),
+                                error: format!("importlib.util import failed: {}", e),
+                            }
+                        })?;
 
-            // Inject the arena bridge before calling init so the guest can route
-            // per-call return buffers through the host CallArena during dispatch.
-            // Done after exec_module (so the namespace exists) and after init_fn is
-            // located (so its __globals__ is the real defining namespace). Injected
-            // into both the entry module and polyplug_init.__globals__ so
-            // split-module generated bundles resolve `_polyplug_arena_alloc` from
-            // the contracts module where their ABI functions are defined.
-            loader::inject_arena_bridge(
-                py,
-                &module_from_spec,
-                &init_fn,
-                host_interface,
-                &bundle_name,
-            )?;
+                    let spec: pyo3::Bound<'_, pyo3::PyAny> = importlib_util
+                        .getattr("spec_from_file_location")
+                        .map_err(|e| LoaderError::InitFailed {
+                            bundle: bundle_name.clone(),
+                            error: format!("spec_from_file_location not found: {}", e),
+                        })?
+                        .call1((&bundle_name, abs_path.to_string_lossy().as_ref()))
+                        .map_err(|e| LoaderError::InitFailed {
+                            bundle: bundle_name.clone(),
+                            error: format!(
+                                "spec_from_file_location call failed for {}: {}",
+                                abs_path.to_string_lossy(),
+                                e
+                            ),
+                        })?;
 
-            // NOTE: Intentionally leaked; bundle_path_static outlives this call.
-            let bundle_path_static: &'static str =
-                Box::leak(bundle_dir_str.clone().into_boxed_str());
-            let ctx: BundleInitContext = BundleInitContext {
-                bundle_id,
-                bundle_path: StringView {
-                    ptr: bundle_path_static.as_ptr(),
-                    len: bundle_path_static.len(),
-                },
-            };
+                    let module_from_spec: pyo3::Bound<'_, pyo3::PyAny> = importlib_util
+                        .getattr("module_from_spec")
+                        .map_err(|e| LoaderError::InitFailed {
+                            bundle: bundle_name.clone(),
+                            error: format!("module_from_spec not found: {}", e),
+                        })?
+                        .call1((&spec,))
+                        .map_err(|e| LoaderError::InitFailed {
+                            bundle: bundle_name.clone(),
+                            error: format!(
+                                "module_from_spec call failed for {}: {}",
+                                abs_path.to_string_lossy(),
+                                e
+                            ),
+                        })?;
 
-            // Pass HostApi pointer and BundleInitContext pointer to Python.
-            // The HostApi uses self-passing pattern - Python guest code will pass it back
-            // as the first parameter to each HostApi function call.
-            let host_interface_i64: i64 = host_interface as usize as i64;
-            let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
-            init_fn
-                .call((host_interface_i64, ctx_ptr), None)
-                .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
-                    bundle: bundle_name.clone(),
-                    error: format!("polyplug_init call failed: {}", e),
-                })?;
+                    // Snapshot sys.modules before executing the bundle so that, after
+                    // init, exactly the modules this bundle introduced can be isolated.
+                    let modules_before: std::collections::HashSet<String> =
+                        crate::isolation::snapshot_loaded_modules(py, &bundle_name)?;
 
-            // Collect the guest's registration data and register every contract
-            // with VM dispatch.
-            Self::collect_and_register(
-                py,
-                &init_fn,
-                &module_from_spec,
-                host_interface,
-                &bundle_name,
-            )?;
+                    // Step 3b: Execute the module.
+                    spec.getattr("loader")
+                        .and_then(|loader: pyo3::Bound<'_, pyo3::PyAny>| {
+                            loader.getattr("exec_module")
+                        })
+                        .and_then(|exec_module: pyo3::Bound<'_, pyo3::PyAny>| {
+                            exec_module.call1((&module_from_spec,))
+                        })
+                        .map_err(|e| LoaderError::InitFailed {
+                            bundle: bundle_name.clone(),
+                            error: format!(
+                                "exec_module failed for {}: {}",
+                                abs_path.to_string_lossy(),
+                                e
+                            ),
+                        })?;
 
-            // Isolate this bundle's freshly imported modules under a unique
-            // per-bundle prefix so the next bundle imports its own generated
-            // package instead of this one's cached copy. Re-keying keeps the module
-            // objects alive for the runtime's lifetime while freeing the generic
-            // module names. The contract callables themselves are held by each
-            // contract's `PythonLoaderData`, so they stay alive regardless.
-            let prefix: String = crate::isolation::isolate_bundle_modules(
-                py,
-                &bundle_name,
-                bundle_id,
-                &bundle_dir_str,
-                &modules_before,
-            )?;
+                    // Step 3c: Locate polyplug_init(host, ctx).
+                    // New signature: polyplug_init(host_interface, ctx) - self-passing pattern.
+                    let init_fn: pyo3::Bound<'_, pyo3::PyAny> = module_from_spec
+                        .getattr("polyplug_init")
+                        .map_err(|_| LoaderError::InitSymbolMissing {
+                            bundle: bundle_name.clone(),
+                        })?;
 
-            Ok::<String, LoaderError>(prefix)
-        })?;
+                    // Inject the arena bridge before calling init so the guest can route
+                    // per-call return buffers through the host CallArena during dispatch.
+                    // Done after exec_module (so the namespace exists) and after init_fn is
+                    // located (so its __globals__ is the real defining namespace). Injected
+                    // into both the entry module and polyplug_init.__globals__ so
+                    // split-module generated bundles resolve `_polyplug_arena_alloc` from
+                    // the contracts module where their ABI functions are defined.
+                    loader::inject_arena_bridge(
+                        py,
+                        &module_from_spec,
+                        &init_fn,
+                        host_interface,
+                        &bundle_name,
+                    )?;
 
-        // Pop bundle_id from the runtime's per-thread init stack after init completes.
+                    // NOTE: Intentionally leaked; bundle_path_static outlives this call.
+                    let bundle_path_static: &'static str =
+                        Box::leak(bundle_dir_str.clone().into_boxed_str());
+                    let ctx: BundleInitContext = BundleInitContext {
+                        bundle_id,
+                        bundle_path: StringView {
+                            ptr: bundle_path_static.as_ptr(),
+                            len: bundle_path_static.len(),
+                        },
+                    };
+
+                    // Pass HostApi pointer and BundleInitContext pointer to Python.
+                    // The HostApi uses self-passing pattern - Python guest code will pass it back
+                    // as the first parameter to each HostApi function call.
+                    let host_interface_i64: i64 = host_interface as usize as i64;
+                    let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
+                    init_fn.call((host_interface_i64, ctx_ptr), None).map_err(
+                        |e: pyo3::PyErr| LoaderError::InitFailed {
+                            bundle: bundle_name.clone(),
+                            error: format!("polyplug_init call failed: {}", e),
+                        },
+                    )?;
+
+                    // Collect the guest's registration data and register every contract
+                    // with VM dispatch.
+                    Self::collect_and_register(
+                        py,
+                        &init_fn,
+                        &module_from_spec,
+                        host_interface,
+                        &bundle_name,
+                    )?;
+
+                    // Isolate this bundle's freshly imported modules under a unique
+                    // per-bundle prefix so the next bundle imports its own generated
+                    // package instead of this one's cached copy. Re-keying keeps the module
+                    // objects alive for the runtime's lifetime while freeing the generic
+                    // module names. The contract callables themselves are held by each
+                    // contract's `PythonLoaderData`, so they stay alive regardless.
+                    let prefix: String = crate::isolation::isolate_bundle_modules(
+                        py,
+                        &bundle_name,
+                        bundle_id,
+                        nonce,
+                        &bundle_dir_str,
+                        &modules_before,
+                    )?;
+
+                    Ok::<String, LoaderError>(prefix)
+                })
+            });
+
+        // Pop bundle_id from the runtime's per-thread init stack after init
+        // completes — also on the error path, before propagating.
         runtime.pop_init_bundle_id();
+        let prefix: String = result?;
 
         // Record the re-key prefix so `unload` can purge this bundle's `sys.modules`
         // entries and force a fresh re-import next load.

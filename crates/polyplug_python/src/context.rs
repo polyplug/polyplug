@@ -1,41 +1,18 @@
-//! PythonContext — CPython interpreter singleton for polyplug_python.
-
-use std::sync::Mutex;
-use std::sync::MutexGuard;
-use std::sync::OnceLock;
+//! CPython interpreter bootstrap helpers for polyplug_python.
+//!
+//! The process-global once-per-process state (the "interpreter initialized"
+//! flag and the snapshot→exec→isolate load serialization) lives in the
+//! `polyplug` crate's `SharedState`, mutated only by
+//! [`Runtime::with_python_load`](polyplug::runtime::Runtime::with_python_load).
+//! This module supplies the two pieces that method drives: the one-time
+//! interpreter init (run inside the guarded `init` closure) and the per-load
+//! minimum-version check (run inside the guarded `body` closure).
 
 use pyo3::Python;
 
 use polyplug::error::LoaderError;
 
 use crate::config::PythonConfig;
-
-/// Global one-time Python interpreter initialization sentinel.
-/// `Python::initialize()` must be called exactly once per process.
-static PYTHON_INIT: OnceLock<()> = OnceLock::new();
-
-/// Process-wide lock serializing the bundle-load critical section
-/// (snapshot `sys.modules` → execute the bundle → isolate its modules).
-///
-/// The CPython interpreter — and therefore `sys.modules` — is a single shared
-/// per-process resource (documented Known Limitation). The per-bundle module
-/// isolation reads a `sys.modules` snapshot before executing a bundle and diffs
-/// it afterward. CPython releases the GIL during import I/O, so without this
-/// lock two concurrent loads on different threads interleave their `sys.modules`
-/// mutations and one load's isolation pass would steal the other's freshly
-/// imported modules. Serializing the whole snapshot→exec→isolate section makes
-/// it atomic with respect to other Python loads. This guards interpreter-level
-/// state only (like `PYTHON_INIT`), never per-`Runtime` state, so it does not
-/// violate runtime isolation.
-static PYTHON_LOAD_LOCK: Mutex<()> = Mutex::new(());
-
-/// Acquire the process-wide Python bundle-load lock. The returned guard must be
-/// held for the entire snapshot→exec→isolate critical section.
-pub(crate) fn acquire_load_lock() -> MutexGuard<'static, ()> {
-    PYTHON_LOAD_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
 
 /// The CPython link library name pyo3 was built against (e.g. `python3.14`),
 /// captured at build time. Empty when the build config could not resolve it.
@@ -89,26 +66,35 @@ fn promote_libpython_symbols() {
 #[cfg(not(unix))]
 fn promote_libpython_symbols() {}
 
-/// Initialize the CPython interpreter exactly once per process and verify
-/// that the running Python version meets the minimum required by `config`.
+/// Initialize the CPython interpreter for this process.
 ///
-/// Subsequent calls are no-ops (OnceLock is already set).
+/// Run exactly once, inside the `init` closure of
+/// [`Runtime::with_python_load`](polyplug::runtime::Runtime::with_python_load):
+/// the runtime holds the process-global `SharedState` lock and only invokes
+/// this when `SupportedLanguage::Python` has not yet been marked initialized,
+/// so the "exactly once per process" guarantee is owned by the runtime rather
+/// than by a loader-side `OnceLock`.
 ///
-/// Returns `Err(LoaderError::InitFailed)` if the version is too old.
-pub(crate) fn ensure_python_initialized(config: &PythonConfig) -> Result<(), LoaderError> {
-    // Step 1: Initialize CPython exactly once.
-    // OnceLock::get_or_init is used (not get_or_try_init) because
-    // Python::initialize() is infallible — it panics on failure,
-    // which is acceptable at init time (same as dotnet's CLR init approach).
-    PYTHON_INIT.get_or_init(|| {
-        // Ensure libpython's symbols are globally visible before the
-        // interpreter loads its C extension modules. Required when this loader
-        // is dlopened as a cdylib by a non-Python host.
-        promote_libpython_symbols();
-        Python::initialize();
-    });
+/// `Python::initialize()` is infallible (it panics on hard failure, acceptable
+/// at process init — same posture as the .NET CLR bootstrap), so this returns
+/// `Ok` once the interpreter is up; the `Result` is part of the
+/// `with_python_load` init-closure contract.
+pub(crate) fn run_python_init() -> Result<(), LoaderError> {
+    // Ensure libpython's symbols are globally visible before the interpreter
+    // loads its C extension modules. Required when this loader is dlopened as a
+    // cdylib by a non-Python host.
+    promote_libpython_symbols();
+    Python::initialize();
+    Ok(())
+}
 
-    // Step 2: Verify version.
+/// Verify that the running CPython meets the minimum version required by
+/// `config`. Run on **every** load (inside the guarded `body` closure), not
+/// only at first init, so a runtime configured with a stricter minimum than an
+/// earlier load still rejects an too-old interpreter.
+///
+/// Returns `Err(LoaderError::InitFailed)` if the running version is too old.
+pub(crate) fn check_python_version(config: &PythonConfig) -> Result<(), LoaderError> {
     Python::attach(|py| {
         let ver: pyo3::PythonVersionInfo<'_> = py.version_info();
         let (req_major, req_minor): (u32, u32) = config.min_version;
