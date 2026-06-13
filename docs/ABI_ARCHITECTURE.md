@@ -168,3 +168,47 @@ New functionality should use host contract interfaces resolved via
 `HostApi.get_host_contract`. The trailing `reserved: *const c_void` pointer
 (offset 160) is the only sanctioned post-freeze expansion slot; producers set
 it to null, consumers must not read it.
+
+## ABI Conformance Testing
+
+Every ABI function pointer has one canonical signature defined in `polyplug_abi`.
+Each language generator must reproduce that signature in its generated/loader
+code. **A signature that drifts from the canonical type is silent
+calling-convention UB** — and the most dangerous case is drift in *generated
+non-Rust text*, because the Rust toolchain never compiles it, so
+`cargo build`/`clippy`/`test` cannot see the mismatch. (This bug class actually
+occurred: a stale LuaJIT `ffi.cdef` declared a by-value `AbiError` return after
+the ABI moved to the out-param convention.)
+
+Who catches drift, per language:
+
+| Language | How its generated ABI signatures are obtained | What checks drift |
+|---|---|---|
+| rust | typed fn assigned to a typed field | `rustc` at build |
+| cpp | C++ fn vs the regenerated mirror header | `g++` when the plugin/host compiles |
+| csharp | delegate / `UnmanagedCallersOnly` vs the mirror | C# compiler at build |
+| python | `ctypes.cast(..., type(field))` — derived from the mirror | by construction (cannot drift) |
+| js | loader installs a **typed Rust** fn into the field | `rustc` |
+| **lua** | **`ffi.cdef` literal C text** (LuaJIT requires it) | **nothing at compile time** |
+
+LuaJIT is the only surface no compiler can check, so the defense is split into
+two layers that **both run in CI and locally**:
+
+1. **Floor — toolchain-free `cargo test`.** A structural test
+   (`lua_host_trampoline_cdefs_are_out_param_abi`) regenerates the lua host
+   factory and asserts the trampoline cdefs equal the real signatures in
+   `crates/polyplug_lua/src/ffi.rs` (void return + trailing out-pointer), and
+   forbids the by-value forms. It needs nothing but `cargo` — no luajit, no
+   toolchain versions, identical result on every machine and in CI. This is the
+   layer that makes the drift class unmergeable everywhere.
+
+2. **Ceiling — `just verify-abi` execution.** Loads a bundle and dispatches
+   through every installed ABI fn-pointer (including a guest calling *back into*
+   a VM-language host contract, which fires `polyplug_lua_host_vm_dispatch`) and
+   asserts the returned value/`AbiError`. CI invokes it with `--require-all`
+   (a missing toolchain is a hard failure, so coverage is guaranteed); locally
+   the same recipe runs whatever is installed and loudly skips the rest.
+   `just setup-toolchains` installs current stable for full local runs — there
+   is no pinned environment (no nix/devcontainer); the floor is version-
+   independent and the ceiling targets latest. As of 2026-06: .NET SDK 10.x,
+   Python 3.14.x, Deno 2.8.x, GCC 15.x, QuickJS-ng 0.15.x, LuaJIT `v2.1` tip.

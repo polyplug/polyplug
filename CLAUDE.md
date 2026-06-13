@@ -369,9 +369,13 @@ Every generator (rust, cpp, csharp, python, lua, js) must generate code that:
 
 3. **Never uses global state or thread-locals in generated code.**
 
+4. **Never hand-types an ABI function-pointer signature.** A generator must obtain ABI signatures from the auto-regenerated mirror — by compiling against it (cpp/csharp/rust) or deriving from the field at runtime (python `type(field)`, js typed-Rust install) — never by writing the signature as a literal string. A hand-typed `polyplug_*_host_*` signature in a generator is a bug: when the ABI changes, the mirror updates but the literal goes stale, and the drift is **invisible to `cargo build`/`clippy`/`test`** because the emitted text is never compiled by the Rust toolchain. It surfaces only as calling-convention UB at runtime.
+
+   **The sole unavoidable exception is LuaJIT's `ffi.cdef`,** which structurally requires literal C text (it cannot compile-check or derive from a field). That single surface is the one place the drift can hide, so it is guarded by a toolchain-free conformance floor — `lua_host_trampoline_cdefs_are_out_param_abi` in `crates/polyplugc/src/generators/lua.rs` — which regenerates the cdefs and asserts they match the real trampolines in `crates/polyplug_lua/src/ffi.rs`. Any new lua cdef for an ABI symbol must be added to that test. Runtime execution of the lua host path (the `just verify-abi` ceiling) is the second layer.
+
 **Why this matters:** Different registration mechanisms (e.g., divergent `HostApi` field layouts or calling conventions) break the ABI contract and cause runtime failures. All plugins, regardless of language, must interact with the host through the exact same ABI path.
 
-**Verification:** When adding or modifying a generator, compare its output with `rust.rs` to ensure ABI parity.
+**Verification:** When adding or modifying a generator, compare its output with `rust.rs` to ensure ABI parity. The bug class above (generated ABI-signature drift) is caught in two layers that both run in CI **and** locally: a toolchain-free `cargo test` floor (structural — no luajit/g++/dotnet needed), and a `just verify-abi` execution ceiling (load+dispatch, strict in CI, graceful-skip locally). See `docs/ABI_ARCHITECTURE.md` § "ABI conformance testing".
 
 ---
 

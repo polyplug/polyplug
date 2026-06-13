@@ -3243,6 +3243,53 @@ mod tests {
         );
     }
 
+    /// Toolchain-free conformance floor for the out-param ABI bug class.
+    ///
+    /// LuaJIT's `ffi.cdef` is the ONLY place in the whole codebase where a
+    /// generator hand-types an ABI function-pointer signature as literal text:
+    /// every other language is checked by its own compiler against the
+    /// auto-regenerated mirror (cpp/csharp/rust) or derives the signature from
+    /// the mirror field at runtime (python `type(field)`, js typed-Rust install).
+    /// LuaJIT structurally cannot do either — it needs literal C text — so a
+    /// drift between these cdefs and the real trampolines in
+    /// `crates/polyplug_lua/src/ffi.rs` is invisible to `cargo build`/`clippy`
+    /// and only manifests at runtime. This test is the floor that catches that
+    /// drift with nothing but `cargo test` (no luajit, no version matching):
+    /// it pins the exact out-param signatures and forbids the by-value forms.
+    #[test]
+    fn lua_host_trampoline_cdefs_are_out_param_abi() {
+        let out: String = generate_lua_host_interface_factories_file(&host_logger_ir());
+        // Exact out-param signatures — must match the `extern "C"` trampolines in
+        // crates/polyplug_lua/src/ffi.rs (void return + trailing out-pointer).
+        assert!(
+            out.contains(
+                "void polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);"
+            ),
+            "vm_dispatch cdef must be the out-param form (void + AbiError*): {out}"
+        );
+        assert!(
+            out.contains(
+                "void polyplug_lua_host_create_instance(const HostContractInterface*, const void*, HostContractInstance*);"
+            ),
+            "create_instance cdef must be the out-param form (void + HostContractInstance*): {out}"
+        );
+        assert!(
+            out.contains(
+                "void polyplug_lua_host_destroy_instance(const HostContractInterface*, HostContractInstance);"
+            ),
+            "destroy_instance cdef must be void with no out-param: {out}"
+        );
+        // The stale by-value returns that this floor exists to prevent.
+        assert!(
+            !out.contains("AbiError polyplug_lua_host_vm_dispatch("),
+            "by-value AbiError return is the regressed form — must never reappear: {out}"
+        );
+        assert!(
+            !out.contains("HostContractInstance polyplug_lua_host_create_instance("),
+            "by-value instance return is the regressed form — must never reappear: {out}"
+        );
+    }
+
     /// Multi-parameter functions must cast to an arg-pack struct that the SAME
     /// file cdefs (guarded), using the canonical pack-struct naming — the old
     /// output cast to `LOG_WITH_LEVELArgs*` which was never cdef'd anywhere.
