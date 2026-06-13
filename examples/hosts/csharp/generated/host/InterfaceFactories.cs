@@ -12,10 +12,14 @@ namespace Polyplug.Generated;
 public static class InterfaceFactories {
 [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
 private static unsafe void host_logger_log_thunk(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {
-    _ = implPtr;
     if (outErr == null) return;
+    if (implPtr == IntPtr.Zero) {
+        *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+        return;
+    }
     try {
-        var impl = s_HostLogger_impl ?? throw new InvalidOperationException("implementation not set");
+        var state = (HostLoggerHostState)GCHandle.FromIntPtr(implPtr).Target!;
+        var impl = state.Impl;
         var message_sv = Marshal.PtrToStructure<StringView>(argsPtr);
         var message = StringViewHelper.ToString(message_sv);
         impl.Log(message);
@@ -35,10 +39,14 @@ private struct HostLoggerLogWithLevelArgs {
 
 [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
 private static unsafe void host_logger_log_with_level_thunk(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {
-    _ = implPtr;
     if (outErr == null) return;
+    if (implPtr == IntPtr.Zero) {
+        *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+        return;
+    }
     try {
-        var impl = s_HostLogger_impl ?? throw new InvalidOperationException("implementation not set");
+        var state = (HostLoggerHostState)GCHandle.FromIntPtr(implPtr).Target!;
+        var impl = state.Impl;
         var packed = Marshal.PtrToStructure<HostLoggerLogWithLevelArgs>(argsPtr);
         var level = packed.Level;
         var message = StringViewHelper.ToString(packed.Message);
@@ -51,14 +59,14 @@ private static unsafe void host_logger_log_with_level_thunk(IntPtr implPtr, IntP
     }
 }
 
-private static IHostLogger? s_HostLogger_impl;
-private static GCHandle s_HostLogger_functionsHandle;
+private sealed class HostLoggerHostState { public IHostLogger Impl = default!; public GCHandle FunctionsHandle; }
 
 [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
 private static unsafe void host_logger_create_instance_stub(IntPtr self, IntPtr args, HostContractInstance* outInstance) {
-    _ = self; _ = args;
+    _ = args;
     if (outInstance == null) return;
-    *outInstance = new HostContractInstance { Data = IntPtr.Zero };
+    var userData = ((HostContractInterface*)self)->UserData;
+    *outInstance = new HostContractInstance { Data = userData };
 }
 
 [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -74,15 +82,14 @@ private static void host_logger_destroy_instance_stub(IntPtr self, HostContractI
 /// The implementation must implement the interface.
 /// </remarks>
 public static unsafe HostContractInterface CreateHostLoggerInterface<T>(T impl) where T: IHostLogger {
-    // Store implementation reference in a static field
-    s_HostLogger_impl = impl;
-
     var functions = new IntPtr[2] {
         (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError*, void>)&host_logger_log_thunk,
         (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError*, void>)&host_logger_log_with_level_thunk,
     };
 
-    s_HostLogger_functionsHandle = GCHandle.Alloc(functions, GCHandleType.Pinned);
+    var functionsHandle = GCHandle.Alloc(functions, GCHandleType.Pinned);
+    var state = new HostLoggerHostState { Impl = impl, FunctionsHandle = functionsHandle };
+    var stateHandle = GCHandle.Alloc(state);
 
     return new HostContractInterface {
         ContractId = 0xF53EB5F2845853BBUL,
@@ -90,15 +97,16 @@ public static unsafe HostContractInterface CreateHostLoggerInterface<T>(T impl) 
         Singleton = false,
         DispatchType = DispatchType.Native,
         Runtime = IntPtr.Zero,
-        // The managed implementation lives in a static field (managed references
-        // cannot be stored in a raw IntPtr); UserData is unused for this path.
-        UserData = IntPtr.Zero,
+        // UserData carries the per-registration state GCHandle token; the
+        // create-instance stub copies it into each instance's Data, and the
+        // dispatch thunk recovers the impl from it (no statics).
+        UserData = GCHandle.ToIntPtr(stateHandle),
         CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance*, void>)&host_logger_create_instance_stub,
         DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, HostContractInstance, void>)&host_logger_destroy_instance_stub,
         Dispatch = new DispatchMechanisms {
             Native = new NativeDispatch {
                 FunctionCount = 2u,
-                Functions = s_HostLogger_functionsHandle.AddrOfPinnedObject(),
+                Functions = functionsHandle.AddrOfPinnedObject(),
             },
         },
     };

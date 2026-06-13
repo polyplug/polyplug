@@ -2217,7 +2217,7 @@ fn generate_cs_host_interface_factory(
     let minor: u32 = contract.version.minor;
     let singleton: bool = contract.singleton;
 
-    let impl_field: String = format!("s_{}_impl", iface_name.trim_start_matches('I'));
+    let state_class: String = format!("{}HostState", iface_name.trim_start_matches('I'));
     let create_stub: String = format!(
         "{}_create_instance_stub",
         contract.name.replace('.', "_").to_lowercase()
@@ -2239,29 +2239,40 @@ fn generate_cs_host_interface_factory(
         generate_cs_host_thunk(out, func, &contract.name, &iface_name, enums);
     }
 
-    // Static implementation storage and the pinned native function-pointer array.
-    out.push_str(&format!("private static {}? {};\n", iface_name, impl_field));
+    // Per-registration state object (static-free, Rule 12). It roots both the managed
+    // implementation and the pinned native function-pointer array. A GCHandle to an
+    // instance of this class is stored in the interface's UserData at registration —
+    // the static-free analogue of the Rust reference's `Box::into_raw(impl)` carried in
+    // `user_data`. One state object per registration; see the factory for lifetime notes.
     out.push_str(&format!(
-        "private static GCHandle s_{}_functionsHandle;\n\n",
-        iface_name.trim_start_matches('I')
+        "private sealed class {} {{ public {} Impl = default!; public GCHandle FunctionsHandle; }}\n\n",
+        state_class, iface_name
     ));
 
-    // Instance lifecycle stubs. For host contracts the implementation lives in a
-    // static field, so the instance handle is an unused opaque token (null).
+    // Create-instance stub: copy the interface's UserData (the per-registration state
+    // GCHandle token, or the VM loaderData) into the instance Data. Mirrors the Rust
+    // reference, which writes `HostContractInstance { data: (*this).user_data }`.
     out.push_str("[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
         "private static unsafe void {}(IntPtr self, IntPtr args, HostContractInstance* outInstance) {{\n",
         create_stub
     ));
-    out.push_str("    _ = self; _ = args;\n");
+    out.push_str("    _ = args;\n");
     out.push_str("    if (outInstance == null) return;\n");
-    out.push_str("    *outInstance = new HostContractInstance { Data = IntPtr.Zero };\n");
+    // SAFETY: `self` is the registered HostContractInterface* per the ABI contract
+    // (the create_instance stub's first argument is the interface pointer), and
+    // `outInstance` is a valid writable out-param. We only read the UserData IntPtr.
+    out.push_str("    var userData = ((HostContractInterface*)self)->UserData;\n");
+    out.push_str("    *outInstance = new HostContractInstance { Data = userData };\n");
     out.push_str("}\n\n");
     out.push_str("[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
         "private static void {}(IntPtr self, HostContractInstance instance) {{\n",
         destroy_stub
     ));
+    // No-op: instances are opaque tokens sharing the per-registration state. Freeing the
+    // state's GCHandle here would be a use-after-free for any other live instance and for
+    // the runtime-lifetime registration; the state is released only when the process ends.
     out.push_str("    _ = self; _ = instance;\n");
     out.push_str("}\n\n");
 
@@ -2278,10 +2289,8 @@ fn generate_cs_host_interface_factory(
         "public static unsafe HostContractInterface {}<T>(T impl) where T: {} {{\n",
         factory_name, iface_name
     ));
-    out.push_str("    // Store implementation reference in a static field\n");
-    out.push_str(&format!("    {} = impl;\n\n", impl_field));
 
-    // Static function pointer array
+    // Local (non-static) function pointer array.
     out.push_str(&format!(
         "    var functions = new IntPtr[{}] {{\n",
         fn_count
@@ -2299,11 +2308,18 @@ fn generate_cs_host_interface_factory(
     }
     out.push_str("    };\n\n");
 
-    // Pin the function array for the lifetime of the interface.
+    // Per-registration state: a pinned handle for the function array plus the impl, rooted
+    // by a normal GCHandle whose token is carried in UserData. Like the Rust reference's
+    // `Box::into_raw(impl)` in `user_data`, these allocations are intentionally retained for
+    // the runtime's lifetime (host contracts are registered once per runtime) and are NOT
+    // freed per-instance — bounded per-registration retention, not the old static
+    // clobber/leak where re-registration overwrote the impl and leaked the prior pin.
+    out.push_str("    var functionsHandle = GCHandle.Alloc(functions, GCHandleType.Pinned);\n");
     out.push_str(&format!(
-        "    s_{}_functionsHandle = GCHandle.Alloc(functions, GCHandleType.Pinned);\n\n",
-        iface_name.trim_start_matches('I')
+        "    var state = new {} {{ Impl = impl, FunctionsHandle = functionsHandle }};\n",
+        state_class
     ));
+    out.push_str("    var stateHandle = GCHandle.Alloc(state);\n\n");
 
     // Create the interface
     out.push_str("    return new HostContractInterface {\n");
@@ -2312,13 +2328,10 @@ fn generate_cs_host_interface_factory(
     out.push_str(&format!("        Singleton = {singleton_lit},\n"));
     out.push_str("        DispatchType = DispatchType.Native,\n");
     out.push_str("        Runtime = IntPtr.Zero,\n");
-    out.push_str(
-        "        // The managed implementation lives in a static field (managed references\n",
-    );
-    out.push_str(
-        "        // cannot be stored in a raw IntPtr); UserData is unused for this path.\n",
-    );
-    out.push_str("        UserData = IntPtr.Zero,\n");
+    out.push_str("        // UserData carries the per-registration state GCHandle token; the\n");
+    out.push_str("        // create-instance stub copies it into each instance's Data, and the\n");
+    out.push_str("        // dispatch thunk recovers the impl from it (no statics).\n");
+    out.push_str("        UserData = GCHandle.ToIntPtr(stateHandle),\n");
     out.push_str(&format!(
         "        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance*, void>)&{},\n",
         create_stub
@@ -2330,10 +2343,7 @@ fn generate_cs_host_interface_factory(
     out.push_str("        Dispatch = new DispatchMechanisms {\n");
     out.push_str("            Native = new NativeDispatch {\n");
     out.push_str(&format!("                FunctionCount = {fn_count}u,\n"));
-    out.push_str(&format!(
-        "                Functions = s_{}_functionsHandle.AddrOfPinnedObject(),\n",
-        iface_name.trim_start_matches('I')
-    ));
+    out.push_str("                Functions = functionsHandle.AddrOfPinnedObject(),\n");
     out.push_str("            },\n");
     out.push_str("        },\n");
     out.push_str("    };\n");
@@ -2420,13 +2430,20 @@ fn generate_cs_host_thunk(
         "private static unsafe void {}(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {{\n",
         thunk_name
     ));
-    out.push_str("    _ = implPtr;\n");
     out.push_str("    if (outErr == null) return;\n");
+    out.push_str("    if (implPtr == IntPtr.Zero) {\n");
+    out.push_str("        *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n");
+    out.push_str("        return;\n");
+    out.push_str("    }\n");
     out.push_str("    try {\n");
+    // implPtr is the instance Data the runtime passes, i.e. the per-registration state
+    // GCHandle token written by the create-instance stub. Recover the impl from it
+    // (static-free; mirrors the Rust reference reading the impl from the instance).
     out.push_str(&format!(
-        "        var impl = s_{}_impl ?? throw new InvalidOperationException(\"implementation not set\");\n",
+        "        var state = ({}HostState)GCHandle.FromIntPtr(implPtr).Target!;\n",
         iface_name.trim_start_matches('I')
     ));
+    out.push_str("        var impl = state.Impl;\n");
 
     // Generate argument extraction
     if !func.params.is_empty() {
@@ -3889,6 +3906,38 @@ mod tests {
         assert!(
             out.contains("host_logger_log_thunk"),
             "missing thunk function: {out}"
+        );
+        // Rule 12: the factory must be static-free. No per-contract class statics
+        // holding the impl or the pinned function-pointer array.
+        assert!(
+            !out.contains("private static IHostLogger"),
+            "Rule 12 violation: impl must not live in a class static: {out}"
+        );
+        assert!(
+            !out.contains("private static GCHandle"),
+            "Rule 12 violation: pinned functions handle must not be a class static: {out}"
+        );
+        // The impl + pinned array must be rooted in a per-registration state object
+        // whose GCHandle token rides in UserData and is recovered from the instance.
+        assert!(
+            out.contains("private sealed class HostLoggerHostState"),
+            "missing per-registration state class: {out}"
+        );
+        assert!(
+            out.contains("var stateHandle = GCHandle.Alloc(state);"),
+            "state must be rooted by a GCHandle: {out}"
+        );
+        assert!(
+            out.contains("UserData = GCHandle.ToIntPtr(stateHandle),"),
+            "UserData must carry the per-registration state token: {out}"
+        );
+        assert!(
+            out.contains("((HostContractInterface*)self)->UserData"),
+            "create stub must copy the interface UserData into instance Data: {out}"
+        );
+        assert!(
+            out.contains("(HostLoggerHostState)GCHandle.FromIntPtr(implPtr).Target!"),
+            "thunk must recover the impl from the instance token, not a static: {out}"
         );
     }
 
