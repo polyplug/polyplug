@@ -20,7 +20,13 @@ pub trait BundleLoader: Send + Sync {
 
     /// The plugin language/runtime this loader serves.
     ///
-    /// Used to key per-language, once-per-process boot state in the runtime.
+    /// A capability claim for language-aware introspection and routing: it lets
+    /// callers identify a loader by language without string-matching
+    /// [`BundleLoader::loader_name`]. Currently informational — no runtime path
+    /// consumes it yet; it exists as the typed seam for future language-aware
+    /// dispatch. (Each loader's once-per-process external-runtime state, where it
+    /// has any, lives in that loader's own crate as a documented Rule 12
+    /// limitation — not in shared runtime state.)
     fn loader_language(&self) -> SupportedLanguage;
 
     /// Whether this loader supports hot-reload.

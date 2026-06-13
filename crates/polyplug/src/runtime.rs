@@ -364,49 +364,6 @@ impl Runtime {
         &*self.host_abi as *const HostApi
     }
 
-    /// Run one once-per-process-guarded guest load under the single
-    /// process-global [`SharedState`](crate::shared_state) lock.
-    ///
-    /// This is the sole entry through which a loader interacts with
-    /// `SharedState`, keeping the `Runtime` the only mutator of that
-    /// process-global datum. It acquires the lock exactly once and, while
-    /// holding it:
-    ///
-    /// 1. If `lang`'s once-per-process init has not run, executes `init`; on
-    ///    `Ok` it marks `lang` initialized (a failed init is retried next load).
-    ///    Holding the lock makes this atomic and serializes concurrent loads of
-    ///    the same language — subsuming the loader's old dedicated load-lock.
-    /// 2. Vends a fresh process-global uniqueness nonce.
-    /// 3. Runs `body`, passing that nonce, **still holding the lock** — this is
-    ///    the loader's snapshot→exec→isolate critical section, which must be
-    ///    atomic against other loads because it mutates a process-global guest
-    ///    namespace (e.g. CPython's `sys.modules`).
-    ///
-    /// The lock is therefore held across guest execution, exactly as the
-    /// Python loader's prior `PYTHON_LOAD_LOCK` was. The only new cost is that
-    /// loads of *different* languages also serialize against each other — a cold
-    /// path, and acceptable.
-    ///
-    /// # Invariant
-    /// Neither `init` nor `body` may re-enter `SharedState` (e.g. by calling
-    /// this method again): the std `Mutex` is non-reentrant, so a nested
-    /// acquisition would deadlock.
-    pub fn with_python_load<R>(
-        &self,
-        lang: SupportedLanguage,
-        init: impl FnOnce() -> Result<(), LoaderError>,
-        body: impl FnOnce(u64) -> Result<R, LoaderError>,
-    ) -> Result<R, LoaderError> {
-        let mut state: std::sync::MutexGuard<'_, crate::shared_state::SharedState> =
-            crate::shared_state::lock_shared_state();
-        if !state.is_initialized(lang) {
-            init()?;
-            state.mark_initialized(lang);
-        }
-        let nonce: u64 = state.next_nonce();
-        body(nonce)
-    }
-
     #[inline(always)]
     pub fn registry(&self) -> &Arc<RuntimeStore> {
         &self.registry
