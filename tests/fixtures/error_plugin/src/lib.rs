@@ -44,36 +44,43 @@ extern "C" fn error_return_with_message(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    // SAFETY: args points to MessageArgs per the ABI contract.
-    let message_args: &MessageArgs = unsafe { &*(args as *const MessageArgs) };
-    // SAFETY: message_args.host is a valid HostApi pointer provided by the caller.
-    let host: &HostApi = unsafe { &*message_args.host };
-    let msg: &[u8] = b"test error from plugin";
-    let len: usize = msg.len(); // 22 bytes
-    // SAFETY: host.alloc is a valid function pointer set by the host runtime;
-    // it allocates len bytes with align 1 and returns null on failure.
-    let ptr: *mut u8 = unsafe { (host.alloc)(message_args.host, len, 1) };
-    if ptr.is_null() {
-        return AbiError {
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        // SAFETY: args points to MessageArgs per the ABI contract.
+        let message_args: &MessageArgs = unsafe { &*(args as *const MessageArgs) };
+        // SAFETY: message_args.host is a valid HostApi pointer provided by the caller.
+        let host: &HostApi = unsafe { &*message_args.host };
+        let msg: &[u8] = b"test error from plugin";
+        let len: usize = msg.len(); // 22 bytes
+        // SAFETY: host.alloc is a valid function pointer set by the host runtime;
+        // it allocates len bytes with align 1 and returns null on failure.
+        let ptr: *mut u8 = unsafe { (host.alloc)(message_args.host, len, 1) };
+        if ptr.is_null() {
+            return AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: string_view_null(),
+            };
+        }
+        let abi_error: AbiError = AbiError {
             code: AbiErrorCode::Generic as u32,
-            message: string_view_null(),
+            message: StringView {
+                ptr: ptr as *const u8,
+                len,
+            },
         };
+        // SAFETY: ptr is valid for len bytes as guaranteed by the host allocator.
+        unsafe {
+            core::ptr::copy_nonoverlapping(msg.as_ptr(), ptr, len);
+            // SAFETY: out points to a valid AbiError per the ABI contract.
+            (out as *mut AbiError).write(abi_error);
+        }
+        abi_error_ok()
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(__result_err) };
     }
-    let abi_error: AbiError = AbiError {
-        code: AbiErrorCode::Generic as u32,
-        message: StringView {
-            ptr: ptr as *const u8,
-            len,
-        },
-    };
-    // SAFETY: ptr is valid for len bytes as guaranteed by the host allocator.
-    unsafe {
-        core::ptr::copy_nonoverlapping(msg.as_ptr(), ptr, len);
-        // SAFETY: out points to a valid AbiError per the ABI contract.
-        (out as *mut AbiError).write(abi_error);
-    }
-    abi_error_ok()
 }
 
 /// fn 1 — error_panic
@@ -87,16 +94,23 @@ extern "C" fn error_panic(
     _instance: GuestContractInstance,
     _args: *const (),
     _out: *mut (),
-) -> AbiError {
-    let result: Result<(), Box<dyn core::any::Any + Send>> = std::panic::catch_unwind(|| {
-        panic!("intentional error_plugin panic");
-    });
-    match result {
-        Ok(()) => abi_error_ok(), // unreachable — the closure always panics
-        Err(_) => AbiError {
-            code: AbiErrorCode::Panic as u32,
-            message: string_view_from_static(b"plugin panicked"),
-        },
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        let result: Result<(), Box<dyn core::any::Any + Send>> = std::panic::catch_unwind(|| {
+            panic!("intentional error_plugin panic");
+        });
+        match result {
+            Ok(()) => abi_error_ok(), // unreachable — the closure always panics
+            Err(_) => AbiError {
+                code: AbiErrorCode::Panic as u32,
+                message: string_view_from_static(b"plugin panicked"),
+            },
+        }
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(__result_err) };
     }
 }
 
@@ -111,62 +125,69 @@ extern "C" fn error_chain_propagate(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    // SAFETY: args points to ChainArgs per the ABI contract.
-    let chain_args: &ChainArgs = unsafe { &*(args as *const ChainArgs) };
-    // SAFETY: chain_args.host is a valid HostApi pointer provided by the host runtime.
-    let host: &HostApi = unsafe { &*chain_args.host };
-    // SAFETY: host.find_guest_contract is a valid function pointer set by the host runtime.
-    let plugin: GuestContractHandle = unsafe {
-        (host.find_guest_contract)(chain_args.host, chain_args.target_contract_id, 0_u32)
-    };
-    // SAFETY: host.resolve_guest_contract returns a 'static GuestContractInterface pointer for the handle.
-    let iface_ptr: *const GuestContractInterface =
-        unsafe { (host.resolve_guest_contract)(chain_args.host, plugin) };
-    // Dispatch through the interface if non-null and fn_id is in range.
-    let inner_result: AbiError = if iface_ptr.is_null() {
-        AbiError {
-            code: AbiErrorCode::NotFound as u32,
-            message: string_view_null(),
-        }
-    } else {
-        // SAFETY: iface_ptr is 'static and non-null.
-        let iface: &GuestContractInterface = unsafe { &*iface_ptr };
-        // SAFETY: Access union field based on dispatch_type == Native
-        let function_count = unsafe { iface.dispatch.native.function_count };
-        if chain_args.target_fn_id >= function_count {
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        // SAFETY: args points to ChainArgs per the ABI contract.
+        let chain_args: &ChainArgs = unsafe { &*(args as *const ChainArgs) };
+        // SAFETY: chain_args.host is a valid HostApi pointer provided by the host runtime.
+        let host: &HostApi = unsafe { &*chain_args.host };
+        // SAFETY: host.find_guest_contract is a valid function pointer set by the host runtime.
+        let plugin: GuestContractHandle = unsafe {
+            (host.find_guest_contract)(chain_args.host, chain_args.target_contract_id, 0_u32)
+        };
+        // SAFETY: host.resolve_guest_contract returns a 'static GuestContractInterface pointer for the handle.
+        let iface_ptr: *const GuestContractInterface =
+            unsafe { (host.resolve_guest_contract)(chain_args.host, plugin) };
+        // Dispatch through the interface if non-null and fn_id is in range.
+        let inner_result: AbiError = if iface_ptr.is_null() {
             AbiError {
-                code: AbiErrorCode::FunctionNotAvailable as u32,
+                code: AbiErrorCode::NotFound as u32,
                 message: string_view_null(),
             }
         } else {
-            // SAFETY: fn_id < function_count validated above.
-            let fn_ptr: *const () = unsafe {
-                *iface
-                    .dispatch
-                    .native
-                    .functions
-                    .add(chain_args.target_fn_id as usize)
-            };
-            // SAFETY: Transmuted to the native dispatch signature; types enforced by generated callers.
-            let dispatch_fn: unsafe extern "C" fn(
-                GuestContractInstance,
-                *const (),
-                *mut (),
-            ) -> AbiError = unsafe { core::mem::transmute(fn_ptr) };
-            // SAFETY: null instance/args/out is valid for fns that don't require them.
-            unsafe {
-                dispatch_fn(
-                    GuestContractInstance::null(),
-                    core::ptr::null(),
-                    core::ptr::null_mut(),
-                )
+            // SAFETY: iface_ptr is 'static and non-null.
+            let iface: &GuestContractInterface = unsafe { &*iface_ptr };
+            // SAFETY: Access union field based on dispatch_type == Native
+            let function_count = unsafe { iface.dispatch.native.function_count };
+            if chain_args.target_fn_id >= function_count {
+                AbiError {
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
+                    message: string_view_null(),
+                }
+            } else {
+                // SAFETY: fn_id < function_count validated above.
+                let fn_ptr: *const () = unsafe {
+                    *iface
+                        .dispatch
+                        .native
+                        .functions
+                        .add(chain_args.target_fn_id as usize)
+                };
+                // SAFETY: Transmuted to the native dispatch signature; types enforced by generated callers.
+                let dispatch_fn: unsafe extern "C" fn(
+                    GuestContractInstance,
+                    *const (),
+                    *mut (),
+                ) -> AbiError = unsafe { core::mem::transmute(fn_ptr) };
+                // SAFETY: null instance/args/out is valid for fns that don't require them.
+                unsafe {
+                    dispatch_fn(
+                        GuestContractInstance::null(),
+                        core::ptr::null(),
+                        core::ptr::null_mut(),
+                    )
+                }
             }
-        }
-    };
-    // SAFETY: out points to a valid AbiError per the ABI contract.
-    unsafe { (out as *mut AbiError).write(inner_result) };
-    abi_error_ok()
+        };
+        // SAFETY: out points to a valid AbiError per the ABI contract.
+        unsafe { (out as *mut AbiError).write(inner_result) };
+        abi_error_ok()
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(__result_err) };
+    }
 }
 
 // ─── Instance lifecycle (stub for test plugin) ────────────────────────────────
@@ -178,8 +199,12 @@ extern "C" fn error_chain_propagate(
 unsafe extern "C" fn create_instance_stub(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// Stub destroy_instance for test plugin - no cleanup needed.
@@ -292,13 +317,21 @@ pub unsafe extern "C" fn polyplug_init(
     // value (carrying the runtime-computed contract ID) is sufficient.
     let interface: GuestContractInterface = error_test_interface();
 
+    // Out-param ABI: register_guest_contract writes its AbiError through a
+    // trailing pointer and returns void; init still surfaces it by value.
+    let mut err: AbiError = AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: string_view_null(),
+    };
     // SAFETY: register_guest_contract is a valid function pointer set by the host.
-    // ERROR_TEST_DESCRIPTOR is 'static; `interface` outlives the synchronous call.
+    // ERROR_TEST_DESCRIPTOR is 'static; `interface` outlives the synchronous call; &mut err is valid.
     unsafe {
         (host.register_guest_contract)(
             host_abi,
             &ERROR_TEST_DESCRIPTOR as *const PluginDescriptor,
             &interface as *const GuestContractInterface,
-        )
+            &mut err as *mut AbiError,
+        );
     }
+    err
 }

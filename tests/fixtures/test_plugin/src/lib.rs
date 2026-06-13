@@ -20,7 +20,7 @@ pub struct AddArgs {
 /// The `add` function: returns a.wrapping_add(b).
 ///
 /// Uses the frozen native cross-dispatch ABI signature
-/// `extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError` — the
+/// `extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)` — the
 /// exact shape the runtime's native dispatch transmutes each function-table
 /// slot to (`Runtime::call_guest_method`). `instance` is the live handle for
 /// this contract; this stateless function does not read it beyond honouring the
@@ -32,23 +32,30 @@ unsafe extern "C" fn plugin_add(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    if args.is_null() || out.is_null() {
-        return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
-            message: string_view_null(),
-        };
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        if args.is_null() || out.is_null() {
+            return AbiError {
+                code: AbiErrorCode::InvalidPointer as u32,
+                message: string_view_null(),
+            };
+        }
+        // SAFETY: the caller guarantees `args` points to a valid `AddArgs` per the
+        // contract; non-null checked above.
+        let add_args: &AddArgs = unsafe { &*(args as *const AddArgs) };
+        let result: u32 = add_args.a.wrapping_add(add_args.b);
+        // SAFETY: the caller guarantees `out` points to a valid `u32`; non-null
+        // checked above.
+        unsafe {
+            core::ptr::write(out as *mut u32, result);
+        }
+        abi_error_ok()
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(__result_err) };
     }
-    // SAFETY: the caller guarantees `args` points to a valid `AddArgs` per the
-    // contract; non-null checked above.
-    let add_args: &AddArgs = unsafe { &*(args as *const AddArgs) };
-    let result: u32 = add_args.a.wrapping_add(add_args.b);
-    // SAFETY: the caller guarantees `out` points to a valid `u32`; non-null
-    // checked above.
-    unsafe {
-        core::ptr::write(out as *mut u32, result);
-    }
-    abi_error_ok()
 }
 
 // ─── Instance lifecycle (stub for test plugin) ────────────────────────────────
@@ -60,8 +67,12 @@ unsafe extern "C" fn plugin_add(
 unsafe extern "C" fn create_instance_stub(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// Stub destroy_instance for test plugin - no cleanup needed.
@@ -173,15 +184,23 @@ pub unsafe extern "C" fn polyplug_init(
     // value (carrying the runtime-computed contract ID) is sufficient.
     let interface: GuestContractInterface = test_add_interface();
 
+    // Out-param ABI: register_guest_contract writes its AbiError through a
+    // trailing pointer and returns void; init still surfaces it by value.
+    let mut err: AbiError = AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: string_view_null(),
+    };
     // SAFETY: register_guest_contract is a valid function pointer set by the host.
-    // TEST_ADD_DESCRIPTOR is 'static; `interface` outlives the synchronous call.
+    // TEST_ADD_DESCRIPTOR is 'static; `interface` outlives the synchronous call; &mut err is valid.
     unsafe {
         (host.register_guest_contract)(
             host_abi,
             &TEST_ADD_DESCRIPTOR as *const PluginDescriptor,
             &interface as *const GuestContractInterface,
-        )
+            &mut err as *mut AbiError,
+        );
     }
+    err
 }
 
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};

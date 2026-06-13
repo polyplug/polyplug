@@ -52,51 +52,66 @@ unsafe extern "C" fn caller_cross_add(
     instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    if instance.data.is_null() || args.is_null() || out.is_null() {
-        return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        if instance.data.is_null() || args.is_null() || out.is_null() {
+            return AbiError {
+                code: AbiErrorCode::InvalidPointer as u32,
+                message: string_view_null(),
+            };
+        }
+
+        // SAFETY: `instance.data` was produced by this contract's `create_instance`
+        // as a `Box<CallerInstance>` leaked via `Box::into_raw`; it is live for the
+        // duration of the call and not aliased mutably.
+        let state: &CallerInstance = unsafe { &*(instance.data as *const CallerInstance) };
+        let host_ptr: *const HostApi = state.host;
+        if host_ptr.is_null() {
+            return AbiError {
+                code: AbiErrorCode::InvalidPointer as u32,
+                message: string_view_null(),
+            };
+        }
+        // SAFETY: `host_ptr` was captured from a non-null `HostApi` the host passed
+        // to `create_instance`; it stays valid for the runtime lifetime.
+        let host: &HostApi = unsafe { &*host_ptr };
+
+        // A stack marker provides a non-null `data` for the target instance handle.
+        // The target's `add` is stateless and never dereferences it; the
+        // `contract_id` is what routes the call to `cross.target`.
+        let mut target_marker: u8 = 0;
+        let target_instance: GuestContractInstance = GuestContractInstance {
+            data: &mut target_marker as *mut u8 as *mut core::ffi::c_void,
+            contract_id: GuestContractId::new("cross.target", 1),
+        };
+
+        // Out-param ABI: call_guest_method writes its AbiError through a trailing
+        // pointer and returns void; this caller surfaces it by value.
+        let mut err: AbiError = AbiError {
+            code: AbiErrorCode::Ok as u32,
             message: string_view_null(),
         };
-    }
-
-    // SAFETY: `instance.data` was produced by this contract's `create_instance`
-    // as a `Box<CallerInstance>` leaked via `Box::into_raw`; it is live for the
-    // duration of the call and not aliased mutably.
-    let state: &CallerInstance = unsafe { &*(instance.data as *const CallerInstance) };
-    let host_ptr: *const HostApi = state.host;
-    if host_ptr.is_null() {
-        return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
-            message: string_view_null(),
-        };
-    }
-    // SAFETY: `host_ptr` was captured from a non-null `HostApi` the host passed
-    // to `create_instance`; it stays valid for the runtime lifetime.
-    let host: &HostApi = unsafe { &*host_ptr };
-
-    // A stack marker provides a non-null `data` for the target instance handle.
-    // The target's `add` is stateless and never dereferences it; the
-    // `contract_id` is what routes the call to `cross.target`.
-    let mut target_marker: u8 = 0;
-    let target_instance: GuestContractInstance = GuestContractInstance {
-        data: &mut target_marker as *mut u8 as *mut core::ffi::c_void,
-        contract_id: GuestContractId::new("cross.target", 1),
-    };
-
-    // SAFETY: `call_guest_method` is a valid host function pointer. The target
-    // function 0 expects `AddArgs` in / `u32` out, which `args`/`out` satisfy
-    // (forwarded verbatim from this contract's own caller). A null arena selects
-    // the native per-value path (the target uses native dispatch).
-    unsafe {
-        (host.call_guest_method)(
-            host_ptr,
-            target_instance,
-            0,
-            args as *const core::ffi::c_void,
-            out as *mut core::ffi::c_void,
-            core::ptr::null_mut(),
-        )
+        // SAFETY: `call_guest_method` is a valid host function pointer. The target
+        // function 0 expects `AddArgs` in / `u32` out, which `args`/`out` satisfy
+        // (forwarded verbatim from this contract's own caller). A null arena selects
+        // the native per-value path (the target uses native dispatch). `&mut err` is valid.
+        unsafe {
+            (host.call_guest_method)(
+                host_ptr,
+                target_instance,
+                0,
+                args as *const core::ffi::c_void,
+                out as *mut core::ffi::c_void,
+                core::ptr::null_mut(),
+                &mut err as *mut AbiError,
+            );
+        }
+        err
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(__result_err) };
     }
 }
 
@@ -110,11 +125,17 @@ unsafe extern "C" fn caller_cross_add(
 unsafe extern "C" fn create_instance(
     host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
+    out_instance: *mut GuestContractInstance,
+) {
     let boxed: Box<CallerInstance> = Box::new(CallerInstance { host });
-    GuestContractInstance {
-        data: Box::into_raw(boxed) as *mut core::ffi::c_void,
-        contract_id: GuestContractId::new("cross.caller", 1),
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe {
+            out_instance.write(GuestContractInstance {
+                data: Box::into_raw(boxed) as *mut core::ffi::c_void,
+                contract_id: GuestContractId::new("cross.caller", 1),
+            })
+        };
     }
 }
 
@@ -208,13 +229,21 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: `host_abi` is non-null and provided by the host runtime.
     let host: &HostApi = unsafe { &*host_abi };
     let interface: GuestContractInterface = caller_interface();
+    // Out-param ABI: register_guest_contract writes its AbiError through a
+    // trailing pointer and returns void; init still surfaces it by value.
+    let mut err: AbiError = AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: string_view_null(),
+    };
     // SAFETY: `register_guest_contract` is a valid host function pointer.
-    // `DESCRIPTOR` is 'static; `interface` outlives the synchronous call.
+    // `DESCRIPTOR` is 'static; `interface` outlives the synchronous call; &mut err is valid.
     unsafe {
         (host.register_guest_contract)(
             host_abi,
             &DESCRIPTOR as *const PluginDescriptor,
             &interface as *const GuestContractInterface,
-        )
+            &mut err as *mut AbiError,
+        );
     }
+    err
 }

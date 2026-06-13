@@ -64,44 +64,51 @@ extern "C" fn memory_fill_preallocated_buffer(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    // SAFETY: args points to a valid FillArgs per the ABI contract.
-    // out points to a valid u32 per the ABI contract.
-    let fill_args: &FillArgs = unsafe { &*(args as *const FillArgs) };
-    let ptr: *mut u8 = fill_args.buf.ptr;
-    let len: usize = fill_args.buf.len;
-    let cap: usize = fill_args.buf.cap;
-    let required_align: usize = align_of::<u64>();
-    if cap < len {
-        return AbiError {
-            code: AbiErrorCode::Generic as u32,
-            message: string_view_null(),
-        };
-    }
-    if cap > 0 && ptr.is_null() {
-        return AbiError {
-            code: AbiErrorCode::Generic as u32,
-            message: string_view_null(),
-        };
-    }
-    if cap > 0 && (ptr as usize) % required_align != 0 {
-        return AbiError {
-            code: AbiErrorCode::Generic as u32,
-            message: string_view_null(),
-        };
-    }
-    // SAFETY: ptr is a valid buffer of at least cap bytes owned and allocated by the host.
-    // The host guarantees the buffer is writable for the full capacity.
-    unsafe {
-        let mut i: usize = 0;
-        while i < cap {
-            ptr.add(i).write(fill_args.fill_byte);
-            i += 1;
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        // SAFETY: args points to a valid FillArgs per the ABI contract.
+        // out points to a valid u32 per the ABI contract.
+        let fill_args: &FillArgs = unsafe { &*(args as *const FillArgs) };
+        let ptr: *mut u8 = fill_args.buf.ptr;
+        let len: usize = fill_args.buf.len;
+        let cap: usize = fill_args.buf.cap;
+        let required_align: usize = align_of::<u64>();
+        if cap < len {
+            return AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: string_view_null(),
+            };
         }
-        let out_u32: *mut u32 = out as *mut u32;
-        out_u32.write(cap as u32);
+        if cap > 0 && ptr.is_null() {
+            return AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: string_view_null(),
+            };
+        }
+        if cap > 0 && (ptr as usize) % required_align != 0 {
+            return AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: string_view_null(),
+            };
+        }
+        // SAFETY: ptr is a valid buffer of at least cap bytes owned and allocated by the host.
+        // The host guarantees the buffer is writable for the full capacity.
+        unsafe {
+            let mut i: usize = 0;
+            while i < cap {
+                ptr.add(i).write(fill_args.fill_byte);
+                i += 1;
+            }
+            let out_u32: *mut u32 = out as *mut u32;
+            out_u32.write(cap as u32);
+        }
+        abi_error_ok()
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(__result_err) };
     }
-    abi_error_ok()
 }
 
 /// fn 1 — allocate a buffer via the host abi, fill it, and return it.
@@ -116,36 +123,43 @@ extern "C" fn memory_alloc_buffer_via_host(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    // SAFETY: args points to a valid AllocArgs per the ABI contract.
-    let alloc_args: &AllocArgs = unsafe { &*(args as *const AllocArgs) };
-    // SAFETY: host is a valid non-null HostApi pointer provided by the caller per ABI contract.
-    let host: &HostApi = unsafe { &*alloc_args.host };
-    let size: usize = alloc_args.size as usize;
-    // SAFETY: host.alloc is a valid function pointer set by the host runtime.
-    // size and align=1 are valid arguments for the host allocator.
-    let ptr: *mut u8 = unsafe { (host.alloc)(alloc_args.host, size, 1) };
-    if ptr.is_null() {
-        return AbiError {
-            code: AbiErrorCode::Generic as u32,
-            message: string_view_null(),
-        };
-    }
-    // SAFETY: ptr is a valid allocation of at least `size` bytes returned by the host allocator.
-    unsafe {
-        let mut i: usize = 0;
-        while i < size {
-            ptr.add(i).write(alloc_args.fill_byte);
-            i += 1;
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        // SAFETY: args points to a valid AllocArgs per the ABI contract.
+        let alloc_args: &AllocArgs = unsafe { &*(args as *const AllocArgs) };
+        // SAFETY: host is a valid non-null HostApi pointer provided by the caller per ABI contract.
+        let host: &HostApi = unsafe { &*alloc_args.host };
+        let size: usize = alloc_args.size as usize;
+        // SAFETY: host.alloc is a valid function pointer set by the host runtime.
+        // size and align=1 are valid arguments for the host allocator.
+        let ptr: *mut u8 = unsafe { (host.alloc)(alloc_args.host, size, 1) };
+        if ptr.is_null() {
+            return AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: string_view_null(),
+            };
         }
-        let out_buf: *mut Buffer = out as *mut Buffer;
-        out_buf.write(Buffer {
-            ptr,
-            len: size,
-            cap: size,
-        });
+        // SAFETY: ptr is a valid allocation of at least `size` bytes returned by the host allocator.
+        unsafe {
+            let mut i: usize = 0;
+            while i < size {
+                ptr.add(i).write(alloc_args.fill_byte);
+                i += 1;
+            }
+            let out_buf: *mut Buffer = out as *mut Buffer;
+            out_buf.write(Buffer {
+                ptr,
+                len: size,
+                cap: size,
+            });
+        }
+        abi_error_ok()
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(__result_err) };
     }
-    abi_error_ok()
 }
 
 /// fn 2 — echo a StringView back without copying.
@@ -161,21 +175,28 @@ extern "C" fn memory_echo_string_view(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    // SAFETY: args points to a valid StringView per the ABI contract.
-    let sv: StringView = unsafe { *(args as *const StringView) };
-    // SAFETY: sv.ptr is valid for sv.len bytes per the ABI contract.
-    // The caller guarantees the StringView points to live, readable memory.
-    let bytes: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
-    if core::str::from_utf8(bytes).is_err() {
-        return AbiError {
-            code: AbiErrorCode::Generic as u32, // invalid UTF-8
-            message: string_view_null(),
-        };
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        // SAFETY: args points to a valid StringView per the ABI contract.
+        let sv: StringView = unsafe { *(args as *const StringView) };
+        // SAFETY: sv.ptr is valid for sv.len bytes per the ABI contract.
+        // The caller guarantees the StringView points to live, readable memory.
+        let bytes: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
+        if core::str::from_utf8(bytes).is_err() {
+            return AbiError {
+                code: AbiErrorCode::Generic as u32, // invalid UTF-8
+                message: string_view_null(),
+            };
+        }
+        // SAFETY: out points to a valid StringView per the ABI contract.
+        unsafe { (out as *mut StringView).write(sv) };
+        abi_error_ok()
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(__result_err) };
     }
-    // SAFETY: out points to a valid StringView per the ABI contract.
-    unsafe { (out as *mut StringView).write(sv) };
-    abi_error_ok()
 }
 
 /// fn 3 — zero-length roundtrip: report buf.len and sv.len (both expected to be 0).
@@ -189,17 +210,24 @@ extern "C" fn memory_zero_length_roundtrip(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    // SAFETY: args points to a valid ZeroArgs per the ABI contract.
-    // out points to a valid ZeroResult per the ABI contract.
-    let zero_args: &ZeroArgs = unsafe { &*(args as *const ZeroArgs) };
-    let result: ZeroResult = ZeroResult {
-        buf_len: zero_args.buf.len as u64,
-        sv_len: zero_args.sv.len as u64,
-    };
-    // SAFETY: out points to a valid ZeroResult per the ABI contract.
-    unsafe { (out as *mut ZeroResult).write(result) };
-    abi_error_ok()
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        // SAFETY: args points to a valid ZeroArgs per the ABI contract.
+        // out points to a valid ZeroResult per the ABI contract.
+        let zero_args: &ZeroArgs = unsafe { &*(args as *const ZeroArgs) };
+        let result: ZeroResult = ZeroResult {
+            buf_len: zero_args.buf.len as u64,
+            sv_len: zero_args.sv.len as u64,
+        };
+        // SAFETY: out points to a valid ZeroResult per the ABI contract.
+        unsafe { (out as *mut ZeroResult).write(result) };
+        abi_error_ok()
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(__result_err) };
+    }
 }
 
 /// fn 4 — return a **borrowed** StringView of the input (zero-copy).
@@ -215,12 +243,19 @@ extern "C" fn memory_return_borrowed(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    // SAFETY: args points to a valid StringView per the ABI contract.
-    let sv: StringView = unsafe { *(args as *const StringView) };
-    // SAFETY: out points to a valid StringView per the ABI contract.
-    unsafe { (out as *mut StringView).write(sv) };
-    abi_error_ok()
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        // SAFETY: args points to a valid StringView per the ABI contract.
+        let sv: StringView = unsafe { *(args as *const StringView) };
+        // SAFETY: out points to a valid StringView per the ABI contract.
+        unsafe { (out as *mut StringView).write(sv) };
+        abi_error_ok()
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(__result_err) };
+    }
 }
 
 /// fn 5 — return an **owned** Buffer copy of the input via the host allocator.
@@ -238,32 +273,39 @@ extern "C" fn memory_return_owned(
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    // SAFETY: args points to a valid CopyArgs per the ABI contract.
-    let copy_args: &CopyArgs = unsafe { &*(args as *const CopyArgs) };
-    // SAFETY: host is a valid non-null HostApi pointer provided by the caller per ABI contract.
-    let host: &HostApi = unsafe { &*copy_args.host };
-    let len: usize = copy_args.sv.len;
-    // SAFETY: host.alloc is a valid function pointer set by the host runtime;
-    // len and align=1 are valid arguments for the host allocator.
-    let ptr: *mut u8 = unsafe { (host.alloc)(copy_args.host, len, 1) };
-    if len > 0 && ptr.is_null() {
-        return AbiError {
-            code: AbiErrorCode::Generic as u32,
-            message: string_view_null(),
-        };
+    out_err: *mut AbiError,
+) {
+    let __result_err: AbiError = (|| {
+        // SAFETY: args points to a valid CopyArgs per the ABI contract.
+        let copy_args: &CopyArgs = unsafe { &*(args as *const CopyArgs) };
+        // SAFETY: host is a valid non-null HostApi pointer provided by the caller per ABI contract.
+        let host: &HostApi = unsafe { &*copy_args.host };
+        let len: usize = copy_args.sv.len;
+        // SAFETY: host.alloc is a valid function pointer set by the host runtime;
+        // len and align=1 are valid arguments for the host allocator.
+        let ptr: *mut u8 = unsafe { (host.alloc)(copy_args.host, len, 1) };
+        if len > 0 && ptr.is_null() {
+            return AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: string_view_null(),
+            };
+        }
+        if len > 0 {
+            // SAFETY: copy_args.sv.ptr is valid for `len` reads per the ABI contract,
+            // and `ptr` is a fresh allocation of at least `len` bytes; the two regions
+            // do not overlap (distinct allocations).
+            unsafe { core::ptr::copy_nonoverlapping(copy_args.sv.ptr, ptr, len) };
+        }
+        // SAFETY: out points to a valid Buffer per the ABI contract.
+        unsafe {
+            (out as *mut Buffer).write(Buffer { ptr, len, cap: len });
+        }
+        abi_error_ok()
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(__result_err) };
     }
-    if len > 0 {
-        // SAFETY: copy_args.sv.ptr is valid for `len` reads per the ABI contract,
-        // and `ptr` is a fresh allocation of at least `len` bytes; the two regions
-        // do not overlap (distinct allocations).
-        unsafe { core::ptr::copy_nonoverlapping(copy_args.sv.ptr, ptr, len) };
-    }
-    // SAFETY: out points to a valid Buffer per the ABI contract.
-    unsafe {
-        (out as *mut Buffer).write(Buffer { ptr, len, cap: len });
-    }
-    abi_error_ok()
 }
 
 // ─── Instance lifecycle (stub for test plugin) ────────────────────────────────
@@ -275,8 +317,12 @@ extern "C" fn memory_return_owned(
 unsafe extern "C" fn create_instance_stub(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// Stub destroy_instance for test plugin - no cleanup needed.
@@ -395,13 +441,21 @@ pub unsafe extern "C" fn polyplug_init(
     // value (carrying the runtime-computed contract ID) is sufficient.
     let interface: GuestContractInterface = memory_test_interface();
 
+    // Out-param ABI: register_guest_contract writes its AbiError through a
+    // trailing pointer and returns void; init still surfaces it by value.
+    let mut err: AbiError = AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: string_view_null(),
+    };
     // SAFETY: register_guest_contract is a valid function pointer set by the host.
-    // MEMORY_TEST_DESCRIPTOR is 'static; `interface` outlives the synchronous call.
+    // MEMORY_TEST_DESCRIPTOR is 'static; `interface` outlives the synchronous call; &mut err is valid.
     unsafe {
         (host.register_guest_contract)(
             host_abi,
             &MEMORY_TEST_DESCRIPTOR as *const PluginDescriptor,
             &interface as *const GuestContractInterface,
-        )
+            &mut err as *mut AbiError,
+        );
     }
+    err
 }

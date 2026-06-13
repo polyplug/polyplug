@@ -40,8 +40,12 @@ const POLYPLUG_ABI_VERSION: u32 = 1_u32;
 unsafe extern "C" fn create_instance_stub(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 /// Stub destroy_instance for test plugin - no cleanup needed.
@@ -132,13 +136,21 @@ pub unsafe extern "C" fn polyplug_init(
     // The host copies the interface during this synchronous call, so a local
     // value (carrying the runtime-computed contract ID) is sufficient.
     let interface: GuestContractInterface = depender_test_interface();
+    // Out-param ABI: register_guest_contract writes its AbiError through a
+    // trailing pointer and returns void; init still surfaces it by value.
+    let mut err: AbiError = AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: string_view_null(),
+    };
     // SAFETY: register_guest_contract is a valid function pointer set by the host.
-    // DESCRIPTOR is 'static; `interface` outlives the synchronous call.
+    // DESCRIPTOR is 'static; `interface` outlives the synchronous call; &mut err is valid.
     unsafe {
         (host.register_guest_contract)(
             host_abi,
             &DESCRIPTOR as *const PluginDescriptor,
             &interface as *const GuestContractInterface,
-        )
+            &mut err as *mut AbiError,
+        );
     }
+    err
 }
