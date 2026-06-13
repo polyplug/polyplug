@@ -549,6 +549,8 @@ mod tests {
             targets: HashMap::new(),
             enums: HashMap::new(),
             enum_targets: HashMap::new(),
+            structs: HashMap::new(),
+            struct_targets: HashMap::new(),
         }
     }
 

@@ -35,6 +35,40 @@ rule:
         )
     }
 
+    /// Generate the ast-grep inline rule matching every `string` literal that
+    /// is the first element of a `tuple` inside the `_fields_` list of the
+    /// ctypes `class_definition` named `struct_name`
+    /// (e.g. `_fields_ = [("ptr", ctypes.c_void_p), ...]`). The ctypes type is
+    /// never a bare string literal, so only the field-name strings match.
+    fn generate_struct_rule(struct_name: &str) -> String {
+        format!(
+            r#"id: struct-fields
+language: python
+severity: hint
+rule:
+  kind: string
+  inside:
+    stopBy: end
+    kind: tuple
+    inside:
+      stopBy: end
+      kind: list
+      inside:
+        stopBy: end
+        kind: assignment
+        has:
+          field: left
+          regex: ^_fields_$
+        inside:
+          stopBy: end
+          kind: class_definition
+          has:
+            field: name
+            regex: ^{struct_name}$
+"#
+        )
+    }
+
     /// Generate the ast-grep inline rule matching class-body-level
     /// assignments inside the `class_definition` named `enum_name`
     /// (e.g. `class AbiErrorCode(enum.IntEnum):` with `Ok = 0` members).
@@ -69,6 +103,14 @@ impl Default for PythonValidator {
     }
 }
 
+/// Strip the surrounding quotes from a ctypes `_fields_` field-name string
+/// literal (`"ptr"` -> `ptr`, `'ptr'` -> `ptr`).
+fn parse_field_string(text: &str) -> String {
+    text.trim()
+        .trim_matches(|c| c == '"' || c == '\'')
+        .to_string()
+}
+
 impl LanguageValidator for PythonValidator {
     fn language_name(&self) -> &'static str {
         "python"
@@ -98,6 +140,20 @@ impl LanguageValidator for PythonValidator {
             .map(|m| parse_variant_text(&m.text))
             .collect())
     }
+
+    fn struct_fields_in_file(
+        &mut self,
+        runner: &AstGrepRunner,
+        struct_name: &str,
+        file: &Path,
+    ) -> Result<Vec<String>, ValidatorError> {
+        let rule: String = Self::generate_struct_rule(struct_name);
+        let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
+        Ok(matches
+            .iter()
+            .map(|m| parse_field_string(&m.text))
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -108,10 +164,13 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use crate::ast_grep::NamingConvention;
-    use crate::languages::test_support::{golden_enum, golden_methods, repo_path, runner};
+    use crate::languages::test_support::{
+        golden_enum, golden_methods, golden_struct, repo_path, runner,
+    };
     use crate::languages::{
-        EnumValidationResult, ValidationResult, VariantCheck, VariantOutcome, validate_language,
-        validate_language_enum,
+        EnumValidationResult, FieldCheck, FieldOutcome, StructFieldValidationResult,
+        ValidationResult, VariantCheck, VariantOutcome, validate_language, validate_language_enum,
+        validate_language_struct,
     };
 
     fn create_temp_python_file(
@@ -387,6 +446,120 @@ class Other:
         let path: PathBuf = repo_path("sdks/python/polyplug_abi/polyplug_abi/__init__.py");
         let result: EnumValidationResult = validate_enum_file("ReloadPhaseType", &path)?;
         assert!(result.is_complete(), "ReloadPhaseType drift: {result:?}");
+        Ok(())
+    }
+
+    fn validate_struct_file(
+        struct_name: &str,
+        golden_fields: &[String],
+        file: &Path,
+    ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
+        let mut validator: PythonValidator = PythonValidator::new();
+        let result: StructFieldValidationResult = validate_language_struct(
+            &mut validator,
+            &runner(),
+            NamingConvention::Snake,
+            struct_name,
+            golden_fields,
+            &[file.to_path_buf()],
+        )?;
+        Ok(result)
+    }
+
+    #[test]
+    fn test_struct_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_python_file(
+            r#"
+import ctypes
+class StringView(ctypes.Structure):
+    _fields_ = [
+        ("ptr", ctypes.c_void_p),
+        ("len", ctypes.c_size_t),
+    ]
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_python_file(
+            r#"
+import ctypes
+class StringView(ctypes.Structure):
+    _fields_ = [
+        ("pointer", ctypes.c_void_p),
+        ("len", ctypes.c_size_t),
+    ]
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(!result.is_complete());
+        let check: &FieldCheck = result
+            .checks
+            .iter()
+            .find(|c| c.field == "ptr")
+            .ok_or("missing ptr check")?;
+        assert_eq!(check.outcome, FieldOutcome::Missing);
+        assert_eq!(result.extra_fields.len(), 1);
+        assert_eq!(result.extra_fields[0].field, "pointer");
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_python_file(
+            r#"
+import ctypes
+# class StringView(ctypes.Structure): _fields_ = [("ptr", c_void_p), ("len", c_size_t)]
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(
+            result
+                .checks
+                .iter()
+                .all(|c| c.outcome == FieldOutcome::Missing)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_other_class_not_confused() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_python_file(
+            r#"
+import ctypes
+class Other(ctypes.Structure):
+    _fields_ = [
+        ("a", ctypes.c_uint32),
+        ("b", ctypes.c_uint32),
+    ]
+class StringView(ctypes.Structure):
+    _fields_ = [
+        ("ptr", ctypes.c_void_p),
+        ("len", ctypes.c_size_t),
+    ]
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_abi_mirror_structs_match_golden() -> Result<(), Box<dyn core::error::Error>> {
+        let path: PathBuf = repo_path("sdks/python/abi/abi.py");
+        for struct_name in ["StringView", "AbiError"] {
+            let result: StructFieldValidationResult =
+                validate_struct_file(struct_name, &golden_struct(struct_name), &path)?;
+            assert!(result.is_complete(), "{struct_name} drift: {result:?}");
+        }
         Ok(())
     }
 }

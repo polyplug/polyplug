@@ -32,6 +32,12 @@ pub struct Config {
     /// Enum mirror targets: language -> enum name -> list of file paths,
     /// resolved relative to the config file's parent directory.
     pub enum_targets: HashMap<String, HashMap<String, Vec<PathBuf>>>,
+    /// Golden struct set: struct name -> ordered field names (declaration
+    /// order is the ABI-layout proxy).
+    pub structs: HashMap<String, Vec<String>>,
+    /// Struct mirror targets: language -> struct name -> list of file paths,
+    /// resolved relative to the config file's parent directory.
+    pub struct_targets: HashMap<String, HashMap<String, Vec<PathBuf>>>,
 }
 
 /// Intermediate struct for YAML deserialization.
@@ -45,6 +51,10 @@ struct ConfigYaml {
     enums: HashMap<String, VariantEntriesYaml>,
     #[serde(default)]
     enum_targets: HashMap<String, HashMap<String, Vec<String>>>,
+    #[serde(default)]
+    structs: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    struct_targets: HashMap<String, HashMap<String, Vec<String>>>,
 }
 
 /// Variant entries of one enum, preserving duplicates.
@@ -118,8 +128,11 @@ pub fn parse_config(path: &Path) -> Result<Config, ValidatorError> {
     validate_language_keys("targets", yaml.targets.keys())?;
     validate_language_keys("naming", yaml.naming.keys())?;
     validate_language_keys("enum_targets", yaml.enum_targets.keys())?;
+    validate_language_keys("struct_targets", yaml.struct_targets.keys())?;
     let enums: HashMap<String, BTreeMap<String, i64>> = validate_enums(&yaml.enums)?;
     validate_enum_targets(&enums, &yaml.enum_targets)?;
+    validate_structs(&yaml.structs)?;
+    validate_struct_targets(&yaml.structs, &yaml.struct_targets)?;
 
     let naming: HashMap<String, NamingConvention> = parse_naming(&yaml.naming, &yaml.targets)?;
 
@@ -148,6 +161,21 @@ pub fn parse_config(path: &Path) -> Result<Config, ValidatorError> {
         })
         .collect();
 
+    let struct_targets: HashMap<String, HashMap<String, Vec<PathBuf>>> = yaml
+        .struct_targets
+        .into_iter()
+        .map(|(language, structs)| {
+            let resolved: HashMap<String, Vec<PathBuf>> = structs
+                .into_iter()
+                .map(|(struct_name, files)| {
+                    let paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(f)).collect();
+                    (struct_name, paths)
+                })
+                .collect();
+            (language, resolved)
+        })
+        .collect();
+
     Ok(Config {
         version: yaml.version,
         methods: yaml.methods,
@@ -155,6 +183,8 @@ pub fn parse_config(path: &Path) -> Result<Config, ValidatorError> {
         targets,
         enums,
         enum_targets,
+        structs: yaml.structs,
+        struct_targets,
     })
 }
 
@@ -211,6 +241,55 @@ fn validate_enum_targets(
                 return Err(ValidatorError::UnknownEnum {
                     language: language.clone(),
                     enum_name: enum_name.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reject non-identifier struct/field names and duplicate fields.
+///
+/// Struct and field names are interpolated into ast-grep rules, so they must
+/// be plain identifiers; declaration order in the `Vec` is preserved as the
+/// ABI-layout proxy.
+fn validate_structs(structs: &HashMap<String, Vec<String>>) -> Result<(), ValidatorError> {
+    for (struct_name, field_list) in structs {
+        if !is_identifier(struct_name) {
+            return Err(ValidatorError::InvalidStructName {
+                struct_name: struct_name.clone(),
+            });
+        }
+        let mut seen: HashSet<&str> = HashSet::new();
+        for field in field_list {
+            if !is_identifier(field) {
+                return Err(ValidatorError::InvalidFieldName {
+                    struct_name: struct_name.clone(),
+                    field: field.clone(),
+                });
+            }
+            if !seen.insert(field.as_str()) {
+                return Err(ValidatorError::DuplicateField {
+                    struct_name: struct_name.clone(),
+                    field: field.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reject `struct_targets:` entries referencing structs absent from `structs:`.
+fn validate_struct_targets(
+    structs: &HashMap<String, Vec<String>>,
+    struct_targets: &HashMap<String, HashMap<String, Vec<String>>>,
+) -> Result<(), ValidatorError> {
+    for (language, targets) in struct_targets {
+        for struct_name in targets.keys() {
+            if !structs.contains_key(struct_name) {
+                return Err(ValidatorError::UnknownStruct {
+                    language: language.clone(),
+                    struct_name: struct_name.clone(),
                 });
             }
         }
@@ -304,6 +383,16 @@ pub fn filter_to_struct(config: &Config, struct_name: Option<&str>) -> Config {
                 })
                 .unwrap_or_default();
 
+            let structs: HashMap<String, Vec<String>> = config
+                .structs
+                .get(name)
+                .map(|fields| {
+                    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+                    map.insert(name.to_string(), fields.clone());
+                    map
+                })
+                .unwrap_or_default();
+
             Config {
                 version: config.version,
                 methods,
@@ -311,6 +400,8 @@ pub fn filter_to_struct(config: &Config, struct_name: Option<&str>) -> Config {
                 targets: config.targets.clone(),
                 enums: config.enums.clone(),
                 enum_targets: config.enum_targets.clone(),
+                structs,
+                struct_targets: config.struct_targets.clone(),
             }
         }
     }
@@ -579,6 +670,8 @@ methods:
             targets: HashMap::new(),
             enums: HashMap::new(),
             enum_targets: HashMap::new(),
+            structs: HashMap::new(),
+            struct_targets: HashMap::new(),
         }
     }
 
@@ -741,5 +834,174 @@ enum_targets:
             other => panic!("expected InvalidEnumName error, got {other:?}"),
         }
         Ok(())
+    }
+
+    const VALID_STRUCT_YAML: &str = r#"
+version: 1
+methods:
+  StringView:
+    - to_str
+naming:
+  rust: snake_case
+  lua: snake_case
+targets:
+  rust:
+    - sdks/rust/guest/src/lib.rs
+structs:
+  StringView:
+    - ptr
+    - len
+  AbiError:
+    - code
+    - message
+struct_targets:
+  rust:
+    StringView:
+      - crates/polyplug_abi/src/types/string_view.rs
+  lua:
+    StringView:
+      - sdks/lua/abi/abi.lua
+"#;
+
+    #[test]
+    fn test_parse_config_structs() -> Result<(), Box<dyn core::error::Error>> {
+        let dir: tempfile::TempDir = tempfile::tempdir()?;
+        let config_path: PathBuf = dir.path().join("cfg.yaml");
+        std::fs::write(&config_path, VALID_STRUCT_YAML)?;
+
+        let config: Config = parse_config(&config_path)?;
+        let string_view: &Vec<String> = config
+            .structs
+            .get("StringView")
+            .ok_or("missing StringView golden struct")?;
+        assert_eq!(string_view, &vec!["ptr".to_string(), "len".to_string()]);
+
+        let rust_targets: &HashMap<String, Vec<PathBuf>> = config
+            .struct_targets
+            .get("rust")
+            .ok_or("missing rust struct targets")?;
+        let files: &Vec<PathBuf> = rust_targets
+            .get("StringView")
+            .ok_or("missing StringView files")?;
+        assert_eq!(
+            files[0],
+            dir.path()
+                .join("crates/polyplug_abi/src/types/string_view.rs")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_missing_struct_sections_default_empty()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_config(VALID_YAML)?;
+        let config: Config = parse_config(file.path())?;
+        assert!(config.structs.is_empty());
+        assert!(config.struct_targets.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_unknown_struct_target_language() -> Result<(), Box<dyn core::error::Error>>
+    {
+        let yaml: String = VALID_STRUCT_YAML.replace("  lua:\n", "  lau:\n");
+        let file: NamedTempFile = create_temp_config(&yaml)?;
+        match parse_config(file.path()) {
+            Err(ValidatorError::UnknownLanguage { section, language }) => {
+                assert_eq!(section, "struct_targets");
+                assert_eq!(language, "lau");
+            }
+            other => panic!("expected UnknownLanguage error, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_struct_target_references_unknown_struct()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let yaml: String =
+            VALID_STRUCT_YAML.replace("  lua:\n    StringView:", "  lua:\n    Version:");
+        let file: NamedTempFile = create_temp_config(&yaml)?;
+        match parse_config(file.path()) {
+            Err(ValidatorError::UnknownStruct {
+                language,
+                struct_name,
+            }) => {
+                assert_eq!(language, "lua");
+                assert_eq!(struct_name, "Version");
+            }
+            other => panic!("expected UnknownStruct error, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_duplicate_field_is_fatal() -> Result<(), Box<dyn core::error::Error>> {
+        let yaml: String = VALID_STRUCT_YAML.replace("    - ptr\n", "    - ptr\n    - ptr\n");
+        let file: NamedTempFile = create_temp_config(&yaml)?;
+        match parse_config(file.path()) {
+            Err(ValidatorError::DuplicateField { struct_name, field }) => {
+                assert_eq!(struct_name, "StringView");
+                assert_eq!(field, "ptr");
+            }
+            other => panic!("expected DuplicateField error, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_invalid_field_name() -> Result<(), Box<dyn core::error::Error>> {
+        let yaml: String = VALID_STRUCT_YAML.replace("    - ptr", "    - \"p tr\"");
+        let file: NamedTempFile = create_temp_config(&yaml)?;
+        match parse_config(file.path()) {
+            Err(ValidatorError::InvalidFieldName { struct_name, field }) => {
+                assert_eq!(struct_name, "StringView");
+                assert_eq!(field, "p tr");
+            }
+            other => panic!("expected InvalidFieldName error, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_invalid_struct_name() -> Result<(), Box<dyn core::error::Error>> {
+        // `AbiError` appears only as a `structs:` key, so this rename is
+        // unambiguous (unlike `StringView`, which is also a methods key).
+        let yaml: String = VALID_STRUCT_YAML.replace("\n  AbiError:", "\n  \"Abi Error\":");
+        let file: NamedTempFile = create_temp_config(&yaml)?;
+        match parse_config(file.path()) {
+            Err(ValidatorError::InvalidStructName { struct_name }) => {
+                assert_eq!(struct_name, "Abi Error");
+            }
+            other => panic!("expected InvalidStructName error, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_to_struct_carries_structs() {
+        let mut structs: HashMap<String, Vec<String>> = HashMap::new();
+        structs.insert(
+            "StringView".to_string(),
+            vec!["ptr".to_string(), "len".to_string()],
+        );
+        structs.insert("AbiError".to_string(), vec!["code".to_string()]);
+        let config: Config = Config {
+            version: 1,
+            methods: HashMap::new(),
+            naming: HashMap::new(),
+            targets: HashMap::new(),
+            enums: HashMap::new(),
+            enum_targets: HashMap::new(),
+            structs,
+            struct_targets: HashMap::new(),
+        };
+
+        let filtered: Config = filter_to_struct(&config, Some("StringView"));
+        assert_eq!(filtered.structs.len(), 1);
+        assert!(filtered.structs.contains_key("StringView"));
+
+        let none: Config = filter_to_struct(&config, None);
+        assert_eq!(none.structs.len(), 2);
     }
 }

@@ -131,6 +131,46 @@ pub enum ValidatorError {
         variant: String,
     },
 
+    /// A `struct_targets:` entry references a struct absent from `structs:`.
+    #[error(
+        "unknown struct '{struct_name}' in struct_targets for language '{language}' (add it to the `structs:` section)"
+    )]
+    UnknownStruct {
+        /// The language whose targets reference the struct.
+        language: String,
+        /// The struct name missing from `structs:`.
+        struct_name: String,
+    },
+
+    /// A struct name in `structs:` is not a plain identifier (it is
+    /// interpolated into ast-grep rules, so anything else would corrupt the
+    /// rule).
+    #[error("invalid struct name '{struct_name}': must be a PascalCase identifier")]
+    InvalidStructName {
+        /// The offending struct name.
+        struct_name: String,
+    },
+
+    /// A field name in `structs:` is not a plain identifier.
+    #[error(
+        "invalid field name '{field}' in struct '{struct_name}': must be a snake_case identifier"
+    )]
+    InvalidFieldName {
+        /// The struct containing the field.
+        struct_name: String,
+        /// The offending field name.
+        field: String,
+    },
+
+    /// The same field is listed twice for one struct.
+    #[error("duplicate field '{field}' found in struct '{struct_name}'")]
+    DuplicateField {
+        /// The struct containing the duplicate.
+        struct_name: String,
+        /// The duplicated field name.
+        field: String,
+    },
+
     /// A configured target file does not exist on disk.
     #[error("target file for language '{language}' does not exist: {path}")]
     TargetFileMissing {

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::ast_grep::{AstGrepRunner, Match};
 use crate::error::ValidatorError;
-use crate::languages::{LanguageValidator, parse_variant_text};
+use crate::languages::{LanguageValidator, parse_field_name_trailing, parse_variant_text};
 
 /// Validator for C++ SDK files.
 ///
@@ -48,6 +48,27 @@ rule:
             field: declarator
             kind: identifier
             regex: ^{method_name}$
+"#
+        )
+    }
+
+    /// Generate the ast-grep inline rule matching every `field_declaration`
+    /// inside the `struct_specifier` named `struct_name`. A bodyless forward
+    /// declaration (`struct StringView;`) has no `field_declaration` children
+    /// and contributes nothing.
+    fn generate_struct_rule(struct_name: &str) -> String {
+        format!(
+            r#"id: struct-fields
+language: cpp
+severity: hint
+rule:
+  kind: field_declaration
+  inside:
+    stopBy: end
+    kind: struct_specifier
+    has:
+      field: name
+      regex: ^{struct_name}$
 "#
         )
     }
@@ -109,6 +130,20 @@ impl LanguageValidator for CppValidator {
             .map(|m| parse_variant_text(&m.text))
             .collect())
     }
+
+    fn struct_fields_in_file(
+        &mut self,
+        runner: &AstGrepRunner,
+        struct_name: &str,
+        file: &Path,
+    ) -> Result<Vec<String>, ValidatorError> {
+        let rule: String = Self::generate_struct_rule(struct_name);
+        let matches: Vec<Match> = runner.run_with_rule(&rule, file)?;
+        Ok(matches
+            .iter()
+            .map(|m| parse_field_name_trailing(&m.text))
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -119,10 +154,13 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use crate::ast_grep::NamingConvention;
-    use crate::languages::test_support::{golden_enum, golden_methods, repo_path, runner};
+    use crate::languages::test_support::{
+        golden_enum, golden_methods, golden_struct, repo_path, runner,
+    };
     use crate::languages::{
-        EnumValidationResult, ValidationResult, VariantCheck, VariantOutcome, validate_language,
-        validate_language_enum,
+        EnumValidationResult, FieldCheck, FieldOutcome, StructFieldValidationResult,
+        ValidationResult, VariantCheck, VariantOutcome, validate_language, validate_language_enum,
+        validate_language_struct,
     };
 
     fn create_temp_cpp_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
@@ -390,6 +428,132 @@ enum class DispatchType : uint32_t {
         ] {
             let result: EnumValidationResult = validate_enum_file(enum_name, &path)?;
             assert!(result.is_complete(), "{enum_name} drift: {result:?}");
+        }
+        Ok(())
+    }
+
+    fn validate_struct_file(
+        struct_name: &str,
+        golden_fields: &[String],
+        file: &Path,
+    ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
+        let mut validator: CppValidator = CppValidator::new();
+        let result: StructFieldValidationResult = validate_language_struct(
+            &mut validator,
+            &runner(),
+            NamingConvention::Snake,
+            struct_name,
+            golden_fields,
+            &[file.to_path_buf()],
+        )?;
+        Ok(result)
+    }
+
+    #[test]
+    fn test_struct_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_cpp_file(
+            r#"
+struct StringView {
+    const uint8_t* ptr;
+    size_t len;
+};
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_cpp_file(
+            r#"
+struct StringView {
+    const uint8_t* pointer;
+    size_t len;
+};
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(!result.is_complete());
+        let check: &FieldCheck = result
+            .checks
+            .iter()
+            .find(|c| c.field == "ptr")
+            .ok_or("missing ptr check")?;
+        assert_eq!(check.outcome, FieldOutcome::Missing);
+        assert_eq!(result.extra_fields.len(), 1);
+        assert_eq!(result.extra_fields[0].field, "pointer");
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_forward_declaration_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+        // A bodyless forward declaration must yield no fields.
+        let file: NamedTempFile = create_temp_cpp_file(
+            r#"
+struct StringView;
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(
+            result
+                .checks
+                .iter()
+                .all(|c| c.outcome == FieldOutcome::Missing)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_cpp_file(
+            r#"
+// struct StringView { const uint8_t* ptr; size_t len; };
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(
+            result
+                .checks
+                .iter()
+                .all(|c| c.outcome == FieldOutcome::Missing)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_other_struct_in_same_file_not_confused()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_cpp_file(
+            r#"
+struct Other {
+    uint32_t a;
+    uint32_t b;
+};
+struct StringView {
+    const uint8_t* ptr;
+    size_t len;
+};
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_abi_mirror_structs_match_golden() -> Result<(), Box<dyn core::error::Error>> {
+        let path: PathBuf = repo_path("sdks/cpp/abi/polyplug/abi.hpp");
+        for struct_name in ["StringView", "AbiError"] {
+            let result: StructFieldValidationResult =
+                validate_struct_file(struct_name, &golden_struct(struct_name), &path)?;
+            assert!(result.is_complete(), "{struct_name} drift: {result:?}");
         }
         Ok(())
     }

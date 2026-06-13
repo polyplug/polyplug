@@ -246,6 +246,52 @@ fn collect_cdef_variants(source: &str, enum_name: &str, variants: &mut Vec<(Stri
     }
 }
 
+/// Collect the field names of the `typedef struct NAME { ... } NAME;` body
+/// from `ffi.cdef[[...]]` C text. tree-sitter sees the cdef body as one
+/// string literal, so this is a deliberate text-level parse (mirroring
+/// [`collect_cdef_variants`]).
+///
+/// Only the body-bearing definition counts: a forward declaration
+/// (`typedef struct NAME NAME;`) has no `{` and is skipped. Comment lines
+/// (`//`, `/* */`) and nested function-pointer typedefs are ignored — only
+/// plain `type name;` field declarations inside the struct body are recorded,
+/// in declaration order, in native (snake) spelling.
+fn collect_struct_fields(source: &str, struct_name: &str, fields: &mut Vec<String>) {
+    let open: String = format!("typedef struct {struct_name} {{");
+    let close: String = format!("}} {struct_name};");
+    let mut in_body: bool = false;
+    for line in source.lines() {
+        let trimmed: &str = line.trim();
+        if !in_body {
+            if trimmed.starts_with(open.as_str()) {
+                in_body = true;
+            }
+            continue;
+        }
+        if trimmed.starts_with(close.as_str()) {
+            break;
+        }
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+            continue;
+        }
+        // Function-pointer typedefs and nested braces are not plain fields.
+        if trimmed.contains('(') || trimmed.contains('{') || trimmed.contains('}') {
+            continue;
+        }
+        let Some(declaration) = trimmed.strip_suffix(';') else {
+            continue;
+        };
+        let name: &str = declaration
+            .trim()
+            .split(|c: char| c.is_whitespace() || c == '*' || c == '&')
+            .rfind(|token| !token.is_empty())
+            .unwrap_or("");
+        if !name.is_empty() {
+            fields.push(name.to_string());
+        }
+    }
+}
+
 impl LanguageValidator for LuaValidator {
     fn language_name(&self) -> &'static str {
         "lua"
@@ -294,6 +340,23 @@ impl LanguageValidator for LuaValidator {
         }
         Ok(variants)
     }
+
+    fn struct_fields_in_file(
+        &mut self,
+        _runner: &AstGrepRunner,
+        struct_name: &str,
+        file: &Path,
+    ) -> Result<Vec<String>, ValidatorError> {
+        let source: String =
+            std::fs::read_to_string(file).map_err(|source| ValidatorError::FileRead {
+                path: file.to_path_buf(),
+                source,
+            })?;
+
+        let mut fields: Vec<String> = Vec::new();
+        collect_struct_fields(&source, struct_name, &mut fields);
+        Ok(fields)
+    }
 }
 
 #[cfg(test)]
@@ -303,10 +366,13 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use crate::ast_grep::NamingConvention;
-    use crate::languages::test_support::{golden_enum, golden_methods, repo_path, runner};
+    use crate::languages::test_support::{
+        golden_enum, golden_methods, golden_struct, repo_path, runner,
+    };
     use crate::languages::{
-        EnumValidationResult, ValidationResult, VariantCheck, VariantOutcome, validate_language,
-        validate_language_enum,
+        EnumValidationResult, FieldCheck, FieldOutcome, StructFieldValidationResult,
+        ValidationResult, VariantCheck, VariantOutcome, validate_language, validate_language_enum,
+        validate_language_struct,
     };
 
     fn create_temp_lua_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
@@ -766,6 +832,151 @@ ffi.cdef[[
         for enum_name in ["AbiErrorCode", "DispatchType", "LogLevel"] {
             let result: EnumValidationResult = validate_enum_file(enum_name, &path)?;
             assert!(result.is_complete(), "{enum_name} drift: {result:?}");
+        }
+        Ok(())
+    }
+
+    fn validate_struct_file(
+        struct_name: &str,
+        golden_fields: &[String],
+        file: &Path,
+    ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
+        let mut validator: LuaValidator = LuaValidator::new()?;
+        let result: StructFieldValidationResult = validate_language_struct(
+            &mut validator,
+            &runner(),
+            NamingConvention::Snake,
+            struct_name,
+            golden_fields,
+            &[file.to_path_buf()],
+        )?;
+        Ok(result)
+    }
+
+    #[test]
+    fn test_struct_cdef_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local ffi = require("ffi")
+ffi.cdef[[
+    typedef struct StringView {
+        //  UTF-8 bytes, NOT null-terminated.
+        const uint8_t* ptr;
+        //  Byte count.
+        size_t len;
+    } StringView;
+]]
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_cdef_renamed_field_is_missing_and_extra()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local ffi = require("ffi")
+ffi.cdef[[
+    typedef struct StringView {
+        const uint8_t* pointer;
+        size_t len;
+    } StringView;
+]]
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(!result.is_complete());
+        let check: &FieldCheck = result
+            .checks
+            .iter()
+            .find(|c| c.field == "ptr")
+            .ok_or("missing ptr check")?;
+        assert_eq!(check.outcome, FieldOutcome::Missing);
+        assert_eq!(result.extra_fields.len(), 1);
+        assert_eq!(result.extra_fields[0].field, "pointer");
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_cdef_forward_declaration_does_not_match()
+    -> Result<(), Box<dyn core::error::Error>> {
+        // A bodyless forward declaration must yield no fields.
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local ffi = require("ffi")
+ffi.cdef[[
+    typedef struct StringView StringView;
+]]
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(
+            result
+                .checks
+                .iter()
+                .all(|c| c.outcome == FieldOutcome::Missing)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_cdef_comment_field_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local ffi = require("ffi")
+ffi.cdef[[
+    typedef struct StringView {
+        const uint8_t* ptr;
+        // size_t stale;
+        size_t len;
+    } StringView;
+]]
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        // The commented-out `stale` field must not surface as extra.
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        assert!(result.extra_fields.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_cdef_other_struct_not_confused() -> Result<(), Box<dyn core::error::Error>> {
+        let file: NamedTempFile = create_temp_lua_file(
+            r#"
+local ffi = require("ffi")
+ffi.cdef[[
+    typedef struct Other {
+        uint32_t a;
+        uint32_t b;
+    } Other;
+    typedef struct StringView {
+        const uint8_t* ptr;
+        size_t len;
+    } StringView;
+]]
+"#,
+        )?;
+        let result: StructFieldValidationResult =
+            validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
+        assert!(result.is_complete(), "unexpected drift: {result:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_abi_cdef_structs_match_golden() -> Result<(), Box<dyn core::error::Error>> {
+        let path: PathBuf = repo_path("sdks/lua/abi/abi.lua");
+        for struct_name in ["StringView", "AbiError"] {
+            let result: StructFieldValidationResult =
+                validate_struct_file(struct_name, &golden_struct(struct_name), &path)?;
+            assert!(result.is_complete(), "{struct_name} drift: {result:?}");
         }
         Ok(())
     }
