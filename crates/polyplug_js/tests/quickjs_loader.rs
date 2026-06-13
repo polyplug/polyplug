@@ -158,9 +158,10 @@ fn assert_vm_function_count(vtable: &GuestContractInterface, expected: u32) {
 
     assert_eq!(vtable.dispatch_type, DispatchType::VirtualMachine);
     for fn_id in 0..expected {
+        let mut result: AbiError = AbiError::ok();
         // SAFETY: dispatch.vm.call is js_dispatch; the noop functions ignore the
         // null args/out pointers.
-        let result: AbiError = unsafe {
+        unsafe {
             (vtable.dispatch.vm.call)(
                 vtable.dispatch.vm.loader_data,
                 GuestContractInstance::null(),
@@ -168,16 +169,18 @@ fn assert_vm_function_count(vtable: &GuestContractInterface, expected: u32) {
                 core::ptr::null::<()>(),
                 core::ptr::null_mut::<()>(),
                 core::ptr::null_mut(),
-            )
-        };
+                &mut result as *mut AbiError,
+            );
+        }
         assert_eq!(
             result.code,
             AbiErrorCode::Ok as u32,
             "fn_id {fn_id} must dispatch to Ok"
         );
     }
+    let mut missing: AbiError = AbiError::ok();
     // SAFETY: dispatch.vm.call is js_dispatch.
-    let missing: AbiError = unsafe {
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -185,8 +188,9 @@ fn assert_vm_function_count(vtable: &GuestContractInterface, expected: u32) {
             core::ptr::null::<()>(),
             core::ptr::null_mut::<()>(),
             core::ptr::null_mut(),
-        )
-    };
+            &mut missing as *mut AbiError,
+        );
+    }
     assert_eq!(
         missing.code,
         AbiErrorCode::FunctionNotAvailable as u32,
@@ -993,9 +997,10 @@ fn dispatch_vm_call_works_correctly() {
 
     assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
 
+    let mut call_result: AbiError = AbiError::ok();
     // SAFETY: dispatch_type is VirtualMachine, so accessing .vm is valid.
     // dispatch.vm.call is js_dispatch, loader_data is valid.
-    let call_result: AbiError = unsafe {
+    unsafe {
         (vtable_ref.dispatch.vm.call)(
             vtable_ref.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -1003,8 +1008,9 @@ fn dispatch_vm_call_works_correctly() {
             core::ptr::null::<()>(),
             core::ptr::null_mut::<()>(),
             core::ptr::null_mut(),
-        )
-    };
+            &mut call_result as *mut AbiError,
+        );
+    }
 
     assert_eq!(
         call_result.code,
@@ -1235,9 +1241,10 @@ fn dispatch_add(runtime: &Runtime, contract_id: u64, a: i32, b: i32) -> i32 {
     // sum to outPtr. Lay out a packed [a, b] args buffer and a single-i32 out.
     let args: [i32; 2] = [a, b];
     let mut out: i32 = 0;
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: dispatch.vm.call is js_dispatch; args points at two valid i32 and
     // out at one valid i32, matching what the guest reads/writes.
-    let result: AbiError = unsafe {
+    unsafe {
         (vtable_ref.dispatch.vm.call)(
             vtable_ref.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -1245,8 +1252,9 @@ fn dispatch_add(runtime: &Runtime, contract_id: u64, a: i32, b: i32) -> i32 {
             args.as_ptr() as *const (),
             &mut out as *mut i32 as *mut (),
             core::ptr::null_mut(),
-        )
-    };
+            &mut result as *mut AbiError,
+        );
+    }
     assert_eq!(result.code, AbiErrorCode::Ok as u32, "add must dispatch Ok");
     out
 }
@@ -1351,10 +1359,15 @@ static COUNTER_LOCK: Mutex<()> = Mutex::new(());
 unsafe extern "C" fn counting_create_instance(
     _this: *const HostContractInterface,
     _args: *const (),
-) -> HostContractInstance {
+    out_instance: *mut HostContractInstance,
+) {
     let n: usize = CREATE_COUNT.fetch_add(1, Ordering::SeqCst);
-    HostContractInstance {
-        data: (n + 1) as *mut core::ffi::c_void,
+    // SAFETY: out_instance is a valid, writable HostContractInstance slot provided
+    // by the host runtime per the create_instance out-param ABI.
+    unsafe {
+        *out_instance = HostContractInstance {
+            data: (n + 1) as *mut core::ffi::c_void,
+        };
     }
 }
 
@@ -1370,16 +1383,22 @@ unsafe extern "C" fn counting_destroy_instance(
     DESTROY_COUNT.fetch_add(1, Ordering::SeqCst);
 }
 
-/// A no-op native host-contract function: `(state, args, out) -> AbiError::ok()`.
+/// A no-op native host-contract function that writes `AbiError::ok()` through its
+/// out-param.
 ///
 /// # Safety
-/// Matches the native dispatch signature `(state, args, out) -> AbiError`.
+/// Matches the native dispatch signature `(state, args, out, out_err) -> ()`.
 unsafe extern "C" fn host_noop_fn(
     _state: *const core::ffi::c_void,
     _args: *const core::ffi::c_void,
     _out: *mut core::ffi::c_void,
-) -> polyplug_abi::AbiError {
-    polyplug_abi::AbiError::ok()
+    out_err: *mut polyplug_abi::AbiError,
+) {
+    // SAFETY: out_err is a valid, writable AbiError slot supplied by the native
+    // dispatch caller per the out-param ABI.
+    unsafe {
+        *out_err = polyplug_abi::AbiError::ok();
+    }
 }
 
 /// `Sync` wrapper around a 'static read-only function-pointer table so it can live
@@ -1475,9 +1494,10 @@ fn dispatch_host_caller(runtime: &Runtime, guest_contract_id: u64) -> u32 {
     // SAFETY: vtable_ptr is a valid pointer returned by resolve.
     let vtable_ref: &GuestContractInterface = unsafe { &*vtable_ptr };
     let mut out: i32 = 0;
+    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
     // SAFETY: dispatch.vm.call is js_dispatch; the guest fn forwards the (unused)
     // args/out pointers straight into callHostContract.
-    let result: polyplug_abi::AbiError = unsafe {
+    unsafe {
         (vtable_ref.dispatch.vm.call)(
             vtable_ref.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -1485,8 +1505,9 @@ fn dispatch_host_caller(runtime: &Runtime, guest_contract_id: u64) -> u32 {
             core::ptr::null::<()>(),
             &mut out as *mut i32 as *mut (),
             core::ptr::null_mut(),
-        )
-    };
+            &mut result as *mut polyplug_abi::AbiError,
+        );
+    }
     result.code
 }
 
@@ -1687,9 +1708,10 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     // SAFETY: vtable_ptr is a valid GuestContractInterface owned by the registry.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
 
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: dispatch.vm.call is js_dispatch, loader_data is valid, and the
     // logging function never reads its (args, out) pointers.
-    let result: AbiError = unsafe {
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -1697,8 +1719,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
             core::ptr::null::<()>(),
             core::ptr::null_mut::<()>(),
             core::ptr::null_mut(),
-        )
-    };
+            &mut result as *mut AbiError,
+        );
+    }
     assert_eq!(
         result.code,
         AbiErrorCode::Ok as u32,

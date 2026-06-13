@@ -120,8 +120,9 @@ fn code_source_loads_resolves_and_dispatches() {
     // wraps a live PythonLoaderData; out points at a valid i32.
     let vm: polyplug_abi::dispatch::vm_dispatch::VmDispatch = unsafe { interface.dispatch.vm };
     let mut out_buf: i32 = 0;
+    let mut err: AbiError = AbiError::ok();
     // SAFETY: see above — out is valid, args/arena are null and ignored.
-    let err: AbiError = unsafe {
+    unsafe {
         (vm.call)(
             vm.loader_data,
             GuestContractInstance::null(),
@@ -129,8 +130,9 @@ fn code_source_loads_resolves_and_dispatches() {
             core::ptr::null(),
             &mut out_buf as *mut i32 as *mut (),
             core::ptr::null_mut(),
-        )
-    };
+            &mut err as *mut AbiError,
+        );
+    }
     assert!(
         err.is_ok(),
         "vm dispatch should return Ok, got code {}",

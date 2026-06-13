@@ -377,9 +377,10 @@ fn assert_function_count(vtable: &GuestContractInterface, expected: u32) {
         "Lua loader must use VM dispatch"
     );
     for fn_id in 0..expected {
+        let mut result: AbiError = AbiError::ok();
         // SAFETY: dispatch.vm.call is a valid function pointer; the noop functions
         // ignore the null args/out pointers.
-        let result: AbiError = unsafe {
+        unsafe {
             (vtable.dispatch.vm.call)(
                 vtable.dispatch.vm.loader_data,
                 GuestContractInstance::null(),
@@ -387,16 +388,18 @@ fn assert_function_count(vtable: &GuestContractInterface, expected: u32) {
                 core::ptr::null::<()>(),
                 core::ptr::null_mut::<()>(),
                 core::ptr::null_mut(),
-            )
-        };
+                &mut result as *mut AbiError,
+            );
+        }
         assert_eq!(
             result.code,
             AbiErrorCode::Ok as u32,
             "fn_id {fn_id} must dispatch to Ok"
         );
     }
+    let mut missing: AbiError = AbiError::ok();
     // SAFETY: dispatch.vm.call is a valid function pointer.
-    let missing: AbiError = unsafe {
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -404,8 +407,9 @@ fn assert_function_count(vtable: &GuestContractInterface, expected: u32) {
             core::ptr::null::<()>(),
             core::ptr::null_mut::<()>(),
             core::ptr::null_mut(),
-        )
-    };
+            &mut missing as *mut AbiError,
+        );
+    }
     assert_eq!(
         missing.code,
         AbiErrorCode::FunctionNotAvailable as u32,
@@ -667,9 +671,10 @@ fn vtable_function_dispatch_returns_abi_ok() {
         "Lua loader must use VM dispatch"
     );
 
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: dispatch.vm.call is a valid function pointer, loader_data is valid,
     // and we pass null pointers for args/out which the noop function ignores.
-    let result: AbiError = unsafe {
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -677,8 +682,9 @@ fn vtable_function_dispatch_returns_abi_ok() {
             core::ptr::null::<()>(),
             core::ptr::null_mut::<()>(),
             core::ptr::null_mut(),
-        )
-    };
+            &mut result as *mut AbiError,
+        );
+    }
     assert_eq!(
         result.code,
         AbiErrorCode::Ok as u32,
@@ -779,9 +785,10 @@ fn dispatch_add(runtime: &Runtime, a: u32, b: u32) -> u32 {
     // The fixture's impl_add reads two u32 from args and writes one u32 to out.
     let args: [u32; 2] = [a, b];
     let mut out: u32 = 0;
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: dispatch.vm.call is a valid function pointer; args points at two
     // contiguous u32 and out at one u32, matching what impl_add reads/writes.
-    let result: AbiError = unsafe {
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -789,8 +796,9 @@ fn dispatch_add(runtime: &Runtime, a: u32, b: u32) -> u32 {
             args.as_ptr() as *const (),
             &mut out as *mut u32 as *mut (),
             core::ptr::null_mut(),
-        )
-    };
+            &mut result as *mut AbiError,
+        );
+    }
     assert_eq!(
         result.code,
         AbiErrorCode::Ok as u32,
@@ -989,9 +997,10 @@ fn dispatch_failure_is_logged_through_host_logger() {
     // SAFETY: vtable_ptr is a 'static leaked GuestContractInterface from LuaLoader.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
 
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: dispatch.vm.call is a valid function pointer, loader_data is valid,
     // and the failing function never reads its (args, out) pointers.
-    let result: AbiError = unsafe {
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -999,8 +1008,9 @@ fn dispatch_failure_is_logged_through_host_logger() {
             core::ptr::null::<()>(),
             core::ptr::null_mut::<()>(),
             core::ptr::null_mut(),
-        )
-    };
+            &mut result as *mut AbiError,
+        );
+    }
     assert_eq!(
         result.code,
         AbiErrorCode::Generic as u32,
@@ -1091,9 +1101,10 @@ fn guest_log_bridge_delivers_records_and_clamps_level() {
     // SAFETY: vtable_ptr is a valid GuestContractInterface owned by the registry.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
 
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: dispatch.vm.call is a valid function pointer, loader_data is valid,
     // and the logging function never reads its (args, out) pointers.
-    let result: AbiError = unsafe {
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -1101,8 +1112,9 @@ fn guest_log_bridge_delivers_records_and_clamps_level() {
             core::ptr::null::<()>(),
             core::ptr::null_mut::<()>(),
             core::ptr::null_mut(),
-        )
-    };
+            &mut result as *mut AbiError,
+        );
+    }
     assert_eq!(
         result.code,
         AbiErrorCode::Ok as u32,

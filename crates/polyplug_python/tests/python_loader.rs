@@ -132,6 +132,7 @@ unsafe fn dispatch(
     // SAFETY: dispatch_type == VirtualMachine guarantees the `vm` union arm is
     // active, so reading it is sound.
     let vm: polyplug_abi::dispatch::vm_dispatch::VmDispatch = unsafe { interface.dispatch.vm };
+    let mut err: AbiError = AbiError::ok();
     // SAFETY: the call function is the loader's python_vm_dispatch; loader_data
     // wraps a live leaked PythonLoaderData; args/out are caller-provided.
     unsafe {
@@ -142,8 +143,10 @@ unsafe fn dispatch(
             args,
             out,
             core::ptr::null_mut(),
-        )
+            &mut err as *mut AbiError,
+        );
     }
+    err
 }
 
 /// Like [`dispatch`], but passes a real per-call `arena` pointer through to the
@@ -174,6 +177,7 @@ unsafe fn dispatch_with_arena(
     let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: Python contracts always register VM dispatch.
     let vm: polyplug_abi::dispatch::vm_dispatch::VmDispatch = unsafe { interface.dispatch.vm };
+    let mut err: AbiError = AbiError::ok();
     // SAFETY: loader_data wraps a live leaked PythonLoaderData; args/out/arena are
     // caller-provided and valid for this call.
     unsafe {
@@ -184,8 +188,10 @@ unsafe fn dispatch_with_arena(
             args,
             out,
             arena,
-        )
+            &mut err as *mut AbiError,
+        );
     }
+    err
 }
 
 // ─── Plugin sources (VM dispatch / _polyplug_registrations) ─────────────────────
