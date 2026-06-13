@@ -148,7 +148,8 @@ fn lua_to_str_raises_on_plain_string() {
     let mut out_view: StringView = StringView::null();
     // SAFETY: VM dispatch; probe() reads no input so a null args pointer is fine;
     // out is a *mut StringView; null arena selects the host->alloc fallback.
-    let err: AbiError = unsafe {
+    let mut err: AbiError = AbiError::ok();
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -156,6 +157,7 @@ fn lua_to_str_raises_on_plain_string() {
             core::ptr::null::<()>(),
             &mut out_view as *mut StringView as *mut (),
             core::ptr::null_mut(),
+            &mut err as *mut AbiError,
         )
     };
     assert_eq!(

@@ -293,7 +293,8 @@ fn js_peer_caller_echo_roundtrip() {
     // SAFETY: dispatch_type is VirtualMachine so the vm union is active;
     // args / out are 16-byte JS StringView buffers matching the consumer's ABI;
     // null arena selects the host->alloc fallback inside arenaAlloc.
-    let err: AbiError = unsafe {
+    let mut err: AbiError = AbiError::ok();
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -301,6 +302,7 @@ fn js_peer_caller_echo_roundtrip() {
             &input_view as *const JsStringView as *const (),
             &mut out_view as *mut JsStringView as *mut (),
             core::ptr::null_mut(),
+            &mut err as *mut AbiError,
         )
     };
     assert_eq!(

@@ -374,9 +374,13 @@ fn csharp_peer_caller_validate_roundtrip() {
     // Native dispatch fn 0 (transform): fn(GuestContractInstance, *const (), *mut ()) -> AbiError.
     // SAFETY: functions[0] is the transform ABI thunk.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: transmute to the canonical native dispatch fn pointer.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    // SAFETY: transmute to the canonical native dispatch out-param fn pointer.
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
 
     let input: &[u8] = b"hello";
     let input_view: StringView = StringView {
@@ -390,19 +394,27 @@ fn csharp_peer_caller_validate_roundtrip() {
     // SAFETY: host_abi is the runtime's live HostApi pointer; create_instance
     // is the generated factory thunk on the resolved interface.
     let host_abi: *const polyplug_abi::HostApi = rt.host_abi();
-    let instance: GuestContractInstance =
-        unsafe { (interface.create_instance)(host_abi, core::ptr::null()) };
+    let mut instance: GuestContractInstance = GuestContractInstance::null();
+    unsafe {
+        (interface.create_instance)(
+            host_abi,
+            core::ptr::null(),
+            &mut instance as *mut GuestContractInstance,
+        )
+    };
     assert!(
         !instance.data.is_null(),
         "create_instance must produce a non-null instance payload"
     );
     // SAFETY: instance was created above; args is a *const StringView, out a
     // *mut StringView per transform's ABI.
-    let err: AbiError = unsafe {
+    let mut err: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             instance,
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
+            &mut err as *mut AbiError,
         )
     };
     assert_eq!(

@@ -70,10 +70,18 @@ fn live_instance_warning_fires_on_unload_after_host_mediated_create() {
     // interface came from `resolve_guest_contract` for a live handle and stays
     // valid while the runtime is alive.
     let host_api: &HostApi = unsafe { &*host };
+    let mut instance: GuestContractInstance = GuestContractInstance::null();
     // SAFETY: `host`/`interface` are valid as above; a null `args` is honoured by
-    // this contract's factory, which ignores its argument.
-    let instance: GuestContractInstance =
-        unsafe { (host_api.create_guest_instance)(host, interface, core::ptr::null()) };
+    // this contract's factory, which ignores its argument; the instance is written
+    // through the trailing out-param.
+    unsafe {
+        (host_api.create_guest_instance)(
+            host,
+            interface,
+            core::ptr::null(),
+            &mut instance as *mut GuestContractInstance,
+        )
+    };
     assert!(
         !instance.data.is_null(),
         "cross.target is stateful: create_guest_instance must return non-null data"

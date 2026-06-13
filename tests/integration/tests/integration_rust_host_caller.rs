@@ -95,8 +95,16 @@ impl TestAddContract {
                     GuestContractInstance,
                     *const (),
                     *mut (),
-                ) -> AbiError = core::mem::transmute(fn_ptr);
-                dispatch_fn(GuestContractInstance::null(), args_ptr, out_ptr)
+                    *mut AbiError,
+                ) = core::mem::transmute(fn_ptr);
+                let mut dispatch_err: AbiError = AbiError::ok();
+                dispatch_fn(
+                    GuestContractInstance::null(),
+                    args_ptr,
+                    out_ptr,
+                    &mut dispatch_err as *mut AbiError,
+                );
+                dispatch_err
             }
         };
         if err.code != AbiErrorCode::Ok as u32 {
@@ -228,8 +236,12 @@ unsafe extern "C" fn caller_stub_register_guest(
     _this: *const HostApi,
     _descriptor: *const PluginDescriptor,
     _interface: *const GuestContractInterface,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn caller_stub_find(
@@ -279,22 +291,38 @@ unsafe extern "C" fn caller_stub_get_deps(_this: *const HostApi) -> Array<Depend
     Array::empty()
 }
 
-unsafe extern "C" fn caller_stub_load(_this: *const HostApi, _p: *const u8, _l: usize) -> AbiError {
-    AbiError::ok()
+unsafe extern "C" fn caller_stub_load(
+    _this: *const HostApi,
+    _p: *const u8,
+    _l: usize,
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn caller_stub_register_host(
     _this: *const HostApi,
     _interface: *const HostContractInterface,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn caller_stub_register_loader(
     _this: *const HostApi,
     _loader: *mut core::ffi::c_void,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn caller_stub_get_last_error(
@@ -316,15 +344,23 @@ unsafe extern "C" fn caller_stub_call_guest_method(
     _args: *const core::ffi::c_void,
     _out: *mut core::ffi::c_void,
     _arena: *mut CallArena,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn caller_stub_unload_bundle(
     _this: *const HostApi,
     _bundle_id: BundleId,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 fn counting_host() -> HostApi {
@@ -364,36 +400,43 @@ unsafe extern "C" fn echo_vm_call(
     args: *const (),
     out: *mut (),
     arena: *mut CallArena,
-) -> AbiError {
-    if arena.is_null() || args.is_null() || out.is_null() {
-        return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
-            message: StringView::null(),
-        };
+    out_err: *mut AbiError,
+) {
+    let result_err: AbiError = (|| {
+        if arena.is_null() || args.is_null() || out.is_null() {
+            return AbiError {
+                code: AbiErrorCode::InvalidPointer as u32,
+                message: StringView::null(),
+            };
+        }
+        // SAFETY: args points to a valid StringView per the caller contract.
+        let input: &StringView = unsafe { &*(args as *const StringView) };
+        // SAFETY: arena is the per-caller CallArena, reset by the caller for this call.
+        let dst: *mut u8 = unsafe { (*arena).alloc(input.len, 1) };
+        if dst.is_null() {
+            return AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            };
+        }
+        // SAFETY: dst owns input.len bytes from the arena; input.ptr is valid for input.len.
+        unsafe { core::ptr::copy_nonoverlapping(input.ptr, dst, input.len) };
+        // SAFETY: out points to a valid StringView slot per the caller contract.
+        unsafe {
+            core::ptr::write(
+                out as *mut StringView,
+                StringView {
+                    ptr: dst,
+                    len: input.len,
+                },
+            );
+        }
+        AbiError::ok()
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result_err) };
     }
-    // SAFETY: args points to a valid StringView per the caller contract.
-    let input: &StringView = unsafe { &*(args as *const StringView) };
-    // SAFETY: arena is the per-caller CallArena, reset by the caller for this call.
-    let dst: *mut u8 = unsafe { (*arena).alloc(input.len, 1) };
-    if dst.is_null() {
-        return AbiError {
-            code: AbiErrorCode::Generic as u32,
-            message: StringView::null(),
-        };
-    }
-    // SAFETY: dst owns input.len bytes from the arena; input.ptr is valid for input.len.
-    unsafe { core::ptr::copy_nonoverlapping(input.ptr, dst, input.len) };
-    // SAFETY: out points to a valid StringView slot per the caller contract.
-    unsafe {
-        core::ptr::write(
-            out as *mut StringView,
-            StringView {
-                ptr: dst,
-                len: input.len,
-            },
-        );
-    }
-    AbiError::ok()
 }
 
 const ARENA_BUF_LEN: usize = 512;
@@ -419,8 +462,10 @@ impl EchoVmCaller {
     fn echo(&mut self, input: StringView) -> StringView {
         self.arena.reset();
         let mut out: StringView = StringView::null();
+        let mut err: AbiError = AbiError::ok();
         // SAFETY: vtable is valid; args/out point to valid StringView slots; arena is per-caller.
-        let err: AbiError = unsafe {
+        // The AbiError is written through the trailing out-param.
+        unsafe {
             let vtable: &GuestContractInterface = &*self.vtable;
             (vtable.dispatch.vm.call)(
                 vtable.dispatch.vm.loader_data,
@@ -429,6 +474,7 @@ impl EchoVmCaller {
                 &input as *const StringView as *const (),
                 &mut out as *mut StringView as *mut (),
                 &mut self.arena as *mut CallArena,
+                &mut err as *mut AbiError,
             )
         };
         assert_eq!(err.code, AbiErrorCode::Ok as u32, "echo must return Ok");
@@ -526,8 +572,12 @@ fn test_host_caller_arena_reuses_buffer_across_calls() {
 unsafe extern "C" fn vm_noop_create(
     _host: *const HostApi,
     _args: *const (),
-) -> GuestContractInstance {
-    GuestContractInstance::null()
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn vm_noop_destroy(_host: *const HostApi, _instance: GuestContractInstance) {}
@@ -545,8 +595,12 @@ unsafe extern "C" fn stub_create_guest_instance(
     _this: *const polyplug_abi::HostApi,
     _interface: *const polyplug_abi::GuestContractInterface,
     _args: *const core::ffi::c_void,
-) -> polyplug_abi::GuestContractInstance {
-    polyplug_abi::GuestContractInstance::null()
+    out_instance: *mut polyplug_abi::GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(

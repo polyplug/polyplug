@@ -145,8 +145,13 @@ fn generated_csharp_bundle_transform_dispatches() {
     // SAFETY: function 0 is `transform`; args is a *const StringView, out a
     // *mut StringView, matching the generated ABI thunk signature.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
-    // Native dispatch signature: fn(GuestContractInstance, *const (), *mut ()) -> AbiError.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    // Native dispatch signature: fn(GuestContractInstance, *const (), *mut (), *mut AbiError).
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) =
         // SAFETY: transmute *const () to the canonical native dispatch fn pointer.
         unsafe { core::mem::transmute(fn_ptr) };
     // The generated CreateInstance constructs the C# implementation via the
@@ -155,19 +160,27 @@ fn generated_csharp_bundle_transform_dispatches() {
     // SAFETY: host_abi is the runtime's live HostApi pointer; create_instance
     // is the generated factory thunk on the resolved interface.
     let host_abi: *const polyplug_abi::HostApi = rt.host_abi();
-    let instance: GuestContractInstance =
-        unsafe { (vtable.create_instance)(host_abi, core::ptr::null()) };
+    let mut instance: GuestContractInstance = GuestContractInstance::null();
+    unsafe {
+        (vtable.create_instance)(
+            host_abi,
+            core::ptr::null(),
+            &mut instance as *mut GuestContractInstance,
+        )
+    };
     assert!(
         !instance.data.is_null(),
         "create_instance must produce a non-null instance payload"
     );
     // SAFETY: input_view/out_view are valid and correctly typed for transform;
     // instance was created above.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             instance,
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(

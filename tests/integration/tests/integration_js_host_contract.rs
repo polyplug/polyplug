@@ -59,13 +59,17 @@ unsafe extern "C" fn svc_version_thunk(
     _impl_ptr: *const c_void,
     _args: *const (),
     out: *mut (),
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     // SAFETY: out is a valid *mut u32 per the host.svc ABI; the buffer is
     // caller-allocated (arena or host alloc) and sized for exactly one u32.
     unsafe {
         *(out as *mut u32) = 42_u32;
     }
-    AbiError::ok()
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 /// fn_id 1: `describe(key: StringView) -> StringView` — records the key and
@@ -74,7 +78,8 @@ unsafe extern "C" fn svc_describe_thunk(
     _impl_ptr: *const c_void,
     args: *const (),
     out: *mut (),
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     // SAFETY: per the host.svc ABI, args is a valid *const StringView for the
     // duration of this call.
     let key_sv: StringView = unsafe { *(args as *const StringView) };
@@ -95,16 +100,25 @@ unsafe extern "C" fn svc_describe_thunk(
             len: DESCRIBED.len(),
         };
     }
-    AbiError::ok()
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn svc_create_instance(
     this: *const HostContractInterface,
     _args: *const (),
-) -> HostContractInstance {
-    // SAFETY: `this` is the valid interface pointer per the ABI contract.
-    HostContractInstance {
-        data: unsafe { (*this).user_data },
+    out_instance: *mut HostContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: `this` is the valid interface pointer per the ABI contract;
+        // out_instance is non-null (just checked) and writable.
+        unsafe {
+            out_instance.write(HostContractInstance {
+                data: (*this).user_data,
+            })
+        };
     }
 }
 
@@ -314,7 +328,8 @@ fn js_guest_calls_real_host_contract() {
     // SAFETY: dispatch_type is VirtualMachine so the vm union variant is active;
     // args/out match probe's ABI (StringView in, StringView out); null arena
     // selects the host->alloc fallback for arenaAlloc inside the JS guest.
-    let err: AbiError = unsafe {
+    let mut err: AbiError = AbiError::ok();
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -322,6 +337,7 @@ fn js_guest_calls_real_host_contract() {
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
             core::ptr::null_mut(),
+            &mut err as *mut AbiError,
         )
     };
     assert_eq!(

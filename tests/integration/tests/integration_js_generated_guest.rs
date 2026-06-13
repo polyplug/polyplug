@@ -51,6 +51,7 @@ unsafe fn dispatch(
     args: *const (),
     out: *mut (),
 ) -> AbiError {
+    let mut err: AbiError = AbiError::ok();
     unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
@@ -59,8 +60,10 @@ unsafe fn dispatch(
             args,
             out,
             core::ptr::null_mut(),
+            &mut err as *mut AbiError,
         )
-    }
+    };
+    err
 }
 
 #[test]

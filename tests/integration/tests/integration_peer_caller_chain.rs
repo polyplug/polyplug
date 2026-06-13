@@ -141,11 +141,15 @@ local function impl_call(args_ptr, out_ptr)
         out_sv[0] = polyplug_guest.alloc_string_arena("{prefix}NO-PEER")
         return
     end
-    local instance = interface.create_instance(host, nil)
+    local out_instance = ffi.new("GuestContractInstance[1]")
+    interface.create_instance(host, nil, out_instance)
+    local instance = out_instance[0]
     instance.contract_id = PEER_ID
     local in_ptr = ffi.cast("const void*", ffi.cast("uintptr_t", args_ptr))
     local peer_out = ffi.new("StringView[1]")
-    local err = host.call_guest_method(host, instance, 0, in_ptr, ffi.cast("void*", peer_out), nil)
+    local out_err = ffi.new("AbiError[1]")
+    host.call_guest_method(host, instance, 0, in_ptr, ffi.cast("void*", peer_out), nil, out_err)
+    local err = out_err[0]
     interface.destroy_instance(host, instance)
     if err.code ~= 0 then
         out_sv[0] = polyplug_guest.alloc_string_arena("{prefix}ERR")
@@ -190,7 +194,8 @@ fn dispatch(rt: &Runtime, contract: &str, input: &[u8]) -> String {
     let mut out_view: StringView = StringView::null();
     // SAFETY: VM dispatch; args is a *const StringView, out a *mut StringView;
     // null arena selects the host->alloc fallback for the return.
-    let err: AbiError = unsafe {
+    let mut err: AbiError = AbiError::ok();
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -198,6 +203,7 @@ fn dispatch(rt: &Runtime, contract: &str, input: &[u8]) -> String {
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
             core::ptr::null_mut(),
+            &mut err as *mut AbiError,
         )
     };
     assert_eq!(

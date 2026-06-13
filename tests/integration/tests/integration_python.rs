@@ -105,6 +105,7 @@ unsafe fn call_vm_function(
     // duration of this call, so both remain valid. A null arena selects the `host->alloc` fallback
     // for variable-size returns. `fn_id`, `args`, and `out` are forwarded under the caller's
     // invariants (see the call sites).
+    let mut err: AbiError = AbiError::ok();
     unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
@@ -113,8 +114,10 @@ unsafe fn call_vm_function(
             args,
             out,
             core::ptr::null_mut(),
+            &mut err as *mut AbiError,
         )
-    }
+    };
+    err
 }
 
 #[test]

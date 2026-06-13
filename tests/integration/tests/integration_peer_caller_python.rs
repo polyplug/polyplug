@@ -312,7 +312,8 @@ fn python_peer_caller_validate_roundtrip() {
     let mut out_view: StringView = StringView::null();
     // SAFETY: VM dispatch — the vm union is active; args is a *const StringView,
     // out a *mut StringView per transform's ABI; null arena selects host->alloc.
-    let err: AbiError = unsafe {
+    let mut err: AbiError = AbiError::ok();
+    unsafe {
         (interface.dispatch.vm.call)(
             interface.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -320,6 +321,7 @@ fn python_peer_caller_validate_roundtrip() {
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
             core::ptr::null_mut(),
+            &mut err as *mut AbiError,
         )
     };
     assert_eq!(

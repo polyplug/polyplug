@@ -100,7 +100,8 @@ fn js_quickjs_load_bundle_and_call() {
 
     let args: AddArgs = AddArgs { a: 3, b: 5 };
     let mut out: u32 = 0_u32;
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -108,6 +109,7 @@ fn js_quickjs_load_bundle_and_call() {
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
             core::ptr::null_mut(),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -139,8 +141,12 @@ unsafe extern "C" fn arena_stub_register_guest(
     _this: *const HostApi,
     _descriptor: *const PluginDescriptor,
     _interface: *const GuestContractInterface,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn arena_stub_find(
@@ -190,22 +196,38 @@ unsafe extern "C" fn arena_stub_get_deps(_this: *const HostApi) -> Array<Depende
     Array::empty()
 }
 
-unsafe extern "C" fn arena_stub_load(_this: *const HostApi, _p: *const u8, _l: usize) -> AbiError {
-    AbiError::ok()
+unsafe extern "C" fn arena_stub_load(
+    _this: *const HostApi,
+    _p: *const u8,
+    _l: usize,
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn arena_stub_register_host(
     _this: *const HostApi,
     _interface: *const HostContractInterface,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn arena_stub_register_loader(
     _this: *const HostApi,
     _loader: *mut core::ffi::c_void,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn arena_stub_get_last_error(
@@ -227,15 +249,23 @@ unsafe extern "C" fn arena_stub_call_guest_method(
     _args: *const core::ffi::c_void,
     _out: *mut core::ffi::c_void,
     _arena: *mut CallArena,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 unsafe extern "C" fn arena_stub_unload_bundle(
     _this: *const HostApi,
     _bundle_id: BundleId,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 /// Build a HostApi whose allocator counts calls — only `alloc`/`free` are ever
@@ -353,7 +383,8 @@ fn js_quickjs_echo_uses_call_arena() {
             ptr_hi: 0,
             len: 0,
         };
-        let err: AbiError = unsafe {
+        let mut err: AbiError = AbiError::ok();
+        unsafe {
             (vtable.dispatch.vm.call)(
                 vtable.dispatch.vm.loader_data,
                 GuestContractInstance::null(),
@@ -361,6 +392,7 @@ fn js_quickjs_echo_uses_call_arena() {
                 &input_view as *const AbiStringView as *const (),
                 &mut out as *mut AbiStringView as *mut (),
                 &mut arena as *mut CallArena,
+                &mut err as *mut AbiError,
             )
         };
         assert_eq!(
@@ -404,8 +436,12 @@ unsafe extern "C" fn stub_create_guest_instance(
     _this: *const polyplug_abi::HostApi,
     _interface: *const polyplug_abi::GuestContractInterface,
     _args: *const core::ffi::c_void,
-) -> polyplug_abi::GuestContractInstance {
-    polyplug_abi::GuestContractInstance::null()
+    out_instance: *mut polyplug_abi::GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(

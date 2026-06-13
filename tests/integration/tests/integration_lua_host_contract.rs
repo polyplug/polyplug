@@ -62,7 +62,8 @@ unsafe extern "C" fn host_logger_log_thunk(
     _impl_ptr: *const c_void,
     args: *const (),
     _out: *mut (),
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     // SAFETY: per the host.logger ABI, args is a valid *const StringView.
     let message_sv: StringView = unsafe { *(args as *const StringView) };
     let message: String = if message_sv.ptr.is_null() || message_sv.len == 0 {
@@ -73,7 +74,10 @@ unsafe extern "C" fn host_logger_log_thunk(
         String::from_utf8_lossy(slice).into_owned()
     };
     *LOGGED_MESSAGE.lock().expect("LOGGED_MESSAGE poisoned") = Some(message);
-    AbiError::ok()
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 /// `create_instance`: hands back the registrant `user_data` as the instance data
@@ -81,10 +85,16 @@ unsafe extern "C" fn host_logger_log_thunk(
 unsafe extern "C" fn host_logger_create_instance(
     this: *const HostContractInterface,
     _args: *const (),
-) -> HostContractInstance {
-    // SAFETY: `this` is the valid interface pointer per the ABI contract.
-    HostContractInstance {
-        data: unsafe { (*this).user_data },
+    out_instance: *mut HostContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: `this` is the valid interface pointer per the ABI contract;
+        // out_instance is non-null (just checked) and writable.
+        unsafe {
+            out_instance.write(HostContractInstance {
+                data: (*this).user_data,
+            })
+        };
     }
 }
 
@@ -260,7 +270,8 @@ fn lua_guest_calls_real_host_contract() {
 
     // SAFETY: dispatch_type is VirtualMachine, so the vm union variant is active;
     // args/out match transform's ABI; a null arena selects the host->alloc fallback.
-    let err: AbiError = unsafe {
+    let mut err: AbiError = AbiError::ok();
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             polyplug_abi::GuestContractInstance::null(),
@@ -268,6 +279,7 @@ fn lua_guest_calls_real_host_contract() {
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
             core::ptr::null_mut(),
+            &mut err as *mut AbiError,
         )
     };
     assert_eq!(

@@ -138,15 +138,22 @@ fn integration_dotnet_add() {
     let mut out: u32 = 0_u32;
     // SAFETY: fn_ptr is function 0 (add). args/out are correctly typed for the add function.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) =
         // SAFETY: cast to generic dispatch signature; arg types enforced by test (AddArgs matches).
         unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args is a valid AddArgs, out is a valid u32.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -174,15 +181,17 @@ fn integration_dotnet_add_primitive() {
     let mut out: u32 = 0_u32;
     // SAFETY: fn_ptr is function 1 (add_primitive). args/out are correctly typed.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(1) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: same dispatch signature as add; arg types enforced by test.
         unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args and out are valid and correctly typed.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -209,15 +218,17 @@ fn integration_dotnet_version_string() {
     let mut out_view: StringView = StringView::null();
     // SAFETY: fn_ptr is function 2 (version). No arg input needed; pass null.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: same dispatch signature; version takes no args (null input accepted by C# side).
         unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: out_view is a valid StringView allocation on the stack.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             core::ptr::null::<()>(),
             &mut out_view as *mut StringView as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -245,16 +256,18 @@ fn integration_dotnet_reset() {
     // function index 3 = reset() — no args, no meaningful output
     // SAFETY: fn_ptr is function 3 (reset). No args; dummy out is acceptable.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(3) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: same dispatch signature; reset ignores both args and out.
         unsafe { core::mem::transmute(fn_ptr) };
     let mut dummy_out: u32 = 0_u32;
     // SAFETY: null args and dummy_out are safe because reset() ignores both.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             core::ptr::null::<()>(),
             &mut dummy_out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -335,16 +348,18 @@ fn integration_dotnet_guest_log_routes_to_host_logger() {
     // function index 3 = reset() — logs (Info, "guest.csharp_test_adder", ...) and ignores args/out
     // SAFETY: fn_ptr is function 3 (reset). No args; dummy out is acceptable.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(3) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: same dispatch signature; reset ignores both args and out.
         unsafe { core::mem::transmute(fn_ptr) };
     let mut dummy_out: u32 = 0_u32;
     // SAFETY: null args and dummy_out are safe because reset() ignores both.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             core::ptr::null::<()>(),
             &mut dummy_out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(

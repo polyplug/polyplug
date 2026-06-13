@@ -157,9 +157,16 @@ impl TestPeerCaller {
         if interface.is_null() {
             return None;
         }
-        // SAFETY: interface is non-null and valid for the runtime lifetime.
-        let created: GuestContractInstance =
-            unsafe { ((*interface).create_instance)(host, core::ptr::null()) };
+        // SAFETY: interface is non-null and valid for the runtime lifetime; the
+        // instance is written through the trailing out-param.
+        let mut created: GuestContractInstance = GuestContractInstance::null();
+        unsafe {
+            ((*interface).create_instance)(
+                host,
+                core::ptr::null(),
+                &mut created as *mut GuestContractInstance,
+            )
+        };
         // Stamp the peer contract id so `call_guest_method` routes by it — the VM
         // provider's create_instance returns a null-id handle. Mirrors the fix in
         // the generated `peer_callers.rs`.
@@ -197,7 +204,9 @@ impl TestPeerCaller {
             &mut out_val as *mut StringView as *mut core::ffi::c_void;
         // SAFETY: host is non-null (set in resolve()); interface and instance are
         // valid for the runtime lifetime. args_ptr/out_ptr are valid StringView slots.
-        let err: AbiError = unsafe {
+        // The AbiError is written through the trailing out-param.
+        let mut err: AbiError = AbiError::ok();
+        unsafe {
             let iface_api: &HostApi = &*self.host;
             (iface_api.call_guest_method)(
                 self.host,
@@ -206,6 +215,7 @@ impl TestPeerCaller {
                 args_ptr,
                 out_ptr,
                 &mut self.arena as *mut CallArena,
+                &mut err as *mut AbiError,
             )
         };
         if err.code != AbiErrorCode::Ok as u32 {

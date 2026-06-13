@@ -40,8 +40,9 @@ fn register_native_loader(host: *const HostApi) {
     let trait_obj: Box<dyn BundleLoader> = Box::new(NativeLoader::new(Default::default()));
     let loader_ptr: *mut c_void = Box::into_raw(Box::new(trait_obj)) as *mut c_void;
     // SAFETY: host is valid, loader_ptr is a freshly leaked Box<Box<dyn BundleLoader>>
-    // that the runtime takes ownership of.
-    let err = unsafe { ((*host).register_loader)(host, loader_ptr) };
+    // that the runtime takes ownership of; err receives the AbiError out-param.
+    let mut err: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    unsafe { ((*host).register_loader)(host, loader_ptr, &mut err as *mut polyplug_abi::AbiError) };
     assert_eq!(
         err.code,
         polyplug_abi::AbiErrorCode::Ok as u32,
@@ -52,8 +53,17 @@ fn register_native_loader(host: *const HostApi) {
 
 fn load_bundle(host: *const HostApi, dir: &str) -> polyplug_abi::AbiError {
     let bytes: &[u8] = dir.as_bytes();
-    // SAFETY: host is valid; bytes points to `len` valid UTF-8 bytes.
-    unsafe { ((*host).load_bundle)(host, bytes.as_ptr(), bytes.len()) }
+    let mut err: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    // SAFETY: host is valid; bytes points to `len` valid UTF-8 bytes; err receives the out-param.
+    unsafe {
+        ((*host).load_bundle)(
+            host,
+            bytes.as_ptr(),
+            bytes.len(),
+            &mut err as *mut polyplug_abi::AbiError,
+        )
+    };
+    err
 }
 
 #[test]

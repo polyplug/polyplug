@@ -95,9 +95,16 @@ fn native_to_native_cross_call() {
     // Create a real caller instance so it captures the runtime's HostApi pointer.
     let host: *const HostApi = rt.host_abi();
     // SAFETY: `create_instance` is a valid factory pointer; `host` is the
-    // runtime's own 'static HostApi pointer (non-null) per the ABI contract.
-    let caller_instance: GuestContractInstance =
-        unsafe { (caller_iface.create_instance)(host, core::ptr::null()) };
+    // runtime's own 'static HostApi pointer (non-null) per the ABI contract;
+    // the instance is written through the trailing out-param.
+    let mut caller_instance: GuestContractInstance = GuestContractInstance::null();
+    unsafe {
+        (caller_iface.create_instance)(
+            host,
+            core::ptr::null(),
+            &mut caller_instance as *mut GuestContractInstance,
+        )
+    };
     assert!(
         !caller_instance.is_null(),
         "cross.caller create_instance must produce a non-null instance"
@@ -279,9 +286,16 @@ fn cross_call_reresolves_after_reload() {
     // SAFETY: live interface pointer; runtime outlives the borrow.
     let target_iface: &GuestContractInterface = unsafe { &*target_iface_ptr };
     let host: *const HostApi = rt.host_abi();
-    // SAFETY: valid factory; `host` is the runtime's non-null 'static HostApi.
-    let target_instance: GuestContractInstance =
-        unsafe { (target_iface.create_instance)(host, core::ptr::null()) };
+    // SAFETY: valid factory; `host` is the runtime's non-null 'static HostApi;
+    // the instance is written through the trailing out-param.
+    let mut target_instance: GuestContractInstance = GuestContractInstance::null();
+    unsafe {
+        (target_iface.create_instance)(
+            host,
+            core::ptr::null(),
+            &mut target_instance as *mut GuestContractInstance,
+        )
+    };
     assert!(
         !target_instance.is_null(),
         "target instance must be non-null"
@@ -326,9 +340,16 @@ fn cross_call_reresolves_after_reload() {
     let target_iface_ptr_v2: *const GuestContractInterface = resolve_interface(&rt, target_id);
     // SAFETY: live interface pointer post-reload; runtime outlives the borrow.
     let target_iface_v2: &GuestContractInterface = unsafe { &*target_iface_ptr_v2 };
-    // SAFETY: valid factory; `host` is the runtime's non-null 'static HostApi.
-    let target_instance_v2: GuestContractInstance =
-        unsafe { (target_iface_v2.create_instance)(host, core::ptr::null()) };
+    // SAFETY: valid factory; `host` is the runtime's non-null 'static HostApi;
+    // the instance is written through the trailing out-param.
+    let mut target_instance_v2: GuestContractInstance = GuestContractInstance::null();
+    unsafe {
+        (target_iface_v2.create_instance)(
+            host,
+            core::ptr::null(),
+            &mut target_instance_v2 as *mut GuestContractInstance,
+        )
+    };
     assert!(
         !target_instance_v2.is_null(),
         "V2 target instance must be non-null"

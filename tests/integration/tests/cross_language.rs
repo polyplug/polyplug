@@ -115,9 +115,13 @@ unsafe extern "C" fn capture_interface_cb(
     _this: *const HostApi,
     _desc: *const PluginDescriptor,
     interface: *const GuestContractInterface,
-) -> AbiError {
+    out_err: *mut AbiError,
+) {
     CAPTURED_INTERFACE.with(|cell| cell.set(interface));
-    AbiError::ok()
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 // ─── HostApi stub functions for native .so tests ─────────────────────────────
@@ -191,8 +195,12 @@ unsafe extern "C" fn stub_load_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 /// Stub reload_bundle — returns success.
@@ -200,24 +208,36 @@ unsafe extern "C" fn stub_reload_bundle(
     _this: *const HostApi,
     _path: *const u8,
     _path_len: usize,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 /// Stub register_host_contract — returns success.
 unsafe extern "C" fn stub_register_host_contract(
     _this: *const HostApi,
     _interface: *const HostContractInterface,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 /// Stub register_loader — returns success.
 unsafe extern "C" fn stub_register_loader(
     _this: *const HostApi,
     _loader_ptr: *mut core::ffi::c_void,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 /// Stub get_last_error — returns 0 bytes written.
@@ -242,12 +262,23 @@ unsafe extern "C" fn stub_call_guest_method(
     _args: *const core::ffi::c_void,
     _out: *mut core::ffi::c_void,
     _arena: *mut polyplug_abi::CallArena,
-) -> AbiError {
-    AbiError::ok()
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
-unsafe extern "C" fn stub_unload_bundle(_this: *const HostApi, _bundle_id: BundleId) -> AbiError {
-    AbiError::ok()
+unsafe extern "C" fn stub_unload_bundle(
+    _this: *const HostApi,
+    _bundle_id: BundleId,
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -271,7 +302,8 @@ fn dispatch_add_and_verify(interface_ptr: *const GuestContractInterface) {
     // SAFETY: interface_ptr is valid for the call.
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    let result: AbiError = if interface.dispatch_type == DispatchType::Native {
+    let mut result: AbiError = AbiError::ok();
+    if interface.dispatch_type == DispatchType::Native {
         // SAFETY: functions[0] is the add wrapper.
         let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
         // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -279,17 +311,19 @@ fn dispatch_add_and_verify(interface_ptr: *const GuestContractInterface) {
             GuestContractInstance,
             *const (),
             *mut (),
-        ) -> AbiError = unsafe { core::mem::transmute(fn_ptr) };
-        // SAFETY: args valid AddArgs; out valid u32 location.
+            *mut AbiError,
+        ) = unsafe { core::mem::transmute(fn_ptr) };
+        // SAFETY: args valid AddArgs; out valid u32 location; result receives the out-param.
         unsafe {
             dispatch_fn(
                 GuestContractInstance::null(),
                 &args as *const AddArgs as *const (),
                 &mut out as *mut u32 as *mut (),
+                &mut result as *mut AbiError,
             )
         }
     } else {
-        // SAFETY: dispatch_type is VirtualMachine, so .vm is valid.
+        // SAFETY: dispatch_type is VirtualMachine, so .vm is valid; result receives the out-param.
         unsafe {
             (interface.dispatch.vm.call)(
                 interface.dispatch.vm.loader_data,
@@ -298,6 +332,7 @@ fn dispatch_add_and_verify(interface_ptr: *const GuestContractInterface) {
                 &args as *const AddArgs as *const (),
                 &mut out as *mut u32 as *mut (),
                 core::ptr::null_mut(),
+                &mut result as *mut AbiError,
             )
         }
     };
@@ -391,14 +426,20 @@ fn test_rust_host_rust_guest() {
     // SAFETY: functions[0] is the `add` wrapper with signature extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is transmuted to the frozen native dispatch signature; AddArgs matches the add function.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args is a valid AddArgs; out is a valid u32 location; null stateless instance.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -488,14 +529,20 @@ fn test_cpp_host_rust_guest() {
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -585,14 +632,20 @@ fn test_csharp_host_rust_guest() {
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -682,14 +735,20 @@ fn test_python_host_rust_guest() {
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -779,14 +838,20 @@ fn test_lua_host_rust_guest() {
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -876,14 +941,20 @@ fn test_js_host_rust_guest() {
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -979,14 +1050,20 @@ fn test_rust_host_cpp_guest() {
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches cpp_test_add.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -1076,14 +1153,20 @@ fn test_cpp_host_cpp_guest() {
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -1173,14 +1256,20 @@ fn test_csharp_host_cpp_guest() {
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -1270,14 +1359,20 @@ fn test_python_host_cpp_guest() {
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -1367,14 +1462,20 @@ fn test_lua_host_cpp_guest() {
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -1464,14 +1565,20 @@ fn test_js_host_cpp_guest() {
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -1581,14 +1688,20 @@ fn test_csharp_host_csharp_guest() {
     // SAFETY: functions[0] is the add wrapper.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
+    let mut result: AbiError = AbiError::ok();
+    unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
+            &mut result as *mut AbiError,
         )
     };
     assert_eq!(
@@ -2037,8 +2150,12 @@ unsafe extern "C" fn stub_create_guest_instance(
     _this: *const polyplug_abi::HostApi,
     _interface: *const polyplug_abi::GuestContractInterface,
     _args: *const core::ffi::c_void,
-) -> polyplug_abi::GuestContractInstance {
-    polyplug_abi::GuestContractInstance::null()
+    out_instance: *mut polyplug_abi::GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+    }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(

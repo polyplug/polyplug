@@ -146,7 +146,10 @@ local function impl_invoke(args_ptr, out_ptr)
     end
 
     -- Create a peer instance (stateless contract: instance.data may be null).
-    local instance = interface.create_instance(host, nil)
+    -- Out-param ABI: create_instance writes the instance through a trailing pointer.
+    local out_instance = ffi.new("GuestContractInstance[1]")
+    interface.create_instance(host, nil, out_instance)
+    local instance = out_instance[0]
     -- Stamp the peer contract id so call_guest_method routes by it (create_instance
     -- returns a null-id handle for stateless/VM peers). Mirrors generated peer_callers.lua.
     instance.contract_id = TEST_PEER_ID
@@ -156,7 +159,9 @@ local function impl_invoke(args_ptr, out_ptr)
     local out_sv_ptr = ffi.cast("void*", ffi.cast("uintptr_t", out_ptr))
 
     -- Dispatch through call_guest_method (null arena: host-alloc fallback).
-    local err = host.call_guest_method(host, instance, 0, in_sv_ptr, out_sv_ptr, nil)
+    -- Out-param ABI: the AbiError is written through a trailing pointer.
+    local out_err = ffi.new("AbiError[1]")
+    host.call_guest_method(host, instance, 0, in_sv_ptr, out_sv_ptr, nil, out_err)
 
     -- Destroy instance (stateless no-op, but honour the lifecycle).
     interface.destroy_instance(host, instance)
@@ -283,7 +288,8 @@ fn lua_peer_caller_echo_roundtrip() {
     // SAFETY: dispatch_type is VirtualMachine so the vm union is active;
     // args is a *const StringView, out is a *mut StringView (invoke's ABI);
     // null arena falls back to host->alloc for cross-bundle StringView returns.
-    let err: AbiError = unsafe {
+    let mut err: AbiError = AbiError::ok();
+    unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
@@ -291,6 +297,7 @@ fn lua_peer_caller_echo_roundtrip() {
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
             core::ptr::null_mut(),
+            &mut err as *mut AbiError,
         )
     };
     assert_eq!(
