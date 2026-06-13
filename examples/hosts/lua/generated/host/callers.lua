@@ -27,7 +27,7 @@ M.DATA_REPORTER_CONTRACT_ID = DATA_REPORTER_CONTRACT_ID
 M.PIPELINE_VALIDATOR_CONTRACT_ID = PIPELINE_VALIDATOR_CONTRACT_ID
 
 -- Cached FFI types for hot path performance
-local NativeDispatchFnType = ffi.typeof("AbiError (*)(GuestContractInstance, const void*, void*)")
+local NativeDispatchFnType = ffi.typeof("void (*)(GuestContractInstance, const void*, void*, AbiError*)")
 
 -- Methods for PipelineDecoderContract (instance wrapper)
 local PipelineDecoderContract_methods = {
@@ -45,7 +45,9 @@ local PipelineDecoderContract_methods = {
     reset = function(self)
         self:destroy()
         if self._interface ~= nil then
-            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)
+            local new_instance = ffi.new("GuestContractInstance")
+            self._host.create_guest_instance(self._host, self._interface, nil, new_instance)
+            self._instance = new_instance
             self._destroyed = false
         end
     end,
@@ -61,16 +63,17 @@ local PipelineDecoderContract_methods = {
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local err
+        -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+        local err = ffi.new("AbiError")
         if self._interface.dispatch_type == 0 then
             if 0 >= self._interface.dispatch.native.function_count then
                 error("function not available in interface", 2)
             end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
-            err = fn(self._instance, args_ptr, out_ptr)
+            fn(self._instance, args_ptr, out_ptr, err)
         else
-            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil)
+            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -99,7 +102,9 @@ function M.PipelineDecoderContract_create(runtime, host)
     -- guests) return a null handle from create_instance and use it as an opaque
     -- dispatch token. Validity is keyed off the interface pointer, not the instance.
     -- Route creation through the host so the runtime tracks the instance.
-    local instance = host.create_guest_instance(host, interface, nil)
+    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
+    local instance = ffi.new("GuestContractInstance")
+    host.create_guest_instance(host, interface, nil, instance)
     local wrapper = {
         _interface = interface,
         _instance = instance,
@@ -126,7 +131,9 @@ local DataTransformerContract_methods = {
     reset = function(self)
         self:destroy()
         if self._interface ~= nil then
-            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)
+            local new_instance = ffi.new("GuestContractInstance")
+            self._host.create_guest_instance(self._host, self._interface, nil, new_instance)
+            self._instance = new_instance
             self._destroyed = false
         end
     end,
@@ -142,16 +149,17 @@ local DataTransformerContract_methods = {
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local err
+        -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+        local err = ffi.new("AbiError")
         if self._interface.dispatch_type == 0 then
             if 0 >= self._interface.dispatch.native.function_count then
                 error("function not available in interface", 2)
             end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
-            err = fn(self._instance, args_ptr, out_ptr)
+            fn(self._instance, args_ptr, out_ptr, err)
         else
-            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil)
+            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -180,7 +188,9 @@ function M.DataTransformerContract_create(runtime, host)
     -- guests) return a null handle from create_instance and use it as an opaque
     -- dispatch token. Validity is keyed off the interface pointer, not the instance.
     -- Route creation through the host so the runtime tracks the instance.
-    local instance = host.create_guest_instance(host, interface, nil)
+    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
+    local instance = ffi.new("GuestContractInstance")
+    host.create_guest_instance(host, interface, nil, instance)
     local wrapper = {
         _interface = interface,
         _instance = instance,
@@ -207,7 +217,9 @@ local PipelineEncoderContract_methods = {
     reset = function(self)
         self:destroy()
         if self._interface ~= nil then
-            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)
+            local new_instance = ffi.new("GuestContractInstance")
+            self._host.create_guest_instance(self._host, self._interface, nil, new_instance)
+            self._instance = new_instance
             self._destroyed = false
         end
     end,
@@ -223,16 +235,17 @@ local PipelineEncoderContract_methods = {
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local err
+        -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+        local err = ffi.new("AbiError")
         if self._interface.dispatch_type == 0 then
             if 0 >= self._interface.dispatch.native.function_count then
                 error("function not available in interface", 2)
             end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
-            err = fn(self._instance, args_ptr, out_ptr)
+            fn(self._instance, args_ptr, out_ptr, err)
         else
-            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil)
+            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -261,7 +274,9 @@ function M.PipelineEncoderContract_create(runtime, host)
     -- guests) return a null handle from create_instance and use it as an opaque
     -- dispatch token. Validity is keyed off the interface pointer, not the instance.
     -- Route creation through the host so the runtime tracks the instance.
-    local instance = host.create_guest_instance(host, interface, nil)
+    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
+    local instance = ffi.new("GuestContractInstance")
+    host.create_guest_instance(host, interface, nil, instance)
     local wrapper = {
         _interface = interface,
         _instance = instance,
@@ -288,7 +303,9 @@ local DataReporterContract_methods = {
     reset = function(self)
         self:destroy()
         if self._interface ~= nil then
-            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)
+            local new_instance = ffi.new("GuestContractInstance")
+            self._host.create_guest_instance(self._host, self._interface, nil, new_instance)
+            self._instance = new_instance
             self._destroyed = false
         end
     end,
@@ -304,16 +321,17 @@ local DataReporterContract_methods = {
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local err
+        -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+        local err = ffi.new("AbiError")
         if self._interface.dispatch_type == 0 then
             if 0 >= self._interface.dispatch.native.function_count then
                 error("function not available in interface", 2)
             end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
-            err = fn(self._instance, args_ptr, out_ptr)
+            fn(self._instance, args_ptr, out_ptr, err)
         else
-            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil)
+            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -342,7 +360,9 @@ function M.DataReporterContract_create(runtime, host)
     -- guests) return a null handle from create_instance and use it as an opaque
     -- dispatch token. Validity is keyed off the interface pointer, not the instance.
     -- Route creation through the host so the runtime tracks the instance.
-    local instance = host.create_guest_instance(host, interface, nil)
+    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
+    local instance = ffi.new("GuestContractInstance")
+    host.create_guest_instance(host, interface, nil, instance)
     local wrapper = {
         _interface = interface,
         _instance = instance,
@@ -369,7 +389,9 @@ local PipelineValidatorContract_methods = {
     reset = function(self)
         self:destroy()
         if self._interface ~= nil then
-            self._instance = self._host.create_guest_instance(self._host, self._interface, nil)
+            local new_instance = ffi.new("GuestContractInstance")
+            self._host.create_guest_instance(self._host, self._interface, nil, new_instance)
+            self._instance = new_instance
             self._destroyed = false
         end
     end,
@@ -385,16 +407,17 @@ local PipelineValidatorContract_methods = {
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local err
+        -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+        local err = ffi.new("AbiError")
         if self._interface.dispatch_type == 0 then
             if 0 >= self._interface.dispatch.native.function_count then
                 error("function not available in interface", 2)
             end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
-            err = fn(self._instance, args_ptr, out_ptr)
+            fn(self._instance, args_ptr, out_ptr, err)
         else
-            err = self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil)
+            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -423,7 +446,9 @@ function M.PipelineValidatorContract_create(runtime, host)
     -- guests) return a null handle from create_instance and use it as an opaque
     -- dispatch token. Validity is keyed off the interface pointer, not the instance.
     -- Route creation through the host so the runtime tracks the instance.
-    local instance = host.create_guest_instance(host, interface, nil)
+    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
+    local instance = ffi.new("GuestContractInstance")
+    host.create_guest_instance(host, interface, nil, instance)
     local wrapper = {
         _interface = interface,
         _instance = instance,

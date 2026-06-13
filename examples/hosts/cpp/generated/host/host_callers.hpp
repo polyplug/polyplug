@@ -176,7 +176,8 @@ public:
         // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
+        GuestContractInstance instance{};
+        host->create_guest_instance(host, iface, nullptr, &instance);
         return PipelineDecoderContract(iface, instance, host);
     }
 
@@ -236,7 +237,8 @@ public:
         if (instance_.data != nullptr) {
             host_->destroy_guest_instance(host_, interface_, instance_);
         }
-        instance_ = host_->create_guest_instance(host_, interface_, nullptr);
+        instance_ = GuestContractInstance{};
+        host_->create_guest_instance(host_, interface_, nullptr, &instance_);
     }
 
     /// Call `decode` (function_id=0)
@@ -262,14 +264,14 @@ public:
                     static constexpr const char* err_msg = "function not available in interface";
                     polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 35}});
                 }
-                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+                auto fn_ = reinterpret_cast<void(*)(GuestContractInstance, const void*, void*, AbiError*)>(interface_->dispatch.native.functions[0U]);
                 // SAFETY: instance_ is the token returned by create_instance and is valid.
                 // args_ptr/out_ptr match the ABI contract for this function.
-                err = fn_(instance_, args_ptr, out_ptr);
+                fn_(instance_, args_ptr, out_ptr, &err);
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_);
+                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_, &err);
                 break;
             }
         }
@@ -333,7 +335,8 @@ public:
         // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
+        GuestContractInstance instance{};
+        host->create_guest_instance(host, iface, nullptr, &instance);
         return DataTransformerContract(iface, instance, host);
     }
 
@@ -393,7 +396,8 @@ public:
         if (instance_.data != nullptr) {
             host_->destroy_guest_instance(host_, interface_, instance_);
         }
-        instance_ = host_->create_guest_instance(host_, interface_, nullptr);
+        instance_ = GuestContractInstance{};
+        host_->create_guest_instance(host_, interface_, nullptr, &instance_);
     }
 
     /// Call `transform` (function_id=0)
@@ -419,14 +423,14 @@ public:
                     static constexpr const char* err_msg = "function not available in interface";
                     polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 35}});
                 }
-                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+                auto fn_ = reinterpret_cast<void(*)(GuestContractInstance, const void*, void*, AbiError*)>(interface_->dispatch.native.functions[0U]);
                 // SAFETY: instance_ is the token returned by create_instance and is valid.
                 // args_ptr/out_ptr match the ABI contract for this function.
-                err = fn_(instance_, args_ptr, out_ptr);
+                fn_(instance_, args_ptr, out_ptr, &err);
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_);
+                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_, &err);
                 break;
             }
         }
@@ -490,7 +494,8 @@ public:
         // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
+        GuestContractInstance instance{};
+        host->create_guest_instance(host, iface, nullptr, &instance);
         return PipelineEncoderContract(iface, instance, host);
     }
 
@@ -550,7 +555,8 @@ public:
         if (instance_.data != nullptr) {
             host_->destroy_guest_instance(host_, interface_, instance_);
         }
-        instance_ = host_->create_guest_instance(host_, interface_, nullptr);
+        instance_ = GuestContractInstance{};
+        host_->create_guest_instance(host_, interface_, nullptr, &instance_);
     }
 
     /// Call `encode` (function_id=0)
@@ -576,14 +582,14 @@ public:
                     static constexpr const char* err_msg = "function not available in interface";
                     polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 35}});
                 }
-                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+                auto fn_ = reinterpret_cast<void(*)(GuestContractInstance, const void*, void*, AbiError*)>(interface_->dispatch.native.functions[0U]);
                 // SAFETY: instance_ is the token returned by create_instance and is valid.
                 // args_ptr/out_ptr match the ABI contract for this function.
-                err = fn_(instance_, args_ptr, out_ptr);
+                fn_(instance_, args_ptr, out_ptr, &err);
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_);
+                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_, &err);
                 break;
             }
         }
@@ -647,7 +653,8 @@ public:
         // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
+        GuestContractInstance instance{};
+        host->create_guest_instance(host, iface, nullptr, &instance);
         return DataReporterContract(iface, instance, host);
     }
 
@@ -707,7 +714,8 @@ public:
         if (instance_.data != nullptr) {
             host_->destroy_guest_instance(host_, interface_, instance_);
         }
-        instance_ = host_->create_guest_instance(host_, interface_, nullptr);
+        instance_ = GuestContractInstance{};
+        host_->create_guest_instance(host_, interface_, nullptr, &instance_);
     }
 
     /// Call `report` (function_id=0)
@@ -733,14 +741,14 @@ public:
                     static constexpr const char* err_msg = "function not available in interface";
                     polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 35}});
                 }
-                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+                auto fn_ = reinterpret_cast<void(*)(GuestContractInstance, const void*, void*, AbiError*)>(interface_->dispatch.native.functions[0U]);
                 // SAFETY: instance_ is the token returned by create_instance and is valid.
                 // args_ptr/out_ptr match the ABI contract for this function.
-                err = fn_(instance_, args_ptr, out_ptr);
+                fn_(instance_, args_ptr, out_ptr, &err);
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_);
+                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_, &err);
                 break;
             }
         }
@@ -804,7 +812,8 @@ public:
         // Create instance via host-mediated lifecycle so the runtime tracks it.
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
-        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
+        GuestContractInstance instance{};
+        host->create_guest_instance(host, iface, nullptr, &instance);
         return PipelineValidatorContract(iface, instance, host);
     }
 
@@ -864,7 +873,8 @@ public:
         if (instance_.data != nullptr) {
             host_->destroy_guest_instance(host_, interface_, instance_);
         }
-        instance_ = host_->create_guest_instance(host_, interface_, nullptr);
+        instance_ = GuestContractInstance{};
+        host_->create_guest_instance(host_, interface_, nullptr, &instance_);
     }
 
     /// Call `validate` (function_id=0)
@@ -890,14 +900,14 @@ public:
                     static constexpr const char* err_msg = "function not available in interface";
                     polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable), StringView{reinterpret_cast<const uint8_t*>(err_msg), 35}});
                 }
-                auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+                auto fn_ = reinterpret_cast<void(*)(GuestContractInstance, const void*, void*, AbiError*)>(interface_->dispatch.native.functions[0U]);
                 // SAFETY: instance_ is the token returned by create_instance and is valid.
                 // args_ptr/out_ptr match the ABI contract for this function.
-                err = fn_(instance_, args_ptr, out_ptr);
+                fn_(instance_, args_ptr, out_ptr, &err);
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_);
+                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_, &err);
                 break;
             }
         }

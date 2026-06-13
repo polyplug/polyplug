@@ -77,12 +77,12 @@ public:
                     detail::log_call_failure(host_, "guest.host_caller", "HostLoggerContract.log", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));
                     return;
                 }
-                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
-                err = fn_(instance_, args_ptr, out_ptr);
+                auto fn_ = reinterpret_cast<void(*)(HostContractInstance, const void*, void*, AbiError*)>(interface_->dispatch.native.functions[0U]);
+                fn_(instance_, args_ptr, out_ptr, &err);
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, GuestContractInstance{}, 0U, args_ptr, out_ptr, nullptr);
+                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, GuestContractInstance{}, 0U, args_ptr, out_ptr, nullptr, &err);
                 break;
             }
         }
@@ -112,12 +112,12 @@ public:
                     detail::log_call_failure(host_, "guest.host_caller", "HostLoggerContract.log_with_level", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));
                     return;
                 }
-                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[1U]);
-                err = fn_(instance_, args_ptr, out_ptr);
+                auto fn_ = reinterpret_cast<void(*)(HostContractInstance, const void*, void*, AbiError*)>(interface_->dispatch.native.functions[1U]);
+                fn_(instance_, args_ptr, out_ptr, &err);
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, GuestContractInstance{}, 1U, args_ptr, out_ptr, nullptr);
+                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, GuestContractInstance{}, 1U, args_ptr, out_ptr, nullptr, &err);
                 break;
             }
         }

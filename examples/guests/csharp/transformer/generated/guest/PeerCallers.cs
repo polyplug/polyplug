@@ -105,8 +105,9 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
         var resolveFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractHandle, GuestContractInterface*>)host->ResolveGuestContract;
         GuestContractInterface* iface = resolveFn(hostPtr, handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
-        GuestContractInstance inst = createFn(hostPtr, iface, null);
+        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
+        GuestContractInstance inst = default;
+        createFn(hostPtr, iface, null, &inst);
         // Stamp the peer contract id so CallGuestMethod routes by it even when a
         // stateless peer's create_instance returns a null (null-id) handle.
         inst.ContractId = 0x45173A959EEC57C5UL;
@@ -148,10 +149,10 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
             // Dispatch via CallGuestMethod (host-mediated, offset 136 on HostApi).
-            var callFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_host->CallGuestMethod;
-            AbiError err;
+            var callFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_host->CallGuestMethod;
+            AbiError err = default;
             fixed (CallArena* arenaPtr = &_arena) {
-                err = callFn((IntPtr)_host, _instance, 0u, argsPtr, outPtr, arenaPtr);
+                callFn((IntPtr)_host, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
             }
             if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"peer call failed: code={{err.Code}}");

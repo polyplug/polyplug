@@ -11,18 +11,19 @@ namespace Polyplug.Generated;
 
 public static class InterfaceFactories {
 [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static AbiError host_logger_log_thunk(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr) {
+private static unsafe void host_logger_log_thunk(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {
     _ = implPtr;
+    if (outErr == null) return;
     try {
         var impl = s_HostLogger_impl ?? throw new InvalidOperationException("implementation not set");
         var message_sv = Marshal.PtrToStructure<StringView>(argsPtr);
         var message = StringViewHelper.ToString(message_sv);
         impl.Log(message);
         _ = outPtr;
-        return new AbiError { Code = (uint)AbiErrorCode.Ok };
+        *outErr = new AbiError { Code = (uint)AbiErrorCode.Ok };
     } catch (Exception ex) {
         var msg = StringViewHelper.StaticMessage(ex.Message);
-        return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
+        *outErr = new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
     }
 }
 
@@ -33,8 +34,9 @@ private struct HostLoggerLogWithLevelArgs {
 }
 
 [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static AbiError host_logger_log_with_level_thunk(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr) {
+private static unsafe void host_logger_log_with_level_thunk(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {
     _ = implPtr;
+    if (outErr == null) return;
     try {
         var impl = s_HostLogger_impl ?? throw new InvalidOperationException("implementation not set");
         var packed = Marshal.PtrToStructure<HostLoggerLogWithLevelArgs>(argsPtr);
@@ -42,10 +44,10 @@ private static AbiError host_logger_log_with_level_thunk(IntPtr implPtr, IntPtr 
         var message = StringViewHelper.ToString(packed.Message);
         impl.LogWithLevel(ref level, message);
         _ = outPtr;
-        return new AbiError { Code = (uint)AbiErrorCode.Ok };
+        *outErr = new AbiError { Code = (uint)AbiErrorCode.Ok };
     } catch (Exception ex) {
         var msg = StringViewHelper.StaticMessage(ex.Message);
-        return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
+        *outErr = new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
     }
 }
 
@@ -53,9 +55,10 @@ private static IHostLogger? s_HostLogger_impl;
 private static GCHandle s_HostLogger_functionsHandle;
 
 [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static HostContractInstance host_logger_create_instance_stub(IntPtr self, IntPtr args) {
+private static unsafe void host_logger_create_instance_stub(IntPtr self, IntPtr args, HostContractInstance* outInstance) {
     _ = self; _ = args;
-    return new HostContractInstance { Data = IntPtr.Zero };
+    if (outInstance == null) return;
+    *outInstance = new HostContractInstance { Data = IntPtr.Zero };
 }
 
 [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -75,8 +78,8 @@ public static unsafe HostContractInterface CreateHostLoggerInterface<T>(T impl) 
     s_HostLogger_impl = impl;
 
     var functions = new IntPtr[2] {
-        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)&host_logger_log_thunk,
-        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)&host_logger_log_with_level_thunk,
+        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError*, void>)&host_logger_log_thunk,
+        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError*, void>)&host_logger_log_with_level_thunk,
     };
 
     s_HostLogger_functionsHandle = GCHandle.Alloc(functions, GCHandleType.Pinned);
@@ -90,7 +93,7 @@ public static unsafe HostContractInterface CreateHostLoggerInterface<T>(T impl) 
         // The managed implementation lives in a static field (managed references
         // cannot be stored in a raw IntPtr); UserData is unused for this path.
         UserData = IntPtr.Zero,
-        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&host_logger_create_instance_stub,
+        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance*, void>)&host_logger_create_instance_stub,
         DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, HostContractInstance, void>)&host_logger_destroy_instance_stub,
         Dispatch = new DispatchMechanisms {
             Native = new NativeDispatch {
@@ -119,7 +122,7 @@ public static unsafe HostContractInterface CreateHostLoggerInterfaceVm(
         DispatchType = DispatchType.VirtualMachine,
         Runtime = IntPtr.Zero,
         UserData = loaderData,  // registrant-owned VM bridge data
-        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance>)&host_logger_create_instance_stub,
+        CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, HostContractInstance*, void>)&host_logger_create_instance_stub,
         DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, HostContractInstance, void>)&host_logger_destroy_instance_stub,
         Dispatch = new DispatchMechanisms {
             Vm = new VmDispatch {

@@ -22,7 +22,7 @@ cdef_guarded([[
 local M = {}
 
 -- Cached FFI types for hot path performance
-local DispatchFnType = ffi.typeof("AbiError (*)(const void*, const void*, void*)")
+local DispatchFnType = ffi.typeof("void (*)(const void*, const void*, void*, AbiError*)")
 
 -- Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 HostLoggerContract = {}
@@ -64,7 +64,8 @@ function HostLoggerContract:log(message)
     message_view.len = #message_bytes
     local args_ptr = ffi.cast("const void*", message_view)
     local out_ptr = nil
-    local err
+    -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+    local err = ffi.new("AbiError")
     if dispatch_type == 0 then
         if 0 >= interface.dispatch.native.function_count then
             return
@@ -73,10 +74,10 @@ function HostLoggerContract:log(message)
         local impl_ptr = nil
         if self._instance ~= nil then impl_ptr = self._instance.data end
         local fn = ffi.cast(DispatchFnType, fn_ptr)
-        err = fn(impl_ptr, args_ptr, out_ptr)
+        fn(impl_ptr, args_ptr, out_ptr, err)
     elseif dispatch_type == 1 then
         local _null_instance = ffi.new("GuestContractInstance")
-        err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, 0, args_ptr, out_ptr, nil)
+        interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, 0, args_ptr, out_ptr, nil, err)
     else
         return
     end
@@ -98,7 +99,8 @@ function HostLoggerContract:log_with_level(level, message)
     args_val.message.len = #message_bytes
     local args_ptr = ffi.cast("const void*", args_val)
     local out_ptr = nil
-    local err
+    -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+    local err = ffi.new("AbiError")
     if dispatch_type == 0 then
         if 1 >= interface.dispatch.native.function_count then
             return
@@ -107,10 +109,10 @@ function HostLoggerContract:log_with_level(level, message)
         local impl_ptr = nil
         if self._instance ~= nil then impl_ptr = self._instance.data end
         local fn = ffi.cast(DispatchFnType, fn_ptr)
-        err = fn(impl_ptr, args_ptr, out_ptr)
+        fn(impl_ptr, args_ptr, out_ptr, err)
     elseif dispatch_type == 1 then
         local _null_instance = ffi.new("GuestContractInstance")
-        err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, 1, args_ptr, out_ptr, nil)
+        interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, 1, args_ptr, out_ptr, nil, err)
     else
         return
     end

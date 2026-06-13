@@ -74,7 +74,7 @@ public sealed class HostLoggerContract {
             var argsPtr = (IntPtr)(&message_view);
             var outPtr = IntPtr.Zero;
 
-            AbiError err;
+            AbiError err = default;
             switch (contract->DispatchType) {
                 case DispatchType.Native: {
                     if (0u >= contract->Dispatch.Native.FunctionCount) {
@@ -82,13 +82,13 @@ public sealed class HostLoggerContract {
                         return;
                     }
                     var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[0u];
-                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)fnPtr;
-                    err = fn_(_instance, argsPtr, outPtr);
+                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError*, void>)fnPtr;
+                    fn_(_instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
-                    err = vmFn(contract->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, IntPtr.Zero);
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError*, void>)contract->Dispatch.Vm.Call;
+                    vmFn(contract->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, IntPtr.Zero, &err);
                     break;
                 }
                 default:
@@ -121,7 +121,7 @@ public sealed class HostLoggerContract {
             var argsPtr = (IntPtr)(&args);
             var outPtr = IntPtr.Zero;
 
-            AbiError err;
+            AbiError err = default;
             switch (contract->DispatchType) {
                 case DispatchType.Native: {
                     if (1u >= contract->Dispatch.Native.FunctionCount) {
@@ -129,13 +129,13 @@ public sealed class HostLoggerContract {
                         return;
                     }
                     var fnPtr = ((IntPtr*)contract->Dispatch.Native.Functions)[1u];
-                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)fnPtr;
-                    err = fn_(_instance, argsPtr, outPtr);
+                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError*, void>)fnPtr;
+                    fn_(_instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError>)contract->Dispatch.Vm.Call;
-                    err = vmFn(contract->Dispatch.Vm.LoaderData, _instance, 1u, argsPtr, outPtr, IntPtr.Zero);
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError*, void>)contract->Dispatch.Vm.Call;
+                    vmFn(contract->Dispatch.Vm.LoaderData, _instance, 1u, argsPtr, outPtr, IntPtr.Zero, &err);
                     break;
                 }
                 default:

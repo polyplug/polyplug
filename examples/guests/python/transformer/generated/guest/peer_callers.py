@@ -6,6 +6,7 @@ import ctypes
 from typing import Any, Optional
 
 from polyplug_abi import (
+    AbiError,
     AbiErrorCode,
     ArenaOverflowBlock,
     CallArena,
@@ -43,7 +44,7 @@ def _arena_free_all(arena: CallArena, host: ctypes.c_void_p) -> None:
         block = next_block
     arena.first_overflow = None
 
-_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)
+_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 
 # Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 class PipelineValidatorPeer:
@@ -92,7 +93,9 @@ class PipelineValidatorPeer:
             return None
         # A null instance is valid for stateless contracts.
         # Route creation through the host so the runtime tracks the instance.
-        instance: GuestContractInstance = host.contents.create_guest_instance(host_ptr, interface, None)
+        # create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> None.
+        instance: GuestContractInstance = GuestContractInstance()
+        host.contents.create_guest_instance(host_ptr, interface, None, ctypes.byref(instance))
         # Stamp the peer contract id so call_guest_method routes by it even when
         # a stateless peer's create_instance returns a null (null-id) handle.
         instance.contract_id = 0x45173A959EEC57C5
@@ -119,7 +122,8 @@ class PipelineValidatorPeer:
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
         host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))
-        err: Any = host.contents.call_guest_method(self._host_ptr, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
+        err: AbiError = AbiError()
+        host.contents.call_guest_method(self._host_ptr, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError(f"peer call failed (code {err.code})")
         return out_val

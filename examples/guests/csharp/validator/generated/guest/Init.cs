@@ -31,8 +31,9 @@ public static class Plugin {
                     Version = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 };
                 var host = (HostApi*)hostPtr;
-                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterGuestContract;
-                var err_validator = registerFn(hostPtr, &desc_validator, interfacePtr_validator);
+                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError*, void>)host->RegisterGuestContract;
+                AbiError err_validator = default;
+                registerFn(hostPtr, &desc_validator, interfacePtr_validator, &err_validator);
                 if (err_validator.Code != (uint)AbiErrorCode.Ok) return err_validator;
             }
             } finally {

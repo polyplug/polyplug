@@ -27,21 +27,25 @@ struct EncoderInstanceState {
 };
 
 // Create a new instance: calls the author factory and heap-allocates the payload.
-// Returns a null handle when host is null, the factory returns null, or it throws.
-static GuestContractInstance ENCODER_create_instance(const HostApi* host, const void* args) noexcept {
+// Writes a null handle to *out_instance when host is null, the factory returns
+// null, or it throws.
+static void ENCODER_create_instance(const HostApi* host, const void* args, GuestContractInstance* out_instance) noexcept {
     (void)args;  // Contract-specific init args are unused by generated glue.
+    if (out_instance == nullptr) return;
     if (host == nullptr) {
-        return GuestContractInstance{nullptr, 0U};
+        *out_instance = GuestContractInstance{nullptr, 0U};
+        return;
     }
     try {
         PipelineEncoderGuestContract* impl = polyplug_create_encoder(host);
         if (impl == nullptr) {
-            return GuestContractInstance{nullptr, 0U};
+            *out_instance = GuestContractInstance{nullptr, 0U};
+            return;
         }
         auto* state = new EncoderInstanceState{host, impl};
-        return GuestContractInstance{state, ENCODER_CONTRACT_ID};
+        *out_instance = GuestContractInstance{state, ENCODER_CONTRACT_ID};
     } catch (...) {
-        return GuestContractInstance{nullptr, 0U};
+        *out_instance = GuestContractInstance{nullptr, 0U};
     }
 }
 
@@ -58,20 +62,23 @@ static void ENCODER_destroy_instance(const HostApi* host, GuestContractInstance 
 }
 
 // ABI wrapper for encode (function_id = 0)
-inline AbiError encoder_encode_abi(GuestContractInstance instance, const void* args, void* out) noexcept {
+inline void encoder_encode_abi(GuestContractInstance instance, const void* args, void* out, AbiError* out_err) noexcept {
     if (instance.data == nullptr) {
         static constexpr const char* null_inst_msg = "instance is null";
-        return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(null_inst_msg), 16}};
+        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(null_inst_msg), 16}};
+        return;
     }
     // SAFETY: instance.data was produced by create_instance and stays valid
     // until destroy_instance; the host never mutates it.
     const auto* state = static_cast<const EncoderInstanceState*>(instance.data);
     try {
         if (args == nullptr) {
-            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
+            *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
+            return;
         }
         if (out == nullptr) {
-            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
+            *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
+            return;
         }
         // SAFETY: args is a valid const void* pointing to a StringView per ABI contract.
 // The host guarantees proper alignment and size before calling this wrapper.
@@ -79,18 +86,21 @@ auto result = state->impl->encode(*static_cast<const StringView*>(args));
         // SAFETY: out is a valid void* pointing to a StringView per ABI contract.
         // The host guarantees proper alignment and size before calling this wrapper.
         *static_cast<StringView*>(out) = result;
-        return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+        return;
     } catch (const std::exception&) {
         // The AbiError message must outlive this stack frame; the host never frees it.
         // e.what() points into the (about-to-be-destroyed) exception object, so we
         // return a static literal instead of a dangling pointer.
         // SAFETY: err_msg is a static constexpr string literal with known length 26.
         static constexpr const char* err_msg = "guest threw std::exception";
-        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 26}};
+        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 26}};
+        return;
     } catch (...) {
         // SAFETY: panic_msg is a static constexpr string literal with known length 15.
         static constexpr const char* panic_msg = "plugin panicked";
-        return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};
+        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};
+        return;
     }
 }
 

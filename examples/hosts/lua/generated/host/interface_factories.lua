@@ -25,8 +25,8 @@ cdef_guarded([[
     typedef struct PolyplugLuaHostDispatchBridge {
         PolyplugLuaHostDispatchCallback callback;
     } PolyplugLuaHostDispatchBridge;
-    AbiError polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*);
-    HostContractInstance polyplug_lua_host_create_instance(const HostContractInterface*, const void*);
+    void polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);
+    void polyplug_lua_host_create_instance(const HostContractInterface*, const void*, HostContractInstance*);
     void polyplug_lua_host_destroy_instance(const HostContractInterface*, HostContractInstance);
 ]])
 

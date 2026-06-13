@@ -28,24 +28,26 @@ public static class TransformerInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static GuestContractInstance TRANSFORMER_CreateInstance(IntPtr host, IntPtr args) {
+    private static unsafe void TRANSFORMER_CreateInstance(IntPtr host, IntPtr args, GuestContractInstance* outInstance) {
         // Calls the author factory and carries the payload in instance.Data as a
         // normal (non-pinned) GCHandle — an opaque token the host never
-        // dereferences. Returns a null handle when host is null, the factory
+        // dereferences. Writes a null handle when host is null, the factory
         // was not registered, or it throws.
+        if (outInstance == null) return;
         try {
             var factory = _factory_transformer;
             if (host == IntPtr.Zero || factory is null) {
-                return new GuestContractInstance { Data = IntPtr.Zero };
+                *outInstance = new GuestContractInstance { Data = IntPtr.Zero };
+                return;
             }
             var state = new TransformerInstanceState { Host = host, Impl = factory(host) };
             var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);
-            return new GuestContractInstance {
+            *outInstance = new GuestContractInstance {
                 Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),
                 ContractId = TRANSFORMER_CONTRACT_ID,
             };
         } catch {
-            return new GuestContractInstance { Data = IntPtr.Zero };
+            *outInstance = new GuestContractInstance { Data = IntPtr.Zero };
         }
     }
 
@@ -62,31 +64,38 @@ public static class TransformerInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static unsafe AbiError transformer_transform_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
+    private static unsafe void transformer_transform_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {
+        if (outErr == null) return;
         try {
             if (instance.Data == IntPtr.Zero) {
-                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage("instance is null") };
+                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage("instance is null") };
+                return;
             }
             if (argsPtr == IntPtr.Zero) {
-                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+                return;
             }
             if (outPtr == IntPtr.Zero) {
-                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+                return;
             }
             // instance.Data is the GCHandle token produced by CreateInstance.
-            var state = (TransformerInstanceState?)System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Target
-                ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.InvalidPointer, "instance payload collected");
+            var state = (TransformerInstanceState?)System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Target;
+            if (state is null) {
+                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage("instance payload collected") };
+                return;
+            }
             var impl = state.Impl;
             var input = *(Polyplug.Abi.StringView*)argsPtr;
             var result = impl.Transform(input);
             *(Polyplug.Abi.StringView*)outPtr = result;
-            return new AbiError { Code = (uint)AbiErrorCode.Ok };
+            *outErr = new AbiError { Code = (uint)AbiErrorCode.Ok };
         } catch (Polyplug.Guest.GuestException ex) {
             var msg = StringViewHelper.StaticMessage(ex.Message);
-            return new AbiError { Code = ex.Code, Message = msg };
+            *outErr = new AbiError { Code = ex.Code, Message = msg };
         } catch {
             var msg = StringViewHelper.StaticMessage("plugin panicked");
-            return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
+            *outErr = new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
         }
     }
 
@@ -97,14 +106,14 @@ public static class TransformerInterfaces {
     static TransformerInterfaces() {
         unsafe {
             TRANSFORMER_FNS = new IntPtr[] {
-                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError>)&transformer_transform_abi,
+                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&transformer_transform_abi,
             };
             _TRANSFORMER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(TRANSFORMER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
             TRANSFORMER_INTERFACE = new GuestContractInterface {
                 ContractId = TRANSFORMER_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
-                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&TRANSFORMER_CreateInstance,
+                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance*, void>)&TRANSFORMER_CreateInstance,
                 DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&TRANSFORMER_DestroyInstance,
                 Dispatch = new DispatchMechanisms {
                     Native = new NativeDispatch {

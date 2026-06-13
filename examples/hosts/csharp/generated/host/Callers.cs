@@ -101,8 +101,9 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
-        var inst = createFn(host, iface, null);
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
+        GuestContractInstance inst = default;
+        createFn(host, iface, null, &inst);
         return new PipelineDecoderContractCaller(iface, inst, host);
     }
 
@@ -114,7 +115,9 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)(_host, _interface, null);
+        GuestContractInstance newInst = default;
+        ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)(_host, _interface, null, &newInst);
+        _instance = newInst;
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
@@ -148,7 +151,7 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err;
+            AbiError err = default;
             switch (_interface->DispatchType) {
                 case DispatchType.Native: {
                     if (0u >= _interface->Dispatch.Native.FunctionCount) {
@@ -156,14 +159,14 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
                     }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
-                    err = dispatch(_instance, argsPtr, outPtr);
+                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
+                    dispatch(_instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
                     fixed (CallArena* arenaPtr = &_arena) {
-                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr);
+                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
                     }
                     break;
                 }
@@ -215,8 +218,9 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
-        var inst = createFn(host, iface, null);
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
+        GuestContractInstance inst = default;
+        createFn(host, iface, null, &inst);
         return new DataTransformerContractCaller(iface, inst, host);
     }
 
@@ -228,7 +232,9 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)(_host, _interface, null);
+        GuestContractInstance newInst = default;
+        ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)(_host, _interface, null, &newInst);
+        _instance = newInst;
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
@@ -262,7 +268,7 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err;
+            AbiError err = default;
             switch (_interface->DispatchType) {
                 case DispatchType.Native: {
                     if (0u >= _interface->Dispatch.Native.FunctionCount) {
@@ -270,14 +276,14 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
                     }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
-                    err = dispatch(_instance, argsPtr, outPtr);
+                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
+                    dispatch(_instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
                     fixed (CallArena* arenaPtr = &_arena) {
-                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr);
+                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
                     }
                     break;
                 }
@@ -329,8 +335,9 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
-        var inst = createFn(host, iface, null);
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
+        GuestContractInstance inst = default;
+        createFn(host, iface, null, &inst);
         return new PipelineEncoderContractCaller(iface, inst, host);
     }
 
@@ -342,7 +349,9 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)(_host, _interface, null);
+        GuestContractInstance newInst = default;
+        ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)(_host, _interface, null, &newInst);
+        _instance = newInst;
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
@@ -376,7 +385,7 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err;
+            AbiError err = default;
             switch (_interface->DispatchType) {
                 case DispatchType.Native: {
                     if (0u >= _interface->Dispatch.Native.FunctionCount) {
@@ -384,14 +393,14 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
                     }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
-                    err = dispatch(_instance, argsPtr, outPtr);
+                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
+                    dispatch(_instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
                     fixed (CallArena* arenaPtr = &_arena) {
-                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr);
+                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
                     }
                     break;
                 }
@@ -443,8 +452,9 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
-        var inst = createFn(host, iface, null);
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
+        GuestContractInstance inst = default;
+        createFn(host, iface, null, &inst);
         return new DataReporterContractCaller(iface, inst, host);
     }
 
@@ -456,7 +466,9 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)(_host, _interface, null);
+        GuestContractInstance newInst = default;
+        ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)(_host, _interface, null, &newInst);
+        _instance = newInst;
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
@@ -490,7 +502,7 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err;
+            AbiError err = default;
             switch (_interface->DispatchType) {
                 case DispatchType.Native: {
                     if (0u >= _interface->Dispatch.Native.FunctionCount) {
@@ -498,14 +510,14 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
                     }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
-                    err = dispatch(_instance, argsPtr, outPtr);
+                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
+                    dispatch(_instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
                     fixed (CallArena* arenaPtr = &_arena) {
-                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr);
+                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
                     }
                     break;
                 }
@@ -557,8 +569,9 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
         var host = (HostApi*)rt.HostHandle;
         var iface = (GuestContractInterface*)rt.ResolveGuestContract(handle);
         if (iface == null) { return null; }
-        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance;
-        var inst = createFn(host, iface, null);
+        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
+        GuestContractInstance inst = default;
+        createFn(host, iface, null, &inst);
         return new PipelineValidatorContractCaller(iface, inst, host);
     }
 
@@ -570,7 +583,9 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
-        _instance = ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)_host->CreateGuestInstance)(_host, _interface, null);
+        GuestContractInstance newInst = default;
+        ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)(_host, _interface, null, &newInst);
+        _instance = newInst;
     }
 
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
@@ -604,7 +619,7 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err;
+            AbiError err = default;
             switch (_interface->DispatchType) {
                 case DispatchType.Native: {
                     if (0u >= _interface->Dispatch.Native.FunctionCount) {
@@ -612,14 +627,14 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
                     }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
-                    err = dispatch(_instance, argsPtr, outPtr);
+                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
+                    dispatch(_instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError>)_interface->Dispatch.Vm.Call;
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
                     fixed (CallArena* arenaPtr = &_arena) {
-                        err = vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr);
+                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
                     }
                     break;
                 }

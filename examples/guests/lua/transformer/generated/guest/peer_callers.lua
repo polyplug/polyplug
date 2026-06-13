@@ -30,7 +30,9 @@ function PipelineValidatorPeer.resolve()
         return nil
     end
     -- Route creation through the host so the runtime tracks the instance.
-    local instance = host.create_guest_instance(host, interface, nil)
+    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
+    local instance = ffi.new("GuestContractInstance")
+    host.create_guest_instance(host, interface, nil, instance)
     -- Stamp the peer contract id so call_guest_method routes by it even when a
     -- stateless peer's create_instance returns a null (null-id) handle.
     instance.contract_id = 0x45173A959EEC57C5ULL
@@ -54,14 +56,15 @@ function PipelineValidatorPeer:validate(input)
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-    local err
+    -- Out-param ABI: call_guest_method writes the AbiError through a trailing pointer.
+    local err = ffi.new("AbiError")
     if dispatch_type == 0 then
         if 0 >= interface.dispatch.native.function_count then
             return nil
         end
-        err = self._host.call_guest_method(self._host, self._instance, 0, args_ptr, out_ptr, nil)
+        self._host.call_guest_method(self._host, self._instance, 0, args_ptr, out_ptr, nil, err)
     elseif dispatch_type == 1 then
-        err = self._host.call_guest_method(self._host, self._instance, 0, args_ptr, out_ptr, nil)
+        self._host.call_guest_method(self._host, self._instance, 0, args_ptr, out_ptr, nil, err)
     else
         return nil
     end

@@ -24,7 +24,8 @@ extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* 
         { (const uint8_t*)"data.Reporter@1", 15U },  // contract_name (StringView)
         { 1U, 0U, 0U }  // version (Version)
     };
-    AbiError err_REPORTER = host->register_guest_contract(host, &desc_REPORTER, &polyplug_plugin::REPORTER_INTERFACE);
+    AbiError err_REPORTER{};
+    host->register_guest_contract(host, &desc_REPORTER, &polyplug_plugin::REPORTER_INTERFACE, &err_REPORTER);
     if (err_REPORTER.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return err_REPORTER;
 
     return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};

@@ -59,8 +59,8 @@ class _AbiError(ctypes.Structure):
         ('message_len', ctypes.c_size_t),
     ]
 
-_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)
-_DISPATCH_FN_TYPE: TypeAlias = Callable[[GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p], _AbiError]
+_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_DISPATCH_FN_TYPE: TypeAlias = Callable[[GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], None]
 
 class PipelineDecoderContractCaller:
     """Host caller for contract `pipeline.Decoder` with instance lifecycle management.
@@ -96,7 +96,8 @@ class PipelineDecoderContractCaller:
         # it. A null instance is valid: stateless contracts return a null
         # handle and use it as an opaque dispatch token. Validity is keyed off
         # the interface pointer, never off instance data.
-        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)
+        self._instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))
         self._host: ctypes.c_void_p = host
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
@@ -157,7 +158,8 @@ class PipelineDecoderContractCaller:
         """Destroy current instance and create a new one (host-mediated)."""
         host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
         host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
-        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)
+        self._instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(self._host, self._interface, None, ctypes.byref(self._instance))
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -174,7 +176,8 @@ class PipelineDecoderContractCaller:
         # SAFETY: the interface pointer is valid for the wrapper lifetime.
         iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
         interface: GuestContractInterface = iface_ptr.contents
-        err: Any
+        # Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+        err: _AbiError = _AbiError()
         if interface.dispatch_type == DispatchType.Native:
             if 0 >= interface.dispatch.native.function_count:
                 raise ContractError("function not available in interface", AbiErrorCode.FunctionNotAvailable)
@@ -183,11 +186,11 @@ class PipelineDecoderContractCaller:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
             # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-            err = dispatch_fn(self._instance, args_ptr, out_ptr)
+            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
             # are valid per the ABI contract. The arena was reset at call start.
-            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
+            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
@@ -227,7 +230,8 @@ class DataTransformerContractCaller:
         # it. A null instance is valid: stateless contracts return a null
         # handle and use it as an opaque dispatch token. Validity is keyed off
         # the interface pointer, never off instance data.
-        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)
+        self._instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))
         self._host: ctypes.c_void_p = host
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
@@ -288,7 +292,8 @@ class DataTransformerContractCaller:
         """Destroy current instance and create a new one (host-mediated)."""
         host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
         host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
-        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)
+        self._instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(self._host, self._interface, None, ctypes.byref(self._instance))
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -305,7 +310,8 @@ class DataTransformerContractCaller:
         # SAFETY: the interface pointer is valid for the wrapper lifetime.
         iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
         interface: GuestContractInterface = iface_ptr.contents
-        err: Any
+        # Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+        err: _AbiError = _AbiError()
         if interface.dispatch_type == DispatchType.Native:
             if 0 >= interface.dispatch.native.function_count:
                 raise ContractError("function not available in interface", AbiErrorCode.FunctionNotAvailable)
@@ -314,11 +320,11 @@ class DataTransformerContractCaller:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
             # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-            err = dispatch_fn(self._instance, args_ptr, out_ptr)
+            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
             # are valid per the ABI contract. The arena was reset at call start.
-            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
+            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
@@ -358,7 +364,8 @@ class PipelineEncoderContractCaller:
         # it. A null instance is valid: stateless contracts return a null
         # handle and use it as an opaque dispatch token. Validity is keyed off
         # the interface pointer, never off instance data.
-        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)
+        self._instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))
         self._host: ctypes.c_void_p = host
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
@@ -419,7 +426,8 @@ class PipelineEncoderContractCaller:
         """Destroy current instance and create a new one (host-mediated)."""
         host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
         host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
-        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)
+        self._instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(self._host, self._interface, None, ctypes.byref(self._instance))
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -436,7 +444,8 @@ class PipelineEncoderContractCaller:
         # SAFETY: the interface pointer is valid for the wrapper lifetime.
         iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
         interface: GuestContractInterface = iface_ptr.contents
-        err: Any
+        # Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+        err: _AbiError = _AbiError()
         if interface.dispatch_type == DispatchType.Native:
             if 0 >= interface.dispatch.native.function_count:
                 raise ContractError("function not available in interface", AbiErrorCode.FunctionNotAvailable)
@@ -445,11 +454,11 @@ class PipelineEncoderContractCaller:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
             # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-            err = dispatch_fn(self._instance, args_ptr, out_ptr)
+            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
             # are valid per the ABI contract. The arena was reset at call start.
-            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
+            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
@@ -489,7 +498,8 @@ class DataReporterContractCaller:
         # it. A null instance is valid: stateless contracts return a null
         # handle and use it as an opaque dispatch token. Validity is keyed off
         # the interface pointer, never off instance data.
-        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)
+        self._instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))
         self._host: ctypes.c_void_p = host
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
@@ -550,7 +560,8 @@ class DataReporterContractCaller:
         """Destroy current instance and create a new one (host-mediated)."""
         host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
         host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
-        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)
+        self._instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(self._host, self._interface, None, ctypes.byref(self._instance))
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -567,7 +578,8 @@ class DataReporterContractCaller:
         # SAFETY: the interface pointer is valid for the wrapper lifetime.
         iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
         interface: GuestContractInterface = iface_ptr.contents
-        err: Any
+        # Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+        err: _AbiError = _AbiError()
         if interface.dispatch_type == DispatchType.Native:
             if 0 >= interface.dispatch.native.function_count:
                 raise ContractError("function not available in interface", AbiErrorCode.FunctionNotAvailable)
@@ -576,11 +588,11 @@ class DataReporterContractCaller:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
             # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-            err = dispatch_fn(self._instance, args_ptr, out_ptr)
+            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
             # are valid per the ABI contract. The arena was reset at call start.
-            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
+            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
@@ -620,7 +632,8 @@ class PipelineValidatorContractCaller:
         # it. A null instance is valid: stateless contracts return a null
         # handle and use it as an opaque dispatch token. Validity is keyed off
         # the interface pointer, never off instance data.
-        self._instance: GuestContractInstance = host_iface.contents.create_guest_instance(host, self._interface, None)
+        self._instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))
         self._host: ctypes.c_void_p = host
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
@@ -681,7 +694,8 @@ class PipelineValidatorContractCaller:
         """Destroy current instance and create a new one (host-mediated)."""
         host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
         host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
-        self._instance = host_iface.contents.create_guest_instance(self._host, self._interface, None)
+        self._instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(self._host, self._interface, None, ctypes.byref(self._instance))
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -698,7 +712,8 @@ class PipelineValidatorContractCaller:
         # SAFETY: the interface pointer is valid for the wrapper lifetime.
         iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
         interface: GuestContractInterface = iface_ptr.contents
-        err: Any
+        # Out-param ABI: dispatch writes the AbiError through a trailing pointer.
+        err: _AbiError = _AbiError()
         if interface.dispatch_type == DispatchType.Native:
             if 0 >= interface.dispatch.native.function_count:
                 raise ContractError("function not available in interface", AbiErrorCode.FunctionNotAvailable)
@@ -707,11 +722,11 @@ class PipelineValidatorContractCaller:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
             # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-            err = dispatch_fn(self._instance, args_ptr, out_ptr)
+            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
             # are valid per the ABI contract. The arena was reset at call start.
-            err = interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena))
+            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val

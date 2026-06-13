@@ -197,7 +197,8 @@ public:
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         // Route creation through the host so the runtime tracks the instance.
-        GuestContractInstance instance = host->create_guest_instance(host, iface, nullptr);
+        GuestContractInstance instance{};
+        host->create_guest_instance(host, iface, nullptr, &instance);
         // Stamp the peer contract id so `host->call_guest_method` routes by it
         // even when a stateless peer's create_instance returns a null (null-id)
         // handle. The host-mediated path keys routing on contract_id.
@@ -270,7 +271,8 @@ public:
         // SAFETY: host_ is non-null (set in resolve()); iface_ and instance_
         // are valid for the lifetime of this wrapper. args_ptr/out_ptr match
         // the ABI contract for this function.
-        AbiError err = host_->call_guest_method(host_, instance_, 0U, args_ptr, out_ptr, &arena_);
+        AbiError err{};
+        host_->call_guest_method(host_, instance_, 0U, args_ptr, out_ptr, &arena_, &err);
         if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             detail::log_call_failure(host_, "guest.peer_caller", "PipelineValidatorContractPeer.validate", err.code);
             return StringView{};

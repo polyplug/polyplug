@@ -9,7 +9,7 @@ from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, GuestCont
 
 from guest.types import LogLevel
 
-_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 
 # Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 class HostLoggerContract:
@@ -42,15 +42,15 @@ class HostLoggerContract:
         message_view: StringView = StringView(ptr=ctypes.cast(ctypes.c_char_p(message_bytes), ctypes.c_void_p), len=len(message_bytes))
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(message_view), ctypes.c_void_p)
         out_ptr: ctypes.c_void_p = ctypes.c_void_p()
-        err: AbiError
+        err: AbiError = AbiError()
         if dispatch_type == DispatchType.Native:
             if 0 >= iface.dispatch.native.function_count:
                 return
             fn_ptr: int = ctypes.cast(iface.dispatch.native.functions + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-            err = dispatch_fn(self._instance.data, args_ptr, out_ptr)
+            dispatch_fn(self._instance.data, args_ptr, out_ptr, ctypes.byref(err))
         elif dispatch_type == DispatchType.VirtualMachine:
-            err = iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), 0, args_ptr, out_ptr, None)
+            iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), 0, args_ptr, out_ptr, None, ctypes.byref(err))
         else:
             return
         if err.code != AbiErrorCode.Ok:
@@ -72,15 +72,15 @@ class HostLoggerContract:
         args_val.message = StringView(ptr=ctypes.cast(ctypes.c_char_p(message_bytes), ctypes.c_void_p), len=len(message_bytes))
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(args_val), ctypes.c_void_p)
         out_ptr: ctypes.c_void_p = ctypes.c_void_p()
-        err: AbiError
+        err: AbiError = AbiError()
         if dispatch_type == DispatchType.Native:
             if 1 >= iface.dispatch.native.function_count:
                 return
             fn_ptr: int = ctypes.cast(iface.dispatch.native.functions + 1 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-            err = dispatch_fn(self._instance.data, args_ptr, out_ptr)
+            dispatch_fn(self._instance.data, args_ptr, out_ptr, ctypes.byref(err))
         elif dispatch_type == DispatchType.VirtualMachine:
-            err = iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), 1, args_ptr, out_ptr, None)
+            iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), 1, args_ptr, out_ptr, None, ctypes.byref(err))
         else:
             return
         if err.code != AbiErrorCode.Ok:

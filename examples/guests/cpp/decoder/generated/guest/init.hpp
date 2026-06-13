@@ -24,7 +24,8 @@ extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* 
         { (const uint8_t*)"pipeline.Decoder@1", 18U },  // contract_name (StringView)
         { 1U, 0U, 0U }  // version (Version)
     };
-    AbiError err_DECODER = host->register_guest_contract(host, &desc_DECODER, &polyplug_plugin::DECODER_INTERFACE);
+    AbiError err_DECODER{};
+    host->register_guest_contract(host, &desc_DECODER, &polyplug_plugin::DECODER_INTERFACE, &err_DECODER);
     if (err_DECODER.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return err_DECODER;
 
     return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};

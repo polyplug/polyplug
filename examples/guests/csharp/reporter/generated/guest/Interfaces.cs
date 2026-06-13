@@ -28,24 +28,26 @@ public static class ReporterInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static GuestContractInstance REPORTER_CreateInstance(IntPtr host, IntPtr args) {
+    private static unsafe void REPORTER_CreateInstance(IntPtr host, IntPtr args, GuestContractInstance* outInstance) {
         // Calls the author factory and carries the payload in instance.Data as a
         // normal (non-pinned) GCHandle — an opaque token the host never
-        // dereferences. Returns a null handle when host is null, the factory
+        // dereferences. Writes a null handle when host is null, the factory
         // was not registered, or it throws.
+        if (outInstance == null) return;
         try {
             var factory = _factory_reporter;
             if (host == IntPtr.Zero || factory is null) {
-                return new GuestContractInstance { Data = IntPtr.Zero };
+                *outInstance = new GuestContractInstance { Data = IntPtr.Zero };
+                return;
             }
             var state = new ReporterInstanceState { Host = host, Impl = factory(host) };
             var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);
-            return new GuestContractInstance {
+            *outInstance = new GuestContractInstance {
                 Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),
                 ContractId = REPORTER_CONTRACT_ID,
             };
         } catch {
-            return new GuestContractInstance { Data = IntPtr.Zero };
+            *outInstance = new GuestContractInstance { Data = IntPtr.Zero };
         }
     }
 
@@ -62,31 +64,38 @@ public static class ReporterInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static unsafe AbiError reporter_report_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
+    private static unsafe void reporter_report_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {
+        if (outErr == null) return;
         try {
             if (instance.Data == IntPtr.Zero) {
-                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage("instance is null") };
+                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage("instance is null") };
+                return;
             }
             if (argsPtr == IntPtr.Zero) {
-                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+                return;
             }
             if (outPtr == IntPtr.Zero) {
-                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
+                return;
             }
             // instance.Data is the GCHandle token produced by CreateInstance.
-            var state = (ReporterInstanceState?)System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Target
-                ?? throw new Polyplug.Guest.GuestException((uint)AbiErrorCode.InvalidPointer, "instance payload collected");
+            var state = (ReporterInstanceState?)System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Target;
+            if (state is null) {
+                *outErr = new AbiError { Code = (uint)AbiErrorCode.InvalidPointer, Message = StringViewHelper.StaticMessage("instance payload collected") };
+                return;
+            }
             var impl = state.Impl;
             var input = *(Polyplug.Abi.StringView*)argsPtr;
             var result = impl.Report(input);
             *(Polyplug.Abi.StringView*)outPtr = result;
-            return new AbiError { Code = (uint)AbiErrorCode.Ok };
+            *outErr = new AbiError { Code = (uint)AbiErrorCode.Ok };
         } catch (Polyplug.Guest.GuestException ex) {
             var msg = StringViewHelper.StaticMessage(ex.Message);
-            return new AbiError { Code = ex.Code, Message = msg };
+            *outErr = new AbiError { Code = ex.Code, Message = msg };
         } catch {
             var msg = StringViewHelper.StaticMessage("plugin panicked");
-            return new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
+            *outErr = new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };
         }
     }
 
@@ -97,14 +106,14 @@ public static class ReporterInterfaces {
     static ReporterInterfaces() {
         unsafe {
             REPORTER_FNS = new IntPtr[] {
-                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError>)&reporter_report_abi,
+                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&reporter_report_abi,
             };
             _REPORTER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(REPORTER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
             REPORTER_INTERFACE = new GuestContractInterface {
                 ContractId = REPORTER_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
-                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&REPORTER_CreateInstance,
+                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance*, void>)&REPORTER_CreateInstance,
                 DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&REPORTER_DestroyInstance,
                 Dispatch = new DispatchMechanisms {
                     Native = new NativeDispatch {
