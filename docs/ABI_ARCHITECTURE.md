@@ -212,3 +212,20 @@ two layers that **both run in CI and locally**:
    is no pinned environment (no nix/devcontainer); the floor is version-
    independent and the ceiling targets latest. As of 2026-06: .NET SDK 10.x,
    Python 3.14.x, Deno 2.8.x, GCC 15.x, QuickJS-ng 0.15.x, LuaJIT `v2.1` tip.
+
+### Canonical ABI struct shapes
+
+Beyond function-pointer signatures, the validator also pins the canonical ABI
+**structs** — `StringView`, `AbiError`, `Version`, `Array`, `Buffer`,
+`ArenaOverflowBlock`, `CallArena`, `GuestContractInstance`, and
+`BundleInitContext` — across every language mirror. For each it enforces the
+golden field-name set *and* the golden declaration order (the proxy for ABI
+layout), keyed off `sdk_validator.yaml`'s `structs:` / `struct_targets:`
+sections. Each mirror's native field spelling (C# PascalCase, etc.) is
+normalized back to snake before comparison, so the check is convention-agnostic.
+As with enums, the rust ABI source is listed as a target for each struct, so
+the yaml golden set cannot silently disagree with the real types. Pinning the
+`AbiError` shape (`{ code, message }`) is the validator's enforcement of the
+out-param ABI's type foundation: a mirror cannot quietly change `AbiError`'s
+layout. The out-param *convention* on the function pointers themselves remains
+runtime-proven by the lua-cdef floor and the `just verify-abi` ceiling above.

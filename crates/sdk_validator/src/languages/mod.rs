@@ -391,10 +391,13 @@ pub fn validate_language_enum(
 ///
 /// Every golden field must be present in EVERY target file, in declaration
 /// order, and the struct construct must not declare any field outside the
-/// golden set (a stale field is drift). The configured naming convention
-/// transforms each canonical snake_case field into the language's native
-/// spelling before probing; leading-underscore padding/marker fields are
-/// skipped (neither missing nor extra).
+/// golden set (a stale field is drift). Comparison is convention-agnostic:
+/// each native field name is normalized back to snake_case (so C#'s
+/// `ContractId` and Rust's `contract_id` both reduce to the golden
+/// `contract_id`) and compared to the golden snake field directly. This
+/// avoids coupling the struct check to a method-level naming map — JS struct
+/// fields are snake_case even though JS methods are camelCase. Leading-
+/// underscore padding/marker fields are skipped (neither missing nor extra).
 ///
 /// # Errors
 ///
@@ -403,7 +406,6 @@ pub fn validate_language_enum(
 pub fn validate_language_struct(
     validator: &mut dyn LanguageValidator,
     runner: &AstGrepRunner,
-    naming: NamingConvention,
     struct_name: &str,
     golden_fields: &[String],
     target_files: &[PathBuf],
@@ -426,44 +428,53 @@ pub fn validate_language_struct(
         }
     }
 
-    let golden_native: Vec<String> = golden_fields
-        .iter()
-        .map(|g| transform_name(g, NamingConvention::Snake, naming))
-        .collect();
-
     for file in target_files {
         let native_fields: Vec<String> =
             validator.struct_fields_in_file(runner, struct_name, file)?;
-        let kept: Vec<String> = native_fields
+        // Each kept native field carries both its native spelling (for
+        // reporting extras) and its snake-normalized form (for comparison).
+        let kept: Vec<(String, String)> = native_fields
             .into_iter()
             .filter(|f| !f.starts_with('_'))
+            .map(|native| {
+                let normalized: String =
+                    transform_name(&native, NamingConvention::Pascal, NamingConvention::Snake);
+                (native, normalized)
+            })
             .collect();
         let file_display: String = file.display().to_string();
 
-        for (i, g_native) in golden_native.iter().enumerate() {
-            let outcome: FieldOutcome = if kept.contains(g_native) {
+        for golden in golden_fields {
+            let outcome: FieldOutcome = if kept.iter().any(|(_, norm)| norm == golden) {
                 FieldOutcome::Found
             } else {
                 FieldOutcome::Missing
             };
             result.checks.push(FieldCheck {
-                field: golden_fields[i].clone(),
+                field: golden.clone(),
                 file: file_display.clone(),
                 outcome,
             });
         }
 
-        for nf in &kept {
-            if !golden_native.contains(nf) {
+        for (native, norm) in &kept {
+            if !golden_fields.iter().any(|g| g == norm) {
                 result.extra_fields.push(ExtraField {
-                    field: nf.clone(),
+                    field: native.clone(),
                     file: file_display.clone(),
                 });
             }
         }
 
-        let present: Vec<&String> = kept.iter().filter(|f| golden_native.contains(f)).collect();
-        let expected: Vec<&String> = golden_native.iter().filter(|g| kept.contains(g)).collect();
+        let present: Vec<&String> = kept
+            .iter()
+            .map(|(_, norm)| norm)
+            .filter(|norm| golden_fields.iter().any(|g| &g == norm))
+            .collect();
+        let expected: Vec<&String> = golden_fields
+            .iter()
+            .filter(|g| kept.iter().any(|(_, norm)| &norm == g))
+            .collect();
         if present != expected {
             result.order_ok = false;
         }
@@ -789,7 +800,6 @@ mod tests {
     }
 
     fn fake_struct_result(
-        naming: NamingConvention,
         golden: &[String],
         native_fields: Vec<String>,
     ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
@@ -802,25 +812,16 @@ mod tests {
         fields_by_file.insert(file.clone(), native_fields);
         let mut validator: FakeValidator = FakeValidator { fields_by_file };
         let runner: AstGrepRunner = test_support::runner();
-        let result: StructFieldValidationResult = validate_language_struct(
-            &mut validator,
-            &runner,
-            naming,
-            "StringView",
-            golden,
-            &[file],
-        )?;
+        let result: StructFieldValidationResult =
+            validate_language_struct(&mut validator, &runner, "StringView", golden, &[file])?;
         Ok(result)
     }
 
     #[test]
     fn test_validate_struct_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
         let golden: Vec<String> = vec!["ptr".to_string(), "len".to_string()];
-        let result: StructFieldValidationResult = fake_struct_result(
-            NamingConvention::Snake,
-            &golden,
-            vec!["ptr".to_string(), "len".to_string()],
-        )?;
+        let result: StructFieldValidationResult =
+            fake_struct_result(&golden, vec!["ptr".to_string(), "len".to_string()])?;
         assert!(result.is_complete(), "unexpected drift: {result:?}");
         Ok(())
     }
@@ -829,7 +830,7 @@ mod tests {
     fn test_validate_struct_missing_field() -> Result<(), Box<dyn core::error::Error>> {
         let golden: Vec<String> = vec!["ptr".to_string(), "len".to_string()];
         let result: StructFieldValidationResult =
-            fake_struct_result(NamingConvention::Snake, &golden, vec!["ptr".to_string()])?;
+            fake_struct_result(&golden, vec!["ptr".to_string()])?;
         assert!(!result.is_complete());
         let check: &FieldCheck = result
             .checks
@@ -844,7 +845,6 @@ mod tests {
     fn test_validate_struct_extra_field() -> Result<(), Box<dyn core::error::Error>> {
         let golden: Vec<String> = vec!["ptr".to_string(), "len".to_string()];
         let result: StructFieldValidationResult = fake_struct_result(
-            NamingConvention::Snake,
             &golden,
             vec!["ptr".to_string(), "len".to_string(), "stale".to_string()],
         )?;
@@ -858,11 +858,8 @@ mod tests {
     fn test_validate_struct_out_of_order_sets_order_not_ok()
     -> Result<(), Box<dyn core::error::Error>> {
         let golden: Vec<String> = vec!["ptr".to_string(), "len".to_string()];
-        let result: StructFieldValidationResult = fake_struct_result(
-            NamingConvention::Snake,
-            &golden,
-            vec!["len".to_string(), "ptr".to_string()],
-        )?;
+        let result: StructFieldValidationResult =
+            fake_struct_result(&golden, vec!["len".to_string(), "ptr".to_string()])?;
         // Every field present, nothing extra, but order is wrong.
         assert!(result.extra_fields.is_empty());
         assert!(
@@ -881,7 +878,6 @@ mod tests {
     -> Result<(), Box<dyn core::error::Error>> {
         let golden: Vec<String> = vec!["items".to_string(), "len".to_string(), "align".to_string()];
         let result: StructFieldValidationResult = fake_struct_result(
-            NamingConvention::Snake,
             &golden,
             vec![
                 "items".to_string(),
@@ -900,8 +896,7 @@ mod tests {
     fn test_validate_struct_empty_construct_all_missing() -> Result<(), Box<dyn core::error::Error>>
     {
         let golden: Vec<String> = vec!["ptr".to_string(), "len".to_string()];
-        let result: StructFieldValidationResult =
-            fake_struct_result(NamingConvention::Snake, &golden, Vec::new())?;
+        let result: StructFieldValidationResult = fake_struct_result(&golden, Vec::new())?;
         assert!(!result.is_complete());
         assert!(
             result
@@ -913,13 +908,13 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_struct_pascal_naming() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_validate_struct_pascal_fields_normalize_to_snake()
+    -> Result<(), Box<dyn core::error::Error>> {
+        // PascalCase native fields (C#) normalize back to the golden snake
+        // fields without any naming argument.
         let golden: Vec<String> = vec!["code".to_string(), "contract_id".to_string()];
-        let result: StructFieldValidationResult = fake_struct_result(
-            NamingConvention::Pascal,
-            &golden,
-            vec!["Code".to_string(), "ContractId".to_string()],
-        )?;
+        let result: StructFieldValidationResult =
+            fake_struct_result(&golden, vec!["Code".to_string(), "ContractId".to_string()])?;
         assert!(result.is_complete(), "unexpected drift: {result:?}");
         Ok(())
     }
@@ -934,7 +929,6 @@ mod tests {
         let result: Result<StructFieldValidationResult, ValidatorError> = validate_language_struct(
             &mut validator,
             &runner,
-            NamingConvention::Snake,
             "StringView",
             &["ptr".to_string()],
             &[PathBuf::from("/nonexistent/file.rs")],

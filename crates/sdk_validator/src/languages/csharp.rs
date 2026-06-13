@@ -490,10 +490,11 @@ public enum DispatchType : uint
         file: &Path,
     ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
         let mut validator: CSharpValidator = CSharpValidator::new();
+        // C# struct fields are PascalCase; the comparator normalizes them back
+        // to the golden snake spelling, so no naming argument is needed.
         let result: StructFieldValidationResult = validate_language_struct(
             &mut validator,
             &runner(),
-            NamingConvention::Pascal,
             struct_name,
             golden_fields,
             &[file.to_path_buf()],

@@ -606,12 +606,12 @@ export const DispatchType = {
         file: &Path,
     ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
         let mut validator: JsValidator = JsValidator::new();
-        // TypeScript interface field names are snake_case, matching the
-        // canonical golden spelling directly.
+        // TypeScript interface field names are snake_case (unlike JS methods,
+        // which are camelCase), and the comparator normalizes either way back
+        // to the golden snake spelling — no naming argument needed.
         let result: StructFieldValidationResult = validate_language_struct(
             &mut validator,
             &runner(),
-            NamingConvention::Snake,
             struct_name,
             golden_fields,
             &[file.to_path_buf()],

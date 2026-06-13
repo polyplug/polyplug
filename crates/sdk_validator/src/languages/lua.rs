@@ -845,7 +845,6 @@ ffi.cdef[[
         let result: StructFieldValidationResult = validate_language_struct(
             &mut validator,
             &runner(),
-            NamingConvention::Snake,
             struct_name,
             golden_fields,
             &[file.to_path_buf()],

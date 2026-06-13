@@ -5,7 +5,8 @@
 //! missing from.
 
 use crate::aggregator::{
-    EnumMismatchKind, EnumReport, EnumVariantStatus, MethodStatus, StructReport, ValidationReport,
+    EnumMismatchKind, EnumReport, EnumVariantStatus, MethodStatus, StructFieldReport,
+    StructFieldStatus, StructReport, ValidationReport,
 };
 
 /// Reporter for generating validation reports in different formats.
@@ -97,7 +98,129 @@ impl Reporter {
             ));
         }
 
+        if !report.per_struct_fields.is_empty() {
+            output.push('\n');
+            let mut struct_names: Vec<&String> = report.per_struct_fields.keys().collect();
+            struct_names.sort();
+            for struct_name in &struct_names {
+                let struct_report: &StructFieldReport =
+                    match report.per_struct_fields.get(*struct_name) {
+                        Some(sr) => sr,
+                        None => continue,
+                    };
+                output.push_str(&format!("{} Fields:\n", struct_name));
+                output.push_str(&self.generate_struct_field_table(struct_report));
+                output.push_str(&self.generate_struct_field_drift_details(struct_report));
+                output.push('\n');
+            }
+            output.push_str(&format!(
+                "Structs: {}/{} field checks passed\n",
+                report.struct_field_checks_passed, report.struct_field_checks_total
+            ));
+        }
+
         output
+    }
+
+    /// Generate a table for a single struct's fields.
+    ///
+    /// `✓` = present in every target file of the language, `✗` = drift,
+    /// `-` = language has no target file for this struct.
+    fn generate_struct_field_table(&self, struct_report: &StructFieldReport) -> String {
+        let mut output: String = String::new();
+
+        let min_width: usize = 5; // "Field" header
+        let field_width: usize = struct_report
+            .fields
+            .keys()
+            .map(|n| n.len())
+            .max()
+            .map_or(min_width, |max_len| core::cmp::max(min_width, max_len));
+        let lang_widths: Vec<usize> = self.calculate_language_column_widths();
+
+        output.push_str("  ");
+        output.push_str(&self.pad_right("Field", field_width));
+        output.push_str(" |");
+        for (i, lang) in self.languages.iter().enumerate() {
+            output.push_str(&format!(" {} |", self.pad_center(lang, lang_widths[i])));
+        }
+        output.push('\n');
+
+        output.push_str("  ");
+        output.push_str(&"-".repeat(field_width));
+        output.push_str("-|");
+        for width in &lang_widths {
+            output.push_str(&format!("-{}-|", "-".repeat(*width)));
+        }
+        output.push('\n');
+
+        let mut field_names: Vec<&String> = struct_report.fields.keys().collect();
+        field_names.sort();
+
+        for field_name in field_names {
+            let status: &StructFieldStatus = match struct_report.fields.get(field_name) {
+                Some(s) => s,
+                None => continue,
+            };
+            output.push_str("  ");
+            output.push_str(&self.pad_right(field_name, field_width));
+            output.push_str(" |");
+            for (i, lang) in self.languages.iter().enumerate() {
+                let symbol: &str = if status.found_in.contains(lang) {
+                    "✓"
+                } else if struct_report.checked_languages.contains(lang) {
+                    "✗"
+                } else {
+                    "-"
+                };
+                output.push_str(&format!(" {} |", self.pad_center(symbol, lang_widths[i])));
+            }
+            output.push('\n');
+        }
+
+        output
+    }
+
+    /// Generate per-file drift lines: missing fields, stale extra fields, then
+    /// declaration-order failures.
+    fn generate_struct_field_drift_details(&self, struct_report: &StructFieldReport) -> String {
+        let mut lines: Vec<String> = Vec::new();
+
+        let mut field_names: Vec<&String> = struct_report.fields.keys().collect();
+        field_names.sort();
+
+        for field_name in field_names {
+            let status: &StructFieldStatus = match struct_report.fields.get(field_name) {
+                Some(s) => s,
+                None => continue,
+            };
+            for mismatch in &status.mismatches {
+                lines.push(format!(
+                    "    {} [{}] {}: missing",
+                    field_name, mismatch.language, mismatch.file
+                ));
+            }
+        }
+
+        for extra in &struct_report.extra_fields {
+            lines.push(format!(
+                "    extra field {} [{}] {}",
+                extra.field, extra.language, extra.file
+            ));
+        }
+
+        for issue in &struct_report.order_issues {
+            lines.push(format!(
+                "    out-of-order fields [{}] {}",
+                issue.language, issue.file
+            ));
+        }
+
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!("  Drift:\n{}\n", lines.join("\n"))
+        }
     }
 
     /// Generate a table for a single enum's variants.
@@ -366,6 +489,10 @@ impl Reporter {
             "enum_checks_total": report.enum_checks_total,
             "enum_checks_passed": report.enum_checks_passed,
             "enums_complete": report.enums_complete,
+            "per_struct_fields": report.per_struct_fields,
+            "struct_field_checks_total": report.struct_field_checks_total,
+            "struct_field_checks_passed": report.struct_field_checks_passed,
+            "structs_complete": report.structs_complete,
         });
 
         serde_json::to_string_pretty(&json_output).unwrap_or_else(|_| "{}".to_string())
@@ -665,6 +792,85 @@ mod tests {
         let extra: &serde_json::Value = &parsed["per_enum"]["DispatchType"]["extra_variants"][0];
         assert_eq!(extra["variant"], "Stale");
         assert_eq!(extra["value"], 9);
+        Ok(())
+    }
+
+    fn create_struct_field_test_report() -> ValidationReport {
+        let mut report: ValidationReport = ValidationReport::new();
+        let mut struct_report: StructFieldReport = StructFieldReport::new();
+        struct_report.checked_languages = vec!["rust".to_string(), "csharp".to_string()];
+
+        let ptr_status: StructFieldStatus = StructFieldStatus {
+            found_in: vec!["rust".to_string(), "csharp".to_string()],
+            mismatches: Vec::new(),
+        };
+        let len_status: StructFieldStatus = StructFieldStatus {
+            found_in: vec!["rust".to_string()],
+            mismatches: vec![crate::aggregator::StructFieldMismatch {
+                language: "csharp".to_string(),
+                file: "sdks/csharp/abi/Abi.cs".to_string(),
+                kind: crate::aggregator::FieldMismatchKind::Missing,
+            }],
+        };
+
+        struct_report.fields.insert("ptr".to_string(), ptr_status);
+        struct_report.fields.insert("len".to_string(), len_status);
+        struct_report
+            .extra_fields
+            .push(crate::aggregator::StructFieldDrift {
+                language: "csharp".to_string(),
+                file: "sdks/csharp/abi/Abi.cs".to_string(),
+                field: "Length".to_string(),
+            });
+
+        report
+            .per_struct_fields
+            .insert("StringView".to_string(), struct_report);
+        report.struct_field_checks_total = 4;
+        report.struct_field_checks_passed = 3;
+        report.structs_complete = false;
+        report.is_complete = false;
+        report
+    }
+
+    #[test]
+    fn test_generate_table_struct_section() {
+        let reporter: Reporter = Reporter::new();
+        let report: ValidationReport = create_struct_field_test_report();
+        let output: String = reporter.generate_table(&report);
+
+        assert!(output.contains("StringView Fields:"));
+        assert!(output.contains("Structs: 3/4 field checks passed"));
+        assert!(output.contains("len [csharp] sdks/csharp/abi/Abi.cs: missing"));
+        assert!(output.contains("extra field Length [csharp] sdks/csharp/abi/Abi.cs"));
+    }
+
+    #[test]
+    fn test_generate_table_no_struct_section_when_unconfigured() {
+        let reporter: Reporter = Reporter::new();
+        let report: ValidationReport = ValidationReport::new();
+        let output: String = reporter.generate_table(&report);
+
+        assert!(!output.contains("Fields:"));
+        assert!(!output.contains("Structs:"));
+    }
+
+    #[test]
+    fn test_generate_json_struct_fields() -> Result<(), Box<dyn core::error::Error>> {
+        let reporter: Reporter = Reporter::new();
+        let report: ValidationReport = create_struct_field_test_report();
+        let output: String = reporter.generate_json(&report);
+
+        let parsed: serde_json::Value = serde_json::from_str(&output)?;
+        assert_eq!(parsed["structs_complete"], false);
+        assert_eq!(parsed["struct_field_checks_total"], 4);
+        assert_eq!(parsed["struct_field_checks_passed"], 3);
+        let len: &serde_json::Value = &parsed["per_struct_fields"]["StringView"]["fields"]["len"];
+        assert_eq!(len["mismatches"][0]["language"], "csharp");
+        assert_eq!(len["mismatches"][0]["kind"], "Missing");
+        let extra: &serde_json::Value =
+            &parsed["per_struct_fields"]["StringView"]["extra_fields"][0];
+        assert_eq!(extra["field"], "Length");
         Ok(())
     }
 

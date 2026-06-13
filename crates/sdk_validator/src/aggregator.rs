@@ -14,9 +14,10 @@ use crate::ast_grep::{AstGrepRunner, NamingConvention};
 use crate::config::Config;
 use crate::error::ValidatorError;
 use crate::languages::{
-    CSharpValidator, CppValidator, EnumValidationResult, JsValidator, LanguageValidator,
-    LuaValidator, PythonValidator, RustValidator, ValidationResult, VariantOutcome,
-    validate_language, validate_language_enum,
+    CSharpValidator, CppValidator, EnumValidationResult, FieldOutcome, JsValidator,
+    LanguageValidator, LuaValidator, PythonValidator, RustValidator, StructFieldValidationResult,
+    ValidationResult, VariantOutcome, validate_language, validate_language_enum,
+    validate_language_struct,
 };
 
 /// A language missing a method, with the target files it is missing from.
@@ -238,6 +239,89 @@ impl Default for EnumReport {
     }
 }
 
+/// Why a field check failed in one file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum FieldMismatchKind {
+    /// Field absent from the struct construct (or the construct is absent).
+    Missing,
+    /// Field present, but the golden fields are not in declaration order in
+    /// this file (the per-language/per-file order check failed).
+    OutOfOrder,
+}
+
+/// One failed field check: which language/file, and how it failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StructFieldMismatch {
+    /// The language with the mismatch.
+    pub language: String,
+    /// The target file with the mismatch.
+    pub file: String,
+    /// How the field check failed.
+    pub kind: FieldMismatchKind,
+}
+
+/// Status of one golden field across all language struct mirrors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StructFieldStatus {
+    /// Languages where the field is present in every target file.
+    pub found_in: Vec<String>,
+    /// Per-file mismatches.
+    pub mismatches: Vec<StructFieldMismatch>,
+}
+
+/// A stale field found in a mirror but absent from the golden set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StructFieldDrift {
+    /// The language containing the stale field.
+    pub language: String,
+    /// The target file containing it.
+    pub file: String,
+    /// The stale field name, in its native spelling.
+    pub field: String,
+}
+
+/// Report for a single golden struct across all language mirrors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StructFieldReport {
+    /// Field name (canonical snake) -> status across languages.
+    pub fields: HashMap<String, StructFieldStatus>,
+    /// Languages with at least one target file for this struct.
+    pub checked_languages: Vec<String>,
+    /// Stale fields found in mirrors.
+    pub extra_fields: Vec<StructFieldDrift>,
+    /// Per-(language, file) declaration-order failures.
+    pub order_issues: Vec<StructFieldMismatch>,
+}
+
+impl StructFieldReport {
+    /// Create a new empty struct-field report.
+    pub fn new() -> Self {
+        Self {
+            fields: HashMap::new(),
+            checked_languages: Vec::new(),
+            extra_fields: Vec::new(),
+            order_issues: Vec::new(),
+        }
+    }
+
+    /// Check that every field matched in every checked language, no stale
+    /// fields exist, and the declaration order holds everywhere.
+    pub fn is_complete(&self) -> bool {
+        self.extra_fields.is_empty()
+            && self.order_issues.is_empty()
+            && self
+                .fields
+                .values()
+                .all(|status| status.mismatches.is_empty())
+    }
+}
+
+impl Default for StructFieldReport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Aggregated validation report across all language SDKs.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ValidationReport {
@@ -261,6 +345,15 @@ pub struct ValidationReport {
     /// Whether every enum mirror matches the golden enums exactly
     /// (no missing variants, wrong values, or stale extras).
     pub enums_complete: bool,
+    /// Per-struct field reports: struct name -> report.
+    pub per_struct_fields: HashMap<String, StructFieldReport>,
+    /// Total number of (field, language, file) struct-field checks performed.
+    pub struct_field_checks_total: usize,
+    /// Number of struct-field checks that passed exactly.
+    pub struct_field_checks_passed: usize,
+    /// Whether every struct mirror matches the golden structs exactly
+    /// (no missing fields, stale extras, or out-of-order declarations).
+    pub structs_complete: bool,
 }
 
 impl ValidationReport {
@@ -276,6 +369,10 @@ impl ValidationReport {
             enum_checks_total: 0,
             enum_checks_passed: 0,
             enums_complete: true,
+            per_struct_fields: HashMap::new(),
+            struct_field_checks_total: 0,
+            struct_field_checks_passed: 0,
+            structs_complete: true,
         }
     }
 }
@@ -405,6 +502,40 @@ pub fn aggregate_results(
         }
     }
 
+    for validator in validators.iter_mut() {
+        let language: &'static str = validator.language_name();
+        let Some(language_struct_targets) = config.struct_targets.get(language) else {
+            continue;
+        };
+
+        // Deterministic iteration so reports are stable across runs.
+        let mut struct_names: Vec<&String> = language_struct_targets.keys().collect();
+        struct_names.sort();
+
+        for struct_name in struct_names {
+            let golden: &Vec<String> =
+                config
+                    .structs
+                    .get(struct_name)
+                    .ok_or_else(|| ValidatorError::UnknownStruct {
+                        language: language.to_string(),
+                        struct_name: struct_name.clone(),
+                    })?;
+            let files: &[PathBuf] = language_struct_targets
+                .get(struct_name)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            if files.is_empty() {
+                continue;
+            }
+
+            let result: StructFieldValidationResult =
+                validate_language_struct(validator.as_mut(), runner, struct_name, golden, files)?;
+
+            merge_struct_result(&mut report, struct_name, golden, &result, language);
+        }
+    }
+
     calculate_overall_stats(&mut report);
 
     Ok(report)
@@ -473,6 +604,82 @@ fn merge_enum_result(
     }
 }
 
+/// Merge one language's struct validation result into the report.
+fn merge_struct_result(
+    report: &mut ValidationReport,
+    struct_name: &str,
+    golden: &[String],
+    result: &StructFieldValidationResult,
+    language: &str,
+) {
+    let struct_report: &mut StructFieldReport = report
+        .per_struct_fields
+        .entry(struct_name.to_string())
+        .or_default();
+    struct_report.checked_languages.push(language.to_string());
+
+    for field in golden {
+        struct_report
+            .fields
+            .entry(field.clone())
+            .or_insert_with(|| StructFieldStatus {
+                found_in: Vec::new(),
+                mismatches: Vec::new(),
+            });
+    }
+
+    let mut failed_fields: Vec<&str> = Vec::new();
+    for check in &result.checks {
+        report.struct_field_checks_total += 1;
+        if check.outcome == FieldOutcome::Found {
+            report.struct_field_checks_passed += 1;
+            continue;
+        }
+        failed_fields.push(check.field.as_str());
+        if let Some(status) = struct_report.fields.get_mut(&check.field) {
+            status.mismatches.push(StructFieldMismatch {
+                language: language.to_string(),
+                file: check.file.clone(),
+                kind: FieldMismatchKind::Missing,
+            });
+        }
+    }
+
+    for field in golden {
+        if failed_fields.contains(&field.as_str()) {
+            continue;
+        }
+        if let Some(status) = struct_report.fields.get_mut(field) {
+            status.found_in.push(language.to_string());
+        }
+    }
+
+    for extra in &result.extra_fields {
+        struct_report.extra_fields.push(StructFieldDrift {
+            language: language.to_string(),
+            file: extra.file.clone(),
+            field: extra.field.clone(),
+        });
+    }
+
+    // `order_ok` is a single flag across all the language's files; attribute
+    // the failure to each distinct file probed so the report names them.
+    if !result.order_ok {
+        let mut seen: Vec<&str> = Vec::new();
+        for check in &result.checks {
+            if seen.contains(&check.file.as_str()) {
+                continue;
+            }
+            seen.push(check.file.as_str());
+            struct_report.order_issues.push(StructFieldMismatch {
+                language: language.to_string(),
+                file: check.file.clone(),
+                kind: FieldMismatchKind::OutOfOrder,
+            });
+        }
+    }
+}
+
 /// Update a struct report with validation results from a language.
 fn update_struct_report(
     struct_report: &mut StructReport,
@@ -526,8 +733,13 @@ fn calculate_overall_stats(report: &mut ValidationReport) {
         .values()
         .all(|enum_report| enum_report.is_complete());
 
+    report.structs_complete = report
+        .per_struct_fields
+        .values()
+        .all(|struct_report| struct_report.is_complete());
+
     report.found_methods = total_found;
-    report.is_complete = all_complete && report.enums_complete;
+    report.is_complete = all_complete && report.enums_complete && report.structs_complete;
 }
 
 #[cfg(test)]
@@ -536,8 +748,9 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    use crate::config::parse_config;
     use crate::languages::MissingMethod;
-    use crate::languages::test_support::runner;
+    use crate::languages::test_support::{repo_path, runner};
 
     use std::collections::BTreeMap;
 
@@ -765,6 +978,137 @@ mod tests {
             vec![PathBuf::from("/nonexistent/enum.rs")],
         );
         config.enum_targets.insert("rust".to_string(), rust_targets);
+
+        let result: Result<ValidationReport, ValidatorError> =
+            aggregate_results(&config, &runner());
+        assert!(matches!(
+            result,
+            Err(ValidatorError::TargetFileMissing { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_config_structs_match_golden() -> Result<(), Box<dyn core::error::Error>> {
+        let config: Config = parse_config(&repo_path("sdk_validator.yaml"))?;
+        let report: ValidationReport = aggregate_results(&config, &runner())?;
+
+        assert!(
+            report.structs_complete,
+            "struct mirror drift: {:?}",
+            report.per_struct_fields
+        );
+        assert_eq!(
+            report.struct_field_checks_passed,
+            report.struct_field_checks_total
+        );
+        assert!(report.struct_field_checks_total > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_results_struct_drift_fails_report() -> Result<(), Box<dyn core::error::Error>>
+    {
+        // `len` renamed to `length` (missing + extra) in a rust mirror.
+        let mut rust_file: NamedTempFile = NamedTempFile::with_suffix(".rs")?;
+        rust_file.write_all(
+            b"#[repr(C)]\npub struct StringView {\n    pub ptr: *const u8,\n    pub length: usize,\n}\n",
+        )?;
+        rust_file.flush()?;
+
+        let mut config: Config = empty_config();
+        config.structs.insert(
+            "StringView".to_string(),
+            vec!["ptr".to_string(), "len".to_string()],
+        );
+        let mut rust_targets: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        rust_targets.insert(
+            "StringView".to_string(),
+            vec![rust_file.path().to_path_buf()],
+        );
+        config
+            .struct_targets
+            .insert("rust".to_string(), rust_targets);
+
+        let report: ValidationReport = aggregate_results(&config, &runner())?;
+
+        assert!(!report.structs_complete);
+        assert!(!report.is_complete);
+        assert_eq!(report.struct_field_checks_total, 2);
+        assert_eq!(report.struct_field_checks_passed, 1);
+
+        let struct_report: &StructFieldReport = report
+            .per_struct_fields
+            .get("StringView")
+            .ok_or("missing StringView struct report")?;
+        assert_eq!(struct_report.checked_languages, vec!["rust".to_string()]);
+
+        let len_status: &StructFieldStatus = struct_report
+            .fields
+            .get("len")
+            .ok_or("missing len status")?;
+        assert_eq!(len_status.mismatches.len(), 1);
+        assert_eq!(len_status.mismatches[0].language, "rust");
+        assert_eq!(len_status.mismatches[0].kind, FieldMismatchKind::Missing);
+
+        let ptr_status: &StructFieldStatus = struct_report
+            .fields
+            .get("ptr")
+            .ok_or("missing ptr status")?;
+        assert_eq!(ptr_status.found_in, vec!["rust".to_string()]);
+
+        assert_eq!(struct_report.extra_fields.len(), 1);
+        assert_eq!(struct_report.extra_fields[0].field, "length");
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_results_struct_exact_match_is_complete()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let mut rust_file: NamedTempFile = NamedTempFile::with_suffix(".rs")?;
+        rust_file.write_all(
+            b"#[repr(C)]\npub struct StringView {\n    pub ptr: *const u8,\n    pub len: usize,\n}\n",
+        )?;
+        rust_file.flush()?;
+
+        let mut config: Config = empty_config();
+        config.structs.insert(
+            "StringView".to_string(),
+            vec!["ptr".to_string(), "len".to_string()],
+        );
+        let mut rust_targets: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        rust_targets.insert(
+            "StringView".to_string(),
+            vec![rust_file.path().to_path_buf()],
+        );
+        config
+            .struct_targets
+            .insert("rust".to_string(), rust_targets);
+
+        let report: ValidationReport = aggregate_results(&config, &runner())?;
+
+        assert!(report.structs_complete);
+        assert!(report.is_complete);
+        assert_eq!(report.struct_field_checks_total, 2);
+        assert_eq!(report.struct_field_checks_passed, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_results_struct_missing_target_file_is_fatal()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let mut config: Config = empty_config();
+        config
+            .structs
+            .insert("StringView".to_string(), vec!["ptr".to_string()]);
+        let mut rust_targets: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        rust_targets.insert(
+            "StringView".to_string(),
+            vec![PathBuf::from("/nonexistent/struct.rs")],
+        );
+        config
+            .struct_targets
+            .insert("rust".to_string(), rust_targets);
 
         let result: Result<ValidationReport, ValidatorError> =
             aggregate_results(&config, &runner());

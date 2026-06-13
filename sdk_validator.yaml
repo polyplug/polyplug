@@ -144,3 +144,165 @@ enum_targets:
       - sdks/lua/guest/polyplug_guest.lua
     ReloadPhaseType:
       - sdks/lua/abi/abi.lua
+
+# Golden struct set (authoritative; the Rust ABI sources are listed as targets
+# below, so yaml-vs-code disagreement fails validation and keeps this honest).
+# Field names are the canonical snake_case spelling; each mirror's native
+# spelling (C# PascalCase, etc.) is normalized back to snake before comparison.
+# Declaration ORDER matters: it is the ABI-layout proxy. Pinning AbiError's
+# {code, message} shape is the validator's enforcement of the out-param ABI's
+# type foundation — a mirror cannot silently change AbiError's layout.
+structs:
+  StringView:
+    - ptr
+    - len
+  AbiError:
+    - code
+    - message
+  Version:
+    - major
+    - minor
+    - patch
+  Array:
+    - items
+    - len
+    - align
+  Buffer:
+    - ptr
+    - len
+    - cap
+  ArenaOverflowBlock:
+    - next
+    - capacity
+    - used
+  CallArena:
+    - cur
+    - end
+    - base
+    - host
+    - first_overflow
+  GuestContractInstance:
+    - data
+    - contract_id
+  BundleInitContext:
+    - bundle_id
+    - bundle_path
+
+# Struct mirror targets per language. Paths are relative to the repo root.
+# Every listed file must declare the struct with the exact golden field set,
+# in declaration order. The Rust ABI sources keep the golden set honest.
+struct_targets:
+  rust:
+    StringView:
+      - crates/polyplug_abi/src/types/string_view.rs
+    AbiError:
+      - crates/polyplug_abi/src/types/abi_error.rs
+    Version:
+      - crates/polyplug_abi/src/types/version.rs
+    Array:
+      - crates/polyplug_abi/src/types/array.rs
+    Buffer:
+      - crates/polyplug_abi/src/types/buffer.rs
+    ArenaOverflowBlock:
+      - crates/polyplug_abi/src/types/call_arena.rs
+    CallArena:
+      - crates/polyplug_abi/src/types/call_arena.rs
+    GuestContractInstance:
+      - crates/polyplug_abi/src/guest/guest_contract_instance.rs
+    BundleInitContext:
+      - crates/polyplug_abi/src/plugin/plugin_context.rs
+  csharp:
+    StringView:
+      - sdks/csharp/abi/Abi.cs
+    AbiError:
+      - sdks/csharp/abi/Abi.cs
+    Version:
+      - sdks/csharp/abi/Abi.cs
+    Array:
+      - sdks/csharp/abi/Abi.cs
+    Buffer:
+      - sdks/csharp/abi/Abi.cs
+    ArenaOverflowBlock:
+      - sdks/csharp/abi/Abi.cs
+    CallArena:
+      - sdks/csharp/abi/Abi.cs
+    GuestContractInstance:
+      - sdks/csharp/abi/Abi.cs
+    BundleInitContext:
+      - sdks/csharp/abi/Abi.cs
+  cpp:
+    StringView:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    AbiError:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    Version:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    Array:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    Buffer:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    ArenaOverflowBlock:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    CallArena:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    GuestContractInstance:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    BundleInitContext:
+      - sdks/cpp/abi/polyplug/abi.hpp
+  python:
+    StringView:
+      - sdks/python/abi/abi.py
+    AbiError:
+      - sdks/python/abi/abi.py
+    Version:
+      - sdks/python/abi/abi.py
+    Array:
+      - sdks/python/abi/abi.py
+    Buffer:
+      - sdks/python/abi/abi.py
+    ArenaOverflowBlock:
+      - sdks/python/abi/abi.py
+    CallArena:
+      - sdks/python/abi/abi.py
+    GuestContractInstance:
+      - sdks/python/abi/abi.py
+    BundleInitContext:
+      - sdks/python/abi/abi.py
+  js:
+    StringView:
+      - sdks/js/abi/abi.ts
+    AbiError:
+      - sdks/js/abi/abi.ts
+    Version:
+      - sdks/js/abi/abi.ts
+    Array:
+      - sdks/js/abi/abi.ts
+    Buffer:
+      - sdks/js/abi/abi.ts
+    ArenaOverflowBlock:
+      - sdks/js/abi/abi.ts
+    CallArena:
+      - sdks/js/abi/abi.ts
+    GuestContractInstance:
+      - sdks/js/abi/abi.ts
+    BundleInitContext:
+      - sdks/js/abi/abi.ts
+  lua:
+    StringView:
+      - sdks/lua/abi/abi.lua
+    AbiError:
+      - sdks/lua/abi/abi.lua
+    Version:
+      - sdks/lua/abi/abi.lua
+    Array:
+      - sdks/lua/abi/abi.lua
+    Buffer:
+      - sdks/lua/abi/abi.lua
+    ArenaOverflowBlock:
+      - sdks/lua/abi/abi.lua
+    CallArena:
+      - sdks/lua/abi/abi.lua
+    GuestContractInstance:
+      - sdks/lua/abi/abi.lua
+    BundleInitContext:
+      - sdks/lua/abi/abi.lua
