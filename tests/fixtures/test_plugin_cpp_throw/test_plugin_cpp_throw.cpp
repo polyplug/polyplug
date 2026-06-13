@@ -7,7 +7,7 @@
 // (the process must survive, see test_exception_isolation_cpp).
 //
 // The dispatch entry stored in `functions[0]` uses the polyplug native calling
-// convention `AbiError(GuestContractInstance, const void* args, void* out)`.
+// convention `void(GuestContractInstance, const void* args, void* out, AbiError* out_err)`.
 //
 // ABI types come from the real C++ ABI SDK header (sdks/cpp/abi/polyplug/abi.hpp)
 // so the fixture can never drift from the frozen layouts; build_all.sh passes
@@ -43,19 +43,24 @@ void throwing_impl() {
     throw std::runtime_error("intentional test exception");
 }
 
-AbiError cpp_throw_abi(GuestContractInstance, const void* args, void* out) noexcept {
+void cpp_throw_abi(GuestContractInstance, const void* args, void* out, AbiError* out_err) noexcept {
     (void)args;
     (void)out;
+    if (out_err == nullptr) {
+        return;
+    }
     try {
         throwing_impl();
-        return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
     } catch (...) {
-        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{nullptr, 0}};
+        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{nullptr, 0}};
     }
 }
 
-GuestContractInstance create_instance_stub(const HostApi*, const void*) noexcept {
-    return GuestContractInstance{nullptr, 0};
+void create_instance_stub(const HostApi*, const void*, GuestContractInstance* out_instance) noexcept {
+    if (out_instance != nullptr) {
+        *out_instance = GuestContractInstance{nullptr, 0};
+    }
 }
 
 void destroy_instance_stub(const HostApi*, GuestContractInstance) noexcept {}
@@ -91,5 +96,9 @@ extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* 
     if (host == nullptr || ctx == nullptr) {
         return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{nullptr, 0}};
     }
-    return host->register_guest_contract(host, &kTestAddDescriptor, &kTestAddInterface);
+    // Out-param ABI: register_guest_contract writes its AbiError through a
+    // trailing pointer and returns void; init still surfaces it by value.
+    AbiError err{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+    host->register_guest_contract(host, &kTestAddDescriptor, &kTestAddInterface, &err);
+    return err;
 }
