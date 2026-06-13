@@ -31,7 +31,7 @@ ffi.cdef[[
     typedef enum DispatchType DispatchType;
     typedef enum Compatibility Compatibility;
     typedef enum ReloadPhaseType ReloadPhaseType;
-    typedef enum RuntimeLanguage RuntimeLanguage;
+    typedef enum SupportedLanguage SupportedLanguage;
     typedef enum AbiErrorCode AbiErrorCode;
     typedef enum LogLevel LogLevel;
     typedef enum ParseVersionError ParseVersionError;
@@ -726,15 +726,15 @@ ffi.cdef[[
         ReloadPhaseType_Unloading = 3,
     } ReloadPhaseType;
 
-    //  Runtime type identifier — identifies the language/runtime hosting plugins.
-    typedef enum RuntimeLanguage {
-        RuntimeLanguage_Rust = 0,
-        RuntimeLanguage_Cpp = 1,
-        RuntimeLanguage_Dotnet = 2,
-        RuntimeLanguage_Python = 3,
-        RuntimeLanguage_Lua = 4,
-        RuntimeLanguage_JavaScript = 5,
-    } RuntimeLanguage;
+    //  Supported plugin language identifier — identifies the language/runtime hosting plugins.
+    typedef enum SupportedLanguage {
+        SupportedLanguage_Rust = 0,
+        SupportedLanguage_Cpp = 1,
+        SupportedLanguage_Dotnet = 2,
+        SupportedLanguage_Python = 3,
+        SupportedLanguage_Lua = 4,
+        SupportedLanguage_JavaScript = 5,
+    } SupportedLanguage;
 
     //  ABI error codes (reserved: 0-255 runtime, 256+ plugin-defined).
     // 

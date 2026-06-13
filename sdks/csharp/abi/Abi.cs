@@ -1109,8 +1109,8 @@ public enum ReloadPhaseType : uint
     Unloading = 3,
 }
 
-///  Runtime type identifier — identifies the language/runtime hosting plugins.
-public enum RuntimeLanguage : uint
+///  Supported plugin language identifier — identifies the language/runtime hosting plugins.
+public enum SupportedLanguage : uint
 {
     Rust = 0,
     Cpp = 1,

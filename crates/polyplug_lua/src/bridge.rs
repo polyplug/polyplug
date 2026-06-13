@@ -37,7 +37,7 @@ use polyplug::host_bridge::BridgeError;
 use polyplug::host_bridge::RuntimeLanguageBridge;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
-use polyplug_abi::RuntimeLanguage;
+use polyplug_abi::SupportedLanguage;
 use polyplug_abi::StringView;
 
 /// Bridge for Lua hosts implementing host contracts.
@@ -123,9 +123,9 @@ impl Default for LuaHostBridge {
 }
 
 impl RuntimeLanguageBridge for LuaHostBridge {
-    /// Returns `RuntimeLanguage::Lua` to identify this as a Lua bridge.
-    fn runtime_type(&self) -> RuntimeLanguage {
-        RuntimeLanguage::Lua
+    /// Returns `SupportedLanguage::Lua` to identify this as a Lua bridge.
+    fn runtime_type(&self) -> SupportedLanguage {
+        SupportedLanguage::Lua
     }
 
     /// Register a Lua callable as a host contract implementation.
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn bridge_runtime_type_returns_lua() {
         let bridge: LuaHostBridge = LuaHostBridge::new();
-        assert_eq!(bridge.runtime_type(), RuntimeLanguage::Lua);
+        assert_eq!(bridge.runtime_type(), SupportedLanguage::Lua);
     }
 
     #[test]

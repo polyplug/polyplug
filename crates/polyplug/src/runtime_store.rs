@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use polyplug_abi::RuntimeLanguage;
+use polyplug_abi::SupportedLanguage;
 use polyplug_abi::dispatch::dispatch_type::DispatchType;
 use polyplug_abi::types::Version;
 use polyplug_abi::{
@@ -88,7 +88,7 @@ pub struct BundleDescriptor {
     /// Bundle version — semantic version (major.minor.patch).
     pub version: Version,
     /// Runtime language — determines which BundleLoader handles this bundle.
-    pub runtime: RuntimeLanguage,
+    pub runtime: SupportedLanguage,
     /// Path to bundle directory or library file.
     pub file_path: PathBuf,
     /// Bundle-level dependencies (replaces contract-level).
@@ -648,7 +648,7 @@ impl RuntimeStore {
                         minor: 0,
                         patch: 0,
                     },
-                    runtime: RuntimeLanguage::Rust,
+                    runtime: SupportedLanguage::Rust,
                     file_path: PathBuf::new(),
                     dependencies: Vec::new(),
                 },
@@ -1535,7 +1535,7 @@ impl RuntimeStore {
         bundle_id: BundleId,
         bundle_name: String,
         version: Version,
-        runtime: RuntimeLanguage,
+        runtime: SupportedLanguage,
         file_path: PathBuf,
         dependencies: Vec<BundleDependency>,
     ) -> Result<(), RegistryError> {
@@ -2017,7 +2017,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
-                RuntimeLanguage::Rust,
+                SupportedLanguage::Rust,
                 PathBuf::from("/test"),
                 Vec::new(),
             )
@@ -2056,7 +2056,7 @@ mod tests {
                     minor: 2,
                     patch: 3,
                 },
-                RuntimeLanguage::Python,
+                SupportedLanguage::Python,
                 PathBuf::from("/path/to/bundle"),
                 vec![BundleDependency {
                     name: "dep-bundle".to_string(),
@@ -2076,7 +2076,7 @@ mod tests {
         assert_eq!(d.version.major, 1);
         assert_eq!(d.version.minor, 2);
         assert_eq!(d.version.patch, 3);
-        assert_eq!(d.runtime, RuntimeLanguage::Python);
+        assert_eq!(d.runtime, SupportedLanguage::Python);
         assert_eq!(d.dependencies.len(), 1);
     }
 
@@ -2095,7 +2095,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
-                RuntimeLanguage::Rust,
+                SupportedLanguage::Rust,
                 PathBuf::new(),
                 Vec::new(),
             )

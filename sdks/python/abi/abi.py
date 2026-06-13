@@ -296,8 +296,8 @@ class ReloadPhaseType(enum.IntEnum):
     Unloading = 3
 
 
-class RuntimeLanguage(enum.IntEnum):
-    """ Runtime type identifier — identifies the language/runtime hosting plugins."""
+class SupportedLanguage(enum.IntEnum):
+    """ Supported plugin language identifier — identifies the language/runtime hosting plugins."""
     Rust = 0
     Cpp = 1
     Dotnet = 2

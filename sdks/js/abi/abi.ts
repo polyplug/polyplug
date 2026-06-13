@@ -1302,8 +1302,8 @@ export const enum ReloadPhaseType {
     Unloading = 3,
 }
 
-/**  Runtime type identifier — identifies the language/runtime hosting plugins. */
-export const enum RuntimeLanguage {
+/**  Supported plugin language identifier — identifies the language/runtime hosting plugins. */
+export const enum SupportedLanguage {
     Rust = 0,
     Cpp = 1,
     Dotnet = 2,

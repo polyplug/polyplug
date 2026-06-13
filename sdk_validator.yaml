@@ -79,6 +79,13 @@ enums:
     Reloaded: 1
     Failed: 2
     Unloading: 3
+  SupportedLanguage:
+    Rust: 0
+    Cpp: 1
+    Dotnet: 2
+    Python: 3
+    Lua: 4
+    JavaScript: 5
 
 # Enum mirror targets per language. Paths are relative to the repo root.
 # Every listed file must declare the enum with the exact golden variant set.
@@ -92,6 +99,8 @@ enum_targets:
       - crates/polyplug_abi/src/dispatch/dispatch_type.rs
     ReloadPhaseType:
       - crates/polyplug_abi/src/runtime/reload_phase.rs
+    SupportedLanguage:
+      - crates/polyplug_abi/src/supported_language.rs
   csharp:
     AbiErrorCode:
       - sdks/csharp/abi/Abi.cs
@@ -102,6 +111,8 @@ enum_targets:
     ReloadPhaseType:
       - sdks/csharp/abi/Abi.cs
       - sdks/csharp/host/ReloadPhase.cs
+    SupportedLanguage:
+      - sdks/csharp/abi/Abi.cs
   cpp:
     AbiErrorCode:
       - sdks/cpp/abi/polyplug/abi.hpp
@@ -110,6 +121,8 @@ enum_targets:
     DispatchType:
       - sdks/cpp/abi/polyplug/abi.hpp
     ReloadPhaseType:
+      - sdks/cpp/abi/polyplug/abi.hpp
+    SupportedLanguage:
       - sdks/cpp/abi/polyplug/abi.hpp
   js:
     AbiErrorCode:
@@ -122,6 +135,8 @@ enum_targets:
       - sdks/js/abi/abi.ts
     ReloadPhaseType:
       - sdks/js/abi/abi.ts
+    SupportedLanguage:
+      - sdks/js/abi/abi.ts
   python:
     AbiErrorCode:
       - sdks/python/abi/abi.py
@@ -132,6 +147,8 @@ enum_targets:
     ReloadPhaseType:
       - sdks/python/abi/abi.py
       - sdks/python/polyplug_abi/polyplug_abi/__init__.py
+    SupportedLanguage:
+      - sdks/python/abi/abi.py
   lua:
     AbiErrorCode:
       - sdks/lua/abi/abi.lua
@@ -143,6 +160,8 @@ enum_targets:
       - sdks/lua/abi/abi.lua
       - sdks/lua/guest/polyplug_guest.lua
     ReloadPhaseType:
+      - sdks/lua/abi/abi.lua
+    SupportedLanguage:
       - sdks/lua/abi/abi.lua
 
 # Golden struct set (authoritative; the Rust ABI sources are listed as targets

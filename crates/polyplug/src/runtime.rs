@@ -28,7 +28,7 @@ use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
 use polyplug_abi::types::LogLevel;
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, DependencyInfo, GuestContractHandle, GuestContractInterface,
-    HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, RuntimeLanguage,
+    HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, SupportedLanguage,
     StringView, types::Version,
 };
 use polyplug_utils::{BundleId, GuestContractId};
@@ -93,8 +93,8 @@ pub struct Runtime {
     /// Cache for singleton host contract instances.
     /// Key: HostContractId hash value.
     pub(crate) singleton_instances: RwLock<HashMap<u64, HostContractInstance>>,
-    /// Host runtime type identifier.
-    pub(crate) host_runtime: RuntimeLanguage,
+    /// Host language type identifier.
+    pub(crate) host_language: SupportedLanguage,
     /// Per-thread stack of bundle_ids currently inside `polyplug_init`.
     ///
     /// Replaces the former process-global `thread_local!` (Rule 12: no thread-locals
@@ -334,10 +334,10 @@ impl Runtime {
         })
     }
 
-    /// Get the host runtime type.
+    /// Get the host language type.
     #[inline(always)]
-    pub fn host_runtime(&self) -> RuntimeLanguage {
-        self.host_runtime
+    pub fn host_language(&self) -> SupportedLanguage {
+        self.host_language
     }
 
     /// Get the HostApi pointer for use in plugin registrars.
@@ -1002,18 +1002,18 @@ impl Runtime {
                 patch: 0,
             });
 
-            // Convert loader string to RuntimeLanguage. An unrecognized loader
-            // string falls back to Rust (see `runtime_language_from_str`); surface
+            // Convert loader string to SupportedLanguage. An unrecognized loader
+            // string falls back to Rust (see `supported_language_from_str`); surface
             // that as a warning so a typo'd `loader` field is not silently coerced.
             if !is_known_runtime_language(&manifest.loader) {
                 self.logger.log(LogLevel::Warn, "runtime", || {
                     format!(
-                        "bundle `{}`: unknown loader `{}`; defaulting RuntimeLanguage to Rust",
+                        "bundle `{}`: unknown loader `{}`; defaulting SupportedLanguage to Rust",
                         manifest.name, manifest.loader
                     )
                 });
             }
-            let runtime_lang: RuntimeLanguage = runtime_language_from_str(&manifest.loader);
+            let runtime_lang: SupportedLanguage = supported_language_from_str(&manifest.loader);
 
             // Register bundle metadata in RuntimeStore. A failure here means the
             // bundle loaded but its metadata could not be recorded, leaving the
@@ -1281,24 +1281,24 @@ fn host_contract_version_satisfies(interface: &HostContractInterface, min_versio
     interface.contract_version.major == req_major && interface.contract_version.minor >= req_minor
 }
 
-/// Convert a runtime string from manifest.toml to RuntimeLanguage enum.
+/// Convert a runtime string from manifest.toml to SupportedLanguage enum.
 ///
-/// An unrecognized string falls back to [`RuntimeLanguage::Rust`]. Callers that want
+/// An unrecognized string falls back to [`SupportedLanguage::Rust`]. Callers that want
 /// to flag a typo should first consult [`is_known_runtime_language`] and emit a
 /// warning, since this function cannot distinguish "rust" from a misspelling.
-fn runtime_language_from_str(s: &str) -> RuntimeLanguage {
+fn supported_language_from_str(s: &str) -> SupportedLanguage {
     match s {
-        "native" | "rust" => RuntimeLanguage::Rust,
-        "python" => RuntimeLanguage::Python,
-        "lua" => RuntimeLanguage::Lua,
-        "javascript" | "js" => RuntimeLanguage::JavaScript,
-        "dotnet" | "csharp" => RuntimeLanguage::Dotnet,
-        "cpp" => RuntimeLanguage::Cpp,
-        _ => RuntimeLanguage::Rust,
+        "native" | "rust" => SupportedLanguage::Rust,
+        "python" => SupportedLanguage::Python,
+        "lua" => SupportedLanguage::Lua,
+        "javascript" | "js" => SupportedLanguage::JavaScript,
+        "dotnet" | "csharp" => SupportedLanguage::Dotnet,
+        "cpp" => SupportedLanguage::Cpp,
+        _ => SupportedLanguage::Rust,
     }
 }
 
-/// Returns `true` iff `s` is a runtime string [`runtime_language_from_str`] maps
+/// Returns `true` iff `s` is a runtime string [`supported_language_from_str`] maps
 /// explicitly (i.e. NOT via its catch-all Rust fallback). Used to warn on an unknown
 /// `runtime` field before it is silently coerced to Rust.
 fn is_known_runtime_language(s: &str) -> bool {
@@ -4255,20 +4255,20 @@ mod tests {
     }
 
     #[test]
-    fn runtime_host_runtime_default_is_rust() {
+    fn runtime_host_language_default_is_rust() {
         let runtime: Arc<Runtime> = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
-        assert_eq!(runtime.host_runtime(), RuntimeLanguage::Rust);
+        assert_eq!(runtime.host_language(), SupportedLanguage::Rust);
     }
 
     #[test]
-    fn runtime_host_runtime_can_be_set() {
+    fn runtime_host_language_can_be_set() {
         let runtime: Arc<Runtime> = Runtime::builder()
-            .host_runtime(RuntimeLanguage::Python)
+            .host_language(SupportedLanguage::Python)
             .build()
             .expect("runtime build should succeed");
-        assert_eq!(runtime.host_runtime(), RuntimeLanguage::Python);
+        assert_eq!(runtime.host_language(), SupportedLanguage::Python);
     }
 
     #[test]
@@ -4726,7 +4726,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
-                RuntimeLanguage::Rust,
+                SupportedLanguage::Rust,
                 PathBuf::new(),
                 Vec::new(),
             )
@@ -4741,7 +4741,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
-                RuntimeLanguage::Rust,
+                SupportedLanguage::Rust,
                 PathBuf::new(),
                 Vec::new(),
             )

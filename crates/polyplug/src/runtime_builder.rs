@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
 use polyplug_abi::types::{LogLevel, StringView};
-use polyplug_abi::{HostApi, RuntimeLanguage};
+use polyplug_abi::{HostApi, SupportedLanguage};
 
 use crate::{
     compatibility::CapabilityGraph,
@@ -56,7 +56,7 @@ pub struct RuntimeBuilder {
     logger_closure: Option<Box<LoggerClosure>>,
     on_reload_cb: Option<ReloadCallback>,
     config: RuntimeConfig,
-    host_runtime: RuntimeLanguage,
+    host_language: SupportedLanguage,
 }
 
 impl RuntimeBuilder {
@@ -69,7 +69,7 @@ impl RuntimeBuilder {
             logger_closure: None,
             on_reload_cb: None,
             config: RuntimeConfig::default(),
-            host_runtime: RuntimeLanguage::Rust,
+            host_language: SupportedLanguage::Rust,
         }
     }
 
@@ -145,10 +145,10 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Set the host runtime type.
-    /// Defaults to `RuntimeLanguage::Rust`.
-    pub fn host_runtime(mut self, runtime: RuntimeLanguage) -> RuntimeBuilder {
-        self.host_runtime = runtime;
+    /// Set the host language type.
+    /// Defaults to `SupportedLanguage::Rust`.
+    pub fn host_language(mut self, language: SupportedLanguage) -> RuntimeBuilder {
+        self.host_language = language;
         self
     }
 
@@ -242,7 +242,7 @@ impl RuntimeBuilder {
             last_error: std::sync::Mutex::new(String::new()),
             host_contracts: std::sync::RwLock::new(HashMap::new()),
             singleton_instances: std::sync::RwLock::new(HashMap::new()),
-            host_runtime: self.host_runtime,
+            host_language: self.host_language,
             init_bundle_stack: std::sync::Mutex::new(HashMap::new()),
             active_init_count: core::sync::atomic::AtomicUsize::new(0),
             reload_serialize: std::sync::Mutex::new(()),

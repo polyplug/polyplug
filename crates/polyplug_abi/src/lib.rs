@@ -11,12 +11,12 @@ pub mod guest;
 pub mod host;
 pub mod plugin;
 pub mod runtime;
-mod runtime_language;
+mod supported_language;
 #[cfg(feature = "tracking")]
 pub mod tracking;
 pub mod types;
 
-pub use runtime_language::RuntimeLanguage;
+pub use supported_language::SupportedLanguage;
 
 // ─── Runtime exports ──────────────────────────────────────────────────────────
 

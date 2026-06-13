@@ -39,7 +39,7 @@ use polyplug::host_bridge::BridgeError;
 use polyplug::host_bridge::RuntimeLanguageBridge;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
-use polyplug_abi::RuntimeLanguage;
+use polyplug_abi::SupportedLanguage;
 use polyplug_abi::StringView;
 
 /// Errors that can occur when creating a JsHostBridge.
@@ -168,9 +168,9 @@ impl Drop for JsHostBridge {
 }
 
 impl RuntimeLanguageBridge for JsHostBridge {
-    /// Returns `RuntimeLanguage::JavaScript` to identify this as a JavaScript bridge.
-    fn runtime_type(&self) -> RuntimeLanguage {
-        RuntimeLanguage::JavaScript
+    /// Returns `SupportedLanguage::JavaScript` to identify this as a JavaScript bridge.
+    fn runtime_type(&self) -> SupportedLanguage {
+        SupportedLanguage::JavaScript
     }
 
     /// Register a JavaScript callable as a host contract implementation.
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn bridge_runtime_type_returns_javascript() {
         let bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
-        assert_eq!(bridge.runtime_type(), RuntimeLanguage::JavaScript);
+        assert_eq!(bridge.runtime_type(), SupportedLanguage::JavaScript);
     }
 
     #[test]

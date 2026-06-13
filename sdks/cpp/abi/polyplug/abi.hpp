@@ -35,7 +35,7 @@ enum class ContractType : uint32_t;
 enum class DispatchType : uint32_t;
 enum class Compatibility : uint32_t;
 enum class ReloadPhaseType : uint32_t;
-enum class RuntimeLanguage : uint32_t;
+enum class SupportedLanguage : uint32_t;
 enum class AbiErrorCode : uint32_t;
 enum class LogLevel : uint32_t;
 enum class ParseVersionError : uint32_t;
@@ -807,8 +807,8 @@ enum class ReloadPhaseType : uint32_t {
     Unloading = 3,
 };
 
-///  Runtime type identifier — identifies the language/runtime hosting plugins.
-enum class RuntimeLanguage : uint32_t {
+///  Supported plugin language identifier — identifies the language/runtime hosting plugins.
+enum class SupportedLanguage : uint32_t {
     Rust = 0,
     Cpp = 1,
     Dotnet = 2,
