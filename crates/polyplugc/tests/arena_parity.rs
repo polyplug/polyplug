@@ -232,12 +232,12 @@ fn csharp_host_caller_emits_arena_for_stringview_return() {
         "C#: arena-backed method must rewind the arena at call start:\n{callers}"
     );
     assert!(
-        callers.contains("argsPtr, outPtr, arenaPtr)"),
-        "C#: arena-backed VM call must pass the live arena pointer:\n{callers}"
+        callers.contains("argsPtr, outPtr, arenaPtr, &err)"),
+        "C#: arena-backed VM call must pass the live arena pointer then the AbiError out-param:\n{callers}"
     );
     assert!(
-        callers.contains("argsPtr, outPtr, (CallArena*)null)"),
-        "C#: scalar VM call must pass a null arena (host->alloc fallback):\n{callers}"
+        callers.contains("argsPtr, outPtr, (CallArena*)null, &err)"),
+        "C#: scalar VM call must pass a null arena (host->alloc fallback) then the AbiError out-param:\n{callers}"
     );
 
     // Dispose must use FreeAll (frees overflow chain) not Reset (rewind only).
@@ -267,8 +267,8 @@ fn csharp_host_caller_omits_arena_for_scalar_only() {
     );
     // VM dispatch still exists and uses a null arena.
     assert!(
-        callers.contains("argsPtr, outPtr, (CallArena*)null)"),
-        "C#: scalar-only VM call must still pass a null arena:\n{callers}"
+        callers.contains("argsPtr, outPtr, (CallArena*)null, &err)"),
+        "C#: scalar-only VM call must still pass a null arena then the AbiError out-param:\n{callers}"
     );
 }
 
@@ -309,12 +309,12 @@ fn python_host_caller_emits_arena_for_stringview_return() {
         "Python: __del__ must call _arena_free_all (teardown frees blocks):\n{callers}"
     );
     assert!(
-        callers.contains("out_ptr, ctypes.byref(self._arena))"),
-        "Python: arena-backed VM call must pass the live arena:\n{callers}"
+        callers.contains("out_ptr, ctypes.byref(self._arena), ctypes.byref(err))"),
+        "Python: arena-backed VM call must pass the live arena then the AbiError out-param:\n{callers}"
     );
     assert!(
-        callers.contains("out_ptr, None)"),
-        "Python: scalar VM call must pass a null arena (host->alloc fallback):\n{callers}"
+        callers.contains("out_ptr, None, ctypes.byref(err))"),
+        "Python: scalar VM call must pass a null arena (host->alloc fallback) then the AbiError out-param:\n{callers}"
     );
 }
 
@@ -336,7 +336,7 @@ fn python_host_caller_omits_arena_for_scalar_only() {
         "Python: scalar-only contract must NOT allocate an arena buffer:\n{callers}"
     );
     assert!(
-        callers.contains("out_ptr, None)"),
-        "Python: scalar-only VM call must pass a null arena:\n{callers}"
+        callers.contains("out_ptr, None, ctypes.byref(err))"),
+        "Python: scalar-only VM call must pass a null arena then the AbiError out-param:\n{callers}"
     );
 }

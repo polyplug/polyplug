@@ -181,7 +181,7 @@ fn test_interface_factory_header_has_correct_function_count() {
 
     // Static FUNCTIONS array must have correct size
     let expected_array_size: String = format!(
-        "[unsafe extern \"C\" fn(*const c_void, *const (), *mut ()) -> AbiError; {expected_count}]"
+        "[unsafe extern \"C\" fn(*const c_void, *const (), *mut (), *mut AbiError); {expected_count}]"
     );
     assert!(
         interfaces.contains(&expected_array_size),

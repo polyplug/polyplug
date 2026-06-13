@@ -342,8 +342,8 @@ fn test_csharp_host_callers_use_real_runtime_api() {
     // and must be cast to function pointers before invocation. The instance
     // lifecycle is host-mediated so the runtime tracks every live instance.
     assert!(
-        callers.contains("(delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance>)host->CreateGuestInstance"),
-        "Create must cast the IntPtr CreateGuestInstance field to a function pointer: {callers}"
+        callers.contains("(delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance"),
+        "Create must cast the IntPtr CreateGuestInstance field to a function pointer (out-param: writes through GuestContractInstance*): {callers}"
     );
 
     println!("test_csharp_host_callers_use_real_runtime_api: passed ✓");
@@ -600,11 +600,11 @@ fn test_python_host_caller_branches_on_dispatch_type() {
         content.contains(
             "interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance,"
         ),
-        "VM dispatch must use the canonical 6-arg call shape"
+        "VM dispatch must use the canonical 7-arg out-param call shape"
     );
     assert!(
-        content.contains(", args_ptr, out_ptr, ctypes.byref(self._arena))"),
-        "arena-backed VM dispatch must hand the guest the per-call arena"
+        content.contains(", args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))"),
+        "arena-backed VM dispatch must hand the guest the per-call arena then the AbiError out-param"
     );
 
     println!("test_python_host_caller_branches_on_dispatch_type: passed ✓");
@@ -709,11 +709,12 @@ fn test_lua_host_contract_guest_generates_caller() {
         !content.contains(".header."),
         "must not read through a nonexistent .header field"
     );
-    // VM dispatch must use the canonical 6-arg call with loader_data and a nil arena.
+    // VM dispatch must use the canonical 7-arg out-param call with loader_data,
+    // a nil arena, and the trailing AbiError out-param.
     assert!(
         content.contains("interface.dispatch.vm.call(interface.dispatch.vm.loader_data,")
-            && content.contains(", args_ptr, out_ptr, nil)"),
-        "VM dispatch must use the 6-arg call(loader_data, instance, fn_id, args, out, nil)"
+            && content.contains(", args_ptr, out_ptr, nil, err)"),
+        "VM dispatch must use the 7-arg call(loader_data, instance, fn_id, args, out, nil, err)"
     );
     assert!(
         !content.contains("bridge_data"),

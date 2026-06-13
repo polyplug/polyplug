@@ -449,18 +449,21 @@ fn host_thunk_empty_stringview_round_trips() {
          // derives from user_data. Reach it the same way the host runtime would.\n\
          let impl_ptr: *const c_void = interface.user_data as *const c_void;\n\
          // SAFETY: native dispatch is active; functions[0] is the `log` thunk.\n\
-         let log_thunk: unsafe extern \"C\" fn(*const c_void, *const (), *mut ()) -> AbiError = unsafe {\n\
+         let log_thunk: unsafe extern \"C\" fn(*const c_void, *const (), *mut (), *mut AbiError) = unsafe {\n\
          let fns: *const *const () = interface.dispatch.native.functions;\n\
          core::mem::transmute(*fns.add(0))\n\
          };\n\
          // The crux: pass a NULL StringView (ptr=null, len=0) as the `message` arg.\n\
          let arg: StringView = StringView::null();\n\
          // SAFETY: impl_ptr is the interface's impl; arg points to a valid (null) StringView.\n\
-         let err: AbiError = unsafe {\n\
+         // Out-param ABI: the thunk writes its AbiError through a trailing pointer and returns void.\n\
+         let mut err: AbiError = AbiError::ok();\n\
+         unsafe {\n\
          log_thunk(\n\
          impl_ptr,\n\
          &arg as *const StringView as *const (),\n\
          core::ptr::null_mut(),\n\
+         &mut err as *mut AbiError,\n\
          )\n\
          };\n\
          assert_eq!(err.code, AbiErrorCode::Ok as u32, \"thunk must return Ok for a null StringView\");\n\

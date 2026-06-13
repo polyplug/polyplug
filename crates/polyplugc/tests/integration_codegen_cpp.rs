@@ -453,12 +453,12 @@ fn test_cpp_codegen_host_caller_threads_arena() {
         "an arena-backed call must reset the arena at call start"
     );
     assert!(
-        content.contains("args_ptr, out_ptr, &arena_);"),
-        "the variable-size return must thread the per-caller arena to vm.call"
+        content.contains("args_ptr, out_ptr, &arena_, &err);"),
+        "the variable-size return must thread the per-caller arena to vm.call then the AbiError out-param"
     );
     assert!(
-        content.contains("args_ptr, out_ptr, nullptr);"),
-        "fixed-size returns must pass a null arena to vm.call"
+        content.contains("args_ptr, out_ptr, nullptr, &err);"),
+        "fixed-size returns must pass a null arena to vm.call then the AbiError out-param"
     );
 
     // The destructor must free (not just rewind) the arena's overflow chain at teardown.
