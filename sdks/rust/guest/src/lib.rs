@@ -183,7 +183,16 @@ pub fn abi_error_panic_caught() -> polyplug_abi::AbiError {
 ///
 /// # Example
 /// ```rust,ignore
-/// extern "C" fn my_fn(args: *const (), out: *mut ()) -> AbiError { AbiError::ok() }
+/// // Out-param ABI: native dispatch fns return void and write their AbiError
+/// // through the trailing out_err pointer.
+/// extern "C" fn my_fn(
+///     _instance: GuestContractInstance,
+///     args: *const (),
+///     out: *mut (),
+///     out_err: *mut AbiError,
+/// ) {
+///     if !out_err.is_null() { unsafe { out_err.write(AbiError::ok()) }; }
+/// }
 /// static MY_FNS: [FnPtr; 1] = [FnPtr(my_fn as *const ())];
 /// ```
 #[repr(transparent)]

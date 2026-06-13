@@ -40,14 +40,17 @@ public sealed class Runtime
 
     // ─── Function pointer delegate types (18-03) ─────────────────────────────────
 
+    // Out-param ABI: these host calls return void and write their AbiError
+    // through a trailing pointer. `out AbiError` marshals as that `*mut AbiError`
+    // (AbiError is blittable), so no managed return value crosses the boundary.
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate AbiError LoadBundleDelegate(nint host, nint path, nuint pathLen);
+    private delegate void LoadBundleDelegate(nint host, nint path, nuint pathLen, out AbiError outErr);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate AbiError ReloadBundleDelegate(nint host, nint path, nuint pathLen);
+    private delegate void ReloadBundleDelegate(nint host, nint path, nuint pathLen, out AbiError outErr);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate AbiError UnloadBundleDelegate(nint host, ulong bundleId);
+    private delegate void UnloadBundleDelegate(nint host, ulong bundleId, out AbiError outErr);
 
     // GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes,
     // align 4). It crosses the C ABI by value as the 8-byte struct — its
@@ -70,10 +73,10 @@ public sealed class Runtime
     private delegate nuint GetErrorLenDelegate(nint host);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate AbiError RegisterHostContractDelegate(nint host, nint interfacePtr);
+    private delegate void RegisterHostContractDelegate(nint host, nint interfacePtr, out AbiError outErr);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate AbiError RegisterLoaderDelegate(nint host, nint loaderPtr);
+    private delegate void RegisterLoaderDelegate(nint host, nint loaderPtr, out AbiError outErr);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeDelegate(nint host, nint ptr, nuint size, nuint align);
@@ -342,7 +345,7 @@ public sealed class Runtime
         EnsureHost();
         InvokeWithUtf8(path, (ptr, len) =>
         {
-            AbiError result = _loadBundleFn!(_host, ptr, len);
+            _loadBundleFn!(_host, ptr, len, out AbiError result);
             CheckAbiError(result, "Failed to load bundle.");
         });
     }
@@ -352,7 +355,7 @@ public sealed class Runtime
         EnsureHost();
         InvokeWithUtf8(path, (ptr, len) =>
         {
-            AbiError result = _reloadBundleFn!(_host, ptr, len);
+            _reloadBundleFn!(_host, ptr, len, out AbiError result);
             CheckAbiError(result, "Failed to reload bundle.");
         });
     }
@@ -360,12 +363,12 @@ public sealed class Runtime
     public void UnloadBundle(ulong bundleId)
     {
         EnsureHost();
-        AbiError result = _unloadBundleFn!(_host, bundleId);
+        _unloadBundleFn!(_host, bundleId, out AbiError result);
         CheckAbiError(result, "Failed to unload bundle.");
     }
 
     /// <summary>
-    /// Inspect an <see cref="AbiError"/> returned by value from a host call.
+    /// Inspect an <see cref="AbiError"/> written through a host call's out-param.
     /// On a non-Ok code, copy the message into a managed string and throw.
     /// </summary>
     /// <remarks>
@@ -452,7 +455,7 @@ public sealed class Runtime
     {
         EnsureHost();
 
-        AbiError result = _registerHostContractFn!(_host, hostInterface);
+        _registerHostContractFn!(_host, hostInterface, out AbiError result);
         CheckAbiError(result, "Failed to register host contract.");
     }
 
@@ -467,7 +470,7 @@ public sealed class Runtime
     {
         EnsureHost();
 
-        AbiError error = _registerLoaderFn!(_host, loaderPtr);
+        _registerLoaderFn!(_host, loaderPtr, out AbiError error);
         // AbiError.Message is static or runtime-owned; the receiver never frees it.
         return error.Code;
     }
