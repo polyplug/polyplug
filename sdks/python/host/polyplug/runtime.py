@@ -229,9 +229,10 @@ class Runtime:
 
         # The HostApi struct fields are already fully-typed C function
         # pointers (CFUNCTYPE with the canonical ABI signatures from abi.py:
-        # functions returning AbiError do so BY VALUE as a 24-byte struct).
-        # Cache them directly — re-wrapping in a hand-rolled CFUNCTYPE would
-        # both duplicate the signature and risk drift from the canonical type.
+        # out-param ABI — these return None and write their AbiError through a
+        # trailing pointer passed as ctypes.byref(err)). Cache them directly —
+        # re-wrapping in a hand-rolled CFUNCTYPE would both duplicate the
+        # signature and risk drift from the canonical type.
         self._load_bundle_fn = self._host_struct.load_bundle
         self._reload_bundle_fn = self._host_struct.reload_bundle
         self._unload_bundle_fn = self._host_struct.unload_bundle
@@ -373,7 +374,8 @@ class Runtime:
         host: int = self._ensure_host()
         path_bytes: bytes = str(Path(path)).encode("utf-8")
         buf = (ctypes.c_uint8 * len(path_bytes))(*path_bytes)
-        err: AbiError = self._load_bundle_fn(host, buf, len(path_bytes))
+        err: AbiError = AbiError()
+        self._load_bundle_fn(host, buf, len(path_bytes), ctypes.byref(err))
         self._check_error(err.code, "load_bundle")
 
     def reload_bundle(self, path: str | Path) -> None:
@@ -381,13 +383,15 @@ class Runtime:
         host: int = self._ensure_host()
         path_bytes: bytes = str(Path(path)).encode("utf-8")
         buf = (ctypes.c_uint8 * len(path_bytes))(*path_bytes)
-        err: AbiError = self._reload_bundle_fn(host, buf, len(path_bytes))
+        err: AbiError = AbiError()
+        self._reload_bundle_fn(host, buf, len(path_bytes), ctypes.byref(err))
         self._check_error(err.code, "reload_bundle")
 
     def unload_bundle(self, bundle_id: int) -> None:
         """Unload a plugin bundle by bundle ID."""
         host: int = self._ensure_host()
-        err: AbiError = self._unload_bundle_fn(host, bundle_id)
+        err: AbiError = AbiError()
+        self._unload_bundle_fn(host, bundle_id, ctypes.byref(err))
         self._check_error(err.code, "unload_bundle")
 
     def find_guest_contract(self, contract_id: int, min_version: int) -> GuestContractHandle:
@@ -464,7 +468,8 @@ class Runtime:
         self._host_contract_interfaces[contract_id] = interface
 
         interface_ptr = ctypes.addressof(interface)
-        err: AbiError = self._register_host_contract_fn(host, interface_ptr)
+        err: AbiError = AbiError()
+        self._register_host_contract_fn(host, interface_ptr, ctypes.byref(err))
         if err.code == AbiErrorCode.DuplicateProvider:
             raise RuntimeError(f"duplicate host contract: contract_id={contract_id}")
         self._check_error(err.code, "register_host_contract")
@@ -476,5 +481,6 @@ class Runtime:
             loader_ptr: Opaque loader pointer from the loader cdylib's create function.
         """
         host: int = self._ensure_host()
-        err: AbiError = self._register_loader_fn(host, loader_ptr)
+        err: AbiError = AbiError()
+        self._register_loader_fn(host, loader_ptr, ctypes.byref(err))
         self._check_error(err.code, "register_loader")
