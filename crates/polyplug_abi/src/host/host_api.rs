@@ -289,11 +289,8 @@ pub struct HostApi {
     ///
     /// The loader's name comes from its own `BundleLoader::loader_name()`
     /// implementation — the single source of truth — so it is not passed here.
-    pub register_loader: unsafe extern "C" fn(
-        this: *const HostApi,
-        loader_ptr: *mut c_void,
-        out_err: *mut AbiError,
-    ),
+    pub register_loader:
+        unsafe extern "C" fn(this: *const HostApi, loader_ptr: *mut c_void, out_err: *mut AbiError),
     /// Get last error message.
     ///
     /// Returns the most recent error message from this runtime.

@@ -96,7 +96,7 @@ extern "C" fn error_panic(
     _out: *mut (),
     out_err: *mut AbiError,
 ) {
-    let __result_err: AbiError = (|| {
+    let __result_err: AbiError = {
         let result: Result<(), Box<dyn core::any::Any + Send>> = std::panic::catch_unwind(|| {
             panic!("intentional error_plugin panic");
         });
@@ -107,7 +107,7 @@ extern "C" fn error_panic(
                 message: string_view_from_static(b"plugin panicked"),
             },
         }
-    })();
+    };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(__result_err) };
@@ -127,7 +127,7 @@ extern "C" fn error_chain_propagate(
     out: *mut (),
     out_err: *mut AbiError,
 ) {
-    let __result_err: AbiError = (|| {
+    let __result_err: AbiError = {
         // SAFETY: args points to ChainArgs per the ABI contract.
         let chain_args: &ChainArgs = unsafe { &*(args as *const ChainArgs) };
         // SAFETY: chain_args.host is a valid HostApi pointer provided by the host runtime.
@@ -172,9 +172,9 @@ extern "C" fn error_chain_propagate(
                     *mut (),
                     *mut AbiError,
                 ) = unsafe { core::mem::transmute(fn_ptr) };
+                let mut inner_err: AbiError = abi_error_ok();
                 // SAFETY: null instance/args/out is valid for fns that don't require them;
                 // the inner AbiError is written through the trailing out-param.
-                let mut inner_err: AbiError = abi_error_ok();
                 unsafe {
                     dispatch_fn(
                         GuestContractInstance::null(),
@@ -189,7 +189,7 @@ extern "C" fn error_chain_propagate(
         // SAFETY: out points to a valid AbiError per the ABI contract.
         unsafe { (out as *mut AbiError).write(inner_result) };
         abi_error_ok()
-    })();
+    };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(__result_err) };

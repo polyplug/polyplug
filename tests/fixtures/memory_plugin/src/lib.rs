@@ -212,7 +212,7 @@ extern "C" fn memory_zero_length_roundtrip(
     out: *mut (),
     out_err: *mut AbiError,
 ) {
-    let __result_err: AbiError = (|| {
+    let __result_err: AbiError = {
         // SAFETY: args points to a valid ZeroArgs per the ABI contract.
         // out points to a valid ZeroResult per the ABI contract.
         let zero_args: &ZeroArgs = unsafe { &*(args as *const ZeroArgs) };
@@ -223,7 +223,7 @@ extern "C" fn memory_zero_length_roundtrip(
         // SAFETY: out points to a valid ZeroResult per the ABI contract.
         unsafe { (out as *mut ZeroResult).write(result) };
         abi_error_ok()
-    })();
+    };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(__result_err) };
@@ -245,13 +245,13 @@ extern "C" fn memory_return_borrowed(
     out: *mut (),
     out_err: *mut AbiError,
 ) {
-    let __result_err: AbiError = (|| {
+    let __result_err: AbiError = {
         // SAFETY: args points to a valid StringView per the ABI contract.
         let sv: StringView = unsafe { *(args as *const StringView) };
         // SAFETY: out points to a valid StringView per the ABI contract.
         unsafe { (out as *mut StringView).write(sv) };
         abi_error_ok()
-    })();
+    };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(__result_err) };
