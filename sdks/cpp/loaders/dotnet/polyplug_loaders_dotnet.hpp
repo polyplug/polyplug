@@ -25,7 +25,8 @@ inline void register_dotnet(Runtime& rt, std::string_view min_framework = "10.0"
         throw std::runtime_error("polyplug: dotnet loader create failed");
     }
     const HostApi* host = rt.host();
-    AbiError err = host->register_loader(host, loader);
+    AbiError err{};
+    host->register_loader(host, loader, &err);
     if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
         throw std::runtime_error("polyplug: dotnet loader register failed: " + rt.get_last_error());
     }

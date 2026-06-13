@@ -208,10 +208,11 @@ public:
     /// Calls through HostApi.load_bundle field.
     void load_bundle(std::string_view path) {
         ensure_host();
-        // Cast function pointer and call with self-passing pattern.
-        // Returns AbiError, not uint32_t.
-        auto func = reinterpret_cast<AbiError(*)(const HostApi*, const uint8_t*, size_t)>(host_->load_bundle);
-        AbiError result = func(host_, reinterpret_cast<const uint8_t*>(path.data()), path.size());
+        // Out-param ABI: the typed field returns void and writes its AbiError
+        // through the trailing pointer. Calling the field directly (no cast)
+        // keeps the signature sourced from the auto-generated mirror (Rule 10).
+        AbiError result{};
+        host_->load_bundle(host_, reinterpret_cast<const uint8_t*>(path.data()), path.size(), &result);
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("load_bundle failed: " + get_last_error());
         }
@@ -221,8 +222,8 @@ public:
     /// Calls through HostApi.reload_bundle field.
     void reload_bundle(std::string_view path) {
         ensure_host();
-        auto func = reinterpret_cast<AbiError(*)(const HostApi*, const uint8_t*, size_t)>(host_->reload_bundle);
-        AbiError result = func(host_, reinterpret_cast<const uint8_t*>(path.data()), path.size());
+        AbiError result{};
+        host_->reload_bundle(host_, reinterpret_cast<const uint8_t*>(path.data()), path.size(), &result);
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("reload_bundle failed: " + get_last_error());
         }
@@ -232,8 +233,8 @@ public:
     /// Calls through HostApi.unload_bundle field.
     void unload_bundle(uint64_t bundle_id) {
         ensure_host();
-        auto func = reinterpret_cast<AbiError(*)(const HostApi*, uint64_t)>(host_->unload_bundle);
-        AbiError result = func(host_, bundle_id);
+        AbiError result{};
+        host_->unload_bundle(host_, bundle_id, &result);
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("unload_bundle failed: " + get_last_error());
         }
@@ -289,8 +290,8 @@ public:
             throw std::runtime_error("register_host_contract: null interface pointer");
         }
         ensure_host();
-        auto func = reinterpret_cast<AbiError(*)(const HostApi*, const HostContractInterface*)>(host_->register_host_contract);
-        AbiError result = func(host_, interface);
+        AbiError result{};
+        host_->register_host_contract(host_, interface, &result);
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("register_host_contract failed: " + get_last_error());
         }

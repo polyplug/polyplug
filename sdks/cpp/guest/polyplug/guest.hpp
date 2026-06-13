@@ -7,11 +7,10 @@
 //   #include <polyplug/guest.hpp>
 //
 //   POLYPLUG_GUEST_MAIN {
-//       // host->register_guest_contract(host, &kDescriptor, &kInterface);
+//       // Out-param ABI: register writes its AbiError through the trailing
+//       // pointer and returns void; init surfaces it by value.
 //       AbiError err{};
-//       err.code        = static_cast<uint32_t>(AbiErrorCode::Ok);
-//       err.message.ptr = nullptr;
-//       err.message.len = 0;
+//       host->register_guest_contract(host, &kDescriptor, &kInterface, &err);
 //       return err;
 //   }
 //
@@ -77,11 +76,10 @@ inline StringView alloc_string(const HostApi* host, const std::string& s) {
 ///
 /// Usage:
 ///   POLYPLUG_GUEST_MAIN {
-///       // register contracts via host->register_guest_contract(host, &desc, &iface)
+///       // Out-param ABI: register writes the AbiError through the trailing
+///       // pointer; init returns it by value.
 ///       AbiError ok{};
-///       ok.code        = static_cast<uint32_t>(AbiErrorCode::Ok);
-///       ok.message.ptr = nullptr;
-///       ok.message.len = 0;
+///       host->register_guest_contract(host, &desc, &iface, &ok);
 ///       return ok;
 ///   }
 ///
