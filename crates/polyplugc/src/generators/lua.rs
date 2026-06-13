@@ -2106,10 +2106,10 @@ fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("        PolyplugLuaHostDispatchCallback callback;\n");
     out.push_str("    } PolyplugLuaHostDispatchBridge;\n");
     out.push_str(
-        "    AbiError polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*);\n",
+        "    void polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);\n",
     );
     out.push_str(
-        "    HostContractInstance polyplug_lua_host_create_instance(const HostContractInterface*, const void*);\n",
+        "    void polyplug_lua_host_create_instance(const HostContractInterface*, const void*, HostContractInstance*);\n",
     );
     out.push_str(
         "    void polyplug_lua_host_destroy_instance(const HostContractInterface*, HostContractInstance);\n",
