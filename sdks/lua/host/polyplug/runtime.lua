@@ -74,15 +74,16 @@ M.FIND_ALL_FN_SIGNATURE = "Array(*)(const HostApi*, uint64_t, uint32_t)"
 -- sites (casting with a ctype object creates no new ctype).
 local GET_ERROR_LEN_FN_T = ffi.typeof("size_t(*)(const HostApi*)")
 local GET_LAST_ERROR_FN_T = ffi.typeof("size_t(*)(const HostApi*, uint8_t*, size_t)")
--- load_bundle and reload_bundle share one shape: AbiError fn(host, path, len).
-local BUNDLE_PATH_FN_T = ffi.typeof("AbiError(*)(const HostApi*, const uint8_t*, size_t)")
-local UNLOAD_BUNDLE_FN_T = ffi.typeof("AbiError(*)(const HostApi*, uint64_t)")
+-- Out-param ABI: load_bundle and reload_bundle share one shape — they return
+-- void and write their AbiError through a trailing AbiError* out-param.
+local BUNDLE_PATH_FN_T = ffi.typeof("void(*)(const HostApi*, const uint8_t*, size_t, AbiError*)")
+local UNLOAD_BUNDLE_FN_T = ffi.typeof("void(*)(const HostApi*, uint64_t, AbiError*)")
 local FIND_GUEST_CONTRACT_FN_T = ffi.typeof("GuestContractHandle(*)(const HostApi*, uint64_t, uint32_t)")
 local FIND_ALL_FN_T = ffi.typeof(M.FIND_ALL_FN_SIGNATURE)
 local HOST_FREE_FN_T = ffi.typeof("void(*)(const HostApi*, void*, size_t, size_t)")
 local RESOLVE_GUEST_CONTRACT_FN_T = ffi.typeof("const GuestContractInterface*(*)(const HostApi*, GuestContractHandle)")
-local REGISTER_HOST_CONTRACT_FN_T = ffi.typeof("AbiError(*)(const HostApi*, const HostContractInterface*)")
-local REGISTER_LOADER_FN_T = ffi.typeof("AbiError(*)(const HostApi*, void*)")
+local REGISTER_HOST_CONTRACT_FN_T = ffi.typeof("void(*)(const HostApi*, const HostContractInterface*, AbiError*)")
+local REGISTER_LOADER_FN_T = ffi.typeof("void(*)(const HostApi*, void*, AbiError*)")
 
 M.bundle_id = abi.bundle_id
 
@@ -339,11 +340,12 @@ end
 function M.Runtime:load_bundle(path)
     local path_str = tostring(path)
     local path_bytes = ffi.new("uint8_t[?]", #path_str, path_str)
-    -- Cast function pointer and call with self-passing pattern.
-    -- HostApi.load_bundle returns AbiError (24-byte struct), not uint32_t.
+    -- Out-param ABI: load_bundle returns void and writes its AbiError through
+    -- the trailing out-param.
     local fn = ffi.cast(BUNDLE_PATH_FN_T, self._host_struct.load_bundle)
-    local err = fn(self._host, path_bytes, #path_str)
-    if err.code ~= ffi.C.AbiErrorCode_Ok then
+    local err = ffi.new("AbiError[1]")
+    fn(self._host, path_bytes, #path_str, err)
+    if err[0].code ~= ffi.C.AbiErrorCode_Ok then
         error("load_bundle failed: " .. M.last_error(self._host, self._lib))
     end
 end
@@ -354,11 +356,12 @@ end
 function M.Runtime:reload_bundle(path)
     local path_str = tostring(path)
     local path_bytes = ffi.new("uint8_t[?]", #path_str, path_str)
-    -- Cast function pointer and call with self-passing pattern.
-    -- HostApi.reload_bundle returns AbiError (24-byte struct), not uint32_t.
+    -- Out-param ABI: reload_bundle returns void and writes its AbiError through
+    -- the trailing out-param.
     local fn = ffi.cast(BUNDLE_PATH_FN_T, self._host_struct.reload_bundle)
-    local err = fn(self._host, path_bytes, #path_str)
-    if err.code ~= ffi.C.AbiErrorCode_Ok then
+    local err = ffi.new("AbiError[1]")
+    fn(self._host, path_bytes, #path_str, err)
+    if err[0].code ~= ffi.C.AbiErrorCode_Ok then
         error("reload_bundle failed: " .. M.last_error(self._host, self._lib))
     end
 end
@@ -367,11 +370,12 @@ end
 -- Calls through HostApi.unload_bundle field.
 -- @param bundle_id number  Bundle identifier (uint64).
 function M.Runtime:unload_bundle(bundle_id)
-    -- Cast function pointer and call with self-passing pattern.
-    -- HostApi.unload_bundle returns AbiError (24-byte struct), not uint32_t.
+    -- Out-param ABI: unload_bundle returns void and writes its AbiError through
+    -- the trailing out-param.
     local fn = ffi.cast(UNLOAD_BUNDLE_FN_T, self._host_struct.unload_bundle)
-    local err = fn(self._host, bundle_id)
-    if err.code ~= ffi.C.AbiErrorCode_Ok then
+    local err = ffi.new("AbiError[1]")
+    fn(self._host, bundle_id, err)
+    if err[0].code ~= ffi.C.AbiErrorCode_Ok then
         error("unload_bundle failed: " .. M.last_error(self._host, self._lib))
     end
 end
@@ -455,11 +459,12 @@ function M.Runtime:register_host_contract(interface)
     if interface == nil then
         error("register_host_contract: null interface pointer")
     end
-    -- Cast function pointer and call with self-passing pattern.
-    -- HostApi.register_host_contract returns AbiError (24-byte struct), not uint32_t.
+    -- Out-param ABI: register_host_contract returns void and writes its
+    -- AbiError through the trailing out-param.
     local fn = ffi.cast(REGISTER_HOST_CONTRACT_FN_T, self._host_struct.register_host_contract)
-    local err = fn(self._host, interface)
-    if err.code ~= ffi.C.AbiErrorCode_Ok then
+    local err = ffi.new("AbiError[1]")
+    fn(self._host, interface, err)
+    if err[0].code ~= ffi.C.AbiErrorCode_Ok then
         error("register_host_contract failed: " .. M.last_error(self._host, self._lib))
     end
 end
@@ -470,8 +475,9 @@ end
 -- @param loader_ptr cdata     Opaque loader pointer from the loader create function.
 function M.Runtime:register_loader(loader_ptr)
     local fn = ffi.cast(REGISTER_LOADER_FN_T, self._host_struct.register_loader)
-    local err = fn(self._host, loader_ptr)
-    if err.code ~= ffi.C.AbiErrorCode_Ok then
+    local err = ffi.new("AbiError[1]")
+    fn(self._host, loader_ptr, err)
+    if err[0].code ~= ffi.C.AbiErrorCode_Ok then
         error("register_loader failed: " .. M.last_error(self._host, self._lib))
     end
 end
