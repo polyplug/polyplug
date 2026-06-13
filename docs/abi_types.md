@@ -179,7 +179,12 @@ ffi.cdef[[
 
 ## AbiError Layout
 
-`AbiError` is returned by value from every ABI call. Defined in
+Under the out-param ABI, `AbiError` is **written through a trailing
+`*mut AbiError` out-parameter** — every ABI function that can fail returns
+`void` and writes its `AbiError` through that pointer. The sole exception is
+`polyplug_init`, which still returns `AbiError` by value (it is the plugin
+entry point, not an `HostApi`/interface function pointer). The 24-byte layout
+below is unchanged either way. Defined in
 `crates/polyplug_abi/src/types/abi_error.rs`. Mirror inline in all plugins.
 
 ```
@@ -202,8 +207,8 @@ pub struct AbiError {
 ```
 
 `code` is a raw `u32` at the ABI boundary, **not** the `AbiErrorCode` enum.
-Plugins are untrusted and return `AbiError` by value across the C ABI, so any
-32-bit pattern can land here — including values that are not declared
+Plugins are untrusted and write `AbiError` through the out-param across the C
+ABI, so any 32-bit pattern can land here — including values that are not declared
 discriminants of the frozen `AbiErrorCode` enum. Materializing such a value as
 the enum would be instant undefined behaviour, so the field stays a raw `u32`.
 Construct it with `AbiErrorCode::X as u32` and interpret it with

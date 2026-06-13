@@ -250,7 +250,7 @@ Full tutorial and per-language examples: [`HOST_CONTRACTS.md`](./HOST_CONTRACTS.
 A plugin can invoke a method on another plugin's guest contract through the host,
 without holding a raw interface pointer of its own.
 
-- `call_guest_method(host, instance, fn_id, args, out, arena) -> AbiError` is the
+- `call_guest_method(host, instance, fn_id, args, out, arena, out_err) -> ()` is the
   17th `HostApi` function pointer (offset 136). The caller passes a
   `GuestContractInstance` it already resolved; the host re-resolves the target
   through the registry via `instance.contract_id` on **every** call, so a call

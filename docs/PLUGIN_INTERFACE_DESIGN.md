@@ -102,13 +102,19 @@ pub struct NativeDispatch {
 
 #[repr(C)]
 pub struct VmDispatch {
+    // Out-param ABI: dispatch returns void and writes its AbiError through the
+    // trailing out_err pointer (the one mechanism every FFI — ctypes, LuaJIT,
+    // Deno — can drive; a struct cannot be returned by value from a callback).
     pub call: unsafe extern "C" fn(
-        loader_data: *mut c_void,
+        loader_data: VmLoaderData,
+        instance: GuestContractInstance,
         fn_id: u32,
         args: *const (),
         out: *mut (),
-    ) -> AbiError,
-    pub loader_data: *mut c_void,  // Loader-specific data
+        arena: *mut CallArena,
+        out_err: *mut AbiError,
+    ),
+    pub loader_data: VmLoaderData,  // Loader-specific data
 }
 ```
 
@@ -118,21 +124,28 @@ pub struct VmDispatch {
 pub fn decode(&self, input: StringView) -> Result<StringView, ContractError> {
     let interface = self.guard.interface();
     
+    // Out-param ABI: dispatch returns void and writes its AbiError through the
+    // trailing out_err pointer; the caller converts `err` into the Result below.
+    let mut err = AbiError::ok();
     if interface.dispatch_type == DispatchType::Native {
         // Native: Direct call, zero overhead
         let fn_ptr = *interface.dispatch.native.functions.add(0);
-        let f: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
+        let f: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
             core::mem::transmute(fn_ptr);
-        f(GuestContractInstance::null(), args_ptr, out_ptr)
+        f(GuestContractInstance::null(), args_ptr, out_ptr, &mut err);
     } else {
         // VM: One dispatch call, no global lookup
         (interface.dispatch.vm.call)(
             interface.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
             0,  // fn_id
             args_ptr,
-            out_ptr
-        )
+            out_ptr,
+            arena_ptr,
+            &mut err,
+        );
     }
+    // ... map `err` (Ok ⇒ borrowed StringView from out_ptr, else ContractError)
 }
 ```
 
@@ -312,31 +325,39 @@ struct DotnetLoaderData {
 The dispatch function IS the implementation. No wrappers:
 
 ```rust
-// Lua dispatch - ALL calling logic here
+// Lua dispatch - ALL calling logic here.
+// Out-param ABI: returns void, writes the AbiError through out_err.
 unsafe extern "C" fn lua_dispatch(
-    loader_data: *mut c_void,
+    loader_data: VmLoaderData,
+    instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    let data = &*(loader_data as *const LuaLoaderData);
+    arena: *mut CallArena,
+    out_err: *mut AbiError,
+) {
+    let data = &*(loader_data.data as *const LuaLoaderData);
     let lua_fn = &data.functions[fn_id as usize];
-    lua_fn.call::<()>((args as i64, out as i64))
+    let err = lua_fn.call::<()>((args as i64, out as i64))
         .map(|_| AbiError::ok())
-        .unwrap_or(AbiError::new(AbiErrorCode::Generic))
+        .unwrap_or(AbiError::new(AbiErrorCode::Generic));
+    if !out_err.is_null() { out_err.write(err); }
 }
 
 // QuickJS dispatch - ALL JS logic here (no channels!)
 unsafe extern "C" fn js_dispatch(
-    loader_data: *mut c_void,
+    loader_data: VmLoaderData,
+    instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
-) -> AbiError {
-    let data = &*(loader_data as *const JsLoaderData);
+    arena: *mut CallArena,
+    out_err: *mut AbiError,
+) {
+    let data = &*(loader_data.data as *const JsLoaderData);
     let func = &data.functions[fn_id as usize];
     func.call((args as i64, out as i64));
-    AbiError::ok()
+    if !out_err.is_null() { out_err.write(AbiError::ok()); }
 }
 ```
 
