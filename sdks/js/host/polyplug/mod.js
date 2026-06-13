@@ -85,9 +85,11 @@ const AbiErrorCode = Object.freeze({
   InvalidPointer: 8,
 });
 
-// AbiError is returned by value from dispatch as a 24-byte struct
-// { code: u32, _pad: u32, message: StringView{ ptr, len } }; code is the first u32.
-const ABI_ERROR_STRUCT = { struct: ["u32", "u32", "pointer", "usize"] };
+// Out-param ABI: AbiError is written through a trailing `*mut AbiError` pointer.
+// It is a 24-byte struct { code: u32, _pad: u32, message: StringView{ ptr, len } };
+// the caller allocates a zeroed buffer of this size, passes its pointer, and
+// reads `code` (the first u32) back after the call.
+const ABI_ERROR_SIZE = 24;
 // GuestContractInstance crosses the ABI by value as { data: ptr, contract_id: u64 }.
 const GUEST_CONTRACT_INSTANCE_STRUCT = { struct: ["pointer", "u64"] };
 // GuestContractHandle crosses the ABI by value as { index: u32, generation: u32 }
@@ -422,15 +424,15 @@ export class GuestContractInterfaceView {
       // raw null pointer survived, fall back to a zeroed (null-data) instance.
       return new Uint8Array(GUEST_CONTRACT_INSTANCE_SIZE);
     }
-    // create_instance(host: *const HostApi, args: *const ()) -> GuestContractInstance
+    // Out-param ABI: create_instance(host: *const HostApi, args: *const (),
+    // out_instance: *mut GuestContractInstance) -> void. The instance is written
+    // directly into the buffer we hand it.
     const fn = new Deno.UnsafeFnPointer(this.#createInstancePtr, {
-      parameters: ["pointer", "pointer"],
-      result: { struct: ["pointer", "u64"] },
+      parameters: ["pointer", "pointer", "pointer"],
+      result: "void",
     });
-    const result = fn.call(this.#host, null);
-    // Normalize the struct result into a 16-byte buffer for by-value re-passing.
     const instance = new Uint8Array(GUEST_CONTRACT_INSTANCE_SIZE);
-    instance.set(new Uint8Array(result.buffer, result.byteOffset, result.byteLength));
+    fn.call(this.#host, null, Deno.UnsafePointer.of(instance));
     return instance;
   }
 
@@ -467,30 +469,34 @@ export class GuestContractInterfaceView {
    * @returns {number} AbiError code (0 = Ok).
    */
   dispatch(slot, instance, argsPtr, outPtr) {
-    let result;
+    // Out-param ABI: dispatch fns return void and write their AbiError through a
+    // trailing *mut AbiError. Allocate a zeroed buffer and read `code` back.
+    const errBuf = new Uint8Array(ABI_ERROR_SIZE);
+    const errPtr = Deno.UnsafePointer.of(errBuf);
     if (this.#dispatchType === DISPATCH_TYPE_VIRTUAL_MACHINE) {
       if (this.#vmCallPtr === null) {
         return AbiErrorCode.InvalidPointer; // null VM dispatch function.
       }
-      // call(loader_data: VmLoaderData, instance, fn_id: u32, args, out, arena) -> AbiError.
-      // VmLoaderData is a single opaque pointer (`{ data: *mut c_void }`). The trailing
-      // `arena` is a `*mut CallArena`; a null arena is the documented legacy fallback to
-      // per-value host->alloc (host callers carry no per-call arena).
+      // call(loader_data: VmLoaderData, instance, fn_id: u32, args, out, arena,
+      // out_err: *mut AbiError) -> void. VmLoaderData is a single opaque pointer
+      // (`{ data: *mut c_void }`). The `arena` is a `*mut CallArena`; a null arena
+      // is the documented legacy fallback to per-value host->alloc (host callers
+      // carry no per-call arena).
       const fn = new Deno.UnsafeFnPointer(this.#vmCallPtr, {
-        parameters: ["pointer", GUEST_CONTRACT_INSTANCE_STRUCT, "u32", "pointer", "pointer", "pointer"],
-        result: ABI_ERROR_STRUCT,
+        parameters: ["pointer", GUEST_CONTRACT_INSTANCE_STRUCT, "u32", "pointer", "pointer", "pointer", "pointer"],
+        result: "void",
       });
       const loaderData = Deno.UnsafePointer.create(this.#vmLoaderData);
-      result = fn.call(loaderData, instance, slot, argsPtr, outPtr, null);
+      fn.call(loaderData, instance, slot, argsPtr, outPtr, null, errPtr);
     } else {
       const fn = this.#nativeFnPointer(slot);
       if (fn === null) {
         return AbiErrorCode.InvalidPointer; // null native function slot.
       }
-      // functions[slot](instance, args, out) -> AbiError.
-      result = fn.call(instance, argsPtr, outPtr);
+      // functions[slot](instance, args, out, out_err: *mut AbiError) -> void.
+      fn.call(instance, argsPtr, outPtr, errPtr);
     }
-    return new DataView(result.buffer, result.byteOffset, result.byteLength).getUint32(0, true);
+    return new DataView(errBuf.buffer).getUint32(0, true);
   }
 
   /**
@@ -512,9 +518,10 @@ export class GuestContractInterfaceView {
     if (fnPtr === null) {
       return null;
     }
+    // Out-param ABI: functions[slot](instance, args, out, out_err) -> void.
     const fn = new Deno.UnsafeFnPointer(fnPtr, {
-      parameters: [GUEST_CONTRACT_INSTANCE_STRUCT, "pointer", "pointer"],
-      result: ABI_ERROR_STRUCT,
+      parameters: [GUEST_CONTRACT_INSTANCE_STRUCT, "pointer", "pointer", "pointer"],
+      result: "void",
     });
     this.#fnPtrCache.set(slot, fn);
     return fn;
@@ -622,15 +629,17 @@ export class Runtime {
   loadBundle(path) {
     const encoded = _encoder.encode(path);
     const ptr = Deno.UnsafePointer.of(encoded);
-    // HostApi.load_bundle returns AbiError (24-byte struct), not u32.
-    const result = callHostMethod(
+    // Out-param ABI: load_bundle returns void and writes its AbiError through a
+    // trailing *mut AbiError.
+    const errBuf = new Uint8Array(ABI_ERROR_SIZE);
+    callHostMethod(
       this.#host,
       HOST_API_OFFSETS.load_bundle,
-      ["pointer", "pointer", "usize"],
-      { struct: ["u32", "u32", "pointer", "usize"] },
-      [this.#host, ptr, BigInt(encoded.length)]
+      ["pointer", "pointer", "usize", "pointer"],
+      "void",
+      [this.#host, ptr, BigInt(encoded.length), Deno.UnsafePointer.of(errBuf)]
     );
-    const code = new DataView(result.buffer, result.byteOffset, result.byteLength).getUint32(0, true);
+    const code = new DataView(errBuf.buffer).getUint32(0, true);
     if (code !== 0) {
       throw new Error(`loadBundle failed: ${this.lastError()}`);
     }
@@ -644,15 +653,17 @@ export class Runtime {
   reloadBundle(path) {
     const encoded = _encoder.encode(path);
     const ptr = Deno.UnsafePointer.of(encoded);
-    // HostApi.reload_bundle returns AbiError (24-byte struct), not u32.
-    const result = callHostMethod(
+    // Out-param ABI: reload_bundle returns void and writes its AbiError through a
+    // trailing *mut AbiError.
+    const errBuf = new Uint8Array(ABI_ERROR_SIZE);
+    callHostMethod(
       this.#host,
       HOST_API_OFFSETS.reload_bundle,
-      ["pointer", "pointer", "usize"],
-      { struct: ["u32", "u32", "pointer", "usize"] },
-      [this.#host, ptr, BigInt(encoded.length)]
+      ["pointer", "pointer", "usize", "pointer"],
+      "void",
+      [this.#host, ptr, BigInt(encoded.length), Deno.UnsafePointer.of(errBuf)]
     );
-    const code = new DataView(result.buffer, result.byteOffset, result.byteLength).getUint32(0, true);
+    const code = new DataView(errBuf.buffer).getUint32(0, true);
     if (code !== 0) {
       throw new Error(`reloadBundle failed: ${this.lastError()}`);
     }
@@ -664,15 +675,17 @@ export class Runtime {
    * @param {bigint} bundleId - Bundle identifier
    */
   unloadBundle(bundleId) {
-    // HostApi.unload_bundle returns AbiError (24-byte struct), not u32.
-    const result = callHostMethod(
+    // Out-param ABI: unload_bundle returns void and writes its AbiError through a
+    // trailing *mut AbiError.
+    const errBuf = new Uint8Array(ABI_ERROR_SIZE);
+    callHostMethod(
       this.#host,
       HOST_API_OFFSETS.unload_bundle,
-      ["pointer", "u64"],
-      { struct: ["u32", "u32", "pointer", "usize"] },
-      [this.#host, bundleId]
+      ["pointer", "u64", "pointer"],
+      "void",
+      [this.#host, bundleId, Deno.UnsafePointer.of(errBuf)]
     );
-    const code = new DataView(result.buffer, result.byteOffset, result.byteLength).getUint32(0, true);
+    const code = new DataView(errBuf.buffer).getUint32(0, true);
     if (code !== 0) {
       throw new Error(`unloadBundle failed: ${this.lastError()}`);
     }
@@ -869,15 +882,17 @@ export class Runtime {
    * @param {Deno.PointerValue} hostInterface - Pointer to HostContractInterface struct
    */
   registerHostContract(hostInterface) {
-    // HostApi.register_host_contract returns AbiError (24-byte struct), not u32.
-    const result = callHostMethod(
+    // Out-param ABI: register_host_contract returns void and writes its AbiError
+    // through a trailing *mut AbiError.
+    const errBuf = new Uint8Array(ABI_ERROR_SIZE);
+    callHostMethod(
       this.#host,
       HOST_API_OFFSETS.register_host_contract,
-      ["pointer", "pointer"],
-      { struct: ["u32", "u32", "pointer", "usize"] },
-      [this.#host, hostInterface]
+      ["pointer", "pointer", "pointer"],
+      "void",
+      [this.#host, hostInterface, Deno.UnsafePointer.of(errBuf)]
     );
-    const code = new DataView(result.buffer, result.byteOffset, result.byteLength).getUint32(0, true);
+    const code = new DataView(errBuf.buffer).getUint32(0, true);
     if (code !== 0) {
       throw new Error(`registerHostContract failed: ${this.lastError()}`);
     }
@@ -886,21 +901,23 @@ export class Runtime {
   /**
    * Register a language loader with the runtime.
    * Calls through HostApi.register_loader field. The loader's runtime name
-   * comes from its own BundleLoader::runtime_name(); the AbiError return is
-   * read as a struct by value (code is the first u32).
+   * comes from its own BundleLoader::runtime_name(); the AbiError is written
+   * through the trailing out-param (code is the first u32).
    * @param {Deno.PointerValue} loaderPtr - Opaque loader pointer from the loader cdylib's create function.
    */
   registerLoader(loaderPtr) {
-    const result = callHostMethod(
+    // Out-param ABI: register_loader returns void and writes its AbiError through
+    // a trailing *mut AbiError.
+    const errBuf = new Uint8Array(ABI_ERROR_SIZE);
+    callHostMethod(
       this.#host,
       HOST_API_OFFSETS.register_loader,
-      ["pointer", "pointer"],
-      { struct: ["u32", "u32", "pointer", "usize"] },
-      [this.#host, loaderPtr]
+      ["pointer", "pointer", "pointer"],
+      "void",
+      [this.#host, loaderPtr, Deno.UnsafePointer.of(errBuf)]
     );
 
-    // AbiError struct returned by value; code is the first u32 field.
-    const code = new DataView(result.buffer, result.byteOffset, result.byteLength).getUint32(0, true);
+    const code = new DataView(errBuf.buffer).getUint32(0, true);
     if (code !== 0) {
       throw new Error(`registerLoader failed: ${this.lastError()}`);
     }
