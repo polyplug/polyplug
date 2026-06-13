@@ -55,9 +55,16 @@ public static class Plugin
     // the stubs mirror the generated C# guest code: create returns a null-data
     // instance stamped with the contract id, destroy is a no-op.
     [UnmanagedCallersOnly]
-    private static GuestContractInstance CreateInstanceStub(nint host, nint args)
+    private static void CreateInstanceStub(nint host, nint args, nint outInstance)
     {
-        return new GuestContractInstance { Data = nint.Zero, ContractId = TEST_ADD_CONTRACT_ID };
+        // Out-param ABI: the instance is written through the trailing pointer.
+        if (outInstance == nint.Zero)
+            return;
+        unsafe
+        {
+            *(GuestContractInstance*)outInstance =
+                new GuestContractInstance { Data = nint.Zero, ContractId = TEST_ADD_CONTRACT_ID };
+        }
     }
 
     [UnmanagedCallersOnly]
@@ -70,10 +77,10 @@ public static class Plugin
     {
         unsafe
         {
-            s_functions[0] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, AbiError>)&Add;
-            s_functions[1] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, AbiError>)&AddPrimitive;
-            s_functions[2] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, AbiError>)&Version;
-            s_functions[3] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, AbiError>)&Reset;
+            s_functions[0] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, nint, void>)&Add;
+            s_functions[1] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, nint, void>)&AddPrimitive;
+            s_functions[2] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, nint, void>)&Version;
+            s_functions[3] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, nint, void>)&Reset;
 
             s_functionsPin = GCHandle.Alloc(s_functions, GCHandleType.Pinned);
             s_functionsPtr = s_functionsPin.AddrOfPinnedObject();
@@ -87,7 +94,7 @@ public static class Plugin
                 ContractId = TEST_ADD_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1, Minor = 0, Patch = 0 },
                 DispatchType = DispatchType.Native,
-                CreateInstance = (IntPtr)(delegate* unmanaged<nint, nint, GuestContractInstance>)&CreateInstanceStub,
+                CreateInstance = (IntPtr)(delegate* unmanaged<nint, nint, nint, void>)&CreateInstanceStub,
                 DestroyInstance = (IntPtr)(delegate* unmanaged<nint, GuestContractInstance, void>)&DestroyInstanceStub,
                 Dispatch = new DispatchMechanisms
                 {
@@ -104,32 +111,40 @@ public static class Plugin
         }
     }
 
+    // Out-param ABI: dispatch thunks return void and write their AbiError through
+    // the trailing `outErr` pointer (a *mut AbiError passed as nint).
+    private static unsafe void WriteOk(nint outErr)
+    {
+        if (outErr != nint.Zero)
+            *(AbiError*)outErr = new AbiError { Code = (uint)AbiErrorCode.Ok };
+    }
+
     [UnmanagedCallersOnly]
-    public static AbiError Add(GuestContractInstance instance, nint args, nint result)
+    public static void Add(GuestContractInstance instance, nint args, nint result, nint outErr)
     {
         unsafe
         {
             var addArgs = (AddArgs*)args;
             var outPtr = (uint*)result;
             *outPtr = addArgs->A + addArgs->B;
+            WriteOk(outErr);
         }
-        return new AbiError { Code = (uint)AbiErrorCode.Ok };
     }
 
     [UnmanagedCallersOnly]
-    public static AbiError AddPrimitive(GuestContractInstance instance, nint args, nint result)
+    public static void AddPrimitive(GuestContractInstance instance, nint args, nint result, nint outErr)
     {
         unsafe
         {
             var addArgs = (AddArgs*)args;
             var outPtr = (uint*)result;
             *outPtr = addArgs->A + addArgs->B;
+            WriteOk(outErr);
         }
-        return new AbiError { Code = (uint)AbiErrorCode.Ok };
     }
 
     [UnmanagedCallersOnly]
-    public static AbiError Version(GuestContractInstance instance, nint args, nint result)
+    public static void Version(GuestContractInstance instance, nint args, nint result, nint outErr)
     {
         unsafe
         {
@@ -138,19 +153,22 @@ public static class Plugin
             // we return), so it must come from the process-lifetime pin — never
             // from a `fixed` block, whose pin ends at the block's closing brace.
             *outPtr = new StringView { Ptr = s_versionPin.AddrOfPinnedObject(), Len = (nuint)s_versionBytes.Length };
+            WriteOk(outErr);
         }
-        return new AbiError { Code = (uint)AbiErrorCode.Ok };
     }
 
     [UnmanagedCallersOnly]
-    public static AbiError Reset(GuestContractInstance instance, nint args, nint result)
+    public static void Reset(GuestContractInstance instance, nint args, nint result, nint outErr)
     {
         // Deterministic guest→host log probe: routes through HostApi.Log via the
         // plugin-owned host pointer captured in PolyplugInit (the SDK stores no
         // host). Non-ASCII characters prove the UTF-16 → UTF-8 boundary
         // transcode. A no-op when no host was captured.
         PolyplugHost.Log(s_hostPtr, LogLevel.Info, "guest.csharp_test_adder", "héllo from .NET ✓");
-        return new AbiError { Code = (uint)AbiErrorCode.Ok };
+        unsafe
+        {
+            WriteOk(outErr);
+        }
     }
 
     [UnmanagedCallersOnly(EntryPoint = "PolyplugInit")]
@@ -171,9 +189,12 @@ public static class Plugin
             fixed (GuestContractInterface* ifacePtr = &s_interface)
             {
                 var registerContract =
-                    (delegate* unmanaged[Cdecl]<nint, nint, nint, AbiError>)host->RegisterGuestContract;
-                // Surface the canonical AbiError straight through (code + message).
-                return registerContract((nint)host, (nint)descPtr, (nint)ifacePtr);
+                    (delegate* unmanaged[Cdecl]<nint, nint, nint, nint, void>)host->RegisterGuestContract;
+                // Out-param ABI: register writes its AbiError through the trailing
+                // pointer and returns void; init surfaces it by value.
+                var err = new AbiError { Code = (uint)AbiErrorCode.Ok };
+                registerContract((nint)host, (nint)descPtr, (nint)ifacePtr, (nint)(&err));
+                return err;
             }
         }
     }

@@ -101,6 +101,17 @@ struct AddArgs {
 std::thread_local! {
     static CAPTURED_INTERFACE: core::cell::Cell<*const GuestContractInterface> =
         const { core::cell::Cell::new(core::ptr::null()) };
+
+    // Stable storage for the captured interface. The ABI contract is that the
+    // interface a guest passes to `register_guest_contract` is valid only for the
+    // duration of that synchronous call — the real runtime COPIES it. test_plugin
+    // (like generated guests) registers a stack-local interface, so capturing the
+    // raw pointer and reading it after `polyplug_init` returns is a dangling read.
+    // We mirror the runtime: copy the interface into this heap box during the call;
+    // its address stays stable for the later dispatch (the .so's static functions
+    // array stays mapped because every test `core::mem::forget`s the Library).
+    static CAPTURED_STORAGE: core::cell::Cell<Option<Box<GuestContractInterface>>> =
+        const { core::cell::Cell::new(None) };
 }
 
 // ─── HostApi callbacks ──────────────────────────────────────────────────────
@@ -109,15 +120,22 @@ std::thread_local! {
 /// Captures the interface pointer into a thread-local cell for later dispatch.
 ///
 /// # Safety
-/// `interface` must be valid for the call duration and remain valid as long as the
-/// loaded library is live (caller must use `core::mem::forget` on the Library).
+/// `interface` must be valid for the call duration (the runtime/this stub copies it
+/// during the call). The copied interface's function pointers reference the loaded
+/// library's static memory, so the caller must `core::mem::forget` the Library.
 unsafe extern "C" fn capture_interface_cb(
     _this: *const HostApi,
     _desc: *const PluginDescriptor,
     interface: *const GuestContractInterface,
     out_err: *mut AbiError,
 ) {
-    CAPTURED_INTERFACE.with(|cell| cell.set(interface));
+    // Copy the interface into stable heap storage during this synchronous call —
+    // the source may be a stack-local in the guest's polyplug_init (valid only now).
+    // SAFETY: `interface` is valid for the duration of this call per the ABI contract.
+    let copied: Box<GuestContractInterface> = Box::new(unsafe { *interface });
+    let stable_ptr: *const GuestContractInterface = &*copied as *const GuestContractInterface;
+    CAPTURED_STORAGE.with(|cell| cell.set(Some(copied)));
+    CAPTURED_INTERFACE.with(|cell| cell.set(stable_ptr));
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(AbiError::ok()) };
