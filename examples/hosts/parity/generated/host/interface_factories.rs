@@ -47,23 +47,32 @@ pub fn create_host_logger_interface(
         impl_ptr: *const c_void,
         args: *const (),
         out: *mut (),
-    ) -> AbiError {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let fat_ptr: *const *const dyn HostLogger = impl_ptr as *const *const dyn HostLogger;
-            let impl_ref: &dyn HostLogger = unsafe { &**fat_ptr };
-            // SAFETY: args is a valid *const StringView per ABI contract.
-            let message_sv: StringView = unsafe { *(args as *const StringView) };
-            // SAFETY: as_str handles null/empty; UTF-8 trusted per TRUST_MODEL.
-            let message: &str = unsafe { message_sv.as_str() };
-            impl_ref.log(message);
-            let _ = out;
-            abi_error_ok()
-        })) {
-            Ok(err) => err,
-            Err(_) => AbiError {
-                code: AbiErrorCode::Panic as u32,
-                message: string_view_from_static(b"panic in host.logger::log"),
-            },
+        out_err: *mut AbiError,
+    ) {
+        let __thunk_err: AbiError =
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let fat_ptr: *const *const dyn HostLogger =
+                    impl_ptr as *const *const dyn HostLogger;
+                let impl_ref: &dyn HostLogger = unsafe { &**fat_ptr };
+                // SAFETY: args is a valid *const StringView per ABI contract.
+                let message_sv: StringView = unsafe { *(args as *const StringView) };
+                // SAFETY: as_str handles null/empty; UTF-8 trusted per TRUST_MODEL.
+                let message: &str = unsafe { message_sv.as_str() };
+                impl_ref.log(message);
+                let _ = out;
+                abi_error_ok()
+            })) {
+                Ok(err) => err,
+                Err(_) => AbiError {
+                    code: AbiErrorCode::Panic as u32,
+                    message: string_view_from_static(b"panic in host.logger::log"),
+                },
+            };
+        // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.
+        if !out_err.is_null() {
+            unsafe {
+                out_err.write(__thunk_err);
+            }
         }
     }
 
@@ -72,29 +81,38 @@ pub fn create_host_logger_interface(
         impl_ptr: *const c_void,
         args: *const (),
         out: *mut (),
-    ) -> AbiError {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let fat_ptr: *const *const dyn HostLogger = impl_ptr as *const *const dyn HostLogger;
-            let impl_ref: &dyn HostLogger = unsafe { &**fat_ptr };
-            // SAFETY: args is a valid *const HostLoggerLogWithLevelArgs per ABI contract.
-            let packed: &HostLoggerLogWithLevelArgs =
-                unsafe { &*(args as *const HostLoggerLogWithLevelArgs) };
-            let level: &LogLevel = &packed.level;
-            // SAFETY: as_str handles null/empty; UTF-8 trusted per TRUST_MODEL.
-            let message: &str = unsafe { packed.message.as_str() };
-            impl_ref.log_with_level(level, message);
-            let _ = out;
-            abi_error_ok()
-        })) {
-            Ok(err) => err,
-            Err(_) => AbiError {
-                code: AbiErrorCode::Panic as u32,
-                message: string_view_from_static(b"panic in host.logger::log_with_level"),
-            },
+        out_err: *mut AbiError,
+    ) {
+        let __thunk_err: AbiError =
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let fat_ptr: *const *const dyn HostLogger =
+                    impl_ptr as *const *const dyn HostLogger;
+                let impl_ref: &dyn HostLogger = unsafe { &**fat_ptr };
+                // SAFETY: args is a valid *const HostLoggerLogWithLevelArgs per ABI contract.
+                let packed: &HostLoggerLogWithLevelArgs =
+                    unsafe { &*(args as *const HostLoggerLogWithLevelArgs) };
+                let level: &LogLevel = &packed.level;
+                // SAFETY: as_str handles null/empty; UTF-8 trusted per TRUST_MODEL.
+                let message: &str = unsafe { packed.message.as_str() };
+                impl_ref.log_with_level(level, message);
+                let _ = out;
+                abi_error_ok()
+            })) {
+                Ok(err) => err,
+                Err(_) => AbiError {
+                    code: AbiErrorCode::Panic as u32,
+                    message: string_view_from_static(b"panic in host.logger::log_with_level"),
+                },
+            };
+        // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.
+        if !out_err.is_null() {
+            unsafe {
+                out_err.write(__thunk_err);
+            }
         }
     }
 
-    static FUNCTIONS: [unsafe extern "C" fn(*const c_void, *const (), *mut ()) -> AbiError; 2] =
+    static FUNCTIONS: [unsafe extern "C" fn(*const c_void, *const (), *mut (), *mut AbiError); 2] =
         [host_logger_log_thunk, host_logger_log_with_level_thunk];
 
     /// Create instance stub for `host.logger` host contract.
@@ -103,11 +121,18 @@ pub fn create_host_logger_interface(
     unsafe extern "C" fn host_logger_create_instance_stub(
         this: *const HostContractInterface,
         _args: *const (),
-    ) -> HostContractInstance {
-        // SAFETY: `this` is a valid HostContractInterface pointer per ABI contract.
-        // `user_data` holds the implementation pointer stored at registration.
-        HostContractInstance {
-            data: unsafe { (*this).user_data },
+        out_instance: *mut HostContractInstance,
+    ) {
+        if out_instance.is_null() {
+            return;
+        }
+        // SAFETY: `this` is a valid HostContractInterface pointer per ABI contract;
+        // `user_data` holds the implementation pointer stored at registration, and
+        // `out_instance` is a valid, writable out-param per the ABI contract.
+        unsafe {
+            out_instance.write(HostContractInstance {
+                data: (*this).user_data,
+            });
         }
     }
 
@@ -164,18 +189,26 @@ pub fn create_host_logger_interface_vm(
         args: *const (),
         out: *mut (),
         arena: *mut CallArena,
-    ) -> AbiError,
+        out_err: *mut AbiError,
+    ),
 ) -> &'static HostContractInterface {
     /// Create instance stub for `host.logger` host contract (VM dispatch).
     /// Returns the registrant-owned `user_data` (bridge_data) as instance for VM-based implementations.
     unsafe extern "C" fn host_logger_vm_create_instance_stub(
         this: *const HostContractInterface,
         _args: *const (),
-    ) -> HostContractInstance {
-        // SAFETY: `this` is a valid HostContractInterface pointer per ABI contract.
-        // `user_data` holds the bridge_data stored at registration.
-        HostContractInstance {
-            data: unsafe { (*this).user_data },
+        out_instance: *mut HostContractInstance,
+    ) {
+        if out_instance.is_null() {
+            return;
+        }
+        // SAFETY: `this` is a valid HostContractInterface pointer per ABI contract;
+        // `user_data` holds the bridge_data stored at registration, and `out_instance`
+        // is a valid, writable out-param per the ABI contract.
+        unsafe {
+            out_instance.write(HostContractInstance {
+                data: (*this).user_data,
+            });
         }
     }
 
