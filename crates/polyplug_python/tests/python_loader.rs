@@ -26,7 +26,6 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use polyplug::error::LoaderError;
-use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
@@ -302,7 +301,7 @@ fn test_interpreter_initializes_without_panic() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "noop_init");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -318,7 +317,7 @@ fn test_default_config_version_check_passes() {
         .build()
         .expect("runtime build must succeed");
     let manifest: ManifestData = make_manifest(&path, "ver_check");
-    let result: Result<(), RuntimeError> = PythonLoader::new(PythonConfig::default()).load(
+    let result: Result<(), LoaderError> = PythonLoader::new(PythonConfig::default()).load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -337,7 +336,7 @@ fn test_version_too_old_returns_version_mismatch() {
         .build()
         .expect("runtime build must succeed");
     let manifest: ManifestData = make_manifest(&path, "ver_mismatch");
-    let err: RuntimeError = PythonLoader::new(config)
+    let err: LoaderError = PythonLoader::new(config)
         .load(
             &manifest,
             &polyplug::loader::BundleSource::Path(manifest.path.clone()),
@@ -345,7 +344,7 @@ fn test_version_too_old_returns_version_mismatch() {
         )
         .expect_err("expected version mismatch");
     match err {
-        RuntimeError::Loader(LoaderError::InitFailed { bundle, error }) => {
+        LoaderError::InitFailed { bundle, error } => {
             assert_eq!(bundle, "python");
             assert!(
                 error.contains("version"),
@@ -367,7 +366,7 @@ fn test_valid_plugin_registers_vm_contract() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "valid_plugin");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -532,17 +531,14 @@ fn test_syntax_error_returns_init_failed() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "syntax_err");
-    let err: RuntimeError = loader
+    let err: LoaderError = loader
         .load(
             &manifest,
             &polyplug::loader::BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect_err("expected failure for syntax error plugin");
-    assert!(matches!(
-        err,
-        RuntimeError::Loader(LoaderError::InitFailed { .. })
-    ));
+    assert!(matches!(err, LoaderError::InitFailed { .. }));
 }
 
 #[test]
@@ -551,17 +547,14 @@ fn test_import_error_returns_init_failed() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "import_err");
-    let err: RuntimeError = loader
+    let err: LoaderError = loader
         .load(
             &manifest,
             &polyplug::loader::BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect_err("expected failure for import-error plugin");
-    assert!(matches!(
-        err,
-        RuntimeError::Loader(LoaderError::InitFailed { .. })
-    ));
+    assert!(matches!(err, LoaderError::InitFailed { .. }));
 }
 
 #[test]
@@ -570,17 +563,14 @@ fn test_missing_init_returns_init_symbol_missing() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "no_init");
-    let err: RuntimeError = loader
+    let err: LoaderError = loader
         .load(
             &manifest,
             &polyplug::loader::BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect_err("expected failure");
-    assert!(matches!(
-        err,
-        RuntimeError::Loader(LoaderError::InitSymbolMissing { .. })
-    ));
+    assert!(matches!(err, LoaderError::InitSymbolMissing { .. }));
 }
 
 #[test]
@@ -589,7 +579,7 @@ fn test_raising_init_returns_init_failed() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "raising_init");
-    let err: RuntimeError = loader
+    let err: LoaderError = loader
         .load(
             &manifest,
             &polyplug::loader::BundleSource::Path(manifest.path.clone()),
@@ -597,7 +587,7 @@ fn test_raising_init_returns_init_failed() {
         )
         .expect_err("expected failure");
     match err {
-        RuntimeError::Loader(LoaderError::InitFailed { error, .. }) => {
+        LoaderError::InitFailed { error, .. } => {
             assert!(
                 error.contains("intentional test error"),
                 "error should contain the Python exception text; got: {error}"
@@ -614,7 +604,7 @@ fn test_missing_registrations_attr_fails() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "no_regs");
-    let err: RuntimeError = loader
+    let err: LoaderError = loader
         .load(
             &manifest,
             &polyplug::loader::BundleSource::Path(manifest.path.clone()),
@@ -622,7 +612,7 @@ fn test_missing_registrations_attr_fails() {
         )
         .expect_err("expected failure for missing registrations");
     match err {
-        RuntimeError::Loader(LoaderError::InitFailed { error, .. }) => {
+        LoaderError::InitFailed { error, .. } => {
             assert!(
                 error.contains("_polyplug_registrations"),
                 "error should mention the missing attribute; got: {error}"
@@ -639,17 +629,14 @@ fn test_empty_registrations_fails() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "empty_regs");
-    let err: RuntimeError = loader
+    let err: LoaderError = loader
         .load(
             &manifest,
             &polyplug::loader::BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect_err("expected failure for empty registrations");
-    assert!(matches!(
-        err,
-        RuntimeError::Loader(LoaderError::InitFailed { .. })
-    ));
+    assert!(matches!(err, LoaderError::InitFailed { .. }));
 }
 
 #[test]
@@ -673,7 +660,7 @@ fn test_many_sequential_loads() {
         let name: String = format!("seq_{i}");
         let (_dir, path) = write_bundle(&name, WRITE_OUT_PLUGIN_SRC);
         let manifest: ManifestData = make_manifest(&path, &name);
-        let result: Result<(), RuntimeError> = loader.load(
+        let result: Result<(), LoaderError> = loader.load(
             &manifest,
             &polyplug::loader::BundleSource::Path(manifest.path.clone()),
             &runtime,
@@ -682,11 +669,7 @@ fn test_many_sequential_loads() {
         // contract id. The point of this test is interpreter stability, so accept
         // either Ok or a duplicate-registration InitFailed without panicking.
         assert!(
-            result.is_ok()
-                || matches!(
-                    result,
-                    Err(RuntimeError::Loader(LoaderError::InitFailed { .. }))
-                ),
+            result.is_ok() || matches!(result, Err(LoaderError::InitFailed { .. })),
             "sequential load {i} produced an unexpected error: {result:?}"
         );
     }
@@ -714,7 +697,7 @@ fn test_valid_load_after_failed_load_succeeds() {
         "bad load should fail"
     );
 
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &good_manifest,
         &polyplug::loader::BundleSource::Path(good_manifest.path.clone()),
         &runtime,
@@ -749,7 +732,7 @@ def polyplug_init(_host_interface: int, ctx_addr: int) -> None:
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "ctx_check");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -805,7 +788,7 @@ from _splitmod_helper import polyplug_init
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
 
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,

@@ -114,7 +114,6 @@ use pyo3::types::PyList;
 use pyo3::types::PyListMethods;
 
 use polyplug::error::LoaderError;
-use polyplug::error::RuntimeError;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::CallArena;
@@ -298,35 +297,36 @@ pub(crate) struct ContractRegistration {
 pub(crate) fn parse_contract_string(
     contract: &str,
     bundle_name: &str,
-) -> Result<(String, u32), RuntimeError> {
-    let (name, version_part): (&str, &str) = contract.split_once('@').ok_or_else(|| {
-        RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!(
-                "invalid contract string `{}`: expected `name@major[.minor]`",
-                contract
-            ),
-        })
-    })?;
+) -> Result<(String, u32), LoaderError> {
+    let (name, version_part): (&str, &str) =
+        contract
+            .split_once('@')
+            .ok_or_else(|| LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!(
+                    "invalid contract string `{}`: expected `name@major[.minor]`",
+                    contract
+                ),
+            })?;
     if name.is_empty() {
-        return Err(RuntimeError::Loader(LoaderError::InitFailed {
+        return Err(LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!(
                 "invalid contract string `{}`: empty contract name",
                 contract
             ),
-        }));
+        });
     }
     let major_str: &str = version_part.split('.').next().unwrap_or(version_part);
-    let major: u32 = major_str.parse::<u32>().map_err(|_| {
-        RuntimeError::Loader(LoaderError::InitFailed {
+    let major: u32 = major_str
+        .parse::<u32>()
+        .map_err(|_| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!(
                 "invalid contract string `{}`: major version `{}` is not a u32",
                 contract, major_str
             ),
-        })
-    })?;
+        })?;
     Ok((name.to_owned(), major))
 }
 
@@ -381,44 +381,38 @@ pub(crate) fn collect_registrations(
     init_fn: &Bound<'_, PyAny>,
     entry_module: &Bound<'_, PyAny>,
     bundle_name: &str,
-) -> Result<Vec<ContractRegistration>, RuntimeError> {
+) -> Result<Vec<ContractRegistration>, LoaderError> {
     let attr: Bound<'_, PyAny> = resolve_registrations(init_fn, entry_module)
-        .map_err(|_| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!(
-                    "failed to read `{}` from the module defining polyplug_init",
-                    REGISTRATIONS_ATTR
-                ),
-            })
+        .map_err(|_| LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!(
+                "failed to read `{}` from the module defining polyplug_init",
+                REGISTRATIONS_ATTR
+            ),
         })?
-        .ok_or_else(|| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!(
-                    "Python plugin missing `{}` in the module defining polyplug_init",
-                    REGISTRATIONS_ATTR
-                ),
-            })
+        .ok_or_else(|| LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!(
+                "Python plugin missing `{}` in the module defining polyplug_init",
+                REGISTRATIONS_ATTR
+            ),
         })?;
 
-    let list: Bound<'_, PyList> = attr.cast_into::<PyList>().map_err(|_| {
-        RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!("`{}` must be a list of dicts", REGISTRATIONS_ATTR),
-        })
-    })?;
+    let list: Bound<'_, PyList> =
+        attr.cast_into::<PyList>()
+            .map_err(|_| LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("`{}` must be a list of dicts", REGISTRATIONS_ATTR),
+            })?;
 
     let mut registrations: Vec<ContractRegistration> = Vec::with_capacity(list.len());
     for entry in list.iter() {
         let contract_str: String = entry
             .get_item("contract")
             .and_then(|v: Bound<'_, PyAny>| v.extract::<String>())
-            .map_err(|_| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: bundle_name.to_owned(),
-                    error: "registration entry missing string `contract` key".to_owned(),
-                })
+            .map_err(|_| LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: "registration entry missing string `contract` key".to_owned(),
             })?;
 
         let (contract_name, contract_major): (String, u32) =
@@ -431,32 +425,34 @@ pub(crate) fn collect_registrations(
             Err(_) => bundle_name.to_owned(),
         };
 
-        let functions: Bound<'_, PyAny> = entry.get_item("functions").map_err(|_| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!(
-                    "registration entry for `{}` missing `functions` list",
-                    contract_str
-                ),
-            })
-        })?;
-        let functions_list: Bound<'_, PyList> = functions.cast_into::<PyList>().map_err(|_| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!("`functions` for `{}` must be a list", contract_str),
-            })
-        })?;
+        let functions: Bound<'_, PyAny> =
+            entry
+                .get_item("functions")
+                .map_err(|_| LoaderError::InitFailed {
+                    bundle: bundle_name.to_owned(),
+                    error: format!(
+                        "registration entry for `{}` missing `functions` list",
+                        contract_str
+                    ),
+                })?;
+        let functions_list: Bound<'_, PyList> =
+            functions
+                .cast_into::<PyList>()
+                .map_err(|_| LoaderError::InitFailed {
+                    bundle: bundle_name.to_owned(),
+                    error: format!("`functions` for `{}` must be a list", contract_str),
+                })?;
 
         let mut callables: Vec<Py<PyAny>> = Vec::with_capacity(functions_list.len());
         for (idx, callable) in functions_list.iter().enumerate() {
             if !callable.is_callable() {
-                return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                return Err(LoaderError::InitFailed {
                     bundle: bundle_name.to_owned(),
                     error: format!(
                         "`functions[{}]` for `{}` is not callable",
                         idx, contract_str
                     ),
-                }));
+                });
             }
             callables.push(callable.unbind());
         }
@@ -486,7 +482,7 @@ pub(crate) fn register_contracts(
     registrations: Vec<ContractRegistration>,
     host_interface: *const HostApi,
     bundle_name: &str,
-) -> Result<u32, RuntimeError> {
+) -> Result<u32, LoaderError> {
     let mut registered: u32 = 0_u32;
 
     for reg in registrations {
@@ -561,26 +557,26 @@ pub(crate) fn register_contracts(
         };
 
         if !reg_result.is_ok() {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+            return Err(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!(
                     "register_guest_contract failed for `{}`: code={:?}",
                     contract_name_leaked, reg_result.code
                 ),
-            }));
+            });
         }
 
         registered += 1;
     }
 
     if registered == 0 {
-        return Err(RuntimeError::Loader(LoaderError::InitFailed {
+        return Err(LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!(
                 "`{}` registered no contracts (empty list)",
                 REGISTRATIONS_ATTR
             ),
-        }));
+        });
     }
 
     Ok(registered)
@@ -602,7 +598,7 @@ fn build_arena_bridge<'py>(
     py: Python<'py>,
     host_interface: *const HostApi,
     bundle_name: &str,
-) -> Result<Bound<'py, PyAny>, RuntimeError> {
+) -> Result<Bound<'py, PyAny>, LoaderError> {
     let host_addr: usize = host_interface as usize;
 
     let closure = move |size: u32, arena_addr: usize| -> i64 {
@@ -638,11 +634,9 @@ fn build_arena_bridge<'py>(
         },
     )
     .map(|f: Bound<'_, pyo3::types::PyCFunction>| f.into_any())
-    .map_err(|e: pyo3::PyErr| {
-        RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!("failed to create `{}` bridge: {}", ARENA_ALLOC_ATTR, e),
-        })
+    .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+        bundle: bundle_name.to_owned(),
+        error: format!("failed to create `{}` bridge: {}", ARENA_ALLOC_ATTR, e),
     })
 }
 
@@ -677,18 +671,16 @@ pub(crate) fn inject_arena_bridge(
     init_fn: &Bound<'_, PyAny>,
     host_interface: *const HostApi,
     bundle_name: &str,
-) -> Result<(), RuntimeError> {
+) -> Result<(), LoaderError> {
     let bridge: Bound<'_, PyAny> = build_arena_bridge(py, host_interface, bundle_name)?;
 
     // Inject into the entry module's namespace (covers single-file plugins, where
     // the entry module is also the module defining polyplug_init).
     module
         .setattr(ARENA_ALLOC_ATTR, &bridge)
-        .map_err(|e: pyo3::PyErr| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!("failed to inject `{}`: {}", ARENA_ALLOC_ATTR, e),
-            })
+        .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("failed to inject `{}`: {}", ARENA_ALLOC_ATTR, e),
         })?;
 
     // Inject into the namespace of the module that defines polyplug_init (its
@@ -700,14 +692,12 @@ pub(crate) fn inject_arena_bridge(
         && let Ok(dict) = globals.cast_into::<PyDict>()
     {
         dict.set_item(ARENA_ALLOC_ATTR, &bridge)
-            .map_err(|e: pyo3::PyErr| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: bundle_name.to_owned(),
-                    error: format!(
-                        "failed to inject `{}` into polyplug_init.__globals__: {}",
-                        ARENA_ALLOC_ATTR, e
-                    ),
-                })
+            .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!(
+                    "failed to inject `{}` into polyplug_init.__globals__: {}",
+                    ARENA_ALLOC_ATTR, e
+                ),
             })?;
     }
 

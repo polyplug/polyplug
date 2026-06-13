@@ -145,6 +145,14 @@ impl Runtime {
                 })
             })?;
 
+        // A loader that does not support hot-reload (e.g. python, dotnet) gates the
+        // same way config-disabled does: surface `HotReloadDisabled` and never call
+        // `loader.reload()`. This is the single place the per-loader capability is
+        // enforced — the loaders' `reload()` bodies no longer re-check it.
+        if !loader.supports_hot_reload() {
+            return Err(RuntimeError::HotReloadDisabled);
+        }
+
         // Validate that the requested library file exists before doing any work.
         // A missing file is a reload failure that must fire the Failed callback so
         // the host learns the active version was kept.
@@ -202,7 +210,8 @@ impl Runtime {
         self.registry.begin_reload(bundle_id);
 
         // Call loader's reload() - this does load+init, registering new interfaces
-        let result: Result<(), crate::error::RuntimeError> = loader.reload(&manifest, self);
+        let result: Result<(), crate::error::RuntimeError> =
+            loader.reload(&manifest, self).map_err(RuntimeError::Loader);
 
         match result {
             Ok(()) => {

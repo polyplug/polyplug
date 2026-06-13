@@ -28,16 +28,24 @@ impl BundleLoader for StubLoader {
         self.name
     }
 
+    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+        polyplug_abi::SupportedLanguage::Rust
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        true
+    }
+
     fn load(
         &self,
         _manifest: &ManifestData,
         _source: &polyplug::loader::BundleSource,
         _runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         Ok(())
     }
 
-    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
         Ok(())
     }
 }
@@ -156,14 +164,14 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
         bundle_dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &rt,
     );
     match result {
         // .NET loader returns InitFailed for assembly not found or CLR init failures
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(LoaderError::InitFailed { bundle, error }) => {
             assert_eq!(bundle, "dummy");
             assert!(
                 !error.is_empty(),
@@ -196,14 +204,14 @@ fn python_loader_loads_nonexistent_file_errors() {
         bundle_dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &rt,
     );
     match result {
         // Python loader returns InitFailed for import errors (file not found or not accessible).
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(LoaderError::InitFailed { bundle, error }) => {
             assert_eq!(bundle, "dummy");
             assert!(
                 !error.is_empty(),
@@ -236,14 +244,14 @@ fn lua_loader_returns_error_for_missing_file() {
         bundle_dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &rt,
     );
     match result {
         // Lua loader returns InitFailed for script load failures (file not found).
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(LoaderError::InitFailed { bundle, error }) => {
             assert_eq!(bundle, "dummy");
             assert!(
                 !error.is_empty(),

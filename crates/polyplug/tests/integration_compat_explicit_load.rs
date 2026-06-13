@@ -19,7 +19,7 @@ use core::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
 use polyplug::Runtime;
-use polyplug::error::RuntimeError;
+use polyplug::error::{LoaderError, RegistryError, RuntimeError};
 use polyplug::loader::{BundleLoader, BundleSource, ManifestData};
 use polyplug_abi::HostApi;
 use polyplug_abi::dispatch::{DispatchMechanisms, DispatchType, NativeDispatch};
@@ -85,12 +85,20 @@ impl BundleLoader for CompatTestLoader {
         "compat-test"
     }
 
+    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+        polyplug_abi::SupportedLanguage::Rust
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        false
+    }
+
     fn load(
         &self,
         manifest: &ManifestData,
         _source: &BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         let bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(bundle_id.id());
 
@@ -118,11 +126,20 @@ impl BundleLoader for CompatTestLoader {
 
         runtime.pop_init_bundle_id();
 
-        result.map(|_| ()).map_err(RuntimeError::Registry)
+        // The mock's "init" is the registration call; a registry rejection (e.g. the
+        // function-count mismatch this test drives) is therefore an init failure.
+        result
+            .map(|_| ())
+            .map_err(|e: RegistryError| LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: e.to_string(),
+            })
     }
 
-    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), RuntimeError> {
-        Err(RuntimeError::HotReloadDisabled)
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+        Err(LoaderError::HotReloadUnsupported {
+            loader_name: self.loader_name().to_owned(),
+        })
     }
 }
 

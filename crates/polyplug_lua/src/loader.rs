@@ -20,7 +20,6 @@ use mlua::Value;
 use crate::config::LuaConfig;
 use polyplug::Runtime;
 use polyplug::error::LoaderError;
-use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
@@ -34,6 +33,7 @@ use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
+use polyplug_abi::SupportedLanguage;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
 use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
@@ -414,15 +414,13 @@ impl LuaLoader {
         bundle: &str,
         field: &str,
         entries: &str,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         let package: Table = lua
             .globals()
             .get::<Table>("package")
-            .map_err(|e: mlua::Error| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: bundle.to_owned(),
-                    error: format!("Lua VM init failed: missing package table: {e}"),
-                })
+            .map_err(|e: mlua::Error| LoaderError::InitFailed {
+                bundle: bundle.to_owned(),
+                error: format!("Lua VM init failed: missing package table: {e}"),
             })?;
 
         let current: String = package
@@ -435,12 +433,12 @@ impl LuaLoader {
             format!("{entries};{current}")
         };
 
-        package.set(field, combined).map_err(|e: mlua::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
+        package
+            .set(field, combined)
+            .map_err(|e: mlua::Error| LoaderError::InitFailed {
                 bundle: bundle.to_owned(),
                 error: format!("Lua VM init failed: package.{field} update failed: {e}"),
             })
-        })
     }
 
     /// Register `_polyplug_arena_alloc(size) -> integer` on the plugin VM.
@@ -454,7 +452,7 @@ impl LuaLoader {
         lua: &Lua,
         bundle: &str,
         host_interface: *const HostApi,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         // Capture the host pointer as a usize: raw pointers are not Send, but the
         // pointee is 'static HostApi for the runtime lifetime, so reconstructing it
         // inside the (Send) closure is sound.
@@ -481,22 +479,16 @@ impl LuaLoader {
                 };
                 Ok(ptr as usize as i64)
             })
-            .map_err(|e: mlua::Error| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: bundle.to_owned(),
-                    error: format!(
-                        "Lua VM init failed: _polyplug_arena_alloc creation failed: {e}"
-                    ),
-                })
+            .map_err(|e: mlua::Error| LoaderError::InitFailed {
+                bundle: bundle.to_owned(),
+                error: format!("Lua VM init failed: _polyplug_arena_alloc creation failed: {e}"),
             })?;
 
         lua.globals()
             .set("_polyplug_arena_alloc", arena_alloc_fn)
-            .map_err(|e: mlua::Error| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: bundle.to_owned(),
-                    error: format!("Lua VM init failed: _polyplug_arena_alloc set failed: {e}"),
-                })
+            .map_err(|e: mlua::Error| LoaderError::InitFailed {
+                bundle: bundle.to_owned(),
+                error: format!("Lua VM init failed: _polyplug_arena_alloc set failed: {e}"),
             })
     }
 
@@ -526,7 +518,7 @@ impl LuaLoader {
     /// "never log under a lock guard" rule exists to keep host callbacks
     /// lock-free from the RUNTIME's locks; no runtime lock is held across a
     /// guest dispatch, so that invariant holds here too.
-    fn register_log(lua: &Lua, bundle: &str, logger: LoggerHandle) -> Result<(), RuntimeError> {
+    fn register_log(lua: &Lua, bundle: &str, logger: LoggerHandle) -> Result<(), LoaderError> {
         let log_fn: Function = lua
             .create_function(
                 move |_lua_ctx: &Lua,
@@ -542,20 +534,16 @@ impl LuaLoader {
                     Ok(())
                 },
             )
-            .map_err(|e: mlua::Error| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: bundle.to_owned(),
-                    error: format!("Lua VM init failed: _polyplug_log creation failed: {e}"),
-                })
+            .map_err(|e: mlua::Error| LoaderError::InitFailed {
+                bundle: bundle.to_owned(),
+                error: format!("Lua VM init failed: _polyplug_log creation failed: {e}"),
             })?;
 
         lua.globals()
             .set("_polyplug_log", log_fn)
-            .map_err(|e: mlua::Error| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: bundle.to_owned(),
-                    error: format!("Lua VM init failed: _polyplug_log set failed: {e}"),
-                })
+            .map_err(|e: mlua::Error| LoaderError::InitFailed {
+                bundle: bundle.to_owned(),
+                error: format!("Lua VM init failed: _polyplug_log set failed: {e}"),
             })
     }
 
@@ -581,37 +569,37 @@ impl LuaLoader {
     fn resolve_source(
         manifest: &ManifestData,
         source: &BundleSource,
-    ) -> Result<(String, String, Option<String>), RuntimeError> {
+    ) -> Result<(String, String, Option<String>), LoaderError> {
         match source {
             BundleSource::Path(_) => {
                 let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
                     manifest.path.join(&manifest.file)
                 } else {
-                    return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
+                    return Err(LoaderError::ManifestMissingFile {
                         bundle: manifest.name.clone(),
-                    }));
+                    });
                 };
 
                 if !bundle_path.exists() {
-                    return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                    return Err(LoaderError::InitFailed {
                         bundle: manifest.name.clone(),
                         error: format!(
                             "Lua script load failed at {}: file does not exist",
                             bundle_path.display()
                         ),
-                    }));
+                    });
                 }
 
                 let source_text: String =
                     std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
-                        RuntimeError::Loader(LoaderError::InitFailed {
+                        LoaderError::InitFailed {
                             bundle: manifest.name.clone(),
                             error: format!(
                                 "Lua script load failed at {}: {}",
                                 bundle_path.display(),
                                 e
                             ),
-                        })
+                        }
                     })?;
 
                 let chunk_name: String = bundle_path
@@ -626,11 +614,11 @@ impl LuaLoader {
             BundleSource::Bytes(bytes) => {
                 let source_text: String =
                     String::from_utf8(bytes.clone()).map_err(|_: std::string::FromUtf8Error| {
-                        RuntimeError::Loader(LoaderError::InvalidSourceEncoding {
+                        LoaderError::InvalidSourceEncoding {
                             loader: "lua",
                             source_kind: source.kind(),
                             bundle: manifest.name.clone(),
-                        })
+                        }
                     })?;
                 Ok((source_text, manifest.name.clone(), None))
             }
@@ -649,7 +637,7 @@ impl LuaLoader {
         manifest: &ManifestData,
         source: &BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         let (source_text, chunk_name, bundle_dir): (String, String, Option<String>) =
             Self::resolve_source(manifest, source)?;
 
@@ -702,11 +690,9 @@ impl LuaLoader {
         lua.load(&source_text)
             .set_name(&chunk_name)
             .exec()
-            .map_err(|e: mlua::Error| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: manifest.name.clone(),
-                    error: format!("Lua script load failed for {}: {}", chunk_name, e),
-                })
+            .map_err(|e: mlua::Error| LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("Lua script load failed for {}: {}", chunk_name, e),
             })?;
 
         // Derive bundle name for error messages.
@@ -716,14 +702,12 @@ impl LuaLoader {
         let init_fn: Function =
             lua.globals()
                 .get::<Function>("polyplug_init")
-                .map_err(|_: mlua::Error| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!(
-                            "Lua plugin missing polyplug_init function: bundle={}",
-                            bundle_name
-                        ),
-                    })
+                .map_err(|_: mlua::Error| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!(
+                        "Lua plugin missing polyplug_init function: bundle={}",
+                        bundle_name
+                    ),
                 })?;
 
         // Get HostApi pointer from runtime.
@@ -770,11 +754,9 @@ impl LuaLoader {
         let init_result: Result<Value, mlua::Error> =
             init_fn.call::<Value>((host_interface_i64, ctx_ptr));
 
-        let init_value: Value = init_result.map_err(|e: mlua::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.clone(),
-                error: format!("Lua polyplug_init raised error: {}", e),
-            })
+        let init_value: Value = init_result.map_err(|e: mlua::Error| LoaderError::InitFailed {
+            bundle: bundle_name.clone(),
+            error: format!("Lua polyplug_init raised error: {}", e),
         })?;
 
         // Honor the AbiError returned by polyplug_init. Generated guests return
@@ -797,10 +779,10 @@ impl LuaLoader {
                 Some(msg) => msg,
                 None => format!("Lua polyplug_init returned error code {}", init_code),
             };
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+            return Err(LoaderError::InitFailed {
                 bundle: bundle_name.clone(),
                 error,
-            }));
+            });
         }
 
         // Read the handler table that polyplug_init populated. Its shape is
@@ -810,14 +792,12 @@ impl LuaLoader {
         let handlers: Table =
             lua.globals()
                 .get::<Table>("_polyplug_handlers")
-                .map_err(|_: mlua::Error| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!(
-                            "Lua plugin missing _polyplug_handlers: bundle={}",
-                            bundle_name
-                        ),
-                    })
+                .map_err(|_: mlua::Error| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!(
+                        "Lua plugin missing _polyplug_handlers: bundle={}",
+                        bundle_name
+                    ),
                 })?;
 
         // Iterate every contract entry and register each one. The Lua VM is shared
@@ -832,12 +812,11 @@ impl LuaLoader {
 
         let mut registered: u32 = 0_u32;
         for pair in handlers.pairs::<String, Table>() {
-            let (contract_name_str, entry): (String, Table) = pair.map_err(|e: mlua::Error| {
-                RuntimeError::Loader(LoaderError::InitFailed {
+            let (contract_name_str, entry): (String, Table) =
+                pair.map_err(|e: mlua::Error| LoaderError::InitFailed {
                     bundle: bundle_name.clone(),
                     error: format!("Lua handlers iteration error: {}", e),
-                })
-            })?;
+                })?;
 
             let contract_version: u32 = entry.get::<u32>("contract_version").unwrap_or(1_u32);
 
@@ -847,13 +826,13 @@ impl LuaLoader {
 
             let functions_table: Table =
                 entry.get::<Table>("functions").map_err(|e: mlua::Error| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
+                    LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
                         error: format!(
                             "Lua handlers error: missing functions table for contract '{}': {}",
                             contract_name_str, e
                         ),
-                    })
+                    }
                 })?;
 
             // Count functions in the table (0-indexed integers).
@@ -875,14 +854,12 @@ impl LuaLoader {
             let mut lua_functions: Vec<Function> = Vec::with_capacity(function_count as usize);
             for slot_idx in 0..function_count {
                 let lua_fn: Function = functions_table.get::<Function>(slot_idx as i64).map_err(
-                    |e: mlua::Error| {
-                        RuntimeError::Loader(LoaderError::InitFailed {
-                            bundle: bundle_name.clone(),
-                            error: format!(
-                                "Lua function slot {} error for contract '{}': {}",
-                                slot_idx, contract_name_str, e
-                            ),
-                        })
+                    |e: mlua::Error| LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!(
+                            "Lua function slot {} error for contract '{}': {}",
+                            slot_idx, contract_name_str, e
+                        ),
                     },
                 )?;
                 lua_functions.push(lua_fn);
@@ -990,23 +967,23 @@ impl LuaLoader {
                 // boxes for epoch-deferred drop rather than dropping them inline here,
                 // which would dangle the registry's bridge_data while a reader is pinned.
                 self.schedule_reclaim(bundle_vm_state);
-                return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                return Err(LoaderError::InitFailed {
                     bundle: bundle_name,
                     error: format!(
                         "register_guest_contract error for contract '{}': code={:?}",
                         contract_name_str, reg_result.code
                     ),
-                }));
+                });
             }
 
             registered += 1;
         }
 
         if registered == 0 {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+            return Err(LoaderError::InitFailed {
                 bundle: bundle_name,
                 error: "Lua plugin registered no contracts: _polyplug_handlers is empty".to_owned(),
-            }));
+            });
         }
 
         // Take ownership of this bundle's VM state. A reload of the same bundle id
@@ -1048,25 +1025,30 @@ impl BundleLoader for LuaLoader {
         "lua"
     }
 
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Lua
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        true
+    }
+
     fn load(
         &self,
         manifest: &ManifestData,
         source: &BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         // The Lua loader serves every BundleSource: Path reads the on-disk entry
         // file, Code evaluates in-memory source text, and Bytes is UTF-8 source
         // text. All three converge on the same compile/init/register path.
         self.load_inner(manifest, source, runtime)
     }
 
-    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
-        if !runtime.config().hot_reload_enabled {
-            return Err(RuntimeError::HotReloadDisabled);
-        }
+    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError> {
         // reload re-reads the on-disk entry file (only path-backed bundles can be
         // hot-reloaded — there is no on-disk artifact to re-read for in-memory
-        // sources, and reload is gated on hot_reload_enabled above).
+        // sources; the runtime gates hot-reload before calling this).
         self.load_inner(
             manifest,
             &BundleSource::Path(manifest.path.clone()),
@@ -1091,7 +1073,7 @@ impl BundleLoader for LuaLoader {
     /// and docs/TRUST_MODEL.md).
     ///
     /// The VM is always epoch-reclaimed (never parked alive forever).
-    fn unload(&self, bundle_id: BundleId, _runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn unload(&self, bundle_id: BundleId, _runtime: &Runtime) -> Result<(), LoaderError> {
         let state: Vec<LuaVm> = {
             let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
                 self.live.lock().unwrap_or_else(PoisonError::into_inner);

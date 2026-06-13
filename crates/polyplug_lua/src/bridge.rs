@@ -37,8 +37,8 @@ use polyplug::host_bridge::BridgeError;
 use polyplug::host_bridge::RuntimeLanguageBridge;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
-use polyplug_abi::SupportedLanguage;
 use polyplug_abi::StringView;
+use polyplug_abi::SupportedLanguage;
 
 /// Bridge for Lua hosts implementing host contracts.
 ///

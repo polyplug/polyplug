@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::error::RuntimeError;
+use polyplug::error::LoaderError;
 use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug::runtime::Runtime;
 use polyplug_abi::{
@@ -59,12 +59,20 @@ impl BundleLoader for RustProviderLoader {
         "rust-provider"
     }
 
+    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+        polyplug_abi::SupportedLanguage::Rust
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        false
+    }
+
     fn load(
         &self,
         manifest: &ManifestData,
         _source: &polyplug::loader::BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         let interface: &'static GuestContractInterface =
             Box::leak(Box::new(GuestContractInterface {
                 contract_id: GuestContractId::from_u64(self.contract_id),
@@ -106,8 +114,10 @@ impl BundleLoader for RustProviderLoader {
         Ok(())
     }
 
-    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), RuntimeError> {
-        Err(RuntimeError::HotReloadDisabled)
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+        Err(LoaderError::HotReloadUnsupported {
+            loader_name: self.loader_name().to_owned(),
+        })
     }
 }
 
@@ -124,12 +134,20 @@ impl BundleLoader for LuaDependerLoader {
         "lua-depender"
     }
 
+    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+        polyplug_abi::SupportedLanguage::Lua
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        false
+    }
+
     fn load(
         &self,
         manifest: &ManifestData,
         _source: &polyplug::loader::BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         let host: *const HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 
@@ -149,8 +167,10 @@ impl BundleLoader for LuaDependerLoader {
         Ok(())
     }
 
-    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), RuntimeError> {
-        Err(RuntimeError::HotReloadDisabled)
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+        Err(LoaderError::HotReloadUnsupported {
+            loader_name: self.loader_name().to_owned(),
+        })
     }
 }
 

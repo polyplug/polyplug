@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use polyplug::Runtime;
-use polyplug::error::RuntimeError;
+use polyplug::error::LoaderError;
 use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
@@ -53,12 +53,20 @@ impl BundleLoader for ProbeLoader {
         "probe-enforce"
     }
 
+    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+        polyplug_abi::SupportedLanguage::Rust
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        false
+    }
+
     fn load(
         &self,
         manifest: &ManifestData,
         _source: &polyplug::loader::BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         let host_abi: *const HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 
@@ -101,8 +109,10 @@ impl BundleLoader for ProbeLoader {
         Ok(())
     }
 
-    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), RuntimeError> {
-        Err(RuntimeError::HotReloadDisabled)
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+        Err(LoaderError::HotReloadUnsupported {
+            loader_name: self.loader_name().to_owned(),
+        })
     }
 }
 

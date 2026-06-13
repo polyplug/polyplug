@@ -94,13 +94,11 @@ fn test_loader_rejects_code_source() {
 
     let result = loader.load(&manifest, &source, &runtime);
     match result {
-        Err(polyplug::error::RuntimeError::Loader(
-            polyplug::error::LoaderError::UnsupportedBundleSource {
-                loader,
-                source_kind,
-                bundle,
-            },
-        )) => {
+        Err(polyplug::error::LoaderError::UnsupportedBundleSource {
+            loader,
+            source_kind,
+            bundle,
+        }) => {
             assert_eq!(loader, "native");
             assert_eq!(source_kind, "code");
             assert_eq!(bundle, "code_plugin");
@@ -119,13 +117,11 @@ fn test_loader_rejects_bytes_source() {
 
     let result = loader.load(&manifest, &source, &runtime);
     match result {
-        Err(polyplug::error::RuntimeError::Loader(
-            polyplug::error::LoaderError::UnsupportedBundleSource {
-                loader,
-                source_kind,
-                bundle,
-            },
-        )) => {
+        Err(polyplug::error::LoaderError::UnsupportedBundleSource {
+            loader,
+            source_kind,
+            bundle,
+        }) => {
             assert_eq!(loader, "native");
             assert_eq!(source_kind, "bytes");
             assert_eq!(bundle, "bytes_plugin");

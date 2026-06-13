@@ -50,7 +50,6 @@ use pyo3::types::PyDictMethods;
 use pyo3::types::PyModule;
 
 use polyplug::error::LoaderError;
-use polyplug::error::RuntimeError;
 
 /// Embedded Python helper performing the `sys.modules` surgery.
 ///
@@ -111,43 +110,42 @@ def isolate(prefix, bundle_dir, before):
 pub(crate) fn snapshot_loaded_modules(
     py: Python<'_>,
     bundle_name: &str,
-) -> Result<HashSet<String>, RuntimeError> {
-    let sys_mod: Bound<'_, PyModule> = PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| {
-        RuntimeError::Loader(LoaderError::InitFailed {
+) -> Result<HashSet<String>, LoaderError> {
+    let sys_mod: Bound<'_, PyModule> =
+        PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("Python sys import failed: {}", e),
-        })
-    })?;
-    let modules: Bound<'_, PyAny> = sys_mod.getattr("modules").map_err(|e: pyo3::PyErr| {
-        RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!("sys.modules access failed: {}", e),
-        })
-    })?;
+        })?;
+    let modules: Bound<'_, PyAny> =
+        sys_mod
+            .getattr("modules")
+            .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("sys.modules access failed: {}", e),
+            })?;
     // `sys.modules.keys()` returns a `dict_keys` view, which is not a Sequence
     // and so cannot be extracted to `Vec<String>` directly; materialize it into
     // a `list` first.
-    let keys_view: Bound<'_, PyAny> = modules.call_method0("keys").map_err(|e: pyo3::PyErr| {
-        RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!("sys.modules.keys() failed: {}", e),
-        })
-    })?;
+    let keys_view: Bound<'_, PyAny> =
+        modules
+            .call_method0("keys")
+            .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("sys.modules.keys() failed: {}", e),
+            })?;
     let keys: Bound<'_, PyAny> = py
         .get_type::<pyo3::types::PyList>()
         .call1((keys_view,))
-        .map_err(|e: pyo3::PyErr| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!("sys.modules keys materialization failed: {}", e),
-            })
+        .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("sys.modules keys materialization failed: {}", e),
         })?;
-    let names: Vec<String> = keys.extract().map_err(|e: pyo3::PyErr| {
-        RuntimeError::Loader(LoaderError::InitFailed {
+    let names: Vec<String> = keys
+        .extract()
+        .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("sys.modules keys extraction failed: {}", e),
-        })
-    })?;
+        })?;
     Ok(names.into_iter().collect())
 }
 
@@ -186,36 +184,34 @@ pub(crate) fn isolate_bundle_modules(
     bundle_id: u64,
     bundle_dir: &str,
     before: &HashSet<String>,
-) -> Result<String, RuntimeError> {
+) -> Result<String, LoaderError> {
     let helper_code: CString =
         CString::new(ISOLATION_HELPER_PY).map_err(|e: std::ffi::NulError| {
-            RuntimeError::Loader(LoaderError::InitFailed {
+            LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("isolation helper contained interior nul: {}", e),
-            })
+            }
         })?;
     let file_name: CString =
         CString::new("polyplug_python_isolation.py").map_err(|e: std::ffi::NulError| {
-            RuntimeError::Loader(LoaderError::InitFailed {
+            LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("isolation file name contained interior nul: {}", e),
-            })
+            }
         })?;
     let module_name: CString =
         CString::new("polyplug_python_isolation").map_err(|e: std::ffi::NulError| {
-            RuntimeError::Loader(LoaderError::InitFailed {
+            LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("isolation module name contained interior nul: {}", e),
-            })
+            }
         })?;
 
     let helper: Bound<'_, PyModule> =
         PyModule::from_code(py, &helper_code, &file_name, &module_name).map_err(
-            |e: pyo3::PyErr| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: bundle_name.to_owned(),
-                    error: format!("isolation helper compile failed: {}", e),
-                })
+            |e: pyo3::PyErr| LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("isolation helper compile failed: {}", e),
             },
         )?;
 
@@ -227,28 +223,26 @@ pub(crate) fn isolate_bundle_modules(
         .and_then(|isolate: Bound<'_, PyAny>| {
             isolate.call1((prefix.as_str(), bundle_dir, before_list))
         })
-        .map_err(|e: pyo3::PyErr| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!("module isolation failed: {}", e),
-            })
+        .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("module isolation failed: {}", e),
         })?;
 
     // The helper module itself must not linger under its generic name where it
     // could collide with a future load; drop it from sys.modules now. Its code
     // object is no longer needed once `isolate` has run.
-    let sys_mod: Bound<'_, PyModule> = PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| {
-        RuntimeError::Loader(LoaderError::InitFailed {
+    let sys_mod: Bound<'_, PyModule> =
+        PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("Python sys import failed: {}", e),
-        })
-    })?;
-    let modules: Bound<'_, PyAny> = sys_mod.getattr("modules").map_err(|e: pyo3::PyErr| {
-        RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!("sys.modules access failed: {}", e),
-        })
-    })?;
+        })?;
+    let modules: Bound<'_, PyAny> =
+        sys_mod
+            .getattr("modules")
+            .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("sys.modules access failed: {}", e),
+            })?;
     if let Ok(dict) = modules.cast::<PyDict>() {
         let _ = dict.del_item("polyplug_python_isolation");
     }

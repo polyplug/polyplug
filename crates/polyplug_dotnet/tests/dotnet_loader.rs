@@ -73,10 +73,10 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
 
 #[test]
 fn tfm_reader_nonexistent_file_returns_init_failed() {
-    let result: Result<String, RuntimeError> =
+    let result: Result<String, LoaderError> =
         read_target_framework(Path::new("/nonexistent/path/that/does/not/exist.dll"));
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
+        Err(LoaderError::InitFailed { bundle: _, error }) => {
             assert!(
                 error.contains("assembly") || error.contains("PE") || error.contains("not found"),
                 "error: {error}"
@@ -89,9 +89,9 @@ fn tfm_reader_nonexistent_file_returns_init_failed() {
 #[test]
 fn tfm_reader_empty_file_returns_init_failed() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"");
-    let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
+    let result: Result<String, LoaderError> = read_target_framework(tmp.path());
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
+        Err(LoaderError::InitFailed { bundle: _, error }) => {
             assert!(
                 error.contains("assembly") || error.contains("PE"),
                 "error: {error}"
@@ -104,9 +104,9 @@ fn tfm_reader_empty_file_returns_init_failed() {
 #[test]
 fn tfm_reader_random_bytes_returns_init_failed() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"\x00\x01\x02\x03this is not a valid PE binary");
-    let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
+    let result: Result<String, LoaderError> = read_target_framework(tmp.path());
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
+        Err(LoaderError::InitFailed { bundle: _, error }) => {
             assert!(
                 error.contains("assembly") || error.contains("PE"),
                 "error: {error}"
@@ -121,9 +121,9 @@ fn tfm_reader_elf_magic_returns_init_failed() {
     // ELF magic (0x7f 'E' 'L' 'F') is not a valid PE header — pelite rejects it.
     let tmp: NamedTempFile =
         temp_file_with_bytes(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00");
-    let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
+    let result: Result<String, LoaderError> = read_target_framework(tmp.path());
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
+        Err(LoaderError::InitFailed { bundle: _, error }) => {
             assert!(
                 error.contains("assembly") || error.contains("PE"),
                 "error: {error}"
@@ -228,13 +228,13 @@ fn load_nonexistent_assembly_returns_init_failed() {
     let runtime: Arc<Runtime> = test_runtime();
     let path: PathBuf = PathBuf::from("/does/not/exist/Plugin.dll");
     let manifest: ManifestData = make_manifest(&path, "nonexistent");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
+        Err(LoaderError::InitFailed { bundle: _, error }) => {
             assert!(
                 error.contains("assembly") || error.contains("not found"),
                 "error: {error}"
@@ -250,13 +250,13 @@ fn load_invalid_pe_file_returns_init_failed() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(tmp.path(), "invalid_pe");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
+        Err(LoaderError::InitFailed { bundle: _, error }) => {
             assert!(
                 error.contains("assembly") || error.contains("PE"),
                 "error: {error}"
@@ -277,16 +277,13 @@ fn load_with_invalid_hostfxr_path_and_missing_dll_returns_init_failed() {
     let runtime: Arc<Runtime> = test_runtime();
     let path: PathBuf = PathBuf::from("/no/such/Plugin.dll");
     let manifest: ManifestData = make_manifest(&path, "missing_dll");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(
-        matches!(
-            result,
-            Err(RuntimeError::Loader(LoaderError::InitFailed { .. }))
-        ),
+        matches!(result, Err(LoaderError::InitFailed { .. })),
         "expected InitFailed (not a hostfxr error), got {result:?}"
     );
 }
@@ -309,13 +306,13 @@ fn load_dll_net10_against_net6_requirement_returns_init_failed() {
     let loader: DotnetLoader = DotnetLoader::new(cfg);
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
+        Err(LoaderError::InitFailed { bundle: _, error }) => {
             assert!(
                 error.contains("version") || error.contains("framework"),
                 "error: {error}"
@@ -335,16 +332,13 @@ fn load_dll_with_matching_version_passes_tfm_check() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(
-        !matches!(
-            result,
-            Err(RuntimeError::Loader(LoaderError::InitFailed { .. }))
-        ),
+        !matches!(result, Err(LoaderError::InitFailed { .. })),
         "must not get InitFailed for matching version"
     );
 }
@@ -367,7 +361,7 @@ fn load_with_bad_hostfxr_path_and_valid_dll_is_rejected() {
     let loader: DotnetLoader = DotnetLoader::new(cfg);
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -386,7 +380,7 @@ fn load_with_bad_hostfxr_path_and_valid_dll_is_rejected() {
     // The contract under test is that the loader rejects the bundle, not which of the
     // two ordering-dependent variants it produces.
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+        Err(LoaderError::InitFailed { bundle, error }) => {
             assert!(
                 error.contains("hostfxr")
                     || error.contains("host")
@@ -395,7 +389,7 @@ fn load_with_bad_hostfxr_path_and_valid_dll_is_rejected() {
                 "InitFailed should mention the issue, got bundle={bundle}, error={error}"
             );
         }
-        Err(RuntimeError::Loader(LoaderError::InitSymbolMissing { bundle })) => {
+        Err(LoaderError::InitSymbolMissing { bundle }) => {
             assert!(
                 bundle.contains("Polyplug"),
                 "InitSymbolMissing should reference the assembly, got bundle={bundle}"
@@ -421,16 +415,13 @@ fn full_clr_init_reaches_init_symbol_check() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(
-        !matches!(
-            result,
-            Err(RuntimeError::Loader(LoaderError::InitFailed { .. }))
-        ),
+        !matches!(result, Err(LoaderError::InitFailed { .. })),
         "must pass TFM and file checks for existing net10.0 DLL, got: {result:?}"
     );
 }
@@ -495,17 +486,17 @@ fn code_source_returns_unsupported_bundle_source() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData = make_manifest(Path::new("/tmp/x/Plugin.dll"), "csharp_code_x");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Code(String::from("// not loadable: .NET is compiled")),
         &runtime,
     );
     match result {
-        Err(RuntimeError::Loader(LoaderError::UnsupportedBundleSource {
+        Err(LoaderError::UnsupportedBundleSource {
             loader: l,
             source_kind,
             bundle,
-        })) => {
+        }) => {
             assert_eq!(l, "dotnet");
             assert_eq!(source_kind, "code");
             assert_eq!(bundle, "csharp_code_x");
@@ -521,13 +512,13 @@ fn bytes_source_invalid_pe_returns_init_failed() {
     let runtime: Arc<Runtime> = test_runtime();
     let manifest: ManifestData =
         make_manifest(Path::new("/tmp/x/CsharpPlugin.dll"), "csharp_bytes_bad");
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Bytes(b"not a PE file".to_vec()),
         &runtime,
     );
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { error, .. })) => {
+        Err(LoaderError::InitFailed { error, .. }) => {
             assert!(
                 error.contains("PE") || error.contains("assembly"),
                 "error: {error}"
@@ -544,18 +535,13 @@ fn bytes_source_missing_manifest_file_returns_manifest_missing_file() {
     let runtime: Arc<Runtime> = test_runtime();
     let mut manifest: ManifestData = make_manifest(Path::new("/tmp/x/x.dll"), "csharp_no_file");
     manifest.file = String::new();
-    let result: Result<(), RuntimeError> = loader.load(
+    let result: Result<(), LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Bytes(vec![0u8; 16]),
         &runtime,
     );
     assert!(
-        matches!(
-            result,
-            Err(RuntimeError::Loader(
-                LoaderError::ManifestMissingFile { .. }
-            ))
-        ),
+        matches!(result, Err(LoaderError::ManifestMissingFile { .. })),
         "expected ManifestMissingFile, got {result:?}"
     );
 }
@@ -600,7 +586,7 @@ fn bytes_source_loads_fixture_and_dispatches() {
             .unwrap_or_else(|e: std::io::Error| panic!("failed to read {dep_name}: {e}"));
         preloader
             .preload_dependency_from_bytes(&runtime, manifest.id, &dep_bytes)
-            .unwrap_or_else(|e: RuntimeError| {
+            .unwrap_or_else(|e: LoaderError| {
                 panic!("preload {dep_name} dependency from bytes: {e:?}")
             });
     }
@@ -709,7 +695,7 @@ fn load_named_fixture(name: &str) -> Option<(Arc<Runtime>, u64)> {
             .unwrap_or_else(|e: std::io::Error| panic!("failed to read {dep_name}: {e}"));
         preloader
             .preload_dependency_from_bytes(&runtime, bundle_id, &dep_bytes)
-            .unwrap_or_else(|e: RuntimeError| panic!("preload {dep_name} dependency: {e:?}"));
+            .unwrap_or_else(|e: LoaderError| panic!("preload {dep_name} dependency: {e:?}"));
     }
     runtime
         .load_bundle_from_source(manifest, polyplug::loader::BundleSource::Bytes(bytes))
@@ -820,7 +806,7 @@ fn two_runtimes_same_bundle_id_have_isolated_alcs() {
                 .unwrap_or_else(|e: std::io::Error| panic!("failed to read {dep_name}: {e}"));
             preloader
                 .preload_dependency_from_bytes(rt, bundle_id, &dep_bytes)
-                .unwrap_or_else(|e: RuntimeError| panic!("preload {dep_name}: {e:?}"));
+                .unwrap_or_else(|e: LoaderError| panic!("preload {dep_name}: {e:?}"));
         }
     }
 

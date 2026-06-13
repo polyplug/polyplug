@@ -221,7 +221,7 @@ fn load_valid_bundle_registers_vtable() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -284,7 +284,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -345,7 +345,7 @@ file = "bundle.js"
         needs_reinit_on_dep_reload: false,
         bundle_dependencies: Vec::new(),
     };
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -374,7 +374,7 @@ fn load_syntax_error_returns_error() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -403,7 +403,7 @@ fn load_runtime_error_returns_error() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -431,7 +431,7 @@ fn load_bundle_without_polyplug_init_returns_error() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -476,7 +476,7 @@ fn load_nonexistent_file_returns_error() {
         needs_reinit_on_dep_reload: false,
         bundle_dependencies: Vec::new(),
     };
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -532,7 +532,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -594,7 +594,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -764,7 +764,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -946,7 +946,7 @@ fn sequential_loads_of_different_contracts_all_succeed() {
         let (_dir, path) = write_temp_bundle(&bundle);
 
         let manifest: ManifestData = make_manifest(&path, "test.bundle");
-        let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+        let result: Result<(), polyplug::error::LoaderError> = loader.load(
             &manifest,
             &polyplug::loader::BundleSource::Path(manifest.path.clone()),
             &runtime,
@@ -975,7 +975,7 @@ fn dispatch_vm_call_works_correctly() {
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -1073,7 +1073,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -1085,7 +1085,10 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
 
 #[test]
 fn js_reload_disabled_returns_error() {
-    // With hot-reload disabled, the loader must reject reload() up front.
+    // With hot-reload disabled in the runtime config, the runtime gate (which now owns
+    // the hot-reload check — the js loader's `reload` no longer inspects config) must
+    // reject the reload up front. The loader still advertises
+    // `supports_hot_reload() == true`, so the config flag is the sole reason for refusal.
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.reload.disabled", 1);
 
     let bundle: String = make_bundle_js(contract_id, 1, "test.reload.disabled");
@@ -1093,12 +1096,15 @@ fn js_reload_disabled_returns_error() {
 
     let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
+    assert!(
+        loader.supports_hot_reload(),
+        "the js loader supports hot-reload; only the config flag must gate it here"
+    );
 
-    let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), RuntimeError> = loader.reload(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = runtime.reload_bundle(path.as_path());
     assert!(
         matches!(result, Err(RuntimeError::HotReloadDisabled)),
-        "reload with hot-reload disabled must return HotReloadDisabled: {result:?}"
+        "reload_bundle with hot-reload disabled must return HotReloadDisabled: {result:?}"
     );
 }
 
@@ -1320,17 +1326,17 @@ fn load_bytes_source_invalid_utf8_returns_structured_error() {
     // 0xFF is never valid in a UTF-8 sequence.
     let invalid: Vec<u8> = vec![0xFF, 0xFE, 0x00, 0x01];
     let manifest: ManifestData = fixture_manifest(std::path::PathBuf::new());
-    let result: Result<(), RuntimeError> =
+    let result: Result<(), LoaderError> =
         loader.load(&manifest, &BundleSource::Bytes(invalid), &runtime);
 
     assert!(
         matches!(
             result,
-            Err(RuntimeError::Loader(LoaderError::InvalidSourceEncoding {
+            Err(LoaderError::InvalidSourceEncoding {
                 loader: "js-quickjs",
                 source_kind: "bytes",
                 ..
-            }))
+            })
         ),
         "invalid UTF-8 bytes must yield InvalidSourceEncoding: {result:?}"
     );
@@ -1770,7 +1776,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
     let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
     let manifest: ManifestData = make_manifest(&path, "test.initerr");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -1802,7 +1808,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
     let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
     let manifest: ManifestData = make_manifest(&path, "test.initnum");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -1838,7 +1844,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
     let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
     let manifest: ManifestData = make_manifest(&path, "test.malformed");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
@@ -1875,7 +1881,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
     let runtime: Arc<Runtime> = make_runtime();
     let loader: JsLoader = make_loader();
     let manifest: ManifestData = make_manifest(&path, "test.short");
-    let result: Result<(), polyplug::error::RuntimeError> = loader.load(
+    let result: Result<(), polyplug::error::LoaderError> = loader.load(
         &manifest,
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,

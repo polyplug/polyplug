@@ -36,7 +36,6 @@ use pyo3::types::PyDictMethods;
 use pyo3::types::PyModule;
 
 use polyplug::error::LoaderError;
-use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
@@ -44,6 +43,7 @@ use polyplug::runtime::Runtime;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
+use polyplug_abi::SupportedLanguage;
 use polyplug_utils::BundleId;
 
 use crate::context::ensure_python_initialized;
@@ -142,7 +142,7 @@ impl PythonLoader {
         module: &Bound<'_, PyAny>,
         host_interface: *const HostApi,
         bundle_name: &str,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         let registrations: Vec<ContractRegistration> =
             loader::collect_registrations(py, init_fn, module, bundle_name)?;
         loader::register_contracts(registrations, host_interface, bundle_name)?;
@@ -178,34 +178,33 @@ impl PythonLoader {
         manifest: &ManifestData,
         code: &str,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         ensure_python_initialized(&self.config)?;
 
         let bundle_name: String = synthetic_module_name(&manifest.name);
         let bundle_id: u64 = manifest.id;
 
-        let code_c: CString = CString::new(code).map_err(|e: std::ffi::NulError| {
-            RuntimeError::Loader(LoaderError::InitFailed {
+        let code_c: CString =
+            CString::new(code).map_err(|e: std::ffi::NulError| LoaderError::InitFailed {
                 bundle: bundle_name.clone(),
                 error: format!("Python source contained an interior nul byte: {}", e),
-            })
-        })?;
+            })?;
         let file_name_c: CString =
             CString::new(format!("{}.py", bundle_name)).map_err(|e: std::ffi::NulError| {
-                RuntimeError::Loader(LoaderError::InitFailed {
+                LoaderError::InitFailed {
                     bundle: bundle_name.clone(),
                     error: format!("synthetic file name contained an interior nul byte: {}", e),
-                })
+                }
             })?;
         let module_name_c: CString =
             CString::new(bundle_name.as_str()).map_err(|e: std::ffi::NulError| {
-                RuntimeError::Loader(LoaderError::InitFailed {
+                LoaderError::InitFailed {
                     bundle: bundle_name.clone(),
                     error: format!(
                         "synthetic module name contained an interior nul byte: {}",
                         e
                     ),
-                })
+                }
             })?;
 
         // Self-passing pattern: the interface already carries the runtime pointer.
@@ -220,7 +219,7 @@ impl PythonLoader {
         // path-based load for the full rationale).
         let _load_guard: std::sync::MutexGuard<'_, ()> = crate::context::acquire_load_lock();
 
-        let result: Result<String, RuntimeError> = Python::attach(|py| {
+        let result: Result<String, LoaderError> = Python::attach(|py| {
             // Snapshot sys.modules before executing so the isolation pass can scope
             // exactly the modules this bundle introduced.
             let modules_before: std::collections::HashSet<String> =
@@ -229,21 +228,19 @@ impl PythonLoader {
             // Compile and execute the source text as a module.
             let module: pyo3::Bound<'_, PyModule> =
                 PyModule::from_code(py, &code_c, &file_name_c, &module_name_c).map_err(
-                    |e: pyo3::PyErr| {
-                        RuntimeError::Loader(LoaderError::InitFailed {
-                            bundle: bundle_name.clone(),
-                            error: format!("inline module compile/exec failed: {}", e),
-                        })
+                    |e: pyo3::PyErr| LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!("inline module compile/exec failed: {}", e),
                     },
                 )?;
 
             // Locate polyplug_init(host, ctx) — self-passing pattern.
             let init_fn: pyo3::Bound<'_, pyo3::PyAny> =
-                module.getattr("polyplug_init").map_err(|_| {
-                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                module
+                    .getattr("polyplug_init")
+                    .map_err(|_| LoaderError::InitSymbolMissing {
                         bundle: bundle_name.clone(),
-                    })
-                })?;
+                    })?;
 
             // Inject the arena bridge before calling init so the guest can route
             // per-call return buffers through the host CallArena during dispatch.
@@ -276,11 +273,9 @@ impl PythonLoader {
             let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
             init_fn
                 .call((host_interface_i64, ctx_ptr), None)
-                .map_err(|e: pyo3::PyErr| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!("polyplug_init call failed: {}", e),
-                    })
+                .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!("polyplug_init call failed: {}", e),
                 })?;
 
             // Collect the guest's registration data and register every contract
@@ -301,7 +296,7 @@ impl PythonLoader {
                 &modules_before,
             )?;
 
-            Ok::<String, RuntimeError>(prefix)
+            Ok::<String, LoaderError>(prefix)
         });
 
         runtime.pop_init_bundle_id();
@@ -316,12 +311,20 @@ impl BundleLoader for PythonLoader {
         "python"
     }
 
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Python
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        false
+    }
+
     fn load(
         &self,
         manifest: &ManifestData,
         source: &BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         // `Code` and `Bytes` carry the plugin's Python module source text directly,
         // with no bundle directory. `Bytes` is validated as UTF-8 first; both then
         // flow through the same in-memory exec path. `Path` keeps the original
@@ -333,11 +336,11 @@ impl BundleLoader for PythonLoader {
             }
             BundleSource::Bytes(bytes) => {
                 let code: &str = core::str::from_utf8(bytes).map_err(|_| {
-                    RuntimeError::Loader(LoaderError::InvalidSourceEncoding {
+                    LoaderError::InvalidSourceEncoding {
                         loader: "python",
                         source_kind: source.kind(),
                         bundle: manifest.name.clone(),
-                    })
+                    }
                 })?;
                 return self.load_from_source_text(manifest, code, runtime);
             }
@@ -346,31 +349,31 @@ impl BundleLoader for PythonLoader {
         let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
             manifest.path.join(&manifest.file)
         } else {
-            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
+            return Err(LoaderError::ManifestMissingFile {
                 bundle: manifest.name.clone(),
-            }));
+            });
         };
 
         if !bundle_path.exists() {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+            return Err(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: format!(
                     "failed to import Python module at {}: file does not exist",
                     bundle_path.to_string_lossy()
                 ),
-            }));
+            });
         }
 
         ensure_python_initialized(&self.config)?;
 
         let abs_path: std::path::PathBuf = bundle_path.canonicalize().map_err(|_| {
-            RuntimeError::Loader(LoaderError::InitFailed {
+            LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: format!(
                     "failed to canonicalize Python module path {}: path does not exist or is not accessible",
                     bundle_path.to_string_lossy()
                 ),
-            })
+            }
         })?;
 
         let bundle_name: String = abs_path
@@ -402,86 +405,70 @@ impl BundleLoader for PythonLoader {
         let prefix: String = Python::attach(|py| {
             // Step 3a: Prepend bundle directory (and site-packages) to sys.path.
             let sys_mod: pyo3::Bound<'_, PyModule> =
-                PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!("Python sys import failed: {}", e),
-                    })
+                PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!("Python sys import failed: {}", e),
                 })?;
             let sys_path: pyo3::Bound<'_, pyo3::PyAny> =
-                sys_mod.getattr("path").map_err(|e: pyo3::PyErr| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
+                sys_mod
+                    .getattr("path")
+                    .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
                         error: format!("Python sys.path get failed: {}", e),
-                    })
-                })?;
+                    })?;
             sys_path
                 .call_method1("insert", (0usize, bundle_dir_str.as_str()))
-                .map_err(|e: pyo3::PyErr| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!("sys.path insert failed: {}", e),
-                    })
+                .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!("sys.path insert failed: {}", e),
                 })?;
             let site_pkgs: std::path::PathBuf = bundle_dir.join("site-packages");
             if site_pkgs.exists() {
                 let sp: String = site_pkgs.to_string_lossy().into_owned();
                 sys_path
                     .call_method1("insert", (0usize, sp.as_str()))
-                    .map_err(|e: pyo3::PyErr| {
-                        RuntimeError::Loader(LoaderError::InitFailed {
-                            bundle: bundle_name.clone(),
-                            error: format!("site-packages path insert failed: {}", e),
-                        })
+                    .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!("site-packages path insert failed: {}", e),
                     })?;
             }
             // Step 3b: Import via importlib (no further sys.path mutation).
             let importlib_util: pyo3::Bound<'_, PyModule> = PyModule::import(py, "importlib.util")
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!("importlib.util import failed: {}", e),
-                    })
+                .map_err(|e| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!("importlib.util import failed: {}", e),
                 })?;
 
             let spec: pyo3::Bound<'_, pyo3::PyAny> = importlib_util
                 .getattr("spec_from_file_location")
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!("spec_from_file_location not found: {}", e),
-                    })
+                .map_err(|e| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!("spec_from_file_location not found: {}", e),
                 })?
                 .call1((&bundle_name, abs_path.to_string_lossy().as_ref()))
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!(
-                            "spec_from_file_location call failed for {}: {}",
-                            abs_path.to_string_lossy(),
-                            e
-                        ),
-                    })
+                .map_err(|e| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!(
+                        "spec_from_file_location call failed for {}: {}",
+                        abs_path.to_string_lossy(),
+                        e
+                    ),
                 })?;
 
             let module_from_spec: pyo3::Bound<'_, pyo3::PyAny> = importlib_util
                 .getattr("module_from_spec")
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!("module_from_spec not found: {}", e),
-                    })
+                .map_err(|e| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!("module_from_spec not found: {}", e),
                 })?
                 .call1((&spec,))
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!(
-                            "module_from_spec call failed for {}: {}",
-                            abs_path.to_string_lossy(),
-                            e
-                        ),
-                    })
+                .map_err(|e| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!(
+                        "module_from_spec call failed for {}: {}",
+                        abs_path.to_string_lossy(),
+                        e
+                    ),
                 })?;
 
             // Snapshot sys.modules before executing the bundle so that, after
@@ -495,24 +482,22 @@ impl BundleLoader for PythonLoader {
                 .and_then(|exec_module: pyo3::Bound<'_, pyo3::PyAny>| {
                     exec_module.call1((&module_from_spec,))
                 })
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!(
-                            "exec_module failed for {}: {}",
-                            abs_path.to_string_lossy(),
-                            e
-                        ),
-                    })
+                .map_err(|e| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!(
+                        "exec_module failed for {}: {}",
+                        abs_path.to_string_lossy(),
+                        e
+                    ),
                 })?;
 
             // Step 3c: Locate polyplug_init(host, ctx).
             // New signature: polyplug_init(host_interface, ctx) - self-passing pattern.
             let init_fn: pyo3::Bound<'_, pyo3::PyAny> =
                 module_from_spec.getattr("polyplug_init").map_err(|_| {
-                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                    LoaderError::InitSymbolMissing {
                         bundle: bundle_name.clone(),
-                    })
+                    }
                 })?;
 
             // Inject the arena bridge before calling init so the guest can route
@@ -548,11 +533,9 @@ impl BundleLoader for PythonLoader {
             let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
             init_fn
                 .call((host_interface_i64, ctx_ptr), None)
-                .map_err(|e: pyo3::PyErr| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: format!("polyplug_init call failed: {}", e),
-                    })
+                .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                    bundle: bundle_name.clone(),
+                    error: format!("polyplug_init call failed: {}", e),
                 })?;
 
             // Collect the guest's registration data and register every contract
@@ -579,7 +562,7 @@ impl BundleLoader for PythonLoader {
                 &modules_before,
             )?;
 
-            Ok::<String, RuntimeError>(prefix)
+            Ok::<String, LoaderError>(prefix)
         })?;
 
         // Pop bundle_id from the runtime's per-thread init stack after init completes.
@@ -592,12 +575,12 @@ impl BundleLoader for PythonLoader {
         Ok(())
     }
 
-    fn reload(
-        &self,
-        _manifest: &ManifestData,
-        _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::RuntimeError> {
-        Err(polyplug::error::RuntimeError::HotReloadDisabled)
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+        // Defensive: the runtime gates on `supports_hot_reload()` (false for python)
+        // and never calls this. Honest impl that also protects any direct caller.
+        Err(LoaderError::HotReloadUnsupported {
+            loader_name: self.loader_name().to_owned(),
+        })
     }
 
     // Unlike native `dlclose`, purging `sys.modules` is memory-safe regardless of any
@@ -607,7 +590,7 @@ impl BundleLoader for PythonLoader {
     // module entries on unload — no deferred-reclaim branch, no quiescence hint, no
     // crossbeam-epoch (CPython owns object liveness, there is no raw resource for the
     // epoch to govern).
-    fn unload(&self, bundle_id: BundleId, _runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn unload(&self, bundle_id: BundleId, _runtime: &Runtime) -> Result<(), LoaderError> {
         // Drain this bundle's prefixes and delete every matching `sys.modules` key so
         // a subsequent load re-imports fresh source.
         let prefixes: Vec<String> = {
@@ -636,30 +619,30 @@ impl BundleLoader for PythonLoader {
 /// are collected first, then deleted, so the dict is never mutated mid-iteration;
 /// an individual missing key is ignored (the entry may already be gone). A hard
 /// interpreter error reaching `sys.modules` is mapped to a proper
-/// [`RuntimeError`].
-fn purge_prefix_from_sys_modules(prefix: &str) -> Result<(), RuntimeError> {
+/// [`LoaderError`].
+fn purge_prefix_from_sys_modules(prefix: &str) -> Result<(), LoaderError> {
     let dotted: String = format!("{}.", prefix);
 
-    Python::attach(|py: Python<'_>| -> Result<(), RuntimeError> {
+    Python::attach(|py: Python<'_>| -> Result<(), LoaderError> {
         let sys_mod: Bound<'_, PyModule> =
-            PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: "python".to_owned(),
-                    error: format!("Python sys import failed during unload purge: {}", e),
-                })
+            PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                bundle: "python".to_owned(),
+                error: format!("Python sys import failed during unload purge: {}", e),
             })?;
-        let modules: Bound<'_, PyAny> = sys_mod.getattr("modules").map_err(|e: pyo3::PyErr| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: "python".to_owned(),
-                error: format!("sys.modules access failed during unload purge: {}", e),
-            })
-        })?;
-        let dict: Bound<'_, PyDict> = modules.cast_into::<PyDict>().map_err(|_| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: "python".to_owned(),
-                error: "sys.modules is not a dict during unload purge".to_owned(),
-            })
-        })?;
+        let modules: Bound<'_, PyAny> =
+            sys_mod
+                .getattr("modules")
+                .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+                    bundle: "python".to_owned(),
+                    error: format!("sys.modules access failed during unload purge: {}", e),
+                })?;
+        let dict: Bound<'_, PyDict> =
+            modules
+                .cast_into::<PyDict>()
+                .map_err(|_| LoaderError::InitFailed {
+                    bundle: "python".to_owned(),
+                    error: "sys.modules is not a dict during unload purge".to_owned(),
+                })?;
 
         let mut to_delete: Vec<Bound<'_, PyAny>> = Vec::new();
         for (key, _value) in dict.iter() {

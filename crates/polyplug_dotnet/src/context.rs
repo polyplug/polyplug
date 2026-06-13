@@ -18,7 +18,6 @@ use netcorehost::pdcstring::PdCString;
 use once_cell::sync::OnceCell;
 
 use polyplug::error::LoaderError;
-use polyplug::error::RuntimeError;
 
 use crate::config::DotnetConfig;
 use crate::config::HostfxrLocation;
@@ -127,7 +126,7 @@ pub(crate) fn init_context(
     config: &DotnetConfig,
     bundle_dir: &std::path::Path,
     logger: LoggerHandle,
-) -> Result<Arc<DotnetContext>, RuntimeError> {
+) -> Result<Arc<DotnetContext>, LoaderError> {
     // Step 1: Parse version from "net10.0" → "10.0" → "10.0.0"
     let ver_str: &str = config
         .min_framework
@@ -159,25 +158,20 @@ pub(crate) fn init_context(
     let mut tmp: tempfile::NamedTempFile = tempfile::Builder::new()
         .suffix(".json")
         .tempfile()
-        .map_err(|e: std::io::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: "<tempfile>".to_owned(),
-                error: format!("CLR init failed: {}", e),
-            })
-        })?;
-    tmp.write_all(json.as_bytes())
-        .map_err(|e: std::io::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: "<tempfile>".to_owned(),
-                error: format!("CLR init failed: {}", e),
-            })
-        })?;
-    tmp.flush().map_err(|e: std::io::Error| {
-        RuntimeError::Loader(LoaderError::InitFailed {
+        .map_err(|e: std::io::Error| LoaderError::InitFailed {
             bundle: "<tempfile>".to_owned(),
             error: format!("CLR init failed: {}", e),
-        })
-    })?;
+        })?;
+    tmp.write_all(json.as_bytes())
+        .map_err(|e: std::io::Error| LoaderError::InitFailed {
+            bundle: "<tempfile>".to_owned(),
+            error: format!("CLR init failed: {}", e),
+        })?;
+    tmp.flush()
+        .map_err(|e: std::io::Error| LoaderError::InitFailed {
+            bundle: "<tempfile>".to_owned(),
+            error: format!("CLR init failed: {}", e),
+        })?;
 
     // Close the write handle before hostfxr reads the file, but keep the file on disk.
     // On Windows, hostfxr opens the runtimeconfig with CreateFileW(GENERIC_READ,
@@ -189,12 +183,11 @@ pub(crate) fn init_context(
     let temp_path: PathBuf = tmp_path_guard.to_path_buf();
 
     // Step 3: Convert path to PdCString.
-    let pdcpath: PdCString = PdCString::from_os_str(temp_path.as_os_str()).map_err(|_| {
-        RuntimeError::Loader(LoaderError::InitFailed {
+    let pdcpath: PdCString =
+        PdCString::from_os_str(temp_path.as_os_str()).map_err(|_| LoaderError::InitFailed {
             bundle: temp_path.to_string_lossy().into_owned(),
             error: "CLR init failed: runtimeconfig path contains embedded nul byte".to_owned(),
-        })
-    })?;
+        })?;
 
     // Step 4: Locate and load hostfxr directly by scanning well-known paths.
     // For HostfxrLocation::Auto we do NOT use netcorehost::nethost::load_hostfxr().
@@ -205,26 +198,25 @@ pub(crate) fn init_context(
     // implementation does — and call Hostfxr::load_from_path() directly.
     let hostfxr: netcorehost::hostfxr::Hostfxr = match &config.hostfxr {
         HostfxrLocation::Auto => {
-            let fxr_path: PathBuf = find_hostfxr_auto(logger).ok_or_else(|| {
-                RuntimeError::Loader(LoaderError::InitFailed {
+            let fxr_path: PathBuf =
+                find_hostfxr_auto(logger).ok_or_else(|| LoaderError::InitFailed {
                     bundle: "<hostfxr>".to_owned(),
                     error: "CLR init failed: hostfxr not found; install .NET or set DOTNET_ROOT"
                         .to_owned(),
-                })
-            })?;
+                })?;
             netcorehost::hostfxr::Hostfxr::load_from_path(&fxr_path).map_err(|e| {
-                RuntimeError::Loader(LoaderError::InitFailed {
+                LoaderError::InitFailed {
                     bundle: fxr_path.to_string_lossy().into_owned(),
                     error: format!("CLR init failed: {}", e),
-                })
+                }
             })?
         }
         HostfxrLocation::Path(p) => {
             netcorehost::hostfxr::Hostfxr::load_from_path(p).map_err(|e| {
-                RuntimeError::Loader(LoaderError::InitFailed {
+                LoaderError::InitFailed {
                     bundle: p.to_string_lossy().into_owned(),
                     error: format!("CLR init failed: {}", e),
-                })
+                }
             })?
         }
     };
@@ -235,11 +227,9 @@ pub(crate) fn init_context(
     // detect file type (tempfile::Builder::suffix(".json") above ensures this).
     let context: HostfxrContext<InitializedForRuntimeConfig> = hostfxr
         .initialize_for_runtime_config(&pdcpath)
-        .map_err(|e| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: temp_path.to_string_lossy().into_owned(),
-                error: format!("CLR init failed: {}", e),
-            })
+        .map_err(|e| LoaderError::InitFailed {
+            bundle: temp_path.to_string_lossy().into_owned(),
+            error: format!("CLR init failed: {}", e),
         })?;
 
     // Step 6: Explicitly delete the temp file now that hostfxr has read it synchronously.
@@ -259,59 +249,53 @@ impl DotnetContext {
     /// loaded through the path-based delegate loader — which, unlike the path-less delegate,
     /// resolves `[UnmanagedCallersOnly]` methods from on-disk assemblies reliably. The
     /// bridge is self-contained (no dependencies), so it loads from any temp path.
-    fn bridge(&self) -> Result<&ByteBridge, RuntimeError> {
+    fn bridge(&self) -> Result<&ByteBridge, LoaderError> {
         if !BYTE_BRIDGE_AVAILABLE || BYTE_BRIDGE_DLL.is_empty() {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+            return Err(LoaderError::InitFailed {
                 bundle: "<byte-bridge>".to_owned(),
                 error: "byte-load bridge unavailable: rebuild polyplug_dotnet with the .NET SDK installed".to_owned(),
-            }));
+            });
         }
         self.bridge.get_or_try_init(|| self.init_bridge())
     }
 
     /// Stage the embedded bridge assembly to a temp file and resolve its entry points.
-    fn init_bridge(&self) -> Result<ByteBridge, RuntimeError> {
+    fn init_bridge(&self) -> Result<ByteBridge, LoaderError> {
         // hostfxr keys delegate loaders by assembly filename, and the bridge resolves its own
         // type by the assembly simple name, so the staged file must be named after the bridge
         // assembly: `Polyplug.Loaders.DotnetByteBridge.dll`.
         let dir: tempfile::TempDir = tempfile::Builder::new()
             .prefix("polyplug-dotnet-bridge")
             .tempdir()
-            .map_err(|e: std::io::Error| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: "<byte-bridge>".to_owned(),
-                    error: format!("byte-bridge stage failed: {e}"),
-                })
+            .map_err(|e: std::io::Error| LoaderError::InitFailed {
+                bundle: "<byte-bridge>".to_owned(),
+                error: format!("byte-bridge stage failed: {e}"),
             })?;
         let dll_path: PathBuf = dir.path().join("Polyplug.Loaders.DotnetByteBridge.dll");
         std::fs::write(&dll_path, BYTE_BRIDGE_DLL).map_err(|e: std::io::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
+            LoaderError::InitFailed {
                 bundle: "<byte-bridge>".to_owned(),
                 error: format!("byte-bridge write failed: {e}"),
-            })
+            }
         })?;
 
-        let asm_pdc: PdCString = PdCString::from_os_str(dll_path.as_os_str()).map_err(|_| {
-            RuntimeError::Loader(LoaderError::InitFailed {
+        let asm_pdc: PdCString =
+            PdCString::from_os_str(dll_path.as_os_str()).map_err(|_| LoaderError::InitFailed {
                 bundle: "<byte-bridge>".to_owned(),
                 error: "byte-bridge path contains embedded nul byte".to_owned(),
-            })
-        })?;
+            })?;
 
         let loader: AssemblyDelegateLoader = {
             let ctx: std::sync::MutexGuard<'_, HostfxrContext<InitializedForRuntimeConfig>> =
-                self._context.lock().map_err(|_| {
-                    RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: "<byte-bridge>".to_owned(),
-                        error: "CLR context mutex poisoned (bridge)".to_owned(),
-                    })
+                self._context.lock().map_err(|_| LoaderError::InitFailed {
+                    bundle: "<byte-bridge>".to_owned(),
+                    error: "CLR context mutex poisoned (bridge)".to_owned(),
                 })?;
-            ctx.get_delegate_loader_for_assembly(asm_pdc).map_err(|e| {
-                RuntimeError::Loader(LoaderError::InitFailed {
+            ctx.get_delegate_loader_for_assembly(asm_pdc)
+                .map_err(|e| LoaderError::InitFailed {
                     bundle: "<byte-bridge>".to_owned(),
                     error: format!("byte-bridge loader init failed: {e}"),
-                })
-            })?
+                })?
             // _context lock dropped here.
         };
 
@@ -332,10 +316,8 @@ impl DotnetContext {
                     type_pdc.as_ref(),
                     load_method_pdc.as_ref(),
                 )
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
-                        bundle: format!("<byte-bridge>: LoadAndGetInit error={e}"),
-                    })
+                .map_err(|e| LoaderError::InitSymbolMissing {
+                    bundle: format!("<byte-bridge>: LoadAndGetInit error={e}"),
                 })?;
             *f
         };
@@ -345,10 +327,8 @@ impl DotnetContext {
                     type_pdc.as_ref(),
                     load_path_method_pdc.as_ref(),
                 )
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
-                        bundle: format!("<byte-bridge>: LoadFromPathAndGetInit error={e}"),
-                    })
+                .map_err(|e| LoaderError::InitSymbolMissing {
+                    bundle: format!("<byte-bridge>: LoadFromPathAndGetInit error={e}"),
                 })?;
             *f
         };
@@ -358,10 +338,8 @@ impl DotnetContext {
                     type_pdc.as_ref(),
                     preload_method_pdc.as_ref(),
                 )
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
-                        bundle: format!("<byte-bridge>: PreloadDependency error={e}"),
-                    })
+                .map_err(|e| LoaderError::InitSymbolMissing {
+                    bundle: format!("<byte-bridge>: PreloadDependency error={e}"),
                 })?;
             *f
         };
@@ -371,10 +349,8 @@ impl DotnetContext {
                     type_pdc.as_ref(),
                     unload_method_pdc.as_ref(),
                 )
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
-                        bundle: format!("<byte-bridge>: Unload error={e}"),
-                    })
+                .map_err(|e| LoaderError::InitSymbolMissing {
+                    bundle: format!("<byte-bridge>: Unload error={e}"),
                 })?;
             *f
         };
@@ -384,10 +360,8 @@ impl DotnetContext {
                     type_pdc.as_ref(),
                     is_alive_method_pdc.as_ref(),
                 )
-                .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
-                        bundle: format!("<byte-bridge>: IsAlcAlive error={e}"),
-                    })
+                .map_err(|e| LoaderError::InitSymbolMissing {
+                    bundle: format!("<byte-bridge>: IsAlcAlive error={e}"),
                 })?;
             *f
         };
@@ -415,7 +389,7 @@ impl DotnetContext {
         runtime_id: u64,
         bundle_id: u64,
         dep_bytes: &[u8],
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         let bridge: &ByteBridge = self.bridge()?;
         // SAFETY: `preload_dependency` is a valid CLR fn ptr resolved in `init_bridge`.
         // `dep_bytes` is a valid, correctly-sized buffer; the bridge copies it during the call.
@@ -428,10 +402,10 @@ impl DotnetContext {
             )
         };
         if code != 0 {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+            return Err(LoaderError::InitFailed {
                 bundle: "<byte-bridge-dependency>".to_owned(),
                 error: format!("bridge PreloadDependency returned {code}"),
-            }));
+            });
         }
         Ok(())
     }
@@ -455,7 +429,7 @@ impl DotnetContext {
         asm_name: &str,
         asm_bytes: &[u8],
         simple_type_name: &str,
-    ) -> Result<InitFn, RuntimeError> {
+    ) -> Result<InitFn, LoaderError> {
         let bridge: &ByteBridge = self.bridge()?;
         let type_name_bytes: &[u8] = simple_type_name.as_bytes();
         // SAFETY: `load_and_get_init` is a valid CLR fn ptr resolved in `init_bridge`.
@@ -472,11 +446,11 @@ impl DotnetContext {
             )
         };
         if raw.is_null() {
-            return Err(RuntimeError::Loader(LoaderError::InitSymbolMissing {
+            return Err(LoaderError::InitSymbolMissing {
                 bundle: format!(
                     "{asm_name}: byte-bridge could not resolve {simple_type_name}.PolyplugInit"
                 ),
-            }));
+            });
         }
         // SAFETY: a non-null return is the native entry of the guest's `[UnmanagedCallersOnly]`
         // PolyplugInit, whose ABI matches `InitFn` (host, ctx) -> AbiError. Transmuting a raw fn
@@ -496,7 +470,7 @@ impl DotnetContext {
         asm_path: &std::path::Path,
         asm_name: &str,
         simple_type_name: &str,
-    ) -> Result<InitFn, RuntimeError> {
+    ) -> Result<InitFn, LoaderError> {
         let bridge: &ByteBridge = self.bridge()?;
         let path_str: String = asm_path.to_string_lossy().into_owned();
         let path_bytes: &[u8] = path_str.as_bytes();
@@ -515,11 +489,11 @@ impl DotnetContext {
             )
         };
         if raw.is_null() {
-            return Err(RuntimeError::Loader(LoaderError::InitSymbolMissing {
+            return Err(LoaderError::InitSymbolMissing {
                 bundle: format!(
                     "{asm_name}: byte-bridge could not load '{path_str}' / resolve {simple_type_name}.PolyplugInit"
                 ),
-            }));
+            });
         }
         // SAFETY: a non-null return is the native entry of the guest's `[UnmanagedCallersOnly]`
         // PolyplugInit, whose ABI matches `InitFn` (host, ctx) -> AbiError. Transmuting a raw fn
@@ -540,15 +514,15 @@ impl DotnetContext {
         &self,
         runtime_id: u64,
         bundle_id: u64,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         let bridge: &ByteBridge = self.bridge()?;
         // SAFETY: `unload` is a valid CLR fn ptr resolved in `init_bridge`.
         let code: u32 = unsafe { (bridge.unload)(runtime_id, bundle_id) };
         if code != 0 {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+            return Err(LoaderError::InitFailed {
                 bundle: format!("<byte-bridge-unload:{bundle_id}>"),
                 error: format!("bridge Unload returned {code}"),
-            }));
+            });
         }
         Ok(())
     }
@@ -559,7 +533,7 @@ impl DotnetContext {
         &self,
         runtime_id: u64,
         bundle_id: u64,
-    ) -> Result<bool, RuntimeError> {
+    ) -> Result<bool, LoaderError> {
         let bridge: &ByteBridge = self.bridge()?;
         // SAFETY: `is_alc_alive` is a valid CLR fn ptr resolved in `init_bridge`.
         let alive: u32 = unsafe { (bridge.is_alc_alive)(runtime_id, bundle_id) };
@@ -569,12 +543,10 @@ impl DotnetContext {
 
 /// Build a `PdCString` for a bridge type/method name, mapping nul-byte errors to a
 /// structured loader error.
-fn bridge_pdc(s: &str) -> Result<PdCString, RuntimeError> {
-    PdCString::from_os_str(std::ffi::OsStr::new(s)).map_err(|_| {
-        RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: "<byte-bridge>".to_owned(),
-            error: format!("bridge name contains embedded nul byte: {s}"),
-        })
+fn bridge_pdc(s: &str) -> Result<PdCString, LoaderError> {
+    PdCString::from_os_str(std::ffi::OsStr::new(s)).map_err(|_| LoaderError::InitFailed {
+        bundle: "<byte-bridge>".to_owned(),
+        error: format!("bridge name contains embedded nul byte: {s}"),
     })
 }
 

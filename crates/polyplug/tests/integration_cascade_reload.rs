@@ -18,7 +18,7 @@ use core::sync::atomic::Ordering;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use polyplug::error::RuntimeError;
+use polyplug::error::LoaderError;
 use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug::runtime::Runtime;
 use polyplug_abi::{
@@ -106,17 +106,25 @@ impl BundleLoader for CascadeLoader {
         self.loader_name
     }
 
+    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+        polyplug_abi::SupportedLanguage::Rust
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        true
+    }
+
     fn load(
         &self,
         manifest: &ManifestData,
         _source: &polyplug::loader::BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         self.register(manifest, runtime);
         Ok(())
     }
 
-    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError> {
         self.reload_called.store(true, Ordering::SeqCst);
         self.register(manifest, runtime);
         Ok(())

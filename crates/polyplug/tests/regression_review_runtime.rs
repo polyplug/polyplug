@@ -114,12 +114,20 @@ impl BundleLoader for DepProbeLoader {
         "dep-probe"
     }
 
+    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+        polyplug_abi::SupportedLanguage::Rust
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        false
+    }
+
     fn load(
         &self,
         manifest: &ManifestData,
         _source: &polyplug::loader::BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), polyplug::error::LoaderError> {
         let host_abi: *const HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(bundle_id.id());
@@ -140,8 +148,14 @@ impl BundleLoader for DepProbeLoader {
         Ok(())
     }
 
-    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), RuntimeError> {
-        Err(RuntimeError::HotReloadDisabled)
+    fn reload(
+        &self,
+        _manifest: &ManifestData,
+        _runtime: &Runtime,
+    ) -> Result<(), polyplug::error::LoaderError> {
+        Err(polyplug::error::LoaderError::HotReloadUnsupported {
+            loader_name: self.loader_name().to_owned(),
+        })
     }
 }
 
@@ -622,15 +636,25 @@ impl BundleLoader for NeverLoadsLoader {
     fn loader_name(&self) -> &'static str {
         "reload-probe"
     }
+    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+        polyplug_abi::SupportedLanguage::Rust
+    }
+    fn supports_hot_reload(&self) -> bool {
+        true
+    }
     fn load(
         &self,
         _manifest: &ManifestData,
         _source: &polyplug::loader::BundleSource,
         _runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), polyplug::error::LoaderError> {
         Ok(())
     }
-    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn reload(
+        &self,
+        _manifest: &ManifestData,
+        _runtime: &Runtime,
+    ) -> Result<(), polyplug::error::LoaderError> {
         Ok(())
     }
 }

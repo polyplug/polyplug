@@ -141,6 +141,9 @@ pub enum LoaderError {
         expected: u64,
         found: u64,
     },
+
+    #[error("loader `{loader_name}` does not support hot-reload")]
+    HotReloadUnsupported { loader_name: String },
 }
 
 /// Errors from the plugin registry.

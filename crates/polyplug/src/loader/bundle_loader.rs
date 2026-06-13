@@ -1,7 +1,9 @@
 use polyplug_utils::BundleId;
 
+use polyplug_abi::SupportedLanguage;
+
 use crate::{
-    error::RuntimeError,
+    error::LoaderError,
     loader::{bundle_source::BundleSource, manifest::ManifestData},
     runtime::Runtime,
 };
@@ -15,6 +17,18 @@ pub trait BundleLoader: Send + Sync {
     ///
     /// Must match the `loader` field in `manifest.toml` exactly (case-sensitive).
     fn loader_name(&self) -> &'static str;
+
+    /// The plugin language/runtime this loader serves.
+    ///
+    /// Used to key per-language, once-per-process boot state in the runtime.
+    fn loader_language(&self) -> SupportedLanguage;
+
+    /// Whether this loader supports hot-reload.
+    ///
+    /// The runtime consults this *before* calling [`BundleLoader::reload`]: when it
+    /// returns `false`, the runtime fails the reload with
+    /// `RuntimeError::HotReloadDisabled` and never invokes `reload()`.
+    fn supports_hot_reload(&self) -> bool;
 
     /// Load a bundle for the first time.
     ///
@@ -30,15 +44,15 @@ pub trait BundleLoader: Send + Sync {
     ///   until they gain real in-memory support.
     ///
     /// # Errors
-    /// Returns `Err(RuntimeError::...)` on any failure, including
-    /// `RuntimeError::Loader(LoaderError::UnsupportedBundleSource { .. })` when the
-    /// loader does not support the given source kind.
+    /// Returns `Err(LoaderError::...)` on any failure, including
+    /// `LoaderError::UnsupportedBundleSource { .. }` when the loader does not support
+    /// the given source kind.
     fn load(
         &self,
         manifest: &ManifestData,
         source: &BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError>;
+    ) -> Result<(), LoaderError>;
 
     /// Reload a bundle - MANDATORY for all loaders.
     ///
@@ -55,9 +69,13 @@ pub trait BundleLoader: Send + Sync {
     /// - Native: drop old library (caller must not have cached raw pointers)
     /// - VMs: let GC handle cleanup
     ///
+    /// The runtime gates hot-reload before calling this: it only invokes `reload()`
+    /// when the config has hot-reload enabled AND [`BundleLoader::supports_hot_reload`]
+    /// returns `true`. Loaders therefore do not re-check the config here.
+    ///
     /// # Errors
-    /// Returns `Err(RuntimeError::...)` on any failure.
-    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError>;
+    /// Returns `Err(LoaderError::...)` on any failure.
+    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError>;
 
     /// Reclaim a bundle's loader-owned resources after it has been invalidated.
     ///
@@ -80,8 +98,8 @@ pub trait BundleLoader: Send + Sync {
     /// - **.NET loader:** unloads the bundle's collectible `AssemblyLoadContext`.
     ///
     /// # Errors
-    /// Returns `Err(RuntimeError::...)` if reclamation fails.
-    fn unload(&self, _bundle_id: BundleId, _runtime: &Runtime) -> Result<(), RuntimeError> {
+    /// Returns `Err(LoaderError::...)` if reclamation fails.
+    fn unload(&self, _bundle_id: BundleId, _runtime: &Runtime) -> Result<(), LoaderError> {
         Ok(())
     }
 }

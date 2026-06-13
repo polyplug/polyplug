@@ -32,11 +32,12 @@ use std::sync::{Mutex, Once};
 use libloading::Library;
 
 use polyplug::Runtime;
-use polyplug::error::{LoaderError, RuntimeError};
+use polyplug::error::LoaderError;
 use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::StringView;
+use polyplug_abi::SupportedLanguage;
 use polyplug_abi::plugin::BundleInitContext;
 use polyplug_abi::types::{AbiError, AbiErrorCode};
 use polyplug_utils::BundleId;
@@ -64,11 +65,11 @@ impl TestNativeLoader {
         }
     }
 
-    fn load_library(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn load_library(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError> {
         if manifest.file.is_empty() {
-            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
+            return Err(LoaderError::ManifestMissingFile {
                 bundle: manifest.name.clone(),
-            }));
+            });
         }
 
         let bundle_path: PathBuf = manifest.path.join(&manifest.file);
@@ -76,32 +77,30 @@ impl TestNativeLoader {
 
         // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
         let library: Library = unsafe {
-            Library::new(&bundle_path).map_err(|e| {
-                RuntimeError::Loader(LoaderError::InitFailed {
-                    bundle: manifest.name.clone(),
-                    error: format!("failed to load plugin library at {path_str}: {e}"),
-                })
+            Library::new(&bundle_path).map_err(|e| LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("failed to load plugin library at {path_str}: {e}"),
             })?
         };
 
         // SAFETY: polyplug_abi_version is a C function `extern "C" fn() -> u32`.
         let abi_version_symbol: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
-            library.get(b"polyplug_abi_version\0").map_err(|_| {
-                RuntimeError::Loader(LoaderError::InitFailed {
+            library
+                .get(b"polyplug_abi_version\0")
+                .map_err(|_| LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
                     error: format!("missing symbol 'polyplug_abi_version' in bundle '{path_str}'"),
-                })
-            })?
+                })?
         };
         // SAFETY: abi_version_symbol was validated by library.get(); it returns a plain u32.
         let found_version: u32 = unsafe { abi_version_symbol() };
         if found_version != POLYPLUG_ABI_VERSION {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+            return Err(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: format!(
                     "ABI version mismatch in {path_str}: expected={POLYPLUG_ABI_VERSION}, found={found_version}"
                 ),
-            }));
+            });
         }
 
         // SAFETY: polyplug_init is an exported C symbol from the plugin library, validated
@@ -114,11 +113,11 @@ impl TestNativeLoader {
                 '_,
                 unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
             > = unsafe {
-                library.get(b"polyplug_init\0").map_err(|_| {
-                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                library
+                    .get(b"polyplug_init\0")
+                    .map_err(|_| LoaderError::InitSymbolMissing {
                         bundle: manifest.name.clone(),
-                    })
-                })?
+                    })?
             };
             *sym
         };
@@ -153,10 +152,10 @@ impl TestNativeLoader {
                 };
                 String::from_utf8_lossy(bytes).into_owned()
             };
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+            return Err(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: error_msg,
-            }));
+            });
         }
 
         // Retire (do not drop) any superseded library so in-flight callers holding
@@ -188,16 +187,24 @@ impl BundleLoader for TestNativeLoader {
         "native"
     }
 
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Rust
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        true
+    }
+
     fn load(
         &self,
         manifest: &ManifestData,
         _source: &polyplug::loader::BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         self.load_library(manifest, runtime)
     }
 
-    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError> {
         self.load_library(manifest, runtime)
     }
 }

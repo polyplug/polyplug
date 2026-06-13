@@ -510,11 +510,11 @@ fn non_dotnet_dll_allowed() {
     // a version-specific error, confirming the version check path is bypassed for non-dotnet files.
     //
     // Instead: test the module function directly.
-    let result: Result<String, RuntimeError> =
+    let result: Result<String, LoaderError> =
         polyplug_dotnet::version::read_target_framework(std::path::Path::new("nonexistent.dll"));
     // Non-existent file should return InitFailed error
     match result {
-        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
+        Err(LoaderError::InitFailed { bundle: _, error }) => {
             assert!(
                 error.contains("assembly") || error.contains("not found"),
                 "error: {error}"

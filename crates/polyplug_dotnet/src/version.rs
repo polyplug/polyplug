@@ -6,7 +6,6 @@ use pelite::PeFile;
 use pelite::image::IMAGE_DATA_DIRECTORY;
 
 use polyplug::error::LoaderError;
-use polyplug::error::RuntimeError;
 
 /// COR20 header layout (ECMA-335 §II.25.3.3 / MSDN IMAGE_COR20_HEADER).
 /// Used with pelite to locate the CLI metadata section.
@@ -46,14 +45,12 @@ const TFM_MARKER: &[u8] = b".NETCoreApp,Version=v";
 ///
 /// Returns the long-form TFM, e.g. `".NETCoreApp,Version=v10.0"`.
 /// Returns `Ok(String::new())` for non-.NET DLLs or if no TFM attribute is found.
-pub fn read_target_framework(dll_path: &Path) -> Result<String, RuntimeError> {
+pub fn read_target_framework(dll_path: &Path) -> Result<String, LoaderError> {
     // Read file bytes, then delegate to the shared byte-slice parser so that path-based
     // and byte-based ([`BundleSource::Bytes`]) loading run identical TFM detection logic.
-    let bytes: Vec<u8> = std::fs::read(dll_path).map_err(|_| {
-        RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: dll_path.to_string_lossy().into_owned(),
-            error: "assembly not found or unreadable".to_owned(),
-        })
+    let bytes: Vec<u8> = std::fs::read(dll_path).map_err(|_| LoaderError::InitFailed {
+        bundle: dll_path.to_string_lossy().into_owned(),
+        error: "assembly not found or unreadable".to_owned(),
     })?;
     let label: String = dll_path.to_string_lossy().into_owned();
     target_framework_from_bytes(&bytes, &label)
@@ -69,13 +66,11 @@ pub fn read_target_framework(dll_path: &Path) -> Result<String, RuntimeError> {
 /// Returns `Ok(String::new())` for non-.NET DLLs or if no TFM attribute is found.
 ///
 /// [`BundleSource::Bytes`]: polyplug::loader::BundleSource::Bytes
-pub fn target_framework_from_bytes(bytes: &[u8], label: &str) -> Result<String, RuntimeError> {
+pub fn target_framework_from_bytes(bytes: &[u8], label: &str) -> Result<String, LoaderError> {
     // Step 1: Parse PE file — auto-detects PE32 vs PE32+.
-    let pe: PeFile<'_> = PeFile::from_bytes(bytes).map_err(|_| {
-        RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: label.to_owned(),
-            error: "invalid PE format".to_owned(),
-        })
+    let pe: PeFile<'_> = PeFile::from_bytes(bytes).map_err(|_| LoaderError::InitFailed {
+        bundle: label.to_owned(),
+        error: "invalid PE format".to_owned(),
     })?;
 
     // Step 2: Get COM descriptor data directory (index 14).
@@ -91,21 +86,19 @@ pub fn target_framework_from_bytes(bytes: &[u8], label: &str) -> Result<String, 
     }
 
     // Step 3: Read COR20 header at the COM descriptor RVA.
-    let cor20: &ImageCor20Header = pe.derva(com_dir.VirtualAddress).map_err(|_| {
-        RuntimeError::Loader(LoaderError::InitFailed {
-            bundle: label.to_owned(),
-            error: "COR20 header not found or invalid".to_owned(),
-        })
-    })?;
+    let cor20: &ImageCor20Header =
+        pe.derva(com_dir.VirtualAddress)
+            .map_err(|_| LoaderError::InitFailed {
+                bundle: label.to_owned(),
+                error: "COR20 header not found or invalid".to_owned(),
+            })?;
 
     // Step 4: Get CLI metadata section as a byte slice.
     let metadata_slice: &[u8] = pe
         .derva_slice(cor20.metadata_rva, cor20.metadata_size as usize)
-        .map_err(|_| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: label.to_owned(),
-                error: "CLI metadata section not found or invalid".to_owned(),
-            })
+        .map_err(|_| LoaderError::InitFailed {
+            bundle: label.to_owned(),
+            error: "CLI metadata section not found or invalid".to_owned(),
         })?;
 
     // Step 5: Scan for TFM marker in metadata bytes.

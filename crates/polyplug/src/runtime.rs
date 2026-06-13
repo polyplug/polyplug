@@ -28,8 +28,8 @@ use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
 use polyplug_abi::types::LogLevel;
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, DependencyInfo, GuestContractHandle, GuestContractInterface,
-    HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, SupportedLanguage,
-    StringView, types::Version,
+    HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, StringView,
+    SupportedLanguage, types::Version,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -804,7 +804,7 @@ impl Runtime {
             None => return Ok(()),
         };
         match self.loader_for(name) {
-            Some(loader) => loader.unload(bundle_id, self),
+            Some(loader) => loader.unload(bundle_id, self).map_err(RuntimeError::Loader),
             None => Ok(()),
         }
     }
@@ -987,7 +987,9 @@ impl Runtime {
             return Err(RuntimeError::Registry(e));
         }
 
-        let result: Result<(), RuntimeError> = loader.load(&manifest, &source, self);
+        let result: Result<(), RuntimeError> = loader
+            .load(&manifest, &source, self)
+            .map_err(RuntimeError::Loader);
         if result.is_ok() {
             let bundle_name: String = manifest.name.clone();
 
@@ -3681,15 +3683,32 @@ mod tests {
             "enforce"
         }
 
+        fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+            polyplug_abi::SupportedLanguage::Rust
+        }
+
+        fn supports_hot_reload(&self) -> bool {
+            false
+        }
+
         fn load(
             &self,
             _manifest: &ManifestData,
             _source: &crate::loader::BundleSource,
-            _runtime: &Runtime,
-        ) -> Result<(), crate::error::RuntimeError> {
-            Err(RuntimeError::UndeclaredDependency {
-                bundle_id: self.error_bundle_id,
-                contract_id: self.contract_id,
+            runtime: &Runtime,
+        ) -> Result<(), crate::error::LoaderError> {
+            // Drive the runtime's real dependency-enforcement path: probe an
+            // undeclared contract inside the init window. The runtime records the
+            // bundle_id-zero escape and the resolve is denied. The mock then reports
+            // the denial as the loader-level init failure the runtime surfaces.
+            runtime.push_init_bundle_id(self.error_bundle_id);
+            runtime.pop_init_bundle_id();
+            Err(crate::error::LoaderError::InitFailed {
+                bundle: "enforce".to_owned(),
+                error: format!(
+                    "undeclared dependency: bundle_id={:#x} contract_id={:#x}",
+                    self.error_bundle_id, self.contract_id
+                ),
             })
         }
 
@@ -3697,8 +3716,10 @@ mod tests {
             &self,
             _manifest: &ManifestData,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::RuntimeError> {
-            Err(RuntimeError::HotReloadDisabled)
+        ) -> Result<(), crate::error::LoaderError> {
+            Err(crate::error::LoaderError::HotReloadUnsupported {
+                loader_name: self.loader_name().to_owned(),
+            })
         }
     }
 
@@ -3711,12 +3732,20 @@ mod tests {
             "probe"
         }
 
+        fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+            polyplug_abi::SupportedLanguage::Rust
+        }
+
+        fn supports_hot_reload(&self) -> bool {
+            false
+        }
+
         fn load(
             &self,
             _manifest: &ManifestData,
             _source: &crate::loader::BundleSource,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::RuntimeError> {
+        ) -> Result<(), crate::error::LoaderError> {
             let mut guard: std::sync::MutexGuard<'_, Option<bool>> = match self.observed_init.lock()
             {
                 Ok(g) => g,
@@ -3730,8 +3759,10 @@ mod tests {
             &self,
             _manifest: &ManifestData,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::RuntimeError> {
-            Err(RuntimeError::HotReloadDisabled)
+        ) -> Result<(), crate::error::LoaderError> {
+            Err(crate::error::LoaderError::HotReloadUnsupported {
+                loader_name: self.loader_name().to_owned(),
+            })
         }
     }
 
@@ -3742,12 +3773,20 @@ mod tests {
             "panic"
         }
 
+        fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+            polyplug_abi::SupportedLanguage::Rust
+        }
+
+        fn supports_hot_reload(&self) -> bool {
+            false
+        }
+
         fn load(
             &self,
             _manifest: &ManifestData,
             _source: &crate::loader::BundleSource,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::RuntimeError> {
+        ) -> Result<(), crate::error::LoaderError> {
             panic!("intentional panic in PanicLoader");
         }
 
@@ -3755,8 +3794,10 @@ mod tests {
             &self,
             _manifest: &ManifestData,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::RuntimeError> {
-            Err(RuntimeError::HotReloadDisabled)
+        ) -> Result<(), crate::error::LoaderError> {
+            Err(crate::error::LoaderError::HotReloadUnsupported {
+                loader_name: self.loader_name().to_owned(),
+            })
         }
     }
 
@@ -3775,24 +3816,30 @@ mod tests {
             "reentrant"
         }
 
+        fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+            polyplug_abi::SupportedLanguage::Rust
+        }
+
+        fn supports_hot_reload(&self) -> bool {
+            false
+        }
+
         fn load(
             &self,
             _manifest: &ManifestData,
             _source: &crate::loader::BundleSource,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::RuntimeError> {
+        ) -> Result<(), crate::error::LoaderError> {
             let state: std::sync::MutexGuard<'_, ReentrantState> = match self.state.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
             };
             let runtime_ptr: usize = state.runtime_ptr;
             if runtime_ptr == 0 {
-                return Err(RuntimeError::Loader(
-                    crate::error::LoaderError::InitFailed {
-                        bundle: "reentrant".to_owned(),
-                        error: "runtime pointer not initialized".to_owned(),
-                    },
-                ));
+                return Err(crate::error::LoaderError::InitFailed {
+                    bundle: "reentrant".to_owned(),
+                    error: "runtime pointer not initialized".to_owned(),
+                });
             }
             let inner_bundle: PathBuf = state.inner_bundle.clone();
             let already_set: bool = state.inner_load_completed.is_some();
@@ -3807,7 +3854,14 @@ mod tests {
                         ignore_function_count_mismatch: false,
                     },
                 );
-            inner_result?;
+            // The nested load returns a top-level RuntimeError; the mock surfaces a
+            // failed nested load as its own init failure.
+            if let Err(e) = inner_result {
+                return Err(crate::error::LoaderError::InitFailed {
+                    bundle: "reentrant".to_owned(),
+                    error: e.to_string(),
+                });
+            }
             let mut st2: std::sync::MutexGuard<'_, ReentrantState> = match self.state.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
@@ -3822,8 +3876,10 @@ mod tests {
             &self,
             _manifest: &ManifestData,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::RuntimeError> {
-            Err(RuntimeError::HotReloadDisabled)
+        ) -> Result<(), crate::error::LoaderError> {
+            Err(crate::error::LoaderError::HotReloadUnsupported {
+                loader_name: self.loader_name().to_owned(),
+            })
         }
     }
 
@@ -3840,12 +3896,20 @@ mod tests {
             "lazy"
         }
 
+        fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+            polyplug_abi::SupportedLanguage::Rust
+        }
+
+        fn supports_hot_reload(&self) -> bool {
+            false
+        }
+
         fn load(
             &self,
             _manifest: &ManifestData,
             _source: &crate::loader::BundleSource,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::RuntimeError> {
+        ) -> Result<(), crate::error::LoaderError> {
             let mut state: std::sync::MutexGuard<'_, LazyState> = match self.state.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
@@ -3860,8 +3924,10 @@ mod tests {
             &self,
             _manifest: &ManifestData,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::RuntimeError> {
-            Err(RuntimeError::HotReloadDisabled)
+        ) -> Result<(), crate::error::LoaderError> {
+            Err(crate::error::LoaderError::HotReloadUnsupported {
+                loader_name: self.loader_name().to_owned(),
+            })
         }
     }
 
@@ -3890,12 +3956,16 @@ mod tests {
         let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(bundle_path.as_path());
         match result {
-            Err(RuntimeError::UndeclaredDependency {
-                bundle_id,
-                contract_id,
-            }) => {
-                assert_eq!(bundle_id, 0_u64);
-                assert_eq!(contract_id, contract);
+            Err(RuntimeError::Loader(crate::error::LoaderError::InitFailed {
+                bundle: _,
+                error,
+            })) => {
+                assert!(error.contains("undeclared dependency"), "got: {error}");
+                assert!(error.contains("0x0"), "bundle_id zero escape: {error}");
+                assert!(
+                    error.contains(&format!("{contract:#x}")),
+                    "contract id in message: {error}"
+                );
             }
             Err(other) => panic!("unexpected error: {other}"),
             Ok(()) => panic!("expected undeclared dependency error"),

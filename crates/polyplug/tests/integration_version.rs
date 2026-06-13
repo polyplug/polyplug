@@ -25,12 +25,20 @@ impl BundleLoader for NoopLoader {
         "test-noop"
     }
 
+    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+        polyplug_abi::SupportedLanguage::Rust
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        false
+    }
+
     fn load(
         &self,
         _manifest: &ManifestData,
         _source: &polyplug::loader::BundleSource,
         _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::RuntimeError> {
+    ) -> Result<(), polyplug::error::LoaderError> {
         Ok(())
     }
 
@@ -38,8 +46,10 @@ impl BundleLoader for NoopLoader {
         &self,
         _manifest: &ManifestData,
         _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::RuntimeError> {
-        Err(polyplug::error::RuntimeError::HotReloadDisabled)
+    ) -> Result<(), polyplug::error::LoaderError> {
+        Err(polyplug::error::LoaderError::HotReloadUnsupported {
+            loader_name: self.loader_name().to_owned(),
+        })
     }
 }
 

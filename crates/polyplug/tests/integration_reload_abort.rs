@@ -103,25 +103,33 @@ impl BundleLoader for AbortLoader {
         "abort-loader"
     }
 
+    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
+        polyplug_abi::SupportedLanguage::Rust
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        true
+    }
+
     fn load(
         &self,
         manifest: &ManifestData,
         _source: &polyplug::loader::BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), LoaderError> {
         self.register(manifest, runtime);
         Ok(())
     }
 
-    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError> {
         // Register the contract first — this creates a pending slot exactly as a
         // real plugin's polyplug_init would before its init logic fails.
         self.register(manifest, runtime);
         if self.fail_reload.load(Ordering::SeqCst) {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+            return Err(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: "simulated init failure after partial registration".to_owned(),
-            }));
+            });
         }
         Ok(())
     }
