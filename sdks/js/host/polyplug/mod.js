@@ -455,9 +455,11 @@ export class GuestContractInterfaceView {
   /**
    * Dispatch a method directly through the resolved interface.
    *
-   * This mirrors the canonical host-caller path (see polyplugc rust generator):
-   * - Native: call `dispatch.native.functions[slot](instance, args, out) -> AbiError`.
-   * - VM: call `dispatch.vm.call(loader_data, instance, fn_id, args, out) -> AbiError`.
+   * This mirrors the canonical host-caller path (see polyplugc rust generator).
+   * Out-param ABI: dispatch fns return void and write their AbiError through a
+   * trailing *mut AbiError, which this method reads back as the result code:
+   * - Native: `dispatch.native.functions[slot](instance, args, out, out_err) -> void`.
+   * - VM: `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err) -> void`.
    *
    * Direct interface dispatch is the supported mechanism and works for both native
    * and VM (QuickJS/Lua/Python) guests, including stateless ones whose instance
