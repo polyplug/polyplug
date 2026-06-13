@@ -164,20 +164,26 @@ extern "C" fn error_chain_propagate(
                         .functions
                         .add(chain_args.target_fn_id as usize)
                 };
-                // SAFETY: Transmuted to the native dispatch signature; types enforced by generated callers.
+                // SAFETY: Transmuted to the native out-param dispatch signature
+                // (void + trailing *mut AbiError); types enforced by generated callers.
                 let dispatch_fn: unsafe extern "C" fn(
                     GuestContractInstance,
                     *const (),
                     *mut (),
-                ) -> AbiError = unsafe { core::mem::transmute(fn_ptr) };
-                // SAFETY: null instance/args/out is valid for fns that don't require them.
+                    *mut AbiError,
+                ) = unsafe { core::mem::transmute(fn_ptr) };
+                // SAFETY: null instance/args/out is valid for fns that don't require them;
+                // the inner AbiError is written through the trailing out-param.
+                let mut inner_err: AbiError = abi_error_ok();
                 unsafe {
                     dispatch_fn(
                         GuestContractInstance::null(),
                         core::ptr::null(),
                         core::ptr::null_mut(),
+                        &mut inner_err as *mut AbiError,
                     )
-                }
+                };
+                inner_err
             }
         };
         // SAFETY: out points to a valid AbiError per the ABI contract.

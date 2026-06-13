@@ -90,9 +90,11 @@ const DEFAULT_SAMPLE_EVERY: u64 = 1;
 /// (the point of the soak is load/unload turnover, not dispatch throughput).
 const DISPATCHES_PER_CYCLE: u32 = 4;
 
-/// Native dispatch signature for the frozen ABI (`GuestContractInstance`,
-/// `*const args`, `*mut out`). Matches the integration-dispatch tests.
-type NativeDispatchFn = unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError;
+/// Native dispatch signature for the frozen out-param ABI (`GuestContractInstance`,
+/// `*const args`, `*mut out`, `*mut AbiError` out-param; returns void). Matches the
+/// integration-dispatch tests.
+type NativeDispatchFn =
+    unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError);
 
 /// `test.add` argument struct (matches `libtest_plugin`'s `add` contract).
 #[repr(C)]
@@ -170,11 +172,13 @@ fn run_one_cycle() {
         let mut out: u32 = u32::MAX;
         // SAFETY: args/out are valid and correctly typed; null stateless instance,
         // exactly as the native dispatch ABI expects for a stateless contract.
-        let rc: AbiError = unsafe {
+        let mut rc: AbiError = AbiError::ok();
+        unsafe {
             dispatch_fn(
                 GuestContractInstance::null(),
                 &args as *const AddArgs as *const (),
                 &mut out as *mut u32 as *mut (),
+                &mut rc as *mut AbiError,
             )
         };
         assert_eq!(rc.code, AbiErrorCode::Ok as u32, "dispatch must succeed");
