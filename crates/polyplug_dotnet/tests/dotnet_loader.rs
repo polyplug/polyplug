@@ -622,14 +622,24 @@ fn bytes_source_loads_fixture_and_dispatches() {
     let mut out: u32 = 0;
     // SAFETY: functions[0] is the `add` wrapper for the test.add contract.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: fn_ptr is the add wrapper; its ABI is the generic native dispatch signature.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> polyplug_abi::AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args and out point to valid, correctly-typed storage for AddArgs/u32.
-    let result: polyplug_abi::AbiError = unsafe {
+    // SAFETY: fn_ptr is the add wrapper; its ABI is the frozen native dispatch
+    // signature `(instance, args, out, *mut AbiError) -> void` (out-param convention).
+    let dispatch_fn: unsafe extern "C" fn(
+        polyplug_abi::GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut polyplug_abi::AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
+    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    // SAFETY: args and out point to valid, correctly-typed storage for AddArgs/u32;
+    // the native `add` wrapper is stateless so a null instance handle is valid; `result`
+    // is a valid, writable out-param for the call's AbiError.
+    unsafe {
         dispatch_fn(
+            polyplug_abi::GuestContractInstance::null(),
             core::ptr::addr_of!(args) as *const (),
             core::ptr::addr_of_mut!(out) as *mut (),
+            core::ptr::addr_of_mut!(result),
         )
     };
     assert_eq!(
@@ -717,16 +727,25 @@ fn assert_add_dispatch_works(runtime: &Runtime) {
     let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
     let args: AddArgs = AddArgs { a: 3, b: 5 };
     let mut out: u32 = 0;
-    // SAFETY: functions[0] is the `add` wrapper; its ABI is the generic native dispatch signature.
+    // SAFETY: functions[0] is the `add` wrapper for the test.add contract.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: fn_ptr is the add wrapper; its ABI is the generic native dispatch signature.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> polyplug_abi::AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args/out point to valid storage for AddArgs/u32.
-    let result: polyplug_abi::AbiError = unsafe {
+    // SAFETY: fn_ptr is the add wrapper; its ABI is the frozen native dispatch
+    // signature `(instance, args, out, *mut AbiError) -> void` (out-param convention).
+    let dispatch_fn: unsafe extern "C" fn(
+        polyplug_abi::GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut polyplug_abi::AbiError,
+    ) = unsafe { core::mem::transmute(fn_ptr) };
+    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    // SAFETY: args/out point to valid storage for AddArgs/u32; the native `add` wrapper
+    // is stateless so a null instance handle is valid; `result` is a valid out-param.
+    unsafe {
         dispatch_fn(
+            polyplug_abi::GuestContractInstance::null(),
             core::ptr::addr_of!(args) as *const (),
             core::ptr::addr_of_mut!(out) as *mut (),
+            core::ptr::addr_of_mut!(result),
         )
     };
     assert_eq!(result.code, polyplug_abi::AbiErrorCode::Ok as u32);
