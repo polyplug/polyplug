@@ -140,6 +140,12 @@ fn quickjs_u64_never_maps_to_bigint() {
     let files: Vec<polyplug_codegen::GeneratedFile> =
         run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
     for file in &files {
+        // `callers.ts` is the Deno HOST caller surface (it runs under Deno, not
+        // QuickJS), so it correctly uses native `bigint` for 64-bit values. The
+        // no-BigInt invariant applies only to QuickJS-runtime output.
+        if file.path.to_string_lossy().ends_with("callers.ts") {
+            continue;
+        }
         let content: &str = &file.content;
         assert!(
             !content.contains("start_ns: bigint"),

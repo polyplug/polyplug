@@ -24,8 +24,6 @@ export const AbiErrorCode = {
     InvalidPointer: 8,
 } as const;
 
-// StringView layout: { ptr: u64 @ 0, len: usize @ 8 } = 16 bytes
-const STRING_VIEW_SIZE = 16;
 const _encoder = new TextEncoder();
 const _decoder = new TextDecoder();
 
@@ -79,41 +77,40 @@ export class PipelineDecoderContract {
         if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `decode` not available in interface');
         }
-        const inputBytes = _encoder.encode(input);
-        const inputPtr = this.#rt.alloc(inputBytes.length, 1);
-        if (inputPtr === null) {
-            throw new Error('host_alloc failed for `decode` input');
-        }
-        if (inputBytes.length > 0) {
-            const dst = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(inputPtr, inputBytes.length));
-            dst.set(inputBytes);
-        }
-        const argsBuf = new Uint8Array(STRING_VIEW_SIZE);
+        const rt = this.#rt;
+        const _allocs: [Deno.PointerValue, number][] = [];
+        const argsBuf = new Uint8Array(16);
         const argsDv = new DataView(argsBuf.buffer);
-        argsDv.setBigUint64(0, BigInt(Deno.UnsafePointer.value(inputPtr)), true);
-        argsDv.setBigUint64(8, BigInt(inputBytes.length), true);
+        const _sv0Bytes = _encoder.encode(input);
+        const _sv0Alloc = _sv0Bytes.length > 0 ? _sv0Bytes.length : 1;
+        const _sv0Ptr = rt.alloc(_sv0Alloc, 1);
+        if (_sv0Ptr === null) { throw new Error('host_alloc failed'); }
+        if (_sv0Bytes.length > 0) { new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_sv0Ptr, _sv0Bytes.length)).set(_sv0Bytes); }
+        argsDv.setBigUint64(0, BigInt(Deno.UnsafePointer.value(_sv0Ptr)), true);
+        argsDv.setBigUint64(8, BigInt(_sv0Bytes.length), true);
+        _allocs.push([_sv0Ptr, _sv0Alloc]);
         const argsPtr = Deno.UnsafePointer.of(argsBuf);
-        const outBuf = new Uint8Array(STRING_VIEW_SIZE);
+        const outBuf = new Uint8Array(16);
         const outPtr = Deno.UnsafePointer.of(outBuf);
         const code = this.#view.dispatch(0, this.#instance, argsPtr, outPtr);
-        this.#rt.free(inputPtr, inputBytes.length, 1);
+        for (const [_p, _s] of _allocs) { rt.free(_p, _s, 1); }
         if (code !== AbiErrorCode.Ok) {
             throw new Error('call `decode` failed: AbiError code ' + code);
         }
         const outDv = new DataView(outBuf.buffer);
-        const resPtrRaw = outDv.getBigUint64(0, true);
-        const resLen = Number(outDv.getBigUint64(8, true));
-        if (resPtrRaw === 0n || resLen === 0) {
-            return '';
+        let _r0 = '';
+        {
+            const _p = outDv.getBigUint64(0, true);
+            const _l = Number(outDv.getBigUint64(8, true));
+            if (_p !== 0n && _l > 0) {
+                const _ptr = Deno.UnsafePointer.create(_p);
+                if (_ptr !== null) {
+                    _r0 = _decoder.decode(new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_ptr, _l)).slice());
+                    rt.free(_ptr, _l, 1);
+                }
+            }
         }
-        const resPtr = Deno.UnsafePointer.create(resPtrRaw);
-        if (resPtr === null) {
-            return '';
-        }
-        const resBytes = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(resPtr, resLen)).slice();
-        const result = _decoder.decode(resBytes);
-        this.#rt.free(resPtr, resLen, 1);
-        return result;
+        return _r0;
     }
 
 }
@@ -156,41 +153,40 @@ export class DataTransformerContract {
         if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `transform` not available in interface');
         }
-        const inputBytes = _encoder.encode(input);
-        const inputPtr = this.#rt.alloc(inputBytes.length, 1);
-        if (inputPtr === null) {
-            throw new Error('host_alloc failed for `transform` input');
-        }
-        if (inputBytes.length > 0) {
-            const dst = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(inputPtr, inputBytes.length));
-            dst.set(inputBytes);
-        }
-        const argsBuf = new Uint8Array(STRING_VIEW_SIZE);
+        const rt = this.#rt;
+        const _allocs: [Deno.PointerValue, number][] = [];
+        const argsBuf = new Uint8Array(16);
         const argsDv = new DataView(argsBuf.buffer);
-        argsDv.setBigUint64(0, BigInt(Deno.UnsafePointer.value(inputPtr)), true);
-        argsDv.setBigUint64(8, BigInt(inputBytes.length), true);
+        const _sv0Bytes = _encoder.encode(input);
+        const _sv0Alloc = _sv0Bytes.length > 0 ? _sv0Bytes.length : 1;
+        const _sv0Ptr = rt.alloc(_sv0Alloc, 1);
+        if (_sv0Ptr === null) { throw new Error('host_alloc failed'); }
+        if (_sv0Bytes.length > 0) { new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_sv0Ptr, _sv0Bytes.length)).set(_sv0Bytes); }
+        argsDv.setBigUint64(0, BigInt(Deno.UnsafePointer.value(_sv0Ptr)), true);
+        argsDv.setBigUint64(8, BigInt(_sv0Bytes.length), true);
+        _allocs.push([_sv0Ptr, _sv0Alloc]);
         const argsPtr = Deno.UnsafePointer.of(argsBuf);
-        const outBuf = new Uint8Array(STRING_VIEW_SIZE);
+        const outBuf = new Uint8Array(16);
         const outPtr = Deno.UnsafePointer.of(outBuf);
         const code = this.#view.dispatch(0, this.#instance, argsPtr, outPtr);
-        this.#rt.free(inputPtr, inputBytes.length, 1);
+        for (const [_p, _s] of _allocs) { rt.free(_p, _s, 1); }
         if (code !== AbiErrorCode.Ok) {
             throw new Error('call `transform` failed: AbiError code ' + code);
         }
         const outDv = new DataView(outBuf.buffer);
-        const resPtrRaw = outDv.getBigUint64(0, true);
-        const resLen = Number(outDv.getBigUint64(8, true));
-        if (resPtrRaw === 0n || resLen === 0) {
-            return '';
+        let _r0 = '';
+        {
+            const _p = outDv.getBigUint64(0, true);
+            const _l = Number(outDv.getBigUint64(8, true));
+            if (_p !== 0n && _l > 0) {
+                const _ptr = Deno.UnsafePointer.create(_p);
+                if (_ptr !== null) {
+                    _r0 = _decoder.decode(new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_ptr, _l)).slice());
+                    rt.free(_ptr, _l, 1);
+                }
+            }
         }
-        const resPtr = Deno.UnsafePointer.create(resPtrRaw);
-        if (resPtr === null) {
-            return '';
-        }
-        const resBytes = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(resPtr, resLen)).slice();
-        const result = _decoder.decode(resBytes);
-        this.#rt.free(resPtr, resLen, 1);
-        return result;
+        return _r0;
     }
 
 }
@@ -233,41 +229,40 @@ export class PipelineEncoderContract {
         if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `encode` not available in interface');
         }
-        const inputBytes = _encoder.encode(input);
-        const inputPtr = this.#rt.alloc(inputBytes.length, 1);
-        if (inputPtr === null) {
-            throw new Error('host_alloc failed for `encode` input');
-        }
-        if (inputBytes.length > 0) {
-            const dst = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(inputPtr, inputBytes.length));
-            dst.set(inputBytes);
-        }
-        const argsBuf = new Uint8Array(STRING_VIEW_SIZE);
+        const rt = this.#rt;
+        const _allocs: [Deno.PointerValue, number][] = [];
+        const argsBuf = new Uint8Array(16);
         const argsDv = new DataView(argsBuf.buffer);
-        argsDv.setBigUint64(0, BigInt(Deno.UnsafePointer.value(inputPtr)), true);
-        argsDv.setBigUint64(8, BigInt(inputBytes.length), true);
+        const _sv0Bytes = _encoder.encode(input);
+        const _sv0Alloc = _sv0Bytes.length > 0 ? _sv0Bytes.length : 1;
+        const _sv0Ptr = rt.alloc(_sv0Alloc, 1);
+        if (_sv0Ptr === null) { throw new Error('host_alloc failed'); }
+        if (_sv0Bytes.length > 0) { new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_sv0Ptr, _sv0Bytes.length)).set(_sv0Bytes); }
+        argsDv.setBigUint64(0, BigInt(Deno.UnsafePointer.value(_sv0Ptr)), true);
+        argsDv.setBigUint64(8, BigInt(_sv0Bytes.length), true);
+        _allocs.push([_sv0Ptr, _sv0Alloc]);
         const argsPtr = Deno.UnsafePointer.of(argsBuf);
-        const outBuf = new Uint8Array(STRING_VIEW_SIZE);
+        const outBuf = new Uint8Array(16);
         const outPtr = Deno.UnsafePointer.of(outBuf);
         const code = this.#view.dispatch(0, this.#instance, argsPtr, outPtr);
-        this.#rt.free(inputPtr, inputBytes.length, 1);
+        for (const [_p, _s] of _allocs) { rt.free(_p, _s, 1); }
         if (code !== AbiErrorCode.Ok) {
             throw new Error('call `encode` failed: AbiError code ' + code);
         }
         const outDv = new DataView(outBuf.buffer);
-        const resPtrRaw = outDv.getBigUint64(0, true);
-        const resLen = Number(outDv.getBigUint64(8, true));
-        if (resPtrRaw === 0n || resLen === 0) {
-            return '';
+        let _r0 = '';
+        {
+            const _p = outDv.getBigUint64(0, true);
+            const _l = Number(outDv.getBigUint64(8, true));
+            if (_p !== 0n && _l > 0) {
+                const _ptr = Deno.UnsafePointer.create(_p);
+                if (_ptr !== null) {
+                    _r0 = _decoder.decode(new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_ptr, _l)).slice());
+                    rt.free(_ptr, _l, 1);
+                }
+            }
         }
-        const resPtr = Deno.UnsafePointer.create(resPtrRaw);
-        if (resPtr === null) {
-            return '';
-        }
-        const resBytes = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(resPtr, resLen)).slice();
-        const result = _decoder.decode(resBytes);
-        this.#rt.free(resPtr, resLen, 1);
-        return result;
+        return _r0;
     }
 
 }
@@ -310,41 +305,40 @@ export class DataReporterContract {
         if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `report` not available in interface');
         }
-        const inputBytes = _encoder.encode(input);
-        const inputPtr = this.#rt.alloc(inputBytes.length, 1);
-        if (inputPtr === null) {
-            throw new Error('host_alloc failed for `report` input');
-        }
-        if (inputBytes.length > 0) {
-            const dst = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(inputPtr, inputBytes.length));
-            dst.set(inputBytes);
-        }
-        const argsBuf = new Uint8Array(STRING_VIEW_SIZE);
+        const rt = this.#rt;
+        const _allocs: [Deno.PointerValue, number][] = [];
+        const argsBuf = new Uint8Array(16);
         const argsDv = new DataView(argsBuf.buffer);
-        argsDv.setBigUint64(0, BigInt(Deno.UnsafePointer.value(inputPtr)), true);
-        argsDv.setBigUint64(8, BigInt(inputBytes.length), true);
+        const _sv0Bytes = _encoder.encode(input);
+        const _sv0Alloc = _sv0Bytes.length > 0 ? _sv0Bytes.length : 1;
+        const _sv0Ptr = rt.alloc(_sv0Alloc, 1);
+        if (_sv0Ptr === null) { throw new Error('host_alloc failed'); }
+        if (_sv0Bytes.length > 0) { new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_sv0Ptr, _sv0Bytes.length)).set(_sv0Bytes); }
+        argsDv.setBigUint64(0, BigInt(Deno.UnsafePointer.value(_sv0Ptr)), true);
+        argsDv.setBigUint64(8, BigInt(_sv0Bytes.length), true);
+        _allocs.push([_sv0Ptr, _sv0Alloc]);
         const argsPtr = Deno.UnsafePointer.of(argsBuf);
-        const outBuf = new Uint8Array(STRING_VIEW_SIZE);
+        const outBuf = new Uint8Array(16);
         const outPtr = Deno.UnsafePointer.of(outBuf);
         const code = this.#view.dispatch(0, this.#instance, argsPtr, outPtr);
-        this.#rt.free(inputPtr, inputBytes.length, 1);
+        for (const [_p, _s] of _allocs) { rt.free(_p, _s, 1); }
         if (code !== AbiErrorCode.Ok) {
             throw new Error('call `report` failed: AbiError code ' + code);
         }
         const outDv = new DataView(outBuf.buffer);
-        const resPtrRaw = outDv.getBigUint64(0, true);
-        const resLen = Number(outDv.getBigUint64(8, true));
-        if (resPtrRaw === 0n || resLen === 0) {
-            return '';
+        let _r0 = '';
+        {
+            const _p = outDv.getBigUint64(0, true);
+            const _l = Number(outDv.getBigUint64(8, true));
+            if (_p !== 0n && _l > 0) {
+                const _ptr = Deno.UnsafePointer.create(_p);
+                if (_ptr !== null) {
+                    _r0 = _decoder.decode(new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_ptr, _l)).slice());
+                    rt.free(_ptr, _l, 1);
+                }
+            }
         }
-        const resPtr = Deno.UnsafePointer.create(resPtrRaw);
-        if (resPtr === null) {
-            return '';
-        }
-        const resBytes = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(resPtr, resLen)).slice();
-        const result = _decoder.decode(resBytes);
-        this.#rt.free(resPtr, resLen, 1);
-        return result;
+        return _r0;
     }
 
 }
@@ -387,41 +381,40 @@ export class PipelineValidatorContract {
         if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `validate` not available in interface');
         }
-        const inputBytes = _encoder.encode(input);
-        const inputPtr = this.#rt.alloc(inputBytes.length, 1);
-        if (inputPtr === null) {
-            throw new Error('host_alloc failed for `validate` input');
-        }
-        if (inputBytes.length > 0) {
-            const dst = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(inputPtr, inputBytes.length));
-            dst.set(inputBytes);
-        }
-        const argsBuf = new Uint8Array(STRING_VIEW_SIZE);
+        const rt = this.#rt;
+        const _allocs: [Deno.PointerValue, number][] = [];
+        const argsBuf = new Uint8Array(16);
         const argsDv = new DataView(argsBuf.buffer);
-        argsDv.setBigUint64(0, BigInt(Deno.UnsafePointer.value(inputPtr)), true);
-        argsDv.setBigUint64(8, BigInt(inputBytes.length), true);
+        const _sv0Bytes = _encoder.encode(input);
+        const _sv0Alloc = _sv0Bytes.length > 0 ? _sv0Bytes.length : 1;
+        const _sv0Ptr = rt.alloc(_sv0Alloc, 1);
+        if (_sv0Ptr === null) { throw new Error('host_alloc failed'); }
+        if (_sv0Bytes.length > 0) { new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_sv0Ptr, _sv0Bytes.length)).set(_sv0Bytes); }
+        argsDv.setBigUint64(0, BigInt(Deno.UnsafePointer.value(_sv0Ptr)), true);
+        argsDv.setBigUint64(8, BigInt(_sv0Bytes.length), true);
+        _allocs.push([_sv0Ptr, _sv0Alloc]);
         const argsPtr = Deno.UnsafePointer.of(argsBuf);
-        const outBuf = new Uint8Array(STRING_VIEW_SIZE);
+        const outBuf = new Uint8Array(16);
         const outPtr = Deno.UnsafePointer.of(outBuf);
         const code = this.#view.dispatch(0, this.#instance, argsPtr, outPtr);
-        this.#rt.free(inputPtr, inputBytes.length, 1);
+        for (const [_p, _s] of _allocs) { rt.free(_p, _s, 1); }
         if (code !== AbiErrorCode.Ok) {
             throw new Error('call `validate` failed: AbiError code ' + code);
         }
         const outDv = new DataView(outBuf.buffer);
-        const resPtrRaw = outDv.getBigUint64(0, true);
-        const resLen = Number(outDv.getBigUint64(8, true));
-        if (resPtrRaw === 0n || resLen === 0) {
-            return '';
+        let _r0 = '';
+        {
+            const _p = outDv.getBigUint64(0, true);
+            const _l = Number(outDv.getBigUint64(8, true));
+            if (_p !== 0n && _l > 0) {
+                const _ptr = Deno.UnsafePointer.create(_p);
+                if (_ptr !== null) {
+                    _r0 = _decoder.decode(new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_ptr, _l)).slice());
+                    rt.free(_ptr, _l, 1);
+                }
+            }
         }
-        const resPtr = Deno.UnsafePointer.create(resPtrRaw);
-        if (resPtr === null) {
-            return '';
-        }
-        const resBytes = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(resPtr, resLen)).slice();
-        const result = _decoder.decode(resBytes);
-        this.#rt.free(resPtr, resLen, 1);
-        return result;
+        return _r0;
     }
 
 }

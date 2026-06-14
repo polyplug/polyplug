@@ -56,6 +56,22 @@ fn main() {
     let polyplug_so: PathBuf = target_dir.join(profile).join(polyplug_lib_filename);
     println!("cargo:rustc-env=POLYPLUG_SO={}", polyplug_so.display());
 
+    // POLYPLUG_NATIVE_LIB — the native loader cdylib (libpolyplug_native), used
+    // by the Deno host SDK's native loader. Deterministic from target dir +
+    // profile + platform filename; consumers check existence at runtime.
+    let native_lib_filename: &str = if cfg!(target_os = "macos") {
+        "libpolyplug_native.dylib"
+    } else if cfg!(target_os = "windows") {
+        "polyplug_native.dll"
+    } else {
+        "libpolyplug_native.so"
+    };
+    let polyplug_native_lib: PathBuf = target_dir.join(profile).join(native_lib_filename);
+    println!(
+        "cargo:rustc-env=POLYPLUG_NATIVE_LIB={}",
+        polyplug_native_lib.display()
+    );
+
     // Platform-specific shared library filename for test_plugin
     let test_plugin_filename: &str = if cfg!(target_os = "macos") {
         "libtest_plugin.dylib"

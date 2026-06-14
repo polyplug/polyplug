@@ -67,6 +67,14 @@ per CLAUDE.md):
 | Contract generators | `crates/polyplugc/src/generators/` | the `polyplugc` CLI | per-contract host/guest bindings |
 
 JS generation targets QuickJS only (`js_quickjs.rs`); there is no `js_deno.rs`.
+That one generator emits both the QuickJS **guest** glue and the Deno **host
+caller** (`host/callers.ts`, run under Deno against the Deno FFI host SDK). The
+Deno host caller marshals the full ABI type universe — primitives (`u64`/`i64`
+as native `bigint`), `bool`, enums (read/written UNSIGNED at their repr width),
+`StringView`/`Buffer` (host-allocated, freed after dispatch), and one-level
+structs — by packing a C-layout argument buffer and reading a C-layout out
+buffer (`DataView` + `Deno.UnsafePointer`). Runtime-proven against a native guest
+by `integration_host_deno_caller`.
 
 **generate-e2e guarantee:** all six languages generate code that compiles/loads
 with zero hand edits. Proof tests live in
