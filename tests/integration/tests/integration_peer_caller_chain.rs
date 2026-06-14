@@ -142,7 +142,8 @@ local function impl_call(args_ptr, out_ptr)
         return
     end
     local out_instance = ffi.new("GuestContractInstance[1]")
-    interface.create_instance(host, nil, out_instance)
+    local loader_data = ffi.new("VmLoaderData")
+    interface.create_instance(loader_data, host, nil, out_instance)
     local instance = out_instance[0]
     instance.contract_id = PEER_ID
     local in_ptr = ffi.cast("const void*", ffi.cast("uintptr_t", args_ptr))
@@ -150,7 +151,7 @@ local function impl_call(args_ptr, out_ptr)
     local out_err = ffi.new("AbiError[1]")
     host.call_guest_method(host, instance, 0, in_ptr, ffi.cast("void*", peer_out), nil, out_err)
     local err = out_err[0]
-    interface.destroy_instance(host, instance)
+    interface.destroy_instance(loader_data, host, instance)
     if err.code ~= 0 then
         out_sv[0] = polyplug_guest.alloc_string_arena("{prefix}ERR")
         return

@@ -19,6 +19,7 @@ use polyplug_utils::GuestContractId;
 
 /// Create a null instance (stub for tests).
 unsafe extern "C" fn null_create_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -31,6 +32,7 @@ unsafe extern "C" fn null_create_instance(
 
 /// Destroy instance (stub for tests).
 unsafe extern "C" fn null_destroy_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {

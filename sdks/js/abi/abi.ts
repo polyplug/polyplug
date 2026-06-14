@@ -186,7 +186,16 @@ export interface GuestContractInterface {
      *  Returns null handle on failure.
      * 
      *  # Arguments
-     *  - `host`: HostApi pointer (for memory allocation via host->alloc)
+     *  - `loader_data`: the VM loader's per-(bundle,runtime) data handle (the same
+     *    handle carried in `dispatch.vm.loader_data`). Native-dispatch contracts
+     *    ignore it — their generated factory is statically linked. VM-dispatch
+     *    contracts (python/lua/js) use it to reach the contract's author factory
+     *    and per-instance registry, since a single generic loader `create_instance`
+     *    has no other channel to the right contract. The runtime passes the
+     *    interface's `dispatch.vm.loader_data` for VM contracts and a null handle
+     *    for native contracts.
+     *  - `host`: HostApi pointer (for memory allocation via host->alloc, and the
+     *    host pointer handed to the author factory)
      *  - `args`: Optional initialization arguments (contract-specific)
      *  - `out_instance`: out-param; the new instance handle is written here. A
      *    null `data` denotes a stateless instance or construction failure.
@@ -207,6 +216,11 @@ export interface GuestContractInterface {
      *  Failure to destroy instances causes memory leaks.
      * 
      *  # Arguments
+     *  - `loader_data`: the VM loader's per-(bundle,runtime) data handle (mirrors
+     *    `create_instance`). Native contracts ignore it; VM contracts use it to
+     *    reach the per-instance registry the handle was minted into. The runtime
+     *    passes the interface's `dispatch.vm.loader_data` for VM contracts and a
+     *    null handle for native contracts.
      *  - `host`: HostApi pointer
      *  - `instance`: Instance handle to destroy
      * 

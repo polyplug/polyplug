@@ -458,7 +458,8 @@ fn emit_cpp_guest_instance_machinery(
         "// Create a new instance: calls the author factory and heap-allocates the payload.\n\
          // Writes a null handle to *out_instance when host is null, the factory returns\n\
          // null, or it throws.\n\
-         static void {prefix_upper}_create_instance(const HostApi* host, const void* args, GuestContractInstance* out_instance) noexcept {{\n\
+         static void {prefix_upper}_create_instance(VmLoaderData loader_data, const HostApi* host, const void* args, GuestContractInstance* out_instance) noexcept {{\n\
+         \x20   (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
          \x20   (void)args;  // Contract-specific init args are unused by generated glue.\n\
          \x20   if (out_instance == nullptr) return;\n\
          \x20   if (host == nullptr) {{\n\
@@ -482,7 +483,8 @@ fn emit_cpp_guest_instance_machinery(
     out.push_str(&format!(
         "// Destroy an instance created by {prefix_upper}_create_instance: deletes the\n\
          // implementation (ownership transferred from the factory) and the payload.\n\
-         static void {prefix_upper}_destroy_instance(const HostApi* host, GuestContractInstance instance) noexcept {{\n\
+         static void {prefix_upper}_destroy_instance(VmLoaderData loader_data, const HostApi* host, GuestContractInstance instance) noexcept {{\n\
+         \x20   (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
          \x20   (void)host;  // The payload is guest-owned; no host call is needed to free it.\n\
          \x20   if (instance.data == nullptr) {{\n\
          \x20       return;\n\

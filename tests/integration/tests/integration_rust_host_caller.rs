@@ -570,6 +570,7 @@ fn test_host_caller_arena_reuses_buffer_across_calls() {
 }
 
 unsafe extern "C" fn vm_noop_create(
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -580,7 +581,12 @@ unsafe extern "C" fn vm_noop_create(
     }
 }
 
-unsafe extern "C" fn vm_noop_destroy(_host: *const HostApi, _instance: GuestContractInstance) {}
+unsafe extern "C" fn vm_noop_destroy(
+    _loader_data: VmLoaderData,
+    _host: *const HostApi,
+    _instance: GuestContractInstance,
+) {
+}
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(

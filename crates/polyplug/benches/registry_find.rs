@@ -31,6 +31,7 @@ use polyplug_utils::GuestContractId;
 
 /// Stub create_instance for benchmarks - writes null instance to out_instance.
 unsafe extern "C" fn bench_create_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -43,6 +44,7 @@ unsafe extern "C" fn bench_create_instance(
 
 /// Stub destroy_instance for benchmarks - no cleanup needed.
 unsafe extern "C" fn bench_destroy_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {

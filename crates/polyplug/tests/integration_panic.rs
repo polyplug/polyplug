@@ -505,6 +505,7 @@ fn test_panic_returns_abi_error_panic() {
     // generated factory thunk on the captured interface.
     unsafe {
         (interface.create_instance)(
+            polyplug_abi::VmLoaderData::null(),
             &host_interface as *const HostApi,
             core::ptr::null(),
             &mut instance,

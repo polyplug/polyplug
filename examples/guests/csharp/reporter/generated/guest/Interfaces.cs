@@ -28,7 +28,8 @@ public static class ReporterInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static unsafe void REPORTER_CreateInstance(IntPtr host, IntPtr args, GuestContractInstance* outInstance) {
+    private static unsafe void REPORTER_CreateInstance(VmLoaderData loaderData, IntPtr host, IntPtr args, GuestContractInstance* outInstance) {
+        _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.
         // Calls the author factory and carries the payload in instance.Data as a
         // normal (non-pinned) GCHandle — an opaque token the host never
         // dereferences. Writes a null handle when host is null, the factory
@@ -52,7 +53,8 @@ public static class ReporterInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void REPORTER_DestroyInstance(IntPtr host, GuestContractInstance instance) {
+    private static void REPORTER_DestroyInstance(VmLoaderData loaderData, IntPtr host, GuestContractInstance instance) {
+        _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.
         // Frees the GCHandle allocated by CreateInstance; the payload becomes
         // collectible. The host calls destroy exactly once per instance.
         if (instance.Data == IntPtr.Zero) return;
@@ -113,8 +115,8 @@ public static class ReporterInterfaces {
                 ContractId = REPORTER_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
-                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance*, void>)&REPORTER_CreateInstance,
-                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&REPORTER_DestroyInstance,
+                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&REPORTER_CreateInstance,
+                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, GuestContractInstance, void>)&REPORTER_DestroyInstance,
                 Dispatch = new DispatchMechanisms {
                     Native = new NativeDispatch {
                         FunctionCount = 1u,

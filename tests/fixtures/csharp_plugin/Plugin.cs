@@ -55,8 +55,9 @@ public static class Plugin
     // the stubs mirror the generated C# guest code: create returns a null-data
     // instance stamped with the contract id, destroy is a no-op.
     [UnmanagedCallersOnly]
-    private static void CreateInstanceStub(nint host, nint args, nint outInstance)
+    private static void CreateInstanceStub(VmLoaderData loaderData, nint host, nint args, nint outInstance)
     {
+        _ = loaderData; // Native-dispatch contract ignores the VM loader handle.
         // Out-param ABI: the instance is written through the trailing pointer.
         if (outInstance == nint.Zero)
             return;
@@ -68,8 +69,9 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly]
-    private static void DestroyInstanceStub(nint host, GuestContractInstance instance)
+    private static void DestroyInstanceStub(VmLoaderData loaderData, nint host, GuestContractInstance instance)
     {
+        _ = loaderData; // Native-dispatch contract ignores the VM loader handle.
         // Stateless contract — nothing to clean up.
     }
 
@@ -94,8 +96,8 @@ public static class Plugin
                 ContractId = TEST_ADD_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1, Minor = 0, Patch = 0 },
                 DispatchType = DispatchType.Native,
-                CreateInstance = (IntPtr)(delegate* unmanaged<nint, nint, nint, void>)&CreateInstanceStub,
-                DestroyInstance = (IntPtr)(delegate* unmanaged<nint, GuestContractInstance, void>)&DestroyInstanceStub,
+                CreateInstance = (IntPtr)(delegate* unmanaged<VmLoaderData, nint, nint, nint, void>)&CreateInstanceStub,
+                DestroyInstance = (IntPtr)(delegate* unmanaged<VmLoaderData, nint, GuestContractInstance, void>)&DestroyInstanceStub,
                 Dispatch = new DispatchMechanisms
                 {
                     Native = new NativeDispatch { FunctionCount = 4, Functions = s_functionsPtr }

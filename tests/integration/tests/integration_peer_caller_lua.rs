@@ -148,7 +148,8 @@ local function impl_invoke(args_ptr, out_ptr)
     -- Create a peer instance (stateless contract: instance.data may be null).
     -- Out-param ABI: create_instance writes the instance through a trailing pointer.
     local out_instance = ffi.new("GuestContractInstance[1]")
-    interface.create_instance(host, nil, out_instance)
+    local loader_data = ffi.new("VmLoaderData")
+    interface.create_instance(loader_data, host, nil, out_instance)
     local instance = out_instance[0]
     -- Stamp the peer contract id so call_guest_method routes by it (create_instance
     -- returns a null-id handle for stateless/VM peers). Mirrors generated peer_callers.lua.
@@ -164,7 +165,7 @@ local function impl_invoke(args_ptr, out_ptr)
     host.call_guest_method(host, instance, 0, in_sv_ptr, out_sv_ptr, nil, out_err)
 
     -- Destroy instance (stateless no-op, but honour the lifecycle).
-    interface.destroy_instance(host, instance)
+    interface.destroy_instance(loader_data, host, instance)
 end
 
 function polyplug_init(registrar_ptr, ctx_ptr)

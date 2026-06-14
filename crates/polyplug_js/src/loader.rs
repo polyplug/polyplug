@@ -209,6 +209,7 @@ impl Drop for JsDispatchGuard<'_> {
 /// # Safety
 /// JS plugins use VM dispatch with global state; instances are not used.
 unsafe extern "C" fn js_create_instance(
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -223,7 +224,12 @@ unsafe extern "C" fn js_create_instance(
 ///
 /// # Safety
 /// JS plugins don't own instance data.
-unsafe extern "C" fn js_destroy_instance(_host: *const HostApi, _instance: GuestContractInstance) {}
+unsafe extern "C" fn js_destroy_instance(
+    _loader_data: VmLoaderData,
+    _host: *const HostApi,
+    _instance: GuestContractInstance,
+) {
+}
 
 // ─── JS Dispatch Function ─────────────────────────────────────────────────────
 
@@ -612,7 +618,14 @@ fn register_host_functions<'js>(
             // SAFETY: iface is non-null and points to a valid GuestContractInterface
             // returned by resolve_guest_contract; null ctx is accepted for stateless contracts;
             // `instance` is a valid, writable out-param for the duration of the call.
-            unsafe { ((*iface).create_instance)(hvt, core::ptr::null(), &mut instance) };
+            unsafe {
+                ((*iface).create_instance)(
+                    VmLoaderData::null(),
+                    hvt,
+                    core::ptr::null(),
+                    &mut instance,
+                )
+            };
             // create_instance returns a null (null-id) handle for stateless/VM peers, but
             // host call_guest_method routes by instance.contract_id — stamp the id we resolved.
             instance.contract_id = GuestContractId::from_u64(contract_id);
@@ -635,7 +648,7 @@ fn register_host_functions<'js>(
             // SAFETY: iface is non-null (checked above); instance was produced by create_instance
             // on this same interface.  Stateless contracts treat destroy_instance as a no-op.
             // Best-effort: stateful peers are out of scope for this bridge primitive.
-            unsafe { ((*iface).destroy_instance)(hvt, instance) };
+            unsafe { ((*iface).destroy_instance)(VmLoaderData::null(), hvt, instance) };
             err.code
         },
     )

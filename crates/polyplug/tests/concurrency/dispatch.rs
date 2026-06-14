@@ -50,6 +50,7 @@ const MOCK_FNS: [*const (); 0] = [];
 /// `create_instance` for the pre-reload interface. Returns a tagged instance so
 /// readers can distinguish which interface version they resolved.
 unsafe extern "C" fn create_instance_v1(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -63,6 +64,7 @@ unsafe extern "C" fn create_instance_v1(
 /// `create_instance` for the reloaded interface — a distinct function pointer so
 /// callers can confirm the swap took effect.
 unsafe extern "C" fn create_instance_v2(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -74,6 +76,7 @@ unsafe extern "C" fn create_instance_v2(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -168,12 +171,18 @@ fn dispatch_concurrent_with_reload_is_safe() {
                         // concurrently on another thread.
                         unsafe {
                             let create_fn: unsafe extern "C" fn(
+                                polyplug_abi::dispatch::VmLoaderData,
                                 *const HostApi,
                                 *const (),
                                 *mut GuestContractInstance,
                             ) = (*interface_ptr).create_instance;
                             let mut instance: GuestContractInstance = GuestContractInstance::null();
-                            create_fn(core::ptr::null(), core::ptr::null(), &mut instance);
+                            create_fn(
+                                polyplug_abi::dispatch::VmLoaderData::null(),
+                                core::ptr::null(),
+                                core::ptr::null(),
+                                &mut instance,
+                            );
                             assert!(instance.is_null(), "mock create_instance returns null");
                         }
 
@@ -222,9 +231,14 @@ fn dispatch_concurrent_with_reload_is_safe() {
 
     // SAFETY: same retained slot interface; reading the function pointer field is
     // a plain pointer comparison against the known reloaded callback.
-    let create_after: unsafe extern "C" fn(*const HostApi, *const (), *mut GuestContractInstance) =
-        unsafe { (*interface_after).create_instance };
+    let create_after: unsafe extern "C" fn(
+        polyplug_abi::dispatch::VmLoaderData,
+        *const HostApi,
+        *const (),
+        *mut GuestContractInstance,
+    ) = unsafe { (*interface_after).create_instance };
     let expected_create: unsafe extern "C" fn(
+        polyplug_abi::dispatch::VmLoaderData,
         *const HostApi,
         *const (),
         *mut GuestContractInstance,

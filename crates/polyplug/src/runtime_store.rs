@@ -60,6 +60,7 @@ pub enum SingleProviderResolution {
 /// every host caller can safely call `create_instance` on any registered
 /// interface. It returns the canonical stateless dispatch token (null data).
 unsafe extern "C" fn stateless_create_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -72,6 +73,7 @@ unsafe extern "C" fn stateless_create_instance(
 
 /// Built-in no-op `destroy_instance` stub, paired with `stateless_create_instance`.
 unsafe extern "C" fn stateless_destroy_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -585,6 +587,7 @@ impl RuntimeStore {
             ) as *const *const ());
 
             let create_instance: unsafe extern "C" fn(
+                polyplug_abi::dispatch::VmLoaderData,
                 *const HostApi,
                 *const (),
                 *mut GuestContractInstance,
@@ -594,19 +597,31 @@ impl RuntimeStore {
                 // SAFETY: non-null pointer to a valid create_instance per ABI.
                 core::mem::transmute::<
                     *const (),
-                    unsafe extern "C" fn(*const HostApi, *const (), *mut GuestContractInstance),
+                    unsafe extern "C" fn(
+                        polyplug_abi::dispatch::VmLoaderData,
+                        *const HostApi,
+                        *const (),
+                        *mut GuestContractInstance,
+                    ),
                 >(create_raw)
             };
-            let destroy_instance: unsafe extern "C" fn(*const HostApi, GuestContractInstance) =
-                if destroy_raw.is_null() {
-                    stateless_destroy_instance
-                } else {
-                    // SAFETY: non-null pointer to a valid destroy_instance per ABI.
-                    core::mem::transmute::<
-                        *const (),
-                        unsafe extern "C" fn(*const HostApi, GuestContractInstance),
-                    >(destroy_raw)
-                };
+            let destroy_instance: unsafe extern "C" fn(
+                polyplug_abi::dispatch::VmLoaderData,
+                *const HostApi,
+                GuestContractInstance,
+            ) = if destroy_raw.is_null() {
+                stateless_destroy_instance
+            } else {
+                // SAFETY: non-null pointer to a valid destroy_instance per ABI.
+                core::mem::transmute::<
+                    *const (),
+                    unsafe extern "C" fn(
+                        polyplug_abi::dispatch::VmLoaderData,
+                        *const HostApi,
+                        GuestContractInstance,
+                    ),
+                >(destroy_raw)
+            };
 
             // SAFETY: the remaining POD fields are read from the same valid
             // struct; the (possibly substituted) lifecycle fns are sound.
@@ -1727,6 +1742,7 @@ mod tests {
 
     /// No-op create_instance callback.
     unsafe extern "C" fn noop_create_instance(
+        _loader_data: polyplug_abi::dispatch::VmLoaderData,
         _host: *const HostApi,
         _args: *const (),
         out_instance: *mut GuestContractInstance,
@@ -1739,6 +1755,7 @@ mod tests {
 
     /// No-op destroy_instance callback.
     unsafe extern "C" fn noop_destroy_instance(
+        _loader_data: polyplug_abi::dispatch::VmLoaderData,
         _host: *const HostApi,
         _instance: GuestContractInstance,
     ) {

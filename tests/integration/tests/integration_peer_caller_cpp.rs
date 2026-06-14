@@ -359,6 +359,7 @@ fn cpp_peer_caller_validate_roundtrip() {
     let mut instance: GuestContractInstance = GuestContractInstance::null();
     unsafe {
         (interface.create_instance)(
+            polyplug_abi::VmLoaderData::null(),
             host_abi,
             core::ptr::null(),
             &mut instance as *mut GuestContractInstance,
@@ -388,7 +389,7 @@ fn cpp_peer_caller_validate_roundtrip() {
     // SAFETY: instance was created by create_instance; destroy exactly once.
     // out_view points to host-allocated bytes (alloc_string), which outlive the
     // instance — destroying before reading the view below is safe.
-    unsafe { (interface.destroy_instance)(host_abi, instance) };
+    unsafe { (interface.destroy_instance)(polyplug_abi::VmLoaderData::null(), host_abi, instance) };
     assert!(
         !out_view.ptr.is_null(),
         "returned StringView must not be null"

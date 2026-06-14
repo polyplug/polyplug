@@ -546,6 +546,7 @@ fn smoke_rust_codegen_dispatch() {
     // SAFETY: host_abi outlives the instance; create_instance is the generated factory thunk.
     unsafe {
         (interface.create_instance)(
+            polyplug_abi::VmLoaderData::null(),
             &host_abi as *const HostApi,
             core::ptr::null(),
             &mut instance as *mut GuestContractInstance,
@@ -570,7 +571,13 @@ fn smoke_rust_codegen_dispatch() {
     };
 
     // SAFETY: instance was created by create_instance; destroy exactly once.
-    unsafe { (interface.destroy_instance)(&host_abi as *const HostApi, instance) };
+    unsafe {
+        (interface.destroy_instance)(
+            polyplug_abi::VmLoaderData::null(),
+            &host_abi as *const HostApi,
+            instance,
+        )
+    };
 
     assert_eq!(
         call_result.code,

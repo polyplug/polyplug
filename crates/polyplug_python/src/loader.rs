@@ -168,6 +168,7 @@ unsafe impl Sync for PythonLoaderData {}
 /// Python plugins use VM dispatch; per-contract state lives in the interpreter,
 /// so no opaque instance handle is produced.
 unsafe extern "C" fn python_create_instance(
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -183,6 +184,7 @@ unsafe extern "C" fn python_create_instance(
 /// # Safety
 /// Python plugins do not own instance data; this is a no-op.
 unsafe extern "C" fn python_destroy_instance(
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {

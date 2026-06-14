@@ -29,7 +29,8 @@ struct EncoderInstanceState {
 // Create a new instance: calls the author factory and heap-allocates the payload.
 // Writes a null handle to *out_instance when host is null, the factory returns
 // null, or it throws.
-static void ENCODER_create_instance(const HostApi* host, const void* args, GuestContractInstance* out_instance) noexcept {
+static void ENCODER_create_instance(VmLoaderData loader_data, const HostApi* host, const void* args, GuestContractInstance* out_instance) noexcept {
+    (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.
     (void)args;  // Contract-specific init args are unused by generated glue.
     if (out_instance == nullptr) return;
     if (host == nullptr) {
@@ -51,7 +52,8 @@ static void ENCODER_create_instance(const HostApi* host, const void* args, Guest
 
 // Destroy an instance created by ENCODER_create_instance: deletes the
 // implementation (ownership transferred from the factory) and the payload.
-static void ENCODER_destroy_instance(const HostApi* host, GuestContractInstance instance) noexcept {
+static void ENCODER_destroy_instance(VmLoaderData loader_data, const HostApi* host, GuestContractInstance instance) noexcept {
+    (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.
     (void)host;  // The payload is guest-owned; no host call is needed to free it.
     if (instance.data == nullptr) {
         return;

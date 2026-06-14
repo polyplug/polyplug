@@ -492,10 +492,10 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             // No bundle info is available here, so default to native dispatch.
             out.push_str("                DispatchType = DispatchType.Native,\n");
             out.push_str(&format!(
-                "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance*, void>)&{upper}_CreateInstance,\n"
+                "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&{upper}_CreateInstance,\n"
             ));
             out.push_str(&format!(
-                "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstance,\n"
+                "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstance,\n"
             ));
             out.push_str("                Dispatch = new DispatchMechanisms {\n");
             out.push_str("                    Native = new NativeDispatch {\n");
@@ -635,11 +635,11 @@ fn generate_cs_guest_plugin_interface(
     // native-dispatch").
     out.push_str("                DispatchType = DispatchType.Native,\n");
     out.push_str(&format!(
-        "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance*, void>)&{upper}_CreateInstance,\n",
+        "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&{upper}_CreateInstance,\n",
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstance,\n",
+        "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstance,\n",
         upper = plugin_upper
     ));
     out.push_str("                Dispatch = new DispatchMechanisms {\n");
@@ -707,8 +707,11 @@ fn emit_cs_guest_instance_machinery(
 
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
-        "    private static unsafe void {upper}_CreateInstance(IntPtr host, IntPtr args, GuestContractInstance* outInstance) {{\n"
+        "    private static unsafe void {upper}_CreateInstance(VmLoaderData loaderData, IntPtr host, IntPtr args, GuestContractInstance* outInstance) {{\n"
     ));
+    out.push_str(
+        "        _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.\n",
+    );
     out.push_str(
         "        // Calls the author factory and carries the payload in instance.Data as a\n",
     );
@@ -745,8 +748,11 @@ fn emit_cs_guest_instance_machinery(
 
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str(&format!(
-        "    private static void {upper}_DestroyInstance(IntPtr host, GuestContractInstance instance) {{\n"
+        "    private static void {upper}_DestroyInstance(VmLoaderData loaderData, IntPtr host, GuestContractInstance instance) {{\n"
     ));
+    out.push_str(
+        "        _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.\n",
+    );
     out.push_str(
         "        // Frees the GCHandle allocated by CreateInstance; the payload becomes\n",
     );

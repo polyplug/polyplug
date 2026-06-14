@@ -108,6 +108,7 @@ fn leak_native_interface(contract_id: u64) -> &'static GuestContractInterface {
 }
 
 unsafe extern "C" fn noop_create_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -119,6 +120,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {

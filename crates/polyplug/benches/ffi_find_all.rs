@@ -505,6 +505,7 @@ fn bench_ffi_find_all_empty_result(c: &mut Criterion) {
 
 /// Stub create_instance for the synthetic sweep interfaces.
 unsafe extern "C" fn sweep_create_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -517,6 +518,7 @@ unsafe extern "C" fn sweep_create_instance(
 
 /// Stub destroy_instance for the synthetic sweep interfaces.
 unsafe extern "C" fn sweep_destroy_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {

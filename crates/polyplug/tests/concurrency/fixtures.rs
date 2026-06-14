@@ -34,6 +34,7 @@ pub(crate) const MOCK_FNS_EMPTY: [*const (); 0] = [];
 /// # Safety
 /// Matches the ABI `create_instance` signature; reads neither argument.
 pub(crate) unsafe extern "C" fn noop_create_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -49,6 +50,7 @@ pub(crate) unsafe extern "C" fn noop_create_instance(
 /// # Safety
 /// Matches the ABI `destroy_instance` signature; owns no instance data.
 pub(crate) unsafe extern "C" fn noop_destroy_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {

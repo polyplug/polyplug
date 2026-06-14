@@ -2674,6 +2674,33 @@ pub(crate) unsafe extern "C" fn host_create_guest_instance(
     }
 }
 
+/// The VM loader-data handle to pass to a guest interface's `create_instance` /
+/// `destroy_instance`.
+///
+/// VM-dispatch contracts (python/lua/js) route per-instance construction through
+/// their loader — the only channel from a single generic loader `create_instance`
+/// to the right contract's author factory and per-instance registry — so they need
+/// the same `loader_data` carried in `dispatch.vm.loader_data`. Native-dispatch
+/// contracts have a statically-linked factory and ignore it, so a null handle is
+/// correct for them.
+///
+/// # Safety
+/// `interface` must be a live, runtime-issued `GuestContractInterface` pointer kept
+/// alive by an epoch pin held by the caller for the duration of the read.
+unsafe fn guest_instance_loader_data(
+    interface: *const GuestContractInterface,
+) -> polyplug_abi::dispatch::VmLoaderData {
+    // SAFETY: interface is a live runtime-issued pointer per the caller's pin.
+    let dispatch_type: polyplug_abi::dispatch::DispatchType = unsafe { (*interface).dispatch_type };
+    if dispatch_type == polyplug_abi::dispatch::DispatchType::VirtualMachine {
+        // SAFETY: dispatch_type == VirtualMachine guarantees the `vm` union variant is
+        // the active one, so reading `dispatch.vm.loader_data` is sound.
+        unsafe { (*interface).dispatch.vm.loader_data }
+    } else {
+        polyplug_abi::dispatch::VmLoaderData::null()
+    }
+}
+
 unsafe fn host_create_guest_instance_impl(
     this: *const HostApi,
     interface: *const GuestContractInterface,
@@ -2696,14 +2723,19 @@ unsafe fn host_create_guest_instance_impl(
     // SAFETY: interface is non-null and points to a runtime-issued
     // GuestContractInterface kept alive by the pin above; reading its fields is sound.
     let contract_id: GuestContractId = unsafe { (*interface).contract_id };
+    // SAFETY: same live, pinned interface; selects the per-instance loader_data
+    // (VM contracts route construction through their loader; native ignore it).
+    let loader_data: polyplug_abi::dispatch::VmLoaderData =
+        unsafe { guest_instance_loader_data(interface) };
 
     let mut inst: polyplug_abi::guest::GuestContractInstance =
         polyplug_abi::guest::GuestContractInstance::null();
     // SAFETY: `create_instance` is non-null by ABI contract (register_guest_contract
     // rejects null bits); the interface stays alive across the call via the pin;
-    // `args` satisfies the contract's argument layout per the caller's contract;
-    // `inst` is a valid, writable out-param for the constructed instance.
-    unsafe { ((*interface).create_instance)(this, args.cast::<()>(), &mut inst) };
+    // `loader_data` is this interface's VM handle (null for native); `args` satisfies
+    // the contract's argument layout per the caller's contract; `inst` is a valid,
+    // writable out-param for the constructed instance.
+    unsafe { ((*interface).create_instance)(loader_data, this, args.cast::<()>(), &mut inst) };
 
     if !inst.data.is_null() {
         runtime.note_instance_created(contract_id);
@@ -2742,9 +2774,14 @@ pub(crate) unsafe extern "C" fn host_destroy_guest_instance(
     // interface during a concurrent unload.
     let _g: crossbeam_epoch::Guard = crossbeam_epoch::pin();
 
+    // SAFETY: same live, pinned interface; selects the per-instance loader_data.
+    let loader_data: polyplug_abi::dispatch::VmLoaderData =
+        unsafe { guest_instance_loader_data(interface) };
+
     // SAFETY: `destroy_instance` is non-null by ABI contract; the interface stays
-    // alive across the call via the pin; `instance` was produced by this contract.
-    unsafe { ((*interface).destroy_instance)(this, instance) };
+    // alive across the call via the pin; `loader_data` is this interface's VM handle
+    // (null for native); `instance` was produced by this contract.
+    unsafe { ((*interface).destroy_instance)(loader_data, this, instance) };
 
     if !instance.data.is_null() {
         runtime.note_instance_destroyed(contract_id);
@@ -2993,6 +3030,7 @@ mod tests {
         };
 
         unsafe extern "C" fn stub_create_instance(
+            _loader_data: polyplug_abi::dispatch::VmLoaderData,
             _host: *const HostApi,
             _args: *const (),
             out_instance: *mut GuestContractInstance,
@@ -3004,6 +3042,7 @@ mod tests {
         }
 
         unsafe extern "C" fn stub_destroy_instance(
+            _loader_data: polyplug_abi::dispatch::VmLoaderData,
             _host: *const HostApi,
             _instance: GuestContractInstance,
         ) {
@@ -3095,6 +3134,7 @@ mod tests {
         };
 
         unsafe extern "C" fn stub_create(
+            _loader_data: polyplug_abi::dispatch::VmLoaderData,
             _host: *const HostApi,
             _args: *const (),
             out_instance: *mut GuestContractInstance,
@@ -3104,7 +3144,11 @@ mod tests {
                 unsafe { out_instance.write(GuestContractInstance::null()) };
             }
         }
-        unsafe extern "C" fn stub_destroy(_host: *const HostApi, _instance: GuestContractInstance) {
+        unsafe extern "C" fn stub_destroy(
+            _loader_data: polyplug_abi::dispatch::VmLoaderData,
+            _host: *const HostApi,
+            _instance: GuestContractInstance,
+        ) {
         }
 
         let interface: &'static GuestContractInterface =
@@ -3308,6 +3352,7 @@ mod tests {
     /// so the runtime counts it as a live stateful instance, stamped with the
     /// contract id like a real generated factory.
     unsafe extern "C" fn stateful_create_instance(
+        _loader_data: polyplug_abi::dispatch::VmLoaderData,
         _host: *const HostApi,
         _args: *const (),
         out_instance: *mut polyplug_abi::guest::GuestContractInstance,
@@ -3326,6 +3371,7 @@ mod tests {
 
     /// Destroy the boxed unit created by `stateful_create_instance`.
     unsafe extern "C" fn stateful_destroy_instance(
+        _loader_data: polyplug_abi::dispatch::VmLoaderData,
         _host: *const HostApi,
         instance: polyplug_abi::guest::GuestContractInstance,
     ) {
@@ -3591,6 +3637,7 @@ mod tests {
         };
 
         unsafe extern "C" fn stub_create(
+            _loader_data: VmLoaderData,
             _host: *const HostApi,
             _args: *const (),
             out_instance: *mut GuestContractInstance,
@@ -3600,7 +3647,11 @@ mod tests {
                 unsafe { out_instance.write(GuestContractInstance::null()) };
             }
         }
-        unsafe extern "C" fn stub_destroy(_host: *const HostApi, _instance: GuestContractInstance) {
+        unsafe extern "C" fn stub_destroy(
+            _loader_data: VmLoaderData,
+            _host: *const HostApi,
+            _instance: GuestContractInstance,
+        ) {
         }
 
         let interface: &'static GuestContractInterface =

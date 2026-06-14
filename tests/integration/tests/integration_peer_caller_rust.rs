@@ -41,6 +41,7 @@ use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
+use polyplug_abi::VmLoaderData;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 use polyplug_utils::bundle_id;
@@ -162,6 +163,7 @@ impl TestPeerCaller {
         let mut created: GuestContractInstance = GuestContractInstance::null();
         unsafe {
             ((*interface).create_instance)(
+                VmLoaderData::null(),
                 host,
                 core::ptr::null(),
                 &mut created as *mut GuestContractInstance,
@@ -232,7 +234,11 @@ impl Drop for TestPeerCaller {
         if !self.instance.data.is_null() {
             // SAFETY: interface is valid; instance was created by this caller.
             unsafe {
-                ((*self.interface).destroy_instance)(self.host, self.instance);
+                ((*self.interface).destroy_instance)(
+                    VmLoaderData::null(),
+                    self.host,
+                    self.instance,
+                );
             }
         }
     }

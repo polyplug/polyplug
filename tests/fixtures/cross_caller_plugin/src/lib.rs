@@ -123,6 +123,7 @@ unsafe extern "C" fn caller_cross_add(
 /// `host` must be a valid non-null `HostApi` pointer for the runtime lifetime.
 /// `_args` is unused.
 unsafe extern "C" fn create_instance(
+    _loader_data: VmLoaderData,
     host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -144,7 +145,11 @@ unsafe extern "C" fn create_instance(
 /// # Safety
 /// `instance.data` must be a pointer returned by this contract's
 /// `create_instance`, not yet destroyed.
-unsafe extern "C" fn destroy_instance(_host: *const HostApi, instance: GuestContractInstance) {
+unsafe extern "C" fn destroy_instance(
+    _loader_data: VmLoaderData,
+    _host: *const HostApi,
+    instance: GuestContractInstance,
+) {
     if instance.data.is_null() {
         return;
     }

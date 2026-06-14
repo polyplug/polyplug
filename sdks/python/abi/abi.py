@@ -573,8 +573,8 @@ class DispatchMechanisms(ctypes.Union):
     ]
 
 
-_guest_contract_interface_create_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
-_guest_contract_interface_destroy_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, GuestContractInstance)
+_guest_contract_interface_create_instance_t = ctypes.CFUNCTYPE(None, VmLoaderData, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_guest_contract_interface_destroy_instance_t = ctypes.CFUNCTYPE(None, VmLoaderData, ctypes.c_void_p, GuestContractInstance)
 class GuestContractInterface(ctypes.Structure):
     """ Guest Contract Interface — one per contract implemented by a guest (plugin).
     

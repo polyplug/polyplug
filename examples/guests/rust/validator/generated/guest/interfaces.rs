@@ -74,6 +74,7 @@ struct ValidatorPluginState {
 /// Create a new instance: calls the author factory and boxes the payload.
 /// Writes a null handle through `out_instance` when `host` is null or the factory panics.
 unsafe extern "C" fn VALIDATOR_create_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -122,6 +123,7 @@ unsafe extern "C" fn VALIDATOR_create_instance(
 
 /// Destroy an instance created by `VALIDATOR_create_instance`.
 unsafe extern "C" fn VALIDATOR_destroy_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     instance: GuestContractInstance,
 ) {

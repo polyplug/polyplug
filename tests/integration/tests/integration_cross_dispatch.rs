@@ -100,6 +100,7 @@ fn native_to_native_cross_call() {
     let mut caller_instance: GuestContractInstance = GuestContractInstance::null();
     unsafe {
         (caller_iface.create_instance)(
+            polyplug_abi::VmLoaderData::null(),
             host,
             core::ptr::null(),
             &mut caller_instance as *mut GuestContractInstance,
@@ -137,7 +138,9 @@ fn native_to_native_cross_call() {
 
     // SAFETY: `caller_instance` was produced by this contract's create_instance
     // and has not been destroyed; destroy it once.
-    unsafe { (caller_iface.destroy_instance)(host, caller_instance) };
+    unsafe {
+        (caller_iface.destroy_instance)(polyplug_abi::VmLoaderData::null(), host, caller_instance)
+    };
 }
 
 // ─── (a2) native test.add through the runtime's real dispatch path ─────────────
@@ -291,6 +294,7 @@ fn cross_call_reresolves_after_reload() {
     let mut target_instance: GuestContractInstance = GuestContractInstance::null();
     unsafe {
         (target_iface.create_instance)(
+            polyplug_abi::VmLoaderData::null(),
             host,
             core::ptr::null(),
             &mut target_instance as *mut GuestContractInstance,
@@ -324,7 +328,9 @@ fn cross_call_reresolves_after_reload() {
 
     // Destroy the V1 instance before reloading; create a fresh handle for V2.
     // SAFETY: `target_instance` was produced by V1's create_instance, not freed.
-    unsafe { (target_iface.destroy_instance)(host, target_instance) };
+    unsafe {
+        (target_iface.destroy_instance)(polyplug_abi::VmLoaderData::null(), host, target_instance)
+    };
 
     rt.reload_bundle(&PathBuf::from(CROSS_TARGET_PLUGIN_V2_SO))
         .expect("hot-reload cross_target_plugin V1 -> V2");
@@ -345,6 +351,7 @@ fn cross_call_reresolves_after_reload() {
     let mut target_instance_v2: GuestContractInstance = GuestContractInstance::null();
     unsafe {
         (target_iface_v2.create_instance)(
+            polyplug_abi::VmLoaderData::null(),
             host,
             core::ptr::null(),
             &mut target_instance_v2 as *mut GuestContractInstance,
@@ -363,5 +370,11 @@ fn cross_call_reresolves_after_reload() {
     );
 
     // SAFETY: produced by V2's create_instance, not freed.
-    unsafe { (target_iface_v2.destroy_instance)(host, target_instance_v2) };
+    unsafe {
+        (target_iface_v2.destroy_instance)(
+            polyplug_abi::VmLoaderData::null(),
+            host,
+            target_instance_v2,
+        )
+    };
 }

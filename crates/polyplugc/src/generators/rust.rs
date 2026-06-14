@@ -850,6 +850,7 @@ fn emit_guest_instance_machinery(
         "/// Create a new instance: calls the author factory and boxes the payload.\n\
          /// Writes a null handle through `out_instance` when `host` is null or the factory panics.\n\
          unsafe extern \"C\" fn {prefix_upper}_create_instance(\n\
+         \x20   _loader_data: polyplug_abi::dispatch::VmLoaderData,\n\
          \x20   host: *const HostApi,\n\
          \x20   _args: *const (),\n\
          \x20   out_instance: *mut GuestContractInstance,\n\
@@ -896,6 +897,7 @@ fn emit_guest_instance_machinery(
     out.push_str(&format!(
         "/// Destroy an instance created by `{prefix_upper}_create_instance`.\n\
          unsafe extern \"C\" fn {prefix_upper}_destroy_instance(\n\
+         \x20   _loader_data: polyplug_abi::dispatch::VmLoaderData,\n\
          \x20   _host: *const HostApi,\n\
          \x20   instance: GuestContractInstance,\n\
          ) {{\n\

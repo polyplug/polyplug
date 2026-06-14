@@ -153,10 +153,10 @@ impl PipelineDecoderContract {
         self.arena.reset();
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
-        let mut out_val: StringView = unsafe { core::mem::zeroed() };
+        let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
-        let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
+        let out_ptr: *mut () = out_val.as_mut_ptr() as *mut ();
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
@@ -219,6 +219,9 @@ impl PipelineDecoderContract {
                 message,
             });
         }
+        // SAFETY: dispatch returned AbiErrorCode::Ok, so it wrote a valid value
+        // through the out-pointer into this slot.
+        let out_val: StringView = unsafe { out_val.assume_init() };
         Ok(out_val)
     }
 }
@@ -354,10 +357,10 @@ impl DataTransformerContract {
         self.arena.reset();
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
-        let mut out_val: StringView = unsafe { core::mem::zeroed() };
+        let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
-        let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
+        let out_ptr: *mut () = out_val.as_mut_ptr() as *mut ();
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
@@ -420,6 +423,9 @@ impl DataTransformerContract {
                 message,
             });
         }
+        // SAFETY: dispatch returned AbiErrorCode::Ok, so it wrote a valid value
+        // through the out-pointer into this slot.
+        let out_val: StringView = unsafe { out_val.assume_init() };
         Ok(out_val)
     }
 }
@@ -555,10 +561,10 @@ impl PipelineEncoderContract {
         self.arena.reset();
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
-        let mut out_val: StringView = unsafe { core::mem::zeroed() };
+        let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
-        let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
+        let out_ptr: *mut () = out_val.as_mut_ptr() as *mut ();
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
@@ -621,6 +627,9 @@ impl PipelineEncoderContract {
                 message,
             });
         }
+        // SAFETY: dispatch returned AbiErrorCode::Ok, so it wrote a valid value
+        // through the out-pointer into this slot.
+        let out_val: StringView = unsafe { out_val.assume_init() };
         Ok(out_val)
     }
 }
@@ -756,10 +765,10 @@ impl DataReporterContract {
         self.arena.reset();
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
-        let mut out_val: StringView = unsafe { core::mem::zeroed() };
+        let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
-        let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
+        let out_ptr: *mut () = out_val.as_mut_ptr() as *mut ();
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
@@ -822,6 +831,9 @@ impl DataReporterContract {
                 message,
             });
         }
+        // SAFETY: dispatch returned AbiErrorCode::Ok, so it wrote a valid value
+        // through the out-pointer into this slot.
+        let out_val: StringView = unsafe { out_val.assume_init() };
         Ok(out_val)
     }
 }
@@ -957,10 +969,10 @@ impl PipelineValidatorContract {
         self.arena.reset();
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
-        let mut out_val: StringView = unsafe { core::mem::zeroed() };
+        let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
-        let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
+        let out_ptr: *mut () = out_val.as_mut_ptr() as *mut ();
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
         let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
@@ -1023,6 +1035,9 @@ impl PipelineValidatorContract {
                 message,
             });
         }
+        // SAFETY: dispatch returned AbiErrorCode::Ok, so it wrote a valid value
+        // through the out-pointer into this slot.
+        let out_val: StringView = unsafe { out_val.assume_init() };
         Ok(out_val)
     }
 }

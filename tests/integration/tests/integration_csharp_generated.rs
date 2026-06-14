@@ -163,6 +163,7 @@ fn generated_csharp_bundle_transform_dispatches() {
     let mut instance: GuestContractInstance = GuestContractInstance::null();
     unsafe {
         (vtable.create_instance)(
+            polyplug_abi::VmLoaderData::null(),
             host_abi,
             core::ptr::null(),
             &mut instance as *mut GuestContractInstance,
@@ -190,7 +191,7 @@ fn generated_csharp_bundle_transform_dispatches() {
     );
     // SAFETY: instance was created by create_instance; destroy exactly once.
     // out_view points to guest/host-owned bytes that outlive the instance.
-    unsafe { (vtable.destroy_instance)(host_abi, instance) };
+    unsafe { (vtable.destroy_instance)(polyplug_abi::VmLoaderData::null(), host_abi, instance) };
 
     // SAFETY: out_view points to out_view.len UTF-8 bytes owned by the guest.
     let out_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };

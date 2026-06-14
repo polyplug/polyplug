@@ -192,6 +192,7 @@ impl Drop for LuaDispatchGuard<'_> {
 /// # Safety
 /// Lua plugins use VM dispatch with global state; instances are not used.
 unsafe extern "C" fn lua_create_instance(
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -206,7 +207,11 @@ unsafe extern "C" fn lua_create_instance(
 ///
 /// # Safety
 /// Lua plugins don't own instance data.
-unsafe extern "C" fn lua_destroy_instance(_host: *const HostApi, _instance: GuestContractInstance) {
+unsafe extern "C" fn lua_destroy_instance(
+    _loader_data: VmLoaderData,
+    _host: *const HostApi,
+    _instance: GuestContractInstance,
+) {
 }
 
 // ─── Lua Dispatch Function ─────────────────────────────────────────────────────

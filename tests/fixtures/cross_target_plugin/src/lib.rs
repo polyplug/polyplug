@@ -87,6 +87,7 @@ unsafe extern "C" fn target_add(
 /// # Safety
 /// `_host`/`_args` follow the ABI calling convention but are unused here.
 unsafe extern "C" fn create_instance(
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -110,7 +111,11 @@ unsafe extern "C" fn create_instance(
 /// # Safety
 /// `instance.data` must be a pointer returned by `create_instance` of this
 /// contract, not yet destroyed.
-unsafe extern "C" fn destroy_instance(_host: *const HostApi, instance: GuestContractInstance) {
+unsafe extern "C" fn destroy_instance(
+    _loader_data: VmLoaderData,
+    _host: *const HostApi,
+    instance: GuestContractInstance,
+) {
     if instance.data.is_null() {
         return;
     }

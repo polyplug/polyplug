@@ -57,13 +57,13 @@ void cpp_throw_abi(GuestContractInstance, const void* args, void* out, AbiError*
     }
 }
 
-void create_instance_stub(const HostApi*, const void*, GuestContractInstance* out_instance) noexcept {
+void create_instance_stub(VmLoaderData, const HostApi*, const void*, GuestContractInstance* out_instance) noexcept {
     if (out_instance != nullptr) {
         *out_instance = GuestContractInstance{nullptr, 0};
     }
 }
 
-void destroy_instance_stub(const HostApi*, GuestContractInstance) noexcept {}
+void destroy_instance_stub(VmLoaderData, const HostApi*, GuestContractInstance) noexcept {}
 
 void* const kTestAddFns[] = {
     reinterpret_cast<void*>(&cpp_throw_abi),
