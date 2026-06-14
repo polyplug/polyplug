@@ -9,17 +9,19 @@ local M = {}
 
 -- Guest contract: transformer (data.Transformer@1)
 --   transform(input: StringView) -> StringView
-local TRANSFORMER_IMPLS = {}
-function M.set_transformer_impl(transform_fn)
-    TRANSFORMER_IMPLS[0] = transform_fn
+local TRANSFORMER_FACTORY = nil
+function M.set_transformer_factory(factory)
+    TRANSFORMER_FACTORY = factory
 end
 function M._register_TRANSFORMER()
+    if TRANSFORMER_FACTORY == nil then
+        error("polyplug: set_transformer_factory(...) was not called at import time")
+    end
     local functions = {}
-    functions[0] = function(args_ptr, out_ptr)
-        local impl = TRANSFORMER_IMPLS[0]
-        if impl == nil then error("polyplug: no implementation registered for function 0") end
+    functions[0] = function(instance, args_ptr, out_ptr)
+        if instance == nil or instance.transform == nil then error("polyplug: no implementation for transform") end
         local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
-        local result = impl(args_sv[0])
+        local result = instance:transform(args_sv[0])
         if out_ptr ~= 0 and result ~= nil then
             local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
             out_sv[0] = result
@@ -32,6 +34,7 @@ function M._register_TRANSFORMER()
     _G._polyplug_handlers["data.Transformer"] = {
         contract_version = 1,
         plugin_name = "transformer",
+        factory = TRANSFORMER_FACTORY,
         functions = functions,
     }
 end

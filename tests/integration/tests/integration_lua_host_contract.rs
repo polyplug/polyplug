@@ -204,17 +204,21 @@ local polyplug = require('polyplug_guest')\n\
 local contracts = require('generated.guest.contracts')\n\
 local host_contracts = require('generated.guest.host_contracts')\n\
 \n\
-local function transform(input)\n\
-    local msg = 'lua-guest called host.logger'\n\
-    local host_ptr = polyplug.get_host_interface()\n\
-    local logger = host_contracts.HostLoggerContract.from_host(host_ptr, 0)\n\
-    if logger ~= nil then\n\
-        logger:log(msg)\n\
+local function new_transformer(host)\n\
+    local self = {}\n\
+    function self:transform(input)\n\
+        local msg = 'lua-guest called host.logger'\n\
+        local host_ptr = polyplug.get_host_interface()\n\
+        local logger = host_contracts.HostLoggerContract.from_host(host_ptr, 0)\n\
+        if logger ~= nil then\n\
+            logger:log(msg)\n\
+        end\n\
+        return polyplug.alloc_string('OK:' .. msg)\n\
     end\n\
-    return polyplug.alloc_string('OK:' .. msg)\n\
+    return self\n\
 end\n\
 \n\
-contracts.set_transformer_impl(transform)\n\
+contracts.set_transformer_factory(new_transformer)\n\
 return contracts\n";
     std::fs::write(bundle_dir.join("transformer.lua"), guest_lua).expect("write transformer.lua");
 

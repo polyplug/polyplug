@@ -40,7 +40,7 @@ local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
 local polyplug_abi = require("polyplug_abi")
 
-local function impl_probe(args_ptr, out_ptr)
+local function impl_probe(instance, args_ptr, out_ptr)
     -- Misuse on purpose: a Lua string is NOT a StringView cdata.
     local ok, err = pcall(polyplug_abi.to_str, "already a Lua string")
     local result
@@ -60,6 +60,7 @@ function polyplug_init(registrar_ptr, ctx_ptr)
         ["test.probe"] = {
             contract_version = 1,
             plugin_name = "to-str-guard-probe",
+            factory = function(_host) return {} end,
             functions = { [0] = impl_probe },
         },
     }

@@ -93,7 +93,7 @@ local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
 local polyplug_abi = require("polyplug_abi")
 
-local function impl_echo(args_ptr, out_ptr)
+local function impl_echo(instance, args_ptr, out_ptr)
     local in_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
     local s = polyplug_abi.to_str(in_sv[0])
     local out_view = polyplug_guest.alloc_string_arena("{prefix}" .. s)
@@ -107,6 +107,7 @@ function polyplug_init(registrar_ptr, ctx_ptr)
         ["{contract}"] = {{
             contract_version = 1,
             plugin_name = "{contract}-provider",
+            factory = function(_host) return {{}} end,
             functions = {{ [0] = impl_echo }},
         }},
     }}
@@ -127,7 +128,7 @@ local polyplug_abi = require("polyplug_abi")
 
 local PEER_ID = 0x{peer_id:016X}ULL
 
-local function impl_call(args_ptr, out_ptr)
+local function impl_call(instance, args_ptr, out_ptr)
     local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
     local host_ptr = polyplug_guest.get_host_interface()
     if host_ptr == nil then
@@ -144,14 +145,14 @@ local function impl_call(args_ptr, out_ptr)
     local out_instance = ffi.new("GuestContractInstance[1]")
     local loader_data = ffi.new("VmLoaderData")
     interface.create_instance(loader_data, host, nil, out_instance)
-    local instance = out_instance[0]
-    instance.contract_id = PEER_ID
+    local peer_instance = out_instance[0]
+    peer_instance.contract_id = PEER_ID
     local in_ptr = ffi.cast("const void*", ffi.cast("uintptr_t", args_ptr))
     local peer_out = ffi.new("StringView[1]")
     local out_err = ffi.new("AbiError[1]")
-    host.call_guest_method(host, instance, 0, in_ptr, ffi.cast("void*", peer_out), nil, out_err)
+    host.call_guest_method(host, peer_instance, 0, in_ptr, ffi.cast("void*", peer_out), nil, out_err)
     local err = out_err[0]
-    interface.destroy_instance(loader_data, host, instance)
+    interface.destroy_instance(loader_data, host, peer_instance)
     if err.code ~= 0 then
         out_sv[0] = polyplug_guest.alloc_string_arena("{prefix}ERR")
         return
@@ -166,6 +167,7 @@ function polyplug_init(registrar_ptr, ctx_ptr)
         ["{contract}"] = {{
             contract_version = 1,
             plugin_name = "{contract}-consumer",
+            factory = function(_host) return {{}} end,
             functions = {{ [0] = impl_call }},
         }},
     }}

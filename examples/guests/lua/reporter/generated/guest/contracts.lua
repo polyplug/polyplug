@@ -9,17 +9,19 @@ local M = {}
 
 -- Guest contract: reporter (data.Reporter@1)
 --   report(input: StringView) -> StringView
-local REPORTER_IMPLS = {}
-function M.set_reporter_impl(report_fn)
-    REPORTER_IMPLS[0] = report_fn
+local REPORTER_FACTORY = nil
+function M.set_reporter_factory(factory)
+    REPORTER_FACTORY = factory
 end
 function M._register_REPORTER()
+    if REPORTER_FACTORY == nil then
+        error("polyplug: set_reporter_factory(...) was not called at import time")
+    end
     local functions = {}
-    functions[0] = function(args_ptr, out_ptr)
-        local impl = REPORTER_IMPLS[0]
-        if impl == nil then error("polyplug: no implementation registered for function 0") end
+    functions[0] = function(instance, args_ptr, out_ptr)
+        if instance == nil or instance.report == nil then error("polyplug: no implementation for report") end
         local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
-        local result = impl(args_sv[0])
+        local result = instance:report(args_sv[0])
         if out_ptr ~= 0 and result ~= nil then
             local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
             out_sv[0] = result
@@ -32,6 +34,7 @@ function M._register_REPORTER()
     _G._polyplug_handlers["data.Reporter"] = {
         contract_version = 1,
         plugin_name = "reporter",
+        factory = REPORTER_FACTORY,
         functions = functions,
     }
 end

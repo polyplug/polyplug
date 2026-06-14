@@ -307,9 +307,13 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     // StringView), so any such cast fails at load. We instead register pure Lua
     // handlers, mirroring tests/fixtures/test_plugin_lua/test_plugin.lua.
     //
-    // Each handler has the low-level dispatch signature (args_ptr, out_ptr),
-    // where both are i64 integers (see polyplug_lua::loader::lua_dispatch). The
-    // generated wrapper marshals args/out around the user's high-level impl.
+    // Each handler has the low-level dispatch signature (instance, args_ptr,
+    // out_ptr): `instance` is the resolved per-instance impl object the loader
+    // passes as the first argument, and args_ptr/out_ptr are i64 integers (see
+    // polyplug_lua::loader::lua_dispatch). The generated wrapper marshals args/out
+    // around a method call ON the instance — the loader owns per-instance state
+    // and builds each impl from the author factory registered via
+    // `set_<plugin>_factory`.
 
     // Collect the (plugin, contract) pairs to register, preserving order.
     let mut registrations: Vec<(&str, &ResolvedContract)> = Vec::new();
@@ -321,7 +325,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_guest_plugin_interface(&mut out, &plugin.name, contract)?;
+                    generate_guest_plugin_interface(&mut out, &plugin.name, contract, &ir.enums)?;
                     registrations.push((plugin.name.as_str(), contract));
                 }
             }
@@ -330,8 +334,10 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
 
     // Define the global polyplug_init the LuaLoader calls. It populates
     // _G._polyplug_handlers with the per-contract dispatch tables. The example
-    // guests require this module and call set_<plugin>_impl at module top level,
-    // so the impls are already stored by the time polyplug_init runs.
+    // guests require this module and call set_<plugin>_factory at module top
+    // level, so the author factory is already stored by the time polyplug_init
+    // runs; the loader calls it to build the default impl and each per-instance
+    // impl.
     out.push_str("\n-- Registration entry point called by the LuaLoader.\n");
     out.push_str("function polyplug_init(host_ptr, ctx_ptr)\n");
     out.push_str("    if host_ptr == nil or ctx_ptr == nil then\n");
@@ -555,6 +561,7 @@ fn generate_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
+    enums: &[EnumDef],
 ) -> Result<(), PolyplugcError> {
     let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
     let contract_name_full: String = format!("{}@{}", contract.name, contract.version.major);
@@ -580,42 +587,41 @@ fn generate_guest_plugin_interface(
         ));
     }
 
-    // Per-plugin storage for the user-supplied high-level implementations.
-    out.push_str(&format!("local {plugin_var}_IMPLS = {{}}\n"));
+    // Per-plugin storage for the author factory. The loader owns per-instance
+    // state: it calls this factory once per create_instance (and once at load for
+    // the stateless default impl). `factory(host_ptr) -> impl` returns an object
+    // whose methods are the contract functions.
+    out.push_str(&format!("local {plugin_var}_FACTORY = nil\n"));
 
-    // set_<plugin>_impl(fn0, fn1, ...) stores the high-level handlers in
-    // declaration order (matching contract function_id order).
-    let set_impl_name: String = format!("set_{plugin_lower}_impl");
-    let impl_params: Vec<String> = contract
-        .functions
-        .iter()
-        .map(|f: &ResolvedFunction| format!("{}_fn", f.name.replace('.', "_")))
-        .collect();
-    out.push_str(&format!(
-        "function M.{set_impl_name}({})\n",
-        impl_params.join(", ")
-    ));
-    for (idx, func) in contract.functions.iter().enumerate() {
-        out.push_str(&format!(
-            "    {plugin_var}_IMPLS[{idx}] = {fn}_fn\n",
-            fn = func.name.replace('.', "_")
-        ));
-    }
+    // set_<plugin>_factory(factory) registers the author factory. The author
+    // calls this once at module import time; the loader reads it from the handler
+    // entry and calls it to build each impl instance.
+    let set_factory_name: String = format!("set_{plugin_lower}_factory");
+    out.push_str(&format!("function M.{set_factory_name}(factory)\n"));
+    out.push_str(&format!("    {plugin_var}_FACTORY = factory\n"));
     out.push_str("end\n");
 
     // _register_<plugin>() builds the low-level dispatch handlers and stores them
     // under a per-contract entry in _G._polyplug_handlers, keyed by contract name.
     // The loader iterates every entry and registers one GuestContractInterface per
     // contract, so multi-contract bundles register ALL their contracts. Each handler
-    // has the signature (args_ptr, out_ptr) with i64 pointer integers, marshals the
-    // inputs, invokes the stored high-level impl, and writes the result to out_ptr.
+    // has the signature (instance, args_ptr, out_ptr): `instance` is the resolved
+    // per-instance impl object the loader passes, and args_ptr/out_ptr are i64
+    // pointer integers. The handler marshals inputs, invokes the contract method ON
+    // the instance, and writes the result to out_ptr. The handler entry also carries
+    // the author factory the loader calls to build each impl.
     out.push_str(&format!("function M._register_{plugin_var}()\n"));
+    out.push_str(&format!("    if {plugin_var}_FACTORY == nil then\n"));
+    out.push_str(&format!(
+        "        error(\"polyplug: {set_factory_name}(...) was not called at import time\")\n"
+    ));
+    out.push_str("    end\n");
     out.push_str("    local functions = {}\n");
     for (idx, func) in contract.functions.iter().enumerate() {
         out.push_str(&format!(
-            "    functions[{idx}] = function(args_ptr, out_ptr)\n"
+            "    functions[{idx}] = function(instance, args_ptr, out_ptr)\n"
         ));
-        emit_lua_guest_handler_body(out, func, &plugin_var, idx);
+        emit_lua_guest_handler_body(out, func, enums);
         out.push_str("    end\n");
     }
     out.push_str("    _G._polyplug_handlers = _G._polyplug_handlers or {}\n");
@@ -628,6 +634,7 @@ fn generate_guest_plugin_interface(
         contract.version.major
     ));
     out.push_str(&format!("        plugin_name = \"{plugin_name}\",\n"));
+    out.push_str(&format!("        factory = {plugin_var}_FACTORY,\n"));
     out.push_str("        functions = functions,\n");
     out.push_str("    }\n");
     out.push_str("end\n\n");
@@ -636,24 +643,22 @@ fn generate_guest_plugin_interface(
 }
 
 /// Emit the body of one low-level dispatch handler: marshal args from
-/// `args_ptr`, call the stored high-level impl, marshal the result to
-/// `out_ptr`. Pointers arrive as i64 integers (see lua_dispatch).
-fn emit_lua_guest_handler_body(
-    out: &mut String,
-    func: &ResolvedFunction,
-    plugin_var: &str,
-    idx: usize,
-) {
-    out.push_str(&format!("        local impl = {plugin_var}_IMPLS[{idx}]\n"));
-    // A missing impl must NOT fall through to success (the loader treats a
-    // normal return as Ok, leaving a zeroed out-slot). Raising makes the
+/// `args_ptr`, call the contract method ON the resolved `instance`, marshal the
+/// result to `out_ptr`. Pointers arrive as i64 integers (see lua_dispatch); the
+/// `instance` is the per-instance impl object the loader passes as the handler's
+/// first argument.
+fn emit_lua_guest_handler_body(out: &mut String, func: &ResolvedFunction, enums: &[EnumDef]) {
+    let method: String = func.name.replace('.', "_");
+    // A missing instance or method must NOT fall through to success (the loader
+    // treats a normal return as Ok, leaving a zeroed out-slot). Raising makes the
     // loader return AbiErrorCode.Generic to the caller.
     out.push_str(&format!(
-        "        if impl == nil then error(\"polyplug: no implementation registered for function {idx}\") end\n"
+        "        if instance == nil or instance.{method} == nil then error(\"polyplug: no implementation for {method}\") end\n"
     ));
 
-    // Marshal a single StringView input (the common pipeline shape). Other
-    // input shapes pass the raw args pointer through for the impl to read.
+    // Marshal a single StringView input (the common pipeline shape). Other input
+    // shapes pass the raw args pointer through for the method to read. The method
+    // is invoked on the instance (`instance:method(...)` == `instance.method(instance, ...)`).
     let single_string_view: bool = func.params.len() == 1
         && matches!(
             func.params[0].ty,
@@ -664,12 +669,16 @@ fn emit_lua_guest_handler_body(
         out.push_str(
             "        local args_sv = ffi.cast(\"const StringView*\", ffi.cast(\"uintptr_t\", args_ptr))\n",
         );
-        out.push_str("        local result = impl(args_sv[0])\n");
+        out.push_str(&format!(
+            "        local result = instance:{method}(args_sv[0])\n"
+        ));
     } else if func.params.is_empty() {
-        out.push_str("        local result = impl()\n");
+        out.push_str(&format!("        local result = instance:{method}()\n"));
     } else {
-        // Fall back to handing the raw pointer integers to the impl.
-        out.push_str("        local result = impl(args_ptr, out_ptr)\n");
+        // Fall back to handing the raw pointer integers to the method.
+        out.push_str(&format!(
+            "        local result = instance:{method}(args_ptr, out_ptr)\n"
+        ));
     }
 
     // Marshal a StringView return value into out_ptr. alloc_string returns a
@@ -691,6 +700,36 @@ fn emit_lua_guest_handler_body(
         out.push_str(
             "            error(\"polyplug: implementation returned nil for a StringView-returning function\")\n",
         );
+        out.push_str("        end\n");
+        return;
+    }
+
+    // Marshal a scalar (primitive or enum) return value into out_ptr. The impl
+    // returns a plain Lua number; write it through a typed pointer cast over the
+    // out slot. Enums use their repr C integer type (the enum itself has no cdef'd
+    // C type — the generator emits enums as Lua tables). Struct returns are not
+    // emitted here: the only non-scalar return marshalled is StringView (above).
+    let scalar_c_type: Option<String> = match &func.returns {
+        Some(ret) => match lua_enum_repr_c_type(ret, enums) {
+            Some(repr) => Some(repr),
+            None if lua_return_is_scalar(ret) => Some(lua_type_name(ret)),
+            None => None,
+        },
+        None => None,
+    };
+    if let Some(c_type) = scalar_c_type {
+        // A nil result for a scalar-returning function must NOT fall through to
+        // success with a zeroed out-slot; raising makes the loader return Generic.
+        out.push_str("        if out_ptr ~= 0 and result == nil then\n");
+        out.push_str(&format!(
+            "            error(\"polyplug: implementation returned nil for a {c_type}-returning function\")\n"
+        ));
+        out.push_str("        end\n");
+        out.push_str("        if out_ptr ~= 0 then\n");
+        out.push_str(&format!(
+            "            local out_scalar = ffi.cast(\"{c_type}*\", ffi.cast(\"uintptr_t\", out_ptr))\n"
+        ));
+        out.push_str("            out_scalar[0] = result\n");
         out.push_str("        end\n");
     }
 }

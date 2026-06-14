@@ -93,7 +93,8 @@ manifest_out:close()
 
 local bundle_out = assert(io.open(tmp_dir .. "/bundle.lua", "w"))
 bundle_out:write([=[
-local function impl_noop(_args, _out) end
+local function make_log_test(_host) return {} end
+local function impl_noop(_instance, _args, _out) end
 function polyplug_init(_host, _ctx)
     -- Warn (2): passes the default log_max_level so the host callback sees it.
     _polyplug_log(2, "guest.log_test", "lua guest warn via funnel")
@@ -101,6 +102,7 @@ function polyplug_init(_host, _ctx)
         ["log.test"] = {
             contract_version = 1,
             plugin_name      = "log-test",
+            factory          = make_log_test,
             functions        = { [0] = impl_noop },
         },
     }

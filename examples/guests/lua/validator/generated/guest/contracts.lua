@@ -9,17 +9,19 @@ local M = {}
 
 -- Guest contract: validator (pipeline.Validator@1)
 --   validate(input: StringView) -> StringView
-local VALIDATOR_IMPLS = {}
-function M.set_validator_impl(validate_fn)
-    VALIDATOR_IMPLS[0] = validate_fn
+local VALIDATOR_FACTORY = nil
+function M.set_validator_factory(factory)
+    VALIDATOR_FACTORY = factory
 end
 function M._register_VALIDATOR()
+    if VALIDATOR_FACTORY == nil then
+        error("polyplug: set_validator_factory(...) was not called at import time")
+    end
     local functions = {}
-    functions[0] = function(args_ptr, out_ptr)
-        local impl = VALIDATOR_IMPLS[0]
-        if impl == nil then error("polyplug: no implementation registered for function 0") end
+    functions[0] = function(instance, args_ptr, out_ptr)
+        if instance == nil or instance.validate == nil then error("polyplug: no implementation for validate") end
         local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
-        local result = impl(args_sv[0])
+        local result = instance:validate(args_sv[0])
         if out_ptr ~= 0 and result ~= nil then
             local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
             out_sv[0] = result
@@ -32,6 +34,7 @@ function M._register_VALIDATOR()
     _G._polyplug_handlers["pipeline.Validator"] = {
         contract_version = 1,
         plugin_name = "validator",
+        factory = VALIDATOR_FACTORY,
         functions = functions,
     }
 end

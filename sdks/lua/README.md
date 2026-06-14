@@ -44,22 +44,31 @@ end
 
 ### Plugin Author
 
-Each bundle runs in its own Lua VM (one VM per runtime per bundle), so module
-state inside the VM is instance state. The generated `guest/contracts` module
-owns `polyplug_init` and registration; you implement the contract functions and
-register them with the generated `set_<contract>_impl`:
+Each bundle runs in its own Lua VM (one VM per runtime per bundle). The generated
+`guest/contracts` module owns `polyplug_init` and registration; you provide an
+author factory `factory(host) -> impl` whose returned object's methods are the
+contract functions, and register it with the generated `set_<contract>_factory`.
+
+The loader owns per-instance state: it calls your factory once per
+`create_instance` (and once at load for the stateless default impl), so any state
+you put on the returned object (`self`) is **per-instance** — two live instances
+of the same contract never share state.
 
 ```lua
 local polyplug = require('polyplug_guest')
 local polyplug_abi = require('polyplug_abi')
 local contracts = require('generated.guest.contracts')
 
-local function decode(input)
-    local s = polyplug_abi.to_str(input)
-    return polyplug.alloc_string('DECODED:' .. s)
+local function new_decoder(host)
+    local self = {}
+    function self:decode(input)
+        local s = polyplug_abi.to_str(input)
+        return polyplug.alloc_string('DECODED:' .. s)
+    end
+    return self
 end
 
-contracts.set_decoder_impl(decode)
+contracts.set_decoder_factory(new_decoder)
 
 return contracts
 ```

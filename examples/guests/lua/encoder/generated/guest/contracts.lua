@@ -9,17 +9,19 @@ local M = {}
 
 -- Guest contract: encoder (pipeline.Encoder@1)
 --   encode(input: StringView) -> StringView
-local ENCODER_IMPLS = {}
-function M.set_encoder_impl(encode_fn)
-    ENCODER_IMPLS[0] = encode_fn
+local ENCODER_FACTORY = nil
+function M.set_encoder_factory(factory)
+    ENCODER_FACTORY = factory
 end
 function M._register_ENCODER()
+    if ENCODER_FACTORY == nil then
+        error("polyplug: set_encoder_factory(...) was not called at import time")
+    end
     local functions = {}
-    functions[0] = function(args_ptr, out_ptr)
-        local impl = ENCODER_IMPLS[0]
-        if impl == nil then error("polyplug: no implementation registered for function 0") end
+    functions[0] = function(instance, args_ptr, out_ptr)
+        if instance == nil or instance.encode == nil then error("polyplug: no implementation for encode") end
         local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
-        local result = impl(args_sv[0])
+        local result = instance:encode(args_sv[0])
         if out_ptr ~= 0 and result ~= nil then
             local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
             out_sv[0] = result
@@ -32,6 +34,7 @@ function M._register_ENCODER()
     _G._polyplug_handlers["pipeline.Encoder"] = {
         contract_version = 1,
         plugin_name = "encoder",
+        factory = ENCODER_FACTORY,
         functions = functions,
     }
 end

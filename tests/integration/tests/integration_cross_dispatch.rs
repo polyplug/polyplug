@@ -246,12 +246,14 @@ fn cross_call_routes_into_loaded_lua_vm() {
         .expect("load lua test bundle");
 
     let add_id: u64 = guest_contract_id("test.add", 1);
-    // Fabricate a VM instance handle: the Lua loader's dispatch is stateless and
-    // ignores instance data, so a non-null marker plus the correct contract_id
-    // is the host-side handle that selects the loaded Lua contract.
-    let mut marker: u8 = 0;
+    // A null-`data` instance handle stamped with the contract id is the host-side
+    // token for a stateless cross-call: `call_guest_method` routes by `contract_id`
+    // (it accepts null `data`), and the Lua loader's dispatch resolves a null
+    // instance handle to the contract's stateless default impl. (A fabricated
+    // non-null `data` would now be read as a live per-instance id and correctly
+    // rejected — instances are real since the per-instance work.)
     let lua_instance: GuestContractInstance = GuestContractInstance {
-        data: &mut marker as *mut u8 as *mut core::ffi::c_void,
+        data: core::ptr::null_mut(),
         contract_id: GuestContractId::from_u64(add_id),
     };
 

@@ -57,7 +57,13 @@ local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
 local polyplug_abi = require("polyplug_abi")
 
-local function impl_echo(args_ptr, out_ptr)
+-- Stateless provider: the factory returns a fresh (empty) instance per
+-- create_instance; the loader passes it back as each handler's first argument.
+local function make_peer(host)
+    return {}
+end
+
+local function impl_echo(instance, args_ptr, out_ptr)
     local in_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
     local s = polyplug_abi.to_str(in_sv[0])
     local result = "PEER:" .. s
@@ -71,6 +77,7 @@ function polyplug_init(registrar_ptr, ctx_ptr)
         ["test.peer"] = {
             contract_version = 1,
             plugin_name = "test-peer-provider-for-rust",
+            factory = make_peer,
             functions = { [0] = impl_echo },
         },
     }

@@ -1,4 +1,10 @@
 //! Integration tests for LuaLoader and the Lua VM initialization / bundle loading pipeline.
+//!
+//! Registration shape: each `_polyplug_handlers[<contract>]` entry carries a
+//! `factory(host_ptr) -> impl` (the loader calls it to build the default impl and
+//! every per-instance impl) and a `functions` table whose entries have the
+//! signature `(instance, args_ptr, out_ptr)` — the loader passes the resolved
+//! per-instance impl object as the first argument.
 
 #![allow(clippy::expect_used)]
 
@@ -60,13 +66,14 @@ file = "bundle.lua"
 fn valid_plugin_script() -> &'static [u8] {
     br#"
 local ffi = require("ffi")
-local function impl_noop(_args_ptr, _out_ptr)
+local function impl_noop(_instance, _args_ptr, _out_ptr)
 end
 function polyplug_init(_registrar_ptr, _ctx_ptr)
     _G._polyplug_handlers = {
         ["test.loader"] = {
             contract_version = 1,
             plugin_name      = "test-loader-unit",
+            factory          = function(_host) return {} end,
             functions        = { [0] = impl_noop },
         },
     }
@@ -78,13 +85,14 @@ end
 fn two_function_plugin_script() -> &'static [u8] {
     br#"
 local ffi = require("ffi")
-local function impl_a(_args_ptr, _out_ptr) end
-local function impl_b(_args_ptr, _out_ptr) end
+local function impl_a(_instance, _args_ptr, _out_ptr) end
+local function impl_b(_instance, _args_ptr, _out_ptr) end
 function polyplug_init(_registrar_ptr, _ctx_ptr)
     _G._polyplug_handlers = {
         ["test.two"] = {
             contract_version = 1,
             plugin_name      = "test-two-unit",
+            factory          = function(_host) return {} end,
             functions        = { [0] = impl_a, [1] = impl_b },
         },
     }
@@ -98,19 +106,21 @@ end
 fn two_contract_plugin_script() -> &'static [u8] {
     br#"
 local ffi = require("ffi")
-local function impl_first(_args_ptr, _out_ptr) end
-local function impl_second_a(_args_ptr, _out_ptr) end
-local function impl_second_b(_args_ptr, _out_ptr) end
+local function impl_first(_instance, _args_ptr, _out_ptr) end
+local function impl_second_a(_instance, _args_ptr, _out_ptr) end
+local function impl_second_b(_instance, _args_ptr, _out_ptr) end
 function polyplug_init(_registrar_ptr, _ctx_ptr)
     _G._polyplug_handlers = {
         ["test.first"] = {
             contract_version = 1,
             plugin_name      = "test-multi-first",
+            factory          = function(_host) return {} end,
             functions        = { [0] = impl_first },
         },
         ["test.second"] = {
             contract_version = 1,
             plugin_name      = "test-multi-second",
+            factory          = function(_host) return {} end,
             functions        = { [0] = impl_second_a, [1] = impl_second_b },
         },
     }
@@ -942,7 +952,7 @@ fn lua_reload_reinitializes_contracts() {
 /// A Lua plugin whose single function always raises a Lua error.
 fn failing_plugin_script() -> &'static [u8] {
     br#"
-local function impl_fail(_args_ptr, _out_ptr)
+local function impl_fail(_instance, _args_ptr, _out_ptr)
     error("boom from lua guest")
 end
 function polyplug_init(_registrar_ptr, _ctx_ptr)
@@ -950,6 +960,7 @@ function polyplug_init(_registrar_ptr, _ctx_ptr)
         ["test.loader"] = {
             contract_version = 1,
             plugin_name      = "test-loader-fail",
+            factory          = function(_host) return {} end,
             functions        = { [0] = impl_fail },
         },
     }
@@ -1044,7 +1055,7 @@ fn dispatch_failure_is_logged_through_host_logger() {
 fn logging_plugin_script() -> &'static [u8] {
     br#"
 local pg = require("polyplug_guest")
-local function impl_log(_args_ptr, _out_ptr)
+local function impl_log(_instance, _args_ptr, _out_ptr)
     pg.log(pg.LogLevel.Info, "guest.test-log", "hello from lua guest")
     _polyplug_log(99, "guest.test-log", "out of range level")
 end
@@ -1053,6 +1064,7 @@ function polyplug_init(_host_ptr, _ctx_ptr)
         ["test.loader"] = {
             contract_version = 1,
             plugin_name      = "test-loader-guest-log",
+            factory          = function(_host) return {} end,
             functions        = { [0] = impl_log },
         },
     }
@@ -1158,12 +1170,13 @@ fn load_init_returning_error_code_fails_load() {
     let (_dir, path) = write_temp_bundle(
         "lua_loader_init_err_code",
         br#"
-local function impl_noop(_args_ptr, _out_ptr) end
+local function impl_noop(_instance, _args_ptr, _out_ptr) end
 function polyplug_init(_reg, _ctx)
     _G._polyplug_handlers = {
         ["test.initerr"] = {
             contract_version = 1,
             plugin_name      = "test-init-err",
+            factory          = function(_host) return {} end,
             functions        = { [0] = impl_noop },
         },
     }
@@ -1192,12 +1205,13 @@ fn load_init_returning_ok_code_succeeds() {
     let (_dir, path) = write_temp_bundle(
         "lua_loader_init_ok_code",
         br#"
-local function impl_noop(_args_ptr, _out_ptr) end
+local function impl_noop(_instance, _args_ptr, _out_ptr) end
 function polyplug_init(_reg, _ctx)
     _G._polyplug_handlers = {
         ["test.initok"] = {
             contract_version = 1,
             plugin_name      = "test-init-ok",
+            factory          = function(_host) return {} end,
             functions        = { [0] = impl_noop },
         },
     }

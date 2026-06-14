@@ -290,13 +290,15 @@ fn bench_lua_log_trampoline(c: &mut Criterion) {
 fn reload_plugin_script() -> &'static [u8] {
     br#"
 local ffi = require("ffi")
-local function impl_noop(_args_ptr, _out_ptr)
+local function make_noop(_host) return {} end
+local function impl_noop(_instance, _args_ptr, _out_ptr)
 end
 function polyplug_init(_registrar_ptr, _ctx_ptr)
     _G._polyplug_handlers = {
         ["test.loader"] = {
             contract_version = 1,
             plugin_name      = "lua-reload-bench",
+            factory          = make_noop,
             functions        = { [0] = impl_noop },
         },
     }

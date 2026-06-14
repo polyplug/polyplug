@@ -9,17 +9,19 @@ local M = {}
 
 -- Guest contract: decoder (pipeline.Decoder@1)
 --   decode(input: StringView) -> StringView
-local DECODER_IMPLS = {}
-function M.set_decoder_impl(decode_fn)
-    DECODER_IMPLS[0] = decode_fn
+local DECODER_FACTORY = nil
+function M.set_decoder_factory(factory)
+    DECODER_FACTORY = factory
 end
 function M._register_DECODER()
+    if DECODER_FACTORY == nil then
+        error("polyplug: set_decoder_factory(...) was not called at import time")
+    end
     local functions = {}
-    functions[0] = function(args_ptr, out_ptr)
-        local impl = DECODER_IMPLS[0]
-        if impl == nil then error("polyplug: no implementation registered for function 0") end
+    functions[0] = function(instance, args_ptr, out_ptr)
+        if instance == nil or instance.decode == nil then error("polyplug: no implementation for decode") end
         local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
-        local result = impl(args_sv[0])
+        local result = instance:decode(args_sv[0])
         if out_ptr ~= 0 and result ~= nil then
             local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
             out_sv[0] = result
@@ -32,6 +34,7 @@ function M._register_DECODER()
     _G._polyplug_handlers["pipeline.Decoder"] = {
         contract_version = 1,
         plugin_name = "decoder",
+        factory = DECODER_FACTORY,
         functions = functions,
     }
 end
