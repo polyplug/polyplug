@@ -1203,14 +1203,59 @@ function M.to_str(sv)
     if sv.ptr == nil or sv.len == 0 then
         return ""
     end
-    return ffi.string(sv.ptr, sv.len)
+    local s = ffi.string(sv.ptr, sv.len)
+    local i, n = 1, #s
+    while i <= n do
+        local c = string.byte(s, i)
+        if c < 0x80 then
+            i = i + 1
+        else
+            local extra, min_cp, cp
+            if c >= 0xC0 and c < 0xE0 then
+                extra, min_cp, cp = 1, 0x80, c % 0x20
+            elseif c >= 0xE0 and c < 0xF0 then
+                extra, min_cp, cp = 2, 0x800, c % 0x10
+            elseif c >= 0xF0 and c < 0xF8 then
+                extra, min_cp, cp = 3, 0x10000, c % 0x08
+            else
+                error("polyplug.to_str: StringView contains invalid UTF-8 " ..
+                    "(invalid lead byte)", 2)
+            end
+            if i + extra > n then
+                error("polyplug.to_str: StringView contains invalid UTF-8 " ..
+                    "(truncated sequence)", 2)
+            end
+            for k = 1, extra do
+                local cc = string.byte(s, i + k)
+                if cc < 0x80 or cc >= 0xC0 then
+                    error("polyplug.to_str: StringView contains invalid UTF-8 " ..
+                        "(bad continuation byte)", 2)
+                end
+                cp = cp * 0x40 + (cc % 0x40)
+            end
+            if cp < min_cp or cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF) then
+                error("polyplug.to_str: StringView contains invalid UTF-8 " ..
+                    "(overlong, surrogate, or out-of-range code point)", 2)
+            end
+            i = i + extra + 1
+        end
+    end
+    return s
 end
 
+--- Check if StringView starts with prefix.
+-- @param sv StringView from polyplug ABI
+-- @param prefix string Prefix string to check for
+-- @return boolean True if the string starts with the prefix
 function M.starts_with(sv, prefix)
     local s = M.to_str(sv)
     return s:sub(1, #prefix) == prefix
 end
 
+--- Check if StringView ends with suffix.
+-- @param sv StringView from polyplug ABI
+-- @param suffix string Suffix string to check for
+-- @return boolean True if the string ends with the suffix
 function M.ends_with(sv, suffix)
     local s = M.to_str(sv)
     if #suffix > #s then
@@ -1219,6 +1264,10 @@ function M.ends_with(sv, suffix)
     return s:sub(-#suffix) == suffix
 end
 
+--- Strip prefix from StringView if present.
+-- @param sv StringView from polyplug ABI
+-- @param prefix string Prefix string to strip
+-- @return string String with prefix removed if present, otherwise original
 function M.strip_prefix(sv, prefix)
     local s = M.to_str(sv)
     if s:sub(1, #prefix) == prefix then
@@ -1227,6 +1276,12 @@ function M.strip_prefix(sv, prefix)
     return s
 end
 
+--- Split StringView by a literal delimiter, keeping empty segments.
+-- The delimiter is matched literally (plain find), never as a Lua pattern.
+-- @param sv StringView from polyplug ABI
+-- @param delimiter string Literal delimiter string to split by
+-- @return table {} for a nil/empty view, { s } for a nil/empty delimiter,
+--         otherwise the segments around every occurrence (empties kept)
 function M.split(sv, delimiter)
     local s = M.to_str(sv)
     if s == "" then

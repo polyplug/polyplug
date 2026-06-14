@@ -15,7 +15,7 @@ impl DataTransformerGuestContract for Plugin {
     fn transform(&self, input: StringView) -> Result<StringView, GuestError> {
         // SAFETY: `input` is a valid StringView whose bytes stay live for the
         // duration of this call, per the ABI contract for dispatch arguments.
-        let s: &str = unsafe { to_str(&input) };
+        let s: &str = unsafe { to_str(&input) }?;
         let data: &str = s.strip_prefix("DECODED:").unwrap_or(s);
         let parts: Vec<&str> = data.split('|').collect();
         if parts.len() >= 3 {
@@ -86,7 +86,10 @@ pub unsafe extern "C" fn polyplug_test_peer_validate(
             // out slot outlives this call.
             // SAFETY: `view` is a valid UTF-8 StringView produced by the
             // validator guest, live until the peer's next arena-backed call.
-            let s: &str = unsafe { to_str(&view) };
+            let s: &str = match unsafe { to_str(&view) } {
+                Ok(s) => s,
+                Err(e) => return e.code as u32,
+            };
             match host_ctx.alloc_string(s) {
                 Ok(stable) => {
                     // SAFETY: out is non-null per this function's contract.

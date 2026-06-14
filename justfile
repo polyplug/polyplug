@@ -443,6 +443,12 @@ test-host-libs: test-host-cpp test-host-python test-host-csharp test-host-lua te
 verify-id-helpers:
     @bash examples/verify_id_helpers.sh
 
+# Cross-language runtime proof that StringView `to_str` ERRORS on a readable-but-
+# invalid UTF-8 view (owner decision item 2) in every SDK, while still decoding a
+# valid view. sdk_validator enforces the helper exists; this proves the behavior.
+verify-to-str-errors:
+    @bash examples/verify_to_str_errors.sh
+
 # Run all tests
 test: test-rust test-host-libs
     @echo ""

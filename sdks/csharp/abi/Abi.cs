@@ -1246,13 +1246,17 @@ public static class StringViewHelper
     /// <summary>
     /// Converts a StringView to a .NET string by decoding the UTF-8 bytes
     /// directly from the native pointer (no intermediate byte[] copy).
+    /// A null/zero-length view decodes to the empty string. A non-null view
+    /// whose bytes are NOT valid UTF-8 throws <see cref="DecoderFallbackException"/>
+    /// — the helper never silently substitutes replacement characters for a
+    /// readable-but-invalid view.
     /// </summary>
     public static unsafe string ToString(this StringView sv)
     {
         if (sv.Ptr == IntPtr.Zero || sv.Len == 0)
             return string.Empty;
 
-        return Encoding.UTF8.GetString((byte*)sv.Ptr, (int)sv.Len);
+        return s_strictUtf8.GetString((byte*)sv.Ptr, (int)sv.Len);
     }
 
     /// <summary>
@@ -1356,6 +1360,13 @@ public static class StringViewHelper
 
     private static readonly System.Collections.Generic.Dictionary<string, StringView> s_staticMessages =
         new System.Collections.Generic.Dictionary<string, StringView>();
+
+    // Strict UTF-8 decoder: throws DecoderFallbackException on invalid bytes
+    // instead of emitting U+FFFD replacement characters. Every StringView decode
+    // (ToString and the helpers built on it) routes through this so a
+    // readable-but-invalid view is surfaced as an error, never silently mangled.
+    private static readonly UTF8Encoding s_strictUtf8 =
+        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 }
 
 /// <summary>

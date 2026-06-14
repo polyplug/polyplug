@@ -15,7 +15,7 @@ impl PipelineDecoderGuestContract for Plugin {
     fn decode(&self, input: StringView) -> Result<StringView, GuestError> {
         // SAFETY: `input` is a valid StringView whose bytes stay live for the
         // duration of this call, per the ABI contract for dispatch arguments.
-        let s: &str = unsafe { to_str(&input) };
+        let s: &str = unsafe { to_str(&input) }?;
         let decoded: String = s.replace(',', "|");
         self.host.alloc_string(&format!("DECODED:{}", decoded))
     }

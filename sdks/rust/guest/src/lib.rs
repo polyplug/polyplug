@@ -233,10 +233,16 @@ impl core::error::Error for GuestError {}
 
 /// Convert a `StringView` to a `&str` borrowing for the view's lifetime.
 ///
+/// A null or zero-length view decodes to `Ok("")`. A non-null view whose bytes
+/// are NOT valid UTF-8 returns `Err(GuestError)` — the helper never silently
+/// substitutes `""` for a readable-but-invalid view. (A panic is not an option:
+/// these helpers run inside `extern "C"` guest dispatch, where unwinding across
+/// the C ABI boundary is undefined behaviour, so the error is surfaced as a
+/// `Result` instead.)
+///
 /// # Safety
 /// - `sv.ptr` must either be null or point to `sv.len` initialized bytes that
 ///   stay valid and immutable for the entire lifetime `'a` of the borrow.
-/// - The pointed-to bytes are expected to be UTF-8; invalid UTF-8 yields `""`.
 ///
 /// The returned `&'a str` is tied to the borrow of `sv`, so it cannot outlive
 /// the `StringView` it was derived from. This is `unsafe` because the validity
@@ -249,17 +255,23 @@ impl core::error::Error for GuestError {}
 ///
 /// let sv = StringView { ptr: b"hello".as_ptr(), len: 5 };
 /// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
-/// let s: &str = unsafe { to_str(&sv) };
+/// let s: &str = unsafe { to_str(&sv) }.expect("valid UTF-8");
 /// assert_eq!(s, "hello");
 /// ```
-pub unsafe fn to_str(sv: &StringView) -> &str {
+pub unsafe fn to_str(sv: &StringView) -> Result<&str, GuestError> {
     if sv.ptr.is_null() || sv.len == 0 {
-        return "";
+        return Ok("");
     }
     // SAFETY: sv.ptr is non-null (checked above) and sv.len is the valid length.
     // The caller guarantees, via this function's `# Safety` contract, that the
-    // pointer is valid for sv.len bytes for the lifetime 'a and points to UTF-8.
-    unsafe { core::str::from_utf8(core::slice::from_raw_parts(sv.ptr, sv.len)).unwrap_or("") }
+    // pointer is valid for sv.len bytes for the lifetime 'a.
+    match unsafe { core::str::from_utf8(core::slice::from_raw_parts(sv.ptr, sv.len)) } {
+        Ok(s) => Ok(s),
+        Err(e) => Err(GuestError {
+            code: AbiErrorCode::Generic,
+            message: format!("StringView contains invalid UTF-8: {e}"),
+        }),
+    }
 }
 
 /// Check if a `StringView` starts with the given prefix.
@@ -275,13 +287,16 @@ pub unsafe fn to_str(sv: &StringView) -> &str {
 ///
 /// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
 /// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
-/// assert!(unsafe { starts_with(&sv, "hello") });
-/// assert!(!unsafe { starts_with(&sv, "world") });
+/// assert!(unsafe { starts_with(&sv, "hello") }.expect("valid UTF-8"));
+/// assert!(!unsafe { starts_with(&sv, "world") }.expect("valid UTF-8"));
 /// ```
-pub unsafe fn starts_with(sv: &StringView, prefix: &str) -> bool {
+///
+/// Returns `Err(GuestError)` if the view's bytes are not valid UTF-8 (it decodes
+/// via [`to_str`], which validates).
+pub unsafe fn starts_with(sv: &StringView, prefix: &str) -> Result<bool, GuestError> {
     // SAFETY: forwarded to the caller via this function's `# Safety` contract.
-    let s: &str = unsafe { to_str(sv) };
-    s.starts_with(prefix)
+    let s: &str = unsafe { to_str(sv) }?;
+    Ok(s.starts_with(prefix))
 }
 
 /// Check if a `StringView` ends with the given suffix.
@@ -297,20 +312,24 @@ pub unsafe fn starts_with(sv: &StringView, prefix: &str) -> bool {
 ///
 /// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
 /// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
-/// assert!(unsafe { ends_with(&sv, "world") });
-/// assert!(!unsafe { ends_with(&sv, "hello") });
+/// assert!(unsafe { ends_with(&sv, "world") }.expect("valid UTF-8"));
+/// assert!(!unsafe { ends_with(&sv, "hello") }.expect("valid UTF-8"));
 /// ```
-pub unsafe fn ends_with(sv: &StringView, suffix: &str) -> bool {
+///
+/// Returns `Err(GuestError)` if the view's bytes are not valid UTF-8 (it decodes
+/// via [`to_str`], which validates).
+pub unsafe fn ends_with(sv: &StringView, suffix: &str) -> Result<bool, GuestError> {
     // SAFETY: forwarded to the caller via this function's `# Safety` contract.
-    let s: &str = unsafe { to_str(sv) };
-    s.ends_with(suffix)
+    let s: &str = unsafe { to_str(sv) }?;
+    Ok(s.ends_with(suffix))
 }
 
 /// Strip a prefix from a `StringView` if present.
 ///
 /// Returns the remaining string slice if the prefix was present,
 /// otherwise returns the original string. The returned slice borrows for the
-/// lifetime of `sv`.
+/// lifetime of `sv`. Returns `Err(GuestError)` if the view's bytes are not
+/// valid UTF-8 (it decodes via [`to_str`], which validates).
 ///
 /// # Safety
 /// Same contract as [`to_str`]: `sv` must point to valid, live UTF-8 bytes for
@@ -323,15 +342,15 @@ pub unsafe fn ends_with(sv: &StringView, suffix: &str) -> bool {
 ///
 /// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
 /// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
-/// assert_eq!(unsafe { strip_prefix(&sv, "hello ") }, "world");
-/// assert_eq!(unsafe { strip_prefix(&sv, "goodbye") }, "hello world");
+/// assert_eq!(unsafe { strip_prefix(&sv, "hello ") }.expect("valid UTF-8"), "world");
+/// assert_eq!(unsafe { strip_prefix(&sv, "goodbye") }.expect("valid UTF-8"), "hello world");
 /// ```
-pub unsafe fn strip_prefix<'a>(sv: &'a StringView, prefix: &str) -> &'a str {
+pub unsafe fn strip_prefix<'a>(sv: &'a StringView, prefix: &str) -> Result<&'a str, GuestError> {
     // SAFETY: forwarded to the caller via this function's `# Safety` contract.
-    let s: &'a str = unsafe { to_str(sv) };
+    let s: &'a str = unsafe { to_str(sv) }?;
     match s.strip_prefix(prefix) {
-        Some(remaining) => remaining,
-        None => s,
+        Some(remaining) => Ok(remaining),
+        None => Ok(s),
     }
 }
 
@@ -340,7 +359,9 @@ pub unsafe fn strip_prefix<'a>(sv: &'a StringView, prefix: &str) -> &'a str {
 /// Returns a vector of string slices borrowing for the lifetime of `sv`. A
 /// null or empty view returns an empty vector; an empty delimiter returns the
 /// whole string as a single element. Leading, trailing, and consecutive
-/// delimiters produce empty strings in the output.
+/// delimiters produce empty strings in the output. Returns `Err(GuestError)`
+/// if the view's bytes are not valid UTF-8 (it decodes via [`to_str`], which
+/// validates).
 ///
 /// # Safety
 /// Same contract as [`to_str`]: `sv` must point to valid, live UTF-8 bytes for
@@ -353,19 +374,19 @@ pub unsafe fn strip_prefix<'a>(sv: &'a StringView, prefix: &str) -> &'a str {
 ///
 /// let sv = StringView { ptr: b"a,b,c".as_ptr(), len: 5 };
 /// // SAFETY: `sv` borrows a live byte slice for the duration of this call.
-/// let parts: Vec<&str> = unsafe { split(&sv, ",") };
+/// let parts: Vec<&str> = unsafe { split(&sv, ",") }.expect("valid UTF-8");
 /// assert_eq!(parts, vec!["a", "b", "c"]);
 /// ```
-pub unsafe fn split<'a>(sv: &'a StringView, delimiter: &str) -> Vec<&'a str> {
+pub unsafe fn split<'a>(sv: &'a StringView, delimiter: &str) -> Result<Vec<&'a str>, GuestError> {
     // SAFETY: forwarded to the caller via this function's `# Safety` contract.
-    let s: &'a str = unsafe { to_str(sv) };
+    let s: &'a str = unsafe { to_str(sv) }?;
     if s.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     if delimiter.is_empty() {
-        return vec![s];
+        return Ok(vec![s]);
     }
-    s.split(delimiter).collect()
+    Ok(s.split(delimiter).collect())
 }
 
 #[cfg(test)]
@@ -386,7 +407,7 @@ mod tests {
             len: 5,
         };
         // SAFETY: a null view is explicitly legal input for to_str.
-        assert_eq!(unsafe { crate::to_str(&sv) }, "");
+        assert_eq!(unsafe { crate::to_str(&sv) }.ok(), Some(""));
     }
 
     #[test]
@@ -394,23 +415,52 @@ mod tests {
         let sv: StringView = view(b"x");
         let sv = StringView { len: 0, ..sv };
         // SAFETY: the view borrows a live byte slice for the duration of the call.
-        assert_eq!(unsafe { crate::to_str(&sv) }, "");
+        assert_eq!(unsafe { crate::to_str(&sv) }.ok(), Some(""));
+    }
+
+    #[test]
+    fn to_str_invalid_utf8_errors() {
+        // 0xFF is never a valid UTF-8 byte; a readable-but-invalid view must
+        // return Err, never silently yield "".
+        let sv: StringView = view(&[0x68, 0x69, 0xFF]);
+        // SAFETY: the view borrows a live byte slice for the duration of the call.
+        assert!(matches!(
+            unsafe { crate::to_str(&sv) },
+            Err(e) if e.code == polyplug_abi::AbiErrorCode::Generic
+        ));
+    }
+
+    #[test]
+    fn derived_helpers_propagate_invalid_utf8_error() {
+        let sv: StringView = view(&[0xFF, 0xFE]);
+        // SAFETY: the view borrows a live byte slice for the duration of the call.
+        assert!(unsafe { crate::starts_with(&sv, "x") }.is_err());
+        // SAFETY: same live borrow.
+        assert!(unsafe { crate::ends_with(&sv, "x") }.is_err());
+        // SAFETY: same live borrow.
+        assert!(unsafe { crate::strip_prefix(&sv, "x") }.is_err());
+        // SAFETY: same live borrow.
+        assert!(unsafe { crate::split(&sv, "|") }.is_err());
     }
 
     #[test]
     fn split_keeps_consecutive_empty_segments() {
         let sv: StringView = view(b"a||b");
         // SAFETY: the view borrows a live byte slice for the duration of the call.
-        let parts: Vec<&str> = unsafe { crate::split(&sv, "|") };
-        assert_eq!(parts, vec!["a", "", "b"]);
+        assert_eq!(
+            unsafe { crate::split(&sv, "|") }.ok(),
+            Some(vec!["a", "", "b"])
+        );
     }
 
     #[test]
     fn split_keeps_leading_and_trailing_empty_segments() {
         let sv: StringView = view(b"|a|");
         // SAFETY: the view borrows a live byte slice for the duration of the call.
-        let parts: Vec<&str> = unsafe { crate::split(&sv, "|") };
-        assert_eq!(parts, vec!["", "a", ""]);
+        assert_eq!(
+            unsafe { crate::split(&sv, "|") }.ok(),
+            Some(vec!["", "a", ""])
+        );
     }
 
     #[test]
@@ -420,23 +470,23 @@ mod tests {
             len: 0,
         };
         // SAFETY: a null view is explicitly legal input for split.
-        let parts: Vec<&str> = unsafe { crate::split(&sv, "|") };
-        assert!(parts.is_empty());
+        assert_eq!(unsafe { crate::split(&sv, "|") }.ok(), Some(Vec::new()));
     }
 
     #[test]
     fn split_empty_delimiter_returns_whole_string() {
         let sv: StringView = view(b"ab");
         // SAFETY: the view borrows a live byte slice for the duration of the call.
-        let parts: Vec<&str> = unsafe { crate::split(&sv, "") };
-        assert_eq!(parts, vec!["ab"]);
+        assert_eq!(unsafe { crate::split(&sv, "") }.ok(), Some(vec!["ab"]));
     }
 
     #[test]
     fn split_multibyte_literal_delimiter() {
         let sv: StringView = view(b"a::b::c");
         // SAFETY: the view borrows a live byte slice for the duration of the call.
-        let parts: Vec<&str> = unsafe { crate::split(&sv, "::") };
-        assert_eq!(parts, vec!["a", "b", "c"]);
+        assert_eq!(
+            unsafe { crate::split(&sv, "::") }.ok(),
+            Some(vec!["a", "b", "c"])
+        );
     }
 }

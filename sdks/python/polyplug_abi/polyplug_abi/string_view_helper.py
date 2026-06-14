@@ -10,11 +10,19 @@ from polyplug_abi.abi import StringView
 def to_str(sv: StringView) -> str:
     """Convert StringView to Python str.
 
+    A null/zero-length view decodes to ``""``. A non-null view whose bytes are
+    NOT valid UTF-8 raises ``UnicodeDecodeError`` — the strict ``bytes.decode``
+    never silently substitutes replacement characters for a readable-but-invalid
+    view.
+
     Args:
         sv: StringView from polyplug ABI
 
     Returns:
         Python string (UTF-8 decoded)
+
+    Raises:
+        UnicodeDecodeError: if the viewed bytes are not valid UTF-8.
     """
     if not sv.ptr or sv.len == 0:
         return ""

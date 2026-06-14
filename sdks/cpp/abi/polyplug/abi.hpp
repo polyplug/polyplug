@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -1196,19 +1197,62 @@ static_assert(sizeof(HostContractInterface) == 80, "HostContractInterface size m
 namespace polyplug {
 namespace abi {
 
-/// Convert StringView to std::string_view (zero-copy)
+/// Convert StringView to std::string_view (zero-copy).
+/// This is the raw byte primitive: it does NOT validate UTF-8 (it is the
+/// explicit escape hatch for callers that knowingly want the bytes). Helpers
+/// that decode — to_string / to_str / starts_with / ends_with / strip_prefix /
+/// split — validate and throw on invalid UTF-8.
 inline std::string_view to_string_view(StringView sv) noexcept {
     if (!sv.ptr || sv.len == 0) return {};
     return {reinterpret_cast<const char*>(sv.ptr), sv.len};
 }
 
-/// Convert StringView to std::string (copies data)
-inline std::string to_string(StringView sv) {
-    if (!sv.ptr || sv.len == 0) return {};
-    return {reinterpret_cast<const char*>(sv.ptr), sv.len};
+/// Returns true if every byte of `s` is part of a well-formed UTF-8 sequence
+/// (rejecting overlong forms, surrogates, and code points above U+10FFFF) —
+/// matching Rust's core::str::from_utf8 strictness. C++ has no standard UTF-8
+/// validator, so this scan is the cross-language floor.
+inline bool is_valid_utf8(std::string_view s) noexcept {
+    size_t i = 0, n = s.size();
+    while (i < n) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c < 0x80) { i++; continue; }
+        size_t extra;
+        unsigned int min_cp, cp;
+        if ((c & 0xE0) == 0xC0) { extra = 1; min_cp = 0x80; cp = c & 0x1F; }
+        else if ((c & 0xF0) == 0xE0) { extra = 2; min_cp = 0x800; cp = c & 0x0F; }
+        else if ((c & 0xF8) == 0xF0) { extra = 3; min_cp = 0x10000; cp = c & 0x07; }
+        else { return false; }
+        if (i + extra >= n) return false;
+        for (size_t k = 1; k <= extra; k++) {
+            unsigned char cc = static_cast<unsigned char>(s[i + k]);
+            if ((cc & 0xC0) != 0x80) return false;
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+        if (cp < min_cp || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return false;
+        i += extra + 1;
+    }
+    return true;
 }
 
-/// Convert StringView to std::string (alias for to_string)
+/// Throws std::runtime_error if `s` is not valid UTF-8. Used by every decoding
+/// helper so a readable-but-invalid view surfaces an error instead of mojibake.
+inline void require_utf8(std::string_view s) {
+    if (!is_valid_utf8(s)) {
+        throw std::runtime_error("polyplug: StringView contains invalid UTF-8");
+    }
+}
+
+/// Convert StringView to std::string (copies data).
+/// Throws std::runtime_error if the viewed bytes are not valid UTF-8.
+inline std::string to_string(StringView sv) {
+    if (!sv.ptr || sv.len == 0) return {};
+    std::string_view s = to_string_view(sv);
+    require_utf8(s);
+    return {s.data(), s.size()};
+}
+
+/// Convert StringView to std::string (alias for to_string).
+/// Throws std::runtime_error on invalid UTF-8.
 inline std::string to_str(StringView sv) {
     return to_string(sv);
 }
@@ -1217,8 +1261,9 @@ inline std::string to_str(StringView sv) {
 /// @param sv The input StringView.
 /// @param prefix The prefix to strip.
 /// @return std::string_view without prefix if it starts with prefix, otherwise original.
-inline std::string_view strip_prefix(StringView sv, std::string_view prefix) noexcept {
+inline std::string_view strip_prefix(StringView sv, std::string_view prefix) {
     auto s = to_string_view(sv);
+    require_utf8(s);
     if (s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix) {
         return s.substr(prefix.size());
     }
@@ -1229,8 +1274,9 @@ inline std::string_view strip_prefix(StringView sv, std::string_view prefix) noe
 /// @param sv The input StringView.
 /// @param prefix The prefix to check.
 /// @return true if string starts with prefix.
-inline bool starts_with(StringView sv, std::string_view prefix) noexcept {
+inline bool starts_with(StringView sv, std::string_view prefix) {
     auto s = to_string_view(sv);
+    require_utf8(s);
     return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
 
@@ -1238,8 +1284,9 @@ inline bool starts_with(StringView sv, std::string_view prefix) noexcept {
 /// @param sv The input StringView.
 /// @param suffix The suffix to check.
 /// @return true if string ends with suffix.
-inline bool ends_with(StringView sv, std::string_view suffix) noexcept {
+inline bool ends_with(StringView sv, std::string_view suffix) {
     auto s = to_string_view(sv);
+    require_utf8(s);
     if (s.size() < suffix.size()) return false;
     return s.substr(s.size() - suffix.size()) == suffix;
 }
@@ -1251,6 +1298,7 @@ inline bool ends_with(StringView sv, std::string_view suffix) noexcept {
 ///         delimiter, otherwise the segments around every occurrence (empties kept).
 inline std::vector<std::string_view> split(StringView sv, std::string_view delimiter) {
     auto s = to_string_view(sv);
+    require_utf8(s);
     std::vector<std::string_view> result;
     if (s.empty()) {
         return result;

@@ -15,7 +15,7 @@ impl PipelineValidatorGuestContract for Plugin {
     fn validate(&self, input: StringView) -> Result<StringView, GuestError> {
         // SAFETY: `input` is a valid StringView whose bytes stay live for the
         // duration of this call, per the ABI contract for dispatch arguments.
-        let s: &str = unsafe { to_str(&input) };
+        let s: &str = unsafe { to_str(&input) }?;
         let data: &str = s.strip_prefix("DECODED:").unwrap_or(s);
         let parts: Vec<&str> = data.split('|').collect();
         if parts.len() == 3

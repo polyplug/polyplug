@@ -119,13 +119,17 @@ public static class StringViewHelper
     /// <summary>
     /// Converts a StringView to a .NET string by decoding the UTF-8 bytes
     /// directly from the native pointer (no intermediate byte[] copy).
+    /// A null/zero-length view decodes to the empty string. A non-null view
+    /// whose bytes are NOT valid UTF-8 throws <see cref="DecoderFallbackException"/>
+    /// — the helper never silently substitutes replacement characters for a
+    /// readable-but-invalid view.
     /// </summary>
     public static unsafe string ToString(this StringView sv)
     {
         if (sv.Ptr == IntPtr.Zero || sv.Len == 0)
             return string.Empty;
 
-        return Encoding.UTF8.GetString((byte*)sv.Ptr, (int)sv.Len);
+        return s_strictUtf8.GetString((byte*)sv.Ptr, (int)sv.Len);
     }
 
     /// <summary>
@@ -229,6 +233,13 @@ public static class StringViewHelper
 
     private static readonly System.Collections.Generic.Dictionary<string, StringView> s_staticMessages =
         new System.Collections.Generic.Dictionary<string, StringView>();
+
+    // Strict UTF-8 decoder: throws DecoderFallbackException on invalid bytes
+    // instead of emitting U+FFFD replacement characters. Every StringView decode
+    // (ToString and the helpers built on it) routes through this so a
+    // readable-but-invalid view is surfaced as an error, never silently mangled.
+    private static readonly UTF8Encoding s_strictUtf8 =
+        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 }
 
 /// <summary>
@@ -414,6 +425,11 @@ const HELPER_LUA: &str = r#"
 -- Raises if given anything other than a StringView cdata or nil — most often a
 -- Lua string that was already converted (double-conversion), which would
 -- otherwise silently yield "" because a Lua string has no `.ptr` field.
+-- Raises if the viewed bytes are not valid UTF-8: LuaJIT's ffi.string copies
+-- raw bytes without checking, so a readable-but-invalid view is validated here
+-- (a manual scan — LuaJIT 5.1 has no utf8 library) and surfaced as an error
+-- rather than silently yielding mojibake. The validation is inline because the
+-- Lua helper extractor only preserves `function M.*` blocks (no module locals).
 function M.to_str(sv)
     if sv == nil then
         return ""
@@ -426,7 +442,44 @@ function M.to_str(sv)
     if sv.ptr == nil or sv.len == 0 then
         return ""
     end
-    return ffi.string(sv.ptr, sv.len)
+    local s = ffi.string(sv.ptr, sv.len)
+    local i, n = 1, #s
+    while i <= n do
+        local c = string.byte(s, i)
+        if c < 0x80 then
+            i = i + 1
+        else
+            local extra, min_cp, cp
+            if c >= 0xC0 and c < 0xE0 then
+                extra, min_cp, cp = 1, 0x80, c % 0x20
+            elseif c >= 0xE0 and c < 0xF0 then
+                extra, min_cp, cp = 2, 0x800, c % 0x10
+            elseif c >= 0xF0 and c < 0xF8 then
+                extra, min_cp, cp = 3, 0x10000, c % 0x08
+            else
+                error("polyplug.to_str: StringView contains invalid UTF-8 " ..
+                    "(invalid lead byte)", 2)
+            end
+            if i + extra > n then
+                error("polyplug.to_str: StringView contains invalid UTF-8 " ..
+                    "(truncated sequence)", 2)
+            end
+            for k = 1, extra do
+                local cc = string.byte(s, i + k)
+                if cc < 0x80 or cc >= 0xC0 then
+                    error("polyplug.to_str: StringView contains invalid UTF-8 " ..
+                        "(bad continuation byte)", 2)
+                end
+                cp = cp * 0x40 + (cc % 0x40)
+            end
+            if cp < min_cp or cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF) then
+                error("polyplug.to_str: StringView contains invalid UTF-8 " ..
+                    "(overlong, surrogate, or out-of-range code point)", 2)
+            end
+            i = i + extra + 1
+        end
+    end
+    return s
 end
 
 --- Check if StringView starts with prefix.
@@ -505,6 +558,8 @@ const HELPER_JS: &str = r#"
  * @returns The decoded string, or empty string for a null/zero-length view.
  * @throws Error when no Deno FFI environment is available — never silently
  *          returns '' for a readable view.
+ * @throws TypeError when the viewed bytes are not valid UTF-8 — the fatal
+ *          decoder never substitutes U+FFFD for a readable-but-invalid view.
  */
 export function stringViewToString(sv: StringView | null | undefined): string {
     if (!sv || sv.ptr === 0n || sv.len === 0) return '';
@@ -525,7 +580,7 @@ export function stringViewToString(sv: StringView | null | undefined): string {
     const pointer: unknown = deno.UnsafePointer.create(sv.ptr);
     if (pointer === null) return '';
     const bytes: ArrayBuffer = new deno.UnsafePointerView(pointer).getArrayBuffer(Number(sv.len));
-    return new TextDecoder().decode(bytes);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
 /**
@@ -595,19 +650,62 @@ const HELPER_CPP: &str = r#"
 namespace polyplug {
 namespace abi {
 
-/// Convert StringView to std::string_view (zero-copy)
+/// Convert StringView to std::string_view (zero-copy).
+/// This is the raw byte primitive: it does NOT validate UTF-8 (it is the
+/// explicit escape hatch for callers that knowingly want the bytes). Helpers
+/// that decode — to_string / to_str / starts_with / ends_with / strip_prefix /
+/// split — validate and throw on invalid UTF-8.
 inline std::string_view to_string_view(StringView sv) noexcept {
     if (!sv.ptr || sv.len == 0) return {};
     return {reinterpret_cast<const char*>(sv.ptr), sv.len};
 }
 
-/// Convert StringView to std::string (copies data)
-inline std::string to_string(StringView sv) {
-    if (!sv.ptr || sv.len == 0) return {};
-    return {reinterpret_cast<const char*>(sv.ptr), sv.len};
+/// Returns true if every byte of `s` is part of a well-formed UTF-8 sequence
+/// (rejecting overlong forms, surrogates, and code points above U+10FFFF) —
+/// matching Rust's core::str::from_utf8 strictness. C++ has no standard UTF-8
+/// validator, so this scan is the cross-language floor.
+inline bool is_valid_utf8(std::string_view s) noexcept {
+    size_t i = 0, n = s.size();
+    while (i < n) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c < 0x80) { i++; continue; }
+        size_t extra;
+        unsigned int min_cp, cp;
+        if ((c & 0xE0) == 0xC0) { extra = 1; min_cp = 0x80; cp = c & 0x1F; }
+        else if ((c & 0xF0) == 0xE0) { extra = 2; min_cp = 0x800; cp = c & 0x0F; }
+        else if ((c & 0xF8) == 0xF0) { extra = 3; min_cp = 0x10000; cp = c & 0x07; }
+        else { return false; }
+        if (i + extra >= n) return false;
+        for (size_t k = 1; k <= extra; k++) {
+            unsigned char cc = static_cast<unsigned char>(s[i + k]);
+            if ((cc & 0xC0) != 0x80) return false;
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+        if (cp < min_cp || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return false;
+        i += extra + 1;
+    }
+    return true;
 }
 
-/// Convert StringView to std::string (alias for to_string)
+/// Throws std::runtime_error if `s` is not valid UTF-8. Used by every decoding
+/// helper so a readable-but-invalid view surfaces an error instead of mojibake.
+inline void require_utf8(std::string_view s) {
+    if (!is_valid_utf8(s)) {
+        throw std::runtime_error("polyplug: StringView contains invalid UTF-8");
+    }
+}
+
+/// Convert StringView to std::string (copies data).
+/// Throws std::runtime_error if the viewed bytes are not valid UTF-8.
+inline std::string to_string(StringView sv) {
+    if (!sv.ptr || sv.len == 0) return {};
+    std::string_view s = to_string_view(sv);
+    require_utf8(s);
+    return {s.data(), s.size()};
+}
+
+/// Convert StringView to std::string (alias for to_string).
+/// Throws std::runtime_error on invalid UTF-8.
 inline std::string to_str(StringView sv) {
     return to_string(sv);
 }
@@ -616,8 +714,9 @@ inline std::string to_str(StringView sv) {
 /// @param sv The input StringView.
 /// @param prefix The prefix to strip.
 /// @return std::string_view without prefix if it starts with prefix, otherwise original.
-inline std::string_view strip_prefix(StringView sv, std::string_view prefix) noexcept {
+inline std::string_view strip_prefix(StringView sv, std::string_view prefix) {
     auto s = to_string_view(sv);
+    require_utf8(s);
     if (s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix) {
         return s.substr(prefix.size());
     }
@@ -628,8 +727,9 @@ inline std::string_view strip_prefix(StringView sv, std::string_view prefix) noe
 /// @param sv The input StringView.
 /// @param prefix The prefix to check.
 /// @return true if string starts with prefix.
-inline bool starts_with(StringView sv, std::string_view prefix) noexcept {
+inline bool starts_with(StringView sv, std::string_view prefix) {
     auto s = to_string_view(sv);
+    require_utf8(s);
     return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
 
@@ -637,8 +737,9 @@ inline bool starts_with(StringView sv, std::string_view prefix) noexcept {
 /// @param sv The input StringView.
 /// @param suffix The suffix to check.
 /// @return true if string ends with suffix.
-inline bool ends_with(StringView sv, std::string_view suffix) noexcept {
+inline bool ends_with(StringView sv, std::string_view suffix) {
     auto s = to_string_view(sv);
+    require_utf8(s);
     if (s.size() < suffix.size()) return false;
     return s.substr(s.size() - suffix.size()) == suffix;
 }
@@ -650,6 +751,7 @@ inline bool ends_with(StringView sv, std::string_view suffix) noexcept {
 ///         delimiter, otherwise the segments around every occurrence (empties kept).
 inline std::vector<std::string_view> split(StringView sv, std::string_view delimiter) {
     auto s = to_string_view(sv);
+    require_utf8(s);
     std::vector<std::string_view> result;
     if (s.empty()) {
         return result;

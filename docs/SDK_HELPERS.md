@@ -12,11 +12,32 @@ null-terminated). "Null view" = null `ptr` OR `len == 0`.
 
 | Method | Contract |
 |---|---|
-| `to_str` | Decode the viewed bytes as UTF-8. Null view → `""`. Never raises for a null view. |
-| `starts_with` | `to_str(sv)` starts with `prefix`. Empty prefix → `true`. Null view + non-empty prefix → `false`. |
-| `ends_with` | `to_str(sv)` ends with `suffix`. Empty suffix → `true`. Null view + non-empty suffix → `false`. |
-| `strip_prefix` | Returns the string with `prefix` removed if present, otherwise the original string. Never raises. |
-| `split` | See split rules below. |
+| `to_str` | Decode the viewed bytes as UTF-8. Null view → `""` (never errors — null is empty, not invalid). A non-null view whose bytes are NOT valid UTF-8 **errors** — see "Invalid UTF-8" below. Never silently substitutes `""` or replacement characters for a readable-but-invalid view. |
+| `starts_with` | `to_str(sv)` starts with `prefix`. Empty prefix → `true`. Null view + non-empty prefix → `false`. Errors on invalid UTF-8 (decodes via `to_str`). |
+| `ends_with` | `to_str(sv)` ends with `suffix`. Empty suffix → `true`. Null view + non-empty suffix → `false`. Errors on invalid UTF-8 (decodes via `to_str`). |
+| `strip_prefix` | Returns the string with `prefix` removed if present, otherwise the original string. Errors on invalid UTF-8 (decodes via `to_str`). |
+| `split` | See split rules below. Errors on invalid UTF-8 (decodes via `to_str`). |
+
+### Invalid UTF-8 (all languages)
+
+A readable view (non-null `ptr`, `len > 0`) whose bytes are not well-formed
+UTF-8 — rejecting overlong forms, surrogates, and code points above U+10FFFF,
+matching Rust's `core::str::from_utf8` — must surface an error, never silently
+yield `""`, U+FFFD replacement characters, or raw mojibake. The error is a
+**local helper error in the language's idiom**, NOT the ABI out-param channel:
+
+| Language | Mechanism on invalid UTF-8 |
+|---|---|
+| Rust (`sdks/rust/guest`) | `to_str` and the derived helpers return `Result<_, GuestError>` (`Err` on invalid). A panic is not used — unwinding across the `extern "C"` guest boundary is UB. |
+| Python (`sdks/python/polyplug_abi`) | `bytes.decode("utf-8")` raises `UnicodeDecodeError`. |
+| C# (`sdks/csharp/abi`) | A strict `UTF8Encoding(throwOnInvalidBytes: true)` throws `DecoderFallbackException`. |
+| C++ (`sdks/cpp/abi`) | `require_utf8` throws `std::runtime_error`. `to_string_view` is the explicit raw byte primitive and does NOT validate. |
+| Lua (`sdks/lua/abi`) | A manual UTF-8 scan (LuaJIT 5.1 has no `utf8` library) calls `error(...)`. |
+| JS (`sdks/js/abi` Deno, `sdks/js/guest` QuickJS) | A fatal `TextDecoder('utf-8', {fatal:true})` or the validating manual decoder throws a `TypeError`. |
+
+Runtime proof: `examples/verify_to_str_errors.sh` (`just verify-to-str-errors`)
+executes every SDK's real `to_str` against an invalid view and a valid view,
+asserting the invalid one errors and the valid one decodes.
 
 ## Contract / Bundle ID Contracts (ContractId)
 
@@ -71,13 +92,14 @@ the language's native read primitive:
 
 | Language | Read primitive | Allocation behaviour |
 |---|---|---|
-| Rust (`sdks/rust/guest`) | raw slice (`core::slice::from_raw_parts`) | `to_str` / `strip_prefix` return **borrowed** `&str`; `split` returns `Vec<&str>` of borrows |
-| C++ (`sdks/cpp/abi`) | `std::string_view` over `ptr/len` | `to_string_view` / `strip_prefix` / `split` are **borrowed** `string_view`s; `to_string`/`to_str` copy |
-| C# (`sdks/csharp/abi`) | `unsafe Encoding.UTF8.GetString((byte*)ptr, len)` | materializes a managed `string` per call |
+| Rust (`sdks/rust/guest`) | raw slice (`core::slice::from_raw_parts`) | `to_str` / `strip_prefix` return **borrowed** `Result<&str, GuestError>`; `split` returns `Result<Vec<&str>, GuestError>` of borrows (UTF-8 validation is a scan, not a copy — the borrow is preserved) |
+| C++ (`sdks/cpp/abi`) | `std::string_view` over `ptr/len` | `strip_prefix` / `split` are **borrowed** `string_view`s (now validating — a scan, not a copy); `to_string_view` is the raw non-validating primitive; `to_string`/`to_str` copy |
+| C# (`sdks/csharp/abi`) | `unsafe s_strictUtf8.GetString((byte*)ptr, len)` (throwing decoder) | materializes a managed `string` per call |
 | Python (`sdks/python/polyplug_abi`) | `ctypes.cast` + bytes copy | materializes a Python `str` per call |
 | Lua (`sdks/lua/abi`) | LuaJIT `ffi.string(ptr, len)` | materializes an interned Lua string per call |
 | JS guest (`sdks/js/guest`, QuickJS) | loader `readBytes` bridge + UTF-8 decode | materializes a JS string per call |
 | JS abi mirror (`sdks/js/abi`, Deno host) | `Deno.UnsafePointerView(...).getArrayBuffer` + `TextDecoder` | materializes a JS string per call; **throws** (never silently returns `""`) if no Deno FFI environment exists |
 
 A helper found making an FFI round-trip into the runtime, or silently
-returning empty on a readable view, is a defect.
+returning empty / lossy-decoding (U+FFFD) on a readable-but-invalid view
+instead of erroring, is a defect.

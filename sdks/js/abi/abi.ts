@@ -1408,6 +1408,8 @@ export const POLYPLUG_ABI_VERSION: number = 1;
  * @returns The decoded string, or empty string for a null/zero-length view.
  * @throws Error when no Deno FFI environment is available — never silently
  *          returns '' for a readable view.
+ * @throws TypeError when the viewed bytes are not valid UTF-8 — the fatal
+ *          decoder never substitutes U+FFFD for a readable-but-invalid view.
  */
 export function stringViewToString(sv: StringView | null | undefined): string {
     if (!sv || sv.ptr === 0n || sv.len === 0) return '';
@@ -1428,7 +1430,7 @@ export function stringViewToString(sv: StringView | null | undefined): string {
     const pointer: unknown = deno.UnsafePointer.create(sv.ptr);
     if (pointer === null) return '';
     const bytes: ArrayBuffer = new deno.UnsafePointerView(pointer).getArrayBuffer(Number(sv.len));
-    return new TextDecoder().decode(bytes);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
 /**

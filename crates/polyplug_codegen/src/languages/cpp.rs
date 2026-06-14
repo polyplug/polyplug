@@ -469,6 +469,7 @@ impl CodeGenerator for CppGenerator {
         header.push_str("#include <cstdint>\n");
         header.push_str("#include <cstddef>\n");
         header.push_str("#include <cstring>\n");
+        header.push_str("#include <stdexcept>\n");
         header.push_str("#include <string>\n");
         header.push_str("#include <string_view>\n");
         header.push_str("#include <vector>\n\n");

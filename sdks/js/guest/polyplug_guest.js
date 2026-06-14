@@ -262,25 +262,53 @@ function _encodeUtf8(str) {
     return new Uint8Array(out);
 }
 
+// Validating UTF-8 decoder for QuickJS, where TextDecoder is absent. Mirrors
+// the strictness of Rust's core::str::from_utf8 / the fatal TextDecoder: it
+// rejects invalid lead bytes, truncated sequences, bad continuation bytes,
+// overlong forms, surrogates, and code points above U+10FFFF, throwing a
+// TypeError so a readable-but-invalid view never decodes to mojibake.
 function _decodeUtf8(bytes) {
     let str = '';
     let i = 0;
-    while (i < bytes.length) {
+    const n = bytes.length;
+    while (i < n) {
         const b = bytes[i];
         if (b < 0x80) {
             str += String.fromCharCode(b);
             i++;
-        } else if (b < 0xE0) {
-            str += String.fromCharCode(((b & 0x1F) << 6) | (bytes[i + 1] & 0x3F));
-            i += 2;
-        } else if (b < 0xF0) {
-            str += String.fromCharCode(((b & 0x0F) << 12) | ((bytes[i + 1] & 0x3F) << 6) | (bytes[i + 2] & 0x3F));
-            i += 3;
-        } else {
-            const cp = ((b & 0x07) << 18) | ((bytes[i + 1] & 0x3F) << 12) | ((bytes[i + 2] & 0x3F) << 6) | (bytes[i + 3] & 0x3F);
-            str += String.fromCharCode(0xD800 + ((cp - 0x10000) >> 10), 0xDC00 + ((cp - 0x10000) & 0x3FF));
-            i += 4;
+            continue;
         }
+        let extra;
+        let minCp;
+        let cp;
+        if (b >= 0xC0 && b < 0xE0) {
+            extra = 1; minCp = 0x80; cp = b & 0x1F;
+        } else if (b >= 0xE0 && b < 0xF0) {
+            extra = 2; minCp = 0x800; cp = b & 0x0F;
+        } else if (b >= 0xF0 && b < 0xF8) {
+            extra = 3; minCp = 0x10000; cp = b & 0x07;
+        } else {
+            throw new TypeError('polyplug.toStr: StringView contains invalid UTF-8 (invalid lead byte)');
+        }
+        if (i + extra >= n) {
+            throw new TypeError('polyplug.toStr: StringView contains invalid UTF-8 (truncated sequence)');
+        }
+        for (let k = 1; k <= extra; k++) {
+            const cc = bytes[i + k];
+            if ((cc & 0xC0) !== 0x80) {
+                throw new TypeError('polyplug.toStr: StringView contains invalid UTF-8 (bad continuation byte)');
+            }
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+        if (cp < minCp || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+            throw new TypeError('polyplug.toStr: StringView contains invalid UTF-8 (overlong, surrogate, or out-of-range code point)');
+        }
+        if (cp < 0x10000) {
+            str += String.fromCharCode(cp);
+        } else {
+            str += String.fromCharCode(0xD800 + ((cp - 0x10000) >> 10), 0xDC00 + ((cp - 0x10000) & 0x3FF));
+        }
+        i += extra + 1;
     }
     return str;
 }
@@ -361,9 +389,12 @@ export function toStr(sv) {
         return '';
     }
     // Read bytes and decode as UTF-8 (TextDecoder is absent in QuickJS).
+    // Both paths reject invalid UTF-8 (the fatal decoder / the manual scan throw
+    // a TypeError) so a readable-but-invalid view surfaces an error rather than
+    // silently yielding U+FFFD or mojibake.
     const bytes = readBytes(ptr, sv.len);
     if (typeof TextDecoder !== 'undefined') {
-        return new TextDecoder().decode(bytes);
+        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     }
     return _decodeUtf8(bytes);
 }
