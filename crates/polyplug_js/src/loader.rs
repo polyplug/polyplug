@@ -2133,11 +2133,11 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
 
         let arg: f64 = 1234.5625;
         let mut out_val: f64 = 0.0;
+        let mut err: AbiError = AbiError::ok();
         // SAFETY: iface is non-null and was just resolved; the JS loader always
         // registers VirtualMachine dispatch, so the vm union variant is active.
         // arg/out_val are valid for the duration of the call; a null arena is
         // the documented host->alloc fallback.
-        let mut err: AbiError = AbiError::ok();
         unsafe {
             assert_eq!((*iface).dispatch_type, DispatchType::VirtualMachine);
             ((*iface).dispatch.vm.call)(

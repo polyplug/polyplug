@@ -536,8 +536,8 @@ fn test_rust_codegen_compile_and_run() {
 
     // The generated create_instance constructs the implementation via the
     // author factory and carries it in instance.data — no static storage.
-    // SAFETY: host_abi outlives the instance; create_instance is the generated factory thunk.
     let mut instance: GuestContractInstance = GuestContractInstance::null();
+    // SAFETY: host_abi outlives the instance; create_instance is the generated factory thunk.
     unsafe {
         (interface.create_instance)(
             &host_abi as *const HostApi,
@@ -550,10 +550,10 @@ fn test_rust_codegen_compile_and_run() {
         "create_instance must produce a non-null instance payload"
     );
 
+    let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid AddArgs; out is a valid u32 location; instance
     // was created by the generated create_instance above; call_result receives
     // the AbiError through the trailing out-param.
-    let mut call_result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
             instance,

@@ -423,8 +423,8 @@ mod tests {
         // 0xFF is never a valid UTF-8 byte; a readable-but-invalid view must
         // return Err, never silently yield "".
         let sv: StringView = view(&[0x68, 0x69, 0xFF]);
-        // SAFETY: the view borrows a live byte slice for the duration of the call.
         assert!(matches!(
+            // SAFETY: the view borrows a live byte slice for the duration of the call.
             unsafe { crate::to_str(&sv) },
             Err(e) if e.code == polyplug_abi::AbiErrorCode::Generic
         ));
@@ -446,8 +446,8 @@ mod tests {
     #[test]
     fn split_keeps_consecutive_empty_segments() {
         let sv: StringView = view(b"a||b");
-        // SAFETY: the view borrows a live byte slice for the duration of the call.
         assert_eq!(
+            // SAFETY: the view borrows a live byte slice for the duration of the call.
             unsafe { crate::split(&sv, "|") }.ok(),
             Some(vec!["a", "", "b"])
         );
@@ -456,8 +456,8 @@ mod tests {
     #[test]
     fn split_keeps_leading_and_trailing_empty_segments() {
         let sv: StringView = view(b"|a|");
-        // SAFETY: the view borrows a live byte slice for the duration of the call.
         assert_eq!(
+            // SAFETY: the view borrows a live byte slice for the duration of the call.
             unsafe { crate::split(&sv, "|") }.ok(),
             Some(vec!["", "a", ""])
         );
@@ -483,8 +483,8 @@ mod tests {
     #[test]
     fn split_multibyte_literal_delimiter() {
         let sv: StringView = view(b"a::b::c");
-        // SAFETY: the view borrows a live byte slice for the duration of the call.
         assert_eq!(
+            // SAFETY: the view borrows a live byte slice for the duration of the call.
             unsafe { crate::split(&sv, "::") }.ok(),
             Some(vec!["a", "b", "c"])
         );

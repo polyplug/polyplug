@@ -358,8 +358,8 @@ fn test_misaligned_buffer_fill() {
         // SAFETY: fn_ptr is cast to the out-param dispatch signature.
         unsafe { core::mem::transmute(fn_ptr) };
 
-    // SAFETY: args is a valid FillArgs, out is a valid u32 location; &mut call_result is valid.
     let mut call_result: AbiError = AbiError::ok();
+    // SAFETY: args is a valid FillArgs, out is a valid u32 location; &mut call_result is valid.
     unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
@@ -406,8 +406,8 @@ fn test_stringview_cross_thread_echo() {
                 // SAFETY: fn_ptr is cast to the out-param dispatch signature.
                 unsafe { core::mem::transmute(fn_ptr) };
 
-            // SAFETY: input_sv is valid for the call; out_sv is a valid output location; &mut is valid.
             let mut call_result: AbiError = AbiError::ok();
+            // SAFETY: input_sv is valid for the call; out_sv is a valid output location; &mut is valid.
             unsafe {
                 dispatch_fn(
                     GuestContractInstance::null(),
@@ -467,8 +467,8 @@ fn test_buffer_cap_less_than_len() {
         // SAFETY: fn_ptr is cast to the out-param dispatch signature.
         unsafe { core::mem::transmute(fn_ptr) };
 
-    // SAFETY: args is a valid FillArgs, out is a valid u32 location; &mut call_result is valid.
     let mut call_result: AbiError = AbiError::ok();
+    // SAFETY: args is a valid FillArgs, out is a valid u32 location; &mut call_result is valid.
     unsafe {
         dispatch_fn(
             GuestContractInstance::null(),

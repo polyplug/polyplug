@@ -170,9 +170,9 @@ fn run_one_cycle() {
     for i in 0..DISPATCHES_PER_CYCLE {
         let args: AddArgs = AddArgs { a: i, b: 1 };
         let mut out: u32 = u32::MAX;
+        let mut rc: AbiError = AbiError::ok();
         // SAFETY: args/out are valid and correctly typed; null stateless instance,
         // exactly as the native dispatch ABI expects for a stateless contract.
-        let mut rc: AbiError = AbiError::ok();
         unsafe {
             dispatch_fn(
                 GuestContractInstance::null(),
