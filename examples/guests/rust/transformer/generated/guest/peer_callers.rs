@@ -130,11 +130,10 @@ impl PipelineValidatorContractPeer {
         self.arena.reset();
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
-        let mut out_val: StringView = unsafe { core::mem::zeroed() };
+        let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
-        let out_ptr: *mut core::ffi::c_void =
-            &mut out_val as *mut StringView as *mut core::ffi::c_void;
+        let out_ptr: *mut core::ffi::c_void = out_val.as_mut_ptr() as *mut core::ffi::c_void;
         // SAFETY: host is non-null (set in resolve()); self.host is stored for the
         // lifetime of the wrapper. instance and args_ptr/out_ptr match the ABI.
         let mut err: AbiError = AbiError::ok();
@@ -170,6 +169,9 @@ impl PipelineValidatorContractPeer {
                 message,
             });
         }
+        // SAFETY: dispatch returned AbiErrorCode::Ok, so it wrote a valid value
+        // through the out-pointer into this slot.
+        let out_val: StringView = unsafe { out_val.assume_init() };
         Ok(out_val)
     }
 }

@@ -1567,12 +1567,6 @@ fn generate_host_fn_caller(
     emit_out_setup(out, &func.returns);
 
     // The unsafe call
-    let out_arg: &str = if func.returns.is_some() {
-        "&mut out_val as *mut {ret_ty} as *mut ()"
-    } else {
-        "core::ptr::null_mut()"
-    };
-
     let param_ty_comment: String = args_type_comment(func, contract_struct);
     let ret_ty_comment: String = ret_type.clone();
 
@@ -1582,7 +1576,7 @@ fn generate_host_fn_caller(
     out.push_str("        // Enforced by the generated caller contract.\n");
     out.push_str("        let out_ptr: *mut () = ");
     if func.returns.is_some() {
-        out.push_str(&format!("&mut out_val as *mut {ret_type} as *mut ();\n"));
+        out.push_str("out_val.as_mut_ptr() as *mut ();\n");
     } else {
         out.push_str("core::ptr::null_mut();\n");
     }
@@ -1663,12 +1657,12 @@ fn generate_host_fn_caller(
 
     // Return
     if func.returns.is_some() {
+        emit_out_assume_init(out, &func.returns);
         out.push_str("        Ok(out_val)\n");
     } else {
         out.push_str("        Ok(())\n");
     }
 
-    let _ = out_arg; // suppress unused warning
     out.push_str("    }\n\n");
     Ok(())
 }
@@ -1746,12 +1740,35 @@ fn emit_args_setup(out: &mut String, func: &ResolvedFunction, contract_struct: &
     ));
 }
 
-/// Emit the `out_val` / `out_ptr` setup (only when there is a return type).
+/// Emit the `out_val` setup (only when there is a return type).
+///
+/// The slot is `MaybeUninit` rather than a zeroed value: a zeroed enum
+/// discriminant is instant UB for any contract enum lacking a `0` variant, and
+/// the dispatch writes the real value through the out-pointer anyway. The caller
+/// `assume_init`s only on the success path (see `emit_out_assume_init`); on the
+/// error path the slot is dropped uninitialized, which is sound for
+/// `MaybeUninit`.
 fn emit_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
     if let Some(ret_ty) = returns {
         let ty_name: String = rust_type_name(ret_ty);
         out.push_str(&format!(
-            "        let mut out_val: {ty_name} = unsafe {{ core::mem::zeroed() }};\n"
+            "        let mut out_val: core::mem::MaybeUninit<{ty_name}> = core::mem::MaybeUninit::uninit();\n"
+        ));
+    }
+}
+
+/// Emit the success-path `assume_init` that materializes the dispatched return
+/// value, shadowing the `MaybeUninit` slot so downstream read-back code sees a
+/// concrete `T`. Must be emitted only after the error check has returned early.
+fn emit_out_assume_init(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+    if let Some(ret_ty) = returns {
+        let ty_name: String = rust_type_name(ret_ty);
+        out.push_str(
+            "        // SAFETY: dispatch returned AbiErrorCode::Ok, so it wrote a valid value\n",
+        );
+        out.push_str("        // through the out-pointer into this slot.\n");
+        out.push_str(&format!(
+            "        let out_val: {ty_name} = unsafe {{ out_val.assume_init() }};\n"
         ));
     }
 }
@@ -2919,6 +2936,8 @@ fn generate_guest_host_contract_method(
     out.push_str("            return Err(HostContractError { code: AbiErrorCode::from_u32(err.code), message });\n");
     out.push_str("        }\n\n");
 
+    emit_out_assume_init(out, &func.returns);
+
     match &func.returns {
         Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) => {
             // A null/empty StringView (ptr=null, len=0) is a legal ABI return; constructing a
@@ -3115,12 +3134,14 @@ fn emit_guest_host_contract_args_setup(
 fn emit_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
     if let Some(ret_ty) = returns {
         let ty_name: String = rust_type_name(ret_ty);
+        // MaybeUninit, not zeroed: a zeroed enum discriminant is UB for any
+        // contract enum without a `0` variant. The dispatch fills the slot
+        // through `out_ptr`; the caller `assume_init`s only after the success
+        // check (see `emit_out_assume_init`).
         out.push_str(&format!(
-            "        let mut out_val: {ty_name} = unsafe {{ core::mem::zeroed() }};\n"
+            "        let mut out_val: core::mem::MaybeUninit<{ty_name}> = core::mem::MaybeUninit::uninit();\n"
         ));
-        out.push_str(&format!(
-            "        let out_ptr: *mut () = &mut out_val as *mut {ty_name} as *mut ();\n"
-        ));
+        out.push_str("        let out_ptr: *mut () = out_val.as_mut_ptr() as *mut ();\n");
     } else {
         out.push_str("        let out_ptr: *mut () = core::ptr::null_mut();\n");
     }
@@ -3484,9 +3505,7 @@ fn generate_peer_fn_caller(out: &mut String, func: &ResolvedFunction, struct_nam
     out.push_str("        // Enforced by the generated caller contract.\n");
     out.push_str("        let out_ptr: *mut core::ffi::c_void = ");
     if func.returns.is_some() {
-        out.push_str(&format!(
-            "&mut out_val as *mut {ret_type} as *mut core::ffi::c_void;\n"
-        ));
+        out.push_str("out_val.as_mut_ptr() as *mut core::ffi::c_void;\n");
     } else {
         out.push_str("core::ptr::null_mut();\n");
     }
@@ -3540,6 +3559,7 @@ fn generate_peer_fn_caller(out: &mut String, func: &ResolvedFunction, struct_nam
 
     // Return
     if func.returns.is_some() {
+        emit_out_assume_init(out, &func.returns);
         out.push_str("        Ok(out_val)\n");
     } else {
         out.push_str("        Ok(())\n");
@@ -4667,6 +4687,24 @@ mod tests {
             "missing decode method: {content}"
         );
 
+        // #34: the return out-slot is MaybeUninit, never `core::mem::zeroed`.
+        // A zeroed enum discriminant is instant UB for any contract enum without
+        // a `0` variant; the generator is type-agnostic, so the same out-slot
+        // path serves every return type (proven for an enum return in
+        // `peer_caller_out_slot_is_maybeuninit_for_enum_return`).
+        assert!(
+            content.contains("core::mem::MaybeUninit<u32>"),
+            "peer caller out-slot must be MaybeUninit, not zeroed: {content}"
+        );
+        assert!(
+            content.contains("out_val.assume_init()"),
+            "peer caller must assume_init the return value on the success path: {content}"
+        );
+        assert!(
+            !content.contains("core::mem::zeroed"),
+            "peer caller must never fabricate a return value via core::mem::zeroed: {content}"
+        );
+
         // struct for contract_a (NOT a declared dep) must NOT appear
         assert!(
             !content.contains("PipelineEncoderContractPeer"),
@@ -4686,6 +4724,108 @@ mod tests {
                 .contains("pub mod peer_callers;"),
             "guest/mod.rs must declare peer_callers: {}",
             mod_file.expect("mod.rs").content
+        );
+    }
+
+    #[test]
+    fn peer_caller_out_slot_is_maybeuninit_for_enum_return() {
+        // #34: a peer caller whose return type is an enum WITHOUT a `0` variant
+        // must never default-initialize the out-slot via `core::mem::zeroed` — a
+        // zeroed invalid discriminant is instant UB. The slot must be
+        // `MaybeUninit`, filled by dispatch, then `assume_init`ed only on success.
+        let status_enum: crate::ir::EnumDef = crate::ir::EnumDef {
+            name: "Status".to_owned(),
+            repr: crate::ir::ReprType::U32,
+            bitflag: false,
+            variants: vec![
+                crate::ir::EnumVariant {
+                    name: "Active".to_owned(),
+                    value: "1".to_owned(),
+                },
+                crate::ir::EnumVariant {
+                    name: "Inactive".to_owned(),
+                    value: "2".to_owned(),
+                },
+            ],
+        };
+
+        let decoder: ResolvedContract = ResolvedContract {
+            name: "pipeline.decoder".to_owned(),
+            contract_id: 0x1111_2222_3333_4444_u64,
+            version: crate::ir::Version {
+                major: 2,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "decode".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "data".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                }],
+                returns: Some(ResolvedTypeRef::UserDefined("Status".to_owned())),
+            }],
+        };
+
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![status_enum],
+            contracts: vec![decoder],
+            host_contracts: vec![],
+            bundle: Some(crate::ir::ResolvedBundle {
+                name: "test.bundle".to_owned(),
+                version: crate::ir::Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                loader: "native".to_owned(),
+                file: polyplug_codegen::ResolvedBundleFile::Single("test.so".to_owned()),
+                plugins: vec![crate::ir::ResolvedPlugin {
+                    name: "test_plugin".to_owned(),
+                    version: crate::ir::Version {
+                        major: 1,
+                        minor: 0,
+                        patch: 0,
+                    },
+                    implements: vec![],
+                    optional: vec![],
+                }],
+                bundle_id: 0xDEAD_BEEF_CAFE_BABE_u64,
+                dependencies: vec![crate::ir::ResolvedDependency::ByContract {
+                    contract: "pipeline.decoder".to_owned(),
+                    contract_id: 0x1111_2222_3333_4444_u64,
+                    min_version: 2,
+                }],
+                needs_reinit_on_dep_reload: false,
+            }),
+        };
+
+        let generator: RustGenerator = RustGenerator;
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+
+        let content: &str = &files
+            .files
+            .iter()
+            .find(|f: &&GeneratedFile| f.path == std::path::Path::new("guest/peer_callers.rs"))
+            .expect("peer_callers.rs should be emitted")
+            .content;
+
+        assert!(
+            content.contains("core::mem::MaybeUninit<Status>"),
+            "enum-return out-slot must be MaybeUninit<Status>: {content}"
+        );
+        assert!(
+            content.contains("out_val.assume_init()"),
+            "enum-return caller must assume_init on the success path: {content}"
+        );
+        assert!(
+            !content.contains("core::mem::zeroed"),
+            "enum-return caller must never fabricate a discriminant via core::mem::zeroed: {content}"
         );
     }
 
