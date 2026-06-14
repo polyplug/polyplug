@@ -1,11 +1,11 @@
-import { openPolyplug, runtimeNew, contractId, NULL_HANDLE } from "../../sdks/js/host/mod.js";
+import { openPolyplug, runtimeNew, guestContractId, NULL_HANDLE } from "../../sdks/js/host/mod.js";
 import { registerNativeLoader } from "../../sdks/js/loaders/native/mod.ts";
 
 const POLYPLUG_SO = Deno.env.get("POLYPLUG_SO") ?? "";
 const TEST_PLUGIN_DIR = Deno.env.get("TEST_PLUGIN_DIR") ?? "";
 // Compute the canonical guest contract ID rather than hardcoding it, so the
 // fixture stays in sync with the runtime's FNV-1a contract-id scheme.
-const TEST_ADD_CONTRACT_ID = contractId("test.add", 1);
+const TEST_ADD_CONTRACT_ID = guestContractId("test.add", 1);
 const NATIVE_AVAILABLE = Deno.env.get("POLYPLUG_NATIVE_LIB") !== undefined;
 
 if (!POLYPLUG_SO) {

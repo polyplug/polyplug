@@ -21,9 +21,9 @@ public struct AddArgs
 
 public static class Plugin
 {
-    // test.add contract ID = FNV-1a("guest_contract:test.add@1") = 0x40244DF59FCBECB6
-    // Must match polyplug_utils::guest_contract_id("test.add", 1).
-    private const ulong TEST_ADD_CONTRACT_ID = 0x40244DF59FCBECB6UL;
+    // test.add contract ID, computed via the canonical SDK helper rather than a
+    // hardcoded literal (mirrors polyplug_utils::guest_contract_id("test.add", 1)).
+    private static readonly ulong TEST_ADD_CONTRACT_ID = ContractId.GuestContractId("test.add", 1);
 
     private static readonly nint[] s_functions = new nint[4];
     private static GuestContractInterface s_interface;

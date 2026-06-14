@@ -27,6 +27,12 @@ pub struct Config {
     /// Target SDK paths: language -> list of file paths, resolved relative to
     /// the config file's parent directory.
     pub targets: HashMap<String, Vec<PathBuf>>,
+    /// Per-method-group target overrides: language -> method group name -> list
+    /// of file paths. When a group has an entry here for a language, it replaces
+    /// `targets` for that group only (a helper group whose implementation lives
+    /// in a different file than the default `targets` SDK file). Groups absent
+    /// from this map fall back to `targets`.
+    pub method_targets: HashMap<String, HashMap<String, Vec<PathBuf>>>,
     /// Golden enum set: enum name -> variant name -> exact value.
     pub enums: HashMap<String, BTreeMap<String, i64>>,
     /// Enum mirror targets: language -> enum name -> list of file paths,
@@ -47,6 +53,8 @@ struct ConfigYaml {
     methods: HashMap<String, Vec<String>>,
     naming: HashMap<String, String>,
     targets: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    method_targets: HashMap<String, HashMap<String, Vec<String>>>,
     #[serde(default)]
     enums: HashMap<String, VariantEntriesYaml>,
     #[serde(default)]
@@ -127,8 +135,10 @@ pub fn parse_config(path: &Path) -> Result<Config, ValidatorError> {
     validate_methods(&yaml.methods)?;
     validate_language_keys("targets", yaml.targets.keys())?;
     validate_language_keys("naming", yaml.naming.keys())?;
+    validate_language_keys("method_targets", yaml.method_targets.keys())?;
     validate_language_keys("enum_targets", yaml.enum_targets.keys())?;
     validate_language_keys("struct_targets", yaml.struct_targets.keys())?;
+    validate_method_targets(&yaml.methods, &yaml.method_targets)?;
     let enums: HashMap<String, BTreeMap<String, i64>> = validate_enums(&yaml.enums)?;
     validate_enum_targets(&enums, &yaml.enum_targets)?;
     validate_structs(&yaml.structs)?;
@@ -142,6 +152,21 @@ pub fn parse_config(path: &Path) -> Result<Config, ValidatorError> {
         .into_iter()
         .map(|(language, files)| {
             let resolved: Vec<PathBuf> = files.iter().map(|f| base_dir.join(f)).collect();
+            (language, resolved)
+        })
+        .collect();
+
+    let method_targets: HashMap<String, HashMap<String, Vec<PathBuf>>> = yaml
+        .method_targets
+        .into_iter()
+        .map(|(language, groups)| {
+            let resolved: HashMap<String, Vec<PathBuf>> = groups
+                .into_iter()
+                .map(|(group_name, files)| {
+                    let paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(f)).collect();
+                    (group_name, paths)
+                })
+                .collect();
             (language, resolved)
         })
         .collect();
@@ -181,6 +206,7 @@ pub fn parse_config(path: &Path) -> Result<Config, ValidatorError> {
         methods: yaml.methods,
         naming,
         targets,
+        method_targets,
         enums,
         enum_targets,
         structs: yaml.structs,
@@ -272,6 +298,25 @@ fn validate_structs(structs: &HashMap<String, Vec<String>>) -> Result<(), Valida
                 return Err(ValidatorError::DuplicateField {
                     struct_name: struct_name.clone(),
                     field: field.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reject `method_targets:` entries referencing a method group absent from
+/// `methods:`.
+fn validate_method_targets(
+    methods: &HashMap<String, Vec<String>>,
+    method_targets: &HashMap<String, HashMap<String, Vec<String>>>,
+) -> Result<(), ValidatorError> {
+    for (language, groups) in method_targets {
+        for group_name in groups.keys() {
+            if !methods.contains_key(group_name) {
+                return Err(ValidatorError::UnknownMethodGroup {
+                    language: language.clone(),
+                    group: group_name.clone(),
                 });
             }
         }
@@ -393,11 +438,27 @@ pub fn filter_to_struct(config: &Config, struct_name: Option<&str>) -> Config {
                 })
                 .unwrap_or_default();
 
+            // Keep only the named group's per-language target overrides so the
+            // single-group validation resolves the same files it would in a full
+            // run.
+            let method_targets: HashMap<String, HashMap<String, Vec<PathBuf>>> = config
+                .method_targets
+                .iter()
+                .filter_map(|(language, groups)| {
+                    groups.get(name).map(|files| {
+                        let mut map: HashMap<String, Vec<PathBuf>> = HashMap::new();
+                        map.insert(name.to_string(), files.clone());
+                        (language.clone(), map)
+                    })
+                })
+                .collect();
+
             Config {
                 version: config.version,
                 methods,
                 naming: config.naming.clone(),
                 targets: config.targets.clone(),
+                method_targets,
                 enums: config.enums.clone(),
                 enum_targets: config.enum_targets.clone(),
                 structs,
@@ -668,6 +729,7 @@ methods:
             methods,
             naming: HashMap::new(),
             targets: HashMap::new(),
+            method_targets: HashMap::new(),
             enums: HashMap::new(),
             enum_targets: HashMap::new(),
             structs: HashMap::new(),
@@ -991,6 +1053,7 @@ struct_targets:
             methods: HashMap::new(),
             naming: HashMap::new(),
             targets: HashMap::new(),
+            method_targets: HashMap::new(),
             enums: HashMap::new(),
             enum_targets: HashMap::new(),
             structs,

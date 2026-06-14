@@ -436,6 +436,13 @@ test-host-js:
 # Run all host-lib tests
 test-host-libs: test-host-cpp test-host-python test-host-csharp test-host-lua test-host-js
 
+# Cross-language parity gate for the contract/bundle ID helpers: every SDK's
+# FNV-1a 64-bit implementation must compute byte-identical hashes (a missing
+# toolchain is skipped loudly, a disagreeing one fails). sdk_validator enforces
+# the helpers exist; this proves they agree.
+verify-id-helpers:
+    @bash examples/verify_id_helpers.sh
+
 # Run all tests
 test: test-rust test-host-libs
     @echo ""

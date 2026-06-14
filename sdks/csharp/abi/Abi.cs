@@ -1410,4 +1410,36 @@ public sealed class PinnedUtf8 : IDisposable
         }
     }
 }
+/// <summary>
+/// FNV-1a 64-bit hashing and contract/bundle ID computation helpers.
+/// Mirrors the canonical scheme in crates/polyplug_utils.
+/// </summary>
+public static class ContractId
+{
+    private const ulong FnvOffset = 0xCBF29CE484222325UL;
+    private const ulong FnvPrime = 0x00000100000001B3UL;
+
+    /// <summary>Compute the FNV-1a 64-bit hash of the UTF-8 bytes of <paramref name="data"/>.</summary>
+    public static ulong Fnv1a64(string data)
+    {
+        ulong hash = FnvOffset;
+        foreach (byte b in System.Text.Encoding.UTF8.GetBytes(data))
+        {
+            hash ^= b;
+            hash *= FnvPrime;
+        }
+        return hash;
+    }
+
+    /// <summary>Compute a bundle ID from its name using FNV-1a 64-bit.</summary>
+    public static ulong BundleId(string name) => Fnv1a64(name);
+
+    /// <summary>Compute a guest contract ID from name and major version.</summary>
+    public static ulong GuestContractId(string name, uint majorVersion) =>
+        Fnv1a64($"guest_contract:{name}@{majorVersion}");
+
+    /// <summary>Compute a host contract ID from name and major version.</summary>
+    public static ulong HostContractId(string name, uint majorVersion) =>
+        Fnv1a64($"host_contract:{name}@{majorVersion}");
+}
 }

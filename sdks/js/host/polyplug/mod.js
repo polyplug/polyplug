@@ -253,7 +253,7 @@ export function fnv1a64(data) {
  * @param {number} majorVersion - Major version number
  * @returns {bigint} 64-bit contract ID
  */
-export function contractId(name, majorVersion) {
+export function guestContractId(name, majorVersion) {
     return fnv1a64(`guest_contract:${name}@${majorVersion}`);
 }
 

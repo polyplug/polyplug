@@ -364,6 +364,47 @@ def bundle_id(name: str) -> int:
     return fnv1a_64(name.encode("utf-8"))
 "#;
 
+/// C# contract-ID / hash helper class merged into the generated Abi.cs namespace.
+///
+/// Provenance: mirrors the canonical FNV-1a 64-bit scheme implemented in
+/// `crates/polyplug_utils/src/{lib,guest_contract_id,host_contract_id,bundle_id}.rs`.
+/// Method names are PascalCase to match the C# naming convention validated by
+/// `sdk_validator.yaml` (`fnv1a_64` -> `Fnv1a64`, etc.).
+const HELPER_CSHARP_HASHING: &str = r#"
+/// <summary>
+/// FNV-1a 64-bit hashing and contract/bundle ID computation helpers.
+/// Mirrors the canonical scheme in crates/polyplug_utils.
+/// </summary>
+public static class ContractId
+{
+    private const ulong FnvOffset = 0xCBF29CE484222325UL;
+    private const ulong FnvPrime = 0x00000100000001B3UL;
+
+    /// <summary>Compute the FNV-1a 64-bit hash of the UTF-8 bytes of <paramref name="data"/>.</summary>
+    public static ulong Fnv1a64(string data)
+    {
+        ulong hash = FnvOffset;
+        foreach (byte b in System.Text.Encoding.UTF8.GetBytes(data))
+        {
+            hash ^= b;
+            hash *= FnvPrime;
+        }
+        return hash;
+    }
+
+    /// <summary>Compute a bundle ID from its name using FNV-1a 64-bit.</summary>
+    public static ulong BundleId(string name) => Fnv1a64(name);
+
+    /// <summary>Compute a guest contract ID from name and major version.</summary>
+    public static ulong GuestContractId(string name, uint majorVersion) =>
+        Fnv1a64($"guest_contract:{name}@{majorVersion}");
+
+    /// <summary>Compute a host contract ID from name and major version.</summary>
+    public static ulong HostContractId(string name, uint majorVersion) =>
+        Fnv1a64($"host_contract:{name}@{majorVersion}");
+}
+"#;
+
 /// Lua helper function definitions (function M.* only, no module boilerplate).
 /// Merged into abi.lua before `return M`.
 const HELPER_LUA: &str = r#"
@@ -1162,10 +1203,13 @@ impl TargetLang {
 /// across consecutive rebuilds without relying on external helper files.
 fn get_inline_helpers(lang: TargetLang) -> Vec<(String, String)> {
     match lang {
-        TargetLang::CSharp => vec![(
-            "StringViewHelper.cs".to_string(),
-            HELPER_CSHARP_STRING_VIEW.to_string(),
-        )],
+        TargetLang::CSharp => vec![
+            (
+                "StringViewHelper.cs".to_string(),
+                HELPER_CSHARP_STRING_VIEW.to_string(),
+            ),
+            ("Hashing.cs".to_string(), HELPER_CSHARP_HASHING.to_string()),
+        ],
         TargetLang::Lua => vec![
             ("string_view_helper.lua".to_string(), HELPER_LUA.to_string()),
             ("hashing.lua".to_string(), HELPER_LUA_HASHING.to_string()),

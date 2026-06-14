@@ -131,6 +131,17 @@ pub enum ValidatorError {
         variant: String,
     },
 
+    /// A `method_targets:` entry references a method group absent from `methods:`.
+    #[error(
+        "unknown method group '{group}' in method_targets for language '{language}' (add it to the `methods:` section)"
+    )]
+    UnknownMethodGroup {
+        /// The language whose targets reference the group.
+        language: String,
+        /// The method group name missing from `methods:`.
+        group: String,
+    },
+
     /// A `struct_targets:` entry references a struct absent from `structs:`.
     #[error(
         "unknown struct '{struct_name}' in struct_targets for language '{language}' (add it to the `structs:` section)"

@@ -8,7 +8,7 @@
  * bundle provides (mirroring the C++ reference host's discovery output).
  */
 
-import { openPolyplug, runtimeNew, bundleId, contractId } from "../../../sdks/js/host/mod.js";
+import { openPolyplug, runtimeNew, bundleId, guestContractId } from "../../../sdks/js/host/mod.js";
 import { registerNativeLoader } from "../../../sdks/js/loaders/native/mod.ts";
 import { registerLuaLoader } from "../../../sdks/js/loaders/lua/mod.ts";
 import { registerJsLoader } from "../../../sdks/js/loaders/js/mod.ts";
@@ -116,7 +116,7 @@ for (const bundle of loaded) {
     if (at === -1) continue;
     const contractName = contract.slice(0, at);
     const major = Number(contract.slice(at + 1));
-    const cid = contractId(contractName, major);
+    const cid = guestContractId(contractName, major);
     console.log(
       `[${bundle.name}] provides ${contract} ` +
       `(bundle_id=0x${hex16(bid)}, contract_id=0x${hex16(cid)})`

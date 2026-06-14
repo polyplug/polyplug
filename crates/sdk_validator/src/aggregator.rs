@@ -429,9 +429,15 @@ pub fn aggregate_results(
 
         for validator in validators.iter_mut() {
             let language: &'static str = validator.language_name();
+            // A method group may override the default `targets` file list when
+            // its implementation lives elsewhere (e.g. the contract-ID helpers
+            // live in a different file than the StringView helpers). Groups
+            // without a `method_targets` entry fall back to `targets`.
             let files: &[PathBuf] = config
-                .targets
+                .method_targets
                 .get(language)
+                .and_then(|groups| groups.get(struct_name))
+                .or_else(|| config.targets.get(language))
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
 
@@ -760,6 +766,7 @@ mod tests {
             methods: HashMap::new(),
             naming: HashMap::new(),
             targets: HashMap::new(),
+            method_targets: HashMap::new(),
             enums: HashMap::new(),
             enum_targets: HashMap::new(),
             structs: HashMap::new(),

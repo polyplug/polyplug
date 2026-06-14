@@ -16,6 +16,16 @@ methods:
     - ends_with
     - strip_prefix
     - split
+  # Contract / bundle ID computation helpers. Every language SDK must expose the
+  # canonical FNV-1a 64-bit scheme so authors compute IDs via the SDK instead of
+  # hand-writing hash literals. These live in a different file than the StringView
+  # helpers for some languages, so their per-language targets are overridden in
+  # `method_targets:` below (groups without an override fall back to `targets:`).
+  ContractId:
+    - fnv1a_64
+    - bundle_id
+    - guest_contract_id
+    - host_contract_id
 
 # Naming conventions per language.
 # The validator transforms the snake_case canonical names above to each
@@ -43,6 +53,30 @@ targets:
     - sdks/cpp/abi/polyplug/abi.hpp
   lua:
     - sdks/lua/abi/abi.lua
+
+# Per-method-group target overrides. A group listed here for a language is
+# searched in these files instead of the default `targets:` file. The contract-ID
+# helpers live in the ABI mirror (and, for Rust, in the polyplug_utils crate that
+# is the canonical source) rather than the StringView guest-helper files.
+method_targets:
+  rust:
+    ContractId:
+      - crates/polyplug_utils/src/lib.rs
+  python:
+    ContractId:
+      - sdks/python/abi/abi.py
+  csharp:
+    ContractId:
+      - sdks/csharp/abi/Abi.cs
+  js:
+    ContractId:
+      - sdks/js/host/polyplug/mod.js
+  cpp:
+    ContractId:
+      - sdks/cpp/host/polyplug/id.hpp
+  lua:
+    ContractId:
+      - sdks/lua/abi/abi.lua
 
 # Golden enum set (authoritative; the Rust ABI sources are listed as targets
 # below, so yaml-vs-code disagreement fails validation and keeps this honest).

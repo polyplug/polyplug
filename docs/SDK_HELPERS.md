@@ -18,6 +18,39 @@ null-terminated). "Null view" = null `ptr` OR `len == 0`.
 | `strip_prefix` | Returns the string with `prefix` removed if present, otherwise the original string. Never raises. |
 | `split` | See split rules below. |
 
+## Contract / Bundle ID Contracts (ContractId)
+
+Every language SDK exposes the canonical FNV-1a 64-bit ID scheme so authors
+compute IDs through the SDK instead of hand-writing hash literals. The Rust
+authority is `crates/polyplug_utils`; all mirrors must produce **byte-identical**
+`u64` results (a divergence means a plugin built in one language cannot be
+resolved by a host in another).
+
+| Method | Contract |
+|---|---|
+| `fnv1a_64` | FNV-1a 64-bit over the UTF-8 bytes of the input. Offset basis `0xcbf29ce484222325`, prime `0x100000001b3`, wrap mod 2^64. Empty input → the offset basis. |
+| `bundle_id` | `fnv1a_64(name)`. |
+| `guest_contract_id` | `fnv1a_64("guest_contract:" + name + "@" + major)`. |
+| `host_contract_id` | `fnv1a_64("host_contract:" + name + "@" + major)`. The distinct prefix guarantees host and guest IDs never collide for the same `name@major`. |
+
+The helper lives in each language's canonical, idiomatic home (the validated
+`method_targets` in `sdk_validator.yaml`), not necessarily the `abi/` mirror:
+
+| Language | Home | Names |
+|---|---|---|
+| Rust | `crates/polyplug_utils/src/lib.rs` | `fnv1a_64`, `bundle_id`, `guest_contract_id`, `host_contract_id` |
+| Python | `sdks/python/abi/abi.py` | snake_case (same) |
+| Lua | `sdks/lua/abi/abi.lua` | `M.fnv1a_64`, … (returns `uint64_t` cdata) |
+| C# | `sdks/csharp/abi/Abi.cs` (`ContractId` class) | `Fnv1a64`, `BundleId`, `GuestContractId`, `HostContractId` (`ulong`) |
+| C++ | `sdks/cpp/host/polyplug/id.hpp` | snake_case, **`constexpr`** (compile-time IDs) |
+| JS | `sdks/js/host/polyplug/mod.js` | `fnv1a64`, `bundleId`, `guestContractId`, `hostContractId` (`bigint`) |
+
+The C# / Python / Lua names are merged into the ABI mirror by
+`crates/polyplug_abi/build/generate.rs`; Rust, C++, and JS keep their pre-existing
+idiomatic implementations. Cross-language byte-parity is proven by
+`examples/verify_id_helpers.sh` (`just verify-id-helpers`), which runs every
+SDK against the Rust golden vectors.
+
 ## Split Rules (all languages, identical)
 
 `split(view, delimiter)` — the delimiter is a **literal string**. Never a Lua
