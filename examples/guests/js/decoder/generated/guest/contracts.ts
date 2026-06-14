@@ -18,7 +18,8 @@ export const DECODER_INTERFACE = {
     contractHi: 0xE1D7DE77,
     dispatchType: DispatchType.VirtualMachine,
     fnCount: 1,
-    functions: [] as ((args_ptr: number, out_ptr: number) => number)[],
+    functions: [] as ((impl: any, args_ptr: number, out_ptr: number) => number)[],
+    factory: null as null | (() => any),
     contractName: "pipeline.Decoder@1",
     version: 0x00010000,
 };
@@ -29,12 +30,13 @@ export const DECODER_DESCRIPTOR = {
     version: { major: 1, minor: 0, patch: 0 }
 };
 
-function decoder_fn0_abi_wrapper(args_ptr: number, out_ptr: number): number {
+function decoder_fn0_abi_wrapper(impl: any, args_ptr: number, out_ptr: number): number {
     // SAFETY: args_ptr and out_ptr are valid addresses passed as f64
     // by the loader. readU32/writeU32 accept f64 and convert to usize.
+    // `impl` is the per-instance impl object the loader resolved for this
+    // call (built by the factory); the loader passes it as the first argument.
     var polyplug = (globalThis as any).polyplug;
     if (!polyplug) return 1;
-    var impl = DECODER_IMPL;
     if (!impl) return 1;
     if (!args_ptr) return 8;
     if (!out_ptr) return 8;
@@ -47,9 +49,7 @@ function decoder_fn0_abi_wrapper(args_ptr: number, out_ptr: number): number {
     return 0;
 }
 
-let DECODER_IMPL: { [fn: string]: (...args: any[]) => any } | null = null;
-
-export function setDecoderImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
-    DECODER_IMPL = { fn0 };
+export function setDecoderFactory(factory: () => { fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number } }): void {
+    DECODER_INTERFACE.factory = factory;
     DECODER_INTERFACE.functions = [decoder_fn0_abi_wrapper];
 }

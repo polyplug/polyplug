@@ -5,4 +5,4 @@
 // Main entry point for bundling
 export { polyplug_init } from './init';
 export { ENCODER_INTERFACE } from './contracts';
-export { setEncoderImpl } from './contracts';
+export { setEncoderFactory } from './contracts';

@@ -9,13 +9,13 @@ var polyplug_module = (function(exports) {
 		}).VirtualMachine,
 		fnCount: 4,
 		functions: [],
+		factory: null,
 		contractName: "test.add@1",
 		version: 65536
 	};
-	function test_adder_fn0_abi_wrapper(args_ptr, out_ptr) {
+	function test_adder_fn0_abi_wrapper(impl, args_ptr, out_ptr) {
 		var polyplug = globalThis.polyplug;
 		if (!polyplug) return 1;
-		var impl = TEST_ADDER_IMPL;
 		if (!impl) return 1;
 		if (!args_ptr) return 8;
 		if (!out_ptr) return 8;
@@ -27,10 +27,9 @@ var polyplug_module = (function(exports) {
 		polyplug.writeU32(out_ptr, result);
 		return 0;
 	}
-	function test_adder_fn1_abi_wrapper(args_ptr, out_ptr) {
+	function test_adder_fn1_abi_wrapper(impl, args_ptr, out_ptr) {
 		var polyplug = globalThis.polyplug;
 		if (!polyplug) return 1;
-		var impl = TEST_ADDER_IMPL;
 		if (!impl) return 1;
 		if (!args_ptr) return 8;
 		if (!out_ptr) return 8;
@@ -40,10 +39,9 @@ var polyplug_module = (function(exports) {
 		polyplug.writeU32(out_ptr, result);
 		return 0;
 	}
-	function test_adder_fn2_abi_wrapper(args_ptr, out_ptr) {
+	function test_adder_fn2_abi_wrapper(impl, args_ptr, out_ptr) {
 		var polyplug = globalThis.polyplug;
 		if (!polyplug) return 1;
-		var impl = TEST_ADDER_IMPL;
 		if (!impl) return 1;
 		if (!out_ptr) return 8;
 		var result = impl.fn2();
@@ -53,21 +51,14 @@ var polyplug_module = (function(exports) {
 		polyplug.writeU32(out_ptr + 12, 0);
 		return 0;
 	}
-	function test_adder_fn3_abi_wrapper(args_ptr, out_ptr) {
+	function test_adder_fn3_abi_wrapper(impl, args_ptr, out_ptr) {
 		if (!globalThis.polyplug) return 1;
-		var impl = TEST_ADDER_IMPL;
 		if (!impl) return 1;
 		impl.fn3();
 		return 0;
 	}
-	let TEST_ADDER_IMPL = null;
-	function setTestAdderImpl(fn0, fn1, fn2, fn3) {
-		TEST_ADDER_IMPL = {
-			fn0,
-			fn1,
-			fn2,
-			fn3
-		};
+	function setTestAdderFactory(factory) {
+		TEST_ADDER_INTERFACE.factory = factory;
 		TEST_ADDER_INTERFACE.functions = [
 			test_adder_fn0_abi_wrapper,
 			test_adder_fn1_abi_wrapper,
@@ -206,7 +197,12 @@ var polyplug_module = (function(exports) {
 		};
 	}
 	function reset() {}
-	setTestAdderImpl(add, addPrimitive, version, reset);
+	setTestAdderFactory(() => ({
+		fn0: add,
+		fn1: addPrimitive,
+		fn2: version,
+		fn3: reset
+	}));
 	//#endregion
 	exports.polyplug_init = polyplug_init;
 	return exports;

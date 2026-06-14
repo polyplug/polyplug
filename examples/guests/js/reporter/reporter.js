@@ -1,4 +1,4 @@
-import { setReporterImpl } from './generated/guest/contracts';
+import { setReporterFactory } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
 import { toStr, allocStringArena } from '../../../../sdks/js/guest/polyplug_guest.js';
 
@@ -19,6 +19,6 @@ function report(input) {
     return { ptr_lo: ptrLo, ptr_hi: ptrHi, len: result.len };
 }
 
-setReporterImpl(report);
+setReporterFactory(() => ({ fn0: report }));
 
 export { polyplug_init };

@@ -21,7 +21,8 @@ export const TEST_ADDER_INTERFACE = {
     contractHi: 0x40244DF5,
     dispatchType: DispatchType.VirtualMachine,
     fnCount: 4,
-    functions: [] as ((args_ptr: number, out_ptr: number) => number)[],
+    functions: [] as ((impl: any, args_ptr: number, out_ptr: number) => number)[],
+    factory: null as null | (() => any),
     contractName: "test.add@1",
     version: 0x00010000,
 };
@@ -32,12 +33,13 @@ export const TEST_ADDER_DESCRIPTOR = {
     version: { major: 1, minor: 0, patch: 0 }
 };
 
-function test_adder_fn0_abi_wrapper(args_ptr: number, out_ptr: number): number {
+function test_adder_fn0_abi_wrapper(impl: any, args_ptr: number, out_ptr: number): number {
     // SAFETY: args_ptr and out_ptr are valid addresses passed as f64
     // by the loader. readU32/writeU32 accept f64 and convert to usize.
+    // `impl` is the per-instance impl object the loader resolved for this
+    // call (built by the factory); the loader passes it as the first argument.
     var polyplug = (globalThis as any).polyplug;
     if (!polyplug) return 1;
-    var impl = TEST_ADDER_IMPL;
     if (!impl) return 1;
     if (!args_ptr) return 8;
     if (!out_ptr) return 8;
@@ -47,12 +49,13 @@ function test_adder_fn0_abi_wrapper(args_ptr: number, out_ptr: number): number {
     return 0;
 }
 
-function test_adder_fn1_abi_wrapper(args_ptr: number, out_ptr: number): number {
+function test_adder_fn1_abi_wrapper(impl: any, args_ptr: number, out_ptr: number): number {
     // SAFETY: args_ptr and out_ptr are valid addresses passed as f64
     // by the loader. readU32/writeU32 accept f64 and convert to usize.
+    // `impl` is the per-instance impl object the loader resolved for this
+    // call (built by the factory); the loader passes it as the first argument.
     var polyplug = (globalThis as any).polyplug;
     if (!polyplug) return 1;
-    var impl = TEST_ADDER_IMPL;
     if (!impl) return 1;
     if (!args_ptr) return 8;
     if (!out_ptr) return 8;
@@ -63,12 +66,13 @@ function test_adder_fn1_abi_wrapper(args_ptr: number, out_ptr: number): number {
     return 0;
 }
 
-function test_adder_fn2_abi_wrapper(args_ptr: number, out_ptr: number): number {
+function test_adder_fn2_abi_wrapper(impl: any, args_ptr: number, out_ptr: number): number {
     // SAFETY: args_ptr and out_ptr are valid addresses passed as f64
     // by the loader. readU32/writeU32 accept f64 and convert to usize.
+    // `impl` is the per-instance impl object the loader resolved for this
+    // call (built by the factory); the loader passes it as the first argument.
     var polyplug = (globalThis as any).polyplug;
     if (!polyplug) return 1;
-    var impl = TEST_ADDER_IMPL;
     if (!impl) return 1;
     if (!out_ptr) return 8;
     var result = impl.fn2();
@@ -79,20 +83,19 @@ function test_adder_fn2_abi_wrapper(args_ptr: number, out_ptr: number): number {
     return 0;
 }
 
-function test_adder_fn3_abi_wrapper(args_ptr: number, out_ptr: number): number {
+function test_adder_fn3_abi_wrapper(impl: any, args_ptr: number, out_ptr: number): number {
     // SAFETY: args_ptr and out_ptr are valid addresses passed as f64
     // by the loader. readU32/writeU32 accept f64 and convert to usize.
+    // `impl` is the per-instance impl object the loader resolved for this
+    // call (built by the factory); the loader passes it as the first argument.
     var polyplug = (globalThis as any).polyplug;
     if (!polyplug) return 1;
-    var impl = TEST_ADDER_IMPL;
     if (!impl) return 1;
     impl.fn3();
     return 0;
 }
 
-let TEST_ADDER_IMPL: { [fn: string]: (...args: any[]) => any } | null = null;
-
-export function setTestAdderImpl(fn0: (args: AddArgs) => number, fn1: (a: number, b: number) => number, fn2: () => { ptr_lo: number; ptr_hi: number; len: number }, fn3: () => void): void {
-    TEST_ADDER_IMPL = { fn0, fn1, fn2, fn3 };
+export function setTestAdderFactory(factory: () => { fn0: (args: AddArgs) => number; fn1: (a: number, b: number) => number; fn2: () => { ptr_lo: number; ptr_hi: number; len: number }; fn3: () => void }): void {
+    TEST_ADDER_INTERFACE.factory = factory;
     TEST_ADDER_INTERFACE.functions = [test_adder_fn0_abi_wrapper, test_adder_fn1_abi_wrapper, test_adder_fn2_abi_wrapper, test_adder_fn3_abi_wrapper];
 }

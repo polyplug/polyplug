@@ -1,4 +1,4 @@
-import { setTransformerImpl } from './generated/guest/contracts';
+import { setTransformerFactory } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
 import { toStr, allocStringArena } from '../../../../sdks/js/guest/polyplug_guest.js';
 
@@ -26,6 +26,6 @@ function transform(input) {
     return { ptr_lo: 0, ptr_hi: 0, len: 0 };
 }
 
-setTransformerImpl(transform);
+setTransformerFactory(() => ({ fn0: transform }));
 
 export { polyplug_init };

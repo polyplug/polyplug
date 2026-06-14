@@ -182,7 +182,7 @@ fn make_bundle_js(svc_lo: u32, svc_hi: u32, probe_lo: u32, probe_hi: u32) -> Str
         r#"
 function polyplug_init(rt_ctx, host_vtable, ctx) {{
     var polyplug = globalThis.polyplug;
-    function probe(args, out) {{
+    function probe(impl, args, out) {{
         var polyplug = globalThis.polyplug;
         // Read input StringView from args (ptr_lo@0, ptr_hi@4, len@8).
         var inLo = polyplug.readU32(args);
@@ -237,6 +237,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         fnCount: 1,
         contractName: "test.probe",
         version: 0x00010000,
+        factory: function() {{ return {{}}; }},
         functions: [probe]
     }};
     polyplug.registerVtable(

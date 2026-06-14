@@ -1,4 +1,4 @@
-import { setEncoderImpl } from './generated/guest/contracts';
+import { setEncoderFactory } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
 import { toStr, allocStringArena } from '../../../../sdks/js/guest/polyplug_guest.js';
 
@@ -17,6 +17,6 @@ function encode(input) {
     };
 }
 
-setEncoderImpl(encode);
+setEncoderFactory(() => ({ fn0: encode }));
 
 export { polyplug_init };

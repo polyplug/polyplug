@@ -18,7 +18,8 @@ export const TRANSFORMER_INTERFACE = {
     contractHi: 0x47759913,
     dispatchType: DispatchType.VirtualMachine,
     fnCount: 1,
-    functions: [] as ((args_ptr: number, out_ptr: number) => number)[],
+    functions: [] as ((impl: any, args_ptr: number, out_ptr: number) => number)[],
+    factory: null as null | (() => any),
     contractName: "data.Transformer@1",
     version: 0x00010000,
 };
@@ -29,12 +30,13 @@ export const TRANSFORMER_DESCRIPTOR = {
     version: { major: 1, minor: 0, patch: 0 }
 };
 
-function transformer_fn0_abi_wrapper(args_ptr: number, out_ptr: number): number {
+function transformer_fn0_abi_wrapper(impl: any, args_ptr: number, out_ptr: number): number {
     // SAFETY: args_ptr and out_ptr are valid addresses passed as f64
     // by the loader. readU32/writeU32 accept f64 and convert to usize.
+    // `impl` is the per-instance impl object the loader resolved for this
+    // call (built by the factory); the loader passes it as the first argument.
     var polyplug = (globalThis as any).polyplug;
     if (!polyplug) return 1;
-    var impl = TRANSFORMER_IMPL;
     if (!impl) return 1;
     if (!args_ptr) return 8;
     if (!out_ptr) return 8;
@@ -47,9 +49,7 @@ function transformer_fn0_abi_wrapper(args_ptr: number, out_ptr: number): number 
     return 0;
 }
 
-let TRANSFORMER_IMPL: { [fn: string]: (...args: any[]) => any } | null = null;
-
-export function setTransformerImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
-    TRANSFORMER_IMPL = { fn0 };
+export function setTransformerFactory(factory: () => { fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number } }): void {
+    TRANSFORMER_INTERFACE.factory = factory;
     TRANSFORMER_INTERFACE.functions = [transformer_fn0_abi_wrapper];
 }

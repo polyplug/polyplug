@@ -1,4 +1,4 @@
-function add(argsPtr, outPtr) {
+function add(impl, argsPtr, outPtr) {
     try {
         var a = polyplug.readI32(argsPtr);
         var b = polyplug.readI32(argsPtr + 4);
@@ -10,7 +10,7 @@ function add(argsPtr, outPtr) {
     }
 }
 
-function subtract(argsPtr, outPtr) {
+function subtract(impl, argsPtr, outPtr) {
     try {
         var a = polyplug.readI32(argsPtr);
         var b = polyplug.readI32(argsPtr + 4);
@@ -21,7 +21,7 @@ function subtract(argsPtr, outPtr) {
     }
 }
 
-function multiply(argsPtr, outPtr) {
+function multiply(impl, argsPtr, outPtr) {
     try {
         var a = polyplug.readI32(argsPtr);
         var b = polyplug.readI32(argsPtr + 4);
@@ -32,7 +32,7 @@ function multiply(argsPtr, outPtr) {
     }
 }
 
-function divide(argsPtr, outPtr) {
+function divide(impl, argsPtr, outPtr) {
     try {
         var a = polyplug.readI32(argsPtr);
         var b = polyplug.readI32(argsPtr + 4);
@@ -48,7 +48,7 @@ function divide(argsPtr, outPtr) {
 // reclaim every return buffer with a single reset instead of per-value frees, so
 // after warmup arenaAlloc serves from the bump region and triggers no host
 // allocation. args/out are 12-byte StringView buffers { ptr_lo, ptr_hi, len }.
-function echo(argsPtr, outPtr) {
+function echo(impl, argsPtr, outPtr) {
     try {
         var inLo = polyplug.readU32(argsPtr);
         var inHi = polyplug.readU32(argsPtr + 4);
@@ -82,6 +82,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
         contractName: "test.add",
         // Packed contract version: major << 16 (test.add@1 -> 0x10000).
         version: 0x10000,
+        factory: function() { return {}; },
         functions: [add, subtract, multiply, divide, echo]
     };
     polyplug.registerVtable(

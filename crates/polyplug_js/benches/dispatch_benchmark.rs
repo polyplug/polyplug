@@ -722,7 +722,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         fnCount: 1,
         contractName: "{contract_name}",
         version: 0x00010000,
-        functions: [ function(args, out) {{ return 0; }} ]
+        factory: function() {{ return {{}}; }},
+        functions: [ function(impl, args, out) {{ return 0; }} ]
     }};
     polyplug.registerVtable(
         vtable.contractLo, vtable.contractHi, vtable,

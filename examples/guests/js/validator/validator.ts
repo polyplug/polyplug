@@ -1,4 +1,4 @@
-import { setValidatorImpl } from './generated/guest/contracts';
+import { setValidatorFactory } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
 import { toStr, allocString } from '../../../../sdks/js/guest/polyplug_guest.js';
 
@@ -19,6 +19,6 @@ function validate(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr
     return { ptr_lo: ptrLo, ptr_hi: ptrHi, len: result.len };
 }
 
-setValidatorImpl(validate);
+setValidatorFactory(() => ({ fn0: validate }));
 
 export { polyplug_init };

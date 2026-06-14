@@ -51,8 +51,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         fnCount: {fn_count},
         contractName: "{contract_name}",
         version: 0x00010000,
+        factory: function() {{ return {{}}; }},
         functions: [
-            function(args, out) {{ return 0; }}
+            function(impl, args, out) {{ return 0; }}
         ]
     }};
     polyplug.registerVtable(
@@ -258,10 +259,11 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         fnCount: {},
         contractName: "test.math",
         version: 0x00010000,
+        factory: function() {{ return {{}}; }},
         functions: [
-            function(args, out) {{ return 0; }},
-            function(args, out) {{ return 0; }},
-            function(args, out) {{ return 0; }}
+            function(impl, args, out) {{ return 0; }},
+            function(impl, args, out) {{ return 0; }},
+            function(impl, args, out) {{ return 0; }}
         ]
     }};
     polyplug.registerVtable(
@@ -511,7 +513,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         fnCount: 1,
         contractName: "test.bundlepath",
         version: 0x00010000,
-        functions: [function(args, out) {{ return 0; }}]
+        factory: function() {{ return {{}}; }},
+        functions: [function(impl, args, out) {{ return 0; }}]
     }};
     polyplug.registerVtable(
         vtable.contractLo,
@@ -573,7 +576,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         fnCount: 1,
         contractName: "test.methods",
         version: 0x00010000,
-        functions: [function(args, out) {{ return 0; }}]
+        factory: function() {{ return {{}}; }},
+        functions: [function(impl, args, out) {{ return 0; }}]
     }};
     polyplug.registerVtable(
         vtable.contractLo,
@@ -657,9 +661,10 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         fnCount: {},
         contractName: "test.vm_dispatch",
         version: 0x00010000,
+        factory: function() {{ return {{}}; }},
         functions: [
-            function(args, out) {{ return 0; }},
-            function(args, out) {{ return 0; }}
+            function(impl, args, out) {{ return 0; }},
+            function(impl, args, out) {{ return 0; }}
         ]
     }};
     polyplug.registerVtable(
@@ -743,7 +748,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         fnCount: 1,
         contractName: "test.memory",
         version: 0x00010000,
-        functions: [function(args, out) {{ return 0; }}]
+        factory: function() {{ return {{}}; }},
+        functions: [function(impl, args, out) {{ return 0; }}]
     }};
     polyplug.registerVtable(
         vtable.contractLo,
@@ -1051,7 +1057,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         fnCount: 1,
         contractName: "test.stringview.empty",
         version: 0x00010000,
-        functions: [function(args, out) {{ return 0; }}]
+        factory: function() {{ return {{}}; }},
+        functions: [function(impl, args, out) {{ return 0; }}]
     }};
     polyplug.registerVtable(
         vtable.contractLo,
@@ -1459,7 +1466,7 @@ fn host_caller_bundle_source(
     let host_hi: u32 = (host_contract_id >> 32) as u32;
     format!(
         r#"
-function callHost(argsPtr, outPtr) {{
+function callHost(impl, argsPtr, outPtr) {{
     // callHostContract(contractLo, contractHi, minVersion, fnId, argsPtr, outPtr).
     // minVersion is the PACKED version (major << 16 | minor); major 1 -> 0x10000.
     return polyplug.callHostContract({host_lo}, {host_hi}, 0x10000, {host_fn_id}, argsPtr, outPtr);
@@ -1472,6 +1479,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         fnCount: 1,
         contractName: "{guest_name}",
         version: 0x10000,
+        factory: function() {{ return {{}}; }},
         functions: [callHost]
     }};
     polyplug.registerVtable(
@@ -1659,8 +1667,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         fnCount: 1,
         contractName: "test.guest.log",
         version: 0x00010000,
+        factory: function() {{ return {{}}; }},
         functions: [
-            function(args, out) {{
+            function(impl, args, out) {{
                 polyplug.log(3, "guest.test-log", "hello from js guest");
                 polyplug.log(99, "guest.test-log", "out of range level");
                 return 0;
@@ -1765,7 +1774,8 @@ fn load_init_returning_error_code_fails_load() {
     let bundle: &str = r#"
 function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
     var vtable = {
-        functions: [function(args, out) { return 0; }]
+        factory: function() { return {}; },
+        functions: [function(impl, args, out) { return 0; }]
     };
     polyplug.registerVtable(0x1, 0x0, vtable, 1, "test.initerr", 0x00010000);
     return { code: 1, message: "init refused" };
@@ -1797,7 +1807,8 @@ fn load_init_returning_bare_error_number_fails_load() {
     let bundle: &str = r#"
 function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
     var vtable = {
-        functions: [function(args, out) { return 0; }]
+        factory: function() { return {}; },
+        functions: [function(impl, args, out) { return 0; }]
     };
     polyplug.registerVtable(0x2, 0x0, vtable, 1, "test.initnum", 0x00010000);
     return 3;
@@ -1870,7 +1881,8 @@ fn register_vtable_with_short_functions_array_fails_precisely() {
     let bundle: &str = r#"
 function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
     var vtable = {
-        functions: [function(args, out) { return 0; }]
+        factory: function() { return {}; },
+        functions: [function(impl, args, out) { return 0; }]
     };
     polyplug.registerVtable(0x4, 0x0, vtable, 2, "test.short", 0x00010000);
     return { code: 0, message: null };

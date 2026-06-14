@@ -72,6 +72,10 @@ struct JsRegistrationData {
     _fn_count: usize,
     contract_name: String,
     functions: Vec<Persistent<Function<'static>>>,
+    /// Factory that builds a fresh impl object. The loader calls it once at load
+    /// to build the stateless default impl and once per `create_instance` for a
+    /// live per-instance impl.
+    factory: Persistent<Function<'static>>,
 }
 
 // SAFETY: JsRegistrationData has no lifetime parameters and contains only 'static
@@ -91,13 +95,32 @@ unsafe impl<'js> JsLifetime<'js> for JsRegistrationData {
 ///
 /// # Field drop order
 /// Rust drops fields in declaration order, and QuickJS's `JS_FreeRuntime` asserts
-/// that every JS object (the `Persistent<Function>`s) and the `Context` are already
-/// freed when the `Runtime` is dropped. `functions` and `ctx` are therefore declared
-/// BEFORE `_runtime` so they drop first; reordering them would re-introduce a
-/// `JS_FreeRuntime: Assertion 'list_empty(&rt->gc_obj_list)' failed` abort when a
-/// bundle's VM is reclaimed on unload.
+/// that every JS object (the `Persistent<Function>`s, the `Persistent<Value>` impls,
+/// and the `Context`) is already freed when the `Runtime` is dropped. Every
+/// JS-holding field (`functions`, `factory`, `default_impl`, `instances`, `ctx`) is
+/// therefore declared BEFORE `_runtime` so they drop first; reordering them would
+/// re-introduce a `JS_FreeRuntime: Assertion 'list_empty(&rt->gc_obj_list)' failed`
+/// abort when a bundle's VM is reclaimed on unload.
 pub struct JsLoaderData {
     pub functions: Vec<Persistent<Function<'static>>>,
+    /// Factory producing a fresh impl object per `create_instance`. Restored under
+    /// `Context::with` and called with no arguments (the guest reaches the host via
+    /// the per-VM `polyplug` global, so the factory needs no host parameter).
+    pub factory: Persistent<Function<'static>>,
+    /// Stateless default impl, built once at load via `factory()`. Serves dispatch
+    /// on a null (id 0) instance handle so low-level / host-caller dispatch with a
+    /// null instance still resolves an impl.
+    pub default_impl: Persistent<Value<'static>>,
+    /// Live per-instance impls keyed by their non-zero id (the value carried in a
+    /// `GuestContractInstance` handle's `data` field). Two live instances of the
+    /// same contract therefore never share state.
+    pub instances: Mutex<HashMap<u64, Persistent<Value<'static>>>>,
+    /// Next instance id to mint. Starts at 1 so a handle's `data` is never null
+    /// (`GuestContractInstance::is_null` keys on `data`).
+    pub next_id: AtomicU64,
+    /// Contract id this VM provides — stamped into every instance handle so the
+    /// runtime routes `call_guest_method` by it.
+    pub contract_id: u64,
     pub ctx: Context,
     pub _runtime: Runtime,
     /// Thread-aware same-VM reentrancy guard for [`js_dispatch`].
@@ -202,33 +225,133 @@ impl Drop for JsDispatchGuard<'_> {
 
 // ─── JS Dispatch Function ─────────────────────────────────────────────────────
 
-// ─── Instance Lifecycle Stubs ──────────────────────────────────────────────────
+// ─── Instance Lifecycle ─────────────────────────────────────────────────────────
 
-/// Stub create_instance for JS plugins - returns null instance.
+/// Create a fresh JS contract instance by running the bundle's factory.
+///
+/// Runs `factory()` inside the VM, persists the returned impl object, mints a
+/// non-zero id, keys the impl under it in the per-contract registry, and stamps the
+/// `GuestContractInstance` handle with that id + the contract id. Two instances of
+/// the same contract therefore never share state.
 ///
 /// # Safety
-/// JS plugins use VM dispatch with global state; instances are not used.
+/// - `loader_data`, when non-null, must wrap a valid pointer to a [`JsLoaderData`]
+///   created by the loader (its box address is stable for as long as the bundle is
+///   loaded).
+/// - `out_instance`, when non-null, must be writable per the ABI contract.
 unsafe extern "C" fn js_create_instance(
-    _loader_data: VmLoaderData,
+    loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
 ) {
-    if !out_instance.is_null() {
-        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(GuestContractInstance::null()) };
+    if out_instance.is_null() {
+        return;
     }
+    // A null loader_data carries no contract to build an instance for (e.g. a peer
+    // caller that constructs a zeroed VmLoaderData and routes by stamping the
+    // contract id afterward). Write a null instance and return rather than deref a
+    // null pointer.
+    if loader_data.data.is_null() {
+        // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+        return;
+    }
+    // SAFETY: loader_data wraps a valid JsLoaderData pointer created by the loader
+    // (non-null checked above); its box address stays valid for as long as the
+    // bundle is loaded.
+    let data: &JsLoaderData = unsafe { &*(loader_data.data as *const JsLoaderData) };
+
+    // Refuse a same-thread nested create: running the factory would re-enter
+    // QuickJS's `Context::with` on this VM already entered by the in-flight dispatch
+    // on this thread, which rquickjs aborts on. There is no error out-param here, so
+    // write a null instance (the caller routes by stamped contract id → default impl).
+    let this_thread: ThreadId = std::thread::current().id();
+    {
+        // Poison recovery: the Vec<ThreadId> cannot be left logically corrupt
+        // between lock/unlock, so reusing it is sound. Production code, no unwrap.
+        let threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = data
+            .in_dispatch_threads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if threads.contains(&this_thread) {
+            drop(threads);
+            // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.
+            unsafe { out_instance.write(GuestContractInstance::null()) };
+            return;
+        }
+    }
+
+    let built: Result<Persistent<Value<'static>>, rquickjs::Error> = data.ctx.with(|ctx| {
+        let factory: Function<'_> = data.factory.clone().restore(&ctx)?;
+        let impl_val: Value<'_> = factory.call::<(), Value<'_>>(())?;
+        Ok(Persistent::save(&ctx, impl_val))
+    });
+
+    let instance: GuestContractInstance = match built {
+        Ok(impl_persistent) => {
+            let id: u64 = data.next_id.fetch_add(1, Ordering::Relaxed);
+            // Poison recovery: a poisoned registry between lock/unlock leaves the
+            // HashMap usable. Production code, no unwrap.
+            let mut map: std::sync::MutexGuard<'_, HashMap<u64, Persistent<Value<'static>>>> = data
+                .instances
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            map.insert(id, impl_persistent);
+            GuestContractInstance {
+                data: id as usize as *mut core::ffi::c_void,
+                contract_id: GuestContractId::from_u64(data.contract_id),
+            }
+        }
+        Err(e) => {
+            data.logger.log(LogLevel::Error, "loader.js", || {
+                format!("JS create_instance: factory call failed: {e}")
+            });
+            GuestContractInstance::null()
+        }
+    };
+
+    // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.
+    unsafe { out_instance.write(instance) };
 }
 
-/// Stub destroy_instance for JS plugins - no cleanup needed.
+/// Destroy a JS contract instance.
+///
+/// Removes the impl keyed under the instance handle's id from the per-contract
+/// registry, dropping its `Persistent`. A null handle (id 0) refers to the stateless
+/// default impl, which the loader owns for the bundle lifetime, so it is a no-op.
 ///
 /// # Safety
-/// JS plugins don't own instance data.
+/// - `loader_data`, when non-null, must wrap a valid pointer to a [`JsLoaderData`]
+///   created by the loader.
+/// - `instance` must be a handle previously produced by [`js_create_instance`] for
+///   this contract (or a null handle).
 unsafe extern "C" fn js_destroy_instance(
-    _loader_data: VmLoaderData,
+    loader_data: VmLoaderData,
     _host: *const HostApi,
-    _instance: GuestContractInstance,
+    instance: GuestContractInstance,
 ) {
+    let id: u64 = instance.data as usize as u64;
+    if id == 0 {
+        return;
+    }
+    // A null loader_data carries no per-contract registry to remove from (e.g. a
+    // peer caller that passes a zeroed VmLoaderData). Nothing to drop.
+    if loader_data.data.is_null() {
+        return;
+    }
+    // SAFETY: loader_data wraps a valid JsLoaderData pointer created by the loader
+    // (non-null checked above); its box address stays valid for as long as the
+    // bundle is loaded.
+    let data: &JsLoaderData = unsafe { &*(loader_data.data as *const JsLoaderData) };
+    // Poison recovery: a poisoned registry between lock/unlock leaves the HashMap
+    // usable. Production code, no unwrap. Dropping the removed Persistent releases the
+    // JS ref through rquickjs's runtime (no Context::with required).
+    let mut map: std::sync::MutexGuard<'_, HashMap<u64, Persistent<Value<'static>>>> = data
+        .instances
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    map.remove(&id);
 }
 
 // ─── JS Dispatch Function ─────────────────────────────────────────────────────
@@ -243,7 +366,7 @@ unsafe extern "C" fn js_destroy_instance(
 ///   `polyplug.arenaAlloc`) are valid until the caller's next reset.
 unsafe extern "C" fn js_dispatch(
     loader_data: VmLoaderData,
-    _instance: GuestContractInstance,
+    instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
@@ -252,7 +375,8 @@ unsafe extern "C" fn js_dispatch(
 ) {
     // SAFETY: loader_data wraps a valid pointer to JsLoaderData created by the
     // loader; args/out/arena satisfy the ABI dispatch contract for this call.
-    let result: AbiError = unsafe { js_dispatch_impl(loader_data, fn_id, args, out, arena) };
+    let result: AbiError =
+        unsafe { js_dispatch_impl(loader_data, instance, fn_id, args, out, arena) };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(result) };
@@ -261,6 +385,7 @@ unsafe extern "C" fn js_dispatch(
 
 unsafe fn js_dispatch_impl(
     loader_data: VmLoaderData,
+    instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
@@ -311,6 +436,31 @@ unsafe fn js_dispatch_impl(
         }
     };
 
+    // Resolve the impl for this instance: a null handle (id 0) uses the stateless
+    // default impl; otherwise look the live instance up by id. The Persistent is
+    // cloned OUT of the registry so the map guard drops before Context::with — a
+    // nested dispatch can never deadlock on the registry mutex.
+    let instance_id: u64 = instance.data as usize as u64;
+    let impl_persistent: Persistent<Value<'static>> = if instance_id == 0 {
+        data.default_impl.clone()
+    } else {
+        // Poison recovery: the HashMap cannot be left logically corrupt between
+        // lock/unlock, so reusing it is sound. Production code, no unwrap.
+        let map: std::sync::MutexGuard<'_, HashMap<u64, Persistent<Value<'static>>>> = data
+            .instances
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match map.get(&instance_id) {
+            Some(p) => p.clone(),
+            None => {
+                return AbiError {
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
+                    message: StringView::null(),
+                };
+            }
+        }
+    };
+
     let args_usize: usize = args as usize;
     let out_usize: usize = out as usize;
 
@@ -331,9 +481,12 @@ unsafe fn js_dispatch_impl(
         set_arena_ptr(&ctx, arena_usize);
 
         let js_fn: Function<'_> = func_persistent.clone().restore(&ctx)?;
+        // The generated wrapper takes (impl, args_ptr, out_ptr): the per-instance
+        // impl object is passed first so the wrapper invokes the method on it.
+        let impl_val: Value<'_> = impl_persistent.clone().restore(&ctx)?;
 
         let result: Result<i32, rquickjs::Error> =
-            js_fn.call::<(f64, f64), i32>((args_f64, out_f64));
+            js_fn.call::<(Value<'_>, f64, f64), i32>((impl_val, args_f64, out_f64));
 
         set_arena_ptr(&ctx, 0);
         result
@@ -580,14 +733,15 @@ fn register_host_functions<'js>(
         })?;
 
     // ── callGuestMethod ────────────────────────────────────────────────────────
-    // Guarded peer-call path: find → resolve → create_instance → call_guest_method.
-    // The contract_id and min_version come from the generated peer_callers.ts
-    // constants so the caller never hard-codes raw numbers.
+    // Guarded peer-call path: find → resolve → create_instance → call_guest_method
+    // → destroy_instance. The contract_id and min_version come from the generated
+    // peer_callers.ts constants so the caller never hard-codes raw numbers.
     //
-    // Per-call create+destroy is intentional: the stateless contract model used
-    // by all examples today has null instance.data and treats destroy_instance as
-    // a no-op.  Stateful peers would need a retained instance-handle API (out of
-    // scope for now; the bridge primitive is the right place to add it later).
+    // Per-call create+destroy: a fresh peer instance is built for the call and
+    // destroyed after it. create_instance is handed the PEER's own loader_data
+    // (read from the resolved interface) so a VM peer reaches its factory; a
+    // same-VM peer's create is refused by the loader's reentrancy guard and falls
+    // back to the default impl (routed by the stamped contract id).
     let call_guest_method_fn: Function<'js> = Function::new(
         ctx.clone(),
         |ctx: Ctx<'js>,
@@ -614,20 +768,27 @@ fn register_host_functions<'js>(
             if iface.is_null() {
                 return AbiErrorCode::NotFound as u32;
             }
+            // The peer's own loader_data lets a VM peer's create_instance reach its
+            // factory; a native peer ignores it. Passing null here (the old behaviour)
+            // would force every VM peer onto its default impl.
+            // SAFETY: iface is non-null (checked above); `dispatch_type` is a plain
+            // field readable through a valid pointer.
+            let peer_dt: DispatchType = unsafe { (*iface).dispatch_type };
+            let peer_loader_data: VmLoaderData = match peer_dt {
+                // SAFETY: iface is non-null; the `vm` union variant is active iff
+                // dispatch_type == VirtualMachine, which this arm establishes.
+                DispatchType::VirtualMachine => unsafe { (*iface).dispatch.vm.loader_data },
+                DispatchType::Native => VmLoaderData::null(),
+            };
             let mut instance: GuestContractInstance = GuestContractInstance::null();
             // SAFETY: iface is non-null and points to a valid GuestContractInterface
             // returned by resolve_guest_contract; null ctx is accepted for stateless contracts;
             // `instance` is a valid, writable out-param for the duration of the call.
             unsafe {
-                ((*iface).create_instance)(
-                    VmLoaderData::null(),
-                    hvt,
-                    core::ptr::null(),
-                    &mut instance,
-                )
+                ((*iface).create_instance)(peer_loader_data, hvt, core::ptr::null(), &mut instance)
             };
-            // create_instance returns a null (null-id) handle for stateless/VM peers, but
-            // host call_guest_method routes by instance.contract_id — stamp the id we resolved.
+            // A same-VM peer create is refused (null-id handle); host call_guest_method
+            // routes by instance.contract_id — stamp the id we resolved either way.
             instance.contract_id = GuestContractId::from_u64(contract_id);
             let mut err: AbiError = AbiError::ok();
             // SAFETY: hvt, instance, and iface are all valid; args_ptr/out_ptr are caller-supplied
@@ -646,9 +807,9 @@ fn register_host_functions<'js>(
                 )
             };
             // SAFETY: iface is non-null (checked above); instance was produced by create_instance
-            // on this same interface.  Stateless contracts treat destroy_instance as a no-op.
-            // Best-effort: stateful peers are out of scope for this bridge primitive.
-            unsafe { ((*iface).destroy_instance)(VmLoaderData::null(), hvt, instance) };
+            // on this same interface, so destroying it with the same peer loader_data releases
+            // the per-instance impl (a null-id handle is a no-op).
+            unsafe { ((*iface).destroy_instance)(peer_loader_data, hvt, instance) };
             err.code
         },
     )
@@ -711,12 +872,29 @@ fn register_host_functions<'js>(
                 functions.push(func_persistent);
             }
 
+            // The factory builds a fresh impl object per instance (and the load-time
+            // default impl). It is a required field on the vtable: the generated
+            // setXFactory installs it before registration.
+            let factory_fn: Function<'js> = match vtable_obj.get::<&str, Function<'js>>("factory") {
+                Ok(f) => f,
+                Err(_) => {
+                    return Err(rquickjs::Exception::throw_message(
+                        &ctx,
+                        &format!(
+                            "registerVtable: vtable for contract '{contract_name}' has no 'factory' function (call setXFactory before registering)"
+                        ),
+                    ));
+                }
+            };
+            let factory: Persistent<Function<'static>> = Persistent::save(&ctx, factory_fn);
+
             let data: JsRegistrationData = JsRegistrationData {
                 contract_id,
                 contract_version,
                 _fn_count: fn_count_usize,
                 contract_name,
                 functions,
+                factory,
             };
 
             let slot_guard: UserDataGuard<Rc<RefCell<Option<JsRegistrationData>>>> =
@@ -1604,10 +1782,39 @@ impl JsLoader {
                     .to_owned(),
             })?;
 
+        // Build the stateless default impl once via the factory. It serves dispatch
+        // on a null instance handle (low-level / host-caller paths). Done before `ctx`
+        // is moved into the JsLoaderData below.
+        let default_impl: Persistent<Value<'static>> = {
+            let built: Result<Persistent<Value<'static>>, rquickjs::Error> =
+                ctx.with(|ctx_ref: Ctx<'_>| {
+                    let factory: Function<'_> =
+                        registration_data.factory.clone().restore(&ctx_ref)?;
+                    let impl_val: Value<'_> = factory.call::<(), Value<'_>>(())?;
+                    Ok(Persistent::save(&ctx_ref, impl_val))
+                });
+            match built {
+                Ok(p) => p,
+                Err(e) => {
+                    return Err(LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!(
+                            "JS runtime js-quickjs error: default impl factory call failed: {e}"
+                        ),
+                    });
+                }
+            }
+        };
+
         let loader_data: SendVm = SendVm(Box::new(JsLoaderData {
-            _runtime: qjs_runtime,
-            ctx,
             functions: registration_data.functions,
+            factory: registration_data.factory,
+            default_impl,
+            instances: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(1),
+            contract_id: registration_data.contract_id,
+            ctx,
+            _runtime: qjs_runtime,
             in_dispatch_threads: Mutex::new(Vec::new()),
             logger: runtime.logger(),
         }));
@@ -1840,7 +2047,10 @@ mod tests {
         format!(
             r#"
 function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
-    var vtable = {{ functions: [ function(args, out) {{ return 0; }} ] }};
+    var vtable = {{
+        factory: function() {{ return {{}}; }},
+        functions: [ function(impl, args, out) {{ return 0; }} ]
+    }};
     polyplug.registerVtable({contract_lo}, {contract_hi}, vtable, 1, "{contract_name}", 0x00010000);
 }}
 "#
@@ -2103,11 +2313,14 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         let bundle_js: String = format!(
             r#"
 function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
-    var vtable = {{ functions: [ function(args_ptr, out_ptr) {{
-        var v = polyplug.readF64(args_ptr);
-        polyplug.writeF64(out_ptr, v * 2.0 + 0.25);
-        return 0;
-    }} ] }};
+    var vtable = {{
+        factory: function() {{ return {{}}; }},
+        functions: [ function(impl, args_ptr, out_ptr) {{
+            var v = polyplug.readF64(args_ptr);
+            polyplug.writeF64(out_ptr, v * 2.0 + 0.25);
+            return 0;
+        }} ]
+    }};
     polyplug.registerVtable({contract_lo}, {contract_hi}, vtable, 1, "test.float@1", 0x00010000);
 }}
 "#
@@ -2186,10 +2399,30 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         ctx: Context,
         functions: Vec<Persistent<Function<'static>>>,
     ) -> (VmLoaderData, &'static JsLoaderData) {
+        // A trivial factory + default impl: the dispatch tests pass a null instance
+        // handle, so dispatch resolves the default impl. The test guest functions
+        // ignore the impl argument, so an empty object suffices.
+        let (factory, default_impl): (Persistent<Function<'static>>, Persistent<Value<'static>>) =
+            ctx.with(|ctx_ref: Ctx<'_>| {
+                let factory_fn: Function<'_> = ctx_ref
+                    .eval::<Function<'_>, _>("(function() { return {}; })")
+                    .expect("factory eval should produce a function");
+                let default_obj: Object<'_> =
+                    Object::new(ctx_ref.clone()).expect("default impl object creation");
+                (
+                    Persistent::save(&ctx_ref, factory_fn),
+                    Persistent::save(&ctx_ref, default_obj.into_value()),
+                )
+            });
         let boxed: Box<JsLoaderData> = Box::new(JsLoaderData {
-            _runtime: runtime,
-            ctx,
             functions,
+            factory,
+            default_impl,
+            instances: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(1),
+            contract_id: 0,
+            ctx,
+            _runtime: runtime,
             in_dispatch_threads: Mutex::new(Vec::new()),
             logger: LoggerHandle::default_stderr(),
         });
@@ -2226,6 +2459,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         let err: AbiError = unsafe {
             js_dispatch_impl(
                 vm_loader_data,
+                GuestContractInstance::null(),
                 0,
                 core::ptr::null(),
                 &mut out_buf as *mut i32 as *mut (),
@@ -2272,6 +2506,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
                 let nested: AbiError = unsafe {
                     js_dispatch_impl(
                         vm_loader_data,
+                        GuestContractInstance::null(),
                         0,
                         core::ptr::null(),
                         core::ptr::null_mut(),
@@ -2306,6 +2541,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         let outer: AbiError = unsafe {
             js_dispatch_impl(
                 vm_loader_data,
+                GuestContractInstance::null(),
                 0,
                 core::ptr::null(),
                 core::ptr::null_mut(),
@@ -2340,6 +2576,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         let recovered: AbiError = unsafe {
             js_dispatch_impl(
                 vm_loader_data,
+                GuestContractInstance::null(),
                 0,
                 core::ptr::null(),
                 core::ptr::null_mut(),
@@ -2419,6 +2656,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
             unsafe {
                 js_dispatch_impl(
                     vm_loader_data_a,
+                    GuestContractInstance::null(),
                     0,
                     core::ptr::null(),
                     core::ptr::null_mut(),
@@ -2442,6 +2680,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
             unsafe {
                 js_dispatch_impl(
                     vm_loader_data_b,
+                    GuestContractInstance::null(),
                     1,
                     core::ptr::null(),
                     core::ptr::null_mut(),

@@ -1,7 +1,7 @@
 // decoder.js - Plugin implementation using generated code
 // Bundled with rolldown along with generated code
 
-import { setDecoderImpl } from './generated/guest/contracts';
+import { setDecoderFactory } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
 import { toStr, allocStringArena } from '../../../../sdks/js/guest/polyplug_guest.js';
 
@@ -27,6 +27,6 @@ function decode(input) {
     };
 }
 
-setDecoderImpl(decode);
+setDecoderFactory(() => ({ fn0: decode }));
 
 export { polyplug_init };

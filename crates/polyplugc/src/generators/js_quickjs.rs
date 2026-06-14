@@ -269,7 +269,7 @@ fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
          // Runtime: js-quickjs\n\n",
     );
     // Collect the user-defined type names referenced by the rendered plugin
-    // interfaces (setXImpl signatures use them) — an empty type import leaves
+    // interfaces (setXFactory signatures use them) — an empty type import leaves
     // `AddArgs`-style references dangling under `deno check`.
     let mut type_imports: BTreeSet<String> = BTreeSet::new();
     if let Some(bundle) = &ir.bundle {
@@ -370,7 +370,13 @@ fn render_plugin_interface_quickjs(
     // extracts only `functions` and substitutes its own instance lifecycle —
     // stubs here would be dead code with a misleading "override" promise.
     out.push_str(&format!("    fnCount: {function_count},\n"));
-    out.push_str("    functions: [] as ((args_ptr: number, out_ptr: number) => number)[],\n");
+    out.push_str(
+        "    functions: [] as ((impl: any, args_ptr: number, out_ptr: number) => number)[],\n",
+    );
+    // The factory builds a fresh impl object per instance. setXFactory installs it
+    // before registration; the loader reads `vtable.factory` and calls it for the
+    // load-time default impl and once per create_instance.
+    out.push_str("    factory: null as null | (() => any),\n");
     out.push_str(&format!("    contractName: \"{contract_name_full}\",\n"));
     // Packed contract version: the loader recovers `major = version >> 16`, so the
     // major version is encoded in the high 16 bits. This threads the contract's real
@@ -385,8 +391,8 @@ fn render_plugin_interface_quickjs(
     out.push_str(&format!("    version: {{ major: {version_major}, minor: {version_minor}, patch: {version_patch} }}\n"));
     out.push_str("};\n");
 
-    let set_impl_name: String = format!(
-        "set{}Impl",
+    let set_factory_name: String = format!(
+        "set{}Factory",
         plugin_name
             .replace(['.', '-'], "_")
             .split('_')
@@ -416,14 +422,17 @@ fn render_plugin_interface_quickjs(
         // usize→f64→usize round-trip is exact. readU32/writeU32 also accept f64.
         out.push_str("\nfunction ");
         out.push_str(&wrapper_name);
-        out.push_str("(args_ptr: number, out_ptr: number): number {\n");
+        out.push_str("(impl: any, args_ptr: number, out_ptr: number): number {\n");
         out.push_str("    // SAFETY: args_ptr and out_ptr are valid addresses passed as f64\n");
         out.push_str("    // by the loader. readU32/writeU32 accept f64 and convert to usize.\n");
+        out.push_str(
+            "    // `impl` is the per-instance impl object the loader resolved for this\n",
+        );
+        out.push_str(
+            "    // call (built by the factory); the loader passes it as the first argument.\n",
+        );
         out.push_str("    var polyplug = (globalThis as any).polyplug;\n");
         out.push_str("    if (!polyplug) return 1;\n");
-        out.push_str("    var impl = ");
-        out.push_str(&plugin_var);
-        out.push_str("_IMPL;\n");
         out.push_str("    if (!impl) return 1;\n");
 
         if has_params {
@@ -485,13 +494,12 @@ fn render_plugin_interface_quickjs(
         abi_wrappers.push(wrapper_name);
     }
 
-    // Store implementation functions
-    out.push_str("\nlet ");
-    out.push_str(&plugin_var);
-    out.push_str("_IMPL: { [fn: string]: (...args: any[]) => any } | null = null;\n");
-
-    out.push_str(&format!("\nexport function {set_impl_name}("));
-    let impl_params: Vec<String> = contract
+    // Install the per-instance factory + ABI wrappers. The factory returns a fresh
+    // impl object ({ fn0, fn1, ... }) per instance; the loader calls it once at load
+    // (default impl) and once per create_instance, then passes the resolved impl as
+    // each wrapper's first argument. No module-global impl: state lives on the
+    // per-instance object the factory builds.
+    let impl_members: Vec<String> = contract
         .functions
         .iter()
         .enumerate()
@@ -509,20 +517,15 @@ fn render_plugin_interface_quickjs(
             format!("fn{idx}: ({}) => {}", params, ret)
         })
         .collect();
-    out.push_str(&impl_params.join(", "));
-    out.push_str("): void {\n");
+    let impl_shape: String = format!("{{ {} }}", impl_members.join("; "));
+
+    out.push_str(&format!(
+        "\nexport function {set_factory_name}(factory: () => {impl_shape}): void {{\n"
+    ));
 
     out.push_str("    ");
     out.push_str(&plugin_var);
-    out.push_str("_IMPL = { ");
-    let fn_refs: Vec<String> = contract
-        .functions
-        .iter()
-        .enumerate()
-        .map(|(idx, _)| format!("fn{idx}"))
-        .collect();
-    out.push_str(&fn_refs.join(", "));
-    out.push_str(" };\n");
+    out.push_str("_INTERFACE.factory = factory;\n");
 
     // Store ABI wrappers in interface
     out.push_str("    ");
@@ -586,8 +589,8 @@ fn generate_index_ts(ir: &ValidatedIr) -> String {
             ));
         }
         for plugin in &bundle.plugins {
-            let set_impl_name: String = format!(
-                "set{}Impl",
+            let set_factory_name: String = format!(
+                "set{}Factory",
                 plugin
                     .name
                     .replace(['.', '-'], "_")
@@ -604,7 +607,7 @@ fn generate_index_ts(ir: &ValidatedIr) -> String {
                     .collect::<String>()
             );
             out.push_str(&format!(
-                "export {{ {set_impl_name} }} from './contracts';\n"
+                "export {{ {set_factory_name} }} from './contracts';\n"
             ));
         }
     }

@@ -76,7 +76,7 @@ fn write_js_bundle(dir: &std::path::Path, name: &str, js_src: &str, provides: &s
 fn provider_js_src(peer_lo: u32, peer_hi: u32) -> String {
     format!(
         r#"
-function echo(argsPtr, outPtr) {{
+function echo(impl, argsPtr, outPtr) {{
     try {{
         var polyplug = globalThis.polyplug;
         var inLo  = polyplug.readU32(argsPtr);
@@ -112,6 +112,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         {peer_hi} >>> 0,
         {{ contractLo: {peer_lo} >>> 0, contractHi: {peer_hi} >>> 0, fnCount: 1,
            contractName: "test.peer", version: 0x10000,
+           factory: function() {{ return {{}}; }},
            functions: [echo] }},
         1,
         "test.peer",
@@ -138,7 +139,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
 fn consumer_js_src(peer_lo: u32, peer_hi: u32, consumer_lo: u32, consumer_hi: u32) -> String {
     format!(
         r#"
-function invoke(argsPtr, outPtr) {{
+function invoke(impl, argsPtr, outPtr) {{
     try {{
         var polyplug = globalThis.polyplug;
         if (!polyplug || !polyplug.callGuestMethod) {{ return 1; }}
@@ -188,6 +189,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         {consumer_hi} >>> 0,
         {{ contractLo: {consumer_lo} >>> 0, contractHi: {consumer_hi} >>> 0, fnCount: 1,
            contractName: "test.consumer", version: 0x10000,
+           factory: function() {{ return {{}}; }},
            functions: [invoke] }},
         1,
         "test.consumer",

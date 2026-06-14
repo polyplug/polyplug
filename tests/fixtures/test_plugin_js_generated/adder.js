@@ -5,7 +5,7 @@
 // integration_js_generated_guest.rs drives every non-StringView signature
 // shape through these wrappers. Rebuilt by tests/fixtures/build_all.sh.
 
-import { setTestAdderImpl } from './generated/guest/contracts';
+import { setTestAdderFactory } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
 import { allocStringArena } from '../../../sdks/js/guest/polyplug_guest.js';
 
@@ -33,6 +33,6 @@ function version() {
 function reset() {
 }
 
-setTestAdderImpl(add, addPrimitive, version, reset);
+setTestAdderFactory(() => ({ fn0: add, fn1: addPrimitive, fn2: version, fn3: reset }));
 
 export { polyplug_init };
