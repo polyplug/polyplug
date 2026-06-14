@@ -104,7 +104,8 @@ def log(host_ptr: int, level: int, scope: str, message: str) -> None:
 def register_contract(
     module_globals: dict,
     contract: str,
-    functions: List[Callable[[int, int, int], None]],
+    functions: List[Callable[[object, int, int, int], None]],
+    factory: Callable[[int], object],
     plugin_name: Optional[str] = None,
 ) -> None:
     """Register one contract's functions with the polyplug Python loader.
@@ -114,6 +115,12 @@ def register_contract(
     this from the plugin's ``polyplug_init`` (or at module top level) once per
     contract the bundle provides.
 
+    The loader owns per-instance state: it calls ``factory(host_ptr)`` once per
+    ``create_instance`` to build a fresh implementation object, keys it under the
+    returned instance handle, and threads it back as the first argument of every
+    dispatch callable. No implementation object is stored at module scope, so two
+    live instances of the same contract never share state.
+
     Args:
         module_globals: the plugin module's ``globals()`` — where the loader
             looks for ``_polyplug_registrations``.
@@ -122,8 +129,13 @@ def register_contract(
             the contract id).
         functions: callables ordered by ``fn_id`` — ``functions[0]`` is fn_id 0,
             etc. Each is invoked as
-            ``fn(args_ptr_int: int, out_ptr_int: int, arena_ptr_int: int)``;
+            ``fn(impl, args_ptr_int: int, out_ptr_int: int, arena_ptr_int: int)``
+            where ``impl`` is the instance the loader resolved for this call;
             return normally on success, raise to signal an error.
+        factory: the author factory ``factory(host_ptr_int: int) -> impl`` the
+            loader calls once per ``create_instance`` (and once at load for the
+            stateless default instance) to build a fresh implementation bound to
+            its owning runtime's host pointer.
         plugin_name: optional human-readable plugin name; the loader defaults to
             the bundle name when omitted.
     """
@@ -131,6 +143,7 @@ def register_contract(
     entry: dict = {
         "contract": contract,
         "functions": list(functions),
+        "factory": factory,
     }
     if plugin_name is not None:
         entry["plugin_name"] = plugin_name

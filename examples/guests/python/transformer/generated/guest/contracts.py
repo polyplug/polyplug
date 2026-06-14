@@ -14,21 +14,18 @@ class TRANSFORMERDataTransformerPlugin:
     def transform(self, input: str) -> str:
         raise NotImplementedError
 
-_transformer_IMPL: TRANSFORMERDataTransformerPlugin | None = None
 _transformer_FACTORY: Callable[[int], TRANSFORMERDataTransformerPlugin] | None = None
 def set_transformer_factory(factory: Callable[[int], TRANSFORMERDataTransformerPlugin]) -> None:
     """Register the author factory; call once at module import time.
 
-    The factory receives the HostApi pointer when polyplug_init runs, so the
-    implementation is constructed with its owning runtime's host pointer.
+    The loader calls the factory with the HostApi pointer once per instance
+    (create_instance), so each implementation is constructed with its owning
+    runtime's host pointer and two live instances never share state.
     """
     global _transformer_FACTORY
     _transformer_FACTORY = factory
 
-def transformer_transform_abi(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
-    impl: TRANSFORMERDataTransformerPlugin | None = _transformer_IMPL
-    if impl is None:
-        raise RuntimeError("plugin impl not set")
+def transformer_transform_abi(impl: TRANSFORMERDataTransformerPlugin, args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
     if not args_ptr:
         raise RuntimeError("null args pointer")
     if not out_ptr:
@@ -53,14 +50,14 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
                   (no host pointer is stored in the guest SDK).
         ctx_ptr: BundleInitContext pointer (unused)
     """
-    global _transformer_IMPL
+    _ = host_ptr
     _ = ctx_ptr
     if _transformer_FACTORY is None:
         raise RuntimeError("set_transformer_factory(...) was not called at import time")
-    _transformer_IMPL = _transformer_FACTORY(host_ptr)
     register_contract(
         globals(),
         contract="data.Transformer@1",
+        factory=_transformer_FACTORY,
         functions=[
             transformer_transform_abi,
         ],

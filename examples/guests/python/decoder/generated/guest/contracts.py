@@ -14,21 +14,18 @@ class DECODERPipelineDecoderPlugin:
     def decode(self, input: str) -> str:
         raise NotImplementedError
 
-_decoder_IMPL: DECODERPipelineDecoderPlugin | None = None
 _decoder_FACTORY: Callable[[int], DECODERPipelineDecoderPlugin] | None = None
 def set_decoder_factory(factory: Callable[[int], DECODERPipelineDecoderPlugin]) -> None:
     """Register the author factory; call once at module import time.
 
-    The factory receives the HostApi pointer when polyplug_init runs, so the
-    implementation is constructed with its owning runtime's host pointer.
+    The loader calls the factory with the HostApi pointer once per instance
+    (create_instance), so each implementation is constructed with its owning
+    runtime's host pointer and two live instances never share state.
     """
     global _decoder_FACTORY
     _decoder_FACTORY = factory
 
-def decoder_decode_abi(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
-    impl: DECODERPipelineDecoderPlugin | None = _decoder_IMPL
-    if impl is None:
-        raise RuntimeError("plugin impl not set")
+def decoder_decode_abi(impl: DECODERPipelineDecoderPlugin, args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
     if not args_ptr:
         raise RuntimeError("null args pointer")
     if not out_ptr:
@@ -53,14 +50,14 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
                   (no host pointer is stored in the guest SDK).
         ctx_ptr: BundleInitContext pointer (unused)
     """
-    global _decoder_IMPL
+    _ = host_ptr
     _ = ctx_ptr
     if _decoder_FACTORY is None:
         raise RuntimeError("set_decoder_factory(...) was not called at import time")
-    _decoder_IMPL = _decoder_FACTORY(host_ptr)
     register_contract(
         globals(),
         contract="pipeline.Decoder@1",
+        factory=_decoder_FACTORY,
         functions=[
             decoder_decode_abi,
         ],

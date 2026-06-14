@@ -574,33 +574,23 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("                  (no host pointer is stored in the guest SDK).\n");
     out.push_str("        ctx_ptr: BundleInitContext pointer (unused)\n");
     out.push_str("    \"\"\"\n");
-    if !registrations.is_empty() {
-        let globals_list: String = registrations
-            .iter()
-            .map(
-                |(_, _, impl_var, _): &(String, String, String, &ResolvedContract)| {
-                    format!("_{impl_var}_IMPL")
-                },
-            )
-            .collect::<Vec<String>>()
-            .join(", ");
-        out.push_str(&format!("    global {globals_list}\n"));
-    }
+    // The loader owns per-instance state: it calls each contract's factory once
+    // per create_instance with the runtime's host pointer. polyplug_init only
+    // registers the factory and callables, so host_ptr is unused here.
+    out.push_str("    _ = host_ptr\n");
     out.push_str("    _ = ctx_ptr\n");
     for (_, _, impl_var, _) in &registrations {
         out.push_str(&format!("    if _{impl_var}_FACTORY is None:\n"));
         out.push_str(&format!(
             "        raise RuntimeError(\"set_{impl_var}_factory(...) was not called at import time\")\n"
         ));
-        out.push_str(&format!(
-            "    _{impl_var}_IMPL = _{impl_var}_FACTORY(host_ptr)\n"
-        ));
     }
-    for (display_name, lower, _, contract) in &registrations {
+    for (display_name, lower, impl_var, contract) in &registrations {
         let contract_str: String = format!("{}@{}", contract.name, contract.version.major);
         out.push_str("    register_contract(\n");
         out.push_str("        globals(),\n");
         out.push_str(&format!("        contract=\"{contract_str}\",\n"));
+        out.push_str(&format!("        factory=_{impl_var}_FACTORY,\n"));
         out.push_str("        functions=[\n");
         for func in &contract.functions {
             out.push_str(&format!("            {lower}_{}_abi,\n", func.name));
@@ -1199,22 +1189,23 @@ fn generate_guest_contract_trait(out: &mut String, contract: &ResolvedContract) 
 
 /// Emit the author-factory slot and registration helper for one impl variable.
 ///
-/// The author calls `set_<var>_factory(MyImpl)` at import time; the generated
-/// `polyplug_init` constructs the implementation by calling the factory with
-/// the `HostApi` pointer, so the impl is built with its owning runtime's host —
-/// no host pointer is stored in the guest SDK. (The slots themselves are
-/// module-level, bounded by the documented CPython once-per-process limit.)
+/// The author calls `set_<var>_factory(MyImpl)` at import time to register the
+/// factory; the loader then calls it once per `create_instance` (with the owning
+/// runtime's `HostApi` pointer) to build a fresh implementation, so each live
+/// instance has its own state and no implementation object is stored at module
+/// scope. The factory slot itself is set-once registration config (not per-call
+/// runtime state), bounded by the documented CPython once-per-process limit.
 fn emit_python_factory_slot(out: &mut String, var: &str, class_name: &str) {
-    out.push_str(&format!("\n_{var}_IMPL: {class_name} | None = None\n"));
     out.push_str(&format!(
-        "_{var}_FACTORY: Callable[[int], {class_name}] | None = None\n"
+        "\n_{var}_FACTORY: Callable[[int], {class_name}] | None = None\n"
     ));
     out.push_str(&format!(
         "def set_{var}_factory(factory: Callable[[int], {class_name}]) -> None:\n"
     ));
     out.push_str("    \"\"\"Register the author factory; call once at module import time.\n\n");
-    out.push_str("    The factory receives the HostApi pointer when polyplug_init runs, so the\n");
-    out.push_str("    implementation is constructed with its owning runtime's host pointer.\n");
+    out.push_str("    The loader calls the factory with the HostApi pointer once per instance\n");
+    out.push_str("    (create_instance), so each implementation is constructed with its owning\n");
+    out.push_str("    runtime's host pointer and two live instances never share state.\n");
     out.push_str("    \"\"\"\n");
     out.push_str(&format!("    global _{var}_FACTORY\n"));
     out.push_str(&format!("    _{var}_FACTORY = factory\n\n"));
@@ -1285,13 +1276,13 @@ fn python_guest_impl_return_type(returns: &Option<ResolvedTypeRef>) -> String {
 }
 
 fn generate_guest_contract_interface(out: &mut String, contract: &ResolvedContract) {
-    // Non-bundle path: trait stored under `_<UPPER_SNAKE>_IMPL`, callables named
-    // `<lower>_<fn>_abi` (see generate_guest_contract_trait).
+    // Non-bundle path: factory registered under `_<UPPER_SNAKE>_FACTORY`, callables
+    // named `<lower>_<fn>_abi` (see generate_guest_contract_trait). The instance
+    // impl is passed to each callable by the loader, not stored at module scope.
     let lower: String = contract.name.replace('.', "_");
-    let upper: String = contract_name_to_upper_snake(&contract.name);
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
-    emit_guest_function_callables(out, contract, &lower, &upper, &trait_name, &struct_name);
+    emit_guest_function_callables(out, contract, &lower, &trait_name, &struct_name);
 }
 
 fn generate_guest_plugin_interface(
@@ -1299,34 +1290,29 @@ fn generate_guest_plugin_interface(
     plugin_name: &str,
     contract: &ResolvedContract,
 ) {
-    // Bundle path: trait stored under `_<plugin_lower>_IMPL`, callables named
-    // `<plugin_lower>_<fn>_abi` (see generate_guest_plugin_trait).
+    // Bundle path: factory registered under `_<plugin_lower>_FACTORY`, callables
+    // named `<plugin_lower>_<fn>_abi` (see generate_guest_plugin_trait). The
+    // instance impl is passed to each callable by the loader, not stored at module
+    // scope.
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
     let plugin_class: String = plugin_guest_trait_name(plugin_name, &contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
-    emit_guest_function_callables(
-        out,
-        contract,
-        &plugin_lower,
-        &plugin_lower,
-        &plugin_class,
-        &struct_name,
-    );
+    emit_guest_function_callables(out, contract, &plugin_lower, &plugin_class, &struct_name);
 }
 
 /// Emit the per-function VM-dispatch callables for one contract.
 ///
-/// Each callable has the loader's three-int signature
-/// `<fn_prefix>_<fn>_abi(args_ptr: int, out_ptr: int, arena_ptr: int)`: it
-/// unmarshals the args buffer, invokes the user impl stored in `_<impl_var>_IMPL`,
-/// marshals the return into `out_ptr`, and returns normally (success) or raises
-/// (failure). Per-function `struct.Struct` instances precompiled at module level
-/// give fast scalar (un)packing without per-call `ctypes` object construction.
+/// Each callable has the loader's four-argument signature
+/// `<fn_prefix>_<fn>_abi(impl, args_ptr: int, out_ptr: int, arena_ptr: int)`: the
+/// loader resolves `impl` from the instance handle and passes it in, then the
+/// callable unmarshals the args buffer, invokes the user impl, marshals the return
+/// into `out_ptr`, and returns normally (success) or raises (failure).
+/// Per-function `struct.Struct` instances precompiled at module level give fast
+/// scalar (un)packing without per-call `ctypes` object construction.
 fn emit_guest_function_callables(
     out: &mut String,
     contract: &ResolvedContract,
     fn_prefix: &str,
-    impl_var: &str,
     impl_class: &str,
     struct_name: &str,
 ) {
@@ -1339,13 +1325,8 @@ fn emit_guest_function_callables(
         let has_return: bool = has_return_value(&func.returns);
         let has_params: bool = !func.params.is_empty();
         out.push_str(&format!(
-            "def {abi_name}(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:\n"
+            "def {abi_name}(impl: {impl_class}, args_ptr: int, out_ptr: int, arena_ptr: int) -> None:\n"
         ));
-        out.push_str(&format!(
-            "    impl: {impl_class} | None = _{impl_var}_IMPL\n"
-        ));
-        out.push_str("    if impl is None:\n");
-        out.push_str("        raise RuntimeError(\"plugin impl not set\")\n");
         if has_params {
             out.push_str("    if not args_ptr:\n");
             out.push_str("        raise RuntimeError(\"null args pointer\")\n");

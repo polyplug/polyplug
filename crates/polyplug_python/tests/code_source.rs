@@ -35,7 +35,7 @@ use polyplug_utils::bundle_id;
 const CODE_PLUGIN_SRC: &str = r#"
 import ctypes
 
-def _fn0(args_ptr, out_ptr, arena_ptr):
+def _fn0(impl, args_ptr, out_ptr, arena_ptr):
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = 0x7B
 
 def polyplug_init(host_interface: int, _ctx: int) -> None:
@@ -44,6 +44,7 @@ def polyplug_init(host_interface: int, _ctx: int) -> None:
         {
             "contract": "code.contract@1",
             "plugin_name": "code_plugin",
+            "factory": lambda host_ptr: None,
             "functions": [_fn0],
         },
     ]

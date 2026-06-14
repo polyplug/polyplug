@@ -501,30 +501,37 @@ fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
          # delivered record.\n\
          log(0, LogLevel.Error, \"guest.logdemo\", \"null host must not be delivered\")\n\
          \n\
-         # The host pointer flows from polyplug_init into this module-level cell\n\
-         # owned by the PLUGIN (author state) — the SDK itself stores nothing.\n\
-         _host_ptr: int = 0\n\
+         \n\
+         class LogDemo:\n\
+         \x20   # The host pointer flows from the loader into per-instance state\n\
+         \x20   # owned by the PLUGIN (the factory receives it) — the SDK stores\n\
+         \x20   # nothing.\n\
+         \x20   def __init__(self, host_ptr: int) -> None:\n\
+         \x20       self._host_ptr = host_ptr\n\
+         \n\
+         \x20   def do_log(self) -> None:\n\
+         \x20       # bytes_as_view round-trip: the view borrows the caller-held\n\
+         \x20       # bytes local, so reading it back through to_str must be verbatim.\n\
+         \x20       payload = \"héllo from python ✓\".encode(\"utf-8\")\n\
+         \x20       view = bytes_as_view(payload)\n\
+         \x20       if to_str(view) != \"héllo from python ✓\":\n\
+         \x20           raise RuntimeError(\"bytes_as_view round-trip mismatch\")\n\
+         \x20       empty = bytes_as_view(b\"\")\n\
+         \x20       if empty.ptr or empty.len != 0:\n\
+         \x20           raise RuntimeError(\"bytes_as_view(b'') must be a null view\")\n\
+         \x20       log(self._host_ptr, LogLevel.Info, \"guest.logdemo\", to_str(view))\n\
          \n\
          \n\
-         def _do_log(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:\n\
-         \x20   # bytes_as_view round-trip: the view borrows the caller-held bytes\n\
-         \x20   # local, so reading it back through to_str must be verbatim.\n\
-         \x20   payload = \"héllo from python ✓\".encode(\"utf-8\")\n\
-         \x20   view = bytes_as_view(payload)\n\
-         \x20   if to_str(view) != \"héllo from python ✓\":\n\
-         \x20       raise RuntimeError(\"bytes_as_view round-trip mismatch\")\n\
-         \x20   empty = bytes_as_view(b\"\")\n\
-         \x20   if empty.ptr or empty.len != 0:\n\
-         \x20       raise RuntimeError(\"bytes_as_view(b'') must be a null view\")\n\
-         \x20   log(_host_ptr, LogLevel.Info, \"guest.logdemo\", to_str(view))\n\
+         def _do_log(impl, args_ptr: int, out_ptr: int, arena_ptr: int) -> None:\n\
+         \x20   impl.do_log()\n\
          \n\
          \n\
          def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n\
-         \x20   global _host_ptr\n\
-         \x20   _host_ptr = host_ptr\n\
+         \x20   _ = host_ptr\n\
          \x20   register_contract(\n\
          \x20       globals(),\n\
          \x20       contract=\"test.logdemo@1\",\n\
+         \x20       factory=LogDemo,\n\
          \x20       functions=[_do_log],\n\
          \x20       plugin_name=\"logdemo\",\n\
          \x20   )\n";

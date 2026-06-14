@@ -14,21 +14,18 @@ class VALIDATORPipelineValidatorPlugin:
     def validate(self, input: str) -> str:
         raise NotImplementedError
 
-_validator_IMPL: VALIDATORPipelineValidatorPlugin | None = None
 _validator_FACTORY: Callable[[int], VALIDATORPipelineValidatorPlugin] | None = None
 def set_validator_factory(factory: Callable[[int], VALIDATORPipelineValidatorPlugin]) -> None:
     """Register the author factory; call once at module import time.
 
-    The factory receives the HostApi pointer when polyplug_init runs, so the
-    implementation is constructed with its owning runtime's host pointer.
+    The loader calls the factory with the HostApi pointer once per instance
+    (create_instance), so each implementation is constructed with its owning
+    runtime's host pointer and two live instances never share state.
     """
     global _validator_FACTORY
     _validator_FACTORY = factory
 
-def validator_validate_abi(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
-    impl: VALIDATORPipelineValidatorPlugin | None = _validator_IMPL
-    if impl is None:
-        raise RuntimeError("plugin impl not set")
+def validator_validate_abi(impl: VALIDATORPipelineValidatorPlugin, args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
     if not args_ptr:
         raise RuntimeError("null args pointer")
     if not out_ptr:
@@ -53,14 +50,14 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
                   (no host pointer is stored in the guest SDK).
         ctx_ptr: BundleInitContext pointer (unused)
     """
-    global _validator_IMPL
+    _ = host_ptr
     _ = ctx_ptr
     if _validator_FACTORY is None:
         raise RuntimeError("set_validator_factory(...) was not called at import time")
-    _validator_IMPL = _validator_FACTORY(host_ptr)
     register_contract(
         globals(),
         contract="pipeline.Validator@1",
+        factory=_validator_FACTORY,
         functions=[
             validator_validate_abi,
         ],

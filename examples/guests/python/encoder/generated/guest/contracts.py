@@ -14,21 +14,18 @@ class ENCODERPipelineEncoderPlugin:
     def encode(self, input: str) -> str:
         raise NotImplementedError
 
-_encoder_IMPL: ENCODERPipelineEncoderPlugin | None = None
 _encoder_FACTORY: Callable[[int], ENCODERPipelineEncoderPlugin] | None = None
 def set_encoder_factory(factory: Callable[[int], ENCODERPipelineEncoderPlugin]) -> None:
     """Register the author factory; call once at module import time.
 
-    The factory receives the HostApi pointer when polyplug_init runs, so the
-    implementation is constructed with its owning runtime's host pointer.
+    The loader calls the factory with the HostApi pointer once per instance
+    (create_instance), so each implementation is constructed with its owning
+    runtime's host pointer and two live instances never share state.
     """
     global _encoder_FACTORY
     _encoder_FACTORY = factory
 
-def encoder_encode_abi(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
-    impl: ENCODERPipelineEncoderPlugin | None = _encoder_IMPL
-    if impl is None:
-        raise RuntimeError("plugin impl not set")
+def encoder_encode_abi(impl: ENCODERPipelineEncoderPlugin, args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
     if not args_ptr:
         raise RuntimeError("null args pointer")
     if not out_ptr:
@@ -53,14 +50,14 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
                   (no host pointer is stored in the guest SDK).
         ctx_ptr: BundleInitContext pointer (unused)
     """
-    global _encoder_IMPL
+    _ = host_ptr
     _ = ctx_ptr
     if _encoder_FACTORY is None:
         raise RuntimeError("set_encoder_factory(...) was not called at import time")
-    _encoder_IMPL = _encoder_FACTORY(host_ptr)
     register_contract(
         globals(),
         contract="pipeline.Encoder@1",
+        factory=_encoder_FACTORY,
         functions=[
             encoder_encode_abi,
         ],

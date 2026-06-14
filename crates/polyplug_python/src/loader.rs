@@ -49,19 +49,34 @@
 //!         "contract": "calculator@1",
 //!         # Optional human-readable plugin name; defaults to the bundle name.
 //!         "plugin_name": "my_calculator",
+//!         # Author factory: factory(host_ptr_int) -> impl. Called once per
+//!         # create_instance (and once at load for the stateless default impl).
+//!         "factory": make_calculator,
 //!         # Callables ordered by fn_id: functions[0] is fn_id 0, etc.
-//!         # Each is invoked as functions[fn_id](args_ptr_int, out_ptr_int, arena_ptr_int).
+//!         # Each is invoked as functions[fn_id](impl, args_ptr_int, out_ptr_int, arena_ptr_int).
 //!         "functions": [add, sub, mul],
 //!     },
 //!     # ... one dict per contract; multi-contract bundles add more entries.
 //! ]
 //! ```
 //!
-//! Each callable receives three Python `int`s — the raw `args`, `out`, and
-//! `arena` pointers — and unmarshals/marshals through them (the generated guest
-//! glue does this). A callable returns normally on success (its return value is
-//! ignored) and raises a Python exception on failure, which the loader maps to
-//! [`AbiErrorCode::Generic`].
+//! Each callable receives the resolved instance `impl` followed by three Python
+//! `int`s — the raw `args`, `out`, and `arena` pointers — and unmarshals/marshals
+//! through them (the generated guest glue does this). A callable returns normally
+//! on success (its return value is ignored) and raises a Python exception on
+//! failure, which the loader maps to [`AbiErrorCode::Generic`].
+//!
+//! # Per-instance state
+//!
+//! The loader — not the guest module — owns per-instance state. `create_instance`
+//! calls the contract's `factory(host_ptr)` to build a fresh impl, mints a
+//! non-zero instance id, and keys the impl under that id in a per-contract
+//! registry; dispatch resolves the impl from the instance handle and passes it as
+//! the callable's first argument; `destroy_instance` drops it. A null instance
+//! handle (id 0) resolves to a per-contract default impl built once at load —
+//! this serves stateless contracts and the low-level dispatch paths that call
+//! with a null instance. Two live instances of the same contract therefore never
+//! share state.
 //!
 //! # Arena bridge
 //!
@@ -103,6 +118,11 @@
 //! cell), the inner call's arena and the outer call's arena never alias or clear
 //! one another.
 
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use pyo3::Bound;
 use pyo3::Py;
 use pyo3::PyAny;
@@ -138,66 +158,146 @@ pub(crate) const ARENA_ALLOC_ATTR: &str = "_polyplug_arena_alloc";
 
 // ─── Per-bundle loader data for VM dispatch ─────────────────────────────────────
 
-/// Loader-specific data for one Python contract's VM dispatch.
+/// Loader-specific data for one Python contract's VM dispatch and per-instance
+/// lifecycle.
 ///
-/// Holds the contract's callables (ordered by `fn_id`). The active per-call
-/// arena pointer is NOT stored here: it is threaded explicitly as the third
-/// argument of every guest callable (`callable(args, out, arena)`) and forwarded
-/// by the guest to `_polyplug_arena_alloc(size, arena)`, so allocation never
-/// depends on any shared cell. This is what makes concurrent and same-thread
-/// reentrant dispatch correct: each call's arena travels with its own call frame
-/// rather than through a cell another dispatch could overwrite or clear.
+/// Holds the contract's callables (ordered by `fn_id`), the author `factory`
+/// used to build implementation objects, the per-instance registry, and the
+/// stateless `default_impl`. The active per-call arena pointer is NOT stored
+/// here: it is threaded explicitly as the third value argument of every guest
+/// callable (`callable(impl, args, out, arena)`) and forwarded by the guest to
+/// `_polyplug_arena_alloc(size, arena)`, so allocation never depends on any
+/// shared cell. This is what makes concurrent and same-thread reentrant dispatch
+/// correct: each call's arena travels with its own call frame rather than through
+/// a cell another dispatch could overwrite or clear.
 pub struct PythonLoaderData {
     /// Callables ordered by `fn_id`. `callables[i]` handles `fn_id == i`.
+    /// Each is invoked as `callable(impl, args, out, arena)`.
     pub callables: Vec<Py<PyAny>>,
+    /// Author factory `factory(host_ptr_int) -> impl`, called once per
+    /// `create_instance` to build a fresh implementation bound to its owning
+    /// runtime's host pointer.
+    pub factory: Py<PyAny>,
+    /// Stateless default implementation, built once at load via the factory.
+    /// Dispatch resolves to this when the instance handle is null (id 0).
+    pub default_impl: Py<PyAny>,
+    /// Live instances keyed by their non-zero instance id (the value stored in
+    /// `GuestContractInstance::data`).
+    pub instances: Mutex<HashMap<u64, Py<PyAny>>>,
+    /// Monotonic source of non-zero instance ids. Starts at 1 so a real
+    /// instance handle is never null (null `data` denotes the default impl).
+    pub next_id: AtomicU64,
+    /// Contract id stamped into every instance handle this contract mints.
+    pub contract_id: GuestContractId,
 }
 
 // SAFETY: PythonLoaderData is shared across threads via the leaked raw pointer in
-// VmLoaderData. `callables` (Py<PyAny>) is Send/Sync when access is GIL-guarded,
-// which python_vm_dispatch guarantees (every access is inside Python::attach).
+// VmLoaderData. The Py<PyAny> fields and the HashMap of Py values are Send/Sync
+// when access is GIL-guarded, which the loader guarantees (every access to a
+// Python object happens inside Python::attach). The Mutex/AtomicU64 are Send/Sync
+// in their own right.
 unsafe impl Send for PythonLoaderData {}
-// SAFETY: see the Send impl above — every access to `callables` is GIL-guarded
+// SAFETY: see the Send impl above — every access to a Python object is GIL-guarded
 // (inside Python::attach), so the type is safe to share across threads.
 unsafe impl Sync for PythonLoaderData {}
 
-// ─── Instance lifecycle stubs ──────────────────────────────────────────────────
+// ─── Instance lifecycle ─────────────────────────────────────────────────────────
 
-/// Stub `create_instance` for Python plugins — returns a null instance.
+/// Create a fresh instance of a Python contract.
+///
+/// Calls the contract's `factory(host_ptr)` to build a new implementation object,
+/// mints a non-zero instance id, keys the impl under that id in the per-contract
+/// registry, and writes a `GuestContractInstance` whose `data` carries the id and
+/// whose `contract_id` is the contract's stamped id. A factory failure (or a
+/// poisoned registry lock) writes a null instance handle.
 ///
 /// # Safety
-/// Python plugins use VM dispatch; per-contract state lives in the interpreter,
-/// so no opaque instance handle is produced.
+/// - `loader_data` must wrap a valid pointer to a [`PythonLoaderData`] created by
+///   the loader (and leaked for the runtime lifetime).
+/// - `host` is the owning runtime's `HostApi` pointer, forwarded to the factory.
+/// - `out_instance`, when non-null, must be writable per the ABI contract.
 unsafe extern "C" fn python_create_instance(
-    _loader_data: VmLoaderData,
-    _host: *const HostApi,
+    loader_data: VmLoaderData,
+    host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
 ) {
-    if !out_instance.is_null() {
-        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(GuestContractInstance::null()) };
+    if out_instance.is_null() {
+        return;
     }
+    // SAFETY: loader_data wraps a valid PythonLoaderData pointer created by the
+    // loader; it is leaked for the runtime lifetime so the borrow is valid here.
+    let data: &PythonLoaderData = unsafe { &*(loader_data.data as *const PythonLoaderData) };
+    let host_addr: i64 = host as usize as i64;
+
+    let instance: GuestContractInstance =
+        Python::attach(
+            |py: Python<'_>| match data.factory.bind(py).call1((host_addr,)) {
+                Ok(impl_obj) => {
+                    let id: u64 = data.next_id.fetch_add(1, Ordering::Relaxed);
+                    match data.instances.lock() {
+                        Ok(mut map) => {
+                            map.insert(id, impl_obj.unbind());
+                            GuestContractInstance {
+                                data: id as usize as *mut core::ffi::c_void,
+                                contract_id: data.contract_id,
+                            }
+                        }
+                        Err(_) => GuestContractInstance::null(),
+                    }
+                }
+                Err(e) => {
+                    e.print(py);
+                    GuestContractInstance::null()
+                }
+            },
+        );
+
+    // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.
+    unsafe { out_instance.write(instance) };
 }
 
-/// Stub `destroy_instance` for Python plugins — no instance state to free.
+/// Destroy a Python contract instance.
+///
+/// Removes the impl keyed under the instance handle's id from the per-contract
+/// registry (dropping the `Py` under the GIL). A null handle (id 0) refers to the
+/// stateless default impl, which the loader owns for the runtime lifetime, so it
+/// is a no-op.
 ///
 /// # Safety
-/// Python plugins do not own instance data; this is a no-op.
+/// - `loader_data` must wrap a valid pointer to a [`PythonLoaderData`] created by
+///   the loader (and leaked for the runtime lifetime).
+/// - `instance` must be a handle previously produced by [`python_create_instance`]
+///   for this contract (or a null handle).
 unsafe extern "C" fn python_destroy_instance(
-    _loader_data: VmLoaderData,
+    loader_data: VmLoaderData,
     _host: *const HostApi,
-    _instance: GuestContractInstance,
+    instance: GuestContractInstance,
 ) {
+    let id: u64 = instance.data as usize as u64;
+    if id == 0 {
+        return;
+    }
+    // SAFETY: loader_data wraps a valid PythonLoaderData pointer created by the
+    // loader; it is leaked for the runtime lifetime so the borrow is valid here.
+    let data: &PythonLoaderData = unsafe { &*(loader_data.data as *const PythonLoaderData) };
+    Python::attach(|_py: Python<'_>| {
+        if let Ok(mut map) = data.instances.lock() {
+            // Drop happens under the GIL (we are inside Python::attach).
+            map.remove(&id);
+        }
+    });
 }
 
 // ─── VM dispatch entry ──────────────────────────────────────────────────────────
 
 /// VM dispatch function for Python plugins.
 ///
-/// Acquires the GIL via pyo3 (correct from any host thread), looks up the
+/// Acquires the GIL via pyo3 (correct from any host thread), resolves the impl for
+/// `instance` (the per-contract default impl when the handle is null), looks up the
 /// callable for `fn_id` in the per-contract [`PythonLoaderData`], and invokes
-/// `callable(args_ptr_int, out_ptr_int, arena_ptr_int)`. The arena pointer is
-/// passed straight to the guest as the third argument — there is no shared cell —
+/// `callable(impl, args_ptr_int, out_ptr_int, arena_ptr_int)`. The arena pointer is
+/// passed straight to the guest as the last argument — there is no shared cell —
 /// so the guest forwards it to `_polyplug_arena_alloc(size, arena)` and a
 /// concurrent or nested dispatch cannot perturb this call's arena. A normal
 /// return maps to [`AbiError::ok`]; a Python exception maps to
@@ -213,7 +313,7 @@ unsafe extern "C" fn python_destroy_instance(
 ///   caller's next reset.
 unsafe extern "C" fn python_vm_dispatch(
     loader_data: VmLoaderData,
-    _instance: GuestContractInstance,
+    instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
@@ -222,7 +322,8 @@ unsafe extern "C" fn python_vm_dispatch(
 ) {
     // SAFETY: loader_data wraps a valid PythonLoaderData pointer created by the
     // loader; it is leaked for the runtime lifetime so the borrow is valid for the call.
-    let result: AbiError = unsafe { python_vm_dispatch_impl(loader_data, fn_id, args, out, arena) };
+    let result: AbiError =
+        unsafe { python_vm_dispatch_impl(loader_data, instance, fn_id, args, out, arena) };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(result) };
@@ -231,6 +332,7 @@ unsafe extern "C" fn python_vm_dispatch(
 
 unsafe fn python_vm_dispatch_impl(
     loader_data: VmLoaderData,
+    instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
@@ -250,18 +352,47 @@ unsafe fn python_vm_dispatch_impl(
         }
     };
 
+    let instance_id: u64 = instance.data as usize as u64;
     let args_int: i64 = args as usize as i64;
     let out_int: i64 = out as usize as i64;
     let arena_int: i64 = arena as usize as i64;
 
     Python::attach(|py: Python<'_>| {
-        // The arena pointer travels as the third call argument; the guest forwards
-        // it to `_polyplug_arena_alloc(size, arena)`. No shared cell is published,
-        // so a concurrent or same-thread nested dispatch cannot overwrite or clear
-        // this call's arena.
+        // Resolve the instance impl: a null handle (id 0) uses the stateless
+        // default impl; otherwise look the live instance up by id. The impl is
+        // cloned out and the registry lock released BEFORE the call, so a nested
+        // dispatch (plugin→plugin re-entry) cannot deadlock on the registry mutex.
+        let impl_py: Py<PyAny> = if instance_id == 0 {
+            data.default_impl.clone_ref(py)
+        } else {
+            let map: std::sync::MutexGuard<'_, HashMap<u64, Py<PyAny>>> =
+                match data.instances.lock() {
+                    Ok(g) => g,
+                    Err(_) => {
+                        return AbiError {
+                            code: AbiErrorCode::Generic as u32,
+                            message: StringView::null(),
+                        };
+                    }
+                };
+            match map.get(&instance_id) {
+                Some(obj) => obj.clone_ref(py),
+                None => {
+                    return AbiError {
+                        code: AbiErrorCode::FunctionNotAvailable as u32,
+                        message: StringView::null(),
+                    };
+                }
+            }
+        };
+
+        // The impl is the first call argument; the arena pointer travels as the
+        // last. The guest forwards the arena to `_polyplug_arena_alloc(size,
+        // arena)`. No shared cell is published, so a concurrent or same-thread
+        // nested dispatch cannot overwrite or clear this call's arena.
         let bound: Bound<'_, PyAny> = callable.bind(py).clone();
         let call_result: Result<Bound<'_, PyAny>, pyo3::PyErr> =
-            bound.call((args_int, out_int, arena_int), None);
+            bound.call((impl_py, args_int, out_int, arena_int), None);
 
         match call_result {
             Ok(_) => AbiError::ok(),
@@ -287,7 +418,10 @@ pub(crate) struct ContractRegistration {
     pub contract_major: u32,
     /// Human-readable plugin name (defaults to the bundle name).
     pub plugin_name: String,
-    /// Callables ordered by `fn_id`.
+    /// Author factory `factory(host_ptr_int) -> impl`, called once per instance.
+    pub factory: Py<PyAny>,
+    /// Per-function callables ordered by `fn_id`. Each is invoked as
+    /// `callable(impl, args, out, arena)`.
     pub callables: Vec<Py<PyAny>>,
 }
 
@@ -427,6 +561,23 @@ pub(crate) fn collect_registrations(
             Err(_) => bundle_name.to_owned(),
         };
 
+        let factory: Bound<'_, PyAny> =
+            entry
+                .get_item("factory")
+                .map_err(|_| LoaderError::InitFailed {
+                    bundle: bundle_name.to_owned(),
+                    error: format!(
+                        "registration entry for `{}` missing `factory` callable",
+                        contract_str
+                    ),
+                })?;
+        if !factory.is_callable() {
+            return Err(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("`factory` for `{}` is not callable", contract_str),
+            });
+        }
+
         let functions: Bound<'_, PyAny> =
             entry
                 .get_item("functions")
@@ -463,6 +614,7 @@ pub(crate) fn collect_registrations(
             contract_name,
             contract_major,
             plugin_name,
+            factory: factory.unbind(),
             callables,
         });
     }
@@ -490,8 +642,35 @@ pub(crate) fn register_contracts(
     for reg in registrations {
         let cid: GuestContractId = GuestContractId::new(&reg.contract_name, reg.contract_major);
 
+        // Build the stateless default impl once at load via the author factory,
+        // bound to the runtime's host pointer. Dispatch uses it for null instance
+        // handles (stateless contracts and the low-level null-instance paths).
+        let host_addr: i64 = host_interface as usize as i64;
+        let default_impl: Py<PyAny> =
+            Python::attach(
+                |py: Python<'_>| match reg.factory.bind(py).call1((host_addr,)) {
+                    Ok(o) => Ok(o.unbind()),
+                    Err(e) => {
+                        e.print(py);
+                        Err(())
+                    }
+                },
+            )
+            .map_err(|_| LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!(
+                    "factory for `{}@{}` failed while building the default instance",
+                    reg.contract_name, reg.contract_major
+                ),
+            })?;
+
         let loader_data: Box<PythonLoaderData> = Box::new(PythonLoaderData {
             callables: reg.callables,
+            factory: reg.factory,
+            default_impl,
+            instances: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(1),
+            contract_id: cid,
         });
         let loader_data_ptr: *mut PythonLoaderData = Box::into_raw(loader_data);
 

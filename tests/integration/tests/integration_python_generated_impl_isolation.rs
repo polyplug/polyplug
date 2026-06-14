@@ -3,30 +3,35 @@
 //!
 //! # Why this exists
 //!
-//! The Python guest generator stores each plugin's constructed implementation in a
-//! module-level global `_<plugin>_IMPL` (set by `polyplug_init` from the author
-//! factory `_<plugin>_FACTORY`), and the per-call `<plugin>_<fn>_abi` callable
-//! reads it from that module's globals. CPython is shared process-wide, so a naive
+//! The Python guest generator registers each plugin's author factory in a
+//! module-level global `_<plugin>_FACTORY` (set at import via `set_<plugin>_factory`
+//! and handed to the loader by `polyplug_init`). The loader — not the module —
+//! builds implementation objects from that factory: a per-contract default impl at
+//! load, plus one per `create_instance`. CPython is shared process-wide, so a naive
 //! reading suggests two `Runtime` instances loading the same-named bundle would
-//! clobber each other's `_<plugin>_IMPL` through the shared `sys.modules` cache —
+//! clobber each other's `_<plugin>_FACTORY` through the shared `sys.modules` cache —
 //! the same class of cross-runtime leak the C# host-contract factory (#68) had.
 //!
 //! They do not. The `polyplug_python` loader's per-bundle module isolation pass
 //! (`isolate_bundle_modules` + the process-global `ISOLATION_NONCE`) re-keys every
 //! freshly imported in-bundle module — **including the `generated.*` package that
-//! holds `_<plugin>_IMPL`/`_<plugin>_FACTORY`** — under a unique per-load prefix.
-//! Each load therefore gets its own module object with its own globals, so the
-//! generated impl/factory globals are per-(bundle,runtime) instance state (the
-//! Rule-12-sanctioned category), exactly like Lua per-`_G` and JS per-context
-//! globals.
+//! holds `_<plugin>_FACTORY`** — under a unique per-load prefix. Each load therefore
+//! gets its own module object with its own globals, so the generated factory global
+//! (and thus the loader's per-runtime default impl built from it) is
+//! per-(bundle,runtime) instance state (the Rule-12-sanctioned category), exactly
+//! like Lua per-`_G` and JS per-context globals.
 //!
 //! `crates/polyplug_python/tests/python_loader.rs::two_runtimes_same_named_bundle_do_not_collide_in_sys_modules`
 //! proves the isolation pass re-keys a *hand-written* in-bundle module global. This
-//! test proves the same guarantee for the **actual generated** impl/factory pattern:
-//! two runtimes load two same-named bundles whose generated glue is byte-identical
-//! (same plugin name → identical `set_probe_factory`/`_probe_IMPL` symbols and the
-//! same `bundle_id` name-hash) but whose author factories construct impls returning
+//! test proves the same guarantee for the **actual generated** factory pattern: two
+//! runtimes load two same-named bundles whose generated glue is byte-identical (same
+//! plugin name → identical `set_probe_factory`/`_probe_FACTORY` symbols and the same
+//! `bundle_id` name-hash) but whose author factories construct impls returning
 //! different values. Each runtime must dispatch its OWN impl's value.
+//!
+//! (Per-instance isolation *within* one runtime is covered separately by
+//! `integration_python_per_instance.rs`; this test is specifically about the
+//! cross-runtime module-global boundary.)
 //!
 //! Uses the embedded CPython interpreter (pyo3), so it runs wherever the other
 //! `integration_python` loader tests run.
@@ -239,10 +244,10 @@ fn dispatch_probe_value(rt: &Runtime) -> i32 {
 
 /// Two `Runtime` instances in one process each load a same-named generated Python
 /// bundle whose author factory builds an impl returning a distinct value. If the
-/// generated `_probe_IMPL` module global were shared across runtimes (a real
-/// cross-runtime leak), the second load would clobber the first and both would
-/// observe the same value. The per-load isolation nonce prevents this: each
-/// dispatches its OWN value.
+/// generated `_probe_FACTORY` module global were shared across runtimes (a real
+/// cross-runtime leak), the second load would clobber the first's factory and both
+/// would build impls observing the same value. The per-load isolation nonce
+/// prevents this: each runtime's default impl dispatches its OWN value.
 #[test]
 fn two_runtimes_generated_probe_impl_globals_do_not_collide() {
     let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tempdir");
@@ -273,10 +278,10 @@ fn two_runtimes_generated_probe_impl_globals_do_not_collide() {
 
     assert_eq!(
         value_a, 0x11,
-        "runtime A must dispatch its OWN generated _probe_IMPL (0x11)"
+        "runtime A must dispatch the impl built from its OWN _probe_FACTORY (0x11)"
     );
     assert_eq!(
         value_b, 0x22,
-        "runtime B must dispatch its OWN generated _probe_IMPL (0x22), not A's cached module"
+        "runtime B must dispatch the impl built from its OWN _probe_FACTORY (0x22), not A's cached module"
     );
 }

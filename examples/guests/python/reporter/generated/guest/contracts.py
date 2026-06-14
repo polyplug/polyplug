@@ -14,21 +14,18 @@ class REPORTERDataReporterPlugin:
     def report(self, input: str) -> str:
         raise NotImplementedError
 
-_reporter_IMPL: REPORTERDataReporterPlugin | None = None
 _reporter_FACTORY: Callable[[int], REPORTERDataReporterPlugin] | None = None
 def set_reporter_factory(factory: Callable[[int], REPORTERDataReporterPlugin]) -> None:
     """Register the author factory; call once at module import time.
 
-    The factory receives the HostApi pointer when polyplug_init runs, so the
-    implementation is constructed with its owning runtime's host pointer.
+    The loader calls the factory with the HostApi pointer once per instance
+    (create_instance), so each implementation is constructed with its owning
+    runtime's host pointer and two live instances never share state.
     """
     global _reporter_FACTORY
     _reporter_FACTORY = factory
 
-def reporter_report_abi(args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
-    impl: REPORTERDataReporterPlugin | None = _reporter_IMPL
-    if impl is None:
-        raise RuntimeError("plugin impl not set")
+def reporter_report_abi(impl: REPORTERDataReporterPlugin, args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
     if not args_ptr:
         raise RuntimeError("null args pointer")
     if not out_ptr:
@@ -53,14 +50,14 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
                   (no host pointer is stored in the guest SDK).
         ctx_ptr: BundleInitContext pointer (unused)
     """
-    global _reporter_IMPL
+    _ = host_ptr
     _ = ctx_ptr
     if _reporter_FACTORY is None:
         raise RuntimeError("set_reporter_factory(...) was not called at import time")
-    _reporter_IMPL = _reporter_FACTORY(host_ptr)
     register_contract(
         globals(),
         contract="data.Reporter@1",
+        factory=_reporter_FACTORY,
         functions=[
             reporter_report_abi,
         ],

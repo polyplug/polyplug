@@ -11,11 +11,16 @@
 //       {
 //           "contract": "name@major" | "name@major.minor",
 //           "plugin_name": "optional",          # defaults to bundle name
+//           "factory": factory,                 # factory(host_ptr) -> impl
 //           "functions": [callable, ...],       # ordered by fn_id
 //       },
 //   ]
 //
-// Each callable is invoked as fn(args_ptr_int, out_ptr_int, arena_ptr_int).
+// The loader calls `factory(host_ptr)` once per create_instance (and once at load
+// for the stateless default impl) and passes the resolved impl as the first
+// argument of each callable, so each callable is invoked as
+// fn(impl, args_ptr_int, out_ptr_int, arena_ptr_int). The stateless plugins below
+// take `impl` and ignore it.
 #![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
@@ -200,7 +205,7 @@ unsafe fn dispatch_with_arena(
 const WRITE_OUT_PLUGIN_SRC: &str = r#"
 import ctypes
 
-def _fn0(args_ptr, out_ptr, arena_ptr):
+def _fn0(impl, args_ptr, out_ptr, arena_ptr):
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = 0x2A
 
 def polyplug_init(host_interface: int, ctx: int) -> None:
@@ -209,6 +214,7 @@ def polyplug_init(host_interface: int, ctx: int) -> None:
         {
             "contract": "writeout@1",
             "plugin_name": "writeout_plugin",
+            "factory": lambda host_ptr: None,
             "functions": [_fn0],
         },
     ]
@@ -221,13 +227,13 @@ fn writeout_contract_id() -> u64 {
 
 /// A plugin whose function 0 raises a Python exception.
 const RAISING_FN_PLUGIN_SRC: &str = r#"
-def _fn0(args_ptr, out_ptr, arena_ptr):
+def _fn0(impl, args_ptr, out_ptr, arena_ptr):
     raise ValueError("dispatch boom")
 
 def polyplug_init(host_interface: int, ctx: int) -> None:
     global _polyplug_registrations
     _polyplug_registrations = [
-        {"contract": "raiser@1", "functions": [_fn0]},
+        {"contract": "raiser@1", "factory": lambda host_ptr: None, "functions": [_fn0]},
     ]
 "#;
 
@@ -240,13 +246,13 @@ fn raiser_contract_id() -> u64 {
 const ARENA_FORWARD_PLUGIN_SRC: &str = r#"
 import ctypes
 
-def _fn0(args_ptr, out_ptr, arena_ptr):
+def _fn0(impl, args_ptr, out_ptr, arena_ptr):
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int64))[0] = arena_ptr
 
 def polyplug_init(host_interface: int, ctx: int) -> None:
     global _polyplug_registrations
     _polyplug_registrations = [
-        {"contract": "arenafwd@1", "functions": [_fn0]},
+        {"contract": "arenafwd@1", "factory": lambda host_ptr: None, "functions": [_fn0]},
     ]
 "#;
 
@@ -717,7 +723,7 @@ class _StringView(ctypes.Structure):
 class _BundleInitContext(ctypes.Structure):
     _fields_ = [("bundle_id", ctypes.c_uint64), ("bundle_path", _StringView)]
 
-def _fn0(args_ptr, out_ptr, arena_ptr):
+def _fn0(impl, args_ptr, out_ptr, arena_ptr):
     pass
 
 def polyplug_init(_host_interface: int, ctx_addr: int) -> None:
@@ -725,7 +731,7 @@ def polyplug_init(_host_interface: int, ctx_addr: int) -> None:
     assert ctx.bundle_path.ptr is not None and ctx.bundle_path.ptr != 0
     assert ctx.bundle_path.len > 0
     global _polyplug_registrations
-    _polyplug_registrations = [{"contract": "ctxcheck@1", "functions": [_fn0]}]
+    _polyplug_registrations = [{"contract": "ctxcheck@1", "factory": lambda host_ptr: None, "functions": [_fn0]}]
 "#;
 
     let (_dir, path) = write_bundle("ctx_check", plugin_src);
@@ -759,7 +765,7 @@ fn test_split_module_registrations_via_init_globals() {
     let helper_src: &str = r#"
 import ctypes
 
-def _fn0(args_ptr, out_ptr, arena_ptr):
+def _fn0(impl, args_ptr, out_ptr, arena_ptr):
     buf = _polyplug_arena_alloc(16, arena_ptr)
     if buf == 0:
         raise RuntimeError("_polyplug_arena_alloc returned 0")
@@ -771,6 +777,7 @@ def polyplug_init(host_interface: int, ctx: int) -> None:
         {
             "contract": "splitmod@1",
             "plugin_name": "splitmod_plugin",
+            "factory": lambda host_ptr: None,
             "functions": [_fn0],
         },
     ]
@@ -842,7 +849,7 @@ fn count_bundle_modules(helper_substr: &str) -> usize {
 fn write_split_bundle(name: &str, helper_module: &str, contract: &str) -> (TempDir, PathBuf) {
     let helper_src: String = format!(
         r#"
-def _fn0(args_ptr, out_ptr, arena_ptr):
+def _fn0(impl, args_ptr, out_ptr, arena_ptr):
     pass
 
 def polyplug_init(host_interface: int, ctx: int) -> None:
@@ -851,6 +858,7 @@ def polyplug_init(host_interface: int, ctx: int) -> None:
         {{
             "contract": "{contract}",
             "plugin_name": "{name}_plugin",
+            "factory": lambda host_ptr: None,
             "functions": [_fn0],
         }},
     ]
@@ -926,10 +934,10 @@ fn unload_purges_bundle_modules_from_sys_modules() {
 const NESTED_ARENA_PLUGIN_SRC: &str = r#"
 import ctypes
 
-def _inner(args_ptr, out_ptr, arena_ptr):
+def _inner(impl, args_ptr, out_ptr, arena_ptr):
     _polyplug_arena_alloc(16, arena_ptr)
 
-def _outer(args_ptr, out_ptr, arena_ptr):
+def _outer(impl, args_ptr, out_ptr, arena_ptr):
     # Real nested dispatch into fn_id 1 via the test-injected Rust trampoline.
     __polyplug_test_nested_dispatch()
     # After the nested call returned, allocate from the OUTER arena_ptr and report.
@@ -939,7 +947,7 @@ def _outer(args_ptr, out_ptr, arena_ptr):
 def polyplug_init(host_interface: int, ctx: int) -> None:
     global _polyplug_registrations
     _polyplug_registrations = [
-        {"contract": "nestedarena@1", "functions": [_outer, _inner]},
+        {"contract": "nestedarena@1", "factory": lambda host_ptr: None, "functions": [_outer, _inner]},
     ]
 "#;
 
@@ -1048,14 +1056,14 @@ fn test_nested_dispatch_preserves_outer_arena() {
 const ARENA_ECHO_PLUGIN_SRC: &str = r#"
 import ctypes
 
-def _fn0(args_ptr, out_ptr, arena_ptr):
+def _fn0(impl, args_ptr, out_ptr, arena_ptr):
     addr = _polyplug_arena_alloc(64, arena_ptr)
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int64))[0] = addr
 
 def polyplug_init(host_interface: int, ctx: int) -> None:
     global _polyplug_registrations
     _polyplug_registrations = [
-        {"contract": "arenaecho@1", "functions": [_fn0]},
+        {"contract": "arenaecho@1", "factory": lambda host_ptr: None, "functions": [_fn0]},
     ]
 "#;
 
@@ -1197,13 +1205,13 @@ const SHARED_NAME_ENTRY_SRC: &str = r#"
 import ctypes
 from shared_helper import VALUE
 
-def _fn0(args_ptr, out_ptr, arena_ptr):
+def _fn0(impl, args_ptr, out_ptr, arena_ptr):
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = VALUE
 
 def polyplug_init(host_interface: int, ctx: int) -> None:
     global _polyplug_registrations
     _polyplug_registrations = [
-        {"contract": "{contract}", "functions": [_fn0]},
+        {"contract": "{contract}", "factory": lambda host_ptr: None, "functions": [_fn0]},
     ]
 "#;
 
