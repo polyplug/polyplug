@@ -1,17 +1,30 @@
 //! FFI exports for polyplug_lua — `polyplug_lua_loader_create` / `polyplug_lua_loader_free`
 //! plus the LuaJIT host-contract bridge (`polyplug_lua_host_vm_dispatch`,
-//! `polyplug_lua_host_create_instance`, `polyplug_lua_host_destroy_instance`).
+//! `polyplug_lua_host_destroy_instance`).
 //!
 //! # Why the host-contract bridge exists
 //! LuaJIT FFI callbacks cannot return structs by value (documented NYI), so a
 //! LuaJIT host can never produce the native-dispatch thunk signature
 //! `AbiError (*)(const void*, const void*, void*)` nor the VM-dispatch `call`
-//! signature (struct parameters AND struct return), nor a `create_instance`
-//! returning `HostContractInstance` by value. The generated Lua host interface
-//! factories therefore register host contracts with VM dispatch whose `call`
-//! points at `polyplug_lua_host_vm_dispatch` below; the trampoline forwards to
-//! a scalar-only LuaJIT callback (`u32 (*)(u32, const void*, void*)`) stored in
-//! a `PolyplugLuaHostDispatchBridge` carried via `VmDispatch.loader_data`.
+//! signature (struct parameters AND struct return). The generated Lua host
+//! interface factories therefore register host contracts with VM dispatch whose
+//! `call` points at `polyplug_lua_host_vm_dispatch` below; the trampoline
+//! forwards to a scalar-only LuaJIT callback
+//! (`u32 (*)(void* instance_data, u32 fn_id, const void*, void*)`) stored in a
+//! `PolyplugLuaHostDispatchBridge` carried via `VmDispatch.loader_data`.
+//!
+//! # create_instance is a Lua callback, not a Rust trampoline
+//! `create_instance` only takes pointer args and writes through an out-pointer
+//! (no struct by value), so LuaJIT CAN create that callback directly — the
+//! generated factory installs a Lua `create_instance` that builds a fresh impl
+//! per instance and stamps the new instance id into the out `HostContractInstance`.
+//! The old `polyplug_lua_host_create_instance` Rust trampoline (which returned
+//! the registrant-owned `user_data` as a single shared instance) is therefore
+//! SUPERSEDED and removed — per-instance state requires a fresh impl per call,
+//! which only the Lua factory can build. `polyplug_lua_host_destroy_instance`
+//! stays a Rust trampoline because it takes `HostContractInstance` BY VALUE
+//! (LuaJIT cannot create that callback); it forwards the instance data to the
+//! bridge's `destroy_callback`.
 
 use core::ffi::c_void;
 
@@ -40,9 +53,18 @@ pub struct PolyplugLuaConfig {
 /// `VmDispatch.loader_data.data` at it.
 #[repr(C)]
 pub struct PolyplugLuaHostDispatchBridge {
-    /// Scalar-only dispatch callback: `(fn_id, args, out) -> AbiErrorCode as u32`.
-    /// LuaJIT can create this callback (no struct-by-value args or return).
-    pub callback: Option<unsafe extern "C" fn(u32, *const c_void, *mut c_void) -> u32>,
+    /// Scalar-only dispatch callback:
+    /// `(instance_data, fn_id, args, out) -> AbiErrorCode as u32`.
+    /// `instance_data` is the `HostContractInstance::data` produced by the Lua
+    /// `create_instance` callback (an instance id cast to a pointer); it routes
+    /// the dispatch to the per-instance impl. LuaJIT can create this callback
+    /// (no struct-by-value args or return).
+    pub callback: Option<unsafe extern "C" fn(*mut c_void, u32, *const c_void, *mut c_void) -> u32>,
+    /// Per-instance teardown callback: `(instance_data)`. Invoked by
+    /// `polyplug_lua_host_destroy_instance` so the Lua factory can drop the
+    /// impl keyed by the instance id. LuaJIT can create this callback (pointer
+    /// arg only, no struct by value).
+    pub destroy_callback: Option<unsafe extern "C" fn(*mut c_void)>,
 }
 
 /// VM-dispatch trampoline for host contracts implemented in a LuaJIT host.
@@ -59,7 +81,7 @@ pub struct PolyplugLuaHostDispatchBridge {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_lua_host_vm_dispatch(
     loader_data: VmLoaderData,
-    _instance: GuestContractInstance,
+    instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
@@ -67,9 +89,10 @@ pub unsafe extern "C" fn polyplug_lua_host_vm_dispatch(
     out_err: *mut AbiError,
 ) {
     // SAFETY: loader_data carries the bridge pointer per this function's safety
-    // contract; the impl forwards args/out untouched to the LuaJIT callback.
+    // contract; the impl forwards instance.data/args/out untouched to the LuaJIT
+    // callback.
     let result: AbiError =
-        unsafe { polyplug_lua_host_vm_dispatch_impl(loader_data, fn_id, args, out) };
+        unsafe { polyplug_lua_host_vm_dispatch_impl(loader_data, instance.data, fn_id, args, out) };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(result) };
@@ -78,6 +101,7 @@ pub unsafe extern "C" fn polyplug_lua_host_vm_dispatch(
 
 unsafe fn polyplug_lua_host_vm_dispatch_impl(
     loader_data: VmLoaderData,
+    instance_data: *mut c_void,
     fn_id: u32,
     args: *const (),
     out: *mut (),
@@ -92,13 +116,22 @@ unsafe fn polyplug_lua_host_vm_dispatch_impl(
     }
     // SAFETY: bridge_ptr is non-null (checked above) and points to a live
     // PolyplugLuaHostDispatchBridge per this function's safety contract.
-    let callback: Option<unsafe extern "C" fn(u32, *const c_void, *mut c_void) -> u32> =
-        unsafe { (*bridge_ptr).callback };
+    let callback: Option<
+        unsafe extern "C" fn(*mut c_void, u32, *const c_void, *mut c_void) -> u32,
+    > = unsafe { (*bridge_ptr).callback };
     match callback {
         Some(cb) => {
             // SAFETY: cb is the LuaJIT callback installed by the generated
-            // factory; args/out are forwarded untouched per the dispatch contract.
-            let code: u32 = unsafe { cb(fn_id, args as *const c_void, out as *mut c_void) };
+            // factory; instance_data routes to the per-instance impl and
+            // args/out are forwarded untouched per the dispatch contract.
+            let code: u32 = unsafe {
+                cb(
+                    instance_data,
+                    fn_id,
+                    args as *const c_void,
+                    out as *mut c_void,
+                )
+            };
             if code == AbiErrorCode::Ok as u32 {
                 AbiError::ok()
             } else {
@@ -185,48 +218,53 @@ pub unsafe extern "C" fn polyplug_lua_log_trampoline(
     }
 }
 
-/// `create_instance` stub for host contracts registered by a LuaJIT host.
+// NOTE: `polyplug_lua_host_create_instance` (a Rust trampoline returning the
+// registrant-owned `user_data` as one shared instance) was SUPERSEDED by a Lua
+// `create_instance` callback in the generated factory. Per-instance state needs
+// a fresh impl built per call, which only the Lua factory can produce;
+// create_instance takes pointer args + an out-pointer (no struct by value), so
+// LuaJIT can create it directly. It is removed here, not blind-deleted.
+
+/// `destroy_instance` trampoline for host contracts registered by a LuaJIT host.
 ///
-/// LuaJIT callbacks cannot return `HostContractInstance` by value, so the
-/// generated factory installs this native stub. Mirrors the generated Rust VM
-/// factory stub: the instance is the registrant-owned `user_data` pointer.
+/// Takes `HostContractInstance` BY VALUE, which LuaJIT FFI callbacks cannot
+/// accept, so this must stay a native Rust trampoline. It reads the
+/// `PolyplugLuaHostDispatchBridge` from `(*this).user_data` and forwards the
+/// instance data to the bridge's `destroy_callback`, letting the Lua factory
+/// drop the per-instance impl keyed by the instance id. Null `this`,
+/// `user_data`, or absent `destroy_callback` is a silent no-op (teardown must
+/// never crash the runtime).
 ///
 /// # Safety
 /// `this` must be null or a valid `HostContractInterface` pointer (self-passing
-/// pattern; the runtime always passes the registered interface).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_lua_host_create_instance(
-    this: *const HostContractInterface,
-    _args: *const c_void,
-    out_instance: *mut HostContractInstance,
-) {
-    let instance: HostContractInstance = if this.is_null() {
-        HostContractInstance::null()
-    } else {
-        HostContractInstance {
-            // SAFETY: this is non-null (checked above) and points at the registered
-            // interface per the self-passing ABI contract; user_data is registrant-owned.
-            data: unsafe { (*this).user_data },
-        }
-    };
-    if !out_instance.is_null() {
-        // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(instance) };
-    }
-}
-
-/// `destroy_instance` stub for host contracts registered by a LuaJIT host.
-///
-/// The instance is the registrant-owned `user_data` (see
-/// `polyplug_lua_host_create_instance`) — nothing to free.
-///
-/// # Safety
-/// Always safe; both parameters are ignored.
+/// pattern; the runtime always passes the registered interface). When non-null,
+/// `(*this).user_data` must be null or point to a live
+/// `PolyplugLuaHostDispatchBridge` that outlives this call (the generated
+/// factory anchors it for the program lifetime).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_lua_host_destroy_instance(
-    _this: *const HostContractInterface,
-    _instance: HostContractInstance,
+    this: *const HostContractInterface,
+    instance: HostContractInstance,
 ) {
+    if this.is_null() {
+        return;
+    }
+    // SAFETY: this is non-null (checked above) and points at the registered
+    // interface per the self-passing ABI contract.
+    let bridge_ptr: *const PolyplugLuaHostDispatchBridge =
+        unsafe { (*this).user_data } as *const PolyplugLuaHostDispatchBridge;
+    if bridge_ptr.is_null() {
+        return;
+    }
+    // SAFETY: bridge_ptr is non-null (checked above) and points to a live
+    // PolyplugLuaHostDispatchBridge per this function's safety contract.
+    let destroy_callback: Option<unsafe extern "C" fn(*mut c_void)> =
+        unsafe { (*bridge_ptr).destroy_callback };
+    if let Some(cb) = destroy_callback {
+        // SAFETY: cb is the LuaJIT destroy callback installed by the generated
+        // factory; instance.data is the instance id it stamped at create time.
+        unsafe { cb(instance.data) };
+    }
 }
 
 /// # Safety

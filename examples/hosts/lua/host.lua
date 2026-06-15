@@ -128,6 +128,13 @@ end
 -- the GENERATED interface factory so plugins can call back into the host
 -- (mirrors the rust/cpp reference hosts' ConsoleLogger).
 local ConsoleLogger = {}
+ConsoleLogger.__index = ConsoleLogger
+
+-- Factory: the generated interface calls this once per instance (or once total
+-- for a singleton contract), so each instance gets its own fresh impl table.
+function ConsoleLogger.new()
+    return setmetatable({}, ConsoleLogger)
+end
 
 function ConsoleLogger:log(message)
     print('[plugin] ' .. message)
@@ -140,7 +147,7 @@ function ConsoleLogger:log_with_level(level, message)
 end
 
 local logger_iface = interface_factories.create_host_logger_interface(
-    ConsoleLogger, lua_loader.bridge_lib())
+    ConsoleLogger.new, lua_loader.bridge_lib())
 rt:register_host_contract(logger_iface)
 
 local bundle_dirs = list_bundle_dirs(plugin_path)

@@ -2139,16 +2139,18 @@ fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
     // the exported trampoline signatures in crates/polyplug_lua/src/ffi.rs.
     out.push_str("cdef_guarded([[\n");
     out.push_str(
-        "    typedef uint32_t (*PolyplugLuaHostDispatchCallback)(uint32_t, const void*, void*);\n",
+        "    typedef uint32_t (*PolyplugLuaHostDispatchCallback)(void* /*instance_data*/, uint32_t, const void*, void*);\n",
+    );
+    out.push_str("    typedef void (*PolyplugLuaHostDestroyCallback)(void* /*instance_data*/);\n");
+    out.push_str(
+        "    typedef void (*PolyplugLuaHostCreateInstanceFn)(const HostContractInterface*, const void*, HostContractInstance*);\n",
     );
     out.push_str("    typedef struct PolyplugLuaHostDispatchBridge {\n");
     out.push_str("        PolyplugLuaHostDispatchCallback callback;\n");
+    out.push_str("        PolyplugLuaHostDestroyCallback destroy_callback;\n");
     out.push_str("    } PolyplugLuaHostDispatchBridge;\n");
     out.push_str(
         "    void polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);\n",
-    );
-    out.push_str(
-        "    void polyplug_lua_host_create_instance(const HostContractInterface*, const void*, HostContractInstance*);\n",
     );
     out.push_str(
         "    void polyplug_lua_host_destroy_instance(const HostContractInterface*, HostContractInstance);\n",
@@ -2224,7 +2226,10 @@ fn generate_lua_host_interface_factory(
     out.push_str("-- impossible under LuaJIT).\n");
     out.push_str("--\n");
     out.push_str("-- Arguments:\n");
-    out.push_str("--     impl: implementation table with methods matching the contract\n");
+    out.push_str("--     factory: a function () -> impl that builds a FRESH implementation\n");
+    out.push_str("--         table (methods matching the contract) per instance. The runtime\n");
+    out.push_str("--         calls create_instance once per non-singleton caller (so each gets\n");
+    out.push_str("--         independent state) and once total for singletons (shared state).\n");
     out.push_str("--     lua_bridge_lib: ffi.load handle for the lua loader cdylib\n");
     out.push_str(
         "--         (libpolyplug_lua), e.g. require('polyplug.loaders.lua').bridge_lib()\n",
@@ -2235,18 +2240,37 @@ fn generate_lua_host_interface_factory(
         "-- The returned interface is anchored and lives for the lifetime of the program.\n",
     );
     out.push_str(&format!(
-        "function M.{factory_name}(impl, lua_bridge_lib)\n"
+        "function M.{factory_name}(factory, lua_bridge_lib)\n"
     ));
     out.push_str(&format!(
-        "    if impl == nil then\n        error(\"{factory_name}: impl is nil\")\n    end\n"
+        "    if factory == nil then\n        error(\"{factory_name}: factory is nil (pass a function () -> impl)\")\n    end\n"
     ));
     out.push_str(&format!(
         "    if lua_bridge_lib == nil then\n        error(\"{factory_name}: lua_bridge_lib is nil (pass the lua loader cdylib handle)\")\n    end\n\n"
     ));
 
-    // Scalar-only dispatcher: (fn_id, args, out) -> AbiErrorCode number.
-    out.push_str("    local function dispatch(fn_id, args, out)\n");
+    // Per-interface instance registry (closure-captured, NOT module-global —
+    // each factory call has its own). `instances[id]` holds the per-instance
+    // impl; `default_impl` serves null/id-0 dispatch (built once at registration).
+    out.push_str("    local instances = {}\n");
+    out.push_str("    local next_id = 1\n");
+    out.push_str("    local default_impl = factory()\n\n");
+
+    // Scalar-only dispatcher: (instance_data, fn_id, args, out) -> AbiErrorCode.
+    // Resolve the per-instance impl from instance_data (an instance id cast to a
+    // pointer); a null/0 handle uses the default impl.
+    out.push_str("    local function dispatch(instance_data, fn_id, args, out)\n");
     out.push_str("        local ok, code = pcall(function()\n");
+    out.push_str("            local impl\n");
+    out.push_str("            local inst_id = tonumber(ffi.cast(\"uintptr_t\", instance_data))\n");
+    out.push_str("            if inst_id == 0 then\n");
+    out.push_str("                impl = default_impl\n");
+    out.push_str("            else\n");
+    out.push_str("                impl = instances[inst_id]\n");
+    out.push_str("            end\n");
+    out.push_str("            if impl == nil then\n");
+    out.push_str("                return AbiErrorCode.FunctionNotAvailable\n");
+    out.push_str("            end\n");
     for (idx, func) in contract.functions.iter().enumerate() {
         out.push_str(&format!("            if fn_id == {idx} then\n"));
         generate_lua_host_dispatch_args(out, &class_name, func, enums);
@@ -2262,11 +2286,44 @@ fn generate_lua_host_interface_factory(
     out.push_str("        return code\n");
     out.push_str("    end\n\n");
 
-    // Bridge + interface construction. The callback cast anchors the LuaJIT
-    // callback object; bridge and interface are plain cdata.
-    out.push_str("    local callback = ffi.cast(\"PolyplugLuaHostDispatchCallback\", dispatch)\n");
+    // create_instance is a Lua callback (pointer args + out-pointer, no struct by
+    // value — LuaJIT can create it). Each call builds a fresh impl, keys it by a
+    // fresh id, and stamps the id into the out HostContractInstance.data.
+    out.push_str("    local function create_instance(this, args, out_ptr)\n");
+    out.push_str("        local _ = this\n");
+    out.push_str("        local _ = args\n");
+    out.push_str("        local inst_impl = factory()\n");
+    out.push_str("        local id = next_id\n");
+    out.push_str("        next_id = next_id + 1\n");
+    out.push_str("        instances[id] = inst_impl\n");
+    out.push_str("        local hci = ffi.cast(\"HostContractInstance*\", out_ptr)\n");
+    out.push_str("        hci.data = ffi.cast(\"void*\", id)\n");
+    out.push_str("    end\n\n");
+
+    // destroy_instance is a scalar callback invoked by the native
+    // polyplug_lua_host_destroy_instance trampoline; it drops the per-instance
+    // impl keyed by the instance id.
+    out.push_str("    local function destroy_instance(instance_data)\n");
+    out.push_str("        local id = tonumber(ffi.cast(\"uintptr_t\", instance_data))\n");
+    out.push_str("        if id ~= 0 then\n");
+    out.push_str("            instances[id] = nil\n");
+    out.push_str("        end\n");
+    out.push_str("    end\n\n");
+
+    // Bridge + interface construction. The callback casts anchor the LuaJIT
+    // callback objects; bridge and interface are plain cdata.
+    out.push_str(
+        "    local dispatch_cb = ffi.cast(\"PolyplugLuaHostDispatchCallback\", dispatch)\n",
+    );
+    out.push_str(
+        "    local create_cb = ffi.cast(\"PolyplugLuaHostCreateInstanceFn\", create_instance)\n",
+    );
+    out.push_str(
+        "    local destroy_cb = ffi.cast(\"PolyplugLuaHostDestroyCallback\", destroy_instance)\n",
+    );
     out.push_str("    local bridge = ffi.new(\"PolyplugLuaHostDispatchBridge\")\n");
-    out.push_str("    bridge.callback = callback\n\n");
+    out.push_str("    bridge.callback = dispatch_cb\n");
+    out.push_str("    bridge.destroy_callback = destroy_cb\n\n");
 
     out.push_str("    local interface = ffi.new(\"HostContractInterface\")\n");
     out.push_str(&format!(
@@ -2281,17 +2338,19 @@ fn generate_lua_host_interface_factory(
     out.push_str("    interface.dispatch_type = ffi.C.DispatchType_VirtualMachine\n");
     out.push_str("    interface.runtime = nil  -- set by the runtime during registration\n");
     out.push_str("    interface.user_data = ffi.cast(\"void*\", bridge)\n");
-    out.push_str(
-        "    interface.create_instance = lua_bridge_lib.polyplug_lua_host_create_instance\n",
-    );
+    out.push_str("    interface.create_instance = create_cb\n");
     out.push_str(
         "    interface.destroy_instance = lua_bridge_lib.polyplug_lua_host_destroy_instance\n",
     );
     out.push_str("    interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_host_vm_dispatch\n");
     out.push_str("    interface.dispatch.vm.loader_data.data = ffi.cast(\"void*\", bridge)\n\n");
 
+    // Anchor everything that must outlive the factory: the interface cdata, the
+    // bridge, all three LuaJIT callbacks, the instances registry, and the
+    // default impl. Without this the LuaJIT callbacks/tables would be GC'd while
+    // the runtime still holds the interface pointer.
     out.push_str(
-        "    _anchors[#_anchors + 1] = { interface = interface, bridge = bridge, callback = callback, impl = impl }\n",
+        "    _anchors[#_anchors + 1] = { interface = interface, bridge = bridge, dispatch_cb = dispatch_cb, create_cb = create_cb, destroy_cb = destroy_cb, instances = instances, default_impl = default_impl }\n",
     );
     out.push_str("    return interface\n");
     out.push_str("end\n\n");
@@ -3275,10 +3334,8 @@ mod tests {
             "dispatch must route through the lua loader trampoline: {out}"
         );
         assert!(
-            out.contains(
-                "interface.create_instance = lua_bridge_lib.polyplug_lua_host_create_instance"
-            ),
-            "create_instance must use the native stub: {out}"
+            out.contains("interface.create_instance = create_cb"),
+            "create_instance must use the Lua per-instance callback: {out}"
         );
     }
 
@@ -3308,15 +3365,41 @@ mod tests {
         );
         assert!(
             out.contains(
-                "void polyplug_lua_host_create_instance(const HostContractInterface*, const void*, HostContractInstance*);"
-            ),
-            "create_instance cdef must be the out-param form (void + HostContractInstance*): {out}"
-        );
-        assert!(
-            out.contains(
                 "void polyplug_lua_host_destroy_instance(const HostContractInterface*, HostContractInstance);"
             ),
             "destroy_instance cdef must be void with no out-param: {out}"
+        );
+        // The dispatch callback gains an instance_data first arg (routes to the
+        // per-instance impl) and the bridge carries a destroy_callback that the
+        // native destroy_instance trampoline invokes — both must match
+        // PolyplugLuaHostDispatchBridge in crates/polyplug_lua/src/ffi.rs.
+        assert!(
+            out.contains(
+                "typedef uint32_t (*PolyplugLuaHostDispatchCallback)(void* /*instance_data*/, uint32_t, const void*, void*);"
+            ),
+            "dispatch callback cdef must take instance_data as the first arg: {out}"
+        );
+        assert!(
+            out.contains(
+                "typedef void (*PolyplugLuaHostDestroyCallback)(void* /*instance_data*/);"
+            ),
+            "destroy callback typedef must be cdef'd: {out}"
+        );
+        assert!(
+            out.contains("PolyplugLuaHostDestroyCallback destroy_callback;"),
+            "bridge struct must carry the destroy_callback field: {out}"
+        );
+        // create_instance is now a Lua callback (typedef'd for the cast), NOT a
+        // native trampoline — the old native export cdef must be gone.
+        assert!(
+            out.contains(
+                "typedef void (*PolyplugLuaHostCreateInstanceFn)(const HostContractInterface*, const void*, HostContractInstance*);"
+            ),
+            "create_instance Lua-callback typedef must be cdef'd: {out}"
+        );
+        assert!(
+            !out.contains("void polyplug_lua_host_create_instance("),
+            "the native create_instance trampoline cdef is superseded by a Lua callback — must be gone: {out}"
         );
         // The stale by-value returns that this floor exists to prevent.
         assert!(

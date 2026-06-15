@@ -21,12 +21,14 @@ local function cdef_guarded(decl)
 end
 
 cdef_guarded([[
-    typedef uint32_t (*PolyplugLuaHostDispatchCallback)(uint32_t, const void*, void*);
+    typedef uint32_t (*PolyplugLuaHostDispatchCallback)(void* /*instance_data*/, uint32_t, const void*, void*);
+    typedef void (*PolyplugLuaHostDestroyCallback)(void* /*instance_data*/);
+    typedef void (*PolyplugLuaHostCreateInstanceFn)(const HostContractInterface*, const void*, HostContractInstance*);
     typedef struct PolyplugLuaHostDispatchBridge {
         PolyplugLuaHostDispatchCallback callback;
+        PolyplugLuaHostDestroyCallback destroy_callback;
     } PolyplugLuaHostDispatchBridge;
     void polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);
-    void polyplug_lua_host_create_instance(const HostContractInterface*, const void*, HostContractInstance*);
     void polyplug_lua_host_destroy_instance(const HostContractInterface*, HostContractInstance);
 ]])
 
@@ -49,22 +51,39 @@ local _anchors = {}
 -- impossible under LuaJIT).
 --
 -- Arguments:
---     impl: implementation table with methods matching the contract
+--     factory: a function () -> impl that builds a FRESH implementation
+--         table (methods matching the contract) per instance. The runtime
+--         calls create_instance once per non-singleton caller (so each gets
+--         independent state) and once total for singletons (shared state).
 --     lua_bridge_lib: ffi.load handle for the lua loader cdylib
 --         (libpolyplug_lua), e.g. require('polyplug.loaders.lua').bridge_lib()
 --
 -- Memory:
 -- The returned interface is anchored and lives for the lifetime of the program.
-function M.create_host_logger_interface(impl, lua_bridge_lib)
-    if impl == nil then
-        error("create_host_logger_interface: impl is nil")
+function M.create_host_logger_interface(factory, lua_bridge_lib)
+    if factory == nil then
+        error("create_host_logger_interface: factory is nil (pass a function () -> impl)")
     end
     if lua_bridge_lib == nil then
         error("create_host_logger_interface: lua_bridge_lib is nil (pass the lua loader cdylib handle)")
     end
 
-    local function dispatch(fn_id, args, out)
+    local instances = {}
+    local next_id = 1
+    local default_impl = factory()
+
+    local function dispatch(instance_data, fn_id, args, out)
         local ok, code = pcall(function()
+            local impl
+            local inst_id = tonumber(ffi.cast("uintptr_t", instance_data))
+            if inst_id == 0 then
+                impl = default_impl
+            else
+                impl = instances[inst_id]
+            end
+            if impl == nil then
+                return AbiErrorCode.FunctionNotAvailable
+            end
             if fn_id == 0 then
                 local message_sv = ffi.cast("const StringView*", args)[0]
                 local message = ffi.string(message_sv.ptr, message_sv.len)
@@ -88,9 +107,30 @@ function M.create_host_logger_interface(impl, lua_bridge_lib)
         return code
     end
 
-    local callback = ffi.cast("PolyplugLuaHostDispatchCallback", dispatch)
+    local function create_instance(this, args, out_ptr)
+        local _ = this
+        local _ = args
+        local inst_impl = factory()
+        local id = next_id
+        next_id = next_id + 1
+        instances[id] = inst_impl
+        local hci = ffi.cast("HostContractInstance*", out_ptr)
+        hci.data = ffi.cast("void*", id)
+    end
+
+    local function destroy_instance(instance_data)
+        local id = tonumber(ffi.cast("uintptr_t", instance_data))
+        if id ~= 0 then
+            instances[id] = nil
+        end
+    end
+
+    local dispatch_cb = ffi.cast("PolyplugLuaHostDispatchCallback", dispatch)
+    local create_cb = ffi.cast("PolyplugLuaHostCreateInstanceFn", create_instance)
+    local destroy_cb = ffi.cast("PolyplugLuaHostDestroyCallback", destroy_instance)
     local bridge = ffi.new("PolyplugLuaHostDispatchBridge")
-    bridge.callback = callback
+    bridge.callback = dispatch_cb
+    bridge.destroy_callback = destroy_cb
 
     local interface = ffi.new("HostContractInterface")
     interface.contract_id = 0xF53EB5F2845853BBULL
@@ -101,12 +141,12 @@ function M.create_host_logger_interface(impl, lua_bridge_lib)
     interface.dispatch_type = ffi.C.DispatchType_VirtualMachine
     interface.runtime = nil  -- set by the runtime during registration
     interface.user_data = ffi.cast("void*", bridge)
-    interface.create_instance = lua_bridge_lib.polyplug_lua_host_create_instance
+    interface.create_instance = create_cb
     interface.destroy_instance = lua_bridge_lib.polyplug_lua_host_destroy_instance
     interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_host_vm_dispatch
     interface.dispatch.vm.loader_data.data = ffi.cast("void*", bridge)
 
-    _anchors[#_anchors + 1] = { interface = interface, bridge = bridge, callback = callback, impl = impl }
+    _anchors[#_anchors + 1] = { interface = interface, bridge = bridge, dispatch_cb = dispatch_cb, create_cb = create_cb, destroy_cb = destroy_cb, instances = instances, default_impl = default_impl }
     return interface
 end
 
