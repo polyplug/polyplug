@@ -178,3 +178,9 @@ dist/decoder/
 | compiled artifact | your toolchain | n/a |
 | bundle dir | your build script (`cp`) | n/a |
 | bundle correctness | `polyplugc validate --bundle-dir` | n/a |
+
+`polyplugc generate` writes incrementally: a binding whose freshly generated content
+is byte-identical to what is already on disk is left untouched (its mtime is preserved,
+so a no-op regeneration does not trigger downstream rebuilds), while `manifest.toml` is
+always rewritten so its precomputed ids stay current. The run prints how many files it
+wrote versus skipped (`generated N files (W written, U unchanged)`).

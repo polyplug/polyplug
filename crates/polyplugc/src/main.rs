@@ -1,11 +1,10 @@
-use std::fs;
 use std::path::PathBuf;
 
 use clap::Parser;
 use clap::Subcommand;
 
 use polyplug_codegen::{GenerateConfig, GenerateOutput, PolyplugcError, Side};
-use polyplugc::{generate, parse_lang, parser, validate};
+use polyplugc::{WriteSummary, generate, parse_lang, parser, validate, write_output};
 
 /// polyplugc — code generator for the polyplug plugin runtime.
 #[derive(Debug, Parser)]
@@ -123,39 +122,12 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
 }
 
 fn write_files(output: &GenerateOutput, out_dir: &std::path::Path) -> Result<(), PolyplugcError> {
-    for file in &output.files {
-        let file_path: PathBuf = out_dir.join(&file.path);
-        if let Some(parent) = file_path.parent() {
-            fs::create_dir_all(parent).map_err(|e: std::io::Error| {
-                PolyplugcError::WriteFailed {
-                    path: parent.to_string_lossy().into_owned(),
-                    source: e,
-                }
-            })?;
-        }
-        fs::write(&file_path, &file.content).map_err(|e: std::io::Error| {
-            PolyplugcError::WriteFailed {
-                path: file_path.to_string_lossy().into_owned(),
-                source: e,
-            }
-        })?;
-
-        // Format Rust source files with rustfmt so generated output is already canonical.
-        // rustfmt is a best-effort post-pass: if it is absent or fails (e.g. syntax error
-        // in generated code that cargo will catch later), we do not abort the write.
-        if file_path
-            .extension()
-            .and_then(|e: &std::ffi::OsStr| e.to_str())
-            == Some("rs")
-        {
-            let _ = std::process::Command::new("rustfmt")
-                .arg("--edition")
-                .arg("2024")
-                .arg(&file_path)
-                .status();
-        }
-    }
-
-    println!("generated {} files", output.files.len());
+    let summary: WriteSummary = write_output(output, out_dir)?;
+    println!(
+        "generated {} files ({} written, {} unchanged)",
+        output.files.len(),
+        summary.written,
+        summary.unchanged
+    );
     Ok(())
 }

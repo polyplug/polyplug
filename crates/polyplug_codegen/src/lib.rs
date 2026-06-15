@@ -65,6 +65,12 @@ pub struct GenerateConfig {
 pub struct GeneratedFile {
     pub path: PathBuf,
     pub content: String,
+    /// When true, the file is always (re)written even if its on-disk content is
+    /// byte-identical to what would be emitted. Set for files like `manifest.toml`
+    /// whose contents must always reflect the current contract ids; left false for
+    /// language bindings so a no-op regeneration preserves their mtimes and does not
+    /// cascade downstream rebuilds.
+    pub force_regenerate: bool,
 }
 
 #[derive(Debug)]
