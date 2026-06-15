@@ -53,7 +53,7 @@ the reload callback bracket as a mutual-exclusion probe.
 
 The runtime notifies the host before and after interface swap, plus failure case. The host is responsible for tracking and destroying all guest contract instances it has created.
 
-**Critical clarification:** Every host-created instance is real: the generated `create_instance` invokes the author factory (`polyplug_create_<plugin>` in Rust/C++, the registered factory in C#/Python) and boxes the implementation — together with its `HostContext`/host pointer — into `GuestContractInstance.data`. The host-side **caller wrappers** each own one such instance; destroying a wrapper destroys its instance. There is no process-wide singleton implementation and no static plugin storage.
+**Critical clarification:** Every host-created instance is real, in every language. The generated `create_instance` invokes the author factory and produces an independent implementation. For **native-dispatch** guests (Rust/C++/C#) the implementation — together with its `HostContext`/host pointer — is boxed into `GuestContractInstance.data`. For **VM-dispatch** guests (Python/Lua/JS) the loader stores the per-instance impl inside the VM and stamps a non-zero registry id into `GuestContractInstance.data` (the VM loaders previously stubbed this and shared one impl — that gap is closed). Either way, the host-side **caller wrappers** each own one such instance; destroying a wrapper destroys its instance. There is no process-wide singleton implementation and no static plugin storage. See `docs/ARCHITECTURE_CLARIFICATIONS.md` for the two-family instance model.
 
 ### 2. Hidden Implementation
 

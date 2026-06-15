@@ -239,12 +239,16 @@ host-provided services (logging, metrics, config, etc.).
   `major == required.major && minor >= required.minor`. Requesting `min_version`
   effectively at a minor of 0 accepts any minor of the same major (a wildcard for
   minor); a major mismatch always fails.
-- **`user_data`-carried impls:** the registrant's implementation pointer lives in
-  the `user_data` field of `HostContractInterface` (offset 40); `create_instance`
-  / `destroy_instance` recover it via `(*this).user_data`. No static or
-  thread-local storage. The runtime stores the pointer only — it never reads,
-  writes, or frees the pointee. (C# and Python additionally hold a managed-side
-  reference so the GC does not collect the impl object.)
+- **`user_data`-carried impls:** for native (Rust/C++/C#) and Python host providers the
+  registrant's single implementation pointer lives in the `user_data` field of
+  `HostContractInterface` (offset 40); `create_instance` / `destroy_instance` recover it
+  via `(*this).user_data`. No static or thread-local storage. The runtime stores the
+  pointer only — it never reads, writes, or frees the pointee. (C# and Python additionally
+  hold a managed-side reference so the GC does not collect the impl object.) The **Lua**
+  host provider instead builds a fresh implementation from a registered factory per
+  `create_instance`, keying real per-instance state by a non-zero id — so `singleton = false`
+  Lua-provided contracts give independent instances. See
+  [`HOST_CONTRACTS.md`](./HOST_CONTRACTS.md) § Singleton vs Per-Instance Host Contracts.
 - **Contract ID namespacing:** host contracts hash `"host_contract:<name>@<major>"`
   and guest contracts hash `"guest_contract:<name>@<major>"`, keeping the two ID
   spaces disjoint.

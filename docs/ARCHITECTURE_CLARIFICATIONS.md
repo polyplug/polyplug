@@ -17,9 +17,13 @@ Interfaces are stored in `RuntimeStore` as interface slots guarded by a single `
 
 ### What polyplug HAS
 
-✅ **Real instances** — every `create_instance` call invokes the plugin's author factory
-   (`polyplug_create_<plugin>` in Rust/C++, `Set<Plugin>Factory` in C#/Python) and returns a
-   fresh implementation carried in `GuestContractInstance.data`
+✅ **Real instances, every language** — every `create_instance` call invokes the plugin's
+   author factory and returns a fresh implementation. This holds for **native-dispatch**
+   guests (Rust/C++/C#, factory `polyplug_create_<plugin>` / `Set<Plugin>Factory`) **and**
+   for **VM-dispatch** guests (Python/Lua/JS, factory `set_<plugin>_factory` /
+   `set<Plugin>Factory`), whose loaders previously stubbed `create_instance` to null and
+   shared one implementation. The two families carry the instance differently — see
+   [Instance payload, two dispatch families](#instance-payload-two-dispatch-families) below.
 ✅ **Per-instance host context** — the `HostApi` pointer is captured at instance creation and
    stored in the instance payload, so every host call routes to the runtime that owns it
 ✅ **Caller wrappers** — host-side RAII objects that own exactly one instance
@@ -54,20 +58,40 @@ struct ValidatorPluginState {
     implementation: Box<dyn PipelineValidatorGuestContract>,
 }
 
-unsafe extern "C" fn VALIDATOR_create_instance(host: *const HostApi, _args: *const ())
-    -> GuestContractInstance
-{
-    // calls the author factory, boxes the payload, stamps the contract id
+unsafe extern "C" fn VALIDATOR_create_instance(
+    _loader_data: polyplug_abi::dispatch::VmLoaderData,  // ignored by native; VM loaders use it
+    host: *const HostApi,
+    _args: *const (),
+    out_instance: *mut GuestContractInstance,            // out-param ABI — no return value
+) {
+    // calls the author factory, boxes the payload, stamps the contract id,
+    // and writes the handle through `out_instance`
 }
 ```
 
 **Consequences:**
 - Each `create_instance` produces an independent implementation with its own state
-- The dispatch wrappers read the implementation from `instance.data` — a null
-  instance is rejected with `InvalidPointer`
+- The dispatch wrappers read the implementation from `instance.data` (see the two
+  families below for how a null/zero instance is handled)
 - `destroy_instance` drops the payload exactly once
 - Re-running `polyplug_init` after an in-place binary overwrite re-creates
   instances through the new factory — no stale static survives a reload
+
+### Instance payload, two dispatch families
+
+`GuestContractInstance.data` means something different per dispatch family, but both
+deliver real per-instance state:
+
+| | Native dispatch (Rust/C++/C#) | VM dispatch (Python/Lua/JS) |
+|---|---|---|
+| What `instance.data` holds | A raw pointer to the boxed implementation payload | A **non-zero id** into the loader's per-contract instance registry (the impl object itself stays inside the VM) |
+| `create_instance` | Calls the author factory, boxes the payload, stamps the contract id | Calls the registered factory inside the VM, mints a non-zero id, stores the impl in the loader's per-contract `instances` map keyed by that id, stamps the handle |
+| Dispatch resolves the impl | `&*(instance.data as *const State)` | id 0 → a per-contract `default_impl` built once at load (stateless / low-level paths); non-zero id → the impl in the `instances` map; the resolved impl is passed as the handler's first argument |
+| Null / zero `instance.data` | Rejected with `InvalidPointer` | Resolves to the per-contract `default_impl` (a valid stateless instance) |
+| `destroy_instance` | Drops the box exactly once | Removes the id from the `instances` map (dropping the VM-side impl) |
+
+The VM family must mint **non-zero** ids because `GuestContractInstance::is_null` keys on
+`data` — id 0 is reserved for "the default instance". Ids start at 1.
 
 ### Host Side: Caller Wrappers Own Instances
 
@@ -144,7 +168,7 @@ let wrapper_v2 = ValidatorContract::new(handles[1], runtime)?;  // → bundle B 
 |------|---------------|---------------------|
 | **Caller Wrapper** | Host-side RAII object owning one instance | NOT a shared reference to a singleton |
 | **Instance payload** | Factory-created state in `GuestContractInstance.data` | NOT static/global plugin state |
-| **Author factory** | `polyplug_create_<plugin>` / `Set<Plugin>Factory` | NOT a registration of a single shared object |
+| **Author factory** | `polyplug_create_<plugin>` (Rust/C++) / `Set<Plugin>Factory` (C#) / `set_<plugin>_factory` (Python/Lua) / `set<Plugin>Factory` (JS) — one per language, all invoked per instance | NOT a registration of a single shared object |
 | **Resolved interface pointer** | `*const GuestContractInterface` from `resolve_guest_contract` | NOT instance state |
 | **Hot-Reload** | Interface swap via callback coordination | NOT instance migration |
 

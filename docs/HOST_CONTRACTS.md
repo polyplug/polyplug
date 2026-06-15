@@ -46,6 +46,40 @@ The naming separation clarifies the Host/Guest relationship: the host provides t
 | **Discovery** | Host finds plugin | Plugin queries host |
 | **Use Case** | Plugin functionality | Host services (logging, metrics, config) |
 
+## Singleton vs Per-Instance Host Contracts
+
+Each `[[host_contract]]` carries a `singleton` flag (defaults to `false` — i.e.
+per-instance). The application developer chooses per contract:
+
+```toml
+[[host_contract]]
+name = "host.logger"
+version = "1.0.0"
+singleton = true     # one shared instance for all plugins (default is false)
+```
+
+What the flag controls — the **runtime's** instance caching:
+
+- `singleton = true` — the runtime creates the instance once (lazily, on the first
+  `get_host_contract`) and hands the same `HostContractInstance` to every plugin caller
+  (cached in `singleton_instances`).
+- `singleton = false` — the runtime calls the provider's `create_instance` once per
+  `get_host_contract` caller, so each caller receives its own instance and
+  `destroy_instance` reclaims it.
+
+Whether distinct instances actually hold **independent state** also depends on the
+provider's `create_instance`:
+
+- **Lua host providers** build a fresh implementation from a registered factory per
+  `create_instance` and key it by a non-zero instance id, so `singleton = false` yields
+  genuinely independent per-instance state (see `sdks/lua/host/tests/test_host_contract_per_instance.lua`).
+- **Native host providers (Rust/C++/C#) and the Python provider** carry a single
+  implementation pointer through `user_data` (see the note below), so `create_instance`
+  returns that same implementation regardless of the flag — they are single-implementation
+  by design. Use `singleton = true` for them to make the intent explicit.
+- The **JavaScript (Deno) host provider** does not yet build per-instance implementations
+  (tracked follow-up); a JS-provided contract behaves as single-implementation today.
+
 ## Common Use Cases
 
 Host contracts are ideal for providing shared services to plugins:

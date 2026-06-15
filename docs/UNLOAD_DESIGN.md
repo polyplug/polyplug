@@ -51,8 +51,10 @@ This follows from facts about the code:
 
 - `HostApi` carries `create_guest_instance` (@160) and `destroy_guest_instance` (@168),
   so the runtime **mediates** instance lifecycle and can attribute each instance to its
-  contract. The bare `create_instance(args)` ABI on `GuestContractInterface` carries no
-  contract context, which is exactly why instance create/destroy is host-mediated.
+  contract. The `create_instance(loader_data, host, args, out_instance)` ABI on
+  `GuestContractInterface` is not self-accounting — calling the fn-ptr directly neither
+  pins the unload epoch nor updates the runtime's per-contract live-instance counter —
+  which is exactly why instance create/destroy is host-mediated.
 - Native instance data uses **the guest's own allocator** (`Box` / `new` / `malloc`
   inside the guest dylib), not `host->alloc`. It is outside the runtime's allocation
   bookkeeping.
