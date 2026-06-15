@@ -75,7 +75,10 @@ provider's `create_instance`:
   `singleton = false` yields genuinely independent per-instance state. The Deno provider
   uses native dispatch via `Deno.UnsafeCallback` (the SDK's `buildHostContractInterface`);
   see `sdks/lua/host/tests/test_host_contract_per_instance.lua` and
-  `sdks/js/host/tests/host_contract_provider_test.ts`.
+  `sdks/js/host/tests/host_contract_provider_test.ts`. These LuaJIT/Deno host-SDK
+  suites have no cargo coverage (the Deno host SDK runs only under Deno, the lua
+  provider only under LuaJIT), so CI runs them through `just test-host-lua` /
+  `just test-host-js` in the `test` job — the same recipes a developer runs locally.
 - **Native host providers (Rust/C++/C#) and the Python provider** carry a single
   implementation pointer through `user_data` (see the note below), so `create_instance`
   returns that same implementation regardless of the flag — they are single-implementation

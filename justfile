@@ -362,7 +362,7 @@ test-host-cpp:
     fi
     @g++ -std=c++17 -I{{sdks_dir}}/cpp/abi -I{{sdks_dir}}/cpp/host \
         tests/integration/cpp/hot_reload_test.cpp \
-        -o /tmp/polyplug_test_cpp 2>/dev/null && \
+        -o /tmp/polyplug_test_cpp && \
         /tmp/polyplug_test_cpp
 
 # Run Python host-lib tests
@@ -410,7 +410,11 @@ test-host-lua:
         luajit test_reload_runtime.lua && \
         POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug.so}" \
         POLYPLUG_LUA_LIB="${POLYPLUG_LUA_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug_lua.so}" \
-        luajit test_log_runtime.lua; \
+        luajit test_log_runtime.lua && \
+        POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug.so}" \
+        POLYPLUG_LUA_LIB="${POLYPLUG_LUA_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug_lua.so}" \
+        POLYPLUGC="${POLYPLUGC:-$(pwd)/../../../../target/{{profile}}/polyplugc}" \
+        luajit test_host_contract_per_instance.lua; \
     else \
         echo "luajit not installed, skipping"; \
     fi
@@ -428,7 +432,8 @@ test-host-js:
         cd {{sdks_dir}}/js/host/tests && deno test reload_notification_test.ts && \
         POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug.so}" \
         POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug_native.so}" \
-        deno test -A reload_runtime_test.ts; \
+        deno test -A reload_runtime_test.ts && \
+        deno test -A host_contract_provider_test.ts; \
     else \
         echo "deno not installed, skipping"; \
     fi
