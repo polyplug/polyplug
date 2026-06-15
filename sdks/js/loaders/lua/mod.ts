@@ -28,5 +28,5 @@ export function registerLuaLoader(rt: Runtime): void {
     if (loaderPtr === null) {
         throw new Error("polyplug: lua loader create failed");
     }
-    rt.registerLoader("lua", loaderPtr);
+    rt.registerLoader(loaderPtr);
 }

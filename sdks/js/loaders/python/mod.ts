@@ -34,5 +34,5 @@ export function registerPythonLoader(rt: Runtime, minVersion: string = "3.11"): 
     if (loaderPtr === null) {
         throw new Error("polyplug: python loader create failed");
     }
-    rt.registerLoader("python", loaderPtr);
+    rt.registerLoader(loaderPtr);
 }

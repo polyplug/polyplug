@@ -29,5 +29,5 @@ export function registerJsLoader(rt: Runtime): void {
     if (loaderPtr === null) {
         throw new Error("polyplug: js loader create failed");
     }
-    rt.registerLoader("js-quickjs", loaderPtr);
+    rt.registerLoader(loaderPtr);
 }
