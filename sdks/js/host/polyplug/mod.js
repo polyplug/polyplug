@@ -424,15 +424,19 @@ export class GuestContractInterfaceView {
       // raw null pointer survived, fall back to a zeroed (null-data) instance.
       return new Uint8Array(GUEST_CONTRACT_INSTANCE_SIZE);
     }
-    // Out-param ABI: create_instance(host: *const HostApi, args: *const (),
-    // out_instance: *mut GuestContractInstance) -> void. The instance is written
-    // directly into the buffer we hand it.
+    // Out-param ABI: create_instance(loader_data: VmLoaderData, host: *const HostApi,
+    // args: *const (), out_instance: *mut GuestContractInstance) -> void. The instance
+    // is written directly into the buffer we hand it. `loader_data` mirrors the runtime's
+    // host-mediated path: the interface's dispatch.vm.loader_data for VM contracts, null
+    // for native (which ignore it). #vmLoaderData is 0n for native, so the single
+    // UnsafePointer.create call yields null there.
     const fn = new Deno.UnsafeFnPointer(this.#createInstancePtr, {
-      parameters: ["pointer", "pointer", "pointer"],
+      parameters: ["pointer", "pointer", "pointer", "pointer"],
       result: "void",
     });
     const instance = new Uint8Array(GUEST_CONTRACT_INSTANCE_SIZE);
-    fn.call(this.#host, null, Deno.UnsafePointer.of(instance));
+    const loaderData = Deno.UnsafePointer.create(this.#vmLoaderData);
+    fn.call(loaderData, this.#host, null, Deno.UnsafePointer.of(instance));
     return instance;
   }
 
@@ -444,12 +448,15 @@ export class GuestContractInterfaceView {
     if (this.#destroyInstancePtr === null) {
       return;
     }
-    // destroy_instance(host: *const HostApi, instance: GuestContractInstance)
+    // destroy_instance(loader_data: VmLoaderData, host: *const HostApi,
+    // instance: GuestContractInstance). loader_data mirrors create_instance: the
+    // interface's dispatch.vm.loader_data for VM, null (0n) for native.
     const fn = new Deno.UnsafeFnPointer(this.#destroyInstancePtr, {
-      parameters: ["pointer", { struct: ["pointer", "u64"] }],
+      parameters: ["pointer", "pointer", { struct: ["pointer", "u64"] }],
       result: "void",
     });
-    fn.call(this.#host, instance);
+    const loaderData = Deno.UnsafePointer.create(this.#vmLoaderData);
+    fn.call(loaderData, this.#host, instance);
   }
 
   /**
