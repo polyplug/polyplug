@@ -22,6 +22,7 @@ import {
   PipelineValidatorContract,
   PIPELINE_DECODER_CONTRACT_ID,
 } from "./generated/host/callers.ts";
+import { createHostLoggerVtable } from "./generated/host/interface_factories.ts";
 
 const pluginPath = Deno.env.get("POLYPLUG_PLUGIN_PATH")
   ?? "../../../examples/plugins";
@@ -50,6 +51,29 @@ for (const loader of loaders) {
     console.error(`  loader ${loader.name} unavailable: ${e.message}`);
   }
 }
+
+// Host-side implementation of the `host.logger` contract, registered through the
+// GENERATED interface factory so plugins can call back into the host (mirrors the
+// rust/cpp/lua reference hosts' ConsoleLogger). The factory builds a fresh impl
+// per instance; per-instance state falls out of the runtime's create_instance.
+class ConsoleLogger {
+  Log(message) {
+    console.log(`[plugin] ${message}`);
+  }
+
+  LogWithLevel(level, message) {
+    const levelNames = { 0: "DEBUG", 1: "INFO", 2: "WARN", 3: "ERROR" };
+    const name = levelNames[level] ?? "INFO";
+    console.log(`[plugin][${name}] ${message}`);
+  }
+}
+
+const loggerInterface = createHostLoggerVtable(rt, () => new ConsoleLogger());
+rt.registerHostContract(loggerInterface.interfacePtr);
+// Keep the interface's Deno.UnsafeCallbacks + buffers alive for the runtime's
+// lifetime — the runtime holds raw pointers into them.
+const ownedHostContracts = [loggerInterface];
+void ownedHostContracts;
 
 /**
  * Parse a manifest.toml for its name and provided contracts.

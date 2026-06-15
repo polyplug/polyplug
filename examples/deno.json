@@ -1,0 +1,5 @@
+{
+  "imports": {
+    "polyplug": "../sdks/js/host/mod.js"
+  }
+}

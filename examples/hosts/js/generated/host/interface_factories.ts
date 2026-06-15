@@ -2,103 +2,66 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-quickjs (host-side interface factories)
 
-import type { HostContractVTable } from 'polyplug';
-import { DispatchType } from 'polyplug';
+import { buildHostContractInterface } from 'polyplug';
+import type { Runtime } from 'polyplug';
 import type * as contracts from './contracts';
 
 // ABI error codes (match polyplug_abi.AbiErrorCode)
 const AbiErrorCode = {
     Ok: 0,
-    Panic: 3,
 };
 
-/** Create a host contract interface for `host.logger` with NATIVE dispatch. */
-export function createHostLoggerVtable(impl: contracts.HostLogger): HostContractVTable {
-    _HostLogger_impl = impl;
+const _encoder = new TextEncoder();
+const _decoder = new TextDecoder();
 
-    function _host_logger_log_thunk(): number {
-        try {
-            const impl = _HostLogger_impl;
-            if (impl === null) {
-                return AbiErrorCode.Panic;
+/**
+ * Build the host contract interface for `host.logger` (native dispatch, per-instance).
+ * `factory` builds a fresh implementation per instance; the runtime calls it
+ * once per non-singleton caller (independent state) or once for a singleton.
+ */
+export function createHostLoggerVtable(rt: Runtime, factory: () => contracts.HostLogger) {
+    return buildHostContractInterface({
+        contractIdLo: 0x845853BB,
+        contractIdHi: 0xF53EB5F2,
+        major: 1,
+        minor: 0,
+        singleton: false,
+        factory,
+        methods: [
+            (impl: contracts.HostLogger, argsPtr: Deno.PointerValue, outPtr: Deno.PointerValue): number => {
+                const _argsDv = new DataView(new Deno.UnsafePointerView(argsPtr!).getArrayBuffer(16));
+        let _r0 = '';
+        {
+            const _p = _argsDv.getBigUint64(0, true);
+            const _l = Number(_argsDv.getBigUint64(8, true));
+            if (_p !== 0n && _l > 0) {
+                const _ptr = Deno.UnsafePointer.create(_p);
+                if (_ptr !== null) {
+                    _r0 = _decoder.decode(new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_ptr, _l)).slice());
+                }
             }
-            // Extract StringView from args pointer
-            const message = '';
-            impl.Log(message);
-            return AbiErrorCode.Ok;
-        } catch (e) {
-            return AbiErrorCode.Panic;
         }
-    }
-
-    function _host_logger_log_with_level_thunk(): number {
-        try {
-            const impl = _HostLogger_impl;
-            if (impl === null) {
-                return AbiErrorCode.Panic;
+                impl.Log(_r0);
+                return AbiErrorCode.Ok;
+            },
+            (impl: contracts.HostLogger, argsPtr: Deno.PointerValue, outPtr: Deno.PointerValue): number => {
+                const _argsDv = new DataView(new Deno.UnsafePointerView(argsPtr!).getArrayBuffer(24));
+        const _r0 = _argsDv.getUint32(0, true);
+        let _r1 = '';
+        {
+            const _p = _argsDv.getBigUint64(8, true);
+            const _l = Number(_argsDv.getBigUint64(16, true));
+            if (_p !== 0n && _l > 0) {
+                const _ptr = Deno.UnsafePointer.create(_p);
+                if (_ptr !== null) {
+                    _r1 = _decoder.decode(new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_ptr, _l)).slice());
+                }
             }
-            const level: LogLevel = 0;
-            const message = '';
-            impl.LogWithLevel(level, message);
-            return AbiErrorCode.Ok;
-        } catch (e) {
-            return AbiErrorCode.Panic;
         }
-    }
-
-    const functions: (() => number)[] = [
-        _host_logger_log_thunk,
-        _host_logger_log_with_level_thunk,
-    ];
-
-    const vtable: HostContractVTable = {
-        header: {
-            vtableVersion: 1,
-            contractIdLo: 0x845853BB,
-            contractIdHi: 0xF53EB5F2,
-            contractMajor: 1,
-            contractMinor: 0,
-            functionCount: 2,
-            singleton: false,
-            dispatchType: DispatchType.Native,
-        },
-        dispatch: {
-            native: {
-                implPtr: { lo: 0, hi: 0 },  // We use global _impl instead
-                functions,
+                impl.LogWithLevel(_r0, _r1);
+                return AbiErrorCode.Ok;
             },
-        },
-    };
-
-    return vtable;
-}
-
-let _HostLogger_impl: contracts.HostLogger | null = null;
-
-/** Create a host contract interface for `host.logger` with VM dispatch. */
-export function createHostLoggerVtableVm(
-    bridgeData: { lo: number; hi: number },
-    dispatchFn: (bridgeData: { lo: number; hi: number }, fnId: number, args: number, out: number) => number,
-): HostContractVTable {
-    const vtable: HostContractVTable = {
-        header: {
-            vtableVersion: 1,
-            contractIdLo: 0x845853BB,
-            contractIdHi: 0xF53EB5F2,
-            contractMajor: 1,
-            contractMinor: 0,
-            functionCount: 2,
-            singleton: false,
-            dispatchType: DispatchType.VirtualMachine,
-        },
-        dispatch: {
-            vm: {
-                call: dispatchFn,
-                bridgeData,
-            },
-        },
-    };
-
-    return vtable;
+        ],
+    });
 }
 

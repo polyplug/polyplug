@@ -70,15 +70,16 @@ What the flag controls — the **runtime's** instance caching:
 Whether distinct instances actually hold **independent state** also depends on the
 provider's `create_instance`:
 
-- **Lua host providers** build a fresh implementation from a registered factory per
-  `create_instance` and key it by a non-zero instance id, so `singleton = false` yields
-  genuinely independent per-instance state (see `sdks/lua/host/tests/test_host_contract_per_instance.lua`).
+- **Lua and JavaScript (Deno) host providers** build a fresh implementation from a
+  registered factory per `create_instance` and key it by a non-zero instance id, so
+  `singleton = false` yields genuinely independent per-instance state. The Deno provider
+  uses native dispatch via `Deno.UnsafeCallback` (the SDK's `buildHostContractInterface`);
+  see `sdks/lua/host/tests/test_host_contract_per_instance.lua` and
+  `sdks/js/host/tests/host_contract_provider_test.ts`.
 - **Native host providers (Rust/C++/C#) and the Python provider** carry a single
   implementation pointer through `user_data` (see the note below), so `create_instance`
   returns that same implementation regardless of the flag — they are single-implementation
   by design. Use `singleton = true` for them to make the intent explicit.
-- The **JavaScript (Deno) host provider** does not yet build per-instance implementations
-  (tracked follow-up); a JS-provided contract behaves as single-implementation today.
 
 ## Common Use Cases
 

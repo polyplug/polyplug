@@ -245,9 +245,10 @@ host-provided services (logging, metrics, config, etc.).
   via `(*this).user_data`. No static or thread-local storage. The runtime stores the
   pointer only — it never reads, writes, or frees the pointee. (C# and Python additionally
   hold a managed-side reference so the GC does not collect the impl object.) The **Lua**
-  host provider instead builds a fresh implementation from a registered factory per
-  `create_instance`, keying real per-instance state by a non-zero id — so `singleton = false`
-  Lua-provided contracts give independent instances. See
+  and **JavaScript (Deno)** host providers instead build a fresh implementation from a
+  registered factory per `create_instance`, keying real per-instance state by a non-zero
+  id — so `singleton = false` contracts give independent instances (the Deno provider uses
+  native dispatch via `Deno.UnsafeCallback`). See
   [`HOST_CONTRACTS.md`](./HOST_CONTRACTS.md) § Singleton vs Per-Instance Host Contracts.
 - **Contract ID namespacing:** host contracts hash `"host_contract:<name>@<major>"`
   and guest contracts hash `"guest_contract:<name>@<major>"`, keeping the two ID

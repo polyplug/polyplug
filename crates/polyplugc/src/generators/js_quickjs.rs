@@ -59,7 +59,7 @@ impl CodeGenerator for JsQuickjsGenerator {
             // Emit host/interface_factories.ts if there are host contracts
             files.files.push(GeneratedFile {
                 path: PathBuf::from("host/interface_factories.ts"),
-                content: generate_js_host_interface_factories_ts(ir),
+                content: generate_js_host_interface_factories_ts(ir)?,
                 force_regenerate: false,
             });
         }
@@ -1059,7 +1059,10 @@ fn generate_host_caller_method_deno(
     if let Some(ret_ty) = &func.returns {
         out.push_str("        const outDv = new DataView(outBuf.buffer);\n");
         let mut read_idx: u32 = 0;
-        let local: String = emit_deno_read_local(out, ret_ty, "outDv", 0, ir, 0, &mut read_idx)?;
+        // The caller OWNS the guest's return payload (the guest host-allocated it
+        // for us), so the read frees it after copying out.
+        let local: String =
+            emit_deno_read_local(out, ret_ty, "outDv", 0, ir, 0, &mut read_idx, true)?;
         out.push_str(&format!("        return {local};\n"));
     }
 
@@ -1323,8 +1326,12 @@ fn emit_deno_write_buffer(out: &mut String, dv: &str, off: usize, value: &str, i
 
 /// Emit statements reading one ABI value of `ty` from `dv` at `off` into a
 /// freshly-declared local, returning that local's name. Scalars/enums read at
-/// their exact repr width (enums UNSIGNED); StringView/Buffer payloads are
-/// copied out and freed; structs recurse one level into an object literal.
+/// their exact repr width (enums UNSIGNED); StringView/Buffer payloads are copied
+/// out and, when `owns_payload`, freed; structs recurse one level into an object
+/// literal.
+// Mirrors emit_deno_write_value's irreducible marshalling context (out, type,
+// view, offset, ir, depth, counter) plus the ownership flag.
+#[allow(clippy::too_many_arguments)]
 fn emit_deno_read_local(
     out: &mut String,
     ty: &ResolvedTypeRef,
@@ -1333,6 +1340,7 @@ fn emit_deno_read_local(
     ir: &ValidatedIr,
     depth: u32,
     idx: &mut u32,
+    owns_payload: bool,
 ) -> Result<String, PolyplugcError> {
     let n: u32 = *idx;
     *idx += 1;
@@ -1362,11 +1370,11 @@ fn emit_deno_read_local(
             Ok(name)
         }
         ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-            emit_deno_read_stringview(out, dv, off, &name);
+            emit_deno_read_stringview(out, dv, off, &name, owns_payload);
             Ok(name)
         }
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
-            emit_deno_read_buffer(out, dv, off, &name);
+            emit_deno_read_buffer(out, dv, off, &name, owns_payload);
             Ok(name)
         }
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => Err(PolyplugcError::UnsupportedType {
@@ -1396,8 +1404,16 @@ fn emit_deno_read_local(
                 for field in &s.fields {
                     let align: usize = js_c_align(&field.ty, ir)?;
                     field_off = align_up(field_off, align);
-                    let field_local: String =
-                        emit_deno_read_local(out, &field.ty, dv, field_off, ir, depth + 1, idx)?;
+                    let field_local: String = emit_deno_read_local(
+                        out,
+                        &field.ty,
+                        dv,
+                        field_off,
+                        ir,
+                        depth + 1,
+                        idx,
+                        owns_payload,
+                    )?;
                     members.push(format!("{}: {field_local}", field.name));
                     field_off += js_c_size(&field.ty, ir)?;
                 }
@@ -1415,9 +1431,19 @@ fn emit_deno_read_local(
     }
 }
 
-/// Read a returned StringView at `off`, decode it to `name` (a `let` string),
-/// and free the guest-allocated payload. Null/empty views decode to `''`.
-fn emit_deno_read_stringview(out: &mut String, dv: &str, off: usize, name: &str) {
+/// Read a StringView at `off`, decode it to `name` (a `let` string). Null/empty
+/// views decode to `''`. `owns_payload` encodes WHO owns the pointed-to bytes:
+/// when true the reader owns them and frees them after copying (a caller reading a
+/// guest RETURN it host-allocated for us); when false the reader only borrows them
+/// and must not free (a host-contract PROVIDER reading a caller-owned ARG — freeing
+/// it would be a use-after-free).
+fn emit_deno_read_stringview(
+    out: &mut String,
+    dv: &str,
+    off: usize,
+    name: &str,
+    owns_payload: bool,
+) {
     out.push_str(&format!("        let {name} = '';\n"));
     out.push_str("        {\n");
     out.push_str(&format!(
@@ -1433,16 +1459,19 @@ fn emit_deno_read_stringview(out: &mut String, dv: &str, off: usize, name: &str)
     out.push_str(&format!(
         "                    {name} = _decoder.decode(new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_ptr, _l)).slice());\n"
     ));
-    out.push_str("                    rt.free(_ptr, _l, 1);\n");
+    if owns_payload {
+        out.push_str("                    rt.free(_ptr, _l, 1);\n");
+    }
     out.push_str("                }\n");
     out.push_str("            }\n");
     out.push_str("        }\n");
 }
 
-/// Read a returned Buffer at `off`, copy it into `name` (a `let` Uint8Array),
-/// and free the guest-allocated payload (by its capacity). Null/empty buffers
-/// decode to an empty array.
-fn emit_deno_read_buffer(out: &mut String, dv: &str, off: usize, name: &str) {
+/// Read a Buffer at `off`, copy it into `name` (a `let` Uint8Array). Null/empty
+/// buffers decode to an empty array. `owns_payload` follows the same ownership
+/// rule as `emit_deno_read_stringview` (own a guest RETURN → free by capacity;
+/// borrow a caller-owned ARG → leave intact).
+fn emit_deno_read_buffer(out: &mut String, dv: &str, off: usize, name: &str, owns_payload: bool) {
     out.push_str(&format!("        let {name} = new Uint8Array(0);\n"));
     out.push_str("        {\n");
     out.push_str(&format!(
@@ -1462,7 +1491,9 @@ fn emit_deno_read_buffer(out: &mut String, dv: &str, off: usize, name: &str) {
     out.push_str(&format!(
         "                    {name} = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(_ptr, _l)).slice();\n"
     ));
-    out.push_str("                    rt.free(_ptr, _c > 0 ? _c : _l, 1);\n");
+    if owns_payload {
+        out.push_str("                    rt.free(_ptr, _c > 0 ? _c : _l, 1);\n");
+    }
     out.push_str("                }\n");
     out.push_str("            }\n");
     out.push_str("        }\n");
@@ -2899,7 +2930,7 @@ fn collect_ts_guest_host_contract_type_imports(ir: &ValidatedIr) -> BTreeSet<Str
 // ─── Host Interface Factories Generation ────────────────────────────────────────
 
 /// Generate all host-side interface factories into a single file.
-fn generate_js_host_interface_factories_ts(ir: &ValidatedIr) -> String {
+fn generate_js_host_interface_factories_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(
         "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
@@ -2907,29 +2938,41 @@ fn generate_js_host_interface_factories_ts(ir: &ValidatedIr) -> String {
          // Runtime: js-quickjs (host-side interface factories)\n\n",
     );
 
-    out.push_str("import type { HostContractVTable } from 'polyplug';\n");
-    out.push_str("import { DispatchType } from 'polyplug';\n");
+    out.push_str("import { buildHostContractInterface } from 'polyplug';\n");
+    out.push_str("import type { Runtime } from 'polyplug';\n");
     out.push_str("import type * as contracts from './contracts';\n\n");
 
     out.push_str("// ABI error codes (match polyplug_abi.AbiErrorCode)\n");
     out.push_str("const AbiErrorCode = {\n");
     out.push_str("    Ok: 0,\n");
-    out.push_str("    Panic: 3,\n");
     out.push_str("};\n\n");
 
+    // Shared by the generated arg/return marshalling (StringView encode/decode).
+    out.push_str("const _encoder = new TextEncoder();\n");
+    out.push_str("const _decoder = new TextDecoder();\n\n");
+
     for contract in &ir.host_contracts {
-        generate_js_host_interface_factory(&mut out, contract);
+        generate_js_host_interface_factory(&mut out, contract, ir)?;
     }
 
-    out
+    Ok(out)
 }
 
-/// Generate interface factories for one host contract.
-fn generate_js_host_interface_factory(out: &mut String, contract: &ResolvedHostContract) {
+/// Generate the per-contract host interface factory.
+///
+/// Emits a factory-based provider: `create<Iface>Vtable(factory)` builds a real
+/// C `HostContractInterface` (native dispatch via `Deno.UnsafeCallback`) with
+/// per-instance state through the SDK's `buildHostContractInterface`. The
+/// `factory` constructs a fresh implementation per instance — no module-level
+/// impl storage (Rule 12). Each method is emitted as a thunk that reads its
+/// packed args at C-layout offsets and calls the impl.
+fn generate_js_host_interface_factory(
+    out: &mut String,
+    contract: &ResolvedHostContract,
+    ir: &ValidatedIr,
+) -> Result<(), PolyplugcError> {
     let iface_name: String = host_contract_name_to_ts_interface(&contract.name);
     let factory_name: String = format!("create{}Vtable", iface_name);
-    let factory_vm_name: String = format!("create{}VtableVm", iface_name);
-    let fn_count: usize = contract.functions.len();
     let contract_id: u64 = contract.contract_id;
     let contract_id_lo: u32 = (contract_id & 0xFFFFFFFF) as u32;
     let contract_id_hi: u32 = (contract_id >> 32) as u32;
@@ -2937,240 +2980,126 @@ fn generate_js_host_interface_factory(out: &mut String, contract: &ResolvedHostC
     let minor: u32 = contract.version.minor;
     let singleton: bool = contract.singleton;
 
-    // NATIVE dispatch factory
     out.push_str(&format!(
-        "/** Create a host contract interface for `{}` with NATIVE dispatch. */\n",
+        "/**\n \
+         * Build the host contract interface for `{}` (native dispatch, per-instance).\n \
+         * `factory` builds a fresh implementation per instance; the runtime calls it\n \
+         * once per non-singleton caller (independent state) or once for a singleton.\n \
+         */\n",
         contract.name
     ));
     out.push_str(&format!(
-        "export function {factory_name}(impl: contracts.{iface_name}): HostContractVTable {{\n"
+        "export function {factory_name}(rt: Runtime, factory: () => contracts.{iface_name}) {{\n"
     ));
-    out.push_str(&format!("    _{iface_name}_impl = impl;\n\n"));
-
-    // Generate thunks for each function
+    out.push_str("    return buildHostContractInterface({\n");
+    out.push_str(&format!("        contractIdLo: 0x{contract_id_lo:08X},\n"));
+    out.push_str(&format!("        contractIdHi: 0x{contract_id_hi:08X},\n"));
+    out.push_str(&format!("        major: {major},\n"));
+    out.push_str(&format!("        minor: {minor},\n"));
+    out.push_str(&format!("        singleton: {singleton},\n"));
+    out.push_str("        factory,\n");
+    out.push_str("        methods: [\n");
     for func in &contract.functions {
-        generate_js_host_thunk(out, func, &contract.name, &iface_name);
+        generate_js_host_method_thunk(out, func, &iface_name, ir)?;
     }
-
-    // Static function pointer array
-    out.push_str("    const functions: (() => number)[] = [\n");
-    for func in &contract.functions {
-        let thunk_name: String = format!(
-            "_{}_{}_thunk",
-            contract.name.replace('.', "_").to_lowercase(),
-            func.name
-        );
-        out.push_str(&format!("        {thunk_name},\n"));
-    }
-    out.push_str("    ];\n\n");
-
-    // Create the interface
-    out.push_str("    const vtable: HostContractVTable = {\n");
-    out.push_str("        header: {\n");
-    out.push_str("            vtableVersion: 1,\n");
-    out.push_str(&format!(
-        "            contractIdLo: 0x{contract_id_lo:08X},\n"
-    ));
-    out.push_str(&format!(
-        "            contractIdHi: 0x{contract_id_hi:08X},\n"
-    ));
-    out.push_str(&format!("            contractMajor: {major},\n"));
-    out.push_str(&format!("            contractMinor: {minor},\n"));
-    out.push_str(&format!("            functionCount: {fn_count},\n"));
-    out.push_str(&format!("            singleton: {singleton},\n"));
-    out.push_str("            dispatchType: DispatchType.Native,\n");
-    out.push_str("        },\n");
-    out.push_str("        dispatch: {\n");
-    out.push_str("            native: {\n");
-    out.push_str("                implPtr: { lo: 0, hi: 0 },  // We use global _impl instead\n");
-    out.push_str("                functions,\n");
-    out.push_str("            },\n");
-    out.push_str("        },\n");
-    out.push_str("    };\n\n");
-    out.push_str("    return vtable;\n");
+    out.push_str("        ],\n");
+    out.push_str("    });\n");
     out.push_str("}\n\n");
-
-    // Global implementation storage
-    out.push_str(&format!(
-        "let _{iface_name}_impl: contracts.{iface_name} | null = null;\n\n"
-    ));
-
-    // VM dispatch factory
-    out.push_str(&format!(
-        "/** Create a host contract interface for `{}` with VM dispatch. */\n",
-        contract.name
-    ));
-    out.push_str(&format!("export function {factory_vm_name}(\n"));
-    out.push_str("    bridgeData: { lo: number; hi: number },\n");
-    out.push_str("    dispatchFn: (bridgeData: { lo: number; hi: number }, fnId: number, args: number, out: number) => number,\n");
-    out.push_str("): HostContractVTable {\n");
-    out.push_str("    const vtable: HostContractVTable = {\n");
-    out.push_str("        header: {\n");
-    out.push_str("            vtableVersion: 1,\n");
-    out.push_str(&format!(
-        "            contractIdLo: 0x{contract_id_lo:08X},\n"
-    ));
-    out.push_str(&format!(
-        "            contractIdHi: 0x{contract_id_hi:08X},\n"
-    ));
-    out.push_str(&format!("            contractMajor: {major},\n"));
-    out.push_str(&format!("            contractMinor: {minor},\n"));
-    out.push_str(&format!("            functionCount: {fn_count},\n"));
-    out.push_str(&format!("            singleton: {singleton},\n"));
-    out.push_str("            dispatchType: DispatchType.VirtualMachine,\n");
-    out.push_str("        },\n");
-    out.push_str("        dispatch: {\n");
-    out.push_str("            vm: {\n");
-    out.push_str("                call: dispatchFn,\n");
-    out.push_str("                bridgeData,\n");
-    out.push_str("            },\n");
-    out.push_str("        },\n");
-    out.push_str("    };\n\n");
-    out.push_str("    return vtable;\n");
-    out.push_str("}\n\n");
+    Ok(())
 }
 
-/// Generate a thunk function for a host contract function.
-fn generate_js_host_thunk(
+/// Emit one native-dispatch thunk for a host contract method, as an entry in the
+/// `methods` array passed to `buildHostContractInterface`. The thunk receives the
+/// resolved impl and the packed-args pointer, reads each argument at its
+/// natural-alignment (C-layout) offset — matching how the guest caller packs them
+/// — calls the impl method, and returns `AbiErrorCode.Ok`.
+fn generate_js_host_method_thunk(
     out: &mut String,
     func: &ResolvedFunction,
-    contract_name: &str,
     iface_name: &str,
-) {
-    let thunk_name: String = format!(
-        "_{}_{}_thunk",
-        contract_name.replace('.', "_").to_lowercase(),
-        func.name
-    );
-    let has_return: bool = func.returns.is_some();
+    ir: &ValidatedIr,
+) -> Result<(), PolyplugcError> {
+    let method_name: String = host_method_pascal_case(&func.name);
 
-    out.push_str(&format!("    function {thunk_name}(): number {{\n"));
-    out.push_str("        try {\n");
-    out.push_str(&format!("            const impl = _{iface_name}_impl;\n"));
-    out.push_str("            if (impl === null) {\n");
-    out.push_str("                return AbiErrorCode.Panic;\n");
-    out.push_str("            }\n");
+    out.push_str(&format!(
+        "            (impl: contracts.{iface_name}, argsPtr: Deno.PointerValue, outPtr: Deno.PointerValue): number => {{\n"
+    ));
 
-    // Generate argument extraction
+    // Read every argument at its natural-alignment (C-layout) offset — the exact
+    // packing the guest caller produced — using the shared full-universe reader.
+    // `owns_payload = false`: the args belong to the caller, so StringView/Buffer
+    // payloads are borrowed (copied out, never freed).
+    let mut arg_names: Vec<String> = Vec::new();
     if !func.params.is_empty() {
-        generate_js_host_thunk_args(out, func);
-    }
-
-    // Generate the method call
-    generate_js_host_thunk_call(out, func, has_return);
-
-    // Handle return value
-    if has_return {
-        out.push_str("            // Write result to out pointer\n");
-        out.push_str("            // Note: In QuickJS, we use the polyplug helpers\n");
-    }
-
-    out.push_str("            return AbiErrorCode.Ok;\n");
-    out.push_str("        } catch (e) {\n");
-    out.push_str("            return AbiErrorCode.Panic;\n");
-    out.push_str("        }\n");
-    out.push_str("    }\n\n");
-}
-
-/// Generate argument extraction for a host thunk.
-fn generate_js_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
-    if func.params.len() == 1 {
-        let param: &ResolvedParam = &func.params[0];
-        match &param.ty {
-            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-                out.push_str("            // Extract StringView from args pointer\n");
-                out.push_str(&format!(
-                    "            const {name} = '';\n",
-                    name = param.name
-                ));
-            }
-            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
-                out.push_str("            // Extract Buffer from args pointer\n");
-                out.push_str(&format!(
-                    "            const {name} = new Uint8Array(0);\n",
-                    name = param.name
-                ));
-            }
-            _ => {
-                let ty_name: String = ts_host_param_type(&param.ty);
-                out.push_str(&format!(
-                    "            const {name}: {ty_name} = 0;\n",
-                    name = param.name,
-                    ty_name = ty_name
-                ));
-            }
-        }
-    } else {
-        // Multiple params - placeholder defaults. Each must use a value assignable
-        // to its TS type (a bare `0` is not assignable to `string`/`Uint8Array`).
+        let args_size: usize = deno_args_total_size(func, ir)?;
+        out.push_str(&format!(
+            "                const _argsDv = new DataView(new Deno.UnsafePointerView(argsPtr!).getArrayBuffer({args_size}));\n"
+        ));
+        let mut read_idx: u32 = 0;
+        let mut offset: usize = 0;
         for param in &func.params {
-            match &param.ty {
-                ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-                    out.push_str(&format!(
-                        "            const {name} = '';\n",
-                        name = param.name
-                    ));
-                }
-                ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
-                    out.push_str(&format!(
-                        "            const {name} = new Uint8Array(0);\n",
-                        name = param.name
-                    ));
-                }
-                _ => {
-                    let ty_name: String = ts_host_param_type(&param.ty);
-                    out.push_str(&format!(
-                        "            const {name}: {ty_name} = 0;\n",
-                        name = param.name,
-                        ty_name = ty_name
-                    ));
-                }
-            }
+            let align: usize = js_c_align(&param.ty, ir)?;
+            offset = align_up(offset, align);
+            let local: String = emit_deno_read_local(
+                out,
+                &param.ty,
+                "_argsDv",
+                offset,
+                ir,
+                0,
+                &mut read_idx,
+                false,
+            )?;
+            arg_names.push(local);
+            offset += js_c_size(&param.ty, ir)?;
         }
     }
+
+    match &func.returns {
+        Some(ret_ty) => {
+            out.push_str(&format!(
+                "                const _result = impl.{method_name}({});\n",
+                arg_names.join(", ")
+            ));
+            // Write the return through outPtr with the shared full-universe writer.
+            // StringView/Buffer payloads are host-allocated here and freed later by
+            // the guest caller, so the per-call `_allocs` list is intentionally NOT
+            // freed by the provider (freeing it would be a use-after-free).
+            let ret_size: usize = js_c_size(ret_ty, ir)?;
+            out.push_str(&format!(
+                "                const _outDv = new DataView(new Deno.UnsafePointerView(outPtr!).getArrayBuffer({ret_size}));\n"
+            ));
+            out.push_str("                const _allocs: [Deno.PointerValue, number][] = [];\n");
+            let mut alloc_idx: u32 = 0;
+            emit_deno_write_value(out, ret_ty, "_outDv", 0, "_result", ir, 0, &mut alloc_idx)?;
+            out.push_str("                void _allocs;\n");
+        }
+        None => {
+            out.push_str(&format!(
+                "                impl.{method_name}({});\n",
+                arg_names.join(", ")
+            ));
+        }
+    }
+    out.push_str("                return AbiErrorCode.Ok;\n");
+    out.push_str("            },\n");
+    Ok(())
 }
 
-/// Generate the method call inside a host thunk.
-fn generate_js_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_return: bool) {
-    let call_args: String = if func.params.is_empty() {
-        String::new()
-    } else if func.params.len() == 1 {
-        let param: &ResolvedParam = &func.params[0];
-        param.name.clone()
-    } else {
-        func.params
-            .iter()
-            .map(|p: &ResolvedParam| p.name.clone())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-
-    // Convert snake_case to PascalCase for method name
-    let method_name: String = func
-        .name
-        .split(['_', '.'])
+/// Convert a `snake_case` (or dotted) method name to the `PascalCase` form the
+/// generated TypeScript host interface declares.
+fn host_method_pascal_case(name: &str) -> String {
+    name.split(['_', '.'])
         .filter(|seg: &&str| !seg.is_empty())
         .map(|seg: &str| {
-            let mut c: core::str::Chars<'_> = seg.chars();
-            match c.next() {
+            let mut chars: core::str::Chars<'_> = seg.chars();
+            match chars.next() {
                 None => String::new(),
-                Some(first) => first.to_uppercase().to_string() + c.as_str(),
+                Some(first) => first.to_uppercase().to_string() + chars.as_str(),
             }
         })
         .collect::<Vec<String>>()
-        .join("");
-
-    if has_return {
-        let ret_ty: String = match func.returns.as_ref() {
-            Some(ret) => ts_host_return_type(ret),
-            None => String::from("void"),
-        };
-        out.push_str(&format!(
-            "            const result: {ret_ty} = impl.{method_name}({call_args});\n"
-        ));
-    } else {
-        out.push_str(&format!("            impl.{method_name}({call_args});\n"));
-    }
+        .join("")
 }
 
 // ─── Peer Caller Generation ───────────────────────────────────────────────────
@@ -4812,6 +4741,143 @@ mod tests {
         assert!(
             !out.contains("getBigInt64") || !out.contains("Number(outDv.getBigInt64"),
             "enum returns must not sign-extend: {out}"
+        );
+    }
+
+    // ─── Deno host PROVIDER — full-shape marshalling ────────────────────────────
+
+    /// Build an IR with a HOST contract exercising every provider marshalling
+    /// shape: a multi-param method (u32 + u64 + enum + StringView in, StringView
+    /// out), a struct parameter with a scalar return, a Buffer parameter, and a
+    /// struct return. Proves the provider has no type-support limitation.
+    fn deno_host_provider_shapes_ir() -> ValidatedIr {
+        let base: ValidatedIr = deno_shapes_ir();
+        ValidatedIr {
+            types: base.types,
+            enums: base.enums,
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.shapes".to_owned(),
+                contract_id: 0x0011_2233_4455_6677_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                singleton: false,
+                functions: vec![
+                    ResolvedFunction {
+                        name: "mix".to_owned(),
+                        function_id: 0,
+                        params: vec![
+                            ResolvedParam {
+                                name: "n".to_owned(),
+                                ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                            },
+                            ResolvedParam {
+                                name: "big".to_owned(),
+                                ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
+                            },
+                            ResolvedParam {
+                                name: "c".to_owned(),
+                                ty: ResolvedTypeRef::UserDefined("Color".to_owned()),
+                            },
+                            ResolvedParam {
+                                name: "s".to_owned(),
+                                ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                            },
+                        ],
+                        returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+                    },
+                    ResolvedFunction {
+                        name: "take_struct".to_owned(),
+                        function_id: 1,
+                        params: vec![ResolvedParam {
+                            name: "p".to_owned(),
+                            ty: ResolvedTypeRef::UserDefined("Pair".to_owned()),
+                        }],
+                        returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+                    },
+                    ResolvedFunction {
+                        name: "take_buffer".to_owned(),
+                        function_id: 2,
+                        params: vec![ResolvedParam {
+                            name: "b".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
+                        }],
+                        returns: None,
+                    },
+                    ResolvedFunction {
+                        name: "get_struct".to_owned(),
+                        function_id: 3,
+                        params: vec![],
+                        returns: Some(ResolvedTypeRef::UserDefined("Pair".to_owned())),
+                    },
+                ],
+            }],
+            bundle: None,
+        }
+    }
+
+    #[test]
+    fn deno_host_provider_marshals_all_shapes() {
+        let ir: ValidatedIr = deno_host_provider_shapes_ir();
+        let out: String =
+            generate_js_host_interface_factories_ts(&ir).expect("generate Deno host provider");
+
+        // Every shape generates — no type is rejected as unsupported.
+        assert!(
+            !out.contains("UnsupportedType") && !out.contains("unsupported"),
+            "no provider shape may be unsupported: {out}"
+        );
+
+        // Multi-param method: u32@0, u64@8, Color(u32)@16, StringView@24 (ptr+len)
+        // → 40-byte args buffer; all four reach the impl.
+        assert!(
+            out.contains("const _argsDv = new DataView(new Deno.UnsafePointerView(argsPtr!).getArrayBuffer(40));"),
+            "mix args must read from a 40-byte C-layout buffer: {out}"
+        );
+        assert!(
+            out.contains("_argsDv.getBigUint64(8, true)"),
+            "u64 arg must be read at offset 8: {out}"
+        );
+        assert!(
+            out.contains("_argsDv.getUint32(16, true)"),
+            "u32-repr enum arg must be read UNSIGNED at offset 16: {out}"
+        );
+        assert!(
+            out.contains("impl.Mix(_r0, _r1, _r2, _r3);"),
+            "all four args must reach the impl: {out}"
+        );
+
+        // StringView RETURN: host-allocated via rt.alloc (the guest frees it later).
+        assert!(
+            out.contains("rt.alloc(") && out.contains("_outDv.setBigUint64(0,"),
+            "StringView return must host-allocate its payload and write the slot: {out}"
+        );
+
+        // Struct param read into an object; struct return written field-by-field.
+        assert!(
+            out.contains("const _r0 = { a:") || out.contains("a: _r"),
+            "struct param must be read into an object literal: {out}"
+        );
+        assert!(
+            out.contains("impl.GetStruct()") && out.contains("_outDv.setUint32(0,"),
+            "struct return must write its scalar field: {out}"
+        );
+
+        // Buffer param read into a Uint8Array copy.
+        assert!(
+            out.contains("new Uint8Array(0)") && out.contains("impl.TakeBuffer(_r0);"),
+            "Buffer param must be read into a Uint8Array and passed to the impl: {out}"
+        );
+
+        // CRITICAL ownership: the provider BORROWS its args — it must never free a
+        // caller-owned arg payload (that would be a use-after-free). The only host
+        // allocation is for the StringView RETURN; there is no rt.free anywhere.
+        assert!(
+            !out.contains("rt.free"),
+            "provider must NOT free caller-owned arg payloads: {out}"
         );
     }
 }

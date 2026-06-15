@@ -61,6 +61,15 @@ import {
   NATIVE_DISPATCH_FUNCTIONS_OFFSET,
   VM_DISPATCH_CALL_OFFSET,
   VM_DISPATCH_LOADER_DATA_OFFSET,
+  HOST_CONTRACT_INTERFACE_CONTRACT_ID_OFFSET,
+  HOST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET,
+  HOST_CONTRACT_INTERFACE_SINGLETON_OFFSET,
+  HOST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET,
+  HOST_CONTRACT_INTERFACE_USER_DATA_OFFSET,
+  HOST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET,
+  HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET,
+  HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET,
+  HOST_CONTRACT_INTERFACE_SIZE,
 } from "../../abi/abi.ts";
 
 // Import the GuestContractHandle layout constants so the by-value struct passing
@@ -82,6 +91,8 @@ const DISPATCH_TYPE_VIRTUAL_MACHINE = 1;
 // (AbiErrorCode.Ok) instead of magic numbers.
 const AbiErrorCode = Object.freeze({
   Ok: 0,
+  Panic: 3,
+  FunctionNotAvailable: 6,
   InvalidPointer: 8,
 });
 
@@ -92,6 +103,10 @@ const AbiErrorCode = Object.freeze({
 const ABI_ERROR_SIZE = 24;
 // GuestContractInstance crosses the ABI by value as { data: ptr, contract_id: u64 }.
 const GUEST_CONTRACT_INSTANCE_STRUCT = { struct: ["pointer", "u64"] };
+// HostContractInstance crosses the ABI by value as a single { data: ptr } field
+// (8 bytes). The host-contract provider stores a non-zero per-instance id in
+// `data`; id 0 denotes the per-contract default (stateless) instance.
+const HOST_CONTRACT_INSTANCE_STRUCT = { struct: ["pointer"] };
 // GuestContractHandle crosses the ABI by value as { index: u32, generation: u32 }
 // (8 bytes, align 4). Deno FFI passes it as a two-field u32 struct.
 const GUEST_CONTRACT_HANDLE_STRUCT = { struct: ["u32", "u32"] };
@@ -229,6 +244,180 @@ function decodeStringViewStruct(svStruct) {
     return "";
   }
   return utf8At(ptr, len);
+}
+
+/**
+ * Write an AbiError `code` (the first u32 of the 24-byte AbiError) through a
+ * runtime-owned out-param pointer. `getArrayBuffer` returns a zero-copy writable
+ * view into the native AbiError, so the DataView write lands in the runtime's
+ * buffer directly (no copy-back needed). A null pointer is ignored.
+ */
+function writeAbiErrorCode(outErrPtr, code) {
+  if (outErrPtr === null) {
+    return;
+  }
+  const ab = new Deno.UnsafePointerView(outErrPtr).getArrayBuffer(ABI_ERROR_SIZE);
+  new DataView(ab).setUint32(0, code, true);
+}
+
+/**
+ * Build a real C `HostContractInterface` for a host-provided contract, with
+ * native dispatch backed by `Deno.UnsafeCallback`s and **per-instance** state.
+ *
+ * Mirrors the canonical per-instance host-provider model (see the Lua provider):
+ * `create_instance` builds a fresh implementation from `factory`, mints a
+ * non-zero id, and stores it keyed by that id; dispatch resolves the impl by the
+ * instance's `data` (id 0 → a per-contract default impl built once here);
+ * `destroy_instance` drops it. The `singleton` flag is honoured by the runtime's
+ * own caching — `singleton: true` makes the runtime create one instance and share
+ * it, `singleton: false` makes it call `create_instance` per caller.
+ *
+ * All `Deno.UnsafeCallback`s and backing buffers are returned in `owned` and MUST
+ * be kept alive by the caller for as long as the contract is registered (the
+ * runtime holds raw pointers into them). No module-level state is used (Rule 12).
+ *
+ * @param {Object} spec
+ * @param {number} spec.contractIdLo - Low 32 bits of the host_contract id.
+ * @param {number} spec.contractIdHi - High 32 bits of the host_contract id.
+ * @param {number} spec.major - Contract major version.
+ * @param {number} spec.minor - Contract minor version.
+ * @param {boolean} spec.singleton - Whether the runtime should cache one instance.
+ * @param {() => object} spec.factory - Builds a fresh impl object per instance.
+ * @param {Array<(impl: object, argsPtr: Deno.PointerValue, outPtr: Deno.PointerValue) => number>} spec.methods
+ *        One thunk per contract method (fn_id = array index). Each reads its args,
+ *        calls the impl, writes any return through `outPtr`, and returns an
+ *        AbiErrorCode (0 = Ok). Throwing is caught and reported as Panic.
+ * @returns {{ interfacePtr: Deno.PointerValue, owned: object[] }}
+ */
+export function buildHostContractInterface(spec) {
+  const { contractIdLo, contractIdHi, major, minor, singleton, factory, methods } = spec;
+
+  /** @type {Map<bigint, object>} */
+  const instances = new Map();
+  let nextId = 1n;
+  const defaultImpl = factory();
+
+  /** @type {Deno.UnsafeCallback[]} */
+  const callbacks = [];
+
+  // One native dispatch callback per method: (instance, args, out, out_err) -> void.
+  const functionPointers = [];
+  for (const invoke of methods) {
+    const dispatchCb = new Deno.UnsafeCallback(
+      { parameters: [HOST_CONTRACT_INSTANCE_STRUCT, "pointer", "pointer", "pointer"], result: "void" },
+      (instanceStruct, argsPtr, outPtr, outErrPtr) => {
+        let code = AbiErrorCode.Ok;
+        try {
+          const id = new DataView(instanceStruct.buffer, instanceStruct.byteOffset, 8).getBigUint64(0, true);
+          const impl = id === 0n ? defaultImpl : instances.get(id);
+          if (impl === undefined) {
+            code = AbiErrorCode.FunctionNotAvailable;
+          } else {
+            const ret = invoke(impl, argsPtr, outPtr);
+            code = typeof ret === "number" ? ret : AbiErrorCode.Ok;
+          }
+        } catch (e) {
+          console.error(`polyplug: host contract dispatch threw: ${e}`);
+          code = AbiErrorCode.Panic;
+        }
+        writeAbiErrorCode(outErrPtr, code);
+      },
+    );
+    callbacks.push(dispatchCb);
+    functionPointers.push(BigInt(Deno.UnsafePointer.value(dispatchCb.pointer)));
+  }
+
+  // create_instance(this, args, out_instance): build a fresh impl, mint a non-zero
+  // id, store it, and write the id as the new instance's `data`.
+  const createInstanceCb = new Deno.UnsafeCallback(
+    { parameters: ["pointer", "pointer", "pointer"], result: "void" },
+    (_this, _args, outInstancePtr) => {
+      let id = 0n;
+      try {
+        const impl = factory();
+        id = nextId;
+        nextId += 1n;
+        instances.set(id, impl);
+      } catch (e) {
+        console.error(`polyplug: host contract create_instance threw: ${e}`);
+        id = 0n;
+      }
+      if (outInstancePtr !== null) {
+        const ab = new Deno.UnsafePointerView(outInstancePtr).getArrayBuffer(8);
+        new DataView(ab).setBigUint64(0, id, true);
+      }
+    },
+  );
+  callbacks.push(createInstanceCb);
+
+  // destroy_instance(this, instance): drop the impl keyed by the instance id.
+  const destroyInstanceCb = new Deno.UnsafeCallback(
+    { parameters: ["pointer", HOST_CONTRACT_INSTANCE_STRUCT], result: "void" },
+    (_this, instanceStruct) => {
+      try {
+        const id = new DataView(instanceStruct.buffer, instanceStruct.byteOffset, 8).getBigUint64(0, true);
+        if (id !== 0n) {
+          instances.delete(id);
+        }
+      } catch (e) {
+        console.error(`polyplug: host contract destroy_instance threw: ${e}`);
+      }
+    },
+  );
+  callbacks.push(destroyInstanceCb);
+
+  // Backing storage: the function-pointer array, then the interface struct. Both
+  // are kept alive via `owned`; the runtime holds raw pointers into them.
+  const functionsBuf = new Uint8Array(8 * Math.max(1, functionPointers.length));
+  const functionsView = new DataView(functionsBuf.buffer);
+  for (let i = 0; i < functionPointers.length; i += 1) {
+    functionsView.setBigUint64(i * 8, functionPointers[i], true);
+  }
+  const functionsPtr = Deno.UnsafePointer.of(functionsBuf);
+
+  const ifaceBuf = new Uint8Array(HOST_CONTRACT_INTERFACE_SIZE);
+  const ifaceView = new DataView(ifaceBuf.buffer);
+  const contractId = BigInt(contractIdLo >>> 0) | (BigInt(contractIdHi >>> 0) << 32n);
+  ifaceView.setBigUint64(HOST_CONTRACT_INTERFACE_CONTRACT_ID_OFFSET, contractId, true);
+  ifaceView.setUint16(HOST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET, major, true);
+  ifaceView.setUint16(HOST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET + 2, minor, true);
+  ifaceView.setUint16(HOST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET + 4, 0, true);
+  ifaceView.setUint8(HOST_CONTRACT_INTERFACE_SINGLETON_OFFSET, singleton ? 1 : 0);
+  ifaceView.setUint32(HOST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET, DISPATCH_TYPE_NATIVE, true);
+  // runtime @ offset is left zero — the runtime fills it in during registration.
+  // user_data is left null — per-instance impls are carried in `instances`, not user_data.
+  ifaceView.setBigUint64(
+    HOST_CONTRACT_INTERFACE_USER_DATA_OFFSET,
+    0n,
+    true,
+  );
+  ifaceView.setBigUint64(
+    HOST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET,
+    BigInt(Deno.UnsafePointer.value(createInstanceCb.pointer)),
+    true,
+  );
+  ifaceView.setBigUint64(
+    HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET,
+    BigInt(Deno.UnsafePointer.value(destroyInstanceCb.pointer)),
+    true,
+  );
+  // dispatch union (native): { function_count: u32, functions: *const *const () }.
+  ifaceView.setUint32(
+    HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET + NATIVE_DISPATCH_FUNCTION_COUNT_OFFSET,
+    functionPointers.length,
+    true,
+  );
+  ifaceView.setBigUint64(
+    HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET + NATIVE_DISPATCH_FUNCTIONS_OFFSET,
+    BigInt(Deno.UnsafePointer.value(functionsPtr)),
+    true,
+  );
+
+  const interfacePtr = Deno.UnsafePointer.of(ifaceBuf);
+  // `owned` keeps every callback + buffer + the per-instance maps reachable so the
+  // GC cannot reclaim memory the runtime still points into.
+  const owned = [...callbacks, functionsBuf, ifaceBuf, instances];
+  return { interfacePtr, owned };
 }
 
 /**
