@@ -4,8 +4,11 @@
  * 
  * This module provides ABI types and helpers for writing polyplug guest plugins
  * in JavaScript. Plugins run inside the QuickJS VM embedded by the polyplug JS
- * loader; all host access goes through the injected `globalThis.polyplug` bridge.
- * 
+ * loader; all host access goes through the `bridge` object the loader passes as
+ * an explicit argument to `polyplug_init`, each dispatch call, and each author
+ * factory — nothing is read from `globalThis` (Rule 12). Every helper that needs
+ * host capabilities therefore takes the `bridge` as its first parameter.
+ *
  * @module polyplug-guest
  */
 
@@ -126,7 +129,8 @@ export const LogLevel = {
  * @callback InitFn
  * @param {HostApi} host - Host interface for plugin registration
  * @param {BundleInitContext} context - Plugin context with bundle path
- * @returns {AbiError} Registration result
+ * @param {Object} bridge - Host-capability bridge passed in by the loader
+ * @returns {[Array, AbiError]} [registrations, abiError] consumed by the loader
  */
 
 /**
@@ -152,20 +156,20 @@ export class DependencyNotFoundError extends Error {
  * suggested convention is `"guest.<plugin-name>"` — and `message` is delivered
  * verbatim.
  *
- * The `polyplug.log` bridge is injected into the VM by the polyplug JS loader;
- * outside a polyplug VM (e.g. plain unit tests of plugin code) it is absent
- * and this helper degrades to a no-op.
+ * `bridge` is the host-capability object the loader passes explicitly into the
+ * guest (the author factory receives it); outside a polyplug VM (e.g. plain unit
+ * tests of plugin code) it is absent and this helper degrades to a no-op.
  *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
  * @param {number} level - One of {@link LogLevel}.
  * @param {string} scope - Short stable tag, e.g. "guest.my-plugin".
  * @param {string} message - Log message, delivered verbatim.
  * @returns {void}
  *
  * @example
- * log(LogLevel.Info, "guest.decoder", "frame decoded");
+ * log(bridge, LogLevel.Info, "guest.decoder", "frame decoded");
  */
-export function log(level, scope, message) {
-    const bridge = globalThis.polyplug;
+export function log(bridge, level, scope, message) {
     if (!bridge || typeof bridge.log !== 'function') {
         return;
     }
@@ -189,85 +193,215 @@ export default {
 
 /**
  * Read bytes from host memory.
- * 
+ *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
  * @param {bigint} ptr - Pointer to memory (as BigInt)
  * @param {number} len - Number of bytes to read
  * @returns {Uint8Array} Bytes read from host memory
- * 
+ *
  * @example
- * const bytes = readBytes(0x1234n, 10);
+ * const bytes = readBytes(bridge, 0x1234n, 10);
  */
-export function readBytes(ptr, len) {
+export function readBytes(bridge, ptr, len) {
     if (len === 0) {
         return new Uint8Array(0);
     }
     // QuickJS: use bulk readMemory for performance (single FFI call)
-    if (globalThis.polyplug.readMemory) {
-        const buffer = globalThis.polyplug.readMemory(Number(ptr), len);
+    if (bridge.readMemory) {
+        const buffer = bridge.readMemory(Number(ptr), len);
         return new Uint8Array(buffer);
     }
     // Fallback: byte-by-byte read (for runtimes without readMemory)
     const bytes = new Uint8Array(len);
     const ptrNum = Number(ptr);
     for (let i = 0; i < len; i++) {
-        bytes[i] = globalThis.polyplug.readByte(ptrNum + i);
+        bytes[i] = bridge.readByte(ptrNum + i);
     }
     return bytes;
 }
 
 /**
  * Write bytes to host memory.
- * 
+ *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
  * @param {bigint} ptr - Pointer to memory (as BigInt)
  * @param {Uint8Array} data - Bytes to write
  * @returns {void}
- * 
+ *
  * @example
- * writeBytes(0x1234n, new TextEncoder().encode("hello"));
+ * writeBytes(bridge, 0x1234n, new TextEncoder().encode("hello"));
  */
-export function writeBytes(ptr, data) {
+export function writeBytes(bridge, ptr, data) {
     const ptrNum = Number(ptr);
     for (let i = 0; i < data.length; i++) {
-        globalThis.polyplug.writeByte(ptrNum + i, data[i]);
+        bridge.writeByte(ptrNum + i, data[i]);
     }
 }
 
 /**
- * Allocate a string in host memory.
- * 
+// UTF-8-encode a JS string for QuickJS, where `TextEncoder` is absent.
+//
+// The encode scan is inlined at every use site (the two alloc helpers below) on
+// purpose: rolldown's dead-code elimination drops a module-private helper
+// referenced only from a `typeof TextEncoder` fallback branch in this (large)
+// module, leaving the QuickJS path calling an undefined function at runtime. A
+// self-contained encode is correct under the bundler regardless. The same reason
+// inlines `toStr`'s validating decode above.
+
+/**
+ * Allocate a string in host memory via the host allocator.
+ *
+ * The bytes are owned by the caller and must be freed explicitly with
+ * {@link freeBytes} (pass the returned `len` as the size). For return-value
+ * strings, prefer {@link allocStringArena}, which never needs an explicit free.
+ *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
  * @param {string} str - JavaScript string to allocate
  * @returns {{ ptr: bigint, len: number }} Pointer and length of allocated string
- * 
+ *
  * @example
- * const { ptr, len } = allocString("hello");
+ * const { ptr, len } = allocString(bridge, "hello");
  */
-function _encodeUtf8(str) {
-    const out = [];
-    for (let i = 0; i < str.length; i++) {
-        let code = str.charCodeAt(i);
-        if (code >= 0xD800 && code <= 0xDBFF) {
-            const low = str.charCodeAt(++i);
-            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
-        }
-        if (code < 0x80) {
-            out.push(code);
-        } else if (code < 0x800) {
-            out.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F));
-        } else if (code < 0x10000) {
-            out.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F));
-        } else {
-            out.push(0xF0 | (code >> 18), 0x80 | ((code >> 12) & 0x3F), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F));
-        }
-    }
-    return new Uint8Array(out);
+export function allocString(bridge, str) {
+    const bytes = (typeof TextEncoder !== 'undefined')
+        ? new TextEncoder().encode(str)
+        : (() => {
+            const out = [];
+            for (let i = 0; i < str.length; i++) {
+                let code = str.charCodeAt(i);
+                if (code >= 0xD800 && code <= 0xDBFF) {
+                    const low = str.charCodeAt(++i);
+                    code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                }
+                if (code < 0x80) {
+                    out.push(code);
+                } else if (code < 0x800) {
+                    out.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F));
+                } else if (code < 0x10000) {
+                    out.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F));
+                } else {
+                    out.push(0xF0 | (code >> 18), 0x80 | ((code >> 12) & 0x3F), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F));
+                }
+            }
+            return new Uint8Array(out);
+        })();
+    const ptrArr = bridge.alloc(bytes.length);
+    const ptr = (BigInt(ptrArr[1]) << 32n) + BigInt(ptrArr[0]);
+    writeBytes(bridge, ptr, bytes);
+    return { ptr, len: bytes.length };
 }
 
-// Validating UTF-8 decoder for QuickJS, where TextDecoder is absent. Mirrors
-// the strictness of Rust's core::str::from_utf8 / the fatal TextDecoder: it
-// rejects invalid lead bytes, truncated sequences, bad continuation bytes,
-// overlong forms, surrogates, and code points above U+10FFFF, throwing a
-// TypeError so a readable-but-invalid view never decodes to mojibake.
-function _decodeUtf8(bytes) {
+/**
+ * Allocate a return-value string from the current call arena.
+ *
+ * Use this for strings RETURNED from a contract function: the bytes are served
+ * from the host's per-call {@link CallArena} and stay valid until the caller's
+ * next arena-backed call, so the guest never frees them. When no arena is active
+ * (`bridge.arenaAlloc` falls back to `bridge.alloc`), this behaves like
+ * {@link allocString}. For data that must outlive the call, use
+ * {@link allocString} and free it explicitly with {@link freeBytes}.
+ *
+ * `arenaPtr` is the per-call arena pointer the loader threads as a dispatch
+ * argument to the generated wrapper (NOT read from any global — Rule 12); the
+ * wrapper forwards it here. `bridge.arenaAlloc(size, arenaPtr)` bumps exactly
+ * that arena, so concurrent and same-VM reentrant dispatch stay correct — each
+ * call's arena travels with its own call frame.
+ *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
+ * @param {string} str - JavaScript string to allocate.
+ * @param {number} arenaPtr - This call's arena pointer threaded by the loader.
+ * @returns {{ ptr: bigint, len: number }} Pointer and length of the bytes.
+ */
+export function allocStringArena(bridge, str, arenaPtr) {
+    const bytes = (typeof TextEncoder !== 'undefined')
+        ? new TextEncoder().encode(str)
+        : (() => {
+            const out = [];
+            for (let i = 0; i < str.length; i++) {
+                let code = str.charCodeAt(i);
+                if (code >= 0xD800 && code <= 0xDBFF) {
+                    const low = str.charCodeAt(++i);
+                    code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                }
+                if (code < 0x80) {
+                    out.push(code);
+                } else if (code < 0x800) {
+                    out.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F));
+                } else if (code < 0x10000) {
+                    out.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F));
+                } else {
+                    out.push(0xF0 | (code >> 18), 0x80 | ((code >> 12) & 0x3F), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F));
+                }
+            }
+            return new Uint8Array(out);
+        })();
+    const ptrArr = bridge.arenaAlloc(bytes.length, arenaPtr);
+    const ptr = (BigInt(ptrArr[1]) << 32n) + BigInt(ptrArr[0]);
+    writeBytes(bridge, ptr, bytes);
+    return { ptr, len: bytes.length };
+}
+
+/**
+ * Free a host-allocated region previously obtained via {@link allocString} or
+ * `bridge.alloc`.
+ *
+ * The host allocator requires the original allocation size and alignment to
+ * free the exact region — passing the wrong size leaks memory (the host free is
+ * a no-op on size 0). `alloc`/`allocString` use alignment 1, which is the
+ * default here.
+ *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
+ * @param {bigint} ptr - Pointer returned by allocString/alloc (as BigInt).
+ * @param {number} size - Original allocation size in bytes.
+ * @param {number} [align=1] - Original allocation alignment.
+ * @returns {void}
+ */
+export function freeBytes(bridge, ptr, size, align = 1) {
+    if (!ptr || size === 0) {
+        return;
+    }
+    const ptrBig = BigInt(ptr);
+    const lo = Number(ptrBig & 0xFFFFFFFFn);
+    const hi = Number((ptrBig >> 32n) & 0xFFFFFFFFn);
+    bridge.free(lo, hi, size, align);
+}
+
+/**
+ * Convert a StringView to a JavaScript string.
+ *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
+ * @param {StringView} sv - StringView from polyplug ABI
+ * @returns {string} JavaScript string (UTF-8 decoded)
+ *
+ * @example
+ * const s = toStr(bridge, stringView);
+ */
+export function toStr(bridge, sv) {
+    if (!sv || sv.len === 0) {
+        return '';
+    }
+    // Reconstruct the 64-bit pointer from the QuickJS hi/lo split.
+    const ptr = (BigInt(sv.ptr_hi) << 32n) + BigInt(sv.ptr_lo);
+    if (ptr === 0n) {
+        return '';
+    }
+    // Read bytes and decode as UTF-8 (TextDecoder is absent in QuickJS).
+    // Both paths reject invalid UTF-8 (the fatal decoder / the manual scan throw
+    // a TypeError) so a readable-but-invalid view surfaces an error rather than
+    // silently yielding U+FFFD or mojibake.
+    //
+    // The QuickJS scan is inlined here (not factored into a module-private helper)
+    // on purpose: rolldown's dead-code elimination drops a private helper that is
+    // referenced ONLY from this TextDecoder fallback branch, which would leave the
+    // QuickJS decode path calling an undefined function at runtime. Keeping the
+    // scan self-contained makes `toStr` correct under the bundler regardless.
+    const bytes = readBytes(bridge, ptr, sv.len);
+    if (typeof TextDecoder !== 'undefined') {
+        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    }
+    // Validating UTF-8 decode: rejects invalid lead bytes, truncated sequences,
+    // bad continuation bytes, overlong forms, surrogates, and code points above
+    // U+10FFFF, mirroring the strictness of the fatal TextDecoder.
     let str = '';
     let i = 0;
     const n = bytes.length;
@@ -313,119 +447,35 @@ function _decodeUtf8(bytes) {
     return str;
 }
 
-export function allocString(str) {
-    const bytes = (typeof TextEncoder !== 'undefined')
-        ? new TextEncoder().encode(str)
-        : _encodeUtf8(str);
-    const ptrArr = globalThis.polyplug.alloc(bytes.length);
-    const ptr = (BigInt(ptrArr[1]) << 32n) + BigInt(ptrArr[0]);
-    writeBytes(ptr, bytes);
-    return { ptr, len: bytes.length };
-}
-
-/**
- * Allocate a return-value string from the current call arena.
- *
- * Use this for strings RETURNED from a contract function: the bytes are served
- * from the host's per-call {@link CallArena} and stay valid until the next call
- * on the same caller, so the guest never frees them. When no arena is active
- * (`polyplug.arenaAlloc` falls back to `polyplug.alloc`), this behaves like
- * {@link allocString}. For data that must outlive the call, use
- * {@link allocString} and free it explicitly with {@link freeBytes}.
- *
- * @param {string} str - JavaScript string to allocate.
- * @returns {{ ptr: bigint, len: number }} Pointer and length of the bytes.
- */
-export function allocStringArena(str) {
-    const bytes = (typeof TextEncoder !== 'undefined')
-        ? new TextEncoder().encode(str)
-        : _encodeUtf8(str);
-    const ptrArr = globalThis.polyplug.arenaAlloc(bytes.length);
-    const ptr = (BigInt(ptrArr[1]) << 32n) + BigInt(ptrArr[0]);
-    writeBytes(ptr, bytes);
-    return { ptr, len: bytes.length };
-}
-
-/**
- * Free a host-allocated region previously obtained via {@link allocString} or
- * `polyplug.alloc`.
- *
- * The host allocator requires the original allocation size and alignment to
- * free the exact region — passing the wrong size leaks memory (the host free is
- * a no-op on size 0). `alloc`/`allocString` use alignment 1, which is the
- * default here.
- *
- * @param {bigint} ptr - Pointer returned by allocString/alloc (as BigInt).
- * @param {number} size - Original allocation size in bytes.
- * @param {number} [align=1] - Original allocation alignment.
- * @returns {void}
- */
-export function freeBytes(ptr, size, align = 1) {
-    if (!ptr || size === 0) {
-        return;
-    }
-    const ptrBig = BigInt(ptr);
-    const lo = Number(ptrBig & 0xFFFFFFFFn);
-    const hi = Number((ptrBig >> 32n) & 0xFFFFFFFFn);
-    globalThis.polyplug.free(lo, hi, size, align);
-}
-
-/**
- * Convert a StringView to a JavaScript string.
- * 
- * @param {StringView} sv - StringView from polyplug ABI
- * @returns {string} JavaScript string (UTF-8 decoded)
- * 
- * @example
- * const s = toStr(stringView);
- */
-export function toStr(sv) {
-    if (!sv || sv.len === 0) {
-        return '';
-    }
-    // Reconstruct the 64-bit pointer from the QuickJS hi/lo split.
-    const ptr = (BigInt(sv.ptr_hi) << 32n) + BigInt(sv.ptr_lo);
-    if (ptr === 0n) {
-        return '';
-    }
-    // Read bytes and decode as UTF-8 (TextDecoder is absent in QuickJS).
-    // Both paths reject invalid UTF-8 (the fatal decoder / the manual scan throw
-    // a TypeError) so a readable-but-invalid view surfaces an error rather than
-    // silently yielding U+FFFD or mojibake.
-    const bytes = readBytes(ptr, sv.len);
-    if (typeof TextDecoder !== 'undefined') {
-        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    }
-    return _decodeUtf8(bytes);
-}
-
 /**
  * Check if a StringView (or string) starts with the given prefix.
  *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
  * @param {StringView|string} sv - StringView from polyplug ABI, or a plain JS string
  * @param {string} prefix - The prefix to check
  * @returns {boolean} True if the string starts with prefix
  *
  * @example
- * const ok = startsWith(stringView, 'hello');
+ * const ok = startsWith(bridge, stringView, 'hello');
  */
-export function startsWith(sv, prefix) {
-    const s = typeof sv === 'string' ? sv : toStr(sv);
+export function startsWith(bridge, sv, prefix) {
+    const s = typeof sv === 'string' ? sv : toStr(bridge, sv);
     return s.startsWith(prefix);
 }
 
 /**
  * Check if a StringView (or string) ends with the given suffix.
  *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
  * @param {StringView|string} sv - StringView from polyplug ABI, or a plain JS string
  * @param {string} suffix - The suffix to check
  * @returns {boolean} True if the string ends with suffix
  *
  * @example
- * const ok = endsWith(stringView, 'world');
+ * const ok = endsWith(bridge, stringView, 'world');
  */
-export function endsWith(sv, suffix) {
-    const s = typeof sv === 'string' ? sv : toStr(sv);
+export function endsWith(bridge, sv, suffix) {
+    const s = typeof sv === 'string' ? sv : toStr(bridge, sv);
     return s.endsWith(suffix);
 }
 
@@ -433,15 +483,16 @@ export function endsWith(sv, suffix) {
  * Strip a prefix from a StringView (or string).
  * Returns the original string unchanged if the prefix is not present.
  *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
  * @param {StringView|string} sv - StringView from polyplug ABI, or a plain JS string
  * @param {string} prefix - The prefix to remove
  * @returns {string} The string with prefix removed, or the original string
  *
  * @example
- * const stripped = stripPrefix(stringView, 'hello_');
+ * const stripped = stripPrefix(bridge, stringView, 'hello_');
  */
-export function stripPrefix(sv, prefix) {
-    const s = typeof sv === 'string' ? sv : toStr(sv);
+export function stripPrefix(bridge, sv, prefix) {
+    const s = typeof sv === 'string' ? sv : toStr(bridge, sv);
     if (s.startsWith(prefix)) {
         return s.slice(prefix.length);
     }
@@ -451,16 +502,17 @@ export function stripPrefix(sv, prefix) {
 /**
  * Split a StringView (or string) by a literal delimiter, keeping empty segments.
  *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
  * @param {StringView|string} sv - StringView from polyplug ABI, or a plain JS string
  * @param {string} delimiter - The literal delimiter to split by
  * @returns {string[]} [] for a null/empty input, [s] for an empty delimiter,
  *                     otherwise the segments around every occurrence (empties kept)
  *
  * @example
- * const parts = split(stringView, ',');
+ * const parts = split(bridge, stringView, ',');
  */
-export function split(sv, delimiter) {
-    const s = typeof sv === 'string' ? sv : toStr(sv);
+export function split(bridge, sv, delimiter) {
+    const s = typeof sv === 'string' ? sv : toStr(bridge, sv);
     if (s.length === 0) {
         return [];
     }

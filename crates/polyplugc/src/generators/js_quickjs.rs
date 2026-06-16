@@ -307,6 +307,7 @@ fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("    Native: 0,\n");
     out.push_str("    VirtualMachine: 1,\n");
     out.push_str("} as const);\n\n");
+    emit_ts_utf8_encoder_helper(&mut out);
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -366,17 +367,21 @@ fn render_plugin_interface_quickjs(
     out.push_str(&format!("    contractLo: 0x{:08X},\n", contract_lo));
     out.push_str(&format!("    contractHi: 0x{:08X},\n", contract_hi));
     out.push_str("    dispatchType: DispatchType.VirtualMachine,\n");
-    // No createInstance/destroyInstance stubs: the loader's registerVtable
-    // extracts only `functions` and substitutes its own instance lifecycle —
-    // stubs here would be dead code with a misleading "override" promise.
+    // No createInstance/destroyInstance stubs: the loader reads this interface from
+    // polyplug_init's returned registrations, extracts only `functions`, and
+    // substitutes its own instance lifecycle — stubs here would be dead code with a
+    // misleading "override" promise.
     out.push_str(&format!("    fnCount: {function_count},\n"));
     out.push_str(
-        "    functions: [] as ((impl: any, args_ptr: number, out_ptr: number) => number)[],\n",
+        "    functions: [] as ((impl: any, args_ptr: number, out_ptr: number, arena_ptr: number, bridge: any) => number)[],\n",
     );
     // The factory builds a fresh impl object per instance. setXFactory installs it
-    // before registration; the loader reads `vtable.factory` and calls it for the
-    // load-time default impl and once per create_instance.
-    out.push_str("    factory: null as null | (() => any),\n");
+    // before registration; the loader reads `vtable.factory` and calls it with the
+    // bridge + host vtable lo/hi for the load-time default impl and once per
+    // create_instance.
+    out.push_str(
+        "    factory: null as null | ((bridge: any, hostLo: number, hostHi: number) => any),\n",
+    );
     out.push_str(&format!("    contractName: \"{contract_name_full}\",\n"));
     // Packed contract version: the loader recovers `major = version >> 16`, so the
     // major version is encoded in the high 16 bits. This threads the contract's real
@@ -415,14 +420,20 @@ fn render_plugin_interface_quickjs(
         let has_return: bool = func.returns.is_some();
 
         // Generate the ABI wrapper function.
-        // The loader dispatches via js_dispatch which passes two f64 values:
-        //   args_ptr — full address of the packed args buffer (as Number/f64)
-        //   out_ptr  — full address of the output StringView buffer (as Number/f64)
+        // The loader dispatches via js_dispatch, which passes:
+        //   impl      — the per-instance impl object the loader resolved
+        //   args_ptr  — full address of the packed args buffer (as Number/f64)
+        //   out_ptr   — full address of the output buffer (as Number/f64)
+        //   arena_ptr — this call's CallArena pointer (Number); threaded to
+        //               `bridge.arenaAlloc(size, arena_ptr)` for StringView returns
+        //   bridge    — the host-capability bridge (NOT read from any global — Rule 12)
         // User-space addresses are < 2^48 < 2^53 (float64 mantissa), so the
         // usize→f64→usize round-trip is exact. readU32/writeU32 also accept f64.
         out.push_str("\nfunction ");
         out.push_str(&wrapper_name);
-        out.push_str("(impl: any, args_ptr: number, out_ptr: number): number {\n");
+        out.push_str(
+            "(impl: any, args_ptr: number, out_ptr: number, arena_ptr: number, bridge: any): number {\n",
+        );
         out.push_str("    // SAFETY: args_ptr and out_ptr are valid addresses passed as f64\n");
         out.push_str("    // by the loader. readU32/writeU32 accept f64 and convert to usize.\n");
         out.push_str(
@@ -431,7 +442,7 @@ fn render_plugin_interface_quickjs(
         out.push_str(
             "    // call (built by the factory); the loader passes it as the first argument.\n",
         );
-        out.push_str("    var polyplug = (globalThis as any).polyplug;\n");
+        out.push_str("    const polyplug = bridge;\n");
         out.push_str("    if (!polyplug) return 1;\n");
         out.push_str("    if (!impl) return 1;\n");
 
@@ -486,7 +497,7 @@ fn render_plugin_interface_quickjs(
         if let Some(ret_ty) = &func.returns {
             // SAFETY (emitted writes): out_ptr is a valid host-allocated out
             // slot sized for the declared return type.
-            emit_js_write_value(out, "    ", ret_ty, "out_ptr", 0, "result", ir)?;
+            emit_js_guest_return_write(out, ret_ty, ir)?;
         }
         out.push_str("    return 0;\n");
         out.push_str("}\n");
@@ -494,11 +505,16 @@ fn render_plugin_interface_quickjs(
         abi_wrappers.push(wrapper_name);
     }
 
-    // Install the per-instance factory + ABI wrappers. The factory returns a fresh
-    // impl object ({ fn0, fn1, ... }) per instance; the loader calls it once at load
-    // (default impl) and once per create_instance, then passes the resolved impl as
-    // each wrapper's first argument. No module-global impl: state lives on the
-    // per-instance object the factory builds.
+    // Install the per-instance factory + ABI wrappers. The factory receives the
+    // bridge and the host vtable lo/hi (threaded explicitly — no global, Rule 12)
+    // and returns a fresh impl object ({ fn0, fn1, ... }) per instance; the loader
+    // calls it once at load (default impl) and once per create_instance, then
+    // passes the resolved impl as each wrapper's first argument. No module-global
+    // impl or host pointer: state lives on the per-instance object the factory
+    // builds, and the bridge/host travel as explicit arguments.
+    //
+    // A StringView return is typed `string`: the author returns a plain string and
+    // the generated wrapper arena-allocates it (mirrors lua/python).
     let impl_members: Vec<String> = contract
         .functions
         .iter()
@@ -512,6 +528,7 @@ fn render_plugin_interface_quickjs(
                 .join(", ");
             let ret: String = match &f.returns {
                 None => "void".to_owned(),
+                Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) => "string".to_owned(),
                 Some(ty) => ts_type_ref(ty),
             };
             format!("fn{idx}: ({}) => {}", params, ret)
@@ -520,7 +537,7 @@ fn render_plugin_interface_quickjs(
     let impl_shape: String = format!("{{ {} }}", impl_members.join("; "));
 
     out.push_str(&format!(
-        "\nexport function {set_factory_name}(factory: () => {impl_shape}): void {{\n"
+        "\nexport function {set_factory_name}(factory: (bridge: any, hostLo: number, hostHi: number) => {impl_shape}): void {{\n"
     ));
 
     out.push_str("    ");
@@ -646,14 +663,6 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
         out.push_str(&format!("    {plugin_var}_INTERFACE"));
     }
     out.push_str("\n} from './contracts';\n\n");
-    out.push_str("// Inline host vtable storage — replaces 'polyplug-guest' import\n");
-    out.push_str(
-        "// because QuickJS loader exposes 'polyplug' global, not 'polyplug-guest' module.\n",
-    );
-    out.push_str("function storeHostVtable(lo: number, hi: number): void {\n");
-    out.push_str("    (globalThis as any).polyplug._hostVtableLo = lo;\n");
-    out.push_str("    (globalThis as any).polyplug._hostVtableHi = hi;\n");
-    out.push_str("}\n\n");
     out.push_str("// ABI error codes (match polyplug_abi.AbiErrorCode)\n");
     out.push_str("const AbiErrorCode = {\n");
     out.push_str("    Ok: 0,\n");
@@ -663,52 +672,90 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
 
     out.push_str("interface AbiError {\n");
     out.push_str("    code: number;\n");
-    out.push_str("    message: { ptr: number; len: number };\n");
+    out.push_str("    message: string;\n");
+    out.push_str("}\n\n");
+
+    out.push_str("// One registration entry per implemented contract. The loader reads this\n");
+    out.push_str("// array from polyplug_init's return value (nothing is deposited into any\n");
+    out.push_str("// global — Rule 12) and registers one GuestContractInterface per entry.\n");
+    out.push_str("interface Registration {\n");
+    out.push_str("    contractLo: number;\n");
+    out.push_str("    contractHi: number;\n");
+    out.push_str("    interface: any;\n");
+    out.push_str("    fnCount: number;\n");
+    out.push_str("    contractName: string;\n");
+    out.push_str("    version: number;\n");
     out.push_str("}\n\n");
 
     out.push_str("/**\n");
     out.push_str(" * Initialize plugin with host runtime.\n");
+    out.push_str(" *\n");
+    out.push_str(" * Returns `[registrations, abiError]`: the per-contract registration array\n");
+    out.push_str(" * the loader consumes, plus the canonical AbiError ({ code, message }).\n");
+    out.push_str(
+        " * Nothing is deposited into any global namespace (Rule 12) — the loader reads\n",
+    );
+    out.push_str(
+        " * BOTH return values. The host vtable and the `bridge` are threaded explicitly\n",
+    );
+    out.push_str(" * to each author factory; no host pointer or bridge is stored in any module.\n");
+    out.push_str(" *\n");
     out.push_str(" * @param host_lo - HostApi pointer (low 32 bits)\n");
     out.push_str(" * @param host_hi - HostApi pointer (high 32 bits)\n");
     out.push_str(" * @param ctx_lo - BundleInitContext pointer (low 32 bits)\n");
     out.push_str(" * @param ctx_hi - BundleInitContext pointer (high 32 bits)\n");
+    out.push_str(" * @param bridge - Host-capability bridge passed in by the loader\n");
     out.push_str(" */\n");
     out.push_str("export function polyplug_init(\n");
     out.push_str("    host_lo: number, host_hi: number,\n");
-    out.push_str("    ctx_lo: number, ctx_hi: number\n");
-    out.push_str("): AbiError {\n");
+    out.push_str("    ctx_lo: number, ctx_hi: number,\n");
+    out.push_str("    bridge: any\n");
+    out.push_str("): [Registration[], AbiError] {\n");
     out.push_str("    // Validate parameters\n");
     out.push_str("    if (host_lo === 0 && host_hi === 0) {\n");
-    out.push_str("        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };\n");
+    out.push_str(
+        "        return [[], { code: AbiErrorCode.Generic, message: \"null host pointer in polyplug_init\" }];\n",
+    );
     out.push_str("    }\n");
     out.push_str("    if (ctx_lo === 0 && ctx_hi === 0) {\n");
-    out.push_str("        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };\n");
-    out.push_str("    }\n\n");
-    out.push_str("    // Store host interface for later access via getHostVtable()\n");
-    out.push_str("    storeHostVtable(host_lo, host_hi);\n\n");
-    out.push_str("    // Get polyplug host interface from globalThis\n");
-    out.push_str("    const polyplug = (globalThis as any).polyplug;\n");
-    out.push_str("    if (!polyplug || !polyplug.registerVtable) {\n");
-    out.push_str("        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };\n");
+    out.push_str(
+        "        return [[], { code: AbiErrorCode.Generic, message: \"null ctx pointer in polyplug_init\" }];\n",
+    );
+    out.push_str("    }\n");
+    out.push_str("    if (!bridge || !bridge.alloc) {\n");
+    out.push_str(
+        "        return [[], { code: AbiErrorCode.Generic, message: \"missing bridge in polyplug_init\" }];\n",
+    );
     out.push_str("    }\n\n");
 
+    out.push_str("    const registrations: Registration[] = [];\n");
     for plugin in &bundle.plugins {
         let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
         out.push_str(&format!(
             "    // Register plugin: {plugin_name}\n",
             plugin_name = plugin.name
         ));
-        out.push_str("    polyplug.registerVtable(\n");
-        out.push_str(&format!("        {plugin_var}_INTERFACE.contractLo,\n"));
-        out.push_str(&format!("        {plugin_var}_INTERFACE.contractHi,\n"));
-        out.push_str(&format!("        {plugin_var}_INTERFACE,\n"));
-        out.push_str(&format!("        {plugin_var}_INTERFACE.fnCount,\n"));
-        out.push_str(&format!("        {plugin_var}_INTERFACE.contractName,\n"));
-        out.push_str(&format!("        {plugin_var}_INTERFACE.version\n"));
-        out.push_str("    );\n\n");
+        out.push_str("    registrations.push({\n");
+        out.push_str(&format!(
+            "        contractLo: {plugin_var}_INTERFACE.contractLo,\n"
+        ));
+        out.push_str(&format!(
+            "        contractHi: {plugin_var}_INTERFACE.contractHi,\n"
+        ));
+        out.push_str(&format!("        interface: {plugin_var}_INTERFACE,\n"));
+        out.push_str(&format!(
+            "        fnCount: {plugin_var}_INTERFACE.fnCount,\n"
+        ));
+        out.push_str(&format!(
+            "        contractName: {plugin_var}_INTERFACE.contractName,\n"
+        ));
+        out.push_str(&format!(
+            "        version: {plugin_var}_INTERFACE.version,\n"
+        ));
+        out.push_str("    });\n\n");
     }
 
-    out.push_str("    return { code: AbiErrorCode.Ok, message: { ptr: 0, len: 0 } };\n");
+    out.push_str("    return [registrations, { code: AbiErrorCode.Ok, message: \"\" }];\n");
     out.push_str("}\n");
 
     out
@@ -1737,28 +1784,37 @@ fn generate_ts_guest_host_contract_caller(
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("export class {} {{\n", class_name));
-    out.push_str("    private _minVersion: number;\n\n");
+    out.push_str("    private _minVersion: number;\n");
+    // The bridge and host pointer are threaded in explicitly (no global — Rule 12)
+    // and stored as instance state so every method reaches the host through them.
+    out.push_str("    private _bridge: any;\n");
+    out.push_str("    private _hostPtr: { lo: number; hi: number };\n\n");
 
-    out.push_str("    private constructor(minVersion: number) {\n");
+    out.push_str(
+        "    private constructor(bridge: any, hostPtr: { lo: number; hi: number }, minVersion: number) {\n",
+    );
+    out.push_str("        this._bridge = bridge;\n");
+    out.push_str("        this._hostPtr = hostPtr;\n");
     out.push_str("        this._minVersion = minVersion;\n");
     out.push_str("    }\n\n");
 
     out.push_str("    /** Factory method - creates caller instance or null if the bridge is unavailable. */\n");
     out.push_str(&format!(
-        "    static fromHost(hostPtr: {{ lo: number; hi: number }}, minVersion: number = 0): {} | null {{\n",
+        "    static fromHost(bridge: any, hostPtr: {{ lo: number; hi: number }}, minVersion: number = 0): {} | null {{\n",
         class_name
     ));
-    out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
-    out.push_str("        if (!polyplug || !polyplug.callHostContract) {\n");
+    out.push_str("        if (!bridge || !bridge.callHostContract) {\n");
     out.push_str("            return null;\n");
     out.push_str("        }\n");
-    out.push_str(&format!("        return new {}(minVersion);\n", class_name));
+    out.push_str(&format!(
+        "        return new {}(bridge, hostPtr, minVersion);\n",
+        class_name
+    ));
     out.push_str("    }\n\n");
 
     out.push_str("    /** Check if the bridge is available. */\n");
     out.push_str("    isValid(): boolean {\n");
-    out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
-    out.push_str("        return !!(polyplug && polyplug.callHostContract);\n");
+    out.push_str("        return !!(this._bridge && this._bridge.callHostContract);\n");
     out.push_str("    }\n\n");
 
     for func in &contract.functions {
@@ -1806,7 +1862,7 @@ fn generate_ts_guest_host_contract_method(
         func.name, params_str, return_type
     ));
 
-    out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
+    out.push_str("        const polyplug = this._bridge;\n");
     out.push_str("        if (!polyplug || !polyplug.callHostContract) {\n");
     if has_return {
         out.push_str("            return null as any;\n");
@@ -1814,6 +1870,8 @@ fn generate_ts_guest_host_contract_method(
         out.push_str("            return;\n");
     }
     out.push_str("        }\n");
+    emit_ts_caller_alloc_shim(out);
+    out.push_str("        try {\n");
 
     emit_ts_guest_host_contract_args_setup(out, func, ir)?;
     emit_ts_guest_host_contract_out_setup(out, &func.returns, ir)?;
@@ -1836,8 +1894,38 @@ fn generate_ts_guest_host_contract_method(
         out.push_str("        return result;\n");
     }
 
+    emit_ts_caller_free_shim(out);
     out.push_str("    }\n\n");
     Ok(())
+}
+
+/// Emit the caller-local host allocator + free-list used for a guest→host /
+/// peer-caller method's transient arg/out buffers.
+///
+/// The caller runs inside a guest dispatch but cannot reach that dispatch's
+/// per-call arena (its method signature is author-defined), so — mirroring the
+/// lua/python callers, which use FFI stack memory — JS allocates these transient
+/// buffers from the HOST allocator and frees them explicitly when the method
+/// returns. `_callerAlloc(size)` returns the same `[lo, hi]` pair `arenaAlloc`
+/// did, so the offset-writing emitters are unchanged; it records `[lo, hi, size]`
+/// on `_frees` so `emit_ts_caller_free_shim`'s `finally` releases every region
+/// even if the call throws. A returned StringView/Buffer points at HOST-owned
+/// memory (not these buffers), so freeing them after read-back is sound.
+fn emit_ts_caller_alloc_shim(out: &mut String) {
+    out.push_str("        const _frees: number[][] = [];\n");
+    out.push_str(
+        "        const _callerAlloc = (sz: number): number[] => { const _a = polyplug.alloc(sz); _frees.push([_a[0], _a[1], sz]); return _a; };\n",
+    );
+}
+
+/// Emit the `finally` block that frees every region recorded by
+/// `_callerAlloc`. Closes the `try` opened by `emit_ts_caller_alloc_shim`.
+fn emit_ts_caller_free_shim(out: &mut String) {
+    out.push_str("        } finally {\n");
+    out.push_str(
+        "            for (const _f of _frees) { polyplug.free(_f[0], _f[1], _f[2], 1); }\n",
+    );
+    out.push_str("        }\n");
 }
 
 /// `(size, align)` of one caller-pack slot for the guest→host / peer caller
@@ -2086,6 +2174,39 @@ fn js_read_expr(
     }
 }
 
+/// Emit the dispatch wrapper's return write into `out_ptr` (offset 0).
+///
+/// For a top-level `StringView` return the author returns a plain JS string and
+/// the GENERATED wrapper arena-allocates it via `bridge.arenaAlloc(size,
+/// arena_ptr)` using the per-call arena pointer the loader threads in (no per-VM
+/// global, no author-side arena — mirrors the lua/python reference). Every other
+/// return shape (scalars, Buffer, struct, enum) is written by `emit_js_write_value`
+/// from the value the author returns directly.
+fn emit_js_guest_return_write(
+    out: &mut String,
+    ret_ty: &ResolvedTypeRef,
+    ir: &ValidatedIr,
+) -> Result<(), PolyplugcError> {
+    if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
+        // The author returns a plain string; encode it, arena-allocate the bytes
+        // from THIS call's arena, and write the StringView into the out slot.
+        out.push_str("    const _retBytes = _ppEncodeUtf8(result);\n");
+        out.push_str(
+            "    const _retBuf = polyplug.arenaAlloc(_retBytes.length > 0 ? _retBytes.length : 1, arena_ptr);\n",
+        );
+        out.push_str("    const _retPtr = _retBuf[0] + _retBuf[1] * 4294967296;\n");
+        out.push_str(
+            "    for (let _i = 0; _i < _retBytes.length; _i++) { polyplug.writeByte(_retPtr + _i, _retBytes[_i]); }\n",
+        );
+        out.push_str("    polyplug.writeU32(out_ptr, _retBuf[0]);\n");
+        out.push_str("    polyplug.writeU32(out_ptr + 4, _retBuf[1]);\n");
+        out.push_str("    polyplug.writeU32(out_ptr + 8, _retBytes.length);\n");
+        out.push_str("    polyplug.writeU32(out_ptr + 12, 0);\n");
+        return Ok(());
+    }
+    emit_js_write_value(out, "    ", ret_ty, "out_ptr", 0, "result", ir)
+}
+
 /// Emit statements writing `value` (a JS expression of `ty`'s shape) into the
 /// out slot at `base + off` through the loader bridge. The mirror of
 /// `js_read_expr` — same C layout, same lo/hi and {ptr_lo,ptr_hi,len} shapes.
@@ -2250,7 +2371,38 @@ fn emit_js_write_value(
     }
 }
 
-/// Emit a StringView into `buf` at `offset` using arenaAlloc + writeU32/writeByte.
+/// Emit the file-level `_ppEncodeUtf8(str)` helper.
+///
+/// The QuickJS loader does NOT provide `TextEncoder` (it is absent in QuickJS —
+/// see `sdks/js/guest/polyplug_guest.js`), so generated guest code must never
+/// call `new TextEncoder()` unconditionally. This emits a manual UTF-8 encoder
+/// (mirroring the SDK's `_encodeUtf8`) guarded by a `typeof TextEncoder` check,
+/// so emitted marshalling works in both QuickJS and TextEncoder-bearing runtimes.
+fn emit_ts_utf8_encoder_helper(out: &mut String) {
+    out.push_str("// UTF-8 encoder usable in QuickJS (where TextEncoder is absent).\n");
+    out.push_str("function _ppEncodeUtf8(str: string): Uint8Array {\n");
+    out.push_str(
+        "    if (typeof TextEncoder !== 'undefined') { return new TextEncoder().encode(str); }\n",
+    );
+    out.push_str("    const out: number[] = [];\n");
+    out.push_str("    for (let i = 0; i < str.length; i++) {\n");
+    out.push_str("        let code = str.charCodeAt(i);\n");
+    out.push_str("        if (code >= 0xD800 && code <= 0xDBFF) {\n");
+    out.push_str("            const low = str.charCodeAt(++i);\n");
+    out.push_str("            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);\n");
+    out.push_str("        }\n");
+    out.push_str("        if (code < 0x80) { out.push(code); }\n");
+    out.push_str(
+        "        else if (code < 0x800) { out.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F)); }\n",
+    );
+    out.push_str("        else if (code < 0x10000) { out.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }\n");
+    out.push_str("        else { out.push(0xF0 | (code >> 18), 0x80 | ((code >> 12) & 0x3F), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }\n");
+    out.push_str("    }\n");
+    out.push_str("    return new Uint8Array(out);\n");
+    out.push_str("}\n\n");
+}
+
+/// Emit a StringView into `buf` at `offset` using `_callerAlloc` + writeU32/writeByte.
 /// `value` is the JS string EXPRESSION to encode (e.g. `name` or `o.inner.s`);
 /// `local` is a valid identifier base for the temporaries (e.g. `name` or `sv0`),
 /// kept separate so nested struct fields (whose value expression contains `.`)
@@ -2265,10 +2417,10 @@ fn emit_ts_write_string_view(
     let n: &str = local;
     let ap: &str = args_ptr;
     out.push_str(&format!(
-        "        const _{n}Bytes = new TextEncoder().encode({value});\n"
+        "        const _{n}Bytes = _ppEncodeUtf8({value});\n"
     ));
     out.push_str(&format!(
-        "        const _{n}DataBuf = polyplug.arenaAlloc(_{n}Bytes.length > 0 ? _{n}Bytes.length : 1);\n"
+        "        const _{n}DataBuf = _callerAlloc(_{n}Bytes.length > 0 ? _{n}Bytes.length : 1);\n"
     ));
     out.push_str(&format!(
         "        const _{n}DataPtr = _{n}DataBuf[0] + _{n}DataBuf[1] * 4294967296;\n"
@@ -2293,14 +2445,14 @@ fn emit_ts_write_string_view(
     ));
 }
 
-/// Emit a Buffer (Uint8Array) into `buf` at `offset` using arenaAlloc + writeU32/writeByte.
+/// Emit a Buffer (Uint8Array) into `buf` at `offset` using `_callerAlloc` + writeU32/writeByte.
 /// `value` is the JS Uint8Array EXPRESSION; `local` is the identifier base for the
 /// temporaries (see `emit_ts_write_string_view`).
 fn emit_ts_write_buffer(out: &mut String, value: &str, local: &str, args_ptr: &str, offset: usize) {
     let n: &str = local;
     let ap: &str = args_ptr;
     out.push_str(&format!(
-        "        const _{n}DataBuf = polyplug.arenaAlloc({value}.length > 0 ? {value}.length : 1);\n"
+        "        const _{n}DataBuf = _callerAlloc({value}.length > 0 ? {value}.length : 1);\n"
     ));
     out.push_str(&format!(
         "        const _{n}DataPtr = _{n}DataBuf[0] + _{n}DataBuf[1] * 4294967296;\n"
@@ -2395,8 +2547,11 @@ fn emit_ts_caller_pack_value(
 
 /// Emit the argsPtr setup for a TypeScript guest host contract / peer method.
 ///
-/// Uses `arenaAlloc` exclusively — no manual free needed; the arena is
-/// reclaimed automatically when the guest function returns.
+/// Allocates every transient buffer through `_callerAlloc` (a host-allocator
+/// shim that records each region on the method's `_frees` list); the method's
+/// `finally` block frees them all. The caller cannot reach the dispatch's
+/// per-call arena, so it uses host alloc+free here, mirroring the lua/python
+/// callers' FFI-stack buffers (Rule 12 — no per-call global arena read).
 fn emit_ts_guest_host_contract_args_setup(
     out: &mut String,
     func: &crate::ir::ResolvedFunction,
@@ -2413,11 +2568,11 @@ fn emit_ts_guest_host_contract_args_setup(
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                 out.push_str(&format!(
-                    "        const _{0}Bytes = new TextEncoder().encode({0});\n",
+                    "        const _{0}Bytes = _ppEncodeUtf8({0});\n",
                     param.name
                 ));
                 out.push_str(&format!(
-                    "        const _{0}DataBuf = polyplug.arenaAlloc(_{0}Bytes.length > 0 ? _{0}Bytes.length : 1);\n",
+                    "        const _{0}DataBuf = _callerAlloc(_{0}Bytes.length > 0 ? _{0}Bytes.length : 1);\n",
                     param.name
                 ));
                 out.push_str(&format!(
@@ -2428,7 +2583,7 @@ fn emit_ts_guest_host_contract_args_setup(
                     "        for (let _i = 0; _i < _{0}Bytes.length; _i++) {{ polyplug.writeByte(_{0}DataPtr + _i, _{0}Bytes[_i]); }}\n",
                     param.name
                 ));
-                out.push_str("        const _argsBuf = polyplug.arenaAlloc(16);\n");
+                out.push_str("        const _argsBuf = _callerAlloc(16);\n");
                 out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
                 out.push_str(&format!(
                     "        polyplug.writeU32(argsPtr, _{0}DataBuf[0]);\n",
@@ -2446,7 +2601,7 @@ fn emit_ts_guest_host_contract_args_setup(
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
                 out.push_str(&format!(
-                    "        const _{0}DataBuf = polyplug.arenaAlloc({0}.length > 0 ? {0}.length : 1);\n",
+                    "        const _{0}DataBuf = _callerAlloc({0}.length > 0 ? {0}.length : 1);\n",
                     param.name
                 ));
                 out.push_str(&format!(
@@ -2457,7 +2612,7 @@ fn emit_ts_guest_host_contract_args_setup(
                     "        for (let _i = 0; _i < {0}.length; _i++) {{ polyplug.writeByte(_{0}DataPtr + _i, {0}[_i]); }}\n",
                     param.name
                 ));
-                out.push_str("        const _argsBuf = polyplug.arenaAlloc(24);\n");
+                out.push_str("        const _argsBuf = _callerAlloc(24);\n");
                 out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
                 out.push_str(&format!(
                     "        polyplug.writeU32(argsPtr, _{0}DataBuf[0]);\n",
@@ -2480,7 +2635,7 @@ fn emit_ts_guest_host_contract_args_setup(
             }
             ResolvedTypeRef::Primitive(p) => {
                 if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
-                    out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str("        const _argsBuf = _callerAlloc(8);\n");
                     out.push_str(
                         "        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n",
                     );
@@ -2495,7 +2650,7 @@ fn emit_ts_guest_host_contract_args_setup(
                 } else if matches!(p, PrimitiveType::F64) {
                     // Floats must keep their bit pattern: writeU32 would
                     // integer-truncate the value (and undersize f64 as 4 bytes).
-                    out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str("        const _argsBuf = _callerAlloc(8);\n");
                     out.push_str(
                         "        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n",
                     );
@@ -2504,7 +2659,7 @@ fn emit_ts_guest_host_contract_args_setup(
                         param.name
                     ));
                 } else if matches!(p, PrimitiveType::F32) {
-                    out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str("        const _argsBuf = _callerAlloc(8);\n");
                     out.push_str(
                         "        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n",
                     );
@@ -2513,7 +2668,7 @@ fn emit_ts_guest_host_contract_args_setup(
                         param.name
                     ));
                 } else {
-                    out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str("        const _argsBuf = _callerAlloc(8);\n");
                     out.push_str(
                         "        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n",
                     );
@@ -2524,7 +2679,7 @@ fn emit_ts_guest_host_contract_args_setup(
                 }
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => {
-                out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                out.push_str("        const _argsBuf = _callerAlloc(8);\n");
                 out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
                 out.push_str(&format!(
                     "        polyplug.writeU32(argsPtr, {}.lo);\n",
@@ -2541,9 +2696,7 @@ fn emit_ts_guest_host_contract_args_setup(
                 // Struct-by-value param: allocate its full C-layout size and pack
                 // field-by-field (matches the Deno caller and every host thunk).
                 let size: usize = js_c_size(&param.ty, ir)?;
-                out.push_str(&format!(
-                    "        const _argsBuf = polyplug.arenaAlloc({size});\n"
-                ));
+                out.push_str(&format!("        const _argsBuf = _callerAlloc({size});\n"));
                 out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
                 let mut sv_idx: u32 = 0;
                 emit_ts_caller_pack_value(
@@ -2562,7 +2715,7 @@ fn emit_ts_guest_host_contract_args_setup(
                 // enum's high word. The callee reads exactly its repr width from
                 // offset 0 (little-endian), so narrower reprs are covered by the
                 // low bytes of the u32 write.
-                out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
+                out.push_str("        const _argsBuf = _callerAlloc(8);\n");
                 out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
                 match js_enum_for_type(&param.ty, enums).map(|e: &EnumDef| &e.repr) {
                     Some(ReprType::U64) => {
@@ -2608,7 +2761,7 @@ fn emit_ts_guest_host_contract_args_setup(
     total_size = align_up(total_size, max_align);
 
     out.push_str(&format!(
-        "        const _argsBuf = polyplug.arenaAlloc({});\n",
+        "        const _argsBuf = _callerAlloc({});\n",
         total_size
     ));
     out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
@@ -2773,7 +2926,8 @@ fn emit_ts_guest_host_contract_args_setup(
 
 /// Emit the outPtr setup for a TypeScript guest host contract / peer method.
 ///
-/// Allocates the correct size via `arenaAlloc` and defines `const outPtr`.
+/// Allocates the correct size via `_callerAlloc` (host alloc, freed by the
+/// method's `finally`) and defines `const outPtr`.
 /// Does NOT pre-create `result` — that is done by `emit_ts_guest_host_contract_readback`
 /// after the dispatch call succeeds.
 fn emit_ts_guest_host_contract_out_setup(
@@ -2784,7 +2938,7 @@ fn emit_ts_guest_host_contract_out_setup(
     if let Some(ret_ty) = returns {
         match ret_ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-                out.push_str("        const _outBuf = polyplug.arenaAlloc(16);\n");
+                out.push_str("        const _outBuf = _callerAlloc(16);\n");
                 out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
                 out.push_str("        polyplug.writeU32(outPtr, 0);\n");
                 out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
@@ -2792,7 +2946,7 @@ fn emit_ts_guest_host_contract_out_setup(
                 out.push_str("        polyplug.writeU32(outPtr + 12, 0);\n");
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
-                out.push_str("        const _outBuf = polyplug.arenaAlloc(24);\n");
+                out.push_str("        const _outBuf = _callerAlloc(24);\n");
                 out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
                 out.push_str("        polyplug.writeU32(outPtr, 0);\n");
                 out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
@@ -2807,9 +2961,7 @@ fn emit_ts_guest_host_contract_out_setup(
                 // host writes each field, and the readback reads them at their C
                 // offsets via js_read_expr.
                 let size: usize = js_c_size(ret_ty, ir)?;
-                out.push_str(&format!(
-                    "        const _outBuf = polyplug.arenaAlloc({size});\n"
-                ));
+                out.push_str(&format!("        const _outBuf = _callerAlloc({size});\n"));
                 out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
                 for w in 0..size.div_ceil(4) {
                     out.push_str(&format!(
@@ -2821,27 +2973,27 @@ fn emit_ts_guest_host_contract_out_setup(
             ResolvedTypeRef::UserDefined(_) => {
                 // Enum-backed return: 8-byte slot, pre-zeroed; the host writes the
                 // repr-width integer and the readback reads it back.
-                out.push_str("        const _outBuf = polyplug.arenaAlloc(8);\n");
+                out.push_str("        const _outBuf = _callerAlloc(8);\n");
                 out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
                 out.push_str("        polyplug.writeU32(outPtr, 0);\n");
                 out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
             }
             ResolvedTypeRef::Primitive(p) => {
                 if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
-                    out.push_str("        const _outBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str("        const _outBuf = _callerAlloc(8);\n");
                     out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
                     out.push_str("        polyplug.writeU32(outPtr, 0);\n");
                     out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
                 } else {
                     // Allocate 8 bytes for safety even though the value is 4 bytes.
-                    out.push_str("        const _outBuf = polyplug.arenaAlloc(8);\n");
+                    out.push_str("        const _outBuf = _callerAlloc(8);\n");
                     out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
                     out.push_str("        polyplug.writeU32(outPtr, 0);\n");
                     out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
                 }
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => {
-                out.push_str("        const _outBuf = polyplug.arenaAlloc(8);\n");
+                out.push_str("        const _outBuf = _callerAlloc(8);\n");
                 out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
                 out.push_str("        polyplug.writeU32(outPtr, 0);\n");
                 out.push_str("        polyplug.writeU32(outPtr + 4, 0);\n");
@@ -2962,6 +3114,7 @@ fn generate_guest_host_contracts_ts(ir: &ValidatedIr) -> Result<String, Polyplug
         let import_list: String = type_imports.into_iter().collect::<Vec<String>>().join(", ");
         out.push_str(&format!("import {{ {} }} from './types';\n\n", import_list));
     }
+    emit_ts_utf8_encoder_helper(&mut out);
 
     for contract in &ir.host_contracts {
         generate_ts_guest_host_contract_caller(&mut out, contract, ir)?;
@@ -3266,6 +3419,7 @@ fn generate_guest_peer_callers_ts(
         let import_list: String = type_imports.into_iter().collect::<Vec<String>>().join(", ");
         out.push_str(&format!("import {{ {} }} from './types';\n\n", import_list));
     }
+    emit_ts_utf8_encoder_helper(&mut out);
 
     for contract in peers {
         let min_ver: u32 = peer_min_version(ir, contract.contract_id);
@@ -3311,21 +3465,34 @@ fn generate_ts_peer_caller_class(
         min_version
     ));
 
-    out.push_str("    private constructor() {}\n\n");
+    // The bridge and host pointer are threaded in explicitly (no global — Rule 12)
+    // and stored as instance state so every method reaches the host through them.
+    out.push_str("    private _bridge: any;\n");
+    out.push_str("    private _hostPtr: { lo: number; hi: number };\n\n");
+
+    out.push_str("    private constructor(bridge: any, hostPtr: { lo: number; hi: number }) {\n");
+    out.push_str("        this._bridge = bridge;\n");
+    out.push_str("        this._hostPtr = hostPtr;\n");
+    out.push_str("    }\n\n");
 
     out.push_str("    /**\n");
     out.push_str("     * Verify the peer contract is reachable via the host.\n");
     out.push_str("     * Returns a `");
     out.push_str(&class_name);
     out.push_str("` instance or `null` if not found.\n");
+    out.push_str("     *\n");
+    out.push_str("     * `bridge` and `hostPtr` are threaded in explicitly by the caller\n");
+    out.push_str("     * (the author factory captured them); no per-VM global is read.\n");
     out.push_str("     */\n");
-    out.push_str(&format!("    static resolve(): {} | null {{\n", class_name));
-    out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
-    out.push_str("        if (!polyplug || !polyplug.findByContract) {\n");
+    out.push_str(&format!(
+        "    static resolve(bridge: any, hostPtr: {{ lo: number; hi: number }}): {} | null {{\n",
+        class_name
+    ));
+    out.push_str("        if (!bridge || !bridge.findByContract) {\n");
     out.push_str("            return null;\n");
     out.push_str("        }\n");
     out.push_str(&format!(
-        "        const handle = polyplug.findByContract(0x{:08X}, 0x{:08X}, {});\n",
+        "        const handle = bridge.findByContract(0x{:08X}, 0x{:08X}, {});\n",
         contract_id_lo, contract_id_hi, min_version
     ));
     // Only null/undefined mean "not found": the loader's pack_handle already
@@ -3334,7 +3501,10 @@ fn generate_ts_peer_caller_class(
     out.push_str("        if (handle === null || handle === undefined) {\n");
     out.push_str("            return null;\n");
     out.push_str("        }\n");
-    out.push_str(&format!("        return new {}();\n", class_name));
+    out.push_str(&format!(
+        "        return new {}(bridge, hostPtr);\n",
+        class_name
+    ));
     out.push_str("    }\n\n");
 
     for func in &contract.functions {
@@ -3388,7 +3558,7 @@ fn generate_ts_peer_caller_method(
         func.name, params_str, return_type
     ));
 
-    out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
+    out.push_str("        const polyplug = this._bridge;\n");
     out.push_str("        if (!polyplug || !polyplug.callGuestMethod) {\n");
     if has_return {
         out.push_str("            return null as any;\n");
@@ -3396,6 +3566,8 @@ fn generate_ts_peer_caller_method(
         out.push_str("            return;\n");
     }
     out.push_str("        }\n");
+    emit_ts_caller_alloc_shim(out);
+    out.push_str("        try {\n");
 
     // Marshal args and out buffer using the same helpers as host-contract methods.
     emit_ts_guest_host_contract_args_setup(out, func, ir)?;
@@ -3419,6 +3591,8 @@ fn generate_ts_peer_caller_method(
         emit_ts_guest_host_contract_readback(out, func.returns.as_ref(), ir)?;
         out.push_str("        return result;\n");
     }
+
+    emit_ts_caller_free_shim(out);
 
     out.push_str("    }\n\n");
     Ok(())
@@ -3811,16 +3985,27 @@ mod tests {
             "missing class: {out}"
         );
         assert!(
-            out.contains("private constructor(minVersion: number)"),
+            out.contains(
+                "private constructor(bridge: any, hostPtr: { lo: number; hi: number }, minVersion: number)"
+            ),
             "missing private constructor: {out}"
         );
         assert!(
             out.contains(
-                "static fromHost(hostPtr: { lo: number; hi: number }, minVersion: number = 0)"
+                "static fromHost(bridge: any, hostPtr: { lo: number; hi: number }, minVersion: number = 0)"
             ),
             "missing fromHost: {out}"
         );
         assert!(out.contains("isValid(): boolean"), "missing isValid: {out}");
+        // The bridge is threaded in, not read from a global (Rule 12).
+        assert!(
+            !out.contains("(globalThis as any).polyplug"),
+            "host-contract caller must not read a global bridge: {out}"
+        );
+        assert!(
+            out.contains("const polyplug = this._bridge;"),
+            "host-contract caller methods must use the threaded bridge: {out}"
+        );
         assert!(
             out.contains("log(message: string): void"),
             "missing log method: {out}"
@@ -4170,8 +4355,9 @@ mod tests {
 
     #[test]
     fn guest_host_contract_stringview_return_uses_new_dispatch() {
-        // A StringView-returning host-contract method must use arenaAlloc(16) for the
-        // out buffer, emit polyplug.callHostContract, and read back via readU32(outPtr+8).
+        // A StringView-returning host-contract method must use _callerAlloc(16) (host
+        // alloc, freed by the method's finally) for the out buffer, emit
+        // polyplug.callHostContract, and read back via readU32(outPtr+8).
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.svc".to_owned(),
             contract_id: 0xABCD_1234_u64,
@@ -4195,8 +4381,8 @@ mod tests {
         generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
             .expect("generate host-contract caller");
         assert!(
-            out.contains("polyplug.arenaAlloc(16)"),
-            "out buffer must be arenaAlloc(16) for StringView: {out}"
+            out.contains("const _outBuf = _callerAlloc(16);"),
+            "out buffer must be _callerAlloc(16) for StringView: {out}"
         );
         assert!(
             out.contains("polyplug.callHostContract("),
@@ -4205,6 +4391,11 @@ mod tests {
         assert!(
             out.contains("polyplug.readU32(outPtr + 8)"),
             "must read len from outPtr+8: {out}"
+        );
+        // Caller buffers are host-allocated and explicitly freed (no global arena).
+        assert!(
+            out.contains("for (const _f of _frees) { polyplug.free("),
+            "caller must free its host-allocated buffers: {out}"
         );
     }
 
@@ -4231,8 +4422,8 @@ mod tests {
         generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
             .expect("generate host-contract caller");
         assert!(
-            out.contains("polyplug.arenaAlloc(24)"),
-            "out buffer must be arenaAlloc(24) for Buffer: {out}"
+            out.contains("const _outBuf = _callerAlloc(24);"),
+            "out buffer must be _callerAlloc(24) for Buffer: {out}"
         );
         assert!(
             out.contains("polyplug.callHostContract("),
@@ -4375,7 +4566,7 @@ mod tests {
     }
 
     #[test]
-    fn quickjs_guest_wrapper_stringview_shape_preserved() {
+    fn quickjs_guest_wrapper_stringview_return_arena_allocates() {
         let contract: ResolvedContract = wrapper_contract(vec![ResolvedFunction {
             name: "decode".to_owned(),
             function_id: 0,
@@ -4387,13 +4578,34 @@ mod tests {
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], vec![]);
         let out: String = render_wrapper(&contract, &ir);
+        // The wrapper takes the threaded arena_ptr + bridge and reads `polyplug`
+        // from the bridge param (no global — Rule 12).
+        assert!(
+            out.contains(
+                "(impl: any, args_ptr: number, out_ptr: number, arena_ptr: number, bridge: any): number"
+            ),
+            "wrapper must take the threaded arena_ptr + bridge: {out}"
+        );
+        assert!(
+            out.contains("const polyplug = bridge;"),
+            "wrapper must use the threaded bridge, not a global: {out}"
+        );
         assert!(
             out.contains("var arg_input = { ptr_lo: polyplug.readU32(args_ptr), ptr_hi: polyplug.readU32(args_ptr + 4), len: polyplug.readU32(args_ptr + 8) };"),
             "single StringView param read at offset 0: {out}"
         );
+        // The author returns a plain string; the wrapper arena-allocates it via the
+        // threaded arena_ptr and writes the StringView back through out_ptr.
         assert!(
-            out.contains("polyplug.writeU32(out_ptr, result.ptr_lo);")
-                && out.contains("polyplug.writeU32(out_ptr + 8, result.len);"),
+            out.contains("const _retBytes = _ppEncodeUtf8(result);")
+                && out.contains(
+                    "const _retBuf = polyplug.arenaAlloc(_retBytes.length > 0 ? _retBytes.length : 1, arena_ptr);"
+                ),
+            "StringView return must arena-allocate a plain string via the threaded arena: {out}"
+        );
+        assert!(
+            out.contains("polyplug.writeU32(out_ptr, _retBuf[0]);")
+                && out.contains("polyplug.writeU32(out_ptr + 8, _retBytes.length);"),
             "StringView return written back through out_ptr: {out}"
         );
         assert!(
@@ -4609,7 +4821,7 @@ mod tests {
         emit_ts_guest_host_contract_args_setup(&mut out, &func, &wrapper_ir(vec![], enums))
             .expect("args setup");
         assert!(
-            out.contains("polyplug.arenaAlloc(24)"),
+            out.contains("_callerAlloc(24)"),
             "pack must be 24 bytes (u32 + pad + 16-byte StringView): {out}"
         );
         assert!(
@@ -4757,7 +4969,7 @@ mod tests {
         let mut args: String = String::new();
         emit_ts_guest_host_contract_args_setup(&mut args, &func, &ir).expect("args setup");
         assert!(
-            args.contains("polyplug.arenaAlloc(8)"),
+            args.contains("_callerAlloc(8)"),
             "struct param slot must be the C-layout size (8), not a 4-byte slot: {args}"
         );
         assert!(
@@ -4774,7 +4986,7 @@ mod tests {
         let mut outs: String = String::new();
         emit_ts_guest_host_contract_out_setup(&mut outs, &func.returns, &ir).expect("out setup");
         assert!(
-            outs.contains("polyplug.arenaAlloc(8)"),
+            outs.contains("_callerAlloc(8)"),
             "struct return out slot must be the C-layout size: {outs}"
         );
 
@@ -4821,12 +5033,12 @@ mod tests {
         let mut out: String = String::new();
         emit_ts_guest_host_contract_args_setup(&mut out, &func, &ir).expect("args setup");
         assert!(
-            out.contains("polyplug.arenaAlloc(24)"),
+            out.contains("_callerAlloc(24)"),
             "Holder slot must be 24 bytes (16-byte StringView + u32, 8-aligned): {out}"
         );
         assert!(
-            out.contains("const _sv0Bytes = new TextEncoder().encode(args.name);"),
-            "StringView struct field must arena-encode from the field expression: {out}"
+            out.contains("const _sv0Bytes = _ppEncodeUtf8(args.name);"),
+            "StringView struct field must encode from the field expression (TextEncoder-free): {out}"
         );
         assert!(
             out.contains("polyplug.writeU32(argsPtr + 16, args.code);"),

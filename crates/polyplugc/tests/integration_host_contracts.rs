@@ -820,10 +820,21 @@ fn test_js_quickjs_host_contract_guest_generates_caller() {
         !content.contains("callDispatchFn"),
         "must not use callDispatchFn"
     );
-    // Out-buffer must use arenaAlloc (auto-reclaimed, correct sizing).
+    // Caller arg/out buffers must use the host-allocator shim (_callerAlloc) and be
+    // explicitly freed — the caller has no per-call arena, so it cannot use the
+    // threaded arenaAlloc (Rule 12).
     assert!(
-        content.contains("polyplug.arenaAlloc("),
-        "must use arenaAlloc for out-buffer"
+        content.contains("const _callerAlloc = (sz: number): number[] =>"),
+        "must use the _callerAlloc host-allocator shim for caller buffers"
+    );
+    assert!(
+        content.contains("for (const _f of _frees) { polyplug.free("),
+        "must explicitly free caller buffers in a finally block"
+    );
+    // The bridge is threaded in, not read from a global (Rule 12).
+    assert!(
+        !content.contains("(globalThis as any).polyplug"),
+        "host-contract caller must not read a global bridge"
     );
 
     println!("test_js_quickjs_host_contract_guest_generates_caller: passed ✓");

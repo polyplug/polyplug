@@ -7,32 +7,19 @@
 
 import { setTestAdderFactory } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
-import { allocStringArena } from '../../../sdks/js/guest/polyplug_guest.js';
 
-// fn0: add(args: AddArgs { a: u32, b: u32 }) -> u32  (struct-by-value param)
-function add(args) {
-    return (args.a + args.b) >>> 0;
-}
-
-// fn1: add_primitive(a: u32, b: u32) -> u32  (multi-scalar pack)
-function addPrimitive(a, b) {
-    return (a + b) >>> 0;
-}
-
-// fn2: version() -> StringView  (no args, string return)
-function version() {
-    const result = allocStringArena('test_adder 1.0.0');
-    return {
-        ptr_lo: Number(result.ptr & 0xFFFFFFFFn),
-        ptr_hi: Number((result.ptr >> 32n) & 0xFFFFFFFFn),
-        len: result.len,
-    };
-}
-
-// fn3: reset() -> void  (no args, no return)
-function reset() {
-}
-
-setTestAdderFactory(() => ({ fn0: add, fn1: addPrimitive, fn2: version, fn3: reset }));
+// The factory receives the bridge + host vtable lo/hi explicitly (no global —
+// Rule 12). A StringView-returning method returns a plain string; the generated
+// wrapper arena-allocates it.
+setTestAdderFactory((bridge, hostLo, hostHi) => ({
+    // fn0: add(args: AddArgs { a: u32, b: u32 }) -> u32  (struct-by-value param)
+    fn0: (args) => (args.a + args.b) >>> 0,
+    // fn1: add_primitive(a: u32, b: u32) -> u32  (multi-scalar pack)
+    fn1: (a, b) => (a + b) >>> 0,
+    // fn2: version() -> StringView  (no args, string return)
+    fn2: () => 'test_adder 1.0.0',
+    // fn3: reset() -> void  (no args, no return)
+    fn3: () => {},
+}));
 
 export { polyplug_init };

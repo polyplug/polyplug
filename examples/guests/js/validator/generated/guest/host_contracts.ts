@@ -4,42 +4,65 @@
 
 import { LogLevel } from './types';
 
+// UTF-8 encoder usable in QuickJS (where TextEncoder is absent).
+function _ppEncodeUtf8(str: string): Uint8Array {
+    if (typeof TextEncoder !== 'undefined') { return new TextEncoder().encode(str); }
+    const out: number[] = [];
+    for (let i = 0; i < str.length; i++) {
+        let code = str.charCodeAt(i);
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            const low = str.charCodeAt(++i);
+            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+        }
+        if (code < 0x80) { out.push(code); }
+        else if (code < 0x800) { out.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F)); }
+        else if (code < 0x10000) { out.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }
+        else { out.push(0xF0 | (code >> 18), 0x80 | ((code >> 12) & 0x3F), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }
+    }
+    return new Uint8Array(out);
+}
+
 /**
  * Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
  */
 export class HostLoggerContract {
     private _minVersion: number;
+    private _bridge: any;
+    private _hostPtr: { lo: number; hi: number };
 
-    private constructor(minVersion: number) {
+    private constructor(bridge: any, hostPtr: { lo: number; hi: number }, minVersion: number) {
+        this._bridge = bridge;
+        this._hostPtr = hostPtr;
         this._minVersion = minVersion;
     }
 
     /** Factory method - creates caller instance or null if the bridge is unavailable. */
-    static fromHost(hostPtr: { lo: number; hi: number }, minVersion: number = 0): HostLoggerContract | null {
-        const polyplug = (globalThis as any).polyplug;
-        if (!polyplug || !polyplug.callHostContract) {
+    static fromHost(bridge: any, hostPtr: { lo: number; hi: number }, minVersion: number = 0): HostLoggerContract | null {
+        if (!bridge || !bridge.callHostContract) {
             return null;
         }
-        return new HostLoggerContract(minVersion);
+        return new HostLoggerContract(bridge, hostPtr, minVersion);
     }
 
     /** Check if the bridge is available. */
     isValid(): boolean {
-        const polyplug = (globalThis as any).polyplug;
-        return !!(polyplug && polyplug.callHostContract);
+        return !!(this._bridge && this._bridge.callHostContract);
     }
 
     /** Call `log` */
     log(message: string): void {
-        const polyplug = (globalThis as any).polyplug;
+        const polyplug = this._bridge;
         if (!polyplug || !polyplug.callHostContract) {
             return;
         }
-        const _messageBytes = new TextEncoder().encode(message);
-        const _messageDataBuf = polyplug.arenaAlloc(_messageBytes.length > 0 ? _messageBytes.length : 1);
+        const _frees: number[][] = [];
+        const _callerAlloc = (sz: number): number[] => { const _a = polyplug.alloc(sz); _frees.push([_a[0], _a[1], sz]); return _a; };
+        try {
+        const _messageBytes = _ppEncodeUtf8(message);
+        const _messageDataBuf = _callerAlloc(_messageBytes.length > 0 ? _messageBytes.length : 1);
         const _messageDataPtr = _messageDataBuf[0] + _messageDataBuf[1] * 4294967296;
         for (let _i = 0; _i < _messageBytes.length; _i++) { polyplug.writeByte(_messageDataPtr + _i, _messageBytes[_i]); }
-        const _argsBuf = polyplug.arenaAlloc(16);
+        const _argsBuf = _callerAlloc(16);
         const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;
         polyplug.writeU32(argsPtr, _messageDataBuf[0]);
         polyplug.writeU32(argsPtr + 4, _messageDataBuf[1]);
@@ -50,19 +73,25 @@ export class HostLoggerContract {
         if (errCode !== 0) {
             throw new Error(`host contract call log failed (code ${errCode})`);
         }
+        } finally {
+            for (const _f of _frees) { polyplug.free(_f[0], _f[1], _f[2], 1); }
+        }
     }
 
     /** Call `log_with_level` */
     log_with_level(level: LogLevel, message: string): void {
-        const polyplug = (globalThis as any).polyplug;
+        const polyplug = this._bridge;
         if (!polyplug || !polyplug.callHostContract) {
             return;
         }
-        const _argsBuf = polyplug.arenaAlloc(24);
+        const _frees: number[][] = [];
+        const _callerAlloc = (sz: number): number[] => { const _a = polyplug.alloc(sz); _frees.push([_a[0], _a[1], sz]); return _a; };
+        try {
+        const _argsBuf = _callerAlloc(24);
         const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;
         polyplug.writeU32(argsPtr, Number(level));
-        const _messageBytes = new TextEncoder().encode(message);
-        const _messageDataBuf = polyplug.arenaAlloc(_messageBytes.length > 0 ? _messageBytes.length : 1);
+        const _messageBytes = _ppEncodeUtf8(message);
+        const _messageDataBuf = _callerAlloc(_messageBytes.length > 0 ? _messageBytes.length : 1);
         const _messageDataPtr = _messageDataBuf[0] + _messageDataBuf[1] * 4294967296;
         for (let _i = 0; _i < _messageBytes.length; _i++) { polyplug.writeByte(_messageDataPtr + _i, _messageBytes[_i]); }
         polyplug.writeU32(argsPtr + 8, _messageDataBuf[0]);
@@ -73,6 +102,9 @@ export class HostLoggerContract {
         const errCode: number = polyplug.callHostContract(0x845853BB, 0xF53EB5F2, this._minVersion, 1, argsPtr, outPtr);
         if (errCode !== 0) {
             throw new Error(`host contract call log_with_level failed (code ${errCode})`);
+        }
+        } finally {
+            for (const _f of _frees) { polyplug.free(_f[0], _f[1], _f[2], 1); }
         }
     }
 

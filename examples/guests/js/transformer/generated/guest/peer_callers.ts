@@ -2,6 +2,24 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-quickjs (guest-side peer callers)
 
+// UTF-8 encoder usable in QuickJS (where TextEncoder is absent).
+function _ppEncodeUtf8(str: string): Uint8Array {
+    if (typeof TextEncoder !== 'undefined') { return new TextEncoder().encode(str); }
+    const out: number[] = [];
+    for (let i = 0; i < str.length; i++) {
+        let code = str.charCodeAt(i);
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            const low = str.charCodeAt(++i);
+            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+        }
+        if (code < 0x80) { out.push(code); }
+        else if (code < 0x800) { out.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F)); }
+        else if (code < 0x10000) { out.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }
+        else { out.push(0xF0 | (code >> 18), 0x80 | ((code >> 12) & 0x3F), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }
+    }
+    return new Uint8Array(out);
+}
+
 /**
  * Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
  *
@@ -15,41 +33,52 @@ export class ValidatorPeer {
     static readonly CONTRACT_ID_HI = 0x45173A95;
     static readonly MIN_VERSION = 1;
 
-    private constructor() {}
+    private _bridge: any;
+    private _hostPtr: { lo: number; hi: number };
+
+    private constructor(bridge: any, hostPtr: { lo: number; hi: number }) {
+        this._bridge = bridge;
+        this._hostPtr = hostPtr;
+    }
 
     /**
      * Verify the peer contract is reachable via the host.
      * Returns a `ValidatorPeer` instance or `null` if not found.
+     *
+     * `bridge` and `hostPtr` are threaded in explicitly by the caller
+     * (the author factory captured them); no per-VM global is read.
      */
-    static resolve(): ValidatorPeer | null {
-        const polyplug = (globalThis as any).polyplug;
-        if (!polyplug || !polyplug.findByContract) {
+    static resolve(bridge: any, hostPtr: { lo: number; hi: number }): ValidatorPeer | null {
+        if (!bridge || !bridge.findByContract) {
             return null;
         }
-        const handle = polyplug.findByContract(0x9EEC57C5, 0x45173A95, 1);
+        const handle = bridge.findByContract(0x9EEC57C5, 0x45173A95, 1);
         if (handle === null || handle === undefined) {
             return null;
         }
-        return new ValidatorPeer();
+        return new ValidatorPeer(bridge, hostPtr);
     }
 
     /** Call peer `validate` */
     validate(input: string): { ptr_lo: number; ptr_hi: number; len: number } {
-        const polyplug = (globalThis as any).polyplug;
+        const polyplug = this._bridge;
         if (!polyplug || !polyplug.callGuestMethod) {
             return null as any;
         }
-        const _inputBytes = new TextEncoder().encode(input);
-        const _inputDataBuf = polyplug.arenaAlloc(_inputBytes.length > 0 ? _inputBytes.length : 1);
+        const _frees: number[][] = [];
+        const _callerAlloc = (sz: number): number[] => { const _a = polyplug.alloc(sz); _frees.push([_a[0], _a[1], sz]); return _a; };
+        try {
+        const _inputBytes = _ppEncodeUtf8(input);
+        const _inputDataBuf = _callerAlloc(_inputBytes.length > 0 ? _inputBytes.length : 1);
         const _inputDataPtr = _inputDataBuf[0] + _inputDataBuf[1] * 4294967296;
         for (let _i = 0; _i < _inputBytes.length; _i++) { polyplug.writeByte(_inputDataPtr + _i, _inputBytes[_i]); }
-        const _argsBuf = polyplug.arenaAlloc(16);
+        const _argsBuf = _callerAlloc(16);
         const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;
         polyplug.writeU32(argsPtr, _inputDataBuf[0]);
         polyplug.writeU32(argsPtr + 4, _inputDataBuf[1]);
         polyplug.writeU32(argsPtr + 8, _inputBytes.length);
         polyplug.writeU32(argsPtr + 12, 0);
-        const _outBuf = polyplug.arenaAlloc(16);
+        const _outBuf = _callerAlloc(16);
         const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;
         polyplug.writeU32(outPtr, 0);
         polyplug.writeU32(outPtr + 4, 0);
@@ -61,6 +90,9 @@ export class ValidatorPeer {
         }
         const result = { ptr_lo: polyplug.readU32(outPtr), ptr_hi: polyplug.readU32(outPtr + 4), len: polyplug.readU32(outPtr + 8) };
         return result;
+        } finally {
+            for (const _f of _frees) { polyplug.free(_f[0], _f[1], _f[2], 1); }
+        }
     }
 
 }

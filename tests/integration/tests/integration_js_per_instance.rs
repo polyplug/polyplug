@@ -23,7 +23,7 @@
 //! number of times, and asserts their counts are independent. If instances shared
 //! state, both would observe the combined total.
 //!
-//! The bundle is a hand-written `bundle.js` calling `polyplug.registerVtable`
+//! The bundle is a hand-written `bundle.js` returning `[registrations, abiError]`
 //! directly — exactly the registration shape `polyplugc` generates and the other JS
 //! integration tests use — so the test needs no rolldown/deno bundling step.
 
@@ -57,39 +57,40 @@ fn counter_bundle_js() -> String {
     let contract_hi: u32 = (contract_id >> 32) as u32;
     format!(
         r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
-    var vtable = {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    var iface = {{
         contractLo: {contract_lo},
         contractHi: {contract_hi},
         fnCount: 2,
         contractName: "iso.Counter@1",
         version: 0x00010000,
         // A fresh impl object per instance: the counter lives here, so two
-        // instances never share state.
-        factory: function() {{ return {{ count: 0 }}; }},
+        // instances never share state. The factory receives the bridge + host
+        // vtable explicitly (no global — Rule 12).
+        factory: function(bridge, hostLo, hostHi) {{ return {{ count: 0 }}; }},
         functions: [
             // fn0 = inc(): advance this instance's own counter, return the new value.
-            function(impl, args_ptr, out_ptr) {{
+            function(impl, args_ptr, out_ptr, arena, bridge) {{
                 impl.count = impl.count + 1;
-                polyplug.writeI32(out_ptr, impl.count);
+                bridge.writeI32(out_ptr, impl.count);
                 return 0;
             }},
             // fn1 = get(): read this instance's own counter.
-            function(impl, args_ptr, out_ptr) {{
-                polyplug.writeI32(out_ptr, impl.count);
+            function(impl, args_ptr, out_ptr, arena, bridge) {{
+                bridge.writeI32(out_ptr, impl.count);
                 return 0;
             }}
         ]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName,
-        vtable.version
-    );
-    return {{ code: 0, message: {{ ptr: 0, len: 0 }} }};
+    var registrations = [{{
+        contractLo: iface.contractLo,
+        contractHi: iface.contractHi,
+        interface: iface,
+        fnCount: iface.fnCount,
+        contractName: iface.contractName,
+        version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#
     )

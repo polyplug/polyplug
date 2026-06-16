@@ -53,36 +53,23 @@ use polyplug_utils::GuestContractId;
 
 use crate::config::JsConfig;
 
-// ─── Registration data stored in QuickJS runtime userdata ──────────────────────
+// ─── Registration data returned by polyplug_init ──────────────────────────────
 
-use core::cell::RefCell;
-use std::rc::Rc;
-
-use rquickjs::JsLifetime;
-use rquickjs::runtime::UserDataError;
-use rquickjs::runtime::UserDataGuard;
-
-/// Registration data collected from the JS plugin during polyplug_init.
+/// Registration data extracted from `polyplug_init`'s return value.
 ///
-/// This struct is stored in the QuickJS runtime's userdata to avoid thread-local
-/// storage, ensuring multiple polyplug runtimes can coexist in the same process.
+/// `polyplug_init` RETURNS `[registrations, abiError]` (nothing is deposited into
+/// any global or VM userdata — Rule 12); the loader reads `registrations[0]` and
+/// extracts these fields. The `Persistent` values are `'static`, so they travel
+/// out of the `Context::with` closure that built them.
 struct JsRegistrationData {
     contract_id: u64,
     contract_version: u32,
-    _fn_count: usize,
     contract_name: String,
     functions: Vec<Persistent<Function<'static>>>,
     /// Factory that builds a fresh impl object. The loader calls it once at load
     /// to build the stateless default impl and once per `create_instance` for a
-    /// live per-instance impl.
+    /// live per-instance impl, threading the bridge + host vtable explicitly.
     factory: Persistent<Function<'static>>,
-}
-
-// SAFETY: JsRegistrationData has no lifetime parameters and contains only 'static
-// data (Persistent<Function<'static>> is 'static). This implementation allows the
-// type to be stored in rquickjs's userdata storage.
-unsafe impl<'js> JsLifetime<'js> for JsRegistrationData {
-    type Changed<'to> = JsRegistrationData;
 }
 
 // ─── JS Loader Data for VM Dispatch ───────────────────────────────────────────
@@ -104,10 +91,22 @@ unsafe impl<'js> JsLifetime<'js> for JsRegistrationData {
 pub struct JsLoaderData {
     pub functions: Vec<Persistent<Function<'static>>>,
     /// Factory producing a fresh impl object per `create_instance`. Restored under
-    /// `Context::with` and called with no arguments (the guest reaches the host via
-    /// the per-VM `polyplug` global, so the factory needs no host parameter).
+    /// `Context::with` and called with `(bridge, host_lo, host_hi)` — the bridge and
+    /// host vtable are threaded explicitly (no per-VM global — Rule 12), so the
+    /// factory's impl can capture them.
     pub factory: Persistent<Function<'static>>,
-    /// Stateless default impl, built once at load via `factory()`. Serves dispatch
+    /// The host-capability bridge object the loader builds at load time and threads
+    /// explicitly into `polyplug_init`, every dispatch call, and each factory call —
+    /// it is NEVER set on `globalThis` (Rule 12). Restored under `Context::with`.
+    /// Declared BEFORE `_runtime` so it drops before the QuickJS `Runtime` (see the
+    /// field-drop-order note above).
+    pub bridge: Persistent<Object<'static>>,
+    /// HostApi pointer split into f64 lo/hi halves, threaded to each factory call so
+    /// the guest impl can store it and reach host-contract / peer callers. f64 avoids
+    /// rquickjs sign-extending a u32 > INT32_MAX to a negative tagged int.
+    pub host_lo: f64,
+    pub host_hi: f64,
+    /// Stateless default impl, built once at load via the factory. Serves dispatch
     /// on a null (id 0) instance handle so low-level / host-caller dispatch with a
     /// null instance still resolves an impl.
     pub default_impl: Persistent<Value<'static>>,
@@ -284,7 +283,14 @@ unsafe extern "C" fn js_create_instance(
 
     let built: Result<Persistent<Value<'static>>, rquickjs::Error> = data.ctx.with(|ctx| {
         let factory: Function<'_> = data.factory.clone().restore(&ctx)?;
-        let impl_val: Value<'_> = factory.call::<(), Value<'_>>(())?;
+        // Thread the bridge + host vtable lo/hi explicitly (no per-VM global — Rule 12)
+        // so the per-instance impl can capture them and reach host-contract / peer callers.
+        let bridge: Object<'_> = data.bridge.clone().restore(&ctx)?;
+        let impl_val: Value<'_> = factory.call::<(Object<'_>, f64, f64), Value<'_>>((
+            bridge,
+            data.host_lo,
+            data.host_hi,
+        ))?;
         Ok(Persistent::save(&ctx, impl_val))
     });
 
@@ -472,24 +478,25 @@ unsafe fn js_dispatch_impl(
     let out_f64: f64 = out_usize as f64;
 
     let arena_usize: usize = arena as usize;
+    // Pass the per-call arena pointer as a Number argument (NOT published into any VM
+    // global — Rule 12). User-space addresses fit within 2^48 < 2^53, so usize → f64
+    // → usize is exact; the generated wrapper threads it to bridge.arenaAlloc(size,
+    // arena_ptr) for StringView returns.
+    let arena_f64: f64 = arena_usize as f64;
 
     let call_result: Result<i32, rquickjs::Error> = data.ctx.with(|ctx| {
-        // Publish the per-call arena pointer on the polyplug object so the
-        // arenaAlloc bridge can serve allocations from it. The VM lock is held
-        // for the whole closure, so single-threaded access is guaranteed. The
-        // pointer is cleared after the call so a stale arena is never reachable.
-        set_arena_ptr(&ctx, arena_usize);
-
         let js_fn: Function<'_> = func_persistent.clone().restore(&ctx)?;
-        // The generated wrapper takes (impl, args_ptr, out_ptr): the per-instance
-        // impl object is passed first so the wrapper invokes the method on it.
+        // The generated wrapper takes (impl, args_ptr, out_ptr, arena_ptr, bridge):
+        // the per-instance impl object is passed first so the wrapper invokes the
+        // method on it; the per-call arena pointer and the host-capability bridge are
+        // threaded as explicit arguments — nothing is read from or written to any VM
+        // global (Rule 12), so concurrent / same-VM reentrant dispatch stay correct.
         let impl_val: Value<'_> = impl_persistent.clone().restore(&ctx)?;
+        let bridge: Object<'_> = data.bridge.clone().restore(&ctx)?;
 
-        let result: Result<i32, rquickjs::Error> =
-            js_fn.call::<(Value<'_>, f64, f64), i32>((impl_val, args_f64, out_f64));
-
-        set_arena_ptr(&ctx, 0);
-        result
+        js_fn.call::<(Value<'_>, f64, f64, f64, Object<'_>), i32>((
+            impl_val, args_f64, out_f64, arena_f64, bridge,
+        ))
     });
 
     match call_result {
@@ -527,47 +534,14 @@ fn pack_handle(h: GuestContractHandle) -> Option<u64> {
     }
 }
 
-/// Publish the per-call arena pointer on the `polyplug` global as lo/hi f64 halves.
+/// Reconstruct a `*const HostApi` from the captured host address, or `None` if null.
 ///
-/// Stored as f64 for the same reason as the host vtable pointer: rquickjs would
-/// sign-extend a u32 above INT32_MAX to a negative tagged int and corrupt the
-/// pointer. A value of 0 means "no arena" (arenaAlloc falls back to host->alloc).
-fn set_arena_ptr<'js>(ctx: &Ctx<'js>, ptr: usize) {
-    let Ok(polyplug_obj) = ctx.globals().get::<&str, Object<'js>>("polyplug") else {
-        return;
-    };
-    let _ = polyplug_obj.set("_arenaLo", (ptr as u32) as f64);
-    let _ = polyplug_obj.set("_arenaHi", ((ptr >> 32) as u32) as f64);
-}
-
-/// Read the per-call arena pointer from the `polyplug` global, or null if unset.
-fn get_arena_ptr<'js>(ctx: &Ctx<'js>) -> *mut CallArena {
-    let Ok(polyplug_obj) = ctx.globals().get::<&str, Object<'js>>("polyplug") else {
-        return core::ptr::null_mut();
-    };
-    let lo: f64 = polyplug_obj.get::<&str, f64>("_arenaLo").unwrap_or(0.0);
-    let hi: f64 = polyplug_obj.get::<&str, f64>("_arenaHi").unwrap_or(0.0);
-    (((hi as u64) << 32) | lo as u64) as usize as *mut CallArena
-}
-
-/// Helper to get HostApi pointer from JS globals.
-///
-/// Lo/hi are stored as f64 to avoid rquickjs sign-extending u32 > INT32_MAX to negative
-/// tagged ints, which would cause u32::from_js to fail or return a wrong value.
-fn get_host_interface_from_globals<'js>(ctx: &Ctx<'js>) -> Option<*const HostApi> {
-    let polyplug_obj: Object<'js> = ctx.globals().get::<&str, Object<'js>>("polyplug").ok()?;
-
-    let vtable_lo: f64 = polyplug_obj.get::<&str, f64>("_hostVtableLo").ok()?;
-    let vtable_hi: f64 = polyplug_obj.get::<&str, f64>("_hostVtableHi").ok()?;
-
-    let host_interface_ptr: *const HostApi =
-        ((vtable_hi as u64) << 32 | vtable_lo as u64) as usize as *const HostApi;
-
-    if host_interface_ptr.is_null() {
-        None
-    } else {
-        Some(host_interface_ptr)
-    }
+/// The bridge closures capture the host pointer as a `usize` (a `Copy`/`Send`
+/// value) at registration time and reconstruct it here per call — the host
+/// pointer is threaded explicitly, never read from a VM global (Rule 12).
+fn host_from_usize(addr: usize) -> Option<*const HostApi> {
+    let ptr: *const HostApi = addr as *const HostApi;
+    if ptr.is_null() { None } else { Some(ptr) }
 }
 
 /// Destroy a host-contract instance obtained from `get_host_contract` when the
@@ -602,32 +576,17 @@ fn register_host_functions<'js>(
     bundle_name: &str,
     logger: LoggerHandle,
 ) -> Result<(), LoaderError> {
-    // Store host interface pointer as JS globals on the polyplug object
+    // Capture the host pointer as a usize: raw pointers are not Send, but the pointee
+    // is a 'static HostApi for the runtime lifetime, so each bridge closure can `move`
+    // this Copy value in and reconstruct the pointer per call — the host pointer is
+    // threaded explicitly, never set on a VM global (Rule 12).
     let host_interface_usize: usize = host_interface as usize;
-
-    // Store as f64: u32 > INT32_MAX would be sign-extended by rquickjs to a negative
-    // tagged int, causing f64::from_js or u32::from_js to fail on read-back.
-    polyplug_obj
-        .set("_hostVtableLo", (host_interface_usize as u32) as f64)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!("JS runtime js-quickjs error: _hostVtableLo set failed: {e}"),
-        })?;
-    polyplug_obj
-        .set(
-            "_hostVtableHi",
-            ((host_interface_usize >> 32) as u32) as f64,
-        )
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!("JS runtime js-quickjs error: _hostVtableHi set failed: {e}"),
-        })?;
 
     let find_by_contract_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |ctx: Ctx<'js>, lo: u32, hi: u32, min_ver: u32| -> Option<u64> {
+        move |_ctx: Ctx<'js>, lo: u32, hi: u32, min_ver: u32| -> Option<u64> {
             let contract_id: u64 = (hi as u64) << 32 | lo as u64;
-            let hvt: *const HostApi = get_host_interface_from_globals(&ctx)?;
+            let hvt: *const HostApi = host_from_usize(host_interface_usize)?;
             // SAFETY: hvt points to 'static HostApi data.
             let handle: GuestContractHandle =
                 unsafe { ((*hvt).find_guest_contract)(hvt, contract_id, min_ver) };
@@ -674,9 +633,9 @@ fn register_host_functions<'js>(
 
     let find_all_by_contract_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |ctx: Ctx<'js>, lo: u32, hi: u32, min_ver: u32| -> u32 {
+        move |_ctx: Ctx<'js>, lo: u32, hi: u32, min_ver: u32| -> u32 {
             let contract_id: u64 = (hi as u64) << 32 | lo as u64;
-            let hvt: *const HostApi = match get_host_interface_from_globals(&ctx) {
+            let hvt: *const HostApi = match host_from_usize(host_interface_usize) {
                 Some(ptr) => ptr,
                 None => return 0_u32,
             };
@@ -701,14 +660,15 @@ fn register_host_functions<'js>(
             error: format!("JS runtime js-quickjs error: findAllByContract set failed: {e}"),
         })?;
 
-    let resolve_guest_contract_fn: Function<'js> =
-        Function::new(ctx.clone(), |ctx: Ctx<'js>, packed: u64| -> Option<u64> {
+    let resolve_guest_contract_fn: Function<'js> = Function::new(
+        ctx.clone(),
+        move |_ctx: Ctx<'js>, packed: u64| -> Option<u64> {
             // Unpack the full handle identity: index in the low 32 bits, generation
             // in the high 32 (matches pack_handle / GuestContractHandle::pack).
             let index: u32 = packed as u32;
             let generation: u32 = (packed >> 32) as u32;
             let handle: GuestContractHandle = GuestContractHandle { index, generation };
-            let hvt: *const HostApi = get_host_interface_from_globals(&ctx)?;
+            let hvt: *const HostApi = host_from_usize(host_interface_usize)?;
             // SAFETY: hvt points to 'static HostApi data.
             let vtable_ptr: *const GuestContractInterface =
                 unsafe { ((*hvt).resolve_guest_contract)(hvt, handle) };
@@ -717,13 +677,14 @@ fn register_host_functions<'js>(
             } else {
                 Some(vtable_ptr as usize as u64)
             }
-        })
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!(
-                "JS runtime js-quickjs error: resolveGuestContract function creation failed: {e}"
-            ),
-        })?;
+        },
+    )
+    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        bundle: bundle_name.to_owned(),
+        error: format!(
+            "JS runtime js-quickjs error: resolveGuestContract function creation failed: {e}"
+        ),
+    })?;
 
     polyplug_obj
         .set("resolveGuestContract", resolve_guest_contract_fn)
@@ -744,16 +705,16 @@ fn register_host_functions<'js>(
     // back to the default impl (routed by the stamped contract id).
     let call_guest_method_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |ctx: Ctx<'js>,
-         contract_id_lo: u32,
-         contract_id_hi: u32,
-         min_version: u32,
-         fn_id: u32,
-         args_ptr: u64,
-         out_ptr: u64|
-         -> u32 {
+        move |_ctx: Ctx<'js>,
+              contract_id_lo: u32,
+              contract_id_hi: u32,
+              min_version: u32,
+              fn_id: u32,
+              args_ptr: u64,
+              out_ptr: u64|
+              -> u32 {
             let contract_id: u64 = (contract_id_hi as u64) << 32 | contract_id_lo as u64;
-            let hvt: *const HostApi = match get_host_interface_from_globals(&ctx) {
+            let hvt: *const HostApi = match host_from_usize(host_interface_usize) {
                 Some(p) => p,
                 None => return AbiErrorCode::Generic as u32,
             };
@@ -827,111 +788,10 @@ fn register_host_functions<'js>(
             error: format!("JS runtime js-quickjs error: callGuestMethod set failed: {e}"),
         })?;
 
-    let register_vtable_fn: Function<'js> = Function::new(
-        ctx.clone(),
-        |ctx: Ctx<'js>,
-         contract_lo: u32,
-         contract_hi: u32,
-         vtable_obj: Object<'js>,
-         fn_count: u32,
-         contract_name: String,
-         contract_version: u32|
-         -> Result<(), rquickjs::Error> {
-            let contract_id: u64 = (contract_hi as u64) << 32 | contract_lo as u64;
-            let fn_count_usize: usize = fn_count as usize;
-
-            let mut functions: Vec<Persistent<Function<'static>>> =
-                Vec::with_capacity(fn_count_usize);
-            let functions_array: Object<'js> =
-                match vtable_obj.get::<&str, Object<'js>>("functions") {
-                    Ok(arr) => arr,
-                    Err(_) => {
-                        return Err(rquickjs::Exception::throw_message(
-                            &ctx,
-                            &format!(
-                                "registerVtable: vtable for contract '{contract_name}' has no 'functions' array"
-                            ),
-                        ));
-                    }
-                };
-
-            for i in 0..fn_count_usize {
-                let func: Function<'js> = match functions_array.get::<u32, Function<'js>>(i as u32)
-                {
-                    Ok(f) => f,
-                    Err(_) => {
-                        return Err(rquickjs::Exception::throw_message(
-                            &ctx,
-                            &format!(
-                                "registerVtable: vtable for contract '{contract_name}' declares fnCount={fn_count} but functions[{i}] is missing or not a function"
-                            ),
-                        ));
-                    }
-                };
-                let func_persistent: Persistent<Function<'static>> = Persistent::save(&ctx, func);
-                functions.push(func_persistent);
-            }
-
-            // The factory builds a fresh impl object per instance (and the load-time
-            // default impl). It is a required field on the vtable: the generated
-            // setXFactory installs it before registration.
-            let factory_fn: Function<'js> = match vtable_obj.get::<&str, Function<'js>>("factory") {
-                Ok(f) => f,
-                Err(_) => {
-                    return Err(rquickjs::Exception::throw_message(
-                        &ctx,
-                        &format!(
-                            "registerVtable: vtable for contract '{contract_name}' has no 'factory' function (call setXFactory before registering)"
-                        ),
-                    ));
-                }
-            };
-            let factory: Persistent<Function<'static>> = Persistent::save(&ctx, factory_fn);
-
-            let data: JsRegistrationData = JsRegistrationData {
-                contract_id,
-                contract_version,
-                _fn_count: fn_count_usize,
-                contract_name,
-                functions,
-                factory,
-            };
-
-            let slot_guard: UserDataGuard<Rc<RefCell<Option<JsRegistrationData>>>> =
-                match ctx.userdata::<Rc<RefCell<Option<JsRegistrationData>>>>() {
-                    Some(guard) => guard,
-                    None => {
-                        return Err(rquickjs::Exception::throw_message(
-                            &ctx,
-                            "registerVtable: registration slot missing from VM userdata (loader bug)",
-                        ));
-                    }
-                };
-            let mut cell: core::cell::RefMut<Option<JsRegistrationData>> = slot_guard.borrow_mut();
-            *cell = Some(data);
-            Ok(())
-        },
-    )
-    .map_err(|e: rquickjs::Error| {
-        LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!(
-                "JS runtime js-quickjs error: registerVtable function creation failed: {e}"
-            ),
-        }
-    })?;
-
-    polyplug_obj
-        .set("registerVtable", register_vtable_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!("JS runtime js-quickjs error: registerVtable set failed: {e}"),
-        })?;
-
     let alloc_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |ctx: Ctx<'js>, size: u32| -> Result<Array<'js>, rquickjs::Error> {
-            let hvt: *const HostApi = match get_host_interface_from_globals(&ctx) {
+        move |ctx: Ctx<'js>, size: u32| -> Result<Array<'js>, rquickjs::Error> {
+            let hvt: *const HostApi = match host_from_usize(host_interface_usize) {
                 Some(ptr) => ptr,
                 None => {
                     let arr: Array<'js> = Array::new(ctx.clone()).map_err(|_| {
@@ -966,23 +826,26 @@ fn register_host_functions<'js>(
             error: format!("JS runtime js-quickjs error: alloc set failed: {e}"),
         })?;
 
-    // arenaAlloc serves the guest's per-call return buffers from the current
-    // CallArena (published by js_dispatch), falling back to host->alloc when no
-    // arena is active. Returns [lo, hi] f64 halves, matching alloc.
+    // arenaAlloc(size, arena_ptr) serves the guest's per-call return buffers from
+    // the per-call CallArena whose pointer the dispatch THREADS in as the
+    // `arena_ptr` argument (NOT read from a VM global — Rule 12), falling back to
+    // host->alloc when that pointer is 0. Returns [lo, hi] f64 halves, matching
+    // alloc. Each call carries its own arena on its own frame, so a concurrent or
+    // same-VM reentrant dispatch can never perturb this call's arena.
     let arena_alloc_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |ctx: Ctx<'js>, size: u32| -> Result<Array<'js>, rquickjs::Error> {
-            let arena: *mut CallArena = get_arena_ptr(&ctx);
+        move |ctx: Ctx<'js>, size: u32, arena_ptr: f64| -> Result<Array<'js>, rquickjs::Error> {
+            let arena: *mut CallArena = arena_ptr as u64 as usize as *mut CallArena;
             let ptr: *mut u8 = if arena.is_null() {
-                match get_host_interface_from_globals(&ctx) {
+                match host_from_usize(host_interface_usize) {
                     // SAFETY: hvt points to 'static HostApi data.
                     Some(hvt) => unsafe { ((*hvt).alloc)(hvt, size as usize, 1) },
                     None => core::ptr::null_mut(),
                 }
             } else {
-                // SAFETY: `arena` is the valid per-call CallArena published by
-                // js_dispatch under the VM lock; alloc bumps within it or chains
-                // a host-allocated overflow block.
+                // SAFETY: `arena` is the valid per-call CallArena whose pointer the
+                // dispatch threaded in as the arena_ptr argument; alloc bumps within
+                // it or chains a host-allocated overflow block.
                 unsafe { (*arena).alloc(size as usize, 1) }
             };
             let ptr_usize: usize = ptr as usize;
@@ -1054,8 +917,8 @@ fn register_host_functions<'js>(
     // region — passing size=0 makes polyplug_host_free a no-op, which leaks every block.
     let free_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |ctx: Ctx<'js>, lo: f64, hi: f64, size: u32, align: u32| {
-            let hvt: *const HostApi = match get_host_interface_from_globals(&ctx) {
+        move |_ctx: Ctx<'js>, lo: f64, hi: f64, size: u32, align: u32| {
+            let hvt: *const HostApi = match host_from_usize(host_interface_usize) {
                 Some(ptr) => ptr,
                 None => return,
             };
@@ -1263,16 +1126,16 @@ fn register_host_functions<'js>(
     // pattern (null GuestContractInstance, null arena).
     let call_host_contract_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |ctx: Ctx<'js>,
-         contract_id_lo: u32,
-         contract_id_hi: u32,
-         min_version: u32,
-         fn_id: u32,
-         args_ptr: u64,
-         out_ptr: u64|
-         -> u32 {
+        move |_ctx: Ctx<'js>,
+              contract_id_lo: u32,
+              contract_id_hi: u32,
+              min_version: u32,
+              fn_id: u32,
+              args_ptr: u64,
+              out_ptr: u64|
+              -> u32 {
             let contract_id: u64 = (contract_id_hi as u64) << 32 | contract_id_lo as u64;
-            let hvt: *const HostApi = match get_host_interface_from_globals(&ctx) {
+            let hvt: *const HostApi = match host_from_usize(host_interface_usize) {
                 Some(p) => p,
                 None => return AbiErrorCode::Generic as u32,
             };
@@ -1482,7 +1345,7 @@ fn register_host_functions<'js>(
 ///
 /// `host_register_guest_contract` attributes each registration to the bundle id at
 /// the top of the runtime's init-bundle stack (`current_init_bundle_id`). The JS
-/// `polyplug_init` only stashes a `JsRegistrationData` in userdata; the actual
+/// `polyplug_init` only RETURNS the registrations array; the actual
 /// `register_guest_contract` call happens later in `load_inner`. The window must
 /// therefore stay open across BOTH phases, and `pop` must run on EVERY exit path —
 /// including the `?` early-returns between init and the registration call. Dropping
@@ -1620,7 +1483,7 @@ impl JsLoader {
         // Open the init-bundle window for BOTH the init call and the registration
         // call below: `host_register_guest_contract` attributes the registration to
         // the bundle id on top of this stack, and `register_guest_contract` runs later
-        // in this function (init only stashes JsRegistrationData in userdata). The
+        // in this function (init only returns the registrations array). The
         // guard's Drop pops once on every exit path — including the `?` early-returns
         // between here and the registration call — so the stack never leaks an entry
         // and the registration carries the real bundle id.
@@ -1633,22 +1496,24 @@ impl JsLoader {
             None => String::new(),
         };
 
-        let registration_slot: Rc<RefCell<Option<JsRegistrationData>>> =
-            Rc::new(RefCell::new(None));
+        // HostApi pointer split into f64 lo/hi halves, threaded explicitly to
+        // polyplug_init and each factory call (NOT set on a VM global — Rule 12).
+        // f64 avoids rquickjs sign-extending a u32 > INT32_MAX to a negative tagged int.
+        let host_usize: usize = host_interface as usize;
+        let host_lo: f64 = (host_usize as u32) as f64;
+        let host_hi: f64 = ((host_usize >> 32) as u32) as f64;
 
-        let init_outcome: Result<(), LoaderError> = ctx.with(|ctx_ref: Ctx<'_>| {
-            ctx_ref
-                .store_userdata(Rc::clone(&registration_slot))
-                .map_err(
-                    |_: UserDataError<Rc<RefCell<Option<JsRegistrationData>>>>| {
-                        LoaderError::InitFailed {
-                            bundle: manifest.name.clone(),
-                            error: "JS runtime js-quickjs error: failed to store registration slot in userdata".to_owned(),
-                        }
-                    },
-                )?;
-
-            let globals: Object<'_> = ctx_ref.globals();
+        // Build the bridge + call polyplug_init + extract the registration and build
+        // the default impl, all under one Context::with. The bridge is persisted and
+        // threaded into init / each factory call / every dispatch — it is NEVER set
+        // on `globalThis` (Rule 12). The `Persistent` values returned here are
+        // 'static, so they leave the closure to populate the JsLoaderData below.
+        type InitExtract = (
+            JsRegistrationData,
+            Persistent<Object<'static>>,
+            Persistent<Value<'static>>,
+        );
+        let init_extract: Result<InitExtract, LoaderError> = ctx.with(|ctx_ref: Ctx<'_>| {
             let polyplug_obj: Object<'_> =
                 Object::new(ctx_ref.clone()).map_err(|e: rquickjs::Error| {
                     LoaderError::InitFailed {
@@ -1663,14 +1528,6 @@ impl JsLoader {
                 &manifest.name,
                 runtime.logger(),
             )?;
-            globals
-                .set("polyplug", polyplug_obj)
-                .map_err(|e: rquickjs::Error| {
-                    LoaderError::InitFailed {
-                        bundle: manifest.name.clone(),
-                        error: format!("JS runtime js-quickjs error: global set failed: {e}"),
-                    }
-                })?;
 
             let set_bundle: String = format!("globalThis.bundlePath = {:?};", bundle_dir_str);
             ctx_ref
@@ -1711,20 +1568,22 @@ impl JsLoader {
                 bundle_id,
             };
 
-            // Pass HostApi and BundleInitContext pointers as 4 f64 arguments:
-            //   (host_lo, host_hi, ctx_lo, ctx_hi)
-            // The generated polyplug_init expects this 4-arg lo/hi split convention.
-            // f64 is used instead of u32 because rquickjs sign-extends u32 > INT32_MAX to
-            // negative tagged ints. f64 represents the full unsigned 32-bit range exactly.
-            let host_usize: usize = host_interface as usize;
+            // Pass HostApi and BundleInitContext pointers as 4 f64 arguments plus the
+            // bridge object: (host_lo, host_hi, ctx_lo, ctx_hi, bridge). The generated
+            // polyplug_init RETURNS [registrations, abiError]; nothing is deposited
+            // into any global / VM userdata (Rule 12).
             let ctx_usize: usize = &plugin_ctx as *const BundleInitContext as usize;
-            let host_lo: f64 = (host_usize as u32) as f64;
-            let host_hi: f64 = ((host_usize >> 32) as u32) as f64;
             let ctx_lo: f64 = (ctx_usize as u32) as f64;
             let ctx_hi: f64 = ((ctx_usize >> 32) as u32) as f64;
 
-            let init_value: Value<'_> = init_fn
-                .call::<(f64, f64, f64, f64), Value<'_>>((host_lo, host_hi, ctx_lo, ctx_hi))
+            let init_value: Array<'_> = init_fn
+                .call::<(f64, f64, f64, f64, Object<'_>), Array<'_>>((
+                    host_lo,
+                    host_hi,
+                    ctx_lo,
+                    ctx_hi,
+                    polyplug_obj.clone(),
+                ))
                 .map_err(|e: rquickjs::Error| {
                     let thrown: Value<'_> = ctx_ref.catch();
                     let detail: String = match thrown.as_exception() {
@@ -1739,24 +1598,21 @@ impl JsLoader {
                     }
                 })?;
 
-            // Honor the AbiError returned by polyplug_init. Generated guests
-            // return `{ code, message }`; a bare number is also accepted.
-            // `undefined` is treated as success. A non-zero code means the
-            // guest refused to initialize — fail the load with that code and
-            // message instead of silently treating the bundle as loaded.
-            let (init_code, init_message): (u32, Option<String>) =
-                if let Some(obj) = init_value.as_object() {
-                    let code: u32 = obj.get::<&str, f64>("code").unwrap_or(0.0_f64) as u32;
-                    let message: Option<String> =
-                        obj.get::<&str, Option<String>>("message").unwrap_or(None);
-                    (code, message)
-                } else if let Some(num) = init_value.as_number() {
-                    (num as u32, None)
-                } else {
-                    (0_u32, None)
-                };
+            // init_value = [registrations, abiError]. Honor the AbiError first: a
+            // non-Ok code means the guest refused to initialize — fail the load,
+            // surfacing the guest's own message when present.
+            let abi_error: Object<'_> = init_value.get::<Object<'_>>(1).map_err(|_| {
+                LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: "JS runtime js-quickjs error: polyplug_init did not return an AbiError"
+                        .to_owned(),
+                }
+            })?;
+            let init_code: u32 = abi_error.get::<&str, f64>("code").unwrap_or(0.0_f64) as u32;
             if init_code != AbiErrorCode::Ok as u32 {
-                let detail: String = match init_message {
+                let message: Option<String> =
+                    abi_error.get::<&str, Option<String>>("message").unwrap_or(None);
+                let detail: String = match message {
                     Some(msg) if !msg.is_empty() => format!(" ({msg})"),
                     _ => String::new(),
                 };
@@ -1768,47 +1624,116 @@ impl JsLoader {
                 });
             }
 
-            Ok::<(), LoaderError>(())
-        });
-
-        init_outcome?;
-
-        let registration_data: JsRegistrationData = registration_slot
-            .borrow_mut()
-            .take()
-            .ok_or_else(|| LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: "JS runtime js-quickjs error: polyplug_init did not call registerVtable"
-                    .to_owned(),
+            // Read registrations[0] — the loader registers a single contract per
+            // bundle (the single-JsLoaderData / single-live-entry model), exactly as
+            // the old registerVtable path did.
+            let registrations: Array<'_> = init_value.get::<Array<'_>>(0).map_err(|_| {
+                LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: "JS runtime js-quickjs error: polyplug_init did not return a registrations array"
+                        .to_owned(),
+                }
+            })?;
+            let entry: Object<'_> = registrations.get::<Object<'_>>(0).map_err(|_| {
+                LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: "JS runtime js-quickjs error: polyplug_init returned an empty registrations array"
+                        .to_owned(),
+                }
             })?;
 
-        // Build the stateless default impl once via the factory. It serves dispatch
-        // on a null instance handle (low-level / host-caller paths). Done before `ctx`
-        // is moved into the JsLoaderData below.
-        let default_impl: Persistent<Value<'static>> = {
-            let built: Result<Persistent<Value<'static>>, rquickjs::Error> =
-                ctx.with(|ctx_ref: Ctx<'_>| {
-                    let factory: Function<'_> =
-                        registration_data.factory.clone().restore(&ctx_ref)?;
-                    let impl_val: Value<'_> = factory.call::<(), Value<'_>>(())?;
-                    Ok(Persistent::save(&ctx_ref, impl_val))
-                });
-            match built {
-                Ok(p) => p,
-                Err(e) => {
-                    return Err(LoaderError::InitFailed {
+            let contract_lo: u32 = entry.get::<&str, f64>("contractLo").unwrap_or(0.0_f64) as u32;
+            let contract_hi: u32 = entry.get::<&str, f64>("contractHi").unwrap_or(0.0_f64) as u32;
+            let contract_id: u64 = (contract_hi as u64) << 32 | contract_lo as u64;
+            let fn_count: u32 = entry.get::<&str, f64>("fnCount").unwrap_or(0.0_f64) as u32;
+            let fn_count_usize: usize = fn_count as usize;
+            let contract_name: String =
+                entry.get::<&str, String>("contractName").map_err(|_| {
+                    LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: "JS runtime js-quickjs error: registration entry missing contractName"
+                            .to_owned(),
+                    }
+                })?;
+            let contract_version: u32 =
+                entry.get::<&str, f64>("version").unwrap_or(0.0_f64) as u32;
+
+            let interface: Object<'_> = entry.get::<&str, Object<'_>>("interface").map_err(|_| {
+                LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: "JS runtime js-quickjs error: registration entry missing interface"
+                        .to_owned(),
+                }
+            })?;
+
+            let functions_array: Object<'_> = interface
+                .get::<&str, Object<'_>>("functions")
+                .map_err(|_| LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "JS runtime js-quickjs error: interface for contract '{contract_name}' has no 'functions' array"
+                    ),
+                })?;
+            let mut functions: Vec<Persistent<Function<'static>>> =
+                Vec::with_capacity(fn_count_usize);
+            for i in 0..fn_count_usize {
+                let func: Function<'_> = functions_array
+                    .get::<u32, Function<'_>>(i as u32)
+                    .map_err(|_| LoaderError::InitFailed {
                         bundle: manifest.name.clone(),
                         error: format!(
-                            "JS runtime js-quickjs error: default impl factory call failed: {e}"
+                            "JS runtime js-quickjs error: interface for contract '{contract_name}' declares fnCount={fn_count} but functions[{i}] is missing or not a function"
                         ),
-                    });
-                }
+                    })?;
+                functions.push(Persistent::save(&ctx_ref, func));
             }
-        };
+
+            let factory_fn: Function<'_> = interface
+                .get::<&str, Function<'_>>("factory")
+                .map_err(|_| LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "JS runtime js-quickjs error: interface for contract '{contract_name}' has no 'factory' function (call setXFactory before registering)"
+                    ),
+                })?;
+            let factory: Persistent<Function<'static>> = Persistent::save(&ctx_ref, factory_fn);
+
+            // Persist the bridge so dispatch / create_instance can thread it; build
+            // the stateless default impl once via the factory, passing (bridge,
+            // host_lo, host_hi). It serves dispatch on a null instance handle.
+            let bridge: Persistent<Object<'static>> = Persistent::save(&ctx_ref, polyplug_obj.clone());
+            let impl_val: Value<'_> = factory
+                .clone()
+                .restore(&ctx_ref)
+                .and_then(|f: Function<'_>| {
+                    f.call::<(Object<'_>, f64, f64), Value<'_>>((polyplug_obj, host_lo, host_hi))
+                })
+                .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "JS runtime js-quickjs error: default impl factory call failed: {e}"
+                    ),
+                })?;
+            let default_impl: Persistent<Value<'static>> = Persistent::save(&ctx_ref, impl_val);
+
+            let registration_data: JsRegistrationData = JsRegistrationData {
+                contract_id,
+                contract_version,
+                contract_name,
+                functions,
+                factory,
+            };
+            Ok((registration_data, bridge, default_impl))
+        });
+
+        let (registration_data, bridge, default_impl): InitExtract = init_extract?;
 
         let loader_data: SendVm = SendVm(Box::new(JsLoaderData {
             functions: registration_data.functions,
             factory: registration_data.factory,
+            bridge,
+            host_lo,
+            host_hi,
             default_impl,
             instances: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -2046,12 +1971,16 @@ mod tests {
         let contract_hi: u32 = (contract_id >> 32) as u32;
         format!(
             r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
-    var vtable = {{
-        factory: function() {{ return {{}}; }},
-        functions: [ function(impl, args, out) {{ return 0; }} ]
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    var iface = {{
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
+        functions: [ function(impl, args, out, arena, bridge) {{ return 0; }} ]
     }};
-    polyplug.registerVtable({contract_lo}, {contract_hi}, vtable, 1, "{contract_name}", 0x00010000);
+    var registrations = [{{
+        contractLo: {contract_lo}, contractHi: {contract_hi}, interface: iface,
+        fnCount: 1, contractName: "{contract_name}", version: 0x00010000
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#
         )
@@ -2312,16 +2241,20 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         let contract_hi: u32 = (contract_id >> 32) as u32;
         let bundle_js: String = format!(
             r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
-    var vtable = {{
-        factory: function() {{ return {{}}; }},
-        functions: [ function(impl, args_ptr, out_ptr) {{
-            var v = polyplug.readF64(args_ptr);
-            polyplug.writeF64(out_ptr, v * 2.0 + 0.25);
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    var iface = {{
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
+        functions: [ function(impl, args_ptr, out_ptr, arena, bridge) {{
+            var v = bridge.readF64(args_ptr);
+            bridge.writeF64(out_ptr, v * 2.0 + 0.25);
             return 0;
         }} ]
     }};
-    polyplug.registerVtable({contract_lo}, {contract_hi}, vtable, 1, "test.float@1", 0x00010000);
+    var registrations = [{{
+        contractLo: {contract_lo}, contractHi: {contract_hi}, interface: iface,
+        fnCount: 1, contractName: "test.float@1", version: 0x00010000
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#
         );
@@ -2399,24 +2332,36 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         ctx: Context,
         functions: Vec<Persistent<Function<'static>>>,
     ) -> (VmLoaderData, &'static JsLoaderData) {
-        // A trivial factory + default impl: the dispatch tests pass a null instance
-        // handle, so dispatch resolves the default impl. The test guest functions
-        // ignore the impl argument, so an empty object suffices.
-        let (factory, default_impl): (Persistent<Function<'static>>, Persistent<Value<'static>>) =
-            ctx.with(|ctx_ref: Ctx<'_>| {
-                let factory_fn: Function<'_> = ctx_ref
-                    .eval::<Function<'_>, _>("(function() { return {}; })")
-                    .expect("factory eval should produce a function");
-                let default_obj: Object<'_> =
-                    Object::new(ctx_ref.clone()).expect("default impl object creation");
-                (
-                    Persistent::save(&ctx_ref, factory_fn),
-                    Persistent::save(&ctx_ref, default_obj.into_value()),
-                )
-            });
+        // A trivial factory + default impl + empty bridge: the dispatch tests pass a
+        // null instance handle, so dispatch resolves the default impl, and the test
+        // guest functions ignore the impl/bridge arguments, so an empty object
+        // suffices for both. The bridge is threaded as the final dispatch argument
+        // (no global — Rule 12); these tests don't call host functions through it.
+        type LoaderParts = (
+            Persistent<Function<'static>>,
+            Persistent<Value<'static>>,
+            Persistent<Object<'static>>,
+        );
+        let (factory, default_impl, bridge): LoaderParts = ctx.with(|ctx_ref: Ctx<'_>| {
+            let factory_fn: Function<'_> = ctx_ref
+                .eval::<Function<'_>, _>("(function(bridge, hostLo, hostHi) { return {}; })")
+                .expect("factory eval should produce a function");
+            let default_obj: Object<'_> =
+                Object::new(ctx_ref.clone()).expect("default impl object creation");
+            let bridge_obj: Object<'_> =
+                Object::new(ctx_ref.clone()).expect("bridge object creation");
+            (
+                Persistent::save(&ctx_ref, factory_fn),
+                Persistent::save(&ctx_ref, default_obj.into_value()),
+                Persistent::save(&ctx_ref, bridge_obj),
+            )
+        });
         let boxed: Box<JsLoaderData> = Box::new(JsLoaderData {
             functions,
             factory,
+            bridge,
+            host_lo: 0.0,
+            host_hi: 0.0,
             default_impl,
             instances: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),

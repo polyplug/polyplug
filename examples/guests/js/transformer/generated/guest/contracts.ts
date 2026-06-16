@@ -10,6 +10,24 @@ const DispatchType = Object.freeze({
     VirtualMachine: 1,
 } as const);
 
+// UTF-8 encoder usable in QuickJS (where TextEncoder is absent).
+function _ppEncodeUtf8(str: string): Uint8Array {
+    if (typeof TextEncoder !== 'undefined') { return new TextEncoder().encode(str); }
+    const out: number[] = [];
+    for (let i = 0; i < str.length; i++) {
+        let code = str.charCodeAt(i);
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            const low = str.charCodeAt(++i);
+            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+        }
+        if (code < 0x80) { out.push(code); }
+        else if (code < 0x800) { out.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F)); }
+        else if (code < 0x10000) { out.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }
+        else { out.push(0xF0 | (code >> 18), 0x80 | ((code >> 12) & 0x3F), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }
+    }
+    return new Uint8Array(out);
+}
+
 // Plugin: transformer (data.Transformer@1)
 //   transform(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
@@ -18,8 +36,8 @@ export const TRANSFORMER_INTERFACE = {
     contractHi: 0x47759913,
     dispatchType: DispatchType.VirtualMachine,
     fnCount: 1,
-    functions: [] as ((impl: any, args_ptr: number, out_ptr: number) => number)[],
-    factory: null as null | (() => any),
+    functions: [] as ((impl: any, args_ptr: number, out_ptr: number, arena_ptr: number, bridge: any) => number)[],
+    factory: null as null | ((bridge: any, hostLo: number, hostHi: number) => any),
     contractName: "data.Transformer@1",
     version: 0x00010000,
 };
@@ -30,26 +48,30 @@ export const TRANSFORMER_DESCRIPTOR = {
     version: { major: 1, minor: 0, patch: 0 }
 };
 
-function transformer_fn0_abi_wrapper(impl: any, args_ptr: number, out_ptr: number): number {
+function transformer_fn0_abi_wrapper(impl: any, args_ptr: number, out_ptr: number, arena_ptr: number, bridge: any): number {
     // SAFETY: args_ptr and out_ptr are valid addresses passed as f64
     // by the loader. readU32/writeU32 accept f64 and convert to usize.
     // `impl` is the per-instance impl object the loader resolved for this
     // call (built by the factory); the loader passes it as the first argument.
-    var polyplug = (globalThis as any).polyplug;
+    const polyplug = bridge;
     if (!polyplug) return 1;
     if (!impl) return 1;
     if (!args_ptr) return 8;
     if (!out_ptr) return 8;
     var arg_input = { ptr_lo: polyplug.readU32(args_ptr), ptr_hi: polyplug.readU32(args_ptr + 4), len: polyplug.readU32(args_ptr + 8) };
     var result = impl.fn0(arg_input);
-    polyplug.writeU32(out_ptr, result.ptr_lo);
-    polyplug.writeU32(out_ptr + 4, result.ptr_hi);
-    polyplug.writeU32(out_ptr + 8, result.len);
+    const _retBytes = _ppEncodeUtf8(result);
+    const _retBuf = polyplug.arenaAlloc(_retBytes.length > 0 ? _retBytes.length : 1, arena_ptr);
+    const _retPtr = _retBuf[0] + _retBuf[1] * 4294967296;
+    for (let _i = 0; _i < _retBytes.length; _i++) { polyplug.writeByte(_retPtr + _i, _retBytes[_i]); }
+    polyplug.writeU32(out_ptr, _retBuf[0]);
+    polyplug.writeU32(out_ptr + 4, _retBuf[1]);
+    polyplug.writeU32(out_ptr + 8, _retBytes.length);
     polyplug.writeU32(out_ptr + 12, 0);
     return 0;
 }
 
-export function setTransformerFactory(factory: () => { fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number } }): void {
+export function setTransformerFactory(factory: (bridge: any, hostLo: number, hostHi: number) => { fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => string }): void {
     TRANSFORMER_INTERFACE.factory = factory;
     TRANSFORMER_INTERFACE.functions = [transformer_fn0_abi_wrapper];
 }

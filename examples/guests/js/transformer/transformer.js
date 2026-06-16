@@ -1,31 +1,21 @@
 import { setTransformerFactory } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
-import { toStr, allocStringArena } from '../../../../sdks/js/guest/polyplug_guest.js';
+import { toStr } from '../../../../sdks/js/guest/polyplug_guest.js';
 
-function transform(input) {
-    const s = toStr(input);
-    const data = s.startsWith('DECODED:') ? s.slice('DECODED:'.length) : s;
-    const parts = data.split('|');
-    
-    if (parts.length >= 3) {
-        const name = parts[0].toUpperCase();
-        const value = `${parts[1]} (transformed)`;
-        const count = parseInt(parts[2], 10) || 0;
-        const result = allocStringArena(`TRANSFORMED:${name}|${value}|${count + 1}`);
-        
-        const ptrLo = Number(result.ptr & 0xFFFFFFFFn);
-        const ptrHi = Number((result.ptr >> 32n) & 0xFFFFFFFFn);
-        
-        return {
-            ptr_lo: ptrLo,
-            ptr_hi: ptrHi,
-            len: result.len
-        };
+setTransformerFactory((bridge, hostLo, hostHi) => ({
+    fn0: (input) => {
+        const s = toStr(bridge, input);
+        const data = s.startsWith('DECODED:') ? s.slice('DECODED:'.length) : s;
+        const parts = data.split('|');
+
+        if (parts.length >= 3) {
+            const name = parts[0].toUpperCase();
+            const value = `${parts[1]} (transformed)`;
+            const count = parseInt(parts[2], 10) || 0;
+            return `TRANSFORMED:${name}|${value}|${count + 1}`;
+        }
+        return 'INVALID:format';
     }
-    
-    return { ptr_lo: 0, ptr_hi: 0, len: 0 };
-}
-
-setTransformerFactory(() => ({ fn0: transform }));
+}));
 
 export { polyplug_init };

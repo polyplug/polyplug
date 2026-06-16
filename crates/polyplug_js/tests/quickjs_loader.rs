@@ -37,7 +37,7 @@ fn make_bundle_js(contract_id: u64, fn_count: u32, contract_name: &str) -> Strin
     let contract_hi: u32 = (contract_id >> 32) as u32;
     format!(
         r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "{contract_name}",
@@ -45,25 +45,26 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         versionMinor: 1,
         versionPatch: 0
     }};
-    var vtable = {{
+    var iface = {{
         contractLo: {contract_lo},
         contractHi: {contract_hi},
         fnCount: {fn_count},
         contractName: "{contract_name}",
         version: 0x00010000,
-        factory: function() {{ return {{}}; }},
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
         functions: [
-            function(impl, args, out) {{ return 0; }}
+            function(impl, args, out, arena, bridge) {{ return 0; }}
         ]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName,
-        vtable.version
-    );
+    var registrations = [{{
+        contractLo: iface.contractLo,
+        contractHi: iface.contractHi,
+        interface: iface,
+        fnCount: iface.fnCount,
+        contractName: iface.contractName,
+        version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#
     )
@@ -245,7 +246,7 @@ fn load_bundle_with_functions_registers_correct_count() {
     // Bundle with 3 functions
     let bundle: String = format!(
         r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "test.math",
@@ -253,27 +254,28 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         versionMinor: 1,
         versionPatch: 0
     }};
-    var vtable = {{
+    var iface = {{
         contractLo: {},
         contractHi: {},
         fnCount: {},
         contractName: "test.math",
         version: 0x00010000,
-        factory: function() {{ return {{}}; }},
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
         functions: [
-            function(impl, args, out) {{ return 0; }},
-            function(impl, args, out) {{ return 0; }},
-            function(impl, args, out) {{ return 0; }}
+            function(impl, args, out, arena, bridge) {{ return 0; }},
+            function(impl, args, out, arena, bridge) {{ return 0; }},
+            function(impl, args, out, arena, bridge) {{ return 0; }}
         ]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName,
-        vtable.version
-    );
+    var registrations = [{{
+        contractLo: iface.contractLo,
+        contractHi: iface.contractHi,
+        interface: iface,
+        fnCount: iface.fnCount,
+        contractName: iface.contractName,
+        version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#,
         contract_id as u32,
@@ -499,7 +501,7 @@ fn bundle_path_global_is_injected() {
 if (typeof globalThis.bundlePath !== 'string') {{
     throw new Error('bundlePath not injected');
 }}
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "test.bundlepath",
@@ -507,23 +509,24 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         versionMinor: 1,
         versionPatch: 0
     }};
-    var vtable = {{
+    var iface = {{
         contractLo: {},
         contractHi: {},
         fnCount: 1,
         contractName: "test.bundlepath",
         version: 0x00010000,
-        factory: function() {{ return {{}}; }},
-        functions: [function(impl, args, out) {{ return 0; }}]
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
+        functions: [function(impl, args, out, arena, bridge) {{ return 0; }}]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName,
-        vtable.version
-    );
+    var registrations = [{{
+        contractLo: iface.contractLo,
+        contractHi: iface.contractHi,
+        interface: iface,
+        fnCount: iface.fnCount,
+        contractName: iface.contractName,
+        version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#,
         contract_id as u32,
@@ -550,19 +553,21 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
 
 #[test]
 fn polyplug_object_has_expected_methods() {
-    // Verify all expected host methods are present on the polyplug global.
+    // Verify all expected host methods are present on the bridge object the loader
+    // threads into polyplug_init (no `polyplug` global exists — Rule 12), so the
+    // check runs INSIDE polyplug_init against the `bridge` argument.
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.methods", 1);
 
     let bundle: String = format!(
         r#"
-var methods = ['findByContract', 'findByBundle', 'findAllByContract',
-                'resolveGuestContract', 'callHostContract', 'registerVtable', 'alloc', 'free'];
-for (var i = 0; i < methods.length; i++) {{
-    if (typeof polyplug[methods[i]] !== 'function') {{
-        throw new Error('missing method: ' + methods[i]);
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    var methods = ['findByContract', 'findByBundle', 'findAllByContract',
+                    'resolveGuestContract', 'callHostContract', 'alloc', 'free'];
+    for (var i = 0; i < methods.length; i++) {{
+        if (typeof bridge[methods[i]] !== 'function') {{
+            throw new Error('missing method: ' + methods[i]);
+        }}
     }}
-}}
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "test.methods",
@@ -570,23 +575,24 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         versionMinor: 1,
         versionPatch: 0
     }};
-    var vtable = {{
+    var iface = {{
         contractLo: {},
         contractHi: {},
         fnCount: 1,
         contractName: "test.methods",
         version: 0x00010000,
-        factory: function() {{ return {{}}; }},
-        functions: [function(impl, args, out) {{ return 0; }}]
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
+        functions: [function(impl, args, out, arena, bridge) {{ return 0; }}]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName,
-        vtable.version
-    );
+    var registrations = [{{
+        contractLo: iface.contractLo,
+        contractHi: iface.contractHi,
+        interface: iface,
+        fnCount: iface.fnCount,
+        contractName: iface.contractName,
+        version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#,
         contract_id as u32,
@@ -647,7 +653,7 @@ fn vtable_uses_vm_dispatch() {
 
     let bundle: String = format!(
         r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "test.vm_dispatch",
@@ -655,26 +661,27 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         versionMinor: 1,
         versionPatch: 0
     }};
-    var vtable = {{
+    var iface = {{
         contractLo: {},
         contractHi: {},
         fnCount: {},
         contractName: "test.vm_dispatch",
         version: 0x00010000,
-        factory: function() {{ return {{}}; }},
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
         functions: [
-            function(impl, args, out) {{ return 0; }},
-            function(impl, args, out) {{ return 0; }}
+            function(impl, args, out, arena, bridge) {{ return 0; }},
+            function(impl, args, out, arena, bridge) {{ return 0; }}
         ]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName,
-        vtable.version
-    );
+    var registrations = [{{
+        contractLo: iface.contractLo,
+        contractHi: iface.contractHi,
+        interface: iface,
+        fnCount: iface.fnCount,
+        contractName: iface.contractName,
+        version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#,
         contract_id as u32,
@@ -728,13 +735,14 @@ fn js_alloc_and_free_calls_host_vtable() {
     // — the size/align must match the allocation so the host actually frees it.
     let bundle: String = format!(
         r#"
-var result = polyplug.alloc(64);
-var ptr_lo = result[0];
-var ptr_hi = result[1];
-if (ptr_lo !== 0 || ptr_hi !== 0) {{
-    polyplug.free(ptr_lo, ptr_hi, 64, 1);
-}}
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    // alloc/free run through the threaded bridge (no `polyplug` global — Rule 12).
+    var result = bridge.alloc(64);
+    var ptr_lo = result[0];
+    var ptr_hi = result[1];
+    if (ptr_lo !== 0 || ptr_hi !== 0) {{
+        bridge.free(ptr_lo, ptr_hi, 64, 1);
+    }}
     var descriptor = {{
         name: "js-quickjs-plugin",
         contractName: "test.memory",
@@ -742,23 +750,24 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
         versionMinor: 1,
         versionPatch: 0
     }};
-    var vtable = {{
+    var iface = {{
         contractLo: {},
         contractHi: {},
         fnCount: 1,
         contractName: "test.memory",
         version: 0x00010000,
-        factory: function() {{ return {{}}; }},
-        functions: [function(impl, args, out) {{ return 0; }}]
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
+        functions: [function(impl, args, out, arena, bridge) {{ return 0; }}]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName,
-        vtable.version
-    );
+    var registrations = [{{
+        contractLo: iface.contractLo,
+        contractHi: iface.contractHi,
+        interface: iface,
+        fnCount: iface.fnCount,
+        contractName: iface.contractName,
+        version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#,
         contract_id as u32,
@@ -1050,25 +1059,25 @@ if (result === '') {{
     throw new Error("expected empty string, got: " + result);
 }}
 
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
-    var vtable = {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    var iface = {{
         contractLo: {},
         contractHi: {},
         fnCount: 1,
         contractName: "test.stringview.empty",
         version: 0x00010000,
-        factory: function() {{ return {{}}; }},
-        functions: [function(impl, args, out) {{ return 0; }}]
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
+        functions: [function(impl, args, out, arena, bridge) {{ return 0; }}]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName,
-        vtable.version
-    );
-    return {{ code: 0, message: null }};
+    var registrations = [{{
+        contractLo: iface.contractLo,
+        contractHi: iface.contractHi,
+        interface: iface,
+        fnCount: iface.fnCount,
+        contractName: iface.contractName,
+        version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#,
         contract_id as u32,
@@ -1159,7 +1168,7 @@ fn js_reload_reinitializes_contracts() {
 
 /// After a successful load, the contract must be attributed to the bundle's REAL
 /// id in the registry — not bundle 0. The JS `register_guest_contract` call runs
-/// after `polyplug_init` stashes its registration data, so the init-bundle window
+/// after `polyplug_init` RETURNS its registrations array, so the init-bundle window
 /// must stay open across that call for `host_register_guest_contract` to attribute
 /// it correctly. Invalidating by the real id must then remove it.
 #[test]
@@ -1451,9 +1460,10 @@ fn leak_counting_host_contract(contract_id: u64, major: u32) -> &'static HostCon
 }
 
 /// Inline JS bundle whose single guest function calls
-/// `polyplug.callHostContract(lo, hi, minVer, fnId, argsPtr, outPtr)` and returns
-/// the host call's AbiError code. The guest contract id / name are parameterised
-/// so each test registers a distinct contract.
+/// `bridge.callHostContract(lo, hi, minVer, fnId, argsPtr, outPtr)` and returns
+/// the host call's AbiError code. The bridge is threaded into the dispatch wrapper
+/// as its final argument (no `polyplug` global — Rule 12). The guest contract id /
+/// name are parameterised so each test registers a distinct contract.
 fn host_caller_bundle_source(
     guest_contract_id: u64,
     guest_name: &str,
@@ -1466,27 +1476,31 @@ fn host_caller_bundle_source(
     let host_hi: u32 = (host_contract_id >> 32) as u32;
     format!(
         r#"
-function callHost(impl, argsPtr, outPtr) {{
+function callHost(impl, argsPtr, outPtr, arena, bridge) {{
     // callHostContract(contractLo, contractHi, minVersion, fnId, argsPtr, outPtr).
     // minVersion is the PACKED version (major << 16 | minor); major 1 -> 0x10000.
-    return polyplug.callHostContract({host_lo}, {host_hi}, 0x10000, {host_fn_id}, argsPtr, outPtr);
+    return bridge.callHostContract({host_lo}, {host_hi}, 0x10000, {host_fn_id}, argsPtr, outPtr);
 }}
 
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
-    var vtable = {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    var iface = {{
         contractLo: {guest_lo} >>> 0,
         contractHi: {guest_hi} >>> 0,
         fnCount: 1,
         contractName: "{guest_name}",
         version: 0x10000,
-        factory: function() {{ return {{}}; }},
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
         functions: [callHost]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo, vtable.contractHi, vtable,
-        vtable.fnCount, vtable.contractName, vtable.version
-    );
-    return {{ code: 0, message: null }};
+    var registrations = [{{
+        contractLo: iface.contractLo,
+        contractHi: iface.contractHi,
+        interface: iface,
+        fnCount: iface.fnCount,
+        contractName: iface.contractName,
+        version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#
     )
@@ -1645,10 +1659,10 @@ fn make_manifest_named(name: &str) -> ManifestData {
     }
 }
 
-// ── Guest logging — the injected `polyplug.log` bridge ───────────────────────
+// ── Guest logging — the threaded `bridge.log` capability ─────────────────────
 
-/// A guest calling the loader-injected `polyplug.log(level, scope, message)`
-/// bridge mid-dispatch must deliver (level, scope, message) verbatim through
+/// A guest calling the threaded `bridge.log(level, scope, message)` capability
+/// mid-dispatch must deliver (level, scope, message) verbatim through
 /// the host logger installed via `RuntimeBuilder::logger`, and an out-of-range
 /// level must clamp to `LogLevel::Error`. The bridge runs inside `js_dispatch`'s
 /// `Context::with` (the QuickJS VM lock is held by the calling thread) — this
@@ -1660,30 +1674,31 @@ fn guest_log_bridge_delivers_records_and_clamps_level() {
     let contract_hi: u32 = (contract_id >> 32) as u32;
     let bundle: String = format!(
         r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
-    var vtable = {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    var iface = {{
         contractLo: {contract_lo},
         contractHi: {contract_hi},
         fnCount: 1,
         contractName: "test.guest.log",
         version: 0x00010000,
-        factory: function() {{ return {{}}; }},
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
         functions: [
-            function(impl, args, out) {{
-                polyplug.log(3, "guest.test-log", "hello from js guest");
-                polyplug.log(99, "guest.test-log", "out of range level");
+            function(impl, args, out, arena, bridge) {{
+                bridge.log(3, "guest.test-log", "hello from js guest");
+                bridge.log(99, "guest.test-log", "out of range level");
                 return 0;
             }}
         ]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName,
-        vtable.version
-    );
+    var registrations = [{{
+        contractLo: iface.contractLo,
+        contractHi: iface.contractHi,
+        interface: iface,
+        fnCount: iface.fnCount,
+        contractName: iface.contractName,
+        version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#
     );
@@ -1772,13 +1787,16 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
 #[test]
 fn load_init_returning_error_code_fails_load() {
     let bundle: &str = r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
-    var vtable = {
-        factory: function() { return {}; },
-        functions: [function(impl, args, out) { return 0; }]
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {
+    var iface = {
+        factory: function(bridge, hostLo, hostHi) { return {}; },
+        functions: [function(impl, args, out, arena, bridge) { return 0; }]
     };
-    polyplug.registerVtable(0x1, 0x0, vtable, 1, "test.initerr", 0x00010000);
-    return { code: 1, message: "init refused" };
+    var registrations = [{
+        contractLo: 0x1, contractHi: 0x0, interface: iface,
+        fnCount: 1, contractName: "test.initerr", version: 0x00010000
+    }];
+    return [registrations, { code: 1, message: "init refused" }];
 }
 "#;
     let (_dir, path) = write_temp_bundle_with_name(bundle, "test.initerr");
@@ -1801,17 +1819,21 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
     );
 }
 
-/// A bare numeric non-zero return from `polyplug_init` is also honored.
+/// A non-zero AbiError `code` in the `[registrations, abiError]` return fails the
+/// load even when no `message` is provided, surfacing the bare code.
 #[test]
-fn load_init_returning_bare_error_number_fails_load() {
+fn load_init_returning_error_code_without_message_fails_load() {
     let bundle: &str = r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
-    var vtable = {
-        factory: function() { return {}; },
-        functions: [function(impl, args, out) { return 0; }]
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {
+    var iface = {
+        factory: function(bridge, hostLo, hostHi) { return {}; },
+        functions: [function(impl, args, out, arena, bridge) { return 0; }]
     };
-    polyplug.registerVtable(0x2, 0x0, vtable, 1, "test.initnum", 0x00010000);
-    return 3;
+    var registrations = [{
+        contractLo: 0x2, contractHi: 0x0, interface: iface,
+        fnCount: 1, contractName: "test.initnum", version: 0x00010000
+    }];
+    return [registrations, { code: 3, message: "" }];
 }
 "#;
     let (_dir, path) = write_temp_bundle_with_name(bundle, "test.initnum");
@@ -1826,10 +1848,10 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
     );
     assert!(
         result.is_err(),
-        "bare non-zero init number must fail the load"
+        "non-zero init code must fail the load even without a message"
     );
     let err_str: String = result
-        .expect_err("expected Err for bare non-zero init number")
+        .expect_err("expected Err for non-zero init code")
         .to_string();
     assert!(
         err_str.contains("returned error code 3"),
@@ -1837,17 +1859,20 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
     );
 }
 
-// ── registerVtable malformed vtables ──────────────────────────────────────────
+// ── malformed registration interfaces ─────────────────────────────────────────
 
-/// A vtable without a `functions` array must fail the load with a precise
-/// error naming the missing field — not the misleading generic
-/// "polyplug_init did not call registerVtable".
+/// A registration whose `interface` lacks a `functions` array must fail the load
+/// with a precise error naming the missing field.
 #[test]
-fn register_vtable_without_functions_array_fails_precisely() {
+fn register_interface_without_functions_array_fails_precisely() {
     let bundle: &str = r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
-    polyplug.registerVtable(0x3, 0x0, { notFunctions: [] }, 1, "test.malformed", 0x00010000);
-    return { code: 0, message: null };
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {
+    var registrations = [{
+        contractLo: 0x3, contractHi: 0x0,
+        interface: { notFunctions: [], factory: function(bridge, hostLo, hostHi) { return {}; } },
+        fnCount: 1, contractName: "test.malformed", version: 0x00010000
+    }];
+    return [registrations, { code: 0, message: "" }];
 }
 "#;
     let (_dir, path) = write_temp_bundle_with_name(bundle, "test.malformed");
@@ -1860,32 +1885,31 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
         &polyplug::loader::BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
-    assert!(result.is_err(), "malformed vtable must fail the load");
+    assert!(result.is_err(), "malformed interface must fail the load");
     let err_str: String = result
-        .expect_err("expected Err for malformed vtable")
+        .expect_err("expected Err for malformed interface")
         .to_string();
     assert!(
         err_str.contains("no 'functions' array"),
         "error must name the missing functions array, got: {err_str}"
     );
-    assert!(
-        !err_str.contains("did not call registerVtable"),
-        "error must not blame the bundle for skipping registerVtable, got: {err_str}"
-    );
 }
 
-/// A vtable whose declared fnCount exceeds the functions array must fail
+/// A registration whose declared fnCount exceeds the functions array must fail
 /// the load naming the missing index.
 #[test]
-fn register_vtable_with_short_functions_array_fails_precisely() {
+fn register_interface_with_short_functions_array_fails_precisely() {
     let bundle: &str = r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {
-    var vtable = {
-        factory: function() { return {}; },
-        functions: [function(impl, args, out) { return 0; }]
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {
+    var iface = {
+        factory: function(bridge, hostLo, hostHi) { return {}; },
+        functions: [function(impl, args, out, arena, bridge) { return 0; }]
     };
-    polyplug.registerVtable(0x4, 0x0, vtable, 2, "test.short", 0x00010000);
-    return { code: 0, message: null };
+    var registrations = [{
+        contractLo: 0x4, contractHi: 0x0, interface: iface,
+        fnCount: 2, contractName: "test.short", version: 0x00010000
+    }];
+    return [registrations, { code: 0, message: "" }];
 }
 "#;
     let (_dir, path) = write_temp_bundle_with_name(bundle, "test.short");

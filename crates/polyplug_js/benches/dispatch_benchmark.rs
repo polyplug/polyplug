@@ -708,27 +708,29 @@ fn bench_dispatch_comparison(c: &mut Criterion) {
 }
 
 /// Build a minimal QuickJS bundle that registers `test.reload.contract@1` with a
-/// single no-op function via `polyplug.registerVtable` — the same registration
-/// shape the loader's reload integration test uses.
+/// single no-op function by RETURNING `[registrations, abiError]` — the same
+/// registration shape the loader's reload integration test uses (the bridge is
+/// threaded in, not read from a global — Rule 12).
 fn make_reload_bundle_js(contract_id: u64, contract_name: &str) -> String {
     let contract_lo: u32 = contract_id as u32;
     let contract_hi: u32 = (contract_id >> 32) as u32;
     format!(
         r#"
-function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi) {{
-    var vtable = {{
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    var iface = {{
         contractLo: {contract_lo},
         contractHi: {contract_hi},
         fnCount: 1,
         contractName: "{contract_name}",
         version: 0x00010000,
-        factory: function() {{ return {{}}; }},
-        functions: [ function(impl, args, out) {{ return 0; }} ]
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
+        functions: [ function(impl, args, out, arena, bridge) {{ return 0; }} ]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo, vtable.contractHi, vtable,
-        vtable.fnCount, vtable.contractName, vtable.version
-    );
+    var registrations = [{{
+        contractLo: iface.contractLo, contractHi: iface.contractHi, interface: iface,
+        fnCount: iface.fnCount, contractName: iface.contractName, version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#
     )

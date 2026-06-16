@@ -76,48 +76,45 @@ fn write_js_bundle(dir: &std::path::Path, name: &str, js_src: &str, provides: &s
 fn provider_js_src(peer_lo: u32, peer_hi: u32) -> String {
     format!(
         r#"
-function echo(impl, argsPtr, outPtr) {{
+function echo(impl, argsPtr, outPtr, arena, bridge) {{
     try {{
-        var polyplug = globalThis.polyplug;
-        var inLo  = polyplug.readU32(argsPtr);
-        var inHi  = polyplug.readU32(argsPtr + 4);
-        var inLen = polyplug.readU32(argsPtr + 8);
+        var inLo  = bridge.readU32(argsPtr);
+        var inHi  = bridge.readU32(argsPtr + 4);
+        var inLen = bridge.readU32(argsPtr + 8);
         var inAddr = inHi * 0x100000000 + inLo;
 
         var prefix = "PEER:";
         var totalLen = prefix.length + inLen;
-        var outBuf = polyplug.arenaAlloc(totalLen === 0 ? 1 : totalLen);
+        var outBuf = bridge.arenaAlloc(totalLen === 0 ? 1 : totalLen, arena);
         var outAddr = outBuf[1] * 0x100000000 + outBuf[0];
 
         for (var i = 0; i < prefix.length; i++) {{
-            polyplug.writeByte(outAddr + i, prefix.charCodeAt(i));
+            bridge.writeByte(outAddr + i, prefix.charCodeAt(i));
         }}
         for (var j = 0; j < inLen; j++) {{
-            polyplug.writeByte(outAddr + prefix.length + j, polyplug.readByte(inAddr + j));
+            bridge.writeByte(outAddr + prefix.length + j, bridge.readByte(inAddr + j));
         }}
 
-        polyplug.writeU32(outPtr,      outBuf[0]);
-        polyplug.writeU32(outPtr + 4,  outBuf[1]);
-        polyplug.writeU32(outPtr + 8,  totalLen);
-        polyplug.writeU32(outPtr + 12, 0);
+        bridge.writeU32(outPtr,      outBuf[0]);
+        bridge.writeU32(outPtr + 4,  outBuf[1]);
+        bridge.writeU32(outPtr + 8,  totalLen);
+        bridge.writeU32(outPtr + 12, 0);
         return 0;
     }} catch (e) {{
         return 1;
     }}
 }}
 
-function polyplug_init(rt_ctx, host_vtable, ctx) {{
-    polyplug.registerVtable(
-        {peer_lo} >>> 0,
-        {peer_hi} >>> 0,
-        {{ contractLo: {peer_lo} >>> 0, contractHi: {peer_hi} >>> 0, fnCount: 1,
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    var registrations = [{{
+        contractLo: {peer_lo} >>> 0, contractHi: {peer_hi} >>> 0,
+        interface: {{ contractLo: {peer_lo} >>> 0, contractHi: {peer_hi} >>> 0, fnCount: 1,
            contractName: "test.peer", version: 0x10000,
-           factory: function() {{ return {{}}; }},
+           factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
            functions: [echo] }},
-        1,
-        "test.peer",
-        0x10000
-    );
+        fnCount: 1, contractName: "test.peer", version: 0x10000
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#,
         peer_lo = peer_lo,
@@ -139,62 +136,60 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
 fn consumer_js_src(peer_lo: u32, peer_hi: u32, consumer_lo: u32, consumer_hi: u32) -> String {
     format!(
         r#"
-function invoke(impl, argsPtr, outPtr) {{
+function invoke(impl, argsPtr, outPtr, arena, bridge) {{
     try {{
-        var polyplug = globalThis.polyplug;
-        if (!polyplug || !polyplug.callGuestMethod) {{ return 1; }}
+        if (!bridge || !bridge.callGuestMethod) {{ return 1; }}
 
         // Read the input StringView (ptr_lo@0, ptr_hi@4, len@8).
-        var inLo  = polyplug.readU32(argsPtr);
-        var inHi  = polyplug.readU32(argsPtr + 4);
-        var inLen = polyplug.readU32(argsPtr + 8);
+        var inLo  = bridge.readU32(argsPtr);
+        var inHi  = bridge.readU32(argsPtr + 4);
+        var inLen = bridge.readU32(argsPtr + 8);
 
-        // Allocate args buffer for the peer call (16 bytes = StringView + padding).
-        var aBuf = polyplug.arenaAlloc(16);
+        // Allocate args buffer for the peer call (16 bytes = StringView + padding)
+        // from THIS call's arena (threaded in as `arena` — no global).
+        var aBuf = bridge.arenaAlloc(16, arena);
         var aPtr = aBuf[0] + aBuf[1] * 4294967296;
-        polyplug.writeU32(aPtr,      inLo);
-        polyplug.writeU32(aPtr + 4,  inHi);
-        polyplug.writeU32(aPtr + 8,  inLen);
-        polyplug.writeU32(aPtr + 12, 0);
+        bridge.writeU32(aPtr,      inLo);
+        bridge.writeU32(aPtr + 4,  inHi);
+        bridge.writeU32(aPtr + 8,  inLen);
+        bridge.writeU32(aPtr + 12, 0);
 
         // Allocate out buffer for the peer's StringView result.
-        var oBuf = polyplug.arenaAlloc(16);
+        var oBuf = bridge.arenaAlloc(16, arena);
         var oPtr = oBuf[0] + oBuf[1] * 4294967296;
-        polyplug.writeU32(oPtr,      0);
-        polyplug.writeU32(oPtr + 4,  0);
-        polyplug.writeU32(oPtr + 8,  0);
-        polyplug.writeU32(oPtr + 12, 0);
+        bridge.writeU32(oPtr,      0);
+        bridge.writeU32(oPtr + 4,  0);
+        bridge.writeU32(oPtr + 8,  0);
+        bridge.writeU32(oPtr + 12, 0);
 
         // Call test.peer@1 fn_id 0 (echo) through the host-mediated bridge.
-        var errCode = polyplug.callGuestMethod({peer_lo}, {peer_hi}, 1, 0, aPtr, oPtr);
+        var errCode = bridge.callGuestMethod({peer_lo}, {peer_hi}, 1, 0, aPtr, oPtr);
         if (errCode !== 0) {{ return errCode; }}
 
         // Read back the StringView from the peer's output and write it to our out.
-        var rLo  = polyplug.readU32(oPtr);
-        var rHi  = polyplug.readU32(oPtr + 4);
-        var rLen = polyplug.readU32(oPtr + 8);
-        polyplug.writeU32(outPtr,      rLo);
-        polyplug.writeU32(outPtr + 4,  rHi);
-        polyplug.writeU32(outPtr + 8,  rLen);
-        polyplug.writeU32(outPtr + 12, 0);
+        var rLo  = bridge.readU32(oPtr);
+        var rHi  = bridge.readU32(oPtr + 4);
+        var rLen = bridge.readU32(oPtr + 8);
+        bridge.writeU32(outPtr,      rLo);
+        bridge.writeU32(outPtr + 4,  rHi);
+        bridge.writeU32(outPtr + 8,  rLen);
+        bridge.writeU32(outPtr + 12, 0);
         return 0;
     }} catch (e) {{
         return 1;
     }}
 }}
 
-function polyplug_init(rt_ctx, host_vtable, ctx) {{
-    polyplug.registerVtable(
-        {consumer_lo} >>> 0,
-        {consumer_hi} >>> 0,
-        {{ contractLo: {consumer_lo} >>> 0, contractHi: {consumer_hi} >>> 0, fnCount: 1,
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    var registrations = [{{
+        contractLo: {consumer_lo} >>> 0, contractHi: {consumer_hi} >>> 0,
+        interface: {{ contractLo: {consumer_lo} >>> 0, contractHi: {consumer_hi} >>> 0, fnCount: 1,
            contractName: "test.consumer", version: 0x10000,
-           factory: function() {{ return {{}}; }},
+           factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
            functions: [invoke] }},
-        1,
-        "test.consumer",
-        0x10000
-    );
+        fnCount: 1, contractName: "test.consumer", version: 0x10000
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#,
         peer_lo = peer_lo,

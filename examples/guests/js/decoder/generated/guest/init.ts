@@ -6,13 +6,6 @@ import {
     DECODER_INTERFACE
 } from './contracts';
 
-// Inline host vtable storage — replaces 'polyplug-guest' import
-// because QuickJS loader exposes 'polyplug' global, not 'polyplug-guest' module.
-function storeHostVtable(lo: number, hi: number): void {
-    (globalThis as any).polyplug._hostVtableLo = lo;
-    (globalThis as any).polyplug._hostVtableHi = hi;
-}
-
 // ABI error codes (match polyplug_abi.AbiErrorCode)
 const AbiErrorCode = {
     Ok: 0,
@@ -22,46 +15,62 @@ const AbiErrorCode = {
 
 interface AbiError {
     code: number;
-    message: { ptr: number; len: number };
+    message: string;
+}
+
+// One registration entry per implemented contract. The loader reads this
+// array from polyplug_init's return value (nothing is deposited into any
+// global — Rule 12) and registers one GuestContractInterface per entry.
+interface Registration {
+    contractLo: number;
+    contractHi: number;
+    interface: any;
+    fnCount: number;
+    contractName: string;
+    version: number;
 }
 
 /**
  * Initialize plugin with host runtime.
+ *
+ * Returns `[registrations, abiError]`: the per-contract registration array
+ * the loader consumes, plus the canonical AbiError ({ code, message }).
+ * Nothing is deposited into any global namespace (Rule 12) — the loader reads
+ * BOTH return values. The host vtable and the `bridge` are threaded explicitly
+ * to each author factory; no host pointer or bridge is stored in any module.
+ *
  * @param host_lo - HostApi pointer (low 32 bits)
  * @param host_hi - HostApi pointer (high 32 bits)
  * @param ctx_lo - BundleInitContext pointer (low 32 bits)
  * @param ctx_hi - BundleInitContext pointer (high 32 bits)
+ * @param bridge - Host-capability bridge passed in by the loader
  */
 export function polyplug_init(
     host_lo: number, host_hi: number,
-    ctx_lo: number, ctx_hi: number
-): AbiError {
+    ctx_lo: number, ctx_hi: number,
+    bridge: any
+): [Registration[], AbiError] {
     // Validate parameters
     if (host_lo === 0 && host_hi === 0) {
-        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };
+        return [[], { code: AbiErrorCode.Generic, message: "null host pointer in polyplug_init" }];
     }
     if (ctx_lo === 0 && ctx_hi === 0) {
-        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };
+        return [[], { code: AbiErrorCode.Generic, message: "null ctx pointer in polyplug_init" }];
+    }
+    if (!bridge || !bridge.alloc) {
+        return [[], { code: AbiErrorCode.Generic, message: "missing bridge in polyplug_init" }];
     }
 
-    // Store host interface for later access via getHostVtable()
-    storeHostVtable(host_lo, host_hi);
-
-    // Get polyplug host interface from globalThis
-    const polyplug = (globalThis as any).polyplug;
-    if (!polyplug || !polyplug.registerVtable) {
-        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };
-    }
-
+    const registrations: Registration[] = [];
     // Register plugin: decoder
-    polyplug.registerVtable(
-        DECODER_INTERFACE.contractLo,
-        DECODER_INTERFACE.contractHi,
-        DECODER_INTERFACE,
-        DECODER_INTERFACE.fnCount,
-        DECODER_INTERFACE.contractName,
-        DECODER_INTERFACE.version
-    );
+    registrations.push({
+        contractLo: DECODER_INTERFACE.contractLo,
+        contractHi: DECODER_INTERFACE.contractHi,
+        interface: DECODER_INTERFACE,
+        fnCount: DECODER_INTERFACE.fnCount,
+        contractName: DECODER_INTERFACE.contractName,
+        version: DECODER_INTERFACE.version,
+    });
 
-    return { code: AbiErrorCode.Ok, message: { ptr: 0, len: 0 } };
+    return [registrations, { code: AbiErrorCode.Ok, message: "" }];
 }

@@ -1,24 +1,18 @@
 import { setReporterFactory } from './generated/guest/contracts';
 import { polyplug_init } from './generated/guest/init';
-import { toStr, allocStringArena } from '../../../../sdks/js/guest/polyplug_guest.js';
+import { toStr } from '../../../../sdks/js/guest/polyplug_guest.js';
 
-function report(input) {
-    const s = toStr(input);
-    const data = s.startsWith("TRANSFORMED:") ? s.slice("TRANSFORMED:".length) : s;
-    const parts = data.split("|");
+setReporterFactory((bridge, hostLo, hostHi) => ({
+    fn0: (input) => {
+        const s = toStr(bridge, input);
+        const data = s.startsWith("TRANSFORMED:") ? s.slice("TRANSFORMED:".length) : s;
+        const parts = data.split("|");
 
-    let result;
-    if (parts.length >= 3) {
-        result = allocStringArena(`Report: ${parts[0]} has value '${parts[1]}' with count ${parts[2]}`);
-    } else {
-        result = allocStringArena("INVALID:format");
+        if (parts.length >= 3) {
+            return `Report: ${parts[0]} has value '${parts[1]}' with count ${parts[2]}`;
+        }
+        return "INVALID:format";
     }
-
-    const ptrLo = Number(result.ptr & 0xFFFFFFFFn);
-    const ptrHi = Number((result.ptr >> 32n) & 0xFFFFFFFFn);
-    return { ptr_lo: ptrLo, ptr_hi: ptrHi, len: result.len };
-}
-
-setReporterFactory(() => ({ fn0: report }));
+}));
 
 export { polyplug_init };

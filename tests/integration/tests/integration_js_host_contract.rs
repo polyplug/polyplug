@@ -180,74 +180,75 @@ fn make_host_svc_interface() -> &'static HostContractInterface {
 fn make_bundle_js(svc_lo: u32, svc_hi: u32, probe_lo: u32, probe_hi: u32) -> String {
     format!(
         r#"
-function polyplug_init(rt_ctx, host_vtable, ctx) {{
-    var polyplug = globalThis.polyplug;
-    function probe(impl, args, out) {{
-        var polyplug = globalThis.polyplug;
-        // Read input StringView from args (ptr_lo@0, ptr_hi@4, len@8).
-        var inLo = polyplug.readU32(args);
-        var inHi = polyplug.readU32(args + 4);
-        var inLen = polyplug.readU32(args + 8);
-        // 1) Call host.svc.version() -> u32 (fn_id 0, no args).
-        var vBuf = polyplug.arenaAlloc(8);
-        var vPtr = vBuf[0] + vBuf[1] * 4294967296;
-        polyplug.writeU32(vPtr, 0); polyplug.writeU32(vPtr + 4, 0);
-        var e1 = polyplug.callHostContract({svc_lo}, {svc_hi}, 0, 0, 0, vPtr);
-        if (e1 !== 0) {{ return e1; }}
-        var version = polyplug.readU32(vPtr);
-        // 2) Call host.svc.describe(input) -> StringView (fn_id 1).
-        var aBuf = polyplug.arenaAlloc(16);
-        var aPtr = aBuf[0] + aBuf[1] * 4294967296;
-        polyplug.writeU32(aPtr,      inLo);
-        polyplug.writeU32(aPtr + 4,  inHi);
-        polyplug.writeU32(aPtr + 8,  inLen);
-        polyplug.writeU32(aPtr + 12, 0);
-        var dBuf = polyplug.arenaAlloc(16);
-        var dPtr = dBuf[0] + dBuf[1] * 4294967296;
-        polyplug.writeU32(dPtr,      0);
-        polyplug.writeU32(dPtr + 4,  0);
-        polyplug.writeU32(dPtr + 8,  0);
-        polyplug.writeU32(dPtr + 12, 0);
-        var e2 = polyplug.callHostContract({svc_lo}, {svc_hi}, 0, 1, aPtr, dPtr);
-        if (e2 !== 0) {{ return e2; }}
-        var dLo  = polyplug.readU32(dPtr);
-        var dHi  = polyplug.readU32(dPtr + 4);
-        var dLen = polyplug.readU32(dPtr + 8);
-        var dAddr = dLo + dHi * 4294967296;
-        var dStr = "";
-        for (var i = 0; i < dLen; i++) {{
-            dStr += String.fromCharCode(polyplug.readByte(dAddr + i));
-        }}
-        // 3) Build result "v=<version>;d=<dStr>" and write it to out as StringView.
-        var res = "v=" + version + ";d=" + dStr;
-        var rBuf = polyplug.arenaAlloc(res.length);
-        var rPtr = rBuf[0] + rBuf[1] * 4294967296;
-        for (var j = 0; j < res.length; j++) {{
-            polyplug.writeByte(rPtr + j, res.charCodeAt(j));
-        }}
-        polyplug.writeU32(out,      rBuf[0]);
-        polyplug.writeU32(out + 4,  rBuf[1]);
-        polyplug.writeU32(out + 8,  res.length);
-        polyplug.writeU32(out + 12, 0);
-        return 0;
+function probe(impl, args, out, arena, bridge) {{
+    // Read input StringView from args (ptr_lo@0, ptr_hi@4, len@8).
+    var inLo = bridge.readU32(args);
+    var inHi = bridge.readU32(args + 4);
+    var inLen = bridge.readU32(args + 8);
+    // 1) Call host.svc.version() -> u32 (fn_id 0, no args). Caller buffers come
+    //    from THIS call's arena, threaded in as `arena` (no global — Rule 12).
+    var vBuf = bridge.arenaAlloc(8, arena);
+    var vPtr = vBuf[0] + vBuf[1] * 4294967296;
+    bridge.writeU32(vPtr, 0); bridge.writeU32(vPtr + 4, 0);
+    var e1 = bridge.callHostContract({svc_lo}, {svc_hi}, 0, 0, 0, vPtr);
+    if (e1 !== 0) {{ return e1; }}
+    var version = bridge.readU32(vPtr);
+    // 2) Call host.svc.describe(input) -> StringView (fn_id 1).
+    var aBuf = bridge.arenaAlloc(16, arena);
+    var aPtr = aBuf[0] + aBuf[1] * 4294967296;
+    bridge.writeU32(aPtr,      inLo);
+    bridge.writeU32(aPtr + 4,  inHi);
+    bridge.writeU32(aPtr + 8,  inLen);
+    bridge.writeU32(aPtr + 12, 0);
+    var dBuf = bridge.arenaAlloc(16, arena);
+    var dPtr = dBuf[0] + dBuf[1] * 4294967296;
+    bridge.writeU32(dPtr,      0);
+    bridge.writeU32(dPtr + 4,  0);
+    bridge.writeU32(dPtr + 8,  0);
+    bridge.writeU32(dPtr + 12, 0);
+    var e2 = bridge.callHostContract({svc_lo}, {svc_hi}, 0, 1, aPtr, dPtr);
+    if (e2 !== 0) {{ return e2; }}
+    var dLo  = bridge.readU32(dPtr);
+    var dHi  = bridge.readU32(dPtr + 4);
+    var dLen = bridge.readU32(dPtr + 8);
+    var dAddr = dLo + dHi * 4294967296;
+    var dStr = "";
+    for (var i = 0; i < dLen; i++) {{
+        dStr += String.fromCharCode(bridge.readByte(dAddr + i));
     }}
-    var vtable = {{
+    // 3) Build result "v=<version>;d=<dStr>" and write it to out as StringView.
+    var res = "v=" + version + ";d=" + dStr;
+    var rBuf = bridge.arenaAlloc(res.length, arena);
+    var rPtr = rBuf[0] + rBuf[1] * 4294967296;
+    for (var j = 0; j < res.length; j++) {{
+        bridge.writeByte(rPtr + j, res.charCodeAt(j));
+    }}
+    bridge.writeU32(out,      rBuf[0]);
+    bridge.writeU32(out + 4,  rBuf[1]);
+    bridge.writeU32(out + 8,  res.length);
+    bridge.writeU32(out + 12, 0);
+    return 0;
+}}
+
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    var iface = {{
         contractLo: {probe_lo},
         contractHi: {probe_hi},
         fnCount: 1,
         contractName: "test.probe",
         version: 0x00010000,
-        factory: function() {{ return {{}}; }},
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
         functions: [probe]
     }};
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName,
-        vtable.version
-    );
+    var registrations = [{{
+        contractLo: iface.contractLo,
+        contractHi: iface.contractHi,
+        interface: iface,
+        fnCount: iface.fnCount,
+        contractName: iface.contractName,
+        version: iface.version
+    }}];
+    return [registrations, {{ code: 0, message: "" }}];
 }}
 "#,
         svc_lo = svc_lo,
