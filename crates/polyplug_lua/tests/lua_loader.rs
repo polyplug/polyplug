@@ -328,9 +328,10 @@ fn vtable_is_registered_after_load() {
 
 /// After a successful load, the contract must be attributed to the bundle's REAL
 /// id in the registry — not bundle 0. The registration runs after Lua
-/// `polyplug_init` populates `_polyplug_handlers`, so the init-bundle window must
-/// stay open across the registration loop for `host_register_guest_contract` to
-/// attribute it correctly. Invalidating by the real id must then remove it.
+/// `polyplug_init` RETURNS its `(registrations, abi_error)` pair, so the
+/// init-bundle window must stay open across the registration loop for
+/// `host_register_guest_contract` to attribute it correctly. Invalidating by the
+/// real id must then remove it.
 #[test]
 fn registrations_attributed_to_real_bundle_id() {
     let (_dir, path) = write_temp_bundle("lua_loader_attribution", valid_plugin_script());
@@ -773,8 +774,9 @@ fn fixture_manifest(path: &Path) -> ManifestData {
         path: path.to_path_buf(),
         version: "1.0.0".to_owned(),
         // Leave `provides` empty so manifest validation skips the per-contract
-        // function-count check; the loader registers test.add@1 from the script's
-        // _polyplug_handlers regardless. This mirrors the other tests' manifests.
+        // function-count check; the loader registers test.add@1 from the
+        // registrations the script's `polyplug_init` returns regardless. This
+        // mirrors the other tests' manifests.
         provides: Vec::new(),
         function_count: HashMap::new(),
         dependencies: Vec::new(),

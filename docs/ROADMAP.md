@@ -284,7 +284,7 @@ Zero API change for plugin authors — hidden inside generated code.
 |---|---|---|
 | JS (QuickJS) | VM | **Yes** (`allocStringArena`) |
 | Lua (LuaJIT) | VM | **Yes** (`alloc_string_arena`) |
-| Python | VM (ctypes sret dispatch removed in `fd8cc4ea` — arm64 UB) | **Yes** (`_polyplug_arena_alloc`) |
+| Python | VM (ctypes sret dispatch removed in `fd8cc4ea` — arm64 UB) | **Yes** (threaded `arena_alloc` dispatch arg) |
 | Rust (host caller) | Native | N/A — returns are borrowed views, zero-alloc |
 | C++ (host caller) | Native/VM | N/A — borrowed views, zero-alloc |
 | C# | Native | N/A — borrowed views, zero-alloc |

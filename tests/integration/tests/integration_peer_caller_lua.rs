@@ -73,8 +73,9 @@ fn write_lua_bundle(
 /// Lua source for the provider bundle: registers `test.peer@1` with one function
 /// `echo(StringView) -> StringView` that prepends `"PEER:"` to its input.
 ///
-/// The implementation follows the same `_G._polyplug_handlers` protocol as
-/// `test_plugin.lua`: the LuaLoader wraps the Lua function in a native trampoline.
+/// The implementation follows the same return-the-registrations protocol as
+/// `test_plugin.lua`: `polyplug_init` RETURNS `(registrations, abi_error)` and the
+/// LuaLoader wraps each Lua function in a native trampoline.
 fn provider_lua_src() -> &'static str {
     r#"
 local ffi = require("ffi")

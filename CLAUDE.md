@@ -367,7 +367,9 @@ Every generator (rust, cpp, csharp, python, lua, js) must generate code that:
    host->register_guest_contract(host, &descriptor, &interface)
    ```
 
-3. **Never uses global state or thread-locals in generated code.**
+3. **Never uses global state or thread-locals in generated code — including VM globals.** Generated guest code may not deposit state OR host capabilities in any global / module-level / VM namespace. For the VM languages (python, lua, js) this is the **global-free VM-dispatch mechanism**, identical across all three: `polyplug_init` RETURNS `(registrations, abi_error)` (nothing is deposited into `_G` / a module attribute / `globalThis` / VM userdata); the `HostApi` pointer is threaded into each `factory(host, …)` and stored as an instance field; the per-call arena allocator is a dispatch argument (`fn(instance, args_ptr, out_ptr, arena_ptr, arena_alloc)`); and JS additionally threads a `bridge` object (memory accessors + host-contract caller + `arenaAlloc`) as an explicit argument instead of `globalThis.polyplug`. See Rule 12 for the full contract.
+
+   For VM guests, items 1–2 describe the C-ABI surface presented by the **Rust loader trampoline**, not the guest text itself: the trampoline exports the `AbiError polyplug_init(host, ctx)` symbol and calls `host->register_guest_contract` after consuming the guest's returned `registrations`. The guest reaches the identical ABI path through the trampoline — it never writes the C signature or calls `register_guest_contract` directly.
 
 4. **Never hand-types an ABI function-pointer signature.** A generator must obtain ABI signatures from the auto-regenerated mirror — by compiling against it (cpp/csharp/rust) or deriving from the field at runtime (python `type(field)`, js typed-Rust install) — never by writing the signature as a literal string. A hand-typed `polyplug_*_host_*` signature in a generator is a bug: when the ABI changes, the mirror updates but the literal goes stale, and the drift is **invisible to `cargo build`/`clippy`/`test`** because the emitted text is never compiled by the Rust toolchain. It surfaces only as calling-convention UB at runtime.
 
@@ -469,7 +471,16 @@ pub struct Runtime {
 
 **Lua, JavaScript (QuickJS), and Native loaders**: Fully compliant with runtime isolation. Each bundle gets its own isolated VM.
 
-**Static-free SDKs — ALL languages, host AND guest.** No SDK file (hand-written or generated, any language) may hold runtime or plugin state in module-level / class-static / process-global storage. The host pointer, plugin implementation objects, and per-bundle state always flow through instances and context parameters. Per-VM globals injected by a loader are instance state (each VM is per-bundle-per-runtime) and are allowed. Interpreter-level once-per-process constraints (CPython, CLR bootstrap) are external limitations, not a license for SDK statics.
+**Static-free SDKs — ALL languages, host AND guest.** No SDK file (hand-written or generated, any language) may hold runtime or plugin state in module-level / class-static / process-global storage. The host pointer, plugin implementation objects, and per-bundle state always flow through instances and context parameters.
+
+**Global-free VM guests (python, lua, js).** A VM guest may NOT carry runtime/plugin state OR host capabilities in any VM global, module-level, or interpreter namespace — not even a loader-injected one. The earlier "per-VM globals injected by a loader are instance state and are allowed" carve-out is REMOVED. Everything threads explicitly, with one identical mechanism across all three VM languages (Rule 10):
+
+- **Registration is returned, never deposited.** `polyplug_init(host, ctx)` RETURNS `(registrations, abi_error)` — two VM-native values (Lua multiple returns / Python tuple / JS `[registrations, abiError]`). The loader honors `abi_error` first, then consumes `registrations`. Nothing is written to `_G`, a module attribute, `globalThis`, or VM userdata.
+- **Host pointer is an argument.** The loader threads the `HostApi` pointer into each `factory(host, …)`; the impl stores it as an INSTANCE field. Helpers take it explicitly (lua/python cast it and call `HostApi` fields directly via FFI/ctypes).
+- **Arena allocator is a per-call dispatch argument.** Dispatch signature is `fn(instance, args_ptr, out_ptr, arena_ptr, arena_alloc)` (js additionally threads a `bridge`); no shared arena cell, so concurrent / same-VM reentrant dispatch are correct by construction.
+- **JS host capabilities ride a threaded `bridge`.** QuickJS cannot deref raw pointers, so the loader passes a `bridge` object (memory accessors + host-contract caller + `arenaAlloc`) as an explicit argument to `polyplug_init`, each `factory(bridge, hostLo, hostHi)`, and every dispatch call — NEVER `globalThis.polyplug`.
+
+Instance fields on the impl (host pointer, bridge, user state), the chunk/module RETURN value, and per-call arguments are NOT globals and remain allowed. Interpreter-level once-per-process constraints (CPython, CLR bootstrap) are external limitations, not a license for SDK statics.
 
 ---
 

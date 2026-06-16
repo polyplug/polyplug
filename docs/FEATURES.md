@@ -102,8 +102,8 @@ rewind plus a single free pass over any overflow blocks).
 
 | Path | Arena-routed? | Why |
 |---|---|---|
-| JS (QuickJS) guest returns | Yes | `arenaAlloc` bridge → `allocStringArena` in the guest SDK |
-| Lua (LuaJIT) guest returns | Yes | `_polyplug_arena_alloc` bridge → `alloc_string_arena` in the guest SDK |
+| JS (QuickJS) guest returns | Yes | loader threads a per-call `arena_ptr` + `bridge` into dispatch; wrapper calls `bridge.arenaAlloc(size, arena_ptr)` (no `globalThis` — Rule 12) |
+| Lua (LuaJIT) guest returns | Yes | loader threads `(arena_ptr, arena_alloc)` as the final dispatch args → `alloc_string_arena(arena_alloc, arena_ptr, s)` in the guest SDK |
 | Rust / C++ / C# host callers | Yes | per-caller `CallArena` field threaded into VM dispatch |
 | Native Rust / C++ / C# guest returns | N/A | returns are borrowed zero-allocation views into guest-owned memory — there is nothing to allocate, so no arena is needed |
 | Python guest returns | N/A | Python guests dispatch through `DispatchType::Native` (ctypes function pointers); the native ABI signature carries no arena slot, exactly like native Rust/C++ |

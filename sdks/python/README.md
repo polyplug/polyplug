@@ -143,18 +143,21 @@ Python wrappers over the polyplug C ABI using ctypes:
 `polyplug_guest` — helpers for Python plugins. Python plugins are VM-dispatch
 plugins: the guest never builds a `GuestContractInterface` or registers native
 function pointers. The loader executes the module, calls
-`polyplug_init(host_ptr: int, ctx_ptr: int) -> None`, then reads the
-`_polyplug_registrations` list the guest deposited. This library provides the
+`polyplug_init(host_ptr: int, ctx_ptr: int) -> tuple[list[dict], AbiError]`, then
+reads the `(registrations, abi_error)` pair the guest RETURNS — nothing is
+deposited into any module namespace (Rule 12). This library provides the
 helpers generated code and plugin authors rely on:
-- `register_contract(globals(), contract, functions, plugin_name=None)` — deposit
-  a contract's functions (ordered by `fn_id`) into the caller module's
-  `_polyplug_registrations` list. Each function is called as
-  `fn(args_ptr: int, out_ptr: int, arena_ptr: int)`; return for Ok, raise for error.
+- `register_contract(registrations, contract, functions, factory, plugin_name=None)`
+  — append a contract's registration (functions ordered by `fn_id` + the per-instance
+  `factory`) to the `registrations` list `polyplug_init` returns. Each function is
+  called as `fn(impl, args_ptr: int, out_ptr: int, arena_ptr: int, arena_alloc)`;
+  return for Ok, raise for error.
 - `to_str(view)` — decode an incoming `StringView` to a Python `str`
 - `alloc_string(host_ptr, s)` — allocate an outgoing `StringView` via the host
   allocator (for data that must outlive the call)
-- `alloc_string_arena(arena_alloc, s)` — allocate a per-call return `StringView`
-  from the active arena via the loader-injected `_polyplug_arena_alloc` bridge
+- `alloc_string_arena(arena_alloc, arena_ptr, s)` — allocate a per-call return
+  `StringView` from this call's arena via the `arena_alloc` allocator the loader
+  threads in as a dispatch argument (no loader-injected module bridge — Rule 12)
 - Re-exported ABI types — `HostApi`, `BundleInitContext`, `StringView`,
   `AbiError`, `AbiErrorCode`, and the other types generated code imports
 

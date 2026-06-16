@@ -197,9 +197,10 @@ concurrent unload keeps the resolved interface and its mapping alive until the
 guard unpins.
 
 - **Arena forwarding**: the `arena` argument is passed straight to VM dispatch
-  (Lua, JS); native dispatch ignores it (native function pointers carry no arena
-  slot). A **null arena** means "no arena" and the guest bridge falls back to
-  `host->alloc`.
+  (Lua, JS, Python) as an explicit per-call argument — never via a VM global
+  (Rule 12); native dispatch ignores it (native function pointers carry no arena
+  slot). A **null arena** means "no arena" and the threaded arena allocator falls
+  back to `host->alloc`.
 - **Re-entrancy guard**: a cross-call that would re-enter a VM already executing a
   dispatch *on the same thread* returns `AbiErrorCode::ReentrantCall` (9) — nested
   same-thread entry would deadlock or panic the VM's own lock. Concurrent dispatch

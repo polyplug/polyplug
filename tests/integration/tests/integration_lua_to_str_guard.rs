@@ -106,8 +106,9 @@ fn build_probe_bundle(tmp: &Path) -> PathBuf {
         dir.join("polyplug_abi.lua"),
     )
     .expect("copy polyplug_abi.lua");
-    // Vendor the CURRENT guest SDK (store_host_interface / alloc_string_arena);
-    // the hardened to_str itself lives in the vendored abi module above.
+    // Vendor the CURRENT guest SDK (alloc_string / alloc_string_arena / log,
+    // all host-threaded — no module globals); the hardened to_str itself lives
+    // in the vendored abi module above.
     std::fs::copy(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()

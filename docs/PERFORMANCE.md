@@ -629,18 +629,18 @@ arena helper.
 
 | Path | Uses arena? | How |
 |---|---|---|
-| JS (QuickJS) guest returns | Yes | `polyplug.arenaAlloc` bridge → `allocStringArena` in the guest SDK |
-| Lua (LuaJIT) guest returns | Yes | `_polyplug_arena_alloc` bridge → `alloc_string_arena` in the guest SDK |
+| JS (QuickJS) guest returns | Yes | the loader threads a per-call `arena_ptr` + a `bridge` into dispatch; the generated wrapper calls `bridge.arenaAlloc(size, arena_ptr)` (no `globalThis` — Rule 12) |
+| Lua (LuaJIT) guest returns | Yes | the loader threads `(arena_ptr, arena_alloc)` as the final two dispatch args; the generated handler calls `alloc_string_arena(arena_alloc, arena_ptr, s)` in the guest SDK |
 | Rust host callers | Yes | per-caller `CallArena` field threaded into VM dispatch when a return needs it |
 | Native Rust / C++ / C# guest returns | N/A | returns are already **borrowed zero-allocation views** into guest-owned memory — nothing to allocate, so no arena is needed |
-| Python (CPython) guest returns | Yes | Python guests register **`DispatchType::VirtualMachine`** (`polyplug_python` loader); the `_polyplug_arena_alloc` bridge injected into the plugin module writes returns into the per-call arena |
+| Python (CPython) guest returns | Yes | Python guests register **`DispatchType::VirtualMachine`** (`polyplug_python` loader); the loader threads `(arena_ptr, arena_alloc)` as the final two dispatch args (no module-injected bridge — Rule 12) and the generated callable writes returns into the per-call arena |
 
 ### Null-arena fallback
 
 The VM dispatch ABI signature is always
 `call(loader_data, instance, fn_id, args, out, arena)`. Passing a **null arena**
-means "no arena": the guest bridge (`arenaAlloc` / `_polyplug_arena_alloc`) falls
-back to per-value `host->alloc`. Host callers that cannot hold a per-caller arena
+means "no arena": the threaded arena allocator (js `bridge.arenaAlloc` / lua &
+python `arena_alloc`) falls back to per-value `host->alloc`. Host callers that cannot hold a per-caller arena
 (e.g. the Lua/Python guest-side host-contract callers) pass null and remain
 correct — just not zero-allocation. Every loader passes the arena slot, so the
 signature is uniform across all languages.
