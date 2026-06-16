@@ -617,12 +617,33 @@ use crate::error::Error;
 fn other_thing() -> Result<(), Error> { }
 ```
 
+**The ONE exception — FFI function-pointer signatures.** A `type` alias whose
+right-hand side is an `unsafe extern "C"` / `extern "system"` **function-pointer
+signature** is PERMITTED. Such an alias is the single definition point for a
+calling convention that crosses the FFI boundary; inlining it at its (often many)
+use sites would duplicate an ABI function-pointer signature across the codebase —
+exactly the drift hazard **Rule 10** (§10 item 4, "Never hand-types an ABI
+function-pointer signature") forbids, where one missed copy after an ABI change is
+silent calling-convention UB. The alias keeps the signature defined once.
+
+```rust
+// CORRECT — FFI fn-pointer signature alias (single source of truth for the call)
+pub(crate) type InitFn =
+    unsafe extern "system" fn(*const HostApi, *const BundleInitContext) -> AbiError;
+```
+
+This exception is **narrow**: it covers ONLY `extern` function-pointer `type`
+aliases. It does NOT relax the ban on data-type aliases (`type Handle = ...`),
+`Result<T>` aliases, convenience/migration aliases, or any other form above.
+
 **Why this matters:**
 - Type aliases hide the actual type, making code harder to understand
 - They create confusion about which name is "real"
 - They make global refactoring painful — must update all aliases
 - IDEs and tools show the alias, not the underlying type
 - This codebase does NOT maintain backward compatibility — use the canonical name
+- The FFI fn-pointer exception is the inverse case: there the alias PREVENTS
+  drift, so it is the maintainable choice (see Rule 10 §10 item 4)
 
 ---
 
