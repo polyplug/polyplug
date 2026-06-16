@@ -7,5 +7,4 @@ file = "reporter.lua"
 
 [[plugin]]
 name = "reporter"
-version = "1.0.0"
 implements = ["data.Reporter@1.0"]

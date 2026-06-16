@@ -86,7 +86,6 @@ fn write_counter_bundle(tmp: &Path, dir_name: &str) -> PathBuf {
          file = \"entry.py\"\n\n\
          [[plugin]]\n\
          name = \"counter\"\n\
-         version = \"1.0.0\"\n\
          implements = [\"iso.Counter@1.0\"]\n",
         name = BUNDLE_NAME,
     );

@@ -255,7 +255,6 @@ fn test_panic_returns_abi_error_panic() {
          \n\
          [[plugin]]\n\
          name = \"panic_plugin\"\n\
-         version = \"1.0.0\"\n\
          implements = [\"test.panic@1.0\"]\n",
         // Backslashes are invalid TOML escape sequences; forward slashes are valid
         // path separators on every platform (including Windows).

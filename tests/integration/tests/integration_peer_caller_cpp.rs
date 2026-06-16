@@ -110,7 +110,6 @@ fn build_cpp_consumer(tmp: &Path) -> PathBuf {
          windows.x86_64 = \"peer_consumer_cpp.dll\"\n\n\
          [[plugin]]\n\
          name = \"transformer\"\n\
-         version = \"1.0.0\"\n\
          implements = [\"data.Transformer@1.0\"]\n\n\
          [[dependency]]\n\
          kind = \"contract\"\n\

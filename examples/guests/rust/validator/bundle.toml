@@ -9,5 +9,4 @@ linux.x86_64 = "libvalidator.so"
 
 [[plugin]]
 name = "validator"
-version = "1.0.0"
 implements = ["pipeline.Validator@1.0"]

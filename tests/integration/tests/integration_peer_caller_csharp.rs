@@ -117,7 +117,6 @@ fn build_csharp_consumer(tmp_root: &Path) -> PathBuf {
          file = \"peer_consumer_csharp.dll\"\n\n\
          [[plugin]]\n\
          name = \"transformer\"\n\
-         version = \"1.0.0\"\n\
          implements = [\"data.Transformer@1.0\"]\n\n\
          [[dependency]]\n\
          kind = \"contract\"\n\

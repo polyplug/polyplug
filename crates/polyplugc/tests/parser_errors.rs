@@ -680,30 +680,18 @@ fn bundle_with_no_plugins_accepted() {
 }
 
 #[test]
-fn bundle_plugin_missing_version_rejected() {
-    // `file` present so the bundle deserializes; the plugin omits the required
-    // `version` field, which the toml layer reports as a span-carrying parse error.
-    let err: PolyplugcError = bundle_err(concat!(
+fn bundle_plugin_without_version_succeeds() {
+    // A `[[plugin]]` no longer carries a `version` field: the bundle version is the
+    // single deployable-artifact version, and plugins ship/load/reload as part of
+    // the bundle, so a per-plugin version would be redundant. A plugin entry with
+    // only `name` + `implements` must parse cleanly.
+    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_bundle_str(concat!(
         "[bundle]\nname = \"b\"\nversion = \"1.0\"\nfile = \"x.so\"\n\n",
-        "[[plugin]]\nname = \"my-plugin\"\n",
+        "[[plugin]]\nname = \"my-plugin\"\nimplements = [\"image.encode@1.0\"]\n",
     ));
     assert!(
-        matches!(err, PolyplugcError::TomlParseError { .. }),
-        "expected TomlParseError for plugin missing version, got {err:?}",
-    );
-}
-
-#[test]
-fn bundle_plugin_invalid_version_rejected() {
-    // `file` present so deserialization reaches version validation; "bad.ver" is a
-    // non-numeric component, so Version::parse raises ValidationFailed.
-    let err: PolyplugcError = bundle_err(concat!(
-        "[bundle]\nname = \"b\"\nversion = \"1.0\"\nfile = \"x.so\"\n\n",
-        "[[plugin]]\nname = \"my-plugin\"\nversion = \"bad.ver\"\n",
-    ));
-    assert!(
-        matches!(err, PolyplugcError::ValidationFailed { .. }),
-        "expected ValidationFailed for plugin invalid version, got {err:?}",
+        result.is_ok(),
+        "expected a plugin without a version field to parse, got {result:?}",
     );
 }
 
@@ -711,7 +699,7 @@ fn bundle_plugin_invalid_version_rejected() {
 fn bundle_well_formed_succeeds() {
     let toml: &str = concat!(
         "[bundle]\nname = \"codec-bundle\"\nversion = \"2.0.1\"\nfile = \"test.so\"\n\n",
-        "[[plugin]]\nname = \"jpeg-encoder\"\nversion = \"1.0.0\"\n",
+        "[[plugin]]\nname = \"jpeg-encoder\"\n",
         "implements = [\"image.encode@1.0\"]\n\n",
         "[[dependency]]\nkind = \"contract\"\ncontract = \"image.encode\"\nmin_version = \"1.0\"\n",
     );

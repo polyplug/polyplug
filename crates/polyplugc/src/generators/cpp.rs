@@ -4165,11 +4165,6 @@ mod tests {
                 file: polyplug_codegen::ResolvedBundleFile::Single("test.so".to_owned()),
                 plugins: vec![ResolvedPlugin {
                     name: "transformer".to_owned(),
-                    version: Version {
-                        major: 1,
-                        minor: 0,
-                        patch: 0,
-                    },
                     implements: vec!["data.Transformer@1".to_owned()],
                     optional: vec![],
                 }],
@@ -4357,11 +4352,6 @@ mod tests {
                 file: polyplug_codegen::ResolvedBundleFile::Single("test.so".to_owned()),
                 plugins: vec![crate::ir::ResolvedPlugin {
                     name: "decoder".to_owned(),
-                    version: Version {
-                        major: 1,
-                        minor: 0,
-                        patch: 0,
-                    },
                     implements: vec!["pipeline.decoder@1.0".to_owned()],
                     optional: vec![],
                 }],

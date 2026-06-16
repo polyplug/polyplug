@@ -67,7 +67,7 @@ fn unclosed_inline_array_value() {
     // Value is an unclosed inline array: `implements = ["x"`.
     let err: PolyplugcError = bundle_err(concat!(
         "[bundle]\nname = \"b\"\nversion = \"1.0\"\n\n",
-        "[[plugin]]\nname = \"p\"\nversion = \"1.0\"\nimplements = [\"x\"\n",
+        "[[plugin]]\nname = \"p\"\nimplements = [\"x\"\n",
     ));
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
@@ -394,7 +394,7 @@ fn nested_inline_table_in_array_is_malformed() {
     // An inline table that is itself unclosed inside an array is invalid.
     let err: PolyplugcError = bundle_err(concat!(
         "[bundle]\nname = \"b\"\nversion = \"1.0\"\n\n",
-        "[[plugin]]\nname = \"p\"\nversion = \"1.0\"\n",
+        "[[plugin]]\nname = \"p\"\n",
         "implements = [{contract = \"svc\"\n",
     ));
     assert!(

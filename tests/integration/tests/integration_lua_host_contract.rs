@@ -159,7 +159,6 @@ fn build_lua_bundle(tmp: &Path) -> PathBuf {
          file = \"transformer.lua\"\n\n\
          [[plugin]]\n\
          name = \"transformer\"\n\
-         version = \"1.0.0\"\n\
          implements = [\"data.Transformer@1.0\"]\n",
         // Backslashes are invalid TOML escape sequences; forward slashes are valid
         // path separators on every platform (including Windows).

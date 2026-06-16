@@ -291,8 +291,6 @@ pub struct ResolvedHostContract {
 #[derive(Debug)]
 pub struct ResolvedPlugin {
     pub name: String,
-    #[allow(dead_code)]
-    pub version: Version,
     pub implements: Vec<String>,
     pub optional: Vec<String>,
 }

@@ -204,10 +204,12 @@ scoping:
 - **B1 — publishing:** which registries, what package names/namespaces, and is
   publishing pre-1.0 (for battle-testing) desired now or held until 1.0?
 - **Lane priority:** which lane do we fund next given the CI-minute constraint?
-- **`ResolvedPlugin.version` (polyplugc):** the `[[plugin]] version` field is parsed
-  and semver-validated but consumed by no generator. Keep + wire (intended per-plugin
-  versioning) or remove the field + the schema requirement (redundant with the bundle
-  version, a bundle.toml format change)?
+- _(Resolved 2026-06-17: the `[[plugin]] version` field was **removed** — field,
+  parse, schema requirement, and all fixtures/examples. A bundle is the single
+  deployable/load/reload unit, so any plugin change forces a bundle-version bump;
+  a per-plugin version carried no independent semantics and never affected
+  resolution (which uses the contract `@N`). The bundle version is the one
+  artifact version; `[[plugin]]` now takes only `name` + `implements`.)_
 
 _(Resolved 2026-06-09: the python peer-caller reachability question (#75) was
 decided "fix it, mirror lua/js/cpp" and is shipped — see the status table.)_

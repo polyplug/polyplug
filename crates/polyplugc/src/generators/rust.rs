@@ -4653,11 +4653,6 @@ mod tests {
                 file: polyplug_codegen::ResolvedBundleFile::Single("test.so".to_owned()),
                 plugins: vec![ResolvedPlugin {
                     name: "test_plugin".to_owned(),
-                    version: Version {
-                        major: 1,
-                        minor: 0,
-                        patch: 0,
-                    },
                     implements: vec!["pipeline.encoder".to_owned()],
                     optional: vec![],
                 }],
@@ -4802,11 +4797,6 @@ mod tests {
                 file: polyplug_codegen::ResolvedBundleFile::Single("test.so".to_owned()),
                 plugins: vec![crate::ir::ResolvedPlugin {
                     name: "test_plugin".to_owned(),
-                    version: crate::ir::Version {
-                        major: 1,
-                        minor: 0,
-                        patch: 0,
-                    },
                     implements: vec![],
                     optional: vec![],
                 }],

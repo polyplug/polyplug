@@ -146,7 +146,6 @@ impl Default for RawBundleFile {
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawBundlePlugin {
     pub name: String,
-    pub version: toml::Spanned<String>,
     #[serde(default)]
     pub implements: Vec<String>,
     #[serde(default)]
@@ -922,10 +921,8 @@ fn lower_bundle(
     let bundle_version: Version = parse_version_spanned(&raw.bundle.version, file, source)?;
     let mut plugins: Vec<ResolvedPlugin> = Vec::new();
     for raw_plugin in &raw.plugin {
-        let plugin_version: Version = parse_version_spanned(&raw_plugin.version, file, source)?;
         plugins.push(ResolvedPlugin {
             name: raw_plugin.name.clone(),
-            version: plugin_version,
             implements: raw_plugin.implements.clone(),
             optional: raw_plugin.optional.clone(),
         });
@@ -1039,7 +1036,7 @@ mod tests {
 
     const SAMPLE_API: &str = "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"decode\"\n\n[[plugin_contract.functions]]\nname = \"supported_formats\"\n    return = \"StringView\"";
 
-    const SAMPLE_BUNDLE: &str = "[bundle]\nname = \"image-plugin\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n[[plugin]]\nname = \"jpeg_decoder\"\nversion = \"1.0.0\"\nimplements = [\"image.decode@1.0\"]";
+    const SAMPLE_BUNDLE: &str = "[bundle]\nname = \"image-plugin\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n[[plugin]]\nname = \"jpeg_decoder\"\nimplements = [\"image.decode@1.0\"]";
 
     #[test]
     fn parse_minimal_api() {

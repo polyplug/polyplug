@@ -79,7 +79,6 @@ Working reference hosts for all six languages live in `examples/hosts/`.
 │                                                                   │
 │    [[plugin]]                                                     │
 │    name       = "decoder"                                         │
-│    version    = "1.0.0"                                           │
 │    implements = ["pipeline.Decoder@1.0"]                          │
 └───────────────────────────────────────────────────────────────────┘
 ┌─ 3. GENERATE ─────────────────────────────────────────────────────┐

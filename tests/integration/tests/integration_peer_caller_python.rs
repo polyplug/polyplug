@@ -85,7 +85,6 @@ fn build_python_consumer(tmp: &Path) -> PathBuf {
          file = \"consumer.py\"\n\n\
          [[plugin]]\n\
          name = \"transformer\"\n\
-         version = \"1.0.0\"\n\
          implements = [\"data.Transformer@1.0\"]\n\n\
          [[dependency]]\n\
          kind = \"contract\"\n\

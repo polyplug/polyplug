@@ -102,7 +102,6 @@ fn write_probe_bundle(tmp: &Path, dir_name: &str, return_value: i32) -> PathBuf 
          file = \"entry.py\"\n\n\
          [[plugin]]\n\
          name = \"probe\"\n\
-         version = \"1.0.0\"\n\
          implements = [\"iso.Probe@1.0\"]\n",
         name = SHARED_BUNDLE_NAME,
     );

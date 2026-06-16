@@ -69,7 +69,6 @@ windows.x86_64 = "my_greeter.dll"
 
 [[plugin]]
 name = "my_greeter"
-version = "1.0.0"
 implements = ["greeter.Hello@1.0"]
 ```
 

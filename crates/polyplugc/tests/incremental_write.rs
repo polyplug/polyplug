@@ -34,7 +34,6 @@ file = \"plugin.lua\"
 
 [[plugin]]
 name = \"decoder\"
-version = \"1.0.0\"
 implements = [\"pipeline.Decoder@1.0\"]
 ";
 

@@ -3105,11 +3105,6 @@ mod tests {
                 file: ResolvedBundleFile::Single("test.lua".to_owned()),
                 plugins: vec![ResolvedPlugin {
                     name: "test_plugin".to_owned(),
-                    version: Version {
-                        major: 1,
-                        minor: 0,
-                        patch: 0,
-                    },
                     implements: vec!["data.Transformer@1.0".to_owned()],
                     optional: vec![],
                 }],
@@ -3240,11 +3235,6 @@ mod tests {
                 file: ResolvedBundleFile::Single("test.lua".to_owned()),
                 plugins: vec![ResolvedPlugin {
                     name: "test_plugin".to_owned(),
-                    version: Version {
-                        major: 1,
-                        minor: 0,
-                        patch: 0,
-                    },
                     implements: vec!["data.Transformer@1.0".to_owned()],
                     optional: vec![],
                 }],
