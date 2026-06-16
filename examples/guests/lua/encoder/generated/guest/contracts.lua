@@ -23,8 +23,8 @@ function M._register_ENCODER()
         local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
         local result = instance:encode(args_sv[0])
         if out_ptr ~= 0 and result ~= nil then
-            local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
-            out_sv[0] = result
+            local out_ref = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
+            out_ref[0] = result
         end
         if out_ptr ~= 0 and result == nil then
             error("polyplug: implementation returned nil for a StringView-returning function")

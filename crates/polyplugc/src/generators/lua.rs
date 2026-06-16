@@ -621,7 +621,7 @@ fn generate_guest_plugin_interface(
         out.push_str(&format!(
             "    functions[{idx}] = function(instance, args_ptr, out_ptr)\n"
         ));
-        emit_lua_guest_handler_body(out, func, enums);
+        emit_lua_guest_handler_body(out, func, enums, &contract.name);
         out.push_str("    end\n");
     }
     out.push_str("    _G._polyplug_handlers = _G._polyplug_handlers or {}\n");
@@ -647,7 +647,12 @@ fn generate_guest_plugin_interface(
 /// result to `out_ptr`. Pointers arrive as i64 integers (see lua_dispatch); the
 /// `instance` is the per-instance impl object the loader passes as the handler's
 /// first argument.
-fn emit_lua_guest_handler_body(out: &mut String, func: &ResolvedFunction, enums: &[EnumDef]) {
+fn emit_lua_guest_handler_body(
+    out: &mut String,
+    func: &ResolvedFunction,
+    enums: &[EnumDef],
+    contract_name: &str,
+) {
     let method: String = func.name.replace('.', "_");
     // A missing instance or method must NOT fall through to success (the loader
     // treats a normal return as Ok, leaving a zeroed out-slot). Raising makes the
@@ -656,82 +661,159 @@ fn emit_lua_guest_handler_body(out: &mut String, func: &ResolvedFunction, enums:
         "        if instance == nil or instance.{method} == nil then error(\"polyplug: no implementation for {method}\") end\n"
     ));
 
-    // Marshal a single StringView input (the common pipeline shape). Other input
-    // shapes pass the raw args pointer through for the method to read. The method
-    // is invoked on the instance (`instance:method(...)` == `instance.method(instance, ...)`).
-    let single_string_view: bool = func.params.len() == 1
-        && matches!(
-            func.params[0].ty,
-            ResolvedTypeRef::AbiType(AbiBuiltin::StringView)
-        );
-
-    if single_string_view {
-        out.push_str(
-            "        local args_sv = ffi.cast(\"const StringView*\", ffi.cast(\"uintptr_t\", args_ptr))\n",
-        );
-        out.push_str(&format!(
-            "        local result = instance:{method}(args_sv[0])\n"
-        ));
-    } else if func.params.is_empty() {
-        out.push_str(&format!("        local result = instance:{method}()\n"));
+    // Unpack the args pointer into typed values the impl receives, mirroring the
+    // host caller's pack layout (emit_lua_host_args_setup): a single param is the
+    // pointee of a typed slot; multiple params are fields of the cdef'd arg-pack
+    // struct. The impl is invoked on the instance
+    // (`instance:method(...)` == `instance.method(instance, ...)`), so it receives
+    // the raw cdata/value per arg (StringView/Buffer/struct cdata, or a number for
+    // scalars/enums) exactly as the host caller passed it.
+    let call_args: String = if func.params.is_empty() {
+        String::new()
+    } else if func.params.len() == 1 {
+        emit_lua_guest_unpack_single_arg(out, &func.params[0], enums)
     } else {
-        // Fall back to handing the raw pointer integers to the method.
+        let contract_struct: String = contract_name_to_struct(contract_name);
+        let pack_struct: String = arg_pack_struct_name(&contract_struct, &func.name);
         out.push_str(&format!(
-            "        local result = instance:{method}(args_ptr, out_ptr)\n"
+            "        local args_pack = ffi.cast(\"const {pack_struct}*\", ffi.cast(\"uintptr_t\", args_ptr))\n"
         ));
-    }
-
-    // Marshal a StringView return value into out_ptr. alloc_string returns a
-    // host-allocated StringView cdata; copy it into the caller's out slot.
-    if matches!(
-        func.returns,
-        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
-    ) {
-        out.push_str("        if out_ptr ~= 0 and result ~= nil then\n");
-        out.push_str(
-            "            local out_sv = ffi.cast(\"StringView*\", ffi.cast(\"uintptr_t\", out_ptr))\n",
-        );
-        out.push_str("            out_sv[0] = result\n");
-        out.push_str("        end\n");
-        // A nil result for a StringView-returning function must NOT fall
-        // through to success with a zeroed out-slot; raising makes the loader
-        // return AbiErrorCode.Generic to the caller.
-        out.push_str("        if out_ptr ~= 0 and result == nil then\n");
-        out.push_str(
-            "            error(\"polyplug: implementation returned nil for a StringView-returning function\")\n",
-        );
-        out.push_str("        end\n");
-        return;
-    }
-
-    // Marshal a scalar (primitive or enum) return value into out_ptr. The impl
-    // returns a plain Lua number; write it through a typed pointer cast over the
-    // out slot. Enums use their repr C integer type (the enum itself has no cdef'd
-    // C type — the generator emits enums as Lua tables). Struct returns are not
-    // emitted here: the only non-scalar return marshalled is StringView (above).
-    let scalar_c_type: Option<String> = match &func.returns {
-        Some(ret) => match lua_enum_repr_c_type(ret, enums) {
-            Some(repr) => Some(repr),
-            None if lua_return_is_scalar(ret) => Some(lua_type_name(ret)),
-            None => None,
-        },
-        None => None,
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| {
+                // Enum fields are repr integers in the pack; collapse to a Lua
+                // number. Every other field (scalar/struct/StringView/Buffer) is
+                // passed through as read from the pack.
+                if lua_enum_repr_c_type(&p.ty, enums).is_some() {
+                    format!("tonumber(args_pack[0].{})", p.name)
+                } else {
+                    format!("args_pack[0].{}", p.name)
+                }
+            })
+            .collect::<Vec<String>>()
+            .join(", ")
     };
-    if let Some(c_type) = scalar_c_type {
-        // A nil result for a scalar-returning function must NOT fall through to
-        // success with a zeroed out-slot; raising makes the loader return Generic.
-        out.push_str("        if out_ptr ~= 0 and result == nil then\n");
-        out.push_str(&format!(
-            "            error(\"polyplug: implementation returned nil for a {c_type}-returning function\")\n"
-        ));
-        out.push_str("        end\n");
-        out.push_str("        if out_ptr ~= 0 then\n");
-        out.push_str(&format!(
-            "            local out_scalar = ffi.cast(\"{c_type}*\", ffi.cast(\"uintptr_t\", out_ptr))\n"
-        ));
-        out.push_str("            out_scalar[0] = result\n");
-        out.push_str("        end\n");
+    out.push_str(&format!(
+        "        local result = instance:{method}({call_args})\n"
+    ));
+
+    emit_lua_guest_marshal_return(out, &func.returns, enums);
+}
+
+/// Unpack a single guest-handler argument from `args_ptr` and return the Lua
+/// expression the impl is called with. Mirrors the single-param branch of
+/// `emit_lua_host_args_setup`: the host passes the ADDRESS of a typed slot, so the
+/// guest casts that address back to the matching pointer type and reads `[0]`.
+fn emit_lua_guest_unpack_single_arg(
+    out: &mut String,
+    param: &ResolvedParam,
+    enums: &[EnumDef],
+) -> String {
+    let addr: &str = "ffi.cast(\"uintptr_t\", args_ptr)";
+    match &param.ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            out.push_str(&format!(
+                "        local args_sv = ffi.cast(\"const StringView*\", {addr})\n"
+            ));
+            "args_sv[0]".to_owned()
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+            out.push_str(&format!(
+                "        local args_buf = ffi.cast(\"const Buffer*\", {addr})\n"
+            ));
+            "args_buf[0]".to_owned()
+        }
+        ResolvedTypeRef::UserDefined(_) => match lua_enum_repr_c_type(&param.ty, enums) {
+            // Enum: the slot is a repr integer; hand the impl a plain Lua number.
+            Some(repr) => {
+                out.push_str(&format!(
+                    "        local args_enum = ffi.cast(\"const {repr}*\", {addr})\n"
+                ));
+                "tonumber(args_enum[0])".to_owned()
+            }
+            // Struct: the slot is the cdef'd struct; hand the impl the struct cdata.
+            None => {
+                let struct_name: String = lua_type_name(&param.ty);
+                out.push_str(&format!(
+                    "        local args_struct = ffi.cast(\"const {struct_name}*\", {addr})\n"
+                ));
+                "args_struct[0]".to_owned()
+            }
+        },
+        _ => {
+            // Scalar / pointer: the slot is a 1-element array of the C type.
+            let c_type: String = lua_type_name(&param.ty);
+            out.push_str(&format!(
+                "        local args_val = ffi.cast(\"const {c_type}*\", {addr})\n"
+            ));
+            "args_val[0]".to_owned()
+        }
     }
+}
+
+/// Marshal the impl's `result` into `out_ptr`, covering EVERY return shape:
+/// StringView/Buffer/struct are reference cdata written through a typed pointer;
+/// scalars and enums are written through a repr-typed scalar slot. A nil result
+/// for any non-void return raises (the loader maps the error to Generic) rather
+/// than silently leaving a zeroed out-slot.
+fn emit_lua_guest_marshal_return(
+    out: &mut String,
+    returns: &Option<ResolvedTypeRef>,
+    enums: &[EnumDef],
+) {
+    let Some(ret) = returns else {
+        return;
+    };
+    match ret {
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {}
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            emit_lua_guest_marshal_ref_return(out, "StringView");
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+            emit_lua_guest_marshal_ref_return(out, "Buffer");
+        }
+        _ => match lua_enum_repr_c_type(ret, enums) {
+            // Enum return: repr-integer scalar slot.
+            Some(repr) => emit_lua_guest_marshal_scalar_return(out, &repr),
+            None if lua_return_is_scalar(ret) => {
+                emit_lua_guest_marshal_scalar_return(out, &lua_type_name(ret));
+            }
+            // Struct-by-value return: a reference cdata, like StringView/Buffer.
+            None => emit_lua_guest_marshal_ref_return(out, &lua_type_name(ret)),
+        },
+    }
+}
+
+/// Marshal a reference-cdata return (StringView/Buffer/struct): the impl returns a
+/// cdata of `c_type`; copy it into the caller's out slot. A nil result raises.
+fn emit_lua_guest_marshal_ref_return(out: &mut String, c_type: &str) {
+    out.push_str("        if out_ptr ~= 0 and result ~= nil then\n");
+    out.push_str(&format!(
+        "            local out_ref = ffi.cast(\"{c_type}*\", ffi.cast(\"uintptr_t\", out_ptr))\n"
+    ));
+    out.push_str("            out_ref[0] = result\n");
+    out.push_str("        end\n");
+    out.push_str("        if out_ptr ~= 0 and result == nil then\n");
+    out.push_str(&format!(
+        "            error(\"polyplug: implementation returned nil for a {c_type}-returning function\")\n"
+    ));
+    out.push_str("        end\n");
+}
+
+/// Marshal a scalar (primitive or enum) return: the impl returns a plain Lua
+/// number/boolean; write it through a `c_type`-typed pointer over the out slot.
+fn emit_lua_guest_marshal_scalar_return(out: &mut String, c_type: &str) {
+    out.push_str("        if out_ptr ~= 0 and result == nil then\n");
+    out.push_str(&format!(
+        "            error(\"polyplug: implementation returned nil for a {c_type}-returning function\")\n"
+    ));
+    out.push_str("        end\n");
+    out.push_str("        if out_ptr ~= 0 then\n");
+    out.push_str(&format!(
+        "            local out_scalar = ffi.cast(\"{c_type}*\", ffi.cast(\"uintptr_t\", out_ptr))\n"
+    ));
+    out.push_str("            out_scalar[0] = result\n");
+    out.push_str("        end\n");
 }
 
 fn build_lua_sig_params(func: &ResolvedFunction) -> String {
@@ -3675,6 +3757,177 @@ mod tests {
         assert!(
             !out.contains("ffi.new(\"uint32_t\", amount)"),
             "scalar value cdata cast to void* is value-as-address: {out}"
+        );
+    }
+
+    // ─── Guest handler: arg unpacking + return marshalling (W3 3a) ──────────────
+
+    fn guest_handler(func: &ResolvedFunction, enums: &[EnumDef]) -> String {
+        let mut out: String = String::new();
+        emit_lua_guest_handler_body(&mut out, func, enums, "test.add");
+        out
+    }
+
+    fn scalar_param(name: &str, prim: PrimitiveType) -> ResolvedParam {
+        ResolvedParam {
+            name: name.to_owned(),
+            ty: ResolvedTypeRef::Primitive(prim),
+        }
+    }
+
+    #[test]
+    fn lua_guest_handler_scalar_arg_unpacks_typed_slot() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "scale".to_owned(),
+            function_id: 0,
+            params: vec![scalar_param("amount", PrimitiveType::U32)],
+            returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+        };
+        let out: String = guest_handler(&func, &[]);
+        assert!(
+            out.contains(
+                "local args_val = ffi.cast(\"const uint32_t*\", ffi.cast(\"uintptr_t\", args_ptr))"
+            ),
+            "scalar arg must be cast back to its typed slot: {out}"
+        );
+        assert!(
+            out.contains("local result = instance:scale(args_val[0])"),
+            "impl must receive the unpacked scalar value, not raw pointers: {out}"
+        );
+        assert!(
+            !out.contains("instance:scale(args_ptr, out_ptr)"),
+            "scalar arg must NOT fall back to raw pointer pass-through: {out}"
+        );
+    }
+
+    #[test]
+    fn lua_guest_handler_buffer_arg_unpacks_cdata() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "store".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "data".to_owned(),
+                ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
+            }],
+            returns: None,
+        };
+        let out: String = guest_handler(&func, &[]);
+        assert!(
+            out.contains(
+                "local args_buf = ffi.cast(\"const Buffer*\", ffi.cast(\"uintptr_t\", args_ptr))"
+            ) && out.contains("local result = instance:store(args_buf[0])"),
+            "Buffer arg must be unpacked as a Buffer cdata: {out}"
+        );
+    }
+
+    #[test]
+    fn lua_guest_handler_struct_arg_unpacks_struct_cdata() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "compute".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "pair".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("Pair".to_owned()),
+            }],
+            returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+        };
+        let out: String = guest_handler(&func, &[]);
+        assert!(
+            out.contains(
+                "local args_struct = ffi.cast(\"const Pair*\", ffi.cast(\"uintptr_t\", args_ptr))"
+            ) && out.contains("local result = instance:compute(args_struct[0])"),
+            "struct arg must be unpacked as the cdef'd struct cdata: {out}"
+        );
+    }
+
+    #[test]
+    fn lua_guest_handler_enum_arg_passes_number() {
+        let enums: Vec<EnumDef> = vec![EnumDef {
+            name: "Level".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![EnumVariant {
+                name: "Info".to_owned(),
+                value: "1".to_owned(),
+            }],
+        }];
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "set_level".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "level".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("Level".to_owned()),
+            }],
+            returns: None,
+        };
+        let out: String = guest_handler(&func, &enums);
+        assert!(
+            out.contains(
+                "local args_enum = ffi.cast(\"const uint32_t*\", ffi.cast(\"uintptr_t\", args_ptr))"
+            ) && out.contains("local result = instance:set_level(tonumber(args_enum[0]))"),
+            "enum arg must be read through its repr slot and handed over as a number: {out}"
+        );
+    }
+
+    #[test]
+    fn lua_guest_handler_multi_param_unpacks_pack_fields() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "combine".to_owned(),
+            function_id: 0,
+            params: vec![
+                scalar_param("a", PrimitiveType::U32),
+                scalar_param("b", PrimitiveType::U32),
+            ],
+            returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+        };
+        let out: String = guest_handler(&func, &[]);
+        assert!(
+            out.contains(
+                "local args_pack = ffi.cast(\"const TestAddContractCombineArgs*\", ffi.cast(\"uintptr_t\", args_ptr))"
+            ),
+            "multi-param args must cast to the cdef'd arg-pack struct: {out}"
+        );
+        assert!(
+            out.contains("local result = instance:combine(args_pack[0].a, args_pack[0].b)"),
+            "each pack field must be unpacked and passed positionally: {out}"
+        );
+    }
+
+    #[test]
+    fn lua_guest_handler_buffer_return_marshalled_not_dropped() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "make".to_owned(),
+            function_id: 0,
+            params: vec![],
+            returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+        };
+        let out: String = guest_handler(&func, &[]);
+        assert!(
+            out.contains("local out_ref = ffi.cast(\"Buffer*\", ffi.cast(\"uintptr_t\", out_ptr))")
+                && out.contains("out_ref[0] = result"),
+            "Buffer return must be written into out_ptr, not silently dropped: {out}"
+        );
+        assert!(
+            out.contains(
+                "error(\"polyplug: implementation returned nil for a Buffer-returning function\")"
+            ),
+            "a nil Buffer return must raise rather than leave a zeroed out-slot: {out}"
+        );
+    }
+
+    #[test]
+    fn lua_guest_handler_struct_return_marshalled_not_dropped() {
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "build".to_owned(),
+            function_id: 0,
+            params: vec![],
+            returns: Some(ResolvedTypeRef::UserDefined("Pair".to_owned())),
+        };
+        let out: String = guest_handler(&func, &[]);
+        assert!(
+            out.contains("local out_ref = ffi.cast(\"Pair*\", ffi.cast(\"uintptr_t\", out_ptr))")
+                && out.contains("out_ref[0] = result"),
+            "struct return must be written into out_ptr, not silently dropped: {out}"
         );
     }
 }
