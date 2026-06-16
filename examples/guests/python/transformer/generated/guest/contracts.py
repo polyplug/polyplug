@@ -5,8 +5,8 @@
 from __future__ import annotations
 import ctypes
 from polyplug_abi import StringView, to_str
-from typing import Callable
-from polyplug_guest import register_contract, alloc_string_arena
+from typing import Any, Callable
+from polyplug_guest import register_contract, alloc_string_arena, AbiError, AbiErrorCode
 
 POLYPLUG_ABI_VERSION: int = 1
 
@@ -25,37 +25,44 @@ def set_transformer_factory(factory: Callable[[int], TRANSFORMERDataTransformerP
     global _transformer_FACTORY
     _transformer_FACTORY = factory
 
-def transformer_transform_abi(impl: TRANSFORMERDataTransformerPlugin, args_ptr: int, out_ptr: int, arena_ptr: int) -> None:
+def transformer_transform_abi(impl: TRANSFORMERDataTransformerPlugin, args_ptr: int, out_ptr: int, arena_ptr: int, arena_alloc: Callable[[int, int], int]) -> None:
     if not args_ptr:
         raise RuntimeError("null args pointer")
     if not out_ptr:
         raise RuntimeError("null out pointer")
     input: str = to_str(StringView.from_address(args_ptr))
     result = impl.transform(input)
-    out_view: StringView = alloc_string_arena(_polyplug_arena_alloc, arena_ptr, result)
+    out_view: StringView = alloc_string_arena(arena_alloc, arena_ptr, result)
     ctypes.memmove(out_ptr, ctypes.addressof(out_view), ctypes.sizeof(out_view))
 
 def polyplug_abi_version() -> int:
     return 1
 
-def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
-    """Record this bundle's contracts for the polyplug_python VM loader.
+def polyplug_init(host_ptr: int, ctx_ptr: int) -> tuple[list[dict[str, Any]], AbiError]:
+    """Build this bundle's contract registrations for the polyplug_python VM loader.
 
-    Deposits `_polyplug_registrations` via register_contract; the loader reads
-    it after this returns and registers each contract itself.
+    Returns a `(registrations, abi_error)` tuple: the loader reads this return
+    value (nothing is deposited into the module namespace) and, when `abi_error.code
+    == AbiErrorCode.Ok`, registers each contract in `registrations` itself. A factory
+    that was never set at import time yields `([], AbiError(code=AbiErrorCode.Generic))`.
 
     Args:
         host_ptr: HostApi pointer — passed to each author factory so every
                   implementation is constructed with its owning runtime's host
                   (no host pointer is stored in the guest SDK).
         ctx_ptr: BundleInitContext pointer (unused)
+
+    Returns:
+        (registrations, abi_error) — the loader consumes registrations only
+        when abi_error.code == AbiErrorCode.Ok.
     """
     _ = host_ptr
     _ = ctx_ptr
+    registrations: list[dict[str, Any]] = []
     if _transformer_FACTORY is None:
-        raise RuntimeError("set_transformer_factory(...) was not called at import time")
+        return [], AbiError(code=int(AbiErrorCode.Generic))
     register_contract(
-        globals(),
+        registrations,
         contract="data.Transformer@1",
         factory=_transformer_FACTORY,
         functions=[
@@ -63,4 +70,5 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
         ],
         plugin_name="transformer",
     )
+    return registrations, AbiError(code=int(AbiErrorCode.Ok))
 

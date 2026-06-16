@@ -1,26 +1,29 @@
 // Integration tests for the polyplug_python PythonLoader (VM dispatch model).
 //
-// Python guests are VM-dispatch (like Lua/JS): the guest deposits its contract
-// registrations in the module attribute `_polyplug_registrations`, and the
-// loader registers each contract with DispatchType::VirtualMachine, routing
-// per-call invocations through the `vm.call` transport.
+// Python guests are VM-dispatch (like Lua/JS): the guest RETURNS its contract
+// registrations from `polyplug_init` as a `(registrations, AbiError)` tuple, and
+// the loader registers each contract with DispatchType::VirtualMachine, routing
+// per-call invocations through the `vm.call` transport. Nothing is deposited into
+// any module namespace.
 //
-// Registration shape (the spec the generator/SDK must emit):
+// Return shape (the spec the generator/SDK must emit):
 //
-//   _polyplug_registrations = [
-//       {
-//           "contract": "name@major" | "name@major.minor",
-//           "plugin_name": "optional",          # defaults to bundle name
-//           "factory": factory,                 # factory(host_ptr) -> impl
-//           "functions": [callable, ...],       # ordered by fn_id
-//       },
-//   ]
+//   def polyplug_init(host_ptr, ctx_ptr):
+//       return [
+//           {
+//               "contract": "name@major" | "name@major.minor",
+//               "plugin_name": "optional",          # defaults to bundle name
+//               "factory": factory,                 # factory(host_ptr) -> impl
+//               "functions": [callable, ...],       # ordered by fn_id
+//           },
+//       ], abi_error   # abi_error.code == AbiErrorCode.Ok on success
 //
 // The loader calls `factory(host_ptr)` once per create_instance (and once at load
 // for the stateless default impl) and passes the resolved impl as the first
-// argument of each callable, so each callable is invoked as
-// fn(impl, args_ptr_int, out_ptr_int, arena_ptr_int). The stateless plugins below
-// take `impl` and ignore it.
+// argument of each callable, plus the per-bundle arena allocator as the last, so
+// each callable is invoked as
+// fn(impl, args_ptr_int, out_ptr_int, arena_ptr_int, arena_alloc). The stateless
+// plugins below take `impl` and ignore it.
 #![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
@@ -198,26 +201,32 @@ unsafe fn dispatch_with_arena(
     err
 }
 
-// ─── Plugin sources (VM dispatch / _polyplug_registrations) ─────────────────────
+// ─── Plugin sources (VM dispatch / polyplug_init returns registrations) ──────────
+//
+// Each inline source defines `_ABI_OK = type("AbiError", (), {"code": 0})()`, a
+// minimal stand-in for the SDK AbiError: the loader reads only `.code` (Ok == 0)
+// from the second element of the `(registrations, AbiError)` tuple that
+// polyplug_init returns.
 
 /// A plugin that registers one contract whose function 0 writes 0x2A into the
 /// 4-byte int at `out` (via ctypes) and ignores `args`/`arena`.
 const WRITE_OUT_PLUGIN_SRC: &str = r#"
 import ctypes
 
-def _fn0(impl, args_ptr, out_ptr, arena_ptr):
+_ABI_OK = type("AbiError", (), {"code": 0})()
+
+def _fn0(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = 0x2A
 
-def polyplug_init(host_interface: int, ctx: int) -> None:
-    global _polyplug_registrations
-    _polyplug_registrations = [
+def polyplug_init(host_interface: int, ctx: int):
+    return [
         {
             "contract": "writeout@1",
             "plugin_name": "writeout_plugin",
             "factory": lambda host_ptr: None,
             "functions": [_fn0],
         },
-    ]
+    ], _ABI_OK
 "#;
 
 /// Contract id for `writeout@1`.
@@ -227,14 +236,15 @@ fn writeout_contract_id() -> u64 {
 
 /// A plugin whose function 0 raises a Python exception.
 const RAISING_FN_PLUGIN_SRC: &str = r#"
-def _fn0(impl, args_ptr, out_ptr, arena_ptr):
+_ABI_OK = type("AbiError", (), {"code": 0})()
+
+def _fn0(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
     raise ValueError("dispatch boom")
 
-def polyplug_init(host_interface: int, ctx: int) -> None:
-    global _polyplug_registrations
-    _polyplug_registrations = [
+def polyplug_init(host_interface: int, ctx: int):
+    return [
         {"contract": "raiser@1", "factory": lambda host_ptr: None, "functions": [_fn0]},
-    ]
+    ], _ABI_OK
 "#;
 
 fn raiser_contract_id() -> u64 {
@@ -246,14 +256,15 @@ fn raiser_contract_id() -> u64 {
 const ARENA_FORWARD_PLUGIN_SRC: &str = r#"
 import ctypes
 
-def _fn0(impl, args_ptr, out_ptr, arena_ptr):
+_ABI_OK = type("AbiError", (), {"code": 0})()
+
+def _fn0(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int64))[0] = arena_ptr
 
-def polyplug_init(host_interface: int, ctx: int) -> None:
-    global _polyplug_registrations
-    _polyplug_registrations = [
+def polyplug_init(host_interface: int, ctx: int):
+    return [
         {"contract": "arenafwd@1", "factory": lambda host_ptr: None, "functions": [_fn0]},
-    ]
+    ], _ABI_OK
 "#;
 
 fn arenafwd_contract_id() -> u64 {
@@ -272,17 +283,18 @@ def not_polyplug_init():
     pass
 "#;
 
-/// `polyplug_init` runs but never deposits `_polyplug_registrations`.
+/// `polyplug_init` returns `None` instead of a `(registrations, AbiError)` tuple.
 const NO_REGISTRATIONS_PLUGIN_SRC: &str = r#"
-def polyplug_init(_host_interface: int, _ctx: int) -> None:
-    pass
+def polyplug_init(_host_interface: int, _ctx: int):
+    return None
 "#;
 
-/// `_polyplug_registrations` is an empty list (no contracts).
+/// `polyplug_init` returns an empty registrations list (no contracts).
 const EMPTY_REGISTRATIONS_PLUGIN_SRC: &str = r#"
-def polyplug_init(_host_interface: int, _ctx: int) -> None:
-    global _polyplug_registrations
-    _polyplug_registrations = []
+_ABI_OK = type("AbiError", (), {"code": 0})()
+
+def polyplug_init(_host_interface: int, _ctx: int):
+    return [], _ABI_OK
 "#;
 
 /// Syntax error.
@@ -603,7 +615,7 @@ fn test_raising_init_returns_init_failed() {
     }
 }
 
-/// A plugin that runs init but never deposits `_polyplug_registrations` fails.
+/// A plugin whose `polyplug_init` returns `None` (not a tuple) fails.
 #[test]
 fn test_missing_registrations_attr_fails() {
     let (_dir, path) = write_bundle("no_regs", NO_REGISTRATIONS_PLUGIN_SRC);
@@ -616,19 +628,19 @@ fn test_missing_registrations_attr_fails() {
             &polyplug::loader::BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
-        .expect_err("expected failure for missing registrations");
+        .expect_err("expected failure for non-tuple polyplug_init return");
     match err {
         LoaderError::InitFailed { error, .. } => {
             assert!(
-                error.contains("_polyplug_registrations"),
-                "error should mention the missing attribute; got: {error}"
+                error.contains("polyplug_init must return"),
+                "error should mention the bad return; got: {error}"
             );
         }
         other => panic!("expected InitFailed, got: {other:?}"),
     }
 }
 
-/// An empty `_polyplug_registrations` list registers no contracts and fails.
+/// An empty registrations list registers no contracts and fails.
 #[test]
 fn test_empty_registrations_fails() {
     let (_dir, path) = write_bundle("empty_regs", EMPTY_REGISTRATIONS_PLUGIN_SRC);
@@ -717,21 +729,22 @@ fn test_plugin_context_bundle_path_accessible() {
     let plugin_src: &str = r#"
 import ctypes
 
+_ABI_OK = type("AbiError", (), {"code": 0})()
+
 class _StringView(ctypes.Structure):
     _fields_ = [("ptr", ctypes.c_void_p), ("len", ctypes.c_size_t)]
 
 class _BundleInitContext(ctypes.Structure):
     _fields_ = [("bundle_id", ctypes.c_uint64), ("bundle_path", _StringView)]
 
-def _fn0(impl, args_ptr, out_ptr, arena_ptr):
+def _fn0(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
     pass
 
-def polyplug_init(_host_interface: int, ctx_addr: int) -> None:
+def polyplug_init(_host_interface: int, ctx_addr: int):
     ctx = _BundleInitContext.from_address(ctx_addr)
     assert ctx.bundle_path.ptr is not None and ctx.bundle_path.ptr != 0
     assert ctx.bundle_path.len > 0
-    global _polyplug_registrations
-    _polyplug_registrations = [{"contract": "ctxcheck@1", "factory": lambda host_ptr: None, "functions": [_fn0]}]
+    return [{"contract": "ctxcheck@1", "factory": lambda host_ptr: None, "functions": [_fn0]}], _ABI_OK
 "#;
 
     let (_dir, path) = write_bundle("ctx_check", plugin_src);
@@ -746,41 +759,41 @@ def polyplug_init(_host_interface: int, ctx_addr: int) -> None:
     assert!(result.is_ok(), "context check plugin failed: {result:?}");
 }
 
-/// Split-module bundle: a helper module defines `polyplug_init` and deposits
-/// `_polyplug_registrations` into its own namespace, and the entry module only
-/// `from helper import polyplug_init`. This mirrors the generated layout, where
-/// the entry file imports `polyplug_init` from `generated/guest/contracts.py`.
+/// Split-module bundle: a helper module defines `polyplug_init` (which RETURNS
+/// its registrations) and the entry module only `from helper import
+/// polyplug_init`. This mirrors the generated layout, where the entry file
+/// imports `polyplug_init` from `generated/guest/contracts.py`.
 ///
-/// The loader must collect the registrations from the namespace of the module
-/// that *defines* `polyplug_init` (its `__globals__`), not from the entry
-/// module — load + register + dispatch must all work.
+/// Because the registrations flow through `polyplug_init`'s return value (not a
+/// module namespace), the split-module and single-file layouts register
+/// identically — load + register + dispatch must all work.
 #[test]
 fn test_split_module_registrations_via_init_globals() {
-    // The helper's callable calls `_polyplug_arena_alloc(16, arena_ptr)` during
-    // dispatch. The bridge must resolve from the helper module's globals (where
-    // the ABI functions are defined), not only from the entry module — this locks
-    // the injection point at polyplug_init.__globals__. The dispatch passes a null
-    // arena, so the bridge takes the host-alloc fallback and must return a
-    // nonzero address; the callable writes that address (truthiness) into `out`.
+    // The helper's callable calls `arena_alloc(16, arena_ptr)` during dispatch,
+    // using the allocator the loader passed as the final argument (no module
+    // injection). The dispatch passes a null arena, so the allocator takes the
+    // host-alloc fallback and must return a nonzero address; the callable writes
+    // that address (truthiness) into `out`.
     let helper_src: &str = r#"
 import ctypes
 
-def _fn0(impl, args_ptr, out_ptr, arena_ptr):
-    buf = _polyplug_arena_alloc(16, arena_ptr)
+_ABI_OK = type("AbiError", (), {"code": 0})()
+
+def _fn0(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
+    buf = arena_alloc(16, arena_ptr)
     if buf == 0:
-        raise RuntimeError("_polyplug_arena_alloc returned 0")
+        raise RuntimeError("arena_alloc returned 0")
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = 0x2A
 
-def polyplug_init(host_interface: int, ctx: int) -> None:
-    global _polyplug_registrations
-    _polyplug_registrations = [
+def polyplug_init(host_interface: int, ctx: int):
+    return [
         {
             "contract": "splitmod@1",
             "plugin_name": "splitmod_plugin",
             "factory": lambda host_ptr: None,
             "functions": [_fn0],
         },
-    ]
+    ], _ABI_OK
 "#;
     let entry_src: &str = r#"
 from _splitmod_helper import polyplug_init
@@ -849,19 +862,20 @@ fn count_bundle_modules(helper_substr: &str) -> usize {
 fn write_split_bundle(name: &str, helper_module: &str, contract: &str) -> (TempDir, PathBuf) {
     let helper_src: String = format!(
         r#"
-def _fn0(impl, args_ptr, out_ptr, arena_ptr):
+_ABI_OK = type("AbiError", (), {{"code": 0}})()
+
+def _fn0(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
     pass
 
-def polyplug_init(host_interface: int, ctx: int) -> None:
-    global _polyplug_registrations
-    _polyplug_registrations = [
+def polyplug_init(host_interface: int, ctx: int):
+    return [
         {{
             "contract": "{contract}",
             "plugin_name": "{name}_plugin",
             "factory": lambda host_ptr: None,
             "functions": [_fn0],
         }},
-    ]
+    ], _ABI_OK
 "#
     );
     let entry_src: String = format!("from {helper_module} import polyplug_init\n");
@@ -920,35 +934,37 @@ fn unload_purges_bundle_modules_from_sys_modules() {
 /// test-injected builtin `__polyplug_test_nested_dispatch()` (a Rust closure that
 /// resolves this contract and calls its VM dispatch with a NULL arena). After the
 /// nested call returns, OUTER allocates a 64-byte buffer from its OWN `arena_ptr`
-/// via `_polyplug_arena_alloc(size, arena)` and writes the address into `out_ptr`.
+/// via `arena_alloc(size, arena)` and writes the address into `out_ptr`.
 /// fn_id 1 (INNER) allocates from its own (null) arena and ignores `out`.
 ///
 /// Going through a real `python_vm_dispatch` reentry — rather than a plain Python
 /// call — is what would have triggered the old shared-cell bug: the INNER call's
 /// exit-time clear-to-0 wiped the cell, so OUTER's post-nested allocation (reading
 /// the cell) fell back to host->alloc and escaped the outer arena. With the arena
-/// threaded as an explicit argument, OUTER always uses its own `arena_ptr`.
+/// (and its allocator) threaded as explicit arguments, OUTER always uses its own
+/// `arena_ptr`.
 ///
 /// The nested re-entry is driven from Rust (no ctypes struct-return calls, which
 /// are UB on some targets) so the test exercises the loader's actual dispatch path.
 const NESTED_ARENA_PLUGIN_SRC: &str = r#"
 import ctypes
 
-def _inner(impl, args_ptr, out_ptr, arena_ptr):
-    _polyplug_arena_alloc(16, arena_ptr)
+_ABI_OK = type("AbiError", (), {"code": 0})()
 
-def _outer(impl, args_ptr, out_ptr, arena_ptr):
+def _inner(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
+    arena_alloc(16, arena_ptr)
+
+def _outer(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
     # Real nested dispatch into fn_id 1 via the test-injected Rust trampoline.
     __polyplug_test_nested_dispatch()
     # After the nested call returned, allocate from the OUTER arena_ptr and report.
-    addr = _polyplug_arena_alloc(64, arena_ptr)
+    addr = arena_alloc(64, arena_ptr)
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int64))[0] = addr
 
-def polyplug_init(host_interface: int, ctx: int) -> None:
-    global _polyplug_registrations
-    _polyplug_registrations = [
+def polyplug_init(host_interface: int, ctx: int):
+    return [
         {"contract": "nestedarena@1", "factory": lambda host_ptr: None, "functions": [_outer, _inner]},
-    ]
+    ], _ABI_OK
 "#;
 
 fn nestedarena_contract_id() -> u64 {
@@ -1056,15 +1072,16 @@ fn test_nested_dispatch_preserves_outer_arena() {
 const ARENA_ECHO_PLUGIN_SRC: &str = r#"
 import ctypes
 
-def _fn0(impl, args_ptr, out_ptr, arena_ptr):
-    addr = _polyplug_arena_alloc(64, arena_ptr)
+_ABI_OK = type("AbiError", (), {"code": 0})()
+
+def _fn0(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
+    addr = arena_alloc(64, arena_ptr)
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int64))[0] = addr
 
-def polyplug_init(host_interface: int, ctx: int) -> None:
-    global _polyplug_registrations
-    _polyplug_registrations = [
+def polyplug_init(host_interface: int, ctx: int):
+    return [
         {"contract": "arenaecho@1", "factory": lambda host_ptr: None, "functions": [_fn0]},
-    ]
+    ], _ABI_OK
 "#;
 
 fn arenaecho_contract_id() -> u64 {
@@ -1205,14 +1222,15 @@ const SHARED_NAME_ENTRY_SRC: &str = r#"
 import ctypes
 from shared_helper import VALUE
 
-def _fn0(impl, args_ptr, out_ptr, arena_ptr):
+_ABI_OK = type("AbiError", (), {"code": 0})()
+
+def _fn0(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = VALUE
 
-def polyplug_init(host_interface: int, ctx: int) -> None:
-    global _polyplug_registrations
-    _polyplug_registrations = [
+def polyplug_init(host_interface: int, ctx: int):
+    return [
         {"contract": "{contract}", "factory": lambda host_ptr: None, "functions": [_fn0]},
-    ]
+    ], _ABI_OK
 "#;
 
 /// Write a same-named bundle whose `shared_helper.VALUE == value` and whose

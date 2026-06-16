@@ -35,19 +35,22 @@ use polyplug_utils::bundle_id;
 const CODE_PLUGIN_SRC: &str = r#"
 import ctypes
 
-def _fn0(impl, args_ptr, out_ptr, arena_ptr):
+# Minimal stand-in for the SDK AbiError: the loader reads only `.code` (Ok == 0).
+_ABI_OK = type("AbiError", (), {"code": 0})()
+
+def _fn0(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
     ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = 0x7B
 
-def polyplug_init(host_interface: int, _ctx: int) -> None:
-    global _polyplug_registrations
-    _polyplug_registrations = [
+def polyplug_init(host_interface: int, _ctx: int):
+    # polyplug_init RETURNS (registrations, AbiError); nothing is deposited.
+    return [
         {
             "contract": "code.contract@1",
             "plugin_name": "code_plugin",
             "factory": lambda host_ptr: None,
             "functions": [_fn0],
         },
-    ]
+    ], _ABI_OK
 "#;
 
 /// Contract id the inline plugin registers under (`code.contract@1`).

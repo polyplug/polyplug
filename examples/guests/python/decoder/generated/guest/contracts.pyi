@@ -4,9 +4,9 @@
 
 from __future__ import annotations
 from typing import Any
+from polyplug_guest import AbiError
 
 POLYPLUG_ABI_VERSION: int
-_polyplug_registrations: list[dict[str, Any]]
 
 class PipelineDecoderGuestContract:
     def decode(self, input: str) -> str: ...
@@ -34,6 +34,6 @@ class PipelineValidatorGuestContract:
 def set_PIPELINE_VALIDATOR_impl(impl: PipelineValidatorGuestContract) -> None: ...
 
 def polyplug_abi_version() -> int: ...
-def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
-    """Initialize plugin with HostApi pointer."""
+def polyplug_init(host_ptr: int, ctx_ptr: int) -> tuple[list[dict[str, Any]], AbiError]:
+    """Initialize the plugin and return its (registrations, AbiError)."""
     ...

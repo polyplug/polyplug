@@ -20,28 +20,27 @@
 //!
 //! # Registration protocol (the contract the generator/SDK must emit)
 //!
-//! After the loader executes the plugin module and calls its
-//! `polyplug_init(host_ptr: int, ctx_ptr: int) -> None`, the loader reads a
-//! module-level attribute named **`_polyplug_registrations`** from the namespace
-//! of the module that **defines** `polyplug_init` (its `__globals__`), not from
-//! the entry module that was loaded. This is the single rule that covers both
-//! bundle layouts with one semantic:
+//! After the loader executes the plugin module, it calls its
+//! `polyplug_init(host_ptr: int, ctx_ptr: int) -> tuple[list[dict], AbiError]`.
+//! `polyplug_init` RETURNS its registrations directly; the loader reads that
+//! return value — **nothing is deposited into any module namespace**. The return
+//! is a two-tuple `(registrations, abi_error)`:
 //!
-//! - the hand-written/single-file layout, where the entry module defines
-//!   `polyplug_init` itself (so `__globals__` *is* the entry module's namespace),
-//!   and
-//! - the generated layout, where the entry file does
-//!   `from generated.guest.contracts import polyplug_init` and the registrations
-//!   are deposited into the *contracts* module that defines `polyplug_init`.
+//! - `registrations` is the list of registration dicts (shape below);
+//! - `abi_error` is an `AbiError` ctypes struct: `code == AbiErrorCode::Ok`
+//!   selects the registration list; any other code surfaces as a loader error
+//!   (e.g. an author factory was never set at import time).
 //!
-//! If `polyplug_init` is not a plain Python function (it has no `__globals__`,
-//! e.g. a C callable), the loader falls back to reading `_polyplug_registrations`
-//! from the entry module's namespace.
+//! This single rule covers both bundle layouts — the hand-written/single-file
+//! layout (the entry module defines `polyplug_init` itself) and the generated
+//! split-module layout (the entry file does `from generated.guest.contracts
+//! import polyplug_init`) — because the data flows through the function's return
+//! value, not the namespace of whatever module defines it.
 //!
-//! Its shape:
+//! The `registrations` list shape:
 //!
 //! ```python
-//! _polyplug_registrations = [
+//! registrations = [
 //!     {
 //!         # Canonical contract string: "<name>@<major>" or "<name>@<major>.<minor>".
 //!         # Only <name> and <major> are significant; <minor> (if present) is parsed
@@ -52,16 +51,17 @@
 //!         # Author factory: factory(host_ptr_int) -> impl. Called once per
 //!         # create_instance (and once at load for the stateless default impl).
 //!         "factory": make_calculator,
-//!         # Callables ordered by fn_id: functions[0] is fn_id 0, etc.
-//!         # Each is invoked as functions[fn_id](impl, args_ptr_int, out_ptr_int, arena_ptr_int).
+//!         # Callables ordered by fn_id: functions[0] is fn_id 0, etc. Each is invoked as
+//!         # functions[fn_id](impl, args_ptr_int, out_ptr_int, arena_ptr_int, arena_alloc).
 //!         "functions": [add, sub, mul],
 //!     },
 //!     # ... one dict per contract; multi-contract bundles add more entries.
 //! ]
 //! ```
 //!
-//! Each callable receives the resolved instance `impl` followed by three Python
-//! `int`s — the raw `args`, `out`, and `arena` pointers — and unmarshals/marshals
+//! Each callable receives the resolved instance `impl`, then three Python `int`s
+//! — the raw `args`, `out`, and `arena` pointers — and finally the loader's
+//! `arena_alloc` callable (see the arena bridge section). It unmarshals/marshals
 //! through them (the generated guest glue does this). A callable returns normally
 //! on success (its return value is ignored) and raises a Python exception on
 //! failure, which the loader maps to [`AbiErrorCode::Generic`].
@@ -80,31 +80,26 @@
 //!
 //! # Arena bridge
 //!
-//! The loader injects a module-level callable **`_polyplug_arena_alloc(size,
-//! arena) -> int`** before `polyplug_init` runs — into the namespace of the
-//! module that *defines* `polyplug_init` (its `__globals__`) AND the entry
-//! module. This is the same single rule that governs registrations collection:
-//! the guest's ABI functions that call `_polyplug_arena_alloc` live in the module
-//! defining `polyplug_init`, so the bridge must be reachable from that module's
-//! globals. In the split-module generated layout the entry file only
-//! `from … import polyplug_init`, so its own namespace is not where the ABI
-//! functions resolve names — `__globals__` is. The dual injection is
-//! belt-and-braces: in the single-file hand-written layout the two targets are
-//! the same dict; if `polyplug_init` is not a plain Python function (no
-//! `__globals__`, e.g. a C callable), only the entry-module injection applies —
-//! the same fallback as registrations collection. Injection must happen after
-//! `polyplug_init` is located but before it (and any dispatch) runs.
+//! The loader builds one **`arena_alloc(size, arena) -> int`** callable per
+//! bundle and **passes it as the FINAL positional argument of every dispatch
+//! call** — `callable(impl, args, out, arena, arena_alloc)`. Nothing is injected
+//! into any module namespace: the callable travels with each call frame, so the
+//! split-module generated layout and the single-file hand-written layout are
+//! served identically (the guest never resolves the allocator by name). The
+//! per-contract [`PythonLoaderData`] holds the callable and clones a bound
+//! reference into each dispatch.
 //!
-//! The arena pointer is threaded EXPLICITLY: every guest callable receives the
-//! active [`CallArena`] pointer as its third `int` argument and forwards it to
-//! `_polyplug_arena_alloc(size, arena)`. The bridge serves the guest's per-call
-//! return buffers from exactly that arena, falling back to `host->alloc` when the
-//! caller has no arena (pointer 0). There is NO shared per-bundle cell: allocation
-//! correctness never depends on any published state, so neither a concurrent
-//! dispatch on another thread nor a same-thread nested dispatch can perturb the
-//! arena seen by an in-flight call (an earlier shared-cell design was racy — a
-//! concurrent attach could overwrite the cell mid-call, and a nested call's
-//! exit-time clear would wipe the outer call's arena).
+//! The arena pointer is likewise threaded EXPLICITLY: every guest callable
+//! receives the active [`CallArena`] pointer as its third `int` argument and
+//! forwards it to `arena_alloc(size, arena)`. The allocator serves the guest's
+//! per-call return buffers from exactly that arena, falling back to `host->alloc`
+//! when the caller has no arena (pointer 0). There is NO shared per-bundle cell
+//! and NO module global: allocation correctness never depends on any published
+//! state, so neither a concurrent dispatch on another thread nor a same-thread
+//! nested dispatch can perturb the arena (or allocator) seen by an in-flight call
+//! (an earlier shared-cell/module-injection design was racy — a concurrent attach
+//! could overwrite the cell mid-call, and a nested call's exit-time clear would
+//! wipe the outer call's arena).
 //!
 //! # Reentrancy
 //!
@@ -114,9 +109,9 @@
 //! reentrant on the same thread: a nested attach from a plugin→plugin
 //! cross-call simply re-enters the held GIL without deadlocking. No reentrancy
 //! guard is needed or used here. Nested dispatch is also arena-safe: because each
-//! call carries its own arena pointer through its own call frame (not a shared
-//! cell), the inner call's arena and the outer call's arena never alias or clear
-//! one another.
+//! call carries its own arena pointer (and the shared, stateless `arena_alloc`
+//! callable) through its own call frame — not a shared mutable cell — the inner
+//! call's arena and the outer call's arena never alias or clear one another.
 
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
@@ -128,10 +123,10 @@ use pyo3::Py;
 use pyo3::PyAny;
 use pyo3::Python;
 use pyo3::types::PyAnyMethods;
-use pyo3::types::PyDict;
-use pyo3::types::PyDictMethods;
 use pyo3::types::PyList;
 use pyo3::types::PyListMethods;
+use pyo3::types::PyTuple;
+use pyo3::types::PyTupleMethods;
 
 use polyplug::error::LoaderError;
 use polyplug_abi::AbiError;
@@ -149,31 +144,31 @@ use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 use polyplug_abi::types::Version;
 use polyplug_utils::GuestContractId;
 
-/// The module-level attribute the guest populates with its contract
-/// registrations. See the module docs for the exact shape.
-pub(crate) const REGISTRATIONS_ATTR: &str = "_polyplug_registrations";
-
-/// The arena-allocator bridge injected into the plugin module namespace.
-pub(crate) const ARENA_ALLOC_ATTR: &str = "_polyplug_arena_alloc";
-
 // ─── Per-bundle loader data for VM dispatch ─────────────────────────────────────
 
 /// Loader-specific data for one Python contract's VM dispatch and per-instance
 /// lifecycle.
 ///
 /// Holds the contract's callables (ordered by `fn_id`), the author `factory`
-/// used to build implementation objects, the per-instance registry, and the
-/// stateless `default_impl`. The active per-call arena pointer is NOT stored
-/// here: it is threaded explicitly as the third value argument of every guest
-/// callable (`callable(impl, args, out, arena)`) and forwarded by the guest to
-/// `_polyplug_arena_alloc(size, arena)`, so allocation never depends on any
-/// shared cell. This is what makes concurrent and same-thread reentrant dispatch
-/// correct: each call's arena travels with its own call frame rather than through
-/// a cell another dispatch could overwrite or clear.
+/// used to build implementation objects, the per-instance registry, the
+/// stateless `default_impl`, and the per-bundle `arena_alloc` callable. The
+/// active per-call arena pointer is NOT stored here: it is threaded explicitly as
+/// the third value argument of every guest callable (`callable(impl, args, out,
+/// arena, arena_alloc)`) and forwarded by the guest to `arena_alloc(size,
+/// arena)`, so allocation never depends on any shared cell. The `arena_alloc`
+/// callable itself is stateless (it reads the arena from its argument), so
+/// sharing one per bundle is sound. This is what makes concurrent and same-thread
+/// reentrant dispatch correct: each call's arena travels with its own call frame
+/// rather than through a cell another dispatch could overwrite or clear.
 pub struct PythonLoaderData {
     /// Callables ordered by `fn_id`. `callables[i]` handles `fn_id == i`.
-    /// Each is invoked as `callable(impl, args, out, arena)`.
+    /// Each is invoked as `callable(impl, args, out, arena, arena_alloc)`.
     pub callables: Vec<Py<PyAny>>,
+    /// Per-bundle arena allocator `arena_alloc(size, arena) -> int`, passed as
+    /// the final positional argument of every dispatch call. Stateless: it reads
+    /// the target arena from its `arena` argument (or falls back to `host->alloc`
+    /// when that is 0), so one instance is shared across all calls and threads.
+    pub arena_alloc: Py<PyAny>,
     /// Author factory `factory(host_ptr_int) -> impl`, called once per
     /// `create_instance` to build a fresh implementation bound to its owning
     /// runtime's host pointer.
@@ -296,9 +291,10 @@ unsafe extern "C" fn python_destroy_instance(
 /// Acquires the GIL via pyo3 (correct from any host thread), resolves the impl for
 /// `instance` (the per-contract default impl when the handle is null), looks up the
 /// callable for `fn_id` in the per-contract [`PythonLoaderData`], and invokes
-/// `callable(impl, args_ptr_int, out_ptr_int, arena_ptr_int)`. The arena pointer is
-/// passed straight to the guest as the last argument — there is no shared cell —
-/// so the guest forwards it to `_polyplug_arena_alloc(size, arena)` and a
+/// `callable(impl, args_ptr_int, out_ptr_int, arena_ptr_int, arena_alloc)`. The arena
+/// pointer is passed straight to the guest as its fourth argument and the per-bundle
+/// `arena_alloc` callable as its fifth — there is no shared cell and no module global —
+/// so the guest forwards both to `arena_alloc(size, arena)` and a
 /// concurrent or nested dispatch cannot perturb this call's arena. A normal
 /// return maps to [`AbiError::ok`]; a Python exception maps to
 /// [`AbiErrorCode::Generic`]; an out-of-range `fn_id` maps to
@@ -387,12 +383,14 @@ unsafe fn python_vm_dispatch_impl(
         };
 
         // The impl is the first call argument; the arena pointer travels as the
-        // last. The guest forwards the arena to `_polyplug_arena_alloc(size,
-        // arena)`. No shared cell is published, so a concurrent or same-thread
-        // nested dispatch cannot overwrite or clear this call's arena.
+        // fourth and the per-bundle `arena_alloc` callable as the fifth. The guest
+        // forwards both to `arena_alloc(size, arena)`. Nothing is published to a
+        // shared cell or module global, so a concurrent or same-thread nested
+        // dispatch cannot overwrite or clear this call's arena.
+        let arena_alloc: Bound<'_, PyAny> = data.arena_alloc.bind(py).clone();
         let bound: Bound<'_, PyAny> = callable.bind(py).clone();
         let call_result: Result<Bound<'_, PyAny>, pyo3::PyErr> =
-            bound.call((impl_py, args_int, out_int, arena_int), None);
+            bound.call((impl_py, args_int, out_int, arena_int, arena_alloc), None);
 
         match call_result {
             Ok(_) => AbiError::ok(),
@@ -409,8 +407,8 @@ unsafe fn python_vm_dispatch_impl(
 
 // ─── Registration collection ────────────────────────────────────────────────────
 
-/// One contract's collected registration data, extracted from the guest's
-/// `_polyplug_registrations` list.
+/// One contract's collected registration data, extracted from the registrations
+/// list `polyplug_init` returned.
 pub(crate) struct ContractRegistration {
     /// Bare contract name (the part before `@`).
     pub contract_name: String,
@@ -466,79 +464,75 @@ pub(crate) fn parse_contract_string(
     Ok((name.to_owned(), major))
 }
 
-/// Resolve `_polyplug_registrations` from the namespace of the module that
-/// *defines* `polyplug_init`.
+/// Read and validate the `(registrations, abi_error)` tuple that
+/// `polyplug_init` returned into a `Vec<ContractRegistration>`.
 ///
-/// The registrations live in the global namespace of the module that defines
-/// `polyplug_init`, which is exactly that function's `__globals__` dict. This
-/// makes the split-module generated layout (entry file imports `polyplug_init`
-/// from a `contracts` module that deposits the registrations) and the single-file
-/// hand-written layout (entry module defines `polyplug_init` itself) collapse to
-/// one rule.
+/// `polyplug_init` returns a two-tuple whose first element is the registrations
+/// list and whose second is an `AbiError` ctypes struct. This function checks the
+/// `AbiError::code` first: a non-`Ok` code surfaces as `InitFailed` (the guest
+/// signalled an init failure, e.g. an author factory was never set), and only an
+/// `Ok` code proceeds to parse the list. No module namespace is read — the data
+/// flows through the function's return value, so the split-module and single-file
+/// layouts are served identically.
 ///
-/// `__globals__` is a plain `dict`, so the attribute is read by *item* lookup,
-/// not attribute lookup. If `init_fn` is not a plain Python function (no
-/// `__globals__`, e.g. a C callable), fall back to the entry module's namespace,
-/// where attribute lookup reaches the same `__dict__` keys.
-///
-/// Returns `Ok(None)` when the namespace exists but the attribute is absent so
-/// the caller can emit a precise "missing" error.
-fn resolve_registrations<'py>(
-    init_fn: &Bound<'py, PyAny>,
-    entry_module: &Bound<'py, PyAny>,
-) -> Result<Option<Bound<'py, PyAny>>, pyo3::PyErr> {
-    match init_fn.getattr("__globals__") {
-        Ok(globals) => match globals.cast_into::<PyDict>() {
-            Ok(dict) => dict.get_item(REGISTRATIONS_ATTR),
-            // `__globals__` is always a dict for a real Python function; if it is
-            // somehow not, treat registrations as absent rather than erroring.
-            Err(_) => Ok(None),
-        },
-        Err(_) => match entry_module.getattr(REGISTRATIONS_ATTR) {
-            Ok(attr) => Ok(Some(attr)),
-            Err(_) => Ok(None),
-        },
-    }
-}
-
-/// Read and validate the guest's `_polyplug_registrations` attribute into a
-/// `Vec<ContractRegistration>`.
-///
-/// The attribute is read from the namespace of the module that *defines*
-/// `polyplug_init` (its `__globals__` dict), falling back to the entry module's
-/// namespace when `init_fn` is not a plain Python function (see
-/// [`resolve_registrations`]).
-///
-/// Returns `InitFailed` if the attribute is missing, is not a list, or any entry
-/// is malformed (missing `contract`/`functions`, bad contract string, or a
-/// non-callable in `functions`).
+/// Returns `InitFailed` if the return is not a 2-tuple, the error code is not
+/// `Ok`, the first element is not a list, or any entry is malformed (missing
+/// `contract`/`functions`, bad contract string, or a non-callable in
+/// `functions`).
 pub(crate) fn collect_registrations(
     py: Python<'_>,
-    init_fn: &Bound<'_, PyAny>,
-    entry_module: &Bound<'_, PyAny>,
+    init_ret: &Bound<'_, PyAny>,
     bundle_name: &str,
 ) -> Result<Vec<ContractRegistration>, LoaderError> {
-    let attr: Bound<'_, PyAny> = resolve_registrations(init_fn, entry_module)
-        .map_err(|_| LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!(
-                "failed to read `{}` from the module defining polyplug_init",
-                REGISTRATIONS_ATTR
-            ),
-        })?
-        .ok_or_else(|| LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!(
-                "Python plugin missing `{}` in the module defining polyplug_init",
-                REGISTRATIONS_ATTR
-            ),
-        })?;
-
-    let list: Bound<'_, PyList> =
-        attr.cast_into::<PyList>()
+    let tuple: Bound<'_, PyTuple> =
+        init_ret
+            .cast::<PyTuple>()
+            .cloned()
             .map_err(|_| LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
-                error: format!("`{}` must be a list of dicts", REGISTRATIONS_ATTR),
+                error: "polyplug_init must return a (registrations, AbiError) tuple".to_owned(),
+            })?;
+    if tuple.len() != 2 {
+        return Err(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!(
+                "polyplug_init must return a 2-tuple (registrations, AbiError), got {} elements",
+                tuple.len()
+            ),
+        });
+    }
+
+    let registrations_obj: Bound<'_, PyAny> =
+        tuple.get_item(0).map_err(|_| LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: "polyplug_init return tuple missing registrations element".to_owned(),
+        })?;
+    let abi_error_obj: Bound<'_, PyAny> =
+        tuple.get_item(1).map_err(|_| LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: "polyplug_init return tuple missing AbiError element".to_owned(),
+        })?;
+
+    let code: u32 = abi_error_obj
+        .getattr("code")
+        .and_then(|c: Bound<'_, PyAny>| c.extract::<u32>())
+        .map_err(|_| LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: "polyplug_init AbiError has no readable u32 `code` field".to_owned(),
+        })?;
+    if code != AbiErrorCode::Ok as u32 {
+        return Err(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("polyplug_init reported AbiError code {}", code),
+        });
+    }
+
+    let list: Bound<'_, PyList> =
+        registrations_obj
+            .cast_into::<PyList>()
+            .map_err(|_| LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: "polyplug_init registrations must be a list of dicts".to_owned(),
             })?;
 
     let mut registrations: Vec<ContractRegistration> = Vec::with_capacity(list.len());
@@ -639,6 +633,15 @@ pub(crate) fn register_contracts(
 ) -> Result<u32, LoaderError> {
     let mut registered: u32 = 0_u32;
 
+    // One arena allocator per bundle, bound to the runtime's host pointer. It is
+    // stateless (reads the target arena from its argument), so every contract's
+    // dispatch shares the same instance: the loader passes it as the final
+    // positional argument of each guest callable. Nothing is injected into any
+    // module namespace.
+    let arena_alloc: Py<PyAny> = Python::attach(|py: Python<'_>| {
+        build_arena_bridge(py, host_interface, bundle_name).map(|b: Bound<'_, PyAny>| b.unbind())
+    })?;
+
     for reg in registrations {
         let cid: GuestContractId = GuestContractId::new(&reg.contract_name, reg.contract_major);
 
@@ -664,8 +667,11 @@ pub(crate) fn register_contracts(
                 ),
             })?;
 
+        let arena_alloc_clone: Py<PyAny> =
+            Python::attach(|py: Python<'_>| arena_alloc.clone_ref(py));
         let loader_data: Box<PythonLoaderData> = Box::new(PythonLoaderData {
             callables: reg.callables,
+            arena_alloc: arena_alloc_clone,
             factory: reg.factory,
             default_impl,
             instances: Mutex::new(HashMap::new()),
@@ -753,17 +759,14 @@ pub(crate) fn register_contracts(
     if registered == 0 {
         return Err(LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
-            error: format!(
-                "`{}` registered no contracts (empty list)",
-                REGISTRATIONS_ATTR
-            ),
+            error: "polyplug_init returned no contracts (empty registrations list)".to_owned(),
         });
     }
 
     Ok(registered)
 }
 
-/// Build the `_polyplug_arena_alloc(size, arena) -> int` bridge callable.
+/// Build the `arena_alloc(size, arena) -> int` bridge callable.
 ///
 /// The arena pointer is supplied EXPLICITLY by the caller as the second argument:
 /// it is the `arena` int the guest received as the third argument of its dispatch
@@ -773,8 +776,9 @@ pub(crate) fn register_contracts(
 /// back to `host->alloc`, preserving per-value allocation behaviour. Returns the
 /// allocated address as a Python `int` (0 on failure).
 ///
-/// One bridge is built per bundle; the caller injects it into the relevant module
-/// namespaces via [`inject_arena_bridge`].
+/// One bridge is built per bundle and stored in each contract's
+/// [`PythonLoaderData`]; the dispatcher passes it as the final positional argument
+/// of every guest callable. It is never injected into any module namespace.
 fn build_arena_bridge<'py>(
     py: Python<'py>,
     host_interface: *const HostApi,
@@ -817,72 +821,8 @@ fn build_arena_bridge<'py>(
     .map(|f: Bound<'_, pyo3::types::PyCFunction>| f.into_any())
     .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
-        error: format!("failed to create `{}` bridge: {}", ARENA_ALLOC_ATTR, e),
+        error: format!("failed to create arena_alloc bridge: {}", e),
     })
-}
-
-/// Build the arena bridge and inject it into BOTH the entry module's namespace
-/// and the namespace of the module that *defines* `polyplug_init` (its
-/// `__globals__` dict).
-///
-/// This is the same single rule that governs registrations collection (see
-/// [`resolve_registrations`]): the ABI functions that call
-/// `_polyplug_arena_alloc` live in the module that *defines* `polyplug_init`, so
-/// the bridge must be reachable from that module's globals. In the split-module
-/// generated layout the entry file only `from … import polyplug_init`, so its own
-/// namespace is not where the ABI functions resolve names — `__globals__` is.
-///
-/// Injecting into both namespaces is belt-and-braces: in the single-file
-/// hand-written layout the entry module *is* the module defining `polyplug_init`,
-/// so both targets are the same dict and the second `setitem` is harmless; in the
-/// split-module layout the entry-module injection is harmless and the
-/// `__globals__` injection is the one that makes dispatch resolve the bridge.
-///
-/// `__globals__` is a plain `dict`, so the bridge is set by *item* assignment, not
-/// attribute assignment. If `init_fn` is not a plain Python function (no
-/// `__globals__`, e.g. a C callable), only the entry-module injection applies —
-/// the same fallback as registrations collection.
-///
-/// Must be called *after* `polyplug_init` is located (so its `__globals__` is the
-/// real defining namespace) but *before* it is invoked (so the bridge is present
-/// when the guest's ABI functions are first reachable).
-pub(crate) fn inject_arena_bridge(
-    py: Python<'_>,
-    module: &Bound<'_, PyAny>,
-    init_fn: &Bound<'_, PyAny>,
-    host_interface: *const HostApi,
-    bundle_name: &str,
-) -> Result<(), LoaderError> {
-    let bridge: Bound<'_, PyAny> = build_arena_bridge(py, host_interface, bundle_name)?;
-
-    // Inject into the entry module's namespace (covers single-file plugins, where
-    // the entry module is also the module defining polyplug_init).
-    module
-        .setattr(ARENA_ALLOC_ATTR, &bridge)
-        .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!("failed to inject `{}`: {}", ARENA_ALLOC_ATTR, e),
-        })?;
-
-    // Inject into the namespace of the module that defines polyplug_init (its
-    // __globals__), where the guest's ABI functions resolve the bridge. This is
-    // the load-bearing injection for the split-module generated layout. Falls back
-    // to nothing extra when init_fn has no __globals__ (non-plain callable): the
-    // entry-module injection above already covers that case.
-    if let Ok(globals) = init_fn.getattr("__globals__")
-        && let Ok(dict) = globals.cast_into::<PyDict>()
-    {
-        dict.set_item(ARENA_ALLOC_ATTR, &bridge)
-            .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!(
-                    "failed to inject `{}` into polyplug_init.__globals__: {}",
-                    ARENA_ALLOC_ATTR, e
-                ),
-            })?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

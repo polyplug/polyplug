@@ -815,7 +815,7 @@ const RESERVED_WORDS: &[ReservedWord] = &[
 
 /// Prefixes the polyplug generators reserve for their own emitted symbols.
 /// Any user identifier starting with one of these would collide with generated
-/// code (e.g. `_polyplug_arena_alloc`, `polyplug_create_<plugin>`).
+/// code (e.g. `polyplug_init`, `polyplug_create_<plugin>`).
 const RESERVED_PREFIXES: &[&str] = &["polyplug_", "_polyplug"];
 
 /// Return the human-readable list of language(s) that reserve `name`, or `None`

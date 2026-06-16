@@ -494,7 +494,7 @@ fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
     std::fs::write(dir.join("manifest.toml"), manifest).expect("write manifest.toml");
 
     let plugin_py: &str = "from polyplug_abi import bytes_as_view, to_str\n\
-         from polyplug_guest import LogLevel, log, register_contract\n\
+         from polyplug_guest import LogLevel, log, register_contract, AbiError, AbiErrorCode\n\
          \n\
          # log() takes the host pointer explicitly (no SDK-level host storage).\n\
          # A zero host pointer must be a graceful no-op, never a crash or a\n\
@@ -522,19 +522,21 @@ fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
          \x20       log(self._host_ptr, LogLevel.Info, \"guest.logdemo\", to_str(view))\n\
          \n\
          \n\
-         def _do_log(impl, args_ptr: int, out_ptr: int, arena_ptr: int) -> None:\n\
+         def _do_log(impl, args_ptr: int, out_ptr: int, arena_ptr: int, arena_alloc) -> None:\n\
          \x20   impl.do_log()\n\
          \n\
          \n\
-         def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n\
+         def polyplug_init(host_ptr: int, ctx_ptr: int):\n\
          \x20   _ = host_ptr\n\
+         \x20   registrations = []\n\
          \x20   register_contract(\n\
-         \x20       globals(),\n\
+         \x20       registrations,\n\
          \x20       contract=\"test.logdemo@1\",\n\
          \x20       factory=LogDemo,\n\
          \x20       functions=[_do_log],\n\
          \x20       plugin_name=\"logdemo\",\n\
-         \x20   )\n";
+         \x20   )\n\
+         \x20   return registrations, AbiError(code=int(AbiErrorCode.Ok))\n";
     std::fs::write(dir.join("logdemo.py"), plugin_py).expect("write logdemo.py");
 
     vendor_current_python_sdk(&dir);

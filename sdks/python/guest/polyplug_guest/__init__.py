@@ -2,23 +2,28 @@
 
 Python plugins are VM-dispatch plugins (like Lua and JavaScript): the guest
 never builds a ``GuestContractInterface`` or registers native function
-pointers. Instead the loader executes the plugin module, calls its
-``polyplug_init(host_ptr: int, ctx_ptr: int) -> None``, then reads the
-module-level ``_polyplug_registrations`` list the guest populated. The loader
-wraps each registration in a VM-dispatch interface and registers it with the
-runtime itself.
+pointers. Instead the loader executes the plugin module and calls its
+``polyplug_init(host_ptr: int, ctx_ptr: int) -> tuple[list[dict], AbiError]``.
+``polyplug_init`` RETURNS its registrations directly — nothing is deposited into
+any module namespace. The loader reads the returned tuple: ``abi_error.code ==
+AbiErrorCode.Ok`` selects the registration list it then wraps in a VM-dispatch
+interface and registers with the runtime itself; a non-Ok code surfaces as a
+loader error.
 
-This library provides the registration helper that deposits that list, the
+This library provides the registration helper that appends to that list, the
 ``StringView`` <-> ``str`` codecs, and the two cross-boundary allocators
 (host-allocator for data that must outlive the call, arena for per-call return
 buffers). It also re-exports the ABI types plugin authors need.
 
-Per-call state (args, out, arena) is passed explicitly through each dispatch
-call. The ``HostApi`` pointer is NOT stored in this package: it flows from
-``polyplug_init`` into the author factory (``polyplug_create_<plugin>``), which
-constructs the implementation with its owning runtime's host pointer. Helpers
-that need the host (:func:`alloc_string`, :func:`log`, the generated peer
-callers' ``resolve(host_ptr)``) take it as an explicit argument.
+Per-call state (args, out, arena, arena_alloc) is passed explicitly through each
+dispatch call. The ``HostApi`` pointer is NOT stored in this package: it flows
+from ``polyplug_init`` into the author factory (``polyplug_create_<plugin>``),
+which constructs the implementation with its owning runtime's host pointer.
+Helpers that need the host (:func:`alloc_string`, :func:`log`, the generated
+peer callers' ``resolve(host_ptr)``) take it as an explicit argument. The arena
+allocator the guest forwards to :func:`alloc_string_arena` is likewise NOT a
+module global: the loader passes it as the FINAL positional argument of every
+dispatch call, and the generated glue threads it through.
 """
 
 from __future__ import annotations
@@ -59,11 +64,6 @@ __all__ = [
     "log",
 ]
 
-# The module-level attribute the loader reads after polyplug_init. Must match
-# `REGISTRATIONS_ATTR` in crates/polyplug_python/src/loader.rs verbatim.
-_REGISTRATIONS_ATTR: str = "_polyplug_registrations"
-
-
 def log(host_ptr: int, level: int, scope: str, message: str) -> None:
     """Send a guest diagnostic to the host's logging funnel (``HostApi.log``).
 
@@ -102,18 +102,20 @@ def log(host_ptr: int, level: int, scope: str, message: str) -> None:
 
 
 def register_contract(
-    module_globals: dict,
+    registrations: List[dict],
     contract: str,
-    functions: List[Callable[[object, int, int, int], None]],
+    functions: List[Callable[[object, int, int, int, Callable[[int, int], int]], None]],
     factory: Callable[[int], object],
     plugin_name: Optional[str] = None,
 ) -> None:
-    """Register one contract's functions with the polyplug Python loader.
+    """Append one contract's registration to ``polyplug_init``'s return list.
 
-    Appends a registration dict to the caller module's ``_polyplug_registrations``
-    list (creating it if absent), in the exact shape the loader expects. Call
-    this from the plugin's ``polyplug_init`` (or at module top level) once per
-    contract the bundle provides.
+    Appends a registration dict — in the exact shape the loader expects — to the
+    ``registrations`` list ``polyplug_init`` returns to the loader. Nothing is
+    deposited into any module namespace: the loader reads the value
+    ``polyplug_init`` returns, not a module attribute. Call this from
+    ``polyplug_init`` once per contract the bundle provides, passing the local
+    list ``polyplug_init`` will return.
 
     The loader owns per-instance state: it calls ``factory(host_ptr)`` once per
     ``create_instance`` to build a fresh implementation object, keys it under the
@@ -122,16 +124,18 @@ def register_contract(
     live instances of the same contract never share state.
 
     Args:
-        module_globals: the plugin module's ``globals()`` — where the loader
-            looks for ``_polyplug_registrations``.
+        registrations: the list ``polyplug_init`` will return to the loader; this
+            entry is appended to it.
         contract: canonical contract string ``"<name>@<major>"`` or
             ``"<name>@<major>.<minor>"`` (minor is parsed but does not affect
             the contract id).
         functions: callables ordered by ``fn_id`` — ``functions[0]`` is fn_id 0,
-            etc. Each is invoked as
-            ``fn(impl, args_ptr_int: int, out_ptr_int: int, arena_ptr_int: int)``
-            where ``impl`` is the instance the loader resolved for this call;
-            return normally on success, raise to signal an error.
+            etc. Each is invoked as ``fn(impl, args_ptr_int: int, out_ptr_int:
+            int, arena_ptr_int: int, arena_alloc: Callable[[int, int], int])``
+            where ``impl`` is the instance the loader resolved for this call and
+            ``arena_alloc`` is the loader-supplied arena allocator (forward it to
+            :func:`alloc_string_arena`); return normally on success, raise to
+            signal an error.
         factory: the author factory ``factory(host_ptr_int: int) -> impl`` the
             loader calls once per ``create_instance`` (and once at load for the
             stateless default instance) to build a fresh implementation bound to
@@ -139,7 +143,6 @@ def register_contract(
         plugin_name: optional human-readable plugin name; the loader defaults to
             the bundle name when omitted.
     """
-    registrations: List[dict] = module_globals.setdefault(_REGISTRATIONS_ATTR, [])
     entry: dict = {
         "contract": contract,
         "functions": list(functions),
@@ -189,18 +192,20 @@ def alloc_string_arena(
     arena-backed call, so the guest never frees them. For data that must outlive
     the call, use :func:`alloc_string` instead.
 
-    The loader injects a module-level
-    ``_polyplug_arena_alloc(size: int, arena: int) -> int`` callable into the
-    plugin module. The arena pointer is NOT read from any shared state: it is the
-    ``arena`` int the dispatch passed to the guest callable as its third argument,
-    forwarded here as ``arena_ptr`` and on to the bridge. The bridge bumps exactly
-    that arena (or falls back to ``host->alloc`` when ``arena_ptr`` is 0). Threading
-    the arena explicitly — rather than through a shared cell — is what makes
-    concurrent and same-thread reentrant dispatch correct: each call's arena
-    travels with its own call frame.
+    The loader passes the arena allocator ``arena_alloc(size: int, arena: int) ->
+    int`` as the FINAL positional argument of every dispatch call (nothing is
+    injected into the plugin module). The arena pointer is NOT read from any
+    shared state: it is the ``arena`` int the dispatch passed to the guest
+    callable as its third argument, forwarded here as ``arena_ptr`` and on to
+    ``arena_alloc``. The allocator bumps exactly that arena (or falls back to
+    ``host->alloc`` when ``arena_ptr`` is 0). Threading both the arena and its
+    allocator explicitly — rather than through a shared cell or module global —
+    is what makes concurrent and same-thread reentrant dispatch correct: each
+    call's arena travels with its own call frame.
 
     Args:
-        arena_alloc: the plugin module's ``_polyplug_arena_alloc`` callable.
+        arena_alloc: the loader-supplied arena allocator this call received as its
+            final dispatch argument.
         arena_ptr: the ``arena`` int this call received as its third argument.
         s: the Python string to allocate.
 

@@ -124,27 +124,25 @@ fn synthetic_module_name(bundle_name: &str) -> String {
 }
 
 impl PythonLoader {
-    /// After `polyplug_init` has run and populated `_polyplug_registrations`,
-    /// inject the arena bridge, collect the guest's registration data, and
-    /// register every contract with the runtime via the self-passing `HostApi`.
+    /// From the `(registrations, AbiError)` tuple `polyplug_init` returned,
+    /// collect the guest's registration data and register every contract with the
+    /// runtime via the self-passing `HostApi` (which builds the per-bundle arena
+    /// allocator threaded into each dispatch).
     ///
-    /// Registrations are read from the namespace of the module that *defines*
-    /// `polyplug_init` (the function's `__globals__`), so split-module generated
-    /// bundles — whose entry file only imports `polyplug_init` — register
-    /// correctly; `init_fn` and the entry `module` are both passed so
-    /// [`loader::collect_registrations`] can resolve that namespace (falling back
-    /// to the entry module for non-Python `polyplug_init` callables).
+    /// Registrations flow through `polyplug_init`'s return value — nothing is read
+    /// from any module namespace — so the split-module generated layout (whose
+    /// entry file only imports `polyplug_init`) and the single-file layout register
+    /// identically.
     ///
     /// Shared by the on-disk and in-memory load paths.
     fn collect_and_register(
         py: Python<'_>,
-        init_fn: &Bound<'_, PyAny>,
-        module: &Bound<'_, PyAny>,
+        init_ret: &Bound<'_, PyAny>,
         host_interface: *const HostApi,
         bundle_name: &str,
     ) -> Result<(), LoaderError> {
         let registrations: Vec<ContractRegistration> =
-            loader::collect_registrations(py, init_fn, module, bundle_name)?;
+            loader::collect_registrations(py, init_ret, bundle_name)?;
         loader::register_contracts(registrations, host_interface, bundle_name)?;
         Ok(())
     }
@@ -242,22 +240,6 @@ impl PythonLoader {
                         bundle: bundle_name.clone(),
                     })?;
 
-            // Inject the arena bridge before calling init so the guest can route
-            // per-call return buffers through the host CallArena during dispatch.
-            // Injected into the namespace of the module that *defines*
-            // polyplug_init (its __globals__) as well as the entry module, so
-            // split-module generated bundles resolve `_polyplug_arena_alloc` from
-            // the contracts module where their ABI functions are defined. Must run
-            // after init_fn is located (its __globals__ is the real namespace).
-            let module_any_bridge: Bound<'_, PyAny> = module.as_any().clone();
-            loader::inject_arena_bridge(
-                py,
-                &module_any_bridge,
-                &init_fn,
-                host_interface,
-                &bundle_name,
-            )?;
-
             // The bundle path is empty for in-memory sources (no bundle directory).
             // NOTE: Intentionally leaked; bundle_path_static outlives this call.
             let bundle_path_static: &'static str = Box::leak(String::new().into_boxed_str());
@@ -271,7 +253,9 @@ impl PythonLoader {
 
             let host_interface_i64: i64 = host_interface as usize as i64;
             let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
-            init_fn
+            // polyplug_init RETURNS its (registrations, AbiError) tuple; the loader
+            // reads that return value — nothing is deposited into the namespace.
+            let init_ret: Bound<'_, PyAny> = init_fn
                 .call((host_interface_i64, ctx_ptr), None)
                 .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
                     bundle: bundle_name.clone(),
@@ -280,8 +264,7 @@ impl PythonLoader {
 
             // Collect the guest's registration data and register every contract
             // with VM dispatch.
-            let module_any: Bound<'_, PyAny> = module.as_any().clone();
-            Self::collect_and_register(py, &init_fn, &module_any, host_interface, &bundle_name)?;
+            Self::collect_and_register(py, &init_ret, host_interface, &bundle_name)?;
 
             // Isolate this bundle's freshly imported modules. With no bundle
             // directory ("") no imported module is classified as in-bundle, so this
@@ -500,21 +483,6 @@ impl BundleLoader for PythonLoader {
                     }
                 })?;
 
-            // Inject the arena bridge before calling init so the guest can route
-            // per-call return buffers through the host CallArena during dispatch.
-            // Done after exec_module (so the namespace exists) and after init_fn is
-            // located (so its __globals__ is the real defining namespace). Injected
-            // into both the entry module and polyplug_init.__globals__ so
-            // split-module generated bundles resolve `_polyplug_arena_alloc` from
-            // the contracts module where their ABI functions are defined.
-            loader::inject_arena_bridge(
-                py,
-                &module_from_spec,
-                &init_fn,
-                host_interface,
-                &bundle_name,
-            )?;
-
             // NOTE: Intentionally leaked; bundle_path_static outlives this call.
             let bundle_path_static: &'static str =
                 Box::leak(bundle_dir_str.clone().into_boxed_str());
@@ -531,7 +499,9 @@ impl BundleLoader for PythonLoader {
             // as the first parameter to each HostApi function call.
             let host_interface_i64: i64 = host_interface as usize as i64;
             let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
-            init_fn
+            // polyplug_init RETURNS its (registrations, AbiError) tuple; the loader
+            // reads that return value — nothing is deposited into the namespace.
+            let init_ret: Bound<'_, PyAny> = init_fn
                 .call((host_interface_i64, ctx_ptr), None)
                 .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
                     bundle: bundle_name.clone(),
@@ -540,13 +510,7 @@ impl BundleLoader for PythonLoader {
 
             // Collect the guest's registration data and register every contract
             // with VM dispatch.
-            Self::collect_and_register(
-                py,
-                &init_fn,
-                &module_from_spec,
-                host_interface,
-                &bundle_name,
-            )?;
+            Self::collect_and_register(py, &init_ret, host_interface, &bundle_name)?;
 
             // Isolate this bundle's freshly imported modules under a unique
             // per-bundle prefix so the next bundle imports its own generated

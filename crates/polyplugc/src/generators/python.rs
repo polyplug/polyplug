@@ -492,14 +492,18 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     if any_string_arg {
         out.push_str("from polyplug_abi import StringView, to_str\n");
     }
-    // typing.Callable types the author-factory slots set at import time.
-    out.push_str("from typing import Callable\n");
-    // polyplug_guest imports: register_contract is always needed;
+    // typing.Callable types the author-factory slots set at import time; Any types
+    // polyplug_init's local registrations list.
+    out.push_str("from typing import Any, Callable\n");
+    // polyplug_guest imports: register_contract is always needed, plus AbiError +
+    // AbiErrorCode for polyplug_init's (registrations, AbiError) return;
     // alloc_string_arena only when a function returns a StringView (arena-allocated).
     if any_string_ret {
-        out.push_str("from polyplug_guest import register_contract, alloc_string_arena\n\n");
+        out.push_str(
+            "from polyplug_guest import register_contract, alloc_string_arena, AbiError, AbiErrorCode\n\n",
+        );
     } else {
-        out.push_str("from polyplug_guest import register_contract\n\n");
+        out.push_str("from polyplug_guest import register_contract, AbiError, AbiErrorCode\n\n");
     }
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
@@ -510,21 +514,23 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
 
     out.push_str("POLYPLUG_ABI_VERSION: int = 1\n\n");
 
-    // VM dispatch: Python plugins are VM-dispatch plugins. polyplug_init records
-    // each contract's functions via `register_contract`, which deposits the
-    // module-level `_polyplug_registrations` list the polyplug_python loader reads
-    // after init. The loader wraps each function in a VM-dispatch trampoline and
-    // registers the contract itself, then routes every per-call invocation through
-    // the `vm.call` transport. The guest therefore never builds a
-    // GuestContractInterface, never registers native function pointers, and never
-    // returns an AbiError from a ctypes callback — the previous sret-emulating
-    // ctypes path was undefined behaviour on arm64 and is gone.
+    // VM dispatch: Python plugins are VM-dispatch plugins. polyplug_init builds a
+    // local registrations list via `register_contract` and RETURNS it together with
+    // an AbiError as a `(registrations, AbiError)` tuple. The polyplug_python loader
+    // reads that return value — nothing is deposited into the module namespace. The
+    // loader wraps each function in a VM-dispatch trampoline and registers the
+    // contract itself, then routes every per-call invocation through the `vm.call`
+    // transport. The guest therefore never builds a GuestContractInterface, never
+    // registers native function pointers, and never returns an AbiError from a
+    // ctypes callback — the previous sret-emulating ctypes path was undefined
+    // behaviour on arm64 and is gone.
     //
-    // Each generated `<plugin>_<fn>_abi(args_ptr, out_ptr, arena_ptr)` callable
-    // receives three raw pointers as Python ints (arena_ptr is 0 when null). It
-    // unmarshals args, invokes the user impl, marshals the return into out_ptr,
-    // and returns normally on success or raises on failure (the loader maps a
-    // raised exception to AbiErrorCode.Generic).
+    // Each generated `<plugin>_<fn>_abi(args_ptr, out_ptr, arena_ptr, arena_alloc)`
+    // callable receives three raw pointers as Python ints (arena_ptr is 0 when null)
+    // and the loader-supplied arena allocator as its final argument. It unmarshals
+    // args, invokes the user impl, marshals the return into out_ptr (forwarding
+    // arena_alloc for arena-backed string returns), and returns normally on success
+    // or raises on failure (the loader maps a raised exception to AbiErrorCode.Generic).
 
     let mut registrations: Vec<(String, String, String, &ResolvedContract)> = Vec::new();
     if let Some(bundle) = &ir.bundle {
@@ -559,36 +565,50 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
 
     out.push_str("def polyplug_abi_version() -> int:\n");
     out.push_str("    return 1\n\n");
-    out.push_str("def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n");
-    out.push_str("    \"\"\"Record this bundle's contracts for the polyplug_python VM loader.\n");
+    out.push_str(
+        "def polyplug_init(host_ptr: int, ctx_ptr: int) -> tuple[list[dict[str, Any]], AbiError]:\n",
+    );
+    out.push_str(
+        "    \"\"\"Build this bundle's contract registrations for the polyplug_python VM loader.\n",
+    );
     out.push('\n');
     out.push_str(
-        "    Deposits `_polyplug_registrations` via register_contract; the loader reads\n",
+        "    Returns a `(registrations, abi_error)` tuple: the loader reads this return\n",
     );
-    out.push_str("    it after this returns and registers each contract itself.\n\n");
+    out.push_str(
+        "    value (nothing is deposited into the module namespace) and, when `abi_error.code\n",
+    );
+    out.push_str(
+        "    == AbiErrorCode.Ok`, registers each contract in `registrations` itself. A factory\n",
+    );
+    out.push_str(
+        "    that was never set at import time yields `([], AbiError(code=AbiErrorCode.Generic))`.\n\n",
+    );
     out.push_str("    Args:\n");
     out.push_str("        host_ptr: HostApi pointer — passed to each author factory so every\n");
     out.push_str(
         "                  implementation is constructed with its owning runtime's host\n",
     );
     out.push_str("                  (no host pointer is stored in the guest SDK).\n");
-    out.push_str("        ctx_ptr: BundleInitContext pointer (unused)\n");
+    out.push_str("        ctx_ptr: BundleInitContext pointer (unused)\n\n");
+    out.push_str("    Returns:\n");
+    out.push_str("        (registrations, abi_error) — the loader consumes registrations only\n");
+    out.push_str("        when abi_error.code == AbiErrorCode.Ok.\n");
     out.push_str("    \"\"\"\n");
     // The loader owns per-instance state: it calls each contract's factory once
     // per create_instance with the runtime's host pointer. polyplug_init only
     // registers the factory and callables, so host_ptr is unused here.
     out.push_str("    _ = host_ptr\n");
     out.push_str("    _ = ctx_ptr\n");
+    out.push_str("    registrations: list[dict[str, Any]] = []\n");
     for (_, _, impl_var, _) in &registrations {
         out.push_str(&format!("    if _{impl_var}_FACTORY is None:\n"));
-        out.push_str(&format!(
-            "        raise RuntimeError(\"set_{impl_var}_factory(...) was not called at import time\")\n"
-        ));
+        out.push_str("        return [], AbiError(code=int(AbiErrorCode.Generic))\n");
     }
     for (display_name, lower, impl_var, contract) in &registrations {
         let contract_str: String = format!("{}@{}", contract.name, contract.version.major);
         out.push_str("    register_contract(\n");
-        out.push_str("        globals(),\n");
+        out.push_str("        registrations,\n");
         out.push_str(&format!("        contract=\"{contract_str}\",\n"));
         out.push_str(&format!("        factory=_{impl_var}_FACTORY,\n"));
         out.push_str("        functions=[\n");
@@ -599,13 +619,14 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
         out.push_str(&format!("        plugin_name=\"{display_name}\",\n"));
         out.push_str("    )\n");
     }
+    out.push_str("    return registrations, AbiError(code=int(AbiErrorCode.Ok))\n");
     out.push('\n');
 
     out
 }
 
 /// Whether a function returns a `StringView` (the variable-size return the guest
-/// glue allocates from the call arena via `_polyplug_arena_alloc`).
+/// glue allocates from the call arena via the loader-supplied `arena_alloc`).
 fn fn_returns_stringview(func: &ResolvedFunction) -> bool {
     matches!(
         func.returns,
@@ -636,7 +657,8 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
-    out.push_str("from typing import Any\n\n");
+    out.push_str("from typing import Any\n");
+    out.push_str("from polyplug_guest import AbiError\n\n");
 
     // Guest-impl traits use ergonomic `str`/`bytes` for StringView/Buffer, so the
     // stub references only user-defined struct types (if any) from guest.types.
@@ -646,8 +668,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
         out.push_str(&format!("from guest.types import {}\n\n", import_list));
     }
 
-    out.push_str("POLYPLUG_ABI_VERSION: int\n");
-    out.push_str("_polyplug_registrations: list[dict[str, Any]]\n\n");
+    out.push_str("POLYPLUG_ABI_VERSION: int\n\n");
 
     for contract in &ir.contracts {
         let trait_name: String = contract_name_to_guest_trait(&contract.name);
@@ -667,8 +688,12 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("def polyplug_abi_version() -> int: ...\n");
-    out.push_str("def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n");
-    out.push_str("    \"\"\"Initialize plugin with HostApi pointer.\"\"\"\n");
+    out.push_str(
+        "def polyplug_init(host_ptr: int, ctx_ptr: int) -> tuple[list[dict[str, Any]], AbiError]:\n",
+    );
+    out.push_str(
+        "    \"\"\"Initialize the plugin and return its (registrations, AbiError).\"\"\"\n",
+    );
     out.push_str("    ...\n");
 
     out
@@ -1302,11 +1327,13 @@ fn generate_guest_plugin_interface(
 
 /// Emit the per-function VM-dispatch callables for one contract.
 ///
-/// Each callable has the loader's four-argument signature
-/// `<fn_prefix>_<fn>_abi(impl, args_ptr: int, out_ptr: int, arena_ptr: int)`: the
-/// loader resolves `impl` from the instance handle and passes it in, then the
-/// callable unmarshals the args buffer, invokes the user impl, marshals the return
-/// into `out_ptr`, and returns normally (success) or raises (failure).
+/// Each callable has the loader's five-argument signature
+/// `<fn_prefix>_<fn>_abi(impl, args_ptr: int, out_ptr: int, arena_ptr: int,
+/// arena_alloc: Callable[[int, int], int])`: the loader resolves `impl` from the
+/// instance handle and passes it in along with the per-bundle `arena_alloc`, then
+/// the callable unmarshals the args buffer, invokes the user impl, marshals the
+/// return into `out_ptr` (forwarding `arena_alloc` for arena-backed returns), and
+/// returns normally (success) or raises (failure).
 /// Per-function `struct.Struct` instances precompiled at module level give fast
 /// scalar (un)packing without per-call `ctypes` object construction.
 fn emit_guest_function_callables(
@@ -1325,7 +1352,7 @@ fn emit_guest_function_callables(
         let has_return: bool = has_return_value(&func.returns);
         let has_params: bool = !func.params.is_empty();
         out.push_str(&format!(
-            "def {abi_name}(impl: {impl_class}, args_ptr: int, out_ptr: int, arena_ptr: int) -> None:\n"
+            "def {abi_name}(impl: {impl_class}, args_ptr: int, out_ptr: int, arena_ptr: int, arena_alloc: Callable[[int, int], int]) -> None:\n"
         ));
         if has_params {
             out.push_str("    if not args_ptr:\n");
@@ -1338,15 +1365,17 @@ fn emit_guest_function_callables(
         if !has_params {
             out.push_str("    _ = args_ptr\n");
         }
-        // `arena_ptr` is forwarded to `alloc_string_arena` only for StringView
-        // returns; every other shape ignores it, so silence the unused binding
-        // exactly when the body never reads it.
+        // `arena_ptr` and the loader-supplied `arena_alloc` are forwarded to
+        // `alloc_string_arena` only for StringView returns; every other shape
+        // ignores them, so silence the unused bindings exactly when the body never
+        // reads them.
         let uses_arena: bool = matches!(
             &func.returns,
             Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
         );
         if !uses_arena {
             out.push_str("    _ = arena_ptr\n");
+            out.push_str("    _ = arena_alloc\n");
         }
         emit_guest_abi_args_unpack(out, func, fn_prefix, struct_name);
         emit_guest_abi_call(out, func);
@@ -1483,13 +1512,14 @@ fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction, fn_prefix: &
         return;
     }
     // StringView return: the impl returns a `str`. Allocate the UTF-8 bytes from
-    // the call arena via the loader-injected `_polyplug_arena_alloc` bridge
-    // (`alloc_string_arena` bumps the active arena, falling back to host->alloc
-    // when no arena is active). The bytes stay valid until the caller's next
-    // arena-backed call. Copy the resulting StringView into the caller's out slot.
+    // the call arena via the loader-supplied `arena_alloc` (passed as the final
+    // dispatch argument; `alloc_string_arena` bumps the active arena, falling back
+    // to host->alloc when no arena is active). The bytes stay valid until the
+    // caller's next arena-backed call. Copy the resulting StringView into the
+    // caller's out slot.
     if matches!(returns, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
         out.push_str(
-            "    out_view: StringView = alloc_string_arena(_polyplug_arena_alloc, arena_ptr, result)\n",
+            "    out_view: StringView = alloc_string_arena(arena_alloc, arena_ptr, result)\n",
         );
         out.push_str(
             "    ctypes.memmove(out_ptr, ctypes.addressof(out_view), ctypes.sizeof(out_view))\n",
