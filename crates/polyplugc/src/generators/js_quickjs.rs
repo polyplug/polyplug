@@ -452,7 +452,7 @@ fn render_plugin_interface_quickjs(
             let param: &ResolvedParam = &func.params[0];
             // SAFETY (emitted reads): args_ptr is a valid host-allocated
             // buffer holding exactly one ABI value of the parameter type.
-            let expr: String = js_read_expr(&param.ty, "args_ptr", 0, ir, 0)?;
+            let expr: String = js_read_expr(&param.ty, "args_ptr", 0, ir)?;
             out.push_str(&format!("    var arg_{} = {};\n", param.name, expr));
             arg_names.push(format!("arg_{}", param.name));
         } else if func.params.len() >= 2 {
@@ -463,7 +463,7 @@ fn render_plugin_interface_quickjs(
                 // SAFETY (emitted reads): args_ptr points at the C-layout
                 // arg-pack struct written by the host caller; each field is
                 // read at its natural-alignment offset.
-                let expr: String = js_read_expr(&param.ty, "args_ptr", offset, ir, 0)?;
+                let expr: String = js_read_expr(&param.ty, "args_ptr", offset, ir)?;
                 out.push_str(&format!("    var arg_{} = {};\n", param.name, expr));
                 offset += js_c_size(&param.ty, ir)?;
                 arg_names.push(format!("arg_{}", param.name));
@@ -486,7 +486,7 @@ fn render_plugin_interface_quickjs(
         if let Some(ret_ty) = &func.returns {
             // SAFETY (emitted writes): out_ptr is a valid host-allocated out
             // slot sized for the declared return type.
-            emit_js_write_value(out, "    ", ret_ty, "out_ptr", 0, "result", ir, 0)?;
+            emit_js_write_value(out, "    ", ret_ty, "out_ptr", 0, "result", ir)?;
         }
         out.push_str("    return 0;\n");
         out.push_str("}\n");
@@ -1024,7 +1024,6 @@ fn generate_host_caller_method_deno(
                 offset,
                 &param.name,
                 ir,
-                0,
                 &mut alloc_idx,
             )?;
             offset += js_c_size(&param.ty, ir)?;
@@ -1061,8 +1060,7 @@ fn generate_host_caller_method_deno(
         let mut read_idx: u32 = 0;
         // The caller OWNS the guest's return payload (the guest host-allocated it
         // for us), so the read frees it after copying out.
-        let local: String =
-            emit_deno_read_local(out, ret_ty, "outDv", 0, ir, 0, &mut read_idx, true)?;
+        let local: String = emit_deno_read_local(out, ret_ty, "outDv", 0, ir, &mut read_idx, true)?;
         out.push_str(&format!("        return {local};\n"));
     }
 
@@ -1098,12 +1096,9 @@ fn deno_caller_ts_type(ty: &ResolvedTypeRef, ir: &ValidatedIr) -> Result<String,
             if let Some(s) = js_struct_for_type(ty, &ir.types) {
                 let mut fields: Vec<String> = Vec::with_capacity(s.fields.len());
                 for field in &s.fields {
-                    if js_struct_for_type(&field.ty, &ir.types).is_some() {
-                        return Err(PolyplugcError::UnsupportedType {
-                            type_name: format!("{name} (nested struct field `{}`)", field.name),
-                            lang: "js-quickjs".to_owned(),
-                        });
-                    }
+                    // Struct-typed fields recurse into a nested inline object type
+                    // ({ a: { b: number } }); the C layout is computed by
+                    // js_c_size/js_c_align, so nesting depth is unbounded.
                     let field_ts: String = deno_caller_ts_type(&field.ty, ir)?;
                     fields.push(format!("{}: {}", field.name, field_ts));
                 }
@@ -1139,9 +1134,8 @@ fn deno_args_total_size(
 /// Emit statements writing `value` (a JS expression of `ty`'s ergonomic shape)
 /// into `dv` at `off` using Deno-FFI primitives. StringView/Buffer payloads are
 /// host-allocated and pushed onto `_allocs` for later release; structs recurse
-/// one level. Integers/enums are written at their exact repr width (enums
-/// UNSIGNED).
-#[allow(clippy::too_many_arguments)]
+/// field-by-field to unbounded nesting depth. Integers/enums are written at their
+/// exact repr width (enums UNSIGNED).
 fn emit_deno_write_value(
     out: &mut String,
     ty: &ResolvedTypeRef,
@@ -1149,7 +1143,6 @@ fn emit_deno_write_value(
     off: usize,
     value: &str,
     ir: &ValidatedIr,
-    depth: u32,
     alloc_idx: &mut u32,
 ) -> Result<(), PolyplugcError> {
     match ty {
@@ -1225,12 +1218,6 @@ fn emit_deno_write_value(
                 return Ok(());
             }
             if let Some(s) = js_struct_for_type(ty, &ir.types) {
-                if depth > 0 {
-                    return Err(PolyplugcError::UnsupportedType {
-                        type_name: format!("{name} (nested struct)"),
-                        lang: "js-quickjs".to_owned(),
-                    });
-                }
                 let mut field_off: usize = off;
                 for field in &s.fields {
                     let align: usize = js_c_align(&field.ty, ir)?;
@@ -1243,7 +1230,6 @@ fn emit_deno_write_value(
                         field_off,
                         &field_value,
                         ir,
-                        depth + 1,
                         alloc_idx,
                     )?;
                     field_off += js_c_size(&field.ty, ir)?;
@@ -1327,18 +1313,16 @@ fn emit_deno_write_buffer(out: &mut String, dv: &str, off: usize, value: &str, i
 /// Emit statements reading one ABI value of `ty` from `dv` at `off` into a
 /// freshly-declared local, returning that local's name. Scalars/enums read at
 /// their exact repr width (enums UNSIGNED); StringView/Buffer payloads are copied
-/// out and, when `owns_payload`, freed; structs recurse one level into an object
-/// literal.
+/// out and, when `owns_payload`, freed; structs recurse field-by-field into a
+/// nested object literal to unbounded depth.
 // Mirrors emit_deno_write_value's irreducible marshalling context (out, type,
-// view, offset, ir, depth, counter) plus the ownership flag.
-#[allow(clippy::too_many_arguments)]
+// view, offset, ir, counter) plus the ownership flag.
 fn emit_deno_read_local(
     out: &mut String,
     ty: &ResolvedTypeRef,
     dv: &str,
     off: usize,
     ir: &ValidatedIr,
-    depth: u32,
     idx: &mut u32,
     owns_payload: bool,
 ) -> Result<String, PolyplugcError> {
@@ -1393,27 +1377,13 @@ fn emit_deno_read_local(
                 return Ok(name);
             }
             if let Some(s) = js_struct_for_type(ty, &ir.types) {
-                if depth > 0 {
-                    return Err(PolyplugcError::UnsupportedType {
-                        type_name: format!("{type_name} (nested struct)"),
-                        lang: "js-quickjs".to_owned(),
-                    });
-                }
                 let mut field_off: usize = off;
                 let mut members: Vec<String> = Vec::with_capacity(s.fields.len());
                 for field in &s.fields {
                     let align: usize = js_c_align(&field.ty, ir)?;
                     field_off = align_up(field_off, align);
-                    let field_local: String = emit_deno_read_local(
-                        out,
-                        &field.ty,
-                        dv,
-                        field_off,
-                        ir,
-                        depth + 1,
-                        idx,
-                        owns_payload,
-                    )?;
+                    let field_local: String =
+                        emit_deno_read_local(out, &field.ty, dv, field_off, ir, idx, owns_payload)?;
                     members.push(format!("{}: {field_local}", field.name));
                     field_off += js_c_size(&field.ty, ir)?;
                 }
@@ -2020,16 +1990,15 @@ fn js_ptr_at(base: &str, off: usize) -> String {
 
 /// JS expression that reads one ABI value of `ty` at `base + off` through the
 /// loader bridge (readByte/readI32/readU32/readF32/readF64). Enums read their
-/// repr-width raw integer; user structs read field-by-field into an object
-/// literal (one nesting level — nested structs are rejected). Narrow signed
-/// integers are sign-extended with shift pairs because the bridge only
-/// exposes byte and 32-bit reads.
+/// repr-width raw integer; user structs read field-by-field into a (possibly
+/// nested) object literal to unbounded depth. Narrow signed integers are
+/// sign-extended with shift pairs because the bridge only exposes byte and
+/// 32-bit reads.
 fn js_read_expr(
     ty: &ResolvedTypeRef,
     base: &str,
     off: usize,
     ir: &ValidatedIr,
-    depth: u32,
 ) -> Result<String, PolyplugcError> {
     let p: String = js_ptr_at(base, off);
     match ty {
@@ -2092,18 +2061,12 @@ fn js_read_expr(
                 });
             }
             if let Some(s) = js_struct_for_type(ty, &ir.types) {
-                if depth > 0 {
-                    return Err(PolyplugcError::UnsupportedType {
-                        type_name: format!("{name} (nested struct)"),
-                        lang: "js-quickjs".to_owned(),
-                    });
-                }
                 let mut offset: usize = off;
                 let mut fields: Vec<String> = Vec::new();
                 for field in &s.fields {
                     let a: usize = js_c_align(&field.ty, ir)?;
                     offset = align_up(offset, a);
-                    let expr: String = js_read_expr(&field.ty, base, offset, ir, depth + 1)?;
+                    let expr: String = js_read_expr(&field.ty, base, offset, ir)?;
                     fields.push(format!("{}: {}", field.name, expr));
                     offset += js_c_size(&field.ty, ir)?;
                 }
@@ -2120,7 +2083,6 @@ fn js_read_expr(
 /// Emit statements writing `value` (a JS expression of `ty`'s shape) into the
 /// out slot at `base + off` through the loader bridge. The mirror of
 /// `js_read_expr` — same C layout, same lo/hi and {ptr_lo,ptr_hi,len} shapes.
-#[allow(clippy::too_many_arguments)]
 fn emit_js_write_value(
     out: &mut String,
     indent: &str,
@@ -2129,7 +2091,6 @@ fn emit_js_write_value(
     off: usize,
     value: &str,
     ir: &ValidatedIr,
-    depth: u32,
 ) -> Result<(), PolyplugcError> {
     let p: String = js_ptr_at(base, off);
     match ty {
@@ -2265,27 +2226,12 @@ fn emit_js_write_value(
                 return Ok(());
             }
             if let Some(s) = js_struct_for_type(ty, &ir.types) {
-                if depth > 0 {
-                    return Err(PolyplugcError::UnsupportedType {
-                        type_name: format!("{name} (nested struct)"),
-                        lang: "js-quickjs".to_owned(),
-                    });
-                }
                 let mut offset: usize = off;
                 for field in &s.fields {
                     let a: usize = js_c_align(&field.ty, ir)?;
                     offset = align_up(offset, a);
                     let field_value: String = format!("{value}.{}", field.name);
-                    emit_js_write_value(
-                        out,
-                        indent,
-                        &field.ty,
-                        base,
-                        offset,
-                        &field_value,
-                        ir,
-                        depth + 1,
-                    )?;
+                    emit_js_write_value(out, indent, &field.ty, base, offset, &field_value, ir)?;
                     offset += js_c_size(&field.ty, ir)?;
                 }
                 return Ok(());
@@ -3040,16 +2986,8 @@ fn generate_js_host_method_thunk(
         for param in &func.params {
             let align: usize = js_c_align(&param.ty, ir)?;
             offset = align_up(offset, align);
-            let local: String = emit_deno_read_local(
-                out,
-                &param.ty,
-                "_argsDv",
-                offset,
-                ir,
-                0,
-                &mut read_idx,
-                false,
-            )?;
+            let local: String =
+                emit_deno_read_local(out, &param.ty, "_argsDv", offset, ir, &mut read_idx, false)?;
             arg_names.push(local);
             offset += js_c_size(&param.ty, ir)?;
         }
@@ -3071,7 +3009,7 @@ fn generate_js_host_method_thunk(
             ));
             out.push_str("                const _allocs: [Deno.PointerValue, number][] = [];\n");
             let mut alloc_idx: u32 = 0;
-            emit_deno_write_value(out, ret_ty, "_outDv", 0, "_result", ir, 0, &mut alloc_idx)?;
+            emit_deno_write_value(out, ret_ty, "_outDv", 0, "_result", ir, &mut alloc_idx)?;
             out.push_str("                void _allocs;\n");
         }
         None => {
@@ -4358,6 +4296,78 @@ mod tests {
     }
 
     #[test]
+    fn quickjs_guest_wrapper_nested_struct_param_and_return_recurse() {
+        // A struct field that is itself a struct (depth > 1) must marshal through
+        // the QuickJS guest wrapper, not be rejected. Layout:
+        //   Inner { a: u32, b: u32 }            -> a@0, b@4 ; size 8, align 4
+        //   Boxed { tag: u64, inner: Inner }    -> tag@0, inner@8 (8-aligned past
+        //                                          the u64) ; size 16, align 8
+        // proving both depth-2 recursion AND that the nested struct sits at the
+        // C-layout offset its alignment demands.
+        let types: Vec<crate::ir::ResolvedType> = vec![
+            crate::ir::ResolvedType {
+                name: "Inner".to_owned(),
+                fields: vec![
+                    crate::ir::ResolvedField {
+                        name: "a".to_owned(),
+                        ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    },
+                    crate::ir::ResolvedField {
+                        name: "b".to_owned(),
+                        ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    },
+                ],
+            },
+            crate::ir::ResolvedType {
+                name: "Boxed".to_owned(),
+                fields: vec![
+                    crate::ir::ResolvedField {
+                        name: "tag".to_owned(),
+                        ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
+                    },
+                    crate::ir::ResolvedField {
+                        name: "inner".to_owned(),
+                        ty: ResolvedTypeRef::UserDefined("Inner".to_owned()),
+                    },
+                ],
+            },
+        ];
+        let contract: ResolvedContract = wrapper_contract(vec![ResolvedFunction {
+            name: "roundtrip".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "o".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("Boxed".to_owned()),
+            }],
+            returns: Some(ResolvedTypeRef::UserDefined("Boxed".to_owned())),
+        }]);
+        let ir: ValidatedIr = wrapper_ir(types, vec![]);
+        let out: String = render_wrapper(&contract, &ir);
+
+        // The depth guard is gone: no UnsupportedType / "nested struct" rejection.
+        assert!(
+            !out.contains("nested struct") && !out.contains("UnsupportedType"),
+            "nested struct must not be rejected: {out}"
+        );
+        // READ (js_read_expr) of the nested param descends field-by-field, with the
+        // inner struct read at the 8-aligned offset (8/12), not 4.
+        assert!(
+            out.contains("var arg_o = { tag: { lo: polyplug.readU32(args_ptr), hi: polyplug.readU32(args_ptr + 4) }, inner: { a: polyplug.readU32(args_ptr + 8), b: polyplug.readU32(args_ptr + 12) } };"),
+            "nested struct param must read as a nested object literal at C offsets: {out}"
+        );
+        // WRITE (emit_js_write_value) of the nested return descends into the inner
+        // struct's fields at the same 8-aligned offsets.
+        assert!(
+            out.contains("polyplug.writeU32(out_ptr + 8, result.inner.a);"),
+            "nested return inner.a must write at offset 8: {out}"
+        );
+        assert!(
+            out.contains("polyplug.writeU32(out_ptr + 12, result.inner.b);"),
+            "nested return inner.b must write at offset 12: {out}"
+        );
+    }
+
+    #[test]
     fn quickjs_guest_wrapper_f64_uses_float_bridge() {
         let contract: ResolvedContract = wrapper_contract(vec![ResolvedFunction {
             name: "scale".to_owned(),
@@ -4741,6 +4751,117 @@ mod tests {
         assert!(
             !out.contains("getBigInt64") || !out.contains("Number(outDv.getBigInt64"),
             "enum returns must not sign-extend: {out}"
+        );
+    }
+
+    #[test]
+    fn deno_host_caller_marshals_nested_struct() {
+        // A struct field that is itself a struct (depth > 1) must marshal through
+        // the Deno host caller, not be rejected. Same layout as the QuickJS guest
+        // nested test:
+        //   Inner { a: u32, b: u32 }          -> a@0, b@4 ; size 8, align 4
+        //   Boxed { tag: u64, inner: Inner }  -> tag@0, inner@8 ; size 16, align 8
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![
+                ResolvedType {
+                    name: "Inner".to_owned(),
+                    fields: vec![
+                        ResolvedField {
+                            name: "a".to_owned(),
+                            ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        },
+                        ResolvedField {
+                            name: "b".to_owned(),
+                            ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        },
+                    ],
+                },
+                ResolvedType {
+                    name: "Boxed".to_owned(),
+                    fields: vec![
+                        ResolvedField {
+                            name: "tag".to_owned(),
+                            ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
+                        },
+                        ResolvedField {
+                            name: "inner".to_owned(),
+                            ty: ResolvedTypeRef::UserDefined("Inner".to_owned()),
+                        },
+                    ],
+                },
+            ],
+            enums: vec![],
+            contracts: vec![ResolvedContract {
+                name: "test.nested".to_owned(),
+                contract_id: 0x0011_2233_4455_6677_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![
+                    ResolvedFunction {
+                        name: "take_box".to_owned(),
+                        function_id: 0,
+                        params: vec![ResolvedParam {
+                            name: "o".to_owned(),
+                            ty: ResolvedTypeRef::UserDefined("Boxed".to_owned()),
+                        }],
+                        returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+                    },
+                    ResolvedFunction {
+                        name: "get_box".to_owned(),
+                        function_id: 1,
+                        params: vec![],
+                        returns: Some(ResolvedTypeRef::UserDefined("Boxed".to_owned())),
+                    },
+                ],
+            }],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let out: String = generate_callers_ts(&ir).expect("generate Deno callers");
+
+        // The depth guard is gone: nothing rejects the nested struct.
+        assert!(
+            !out.contains("shape not supported")
+                && !out.contains("UnsupportedType")
+                && !out.contains("nested struct"),
+            "nested struct must not be rejected by the Deno caller: {out}"
+        );
+        // Nested inline TS types (deno_caller_ts_type recurses).
+        assert!(
+            out.contains("take_box(o: { tag: bigint; inner: { a: number; b: number } }): number {"),
+            "nested struct param must be a nested inline object type: {out}"
+        );
+        assert!(
+            out.contains("get_box(): { tag: bigint; inner: { a: number; b: number } } {"),
+            "nested struct return must be a nested inline object type: {out}"
+        );
+        // WRITE (emit_deno_write_value) descends into the inner struct at the
+        // 8-aligned C offsets (8/12), past the u64 tag at 0.
+        assert!(
+            out.contains("argsDv.setBigUint64(0, BigInt(o.tag), true);"),
+            "u64 tag must be written at offset 0: {out}"
+        );
+        assert!(
+            out.contains("argsDv.setUint32(8, Number(o.inner.a) >>> 0, true);"),
+            "nested inner.a must be written at offset 8: {out}"
+        );
+        assert!(
+            out.contains("argsDv.setUint32(12, Number(o.inner.b) >>> 0, true);"),
+            "nested inner.b must be written at offset 12: {out}"
+        );
+        // READ (emit_deno_read_local) assembles the nested return object from the
+        // inner fields read at offsets 8/12.
+        assert!(
+            out.contains("const _r2 = { a: _r3, b: _r4 };")
+                && out.contains("const _r0 = { tag: _r1, inner: _r2 };"),
+            "nested struct return must assemble a nested object literal: {out}"
+        );
+        assert!(
+            out.contains("outDv.getUint32(8, true)") && out.contains("outDv.getUint32(12, true)"),
+            "nested inner fields must be read at offsets 8/12: {out}"
         );
     }
 
