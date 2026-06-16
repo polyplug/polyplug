@@ -106,7 +106,7 @@ impl CodeGenerator for JsQuickjsGenerator {
         if !ir.host_contracts.is_empty() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/host_contracts.ts"),
-                content: generate_guest_host_contracts_ts(ir),
+                content: generate_guest_host_contracts_ts(ir)?,
                 force_regenerate: false,
             });
         }
@@ -115,7 +115,7 @@ impl CodeGenerator for JsQuickjsGenerator {
         if !peer_contracts.is_empty() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/peer_callers.ts"),
-                content: generate_guest_peer_callers_ts(ir, &peer_contracts),
+                content: generate_guest_peer_callers_ts(ir, &peer_contracts)?,
                 force_regenerate: false,
             });
         }
@@ -1726,8 +1726,8 @@ fn ts_primitive_guest(p: &PrimitiveType) -> &'static str {
 fn generate_ts_guest_host_contract_caller(
     out: &mut String,
     contract: &ResolvedHostContract,
-    enums: &[EnumDef],
-) {
+    ir: &ValidatedIr,
+) -> Result<(), PolyplugcError> {
     let class_name: String = host_contract_name_to_ts_caller(&contract.name);
     let contract_id_lo: u32 = (contract.contract_id & 0xFFFFFFFF) as u32;
     let contract_id_hi: u32 = (contract.contract_id >> 32) as u32;
@@ -1762,10 +1762,11 @@ fn generate_ts_guest_host_contract_caller(
     out.push_str("    }\n\n");
 
     for func in &contract.functions {
-        generate_ts_guest_host_contract_method(out, func, contract_id_lo, contract_id_hi, enums);
+        generate_ts_guest_host_contract_method(out, func, contract_id_lo, contract_id_hi, ir)?;
     }
 
     out.push_str("}\n\n");
+    Ok(())
 }
 
 /// Generate one method for a guest-side host contract caller.
@@ -1774,8 +1775,8 @@ fn generate_ts_guest_host_contract_method(
     func: &crate::ir::ResolvedFunction,
     contract_id_lo: u32,
     contract_id_hi: u32,
-    enums: &[EnumDef],
-) {
+    ir: &ValidatedIr,
+) -> Result<(), PolyplugcError> {
     let fn_id: u32 = func.function_id;
     // Returns are RAW ABI values — declared type must match the shape that
     // emit_ts_guest_host_contract_readback produces (e.g. StringView →
@@ -1814,8 +1815,8 @@ fn generate_ts_guest_host_contract_method(
     }
     out.push_str("        }\n");
 
-    emit_ts_guest_host_contract_args_setup(out, func, enums);
-    emit_ts_guest_host_contract_out_setup(out, &func.returns);
+    emit_ts_guest_host_contract_args_setup(out, func, ir)?;
+    emit_ts_guest_host_contract_out_setup(out, &func.returns, ir)?;
 
     out.push_str(&format!(
         "        const errCode: number = polyplug.callHostContract(0x{:08X}, 0x{:08X}, this._minVersion, {}, argsPtr, outPtr);\n",
@@ -1831,36 +1832,41 @@ fn generate_ts_guest_host_contract_method(
     out.push_str("        }\n");
 
     if has_return {
-        emit_ts_guest_host_contract_readback(out, func.returns.as_ref(), enums);
+        emit_ts_guest_host_contract_readback(out, func.returns.as_ref(), ir)?;
         out.push_str("        return result;\n");
     }
 
     out.push_str("    }\n\n");
+    Ok(())
 }
 
 /// `(size, align)` of one caller-pack slot for the guest→host / peer caller
 /// args pack. User-defined ENUM types use their repr width; user-defined
-/// non-enum (struct-by-value) params remain unsupported on the JS caller path
-/// and keep their legacy 4-byte slot (the guest-side WRAPPERS do support
-/// structs — see `js_c_size` / `js_read_expr`).
-fn js_caller_slot_layout(ty: &ResolvedTypeRef, enums: &[EnumDef]) -> (usize, usize) {
+/// non-enum (struct-by-value) params use their full C-layout size/alignment
+/// (computed by `js_c_size` / `js_c_align`) and are marshalled field-by-field
+/// by `emit_ts_caller_pack_value`, matching the guest-side wrappers and every
+/// other host caller.
+fn js_caller_slot_layout(
+    ty: &ResolvedTypeRef,
+    ir: &ValidatedIr,
+) -> Result<(usize, usize), PolyplugcError> {
     match ty {
-        ResolvedTypeRef::Primitive(p) => match p {
+        ResolvedTypeRef::Primitive(p) => Ok(match p {
             PrimitiveType::U8 | PrimitiveType::I8 | PrimitiveType::Bool => (1, 1),
             PrimitiveType::U16 | PrimitiveType::I16 => (2, 2),
             PrimitiveType::U32 | PrimitiveType::I32 | PrimitiveType::F32 => (4, 4),
             PrimitiveType::U64 | PrimitiveType::I64 | PrimitiveType::F64 => (8, 8),
-        },
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => (16, 8),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => (24, 8),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => (8, 8),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => (0, 1),
-        ResolvedTypeRef::UserDefined(_) => match js_enum_for_type(ty, enums) {
+        }),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => Ok((16, 8)),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => Ok((24, 8)),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => Ok((8, 8)),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => Ok((0, 1)),
+        ResolvedTypeRef::UserDefined(_) => match js_enum_for_type(ty, &ir.enums) {
             Some(e) => {
                 let size: usize = js_repr_size(&e.repr);
-                (size, size)
+                Ok((size, size))
             }
-            None => (4, 4),
+            None => Ok((js_c_size(ty, ir)?, js_c_align(ty, ir)?)),
         },
     }
 }
@@ -2245,12 +2251,21 @@ fn emit_js_write_value(
 }
 
 /// Emit a StringView into `buf` at `offset` using arenaAlloc + writeU32/writeByte.
-/// Defines `_<name>DataBuf` and `_<name>DataPtr` locals; `buf` is the combined args pointer.
-fn emit_ts_write_string_view(out: &mut String, param_name: &str, args_ptr: &str, offset: usize) {
-    let n: &str = param_name;
+/// `value` is the JS string EXPRESSION to encode (e.g. `name` or `o.inner.s`);
+/// `local` is a valid identifier base for the temporaries (e.g. `name` or `sv0`),
+/// kept separate so nested struct fields (whose value expression contains `.`)
+/// can still name their temporaries.
+fn emit_ts_write_string_view(
+    out: &mut String,
+    value: &str,
+    local: &str,
+    args_ptr: &str,
+    offset: usize,
+) {
+    let n: &str = local;
     let ap: &str = args_ptr;
     out.push_str(&format!(
-        "        const _{n}Bytes = new TextEncoder().encode({n});\n"
+        "        const _{n}Bytes = new TextEncoder().encode({value});\n"
     ));
     out.push_str(&format!(
         "        const _{n}DataBuf = polyplug.arenaAlloc(_{n}Bytes.length > 0 ? _{n}Bytes.length : 1);\n"
@@ -2279,17 +2294,19 @@ fn emit_ts_write_string_view(out: &mut String, param_name: &str, args_ptr: &str,
 }
 
 /// Emit a Buffer (Uint8Array) into `buf` at `offset` using arenaAlloc + writeU32/writeByte.
-fn emit_ts_write_buffer(out: &mut String, param_name: &str, args_ptr: &str, offset: usize) {
-    let n: &str = param_name;
+/// `value` is the JS Uint8Array EXPRESSION; `local` is the identifier base for the
+/// temporaries (see `emit_ts_write_string_view`).
+fn emit_ts_write_buffer(out: &mut String, value: &str, local: &str, args_ptr: &str, offset: usize) {
+    let n: &str = local;
     let ap: &str = args_ptr;
     out.push_str(&format!(
-        "        const _{n}DataBuf = polyplug.arenaAlloc({n}.length > 0 ? {n}.length : 1);\n"
+        "        const _{n}DataBuf = polyplug.arenaAlloc({value}.length > 0 ? {value}.length : 1);\n"
     ));
     out.push_str(&format!(
         "        const _{n}DataPtr = _{n}DataBuf[0] + _{n}DataBuf[1] * 4294967296;\n"
     ));
     out.push_str(&format!(
-        "        for (let _i = 0; _i < {n}.length; _i++) {{ polyplug.writeByte(_{n}DataPtr + _i, {n}[_i]); }}\n"
+        "        for (let _i = 0; _i < {value}.length; _i++) {{ polyplug.writeByte(_{n}DataPtr + _i, {value}[_i]); }}\n"
     ));
     out.push_str(&format!(
         "        polyplug.writeU32({ap} + {offset}, _{n}DataBuf[0]);\n"
@@ -2299,7 +2316,7 @@ fn emit_ts_write_buffer(out: &mut String, param_name: &str, args_ptr: &str, offs
         offset + 4
     ));
     out.push_str(&format!(
-        "        polyplug.writeU32({ap} + {}, {n}.length);\n",
+        "        polyplug.writeU32({ap} + {}, {value}.length);\n",
         offset + 8
     ));
     out.push_str(&format!(
@@ -2307,13 +2324,73 @@ fn emit_ts_write_buffer(out: &mut String, param_name: &str, args_ptr: &str, offs
         offset + 12
     ));
     out.push_str(&format!(
-        "        polyplug.writeU32({ap} + {}, {n}.length);\n",
+        "        polyplug.writeU32({ap} + {}, {value}.length);\n",
         offset + 16
     ));
     out.push_str(&format!(
         "        polyplug.writeU32({ap} + {}, 0);\n",
         offset + 20
     ));
+}
+
+/// Recursively pack `value` (a JS expression of `ty`'s ergonomic shape) into the
+/// caller args buffer at `{args_ptr} + {offset}` through the QuickJS bridge.
+///
+/// StringView/Buffer leaves are arena-allocated from their string/Uint8Array;
+/// struct fields recurse field-by-field at their C-layout offsets to unbounded
+/// depth; every other leaf (primitive, Ptr, enum) delegates to
+/// `emit_js_write_value`. This mirrors the Deno caller's `emit_deno_write_value`,
+/// so the JS guest caller marshals struct-by-value params with no type-support
+/// limitation. `sv_idx` yields unique identifier bases for the arena temporaries.
+fn emit_ts_caller_pack_value(
+    out: &mut String,
+    ty: &ResolvedTypeRef,
+    args_ptr: &str,
+    offset: usize,
+    value: &str,
+    ir: &ValidatedIr,
+    sv_idx: &mut u32,
+) -> Result<(), PolyplugcError> {
+    match ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            let local: String = format!("sv{}", *sv_idx);
+            *sv_idx += 1;
+            emit_ts_write_string_view(out, value, &local, args_ptr, offset);
+            Ok(())
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+            let local: String = format!("buf{}", *sv_idx);
+            *sv_idx += 1;
+            emit_ts_write_buffer(out, value, &local, args_ptr, offset);
+            Ok(())
+        }
+        ResolvedTypeRef::UserDefined(_) if js_struct_for_type(ty, &ir.types).is_some() => {
+            let s: &ResolvedType = js_struct_for_type(ty, &ir.types).ok_or_else(|| {
+                PolyplugcError::UnsupportedType {
+                    type_name: "struct".to_owned(),
+                    lang: "js-quickjs".to_owned(),
+                }
+            })?;
+            let mut field_off: usize = offset;
+            for field in &s.fields {
+                let align: usize = js_c_align(&field.ty, ir)?;
+                field_off = align_up(field_off, align);
+                let field_value: String = format!("{value}.{}", field.name);
+                emit_ts_caller_pack_value(
+                    out,
+                    &field.ty,
+                    args_ptr,
+                    field_off,
+                    &field_value,
+                    ir,
+                    sv_idx,
+                )?;
+                field_off += js_c_size(&field.ty, ir)?;
+            }
+            Ok(())
+        }
+        _ => emit_js_write_value(out, "        ", ty, args_ptr, offset, value, ir),
+    }
 }
 
 /// Emit the argsPtr setup for a TypeScript guest host contract / peer method.
@@ -2323,11 +2400,12 @@ fn emit_ts_write_buffer(out: &mut String, param_name: &str, args_ptr: &str, offs
 fn emit_ts_guest_host_contract_args_setup(
     out: &mut String,
     func: &crate::ir::ResolvedFunction,
-    enums: &[EnumDef],
-) {
+    ir: &ValidatedIr,
+) -> Result<(), PolyplugcError> {
+    let enums: &[EnumDef] = &ir.enums;
     if func.params.is_empty() {
         out.push_str("        const argsPtr = 0;\n");
-        return;
+        return Ok(());
     }
 
     if func.params.len() == 1 {
@@ -2457,12 +2535,33 @@ fn emit_ts_guest_host_contract_args_setup(
                     param.name
                 ));
             }
+            ResolvedTypeRef::UserDefined(_)
+                if js_struct_for_type(&param.ty, &ir.types).is_some() =>
+            {
+                // Struct-by-value param: allocate its full C-layout size and pack
+                // field-by-field (matches the Deno caller and every host thunk).
+                let size: usize = js_c_size(&param.ty, ir)?;
+                out.push_str(&format!(
+                    "        const _argsBuf = polyplug.arenaAlloc({size});\n"
+                ));
+                out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
+                let mut sv_idx: u32 = 0;
+                emit_ts_caller_pack_value(
+                    out,
+                    &param.ty,
+                    "argsPtr",
+                    0,
+                    &param.name,
+                    ir,
+                    &mut sv_idx,
+                )?;
+            }
             ResolvedTypeRef::UserDefined(_) => {
-                // UserDefined types in guest caller context are enum-backed scalars.
-                // Pack through the repr width in an 8-byte aligned slot: a plain
-                // writeU32 would truncate a u64-repr enum's high word. The callee
-                // reads exactly its repr width from offset 0 (little-endian), so
-                // narrower reprs are covered by the low bytes of the u32 write.
+                // Enum-backed scalar param. Pack through the repr width in an
+                // 8-byte aligned slot: a plain writeU32 would truncate a u64-repr
+                // enum's high word. The callee reads exactly its repr width from
+                // offset 0 (little-endian), so narrower reprs are covered by the
+                // low bytes of the u32 write.
                 out.push_str("        const _argsBuf = polyplug.arenaAlloc(8);\n");
                 out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
                 match js_enum_for_type(&param.ty, enums).map(|e: &EnumDef| &e.repr) {
@@ -2489,7 +2588,7 @@ fn emit_ts_guest_host_contract_args_setup(
                 out.push_str("        const argsPtr = 0;\n");
             }
         }
-        return;
+        return Ok(());
     }
 
     // Multiple params: pack with C-layout (repr(C)) offsets. Every host-side
@@ -2500,7 +2599,7 @@ fn emit_ts_guest_host_contract_args_setup(
     let mut total_size: usize = 0;
     let mut max_align: usize = 1;
     for param in &func.params {
-        let (size, align): (usize, usize) = js_caller_slot_layout(&param.ty, enums);
+        let (size, align): (usize, usize) = js_caller_slot_layout(&param.ty, ir)?;
         if align > max_align {
             max_align = align;
         }
@@ -2515,15 +2614,16 @@ fn emit_ts_guest_host_contract_args_setup(
     out.push_str("        const argsPtr = _argsBuf[0] + _argsBuf[1] * 4294967296;\n");
 
     let mut offset: usize = 0;
+    let mut sv_idx: u32 = 0;
     for param in &func.params {
-        let (size, align): (usize, usize) = js_caller_slot_layout(&param.ty, enums);
+        let (size, align): (usize, usize) = js_caller_slot_layout(&param.ty, ir)?;
         offset = align_up(offset, align);
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-                emit_ts_write_string_view(out, &param.name, "argsPtr", offset);
+                emit_ts_write_string_view(out, &param.name, &param.name, "argsPtr", offset);
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
-                emit_ts_write_buffer(out, &param.name, "argsPtr", offset);
+                emit_ts_write_buffer(out, &param.name, &param.name, "argsPtr", offset);
             }
             ResolvedTypeRef::Primitive(p) => match p {
                 PrimitiveType::U64 | PrimitiveType::I64 => {
@@ -2650,13 +2750,17 @@ fn emit_ts_guest_host_contract_args_setup(
                         }
                     },
                     None => {
-                        // Struct-by-value caller params are not supported on
-                        // the JS guest caller path (legacy 4-byte slot).
-                        out.push_str(&format!(
-                            "        polyplug.writeU32({}, Number({}));\n",
-                            js_ptr_at("argsPtr", offset),
-                            param.name
-                        ));
+                        // Struct-by-value caller param: pack field-by-field at its
+                        // C-layout offsets (matches the Deno caller and host thunks).
+                        emit_ts_caller_pack_value(
+                            out,
+                            &param.ty,
+                            "argsPtr",
+                            offset,
+                            &param.name,
+                            ir,
+                            &mut sv_idx,
+                        )?;
                     }
                 }
             }
@@ -2664,6 +2768,7 @@ fn emit_ts_guest_host_contract_args_setup(
         }
         offset += size;
     }
+    Ok(())
 }
 
 /// Emit the outPtr setup for a TypeScript guest host contract / peer method.
@@ -2671,7 +2776,11 @@ fn emit_ts_guest_host_contract_args_setup(
 /// Allocates the correct size via `arenaAlloc` and defines `const outPtr`.
 /// Does NOT pre-create `result` — that is done by `emit_ts_guest_host_contract_readback`
 /// after the dispatch call succeeds.
-fn emit_ts_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+fn emit_ts_guest_host_contract_out_setup(
+    out: &mut String,
+    returns: &Option<ResolvedTypeRef>,
+    ir: &ValidatedIr,
+) -> Result<(), PolyplugcError> {
     if let Some(ret_ty) = returns {
         match ret_ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
@@ -2692,11 +2801,26 @@ fn emit_ts_guest_host_contract_out_setup(out: &mut String, returns: &Option<Reso
                 out.push_str("        polyplug.writeU32(outPtr + 16, 0);\n");
                 out.push_str("        polyplug.writeU32(outPtr + 20, 0);\n");
             }
+            ResolvedTypeRef::UserDefined(_) if js_struct_for_type(ret_ty, &ir.types).is_some() => {
+                // Struct-by-value return: allocate the exact C-layout size and
+                // zero the slot word-by-word (arena memory is not pre-zeroed); the
+                // host writes each field, and the readback reads them at their C
+                // offsets via js_read_expr.
+                let size: usize = js_c_size(ret_ty, ir)?;
+                out.push_str(&format!(
+                    "        const _outBuf = polyplug.arenaAlloc({size});\n"
+                ));
+                out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
+                for w in 0..size.div_ceil(4) {
+                    out.push_str(&format!(
+                        "        polyplug.writeU32({}, 0);\n",
+                        js_ptr_at("outPtr", w * 4)
+                    ));
+                }
+            }
             ResolvedTypeRef::UserDefined(_) => {
-                // User-defined structs: allocate 8 bytes (pointer-sized slot); the host
-                // writes the return value here.  Without field-layout info at this call
-                // site we cannot allocate the exact struct size, so we use a pointer
-                // slot and note the limitation.
+                // Enum-backed return: 8-byte slot, pre-zeroed; the host writes the
+                // repr-width integer and the readback reads it back.
                 out.push_str("        const _outBuf = polyplug.arenaAlloc(8);\n");
                 out.push_str("        const outPtr = _outBuf[0] + _outBuf[1] * 4294967296;\n");
                 out.push_str("        polyplug.writeU32(outPtr, 0);\n");
@@ -2729,6 +2853,7 @@ fn emit_ts_guest_host_contract_out_setup(out: &mut String, returns: &Option<Reso
     } else {
         out.push_str("        const outPtr = 0;\n");
     }
+    Ok(())
 }
 
 /// Emit `const result = ...;` by reading the dispatch result back from `outPtr`.
@@ -2738,10 +2863,11 @@ fn emit_ts_guest_host_contract_out_setup(out: &mut String, returns: &Option<Reso
 fn emit_ts_guest_host_contract_readback(
     out: &mut String,
     returns: Option<&ResolvedTypeRef>,
-    enums: &[EnumDef],
-) {
+    ir: &ValidatedIr,
+) -> Result<(), PolyplugcError> {
+    let enums: &[EnumDef] = &ir.enums;
     let Some(ret_ty) = returns else {
-        return;
+        return Ok(());
     };
     match ret_ty {
         ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
@@ -2789,6 +2915,13 @@ fn emit_ts_guest_host_contract_readback(
                 out.push_str("        const result: number = polyplug.readU32(outPtr);\n");
             }
         },
+        ResolvedTypeRef::UserDefined(_) if js_struct_for_type(ret_ty, &ir.types).is_some() => {
+            // Struct-by-value return: read field-by-field from outPtr into a
+            // (possibly nested) object literal via js_read_expr — the same reader
+            // the guest wrappers use, so the shape matches the raw return type.
+            let expr: String = js_read_expr(ret_ty, "outPtr", 0, ir)?;
+            out.push_str(&format!("        const result = {expr};\n"));
+        }
         ResolvedTypeRef::UserDefined(_) => {
             // Enum returns read back as their repr integer — the declared TS
             // return type is the numeric enum itself, NOT the {lo, hi} object.
@@ -2812,10 +2945,11 @@ fn emit_ts_guest_host_contract_readback(
         }
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {}
     }
+    Ok(())
 }
 
 /// Generate `guest/host_contracts.ts` — caller classes for guest-side host contract callers.
-fn generate_guest_host_contracts_ts(ir: &ValidatedIr) -> String {
+fn generate_guest_host_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(
         "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
@@ -2830,7 +2964,7 @@ fn generate_guest_host_contracts_ts(ir: &ValidatedIr) -> String {
     }
 
     for contract in &ir.host_contracts {
-        generate_ts_guest_host_contract_caller(&mut out, contract, &ir.enums);
+        generate_ts_guest_host_contract_caller(&mut out, contract, ir)?;
     }
 
     // Emit contract ID constants
@@ -2848,7 +2982,7 @@ fn generate_guest_host_contracts_ts(ir: &ValidatedIr) -> String {
         ));
     }
 
-    out
+    Ok(out)
 }
 
 /// Collect user-defined type names (enums, structs) referenced in guest-side
@@ -3103,7 +3237,10 @@ fn guest_contract_name_to_ts_peer(name: &str) -> String {
 }
 
 /// Generate `guest/peer_callers.ts` — one typed peer class per matched dependency.
-fn generate_guest_peer_callers_ts(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> String {
+fn generate_guest_peer_callers_ts(
+    ir: &ValidatedIr,
+    peers: &[&ResolvedContract],
+) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(
         "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
@@ -3132,10 +3269,10 @@ fn generate_guest_peer_callers_ts(ir: &ValidatedIr, peers: &[&ResolvedContract])
 
     for contract in peers {
         let min_ver: u32 = peer_min_version(ir, contract.contract_id);
-        generate_ts_peer_caller_class(&mut out, contract, min_ver, &ir.enums);
+        generate_ts_peer_caller_class(&mut out, contract, min_ver, ir)?;
     }
 
-    out
+    Ok(out)
 }
 
 /// Generate one `<Name>Peer` class for a single peer contract.
@@ -3143,8 +3280,8 @@ fn generate_ts_peer_caller_class(
     out: &mut String,
     contract: &ResolvedContract,
     min_version: u32,
-    enums: &[EnumDef],
-) {
+    ir: &ValidatedIr,
+) -> Result<(), PolyplugcError> {
     let class_name: String = guest_contract_name_to_ts_peer(&contract.name);
     let contract_id_lo: u32 = (contract.contract_id & 0xFFFF_FFFF) as u32;
     let contract_id_hi: u32 = (contract.contract_id >> 32) as u32;
@@ -3201,17 +3338,11 @@ fn generate_ts_peer_caller_class(
     out.push_str("    }\n\n");
 
     for func in &contract.functions {
-        generate_ts_peer_caller_method(
-            out,
-            func,
-            contract_id_lo,
-            contract_id_hi,
-            min_version,
-            enums,
-        );
+        generate_ts_peer_caller_method(out, func, contract_id_lo, contract_id_hi, min_version, ir)?;
     }
 
     out.push_str("}\n\n");
+    Ok(())
 }
 
 /// Generate one method for a peer caller class.
@@ -3227,8 +3358,8 @@ fn generate_ts_peer_caller_method(
     contract_id_lo: u32,
     contract_id_hi: u32,
     min_version: u32,
-    enums: &[EnumDef],
-) {
+    ir: &ValidatedIr,
+) -> Result<(), PolyplugcError> {
     let fn_id: u32 = func.function_id;
     let has_return: bool = func.returns.is_some();
     // Use the raw ABI return type — it must match the `result` shape that
@@ -3267,8 +3398,8 @@ fn generate_ts_peer_caller_method(
     out.push_str("        }\n");
 
     // Marshal args and out buffer using the same helpers as host-contract methods.
-    emit_ts_guest_host_contract_args_setup(out, func, enums);
-    emit_ts_guest_host_contract_out_setup(out, &func.returns);
+    emit_ts_guest_host_contract_args_setup(out, func, ir)?;
+    emit_ts_guest_host_contract_out_setup(out, &func.returns, ir)?;
 
     // Call the bridge primitive.  It returns the u32 error code directly.
     out.push_str(&format!(
@@ -3285,11 +3416,12 @@ fn generate_ts_peer_caller_method(
     out.push_str("        }\n");
 
     if has_return {
-        emit_ts_guest_host_contract_readback(out, func.returns.as_ref(), enums);
+        emit_ts_guest_host_contract_readback(out, func.returns.as_ref(), ir)?;
         out.push_str("        return result;\n");
     }
 
     out.push_str("    }\n\n");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3672,7 +3804,8 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_ts_guest_host_contract_caller(&mut out, &contract, &[]);
+        generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
+            .expect("generate host-contract caller");
         assert!(
             out.contains("export class HostLoggerContract"),
             "missing class: {out}"
@@ -3733,7 +3866,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_ts_guest_host_contract_caller(&mut out, &contract, &[]);
+        generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
+            .expect("generate host-contract caller");
         assert!(
             out.contains("export class HostFsReaderContract"),
             "missing class: {out}"
@@ -3773,7 +3907,8 @@ mod tests {
             }],
             bundle: None,
         };
-        let out: String = generate_guest_host_contracts_ts(&ir);
+        let out: String =
+            generate_guest_host_contracts_ts(&ir).expect("generate guest host contracts");
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
         assert!(
             out.contains("export class HostLoggerContract"),
@@ -3884,7 +4019,8 @@ mod tests {
             }],
             bundle: None,
         };
-        let out: String = generate_guest_host_contracts_ts(&ir);
+        let out: String =
+            generate_guest_host_contracts_ts(&ir).expect("generate guest host contracts");
         assert!(
             out.contains("import { LogLevel } from './types';"),
             "host_contracts.ts must import enum param type from ./types: {out}"
@@ -3919,7 +4055,8 @@ mod tests {
             }],
             bundle: None,
         };
-        let out: String = generate_guest_host_contracts_ts(&ir);
+        let out: String =
+            generate_guest_host_contracts_ts(&ir).expect("generate guest host contracts");
         assert!(
             !out.contains("from './types'"),
             "no type import expected for ABI-only host contract: {out}"
@@ -4055,7 +4192,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_ts_guest_host_contract_caller(&mut out, &contract, &[]);
+        generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
+            .expect("generate host-contract caller");
         assert!(
             out.contains("polyplug.arenaAlloc(16)"),
             "out buffer must be arenaAlloc(16) for StringView: {out}"
@@ -4090,7 +4228,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_ts_guest_host_contract_caller(&mut out, &contract, &[]);
+        generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
+            .expect("generate host-contract caller");
         assert!(
             out.contains("polyplug.arenaAlloc(24)"),
             "out buffer must be arenaAlloc(24) for Buffer: {out}"
@@ -4467,7 +4606,8 @@ mod tests {
             returns: None,
         };
         let mut out: String = String::new();
-        emit_ts_guest_host_contract_args_setup(&mut out, &func, &enums);
+        emit_ts_guest_host_contract_args_setup(&mut out, &func, &wrapper_ir(vec![], enums))
+            .expect("args setup");
         assert!(
             out.contains("polyplug.arenaAlloc(24)"),
             "pack must be 24 bytes (u32 + pad + 16-byte StringView): {out}"
@@ -4504,7 +4644,12 @@ mod tests {
             returns: None,
         };
         let mut out: String = String::new();
-        emit_ts_guest_host_contract_args_setup(&mut out, &func, &pixel_format_enums());
+        emit_ts_guest_host_contract_args_setup(
+            &mut out,
+            &func,
+            &wrapper_ir(vec![], pixel_format_enums()),
+        )
+        .expect("args setup");
         assert!(
             out.contains("polyplug.writeU32(argsPtr, Number(fmt));"),
             "u32-repr enum param must be written into the arena slot: {out}"
@@ -4520,7 +4665,12 @@ mod tests {
         let returns: Option<ResolvedTypeRef> =
             Some(ResolvedTypeRef::UserDefined("PixelFormat".to_owned()));
         let mut out: String = String::new();
-        emit_ts_guest_host_contract_readback(&mut out, returns.as_ref(), &pixel_format_enums());
+        emit_ts_guest_host_contract_readback(
+            &mut out,
+            returns.as_ref(),
+            &wrapper_ir(vec![], pixel_format_enums()),
+        )
+        .expect("readback");
         assert!(
             out.contains("const result = polyplug.readU32(outPtr) as any;"),
             "u32-repr enum return must read back the repr integer: {out}"
@@ -4551,8 +4701,9 @@ mod tests {
             }],
             returns: None,
         };
+        let ir: ValidatedIr = wrapper_ir(vec![], enums);
         let mut out: String = String::new();
-        emit_ts_guest_host_contract_args_setup(&mut out, &func, &enums);
+        emit_ts_guest_host_contract_args_setup(&mut out, &func, &ir).expect("args setup");
         assert!(
             out.contains("polyplug.writeU32(argsPtr, Number(flags) >>> 0);")
                 && out.contains(
@@ -4564,12 +4715,122 @@ mod tests {
         let returns: Option<ResolvedTypeRef> =
             Some(ResolvedTypeRef::UserDefined("BigFlags".to_owned()));
         let mut ret: String = String::new();
-        emit_ts_guest_host_contract_readback(&mut ret, returns.as_ref(), &enums);
+        emit_ts_guest_host_contract_readback(&mut ret, returns.as_ref(), &ir).expect("readback");
         assert!(
             ret.contains(
                 "(polyplug.readU32(outPtr) + polyplug.readU32(outPtr + 4) * 4294967296) as any"
             ),
             "u64-repr enum return must combine lo/hi words: {ret}"
+        );
+    }
+
+    #[test]
+    fn quickjs_caller_struct_param_and_return_marshal_field_by_field() {
+        // Struct-by-value param/return on the guest→host caller path must marshal
+        // field-by-field (NOT Number(structObj) = NaN into a 4-byte slot).
+        // Pair { a: u32, b: u32 } -> a@0, b@4 ; size 8, align 4.
+        let types: Vec<crate::ir::ResolvedType> = vec![crate::ir::ResolvedType {
+            name: "Pair".to_owned(),
+            fields: vec![
+                crate::ir::ResolvedField {
+                    name: "a".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                },
+                crate::ir::ResolvedField {
+                    name: "b".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                },
+            ],
+        }];
+        let ir: ValidatedIr = wrapper_ir(types, vec![]);
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "compute".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "args".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("Pair".to_owned()),
+            }],
+            returns: Some(ResolvedTypeRef::UserDefined("Pair".to_owned())),
+        };
+
+        // PARAM: allocate the struct's C size and pack each field — no NaN.
+        let mut args: String = String::new();
+        emit_ts_guest_host_contract_args_setup(&mut args, &func, &ir).expect("args setup");
+        assert!(
+            args.contains("polyplug.arenaAlloc(8)"),
+            "struct param slot must be the C-layout size (8), not a 4-byte slot: {args}"
+        );
+        assert!(
+            args.contains("polyplug.writeU32(argsPtr, args.a);")
+                && args.contains("polyplug.writeU32(argsPtr + 4, args.b);"),
+            "struct param must be packed field-by-field at C offsets: {args}"
+        );
+        assert!(
+            !args.contains("Number(args)"),
+            "struct param must NOT degrade to Number(structObj) = NaN: {args}"
+        );
+
+        // RETURN out-setup: allocate the exact struct size (not an 8-byte pointer slot).
+        let mut outs: String = String::new();
+        emit_ts_guest_host_contract_out_setup(&mut outs, &func.returns, &ir).expect("out setup");
+        assert!(
+            outs.contains("polyplug.arenaAlloc(8)"),
+            "struct return out slot must be the C-layout size: {outs}"
+        );
+
+        // RETURN readback: read the struct field-by-field into an object literal.
+        let mut rb: String = String::new();
+        emit_ts_guest_host_contract_readback(&mut rb, func.returns.as_ref(), &ir)
+            .expect("readback");
+        assert!(
+            rb.contains(
+                "const result = { a: polyplug.readU32(outPtr), b: polyplug.readU32(outPtr + 4) };"
+            ),
+            "struct return must be read field-by-field, not as a {{lo,hi}} pointer: {rb}"
+        );
+    }
+
+    #[test]
+    fn quickjs_caller_struct_with_stringview_field_arena_allocates() {
+        // A struct param whose field is a StringView must arena-allocate the
+        // string bytes (matching the Deno caller) — no per-language limitation.
+        // Holder { name: StringView, code: u32 } -> name@0 (16,8), code@16 ; size 24.
+        let types: Vec<crate::ir::ResolvedType> = vec![crate::ir::ResolvedType {
+            name: "Holder".to_owned(),
+            fields: vec![
+                crate::ir::ResolvedField {
+                    name: "name".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                },
+                crate::ir::ResolvedField {
+                    name: "code".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                },
+            ],
+        }];
+        let ir: ValidatedIr = wrapper_ir(types, vec![]);
+        let func: ResolvedFunction = ResolvedFunction {
+            name: "store".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "args".to_owned(),
+                ty: ResolvedTypeRef::UserDefined("Holder".to_owned()),
+            }],
+            returns: None,
+        };
+        let mut out: String = String::new();
+        emit_ts_guest_host_contract_args_setup(&mut out, &func, &ir).expect("args setup");
+        assert!(
+            out.contains("polyplug.arenaAlloc(24)"),
+            "Holder slot must be 24 bytes (16-byte StringView + u32, 8-aligned): {out}"
+        );
+        assert!(
+            out.contains("const _sv0Bytes = new TextEncoder().encode(args.name);"),
+            "StringView struct field must arena-encode from the field expression: {out}"
+        );
+        assert!(
+            out.contains("polyplug.writeU32(argsPtr + 16, args.code);"),
+            "scalar field after the 16-byte StringView must write at offset 16: {out}"
         );
     }
 
