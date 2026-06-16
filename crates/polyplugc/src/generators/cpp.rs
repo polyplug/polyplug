@@ -3334,10 +3334,6 @@ mod tests {
 
     #[test]
     fn generate_cpp_host_contract_has_factory_method() {
-        use crate::ir::ResolvedContract;
-        use crate::ir::ResolvedFunction;
-        use crate::ir::ResolvedParam;
-        use crate::ir::ResolvedTypeRef;
 
         let contract = ResolvedContract {
             name: "test.add".to_owned(),
@@ -4133,8 +4129,6 @@ mod tests {
     /// must produce a PeerCallers class in guest/peer_callers.hpp.
     #[test]
     fn peer_caller_emitted_for_declared_dependency() {
-        use crate::ir::ResolvedBundle;
-        use crate::ir::ResolvedPlugin;
 
         let contract_id: u64 = 0xDEAD_BEEF_1234_5678_u64;
         let ir: ValidatedIr = ValidatedIr {

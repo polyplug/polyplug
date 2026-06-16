@@ -3625,6 +3625,7 @@ mod tests {
 
     use super::*;
     use crate::ir::ReprType;
+    use crate::ir::Version;
 
     #[test]
     fn contract_name_to_struct_conversion() {
@@ -3838,7 +3839,6 @@ mod tests {
 
     #[test]
     fn host_caller_with_stringview_return_uses_arena() {
-        use crate::ir::Version;
 
         let contract: ResolvedContract = ResolvedContract {
             name: "pipeline.decoder".to_owned(),
@@ -3889,7 +3889,6 @@ mod tests {
 
     #[test]
     fn host_caller_with_primitive_return_passes_null_arena() {
-        use crate::ir::Version;
 
         let contract: ResolvedContract = ResolvedContract {
             name: "math.adder".to_owned(),
@@ -3928,7 +3927,6 @@ mod tests {
 
     #[test]
     fn generate_host_contract_trait_produces_trait() {
-        use crate::ir::Version;
 
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
@@ -3984,7 +3982,6 @@ mod tests {
 
     #[test]
     fn generate_host_contracts_file_produces_file() {
-        use crate::ir::Version;
 
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -4025,7 +4022,6 @@ mod tests {
 
     #[test]
     fn generate_host_with_host_contracts_produces_host_contracts_file() {
-        use crate::ir::Version;
 
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
@@ -4144,7 +4140,6 @@ mod tests {
 
     #[test]
     fn guest_host_contract_method_stringview_return_emits_borrowed_str() {
-        use crate::ir::Version;
 
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.cache".to_owned(),
@@ -4184,7 +4179,6 @@ mod tests {
 
     #[test]
     fn guest_host_contract_method_buffer_return_emits_borrowed_slice() {
-        use crate::ir::Version;
 
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.store".to_owned(),
@@ -4308,7 +4302,6 @@ mod tests {
 
     #[test]
     fn generate_guest_host_contract_caller_produces_struct() {
-        use crate::ir::Version;
 
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
@@ -4351,7 +4344,6 @@ mod tests {
 
     #[test]
     fn generate_guest_host_contracts_file_produces_file() {
-        use crate::ir::Version;
 
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -4389,7 +4381,6 @@ mod tests {
 
     #[test]
     fn generate_guest_with_host_contracts_produces_host_contract_callers_file() {
-        use crate::ir::Version;
 
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
@@ -4456,7 +4447,6 @@ mod tests {
 
     #[test]
     fn generate_host_interface_factories_file_produces_file() {
-        use crate::ir::Version;
 
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -4511,7 +4501,6 @@ mod tests {
 
     #[test]
     fn generate_host_with_host_contracts_produces_interface_factories_file() {
-        use crate::ir::Version;
 
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
@@ -4578,7 +4567,6 @@ mod tests {
 
     #[test]
     fn interface_factory_has_safety_comments() {
-        use crate::ir::Version;
 
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -4611,10 +4599,6 @@ mod tests {
 
     #[test]
     fn peer_caller_emitted_for_declared_dependency() {
-        use crate::ir::ResolvedBundle;
-        use crate::ir::ResolvedPlugin;
-        use crate::ir::Version;
-
         let contract_a: ResolvedContract = ResolvedContract {
             name: "pipeline.encoder".to_owned(),
             contract_id: 0xAAAA_BBBB_CCCC_DDDD_u64,
@@ -4865,7 +4849,6 @@ mod tests {
 
     #[test]
     fn no_peer_callers_without_dependencies() {
-        use crate::ir::Version;
 
         // Case 1: bundle field is None (--api mode)
         let ir_no_bundle: ValidatedIr = ValidatedIr {

@@ -4275,8 +4275,6 @@ mod tests {
 
     #[test]
     fn peer_caller_emitted_for_declared_dependency() {
-        use crate::ir::ResolvedDependency;
-        use crate::ir::Version;
         // Build an IR where the bundle declares a dependency on a contract that
         // IS present in ir.contracts — the generator must emit peer_callers.ts.
         let validator_id: u64 = polyplug_utils::guest_contract_id("pipeline.Validator", 1);

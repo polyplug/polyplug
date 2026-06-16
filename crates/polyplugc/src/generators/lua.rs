@@ -2588,6 +2588,8 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
     use crate::ir::ReprType;
+    use crate::ir::Version;
+    use polyplug_codegen::ResolvedBundleFile;
 
     #[test]
     fn generate_lua_enum_non_bitflag() {
@@ -3067,11 +3069,6 @@ mod tests {
 
     #[test]
     fn peer_caller_emitted_for_declared_dependency() {
-        use crate::ir::ResolvedBundle;
-        use crate::ir::ResolvedDependency;
-        use crate::ir::ResolvedPlugin;
-        use crate::ir::Version;
-        use polyplug_codegen::ResolvedBundleFile;
 
         let contract: ResolvedContract = ResolvedContract {
             name: "pipeline.Validator".to_owned(),
@@ -3189,7 +3186,6 @@ mod tests {
 
     #[test]
     fn no_peer_callers_without_dependencies() {
-        use crate::ir::Version;
 
         let contract: ResolvedContract = ResolvedContract {
             name: "pipeline.Validator".to_owned(),
@@ -3217,9 +3213,6 @@ mod tests {
         );
 
         // Bundle with no dependencies — no peer contracts even if contracts exist.
-        use crate::ir::ResolvedBundle;
-        use crate::ir::ResolvedPlugin;
-        use polyplug_codegen::ResolvedBundleFile;
 
         let contract2: ResolvedContract = ResolvedContract {
             name: "pipeline.Validator".to_owned(),
@@ -3273,8 +3266,6 @@ mod tests {
     fn host_out_setup_scalar_u32_emits_array_slot() {
         // A u32 return is scalar: out slot must be ffi.new("uint32_t[1]") and
         // the caller must read back with out_val[0].
-        use crate::ir::PrimitiveType;
-        use crate::ir::Version;
 
         let func: ResolvedFunction = ResolvedFunction {
             name: "get_count".to_owned(),
@@ -3318,7 +3309,6 @@ mod tests {
     fn host_out_setup_string_view_keeps_struct_slot() {
         // A StringView return is a struct (reference cdata): out slot must stay
         // ffi.new("StringView") and the caller must return the raw handle.
-        use crate::ir::Version;
 
         let func: ResolvedFunction = ResolvedFunction {
             name: "get_name".to_owned(),

@@ -3456,6 +3456,7 @@ mod tests {
     use super::*;
     use crate::ir::ReprType;
     use crate::ir::Version;
+    use polyplug_codegen::ResolvedBundleFile;
 
     #[test]
     fn generate_python_enum_non_bitflag() {
@@ -4266,7 +4267,6 @@ mod tests {
     }
 
     fn make_bundle_with_dep(contract_id: u64) -> crate::ir::ResolvedBundle {
-        use polyplug_codegen::ResolvedBundleFile;
         ResolvedBundle {
             name: "python_transformer".to_owned(),
             version: Version {
