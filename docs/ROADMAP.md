@@ -6,7 +6,7 @@ v1.0 and the project is still pre-1.0, so any item touching `HostApi` /
 `RuntimeConfig` / dispatch shape must land *before* the freeze — that window is
 the reason "Harden" items are ranked first below.
 
-_Last updated: 2026-06-08._
+_Last updated: 2026-06-16._
 
 ---
 
@@ -36,6 +36,10 @@ _Last updated: 2026-06-08._
 | **Call-arena retain-and-rewind (perf)** | ✅ Done (ArenaOverflowBlock +used cursor; reset rewinds & retains, free on Drop/teardown; all 6 SDKs + 4 lockstep impls) |
 | Live-instance counter (per-contract, host-mediated) | ✅ Done — counts stateful instances; reload/unload-with-live warning |
 | .NET collectible ALC (true managed unload) | ✅ Done (#68) — per-bundle collectible ALC; unload always calls `AssemblyLoadContext.Unload()` |
+| **Real per-instance state — VM guests + host contracts (all 6 langs)** | ✅ Done (#74) — replaced the VM `create/destroy_instance` stubs; python/lua/js guests AND lua + Deno host-contract providers now build a fresh impl per `create_instance` and route dispatch by instance id (native = boxed payload, null rejected; VM = non-zero id keyed, id 0 → per-contract default). Owner-approved layout-neutral `loader_data` ABI change |
+| **JS (Deno) host-contract provider** | ✅ Done (#85) — native dispatch via `Deno.UnsafeCallback` + per-instance, marshalling the **full ABI type universe** (no per-language limitation) |
+| **Lua/JS host-SDK suites in CI** | ✅ Done (#26) — the `test` job runs `just test-host-lua test-host-js`; closes the no-cargo-coverage gap that previously hid two bugs until after merge |
+| **Incremental codegen writes** | ✅ Done (#31) — `polyplugc generate` skips bindings whose content is unchanged (mtime-preserving, no downstream rebuild cascade) and always rewrites `manifest.toml` via the wired `force_regenerate` flag |
 
 ---
 
@@ -194,9 +198,16 @@ scoping:
 
 ## Decisions needed from owner
 
+- **1.0 ABI freeze — pull the trigger?** Lane A (the irreversible-before-freeze
+  correctness work) is complete and the ABI is hardened. Declaring 1.0 is now an
+  owner call, not a blocked engineering task.
 - **B1 — publishing:** which registries, what package names/namespaces, and is
   publishing pre-1.0 (for battle-testing) desired now or held until 1.0?
 - **Lane priority:** which lane do we fund next given the CI-minute constraint?
+- **`ResolvedPlugin.version` (polyplugc):** the `[[plugin]] version` field is parsed
+  and semver-validated but consumed by no generator. Keep + wire (intended per-plugin
+  versioning) or remove the field + the schema requirement (redundant with the bundle
+  version, a bundle.toml format change)?
 
 _(Resolved 2026-06-09: the python peer-caller reachability question (#75) was
 decided "fix it, mirror lua/js/cpp" and is shipped — see the status table.)_
