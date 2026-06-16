@@ -595,7 +595,7 @@ fn generate_guest_interfaces_file(
         for plugin in &bundle.plugins {
             for contract_impl in &plugin.implements {
                 if let Some(contract) = ir.contracts.iter().find(|c| {
-                    let contract_full =
+                    let contract_full: String =
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
@@ -1153,14 +1153,14 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
             let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
-            let contract_impl = plugin.implements.first().map(|s| s.as_str()).unwrap_or("");
-            let (contract_name, version_str) = contract_impl
+            let contract_impl: &str = plugin.implements.first().map(|s| s.as_str()).unwrap_or("");
+            let (contract_name, version_str): (&str, &str) = contract_impl
                 .split_once('@')
                 .unwrap_or((contract_impl, "1.0.0"));
-            let (version_major, version_minor_patch) =
+            let (version_major, version_minor_patch): (&str, &str) =
                 version_str.split_once('.').unwrap_or((version_str, "0"));
-            let version_minor = version_minor_patch.split('.').next().unwrap_or("0");
-            let contract_name_full = format!("{}@{}", contract_name, version_major);
+            let version_minor: &str = version_minor_patch.split('.').next().unwrap_or("0");
+            let contract_name_full: String = format!("{}@{}", contract_name, version_major);
 
             out.push_str(&format!(
                 "    let desc_{plugin_upper}: PluginDescriptor = PluginDescriptor {{\n"

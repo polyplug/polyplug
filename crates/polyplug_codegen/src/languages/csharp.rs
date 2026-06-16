@@ -17,7 +17,7 @@ impl CSharpGenerator {
 
     /// Check if a rust_type string represents a function pointer.
     fn is_function_pointer(rust_type: &str) -> bool {
-        let type_str = Self::strip_option(rust_type);
+        let type_str: &str = Self::strip_option(rust_type);
         type_str.contains("extern\"C\"fn") || type_str.contains("extern\"C\"")
     }
 
@@ -44,7 +44,7 @@ impl CSharpGenerator {
     fn rust_type_to_csharp(rust_type: &str) -> String {
         // Handle Option<...> wrapper.
         if Self::is_option(rust_type) {
-            let inner = &rust_type["Option<".len()..rust_type.len() - 1];
+            let inner: &str = &rust_type["Option<".len()..rust_type.len() - 1];
             if Self::is_function_pointer(rust_type) {
                 return Self::rust_type_to_csharp(inner);
             }
@@ -183,7 +183,7 @@ impl CodeGenerator for CSharpGenerator {
 
             // Handle Array<T> — expand into 3 sub-fields per D-21.
             if Self::is_array(&field.rust_type) {
-                let field_name = Self::to_pascal_case(&field.name);
+                let field_name: String = Self::to_pascal_case(&field.name);
                 output.push_str(&format!("    public IntPtr {};\n", field_name));
                 output.push_str(&format!("    public nuint {}Len;\n", field_name));
                 output.push_str(&format!("    public nuint {}Align;\n", field_name));
@@ -193,13 +193,13 @@ impl CodeGenerator for CSharpGenerator {
             // Handle function pointer fields — emit IntPtr (blittable, no managed
             // delegate in the ABI struct so unions stay overlappable in .NET).
             if Self::is_function_pointer(&field.rust_type) {
-                let field_name = Self::to_pascal_case(&field.name);
+                let field_name: String = Self::to_pascal_case(&field.name);
                 output.push_str(&format!("    public IntPtr {};\n", field_name));
                 continue;
             }
 
-            let csharp_type = Self::rust_type_to_csharp(&field.rust_type);
-            let field_name = Self::to_pascal_case(&field.name);
+            let csharp_type: String = Self::rust_type_to_csharp(&field.rust_type);
+            let field_name: String = Self::to_pascal_case(&field.name);
             output.push_str(&format!("    public {} {};\n", csharp_type, field_name));
         }
 
@@ -257,8 +257,8 @@ impl CodeGenerator for CSharpGenerator {
         output.push_str("{\n");
 
         for variant in &item.variants {
-            let csharp_type = Self::rust_type_to_csharp(&variant.type_name);
-            let variant_name = Self::to_pascal_case(&variant.name);
+            let csharp_type: String = Self::rust_type_to_csharp(&variant.type_name);
+            let variant_name: String = Self::to_pascal_case(&variant.name);
             output.push_str("    [FieldOffset(0)]\n");
             output.push_str(&format!("    public {} {};\n", csharp_type, variant_name));
         }
@@ -313,8 +313,8 @@ mod tests {
     /// managed delegate definitions (so ABI unions stay overlappable in .NET).
     #[test]
     fn csharp_struct_with_fn_ptr_emits_intptr() {
-        let generator = CSharpGenerator::new();
-        let ctx = GenerationContext::new();
+        let generator: CSharpGenerator = CSharpGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
         let item = StructInfo {
             name: String::from("TestStruct"),
             fields: vec![
@@ -334,7 +334,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx);
         assert!(
             output.contains("public IntPtr Callback;"),
             "fn ptr field should be IntPtr: {}",
@@ -355,8 +355,8 @@ mod tests {
     /// Test that Array<T> fields expand into 3 sub-fields with PascalCase.
     #[test]
     fn csharp_array_field_expands() {
-        let generator = CSharpGenerator::new();
-        let ctx = GenerationContext::new();
+        let generator: CSharpGenerator = CSharpGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
         let item = StructInfo {
             name: String::from("WithArray"),
             fields: vec![FieldInfo {
@@ -369,7 +369,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx);
         assert!(
             output.contains("public IntPtr Data;"),
             "Array items should be IntPtr with PascalCase: {}",

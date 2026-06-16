@@ -17,6 +17,7 @@ use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
+use crate::ir::ResolvedParam;
 use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
@@ -269,7 +270,7 @@ fn generate_interfaces_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         for plugin in &bundle.plugins {
             for contract_impl in &plugin.implements {
                 if let Some(contract) = ir.contracts.iter().find(|c| {
-                    let contract_full =
+                    let contract_full: String =
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
@@ -743,14 +744,14 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         for plugin in &bundle.plugins {
             let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
             let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
-            let contract_impl = plugin.implements.first().map(|s| s.as_str()).unwrap_or("");
-            let (contract_name, version_str) = contract_impl
+            let contract_impl: &str = plugin.implements.first().map(|s| s.as_str()).unwrap_or("");
+            let (contract_name, version_str): (&str, &str) = contract_impl
                 .split_once('@')
                 .unwrap_or((contract_impl, "1.0.0"));
-            let (version_major, version_minor_patch) =
+            let (version_major, version_minor_patch): (&str, &str) =
                 version_str.split_once('.').unwrap_or((version_str, "0"));
-            let version_minor = version_minor_patch.split('.').next().unwrap_or("0");
-            let contract_name_full = format!("{}@{}", contract_name, version_major);
+            let version_minor: &str = version_minor_patch.split('.').next().unwrap_or("0");
+            let contract_name_full: String = format!("{}@{}", contract_name, version_major);
 
             let _ = &plugin_lower;
             out.push_str(&format!("    // Register plugin: {}\n", plugin.name));
@@ -1638,7 +1639,7 @@ fn build_args_ptr_code(class_name: &str, func: &ResolvedFunction) -> String {
     }
 
     if func.params.len() == 1 {
-        let param = &func.params[0];
+        let param: &ResolvedParam = &func.params[0];
         match &param.ty {
             ResolvedTypeRef::UserDefined(_) => {
                 // User-defined struct: pass pointer directly.

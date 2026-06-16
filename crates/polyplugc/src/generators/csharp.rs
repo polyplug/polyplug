@@ -408,7 +408,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
         for plugin in &bundle.plugins {
             for contract_impl in &plugin.implements {
                 if let Some(contract) = ir.contracts.iter().find(|c| {
-                    let contract_full =
+                    let contract_full: String =
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
@@ -535,7 +535,7 @@ fn generate_cs_guest_plugin_interface(
     let class_name_pascal: String = plugin_name
         .split('_')
         .map(|s| {
-            let mut chars = s.chars();
+            let mut chars: core::str::Chars<'_> = s.chars();
             match chars.next() {
                 None => String::new(),
                 Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
@@ -914,7 +914,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
         for plugin in &bundle.plugins {
             for contract_impl in &plugin.implements {
                 if let Some(contract) = ir.contracts.iter().find(|c| {
-                    let contract_full =
+                    let contract_full: String =
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
@@ -924,7 +924,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                         .name
                         .split(['_', '.', '-'])
                         .map(|s| {
-                            let mut chars = s.chars();
+                            let mut chars: core::str::Chars<'_> = s.chars();
                             match chars.next() {
                                 None => String::new(),
                                 Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
@@ -1278,7 +1278,7 @@ fn generate_host_fn_caller(
     // Instance validity check. A null instance handle is valid (stateless
     // contracts); only a disposed wrapper is an error.
     out.push_str("        if (_disposed) {\n");
-    let caller_name = format!("{}Caller", _contract_struct);
+    let caller_name: String = format!("{}Caller", _contract_struct);
     out.push_str(&format!(
         "            throw new ObjectDisposedException(nameof({caller_name}));\n"
     ));

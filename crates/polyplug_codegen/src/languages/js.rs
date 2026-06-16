@@ -37,8 +37,8 @@ impl JsGenerator {
     fn rust_type_to_ts(rust_type: &str) -> String {
         // Handle Option<...> wrapper.
         if Self::is_option(rust_type) {
-            let inner = &rust_type["Option<".len()..rust_type.len() - 1];
-            let ts_inner = Self::rust_type_to_ts(inner);
+            let inner: &str = &rust_type["Option<".len()..rust_type.len() - 1];
+            let ts_inner: String = Self::rust_type_to_ts(inner);
             // In TypeScript, function pointer Option is just the type itself (can be null).
             return ts_inner;
         }
@@ -101,7 +101,7 @@ impl JsGenerator {
 
     /// Compute the byte size of a known Rust type for offset calculation.
     fn type_size(rust_type: &str) -> usize {
-        let type_str = Self::strip_option(rust_type);
+        let type_str: &str = Self::strip_option(rust_type);
         if type_str.contains("extern\"C\"fn") || type_str.contains("extern\"C\"") {
             return 8; // fn pointer = 8 bytes on 64-bit
         }
@@ -125,7 +125,7 @@ impl JsGenerator {
 
     /// Compute the alignment of a known Rust type.
     fn type_align(rust_type: &str) -> usize {
-        let type_str = Self::strip_option(rust_type);
+        let type_str: &str = Self::strip_option(rust_type);
         if type_str.contains("extern\"C\"fn") || type_str.contains("extern\"C\"") {
             return 8;
         }
@@ -153,12 +153,12 @@ impl JsGenerator {
     }
 
     fn format_jsdoc(doc: &str, indent: usize) -> String {
-        let indent_str = " ".repeat(indent);
+        let indent_str: String = " ".repeat(indent);
         let lines: Vec<&str> = doc.lines().collect();
         if lines.len() == 1 {
             format!("{}/** {} */\n", indent_str, lines[0])
         } else {
-            let mut output = format!("{}/**\n", indent_str);
+            let mut output: String = format!("{}/**\n", indent_str);
             for line in lines {
                 output.push_str(&format!("{} * {}\n", indent_str, line));
             }
@@ -170,8 +170,8 @@ impl JsGenerator {
 
 impl CodeGenerator for JsGenerator {
     fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
-        let ts_type = Self::rust_type_to_ts(&item.rust_type);
-        let formatted_value = if ts_type == "bigint" {
+        let ts_type: String = Self::rust_type_to_ts(&item.rust_type);
+        let formatted_value: String = if ts_type == "bigint" {
             format!("{}n", item.value)
         } else {
             item.value.clone()
@@ -206,28 +206,28 @@ impl CodeGenerator for JsGenerator {
                 continue;
             }
 
-            let ts_type = Self::rust_type_to_ts(&field.rust_type);
+            let ts_type: String = Self::rust_type_to_ts(&field.rust_type);
             output.push_str(&format!("    {}: {};\n", field.name, ts_type));
         }
 
         output.push_str("}\n\n");
 
         // Binary offset constants per D-33.
-        let struct_align = item
+        let struct_align: usize = item
             .fields
             .iter()
             .map(|f| Self::type_align(&f.rust_type))
             .max()
             .unwrap_or(1);
 
-        let mut offset = 0usize;
-        let mut offset_constants = String::new();
+        let mut offset: usize = 0usize;
+        let mut offset_constants: String = String::new();
 
         for field in &item.fields {
-            let field_align = Self::type_align(&field.rust_type);
+            let field_align: usize = Self::type_align(&field.rust_type);
             offset = Self::align_up(offset, field_align);
 
-            let const_name = format!(
+            let const_name: String = format!(
                 "{}_{}_OFFSET",
                 to_upper_snake_case(&item.name),
                 to_upper_snake_case(&field.name)
@@ -258,7 +258,7 @@ impl CodeGenerator for JsGenerator {
         }
 
         // Total struct size constant — prefer size_hint from Rust if available.
-        let total_size = item
+        let total_size: usize = item
             .size_hint
             .unwrap_or_else(|| Self::align_up(offset, struct_align));
         offset_constants.push_str(&format!(
@@ -308,7 +308,7 @@ impl CodeGenerator for JsGenerator {
         output.push_str(&format!("export type {} =\n", item.name));
 
         for variant in item.variants.iter() {
-            let ts_type = Self::rust_type_to_ts(&variant.type_name);
+            let ts_type: String = Self::rust_type_to_ts(&variant.type_name);
             output.push_str(&format!("    | {{ {}: {} }}\n", variant.name, ts_type));
         }
 
@@ -317,13 +317,13 @@ impl CodeGenerator for JsGenerator {
     }
 
     fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
-        let ret_type = item
+        let ret_type: String = item
             .return_type
             .as_ref()
             .map(|t| Self::rust_type_to_ts(t))
             .unwrap_or_else(|| "void".to_string());
 
-        let params = item
+        let params: String = item
             .params
             .iter()
             .map(|p| format!("{}: {}", p.name, Self::rust_type_to_ts(&p.rust_type)))
@@ -351,7 +351,7 @@ impl CodeGenerator for JsGenerator {
 
 /// Convert a string to UPPER_SNAKE_CASE for JS constant names.
 fn to_upper_snake_case(s: &str) -> String {
-    let mut result = String::new();
+    let mut result: String = String::new();
     for (i, c) in s.chars().enumerate() {
         if c.is_uppercase() {
             if i > 0 {
@@ -379,8 +379,8 @@ mod tests {
     /// Test that structs emit both TypeScript interface and offset constants.
     #[test]
     fn js_struct_emits_interface_and_offsets() {
-        let generator = JsGenerator::new();
-        let ctx = GenerationContext::new();
+        let generator: JsGenerator = JsGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
         let item = StructInfo {
             name: String::from("TestStruct"),
             fields: vec![
@@ -400,7 +400,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx);
         assert!(
             output.contains("export interface TestStruct"),
             "should emit TypeScript interface: {}",
@@ -426,8 +426,8 @@ mod tests {
     /// Test that fn ptr fields emit as number in interface.
     #[test]
     fn js_fn_ptr_field_emits_as_number() {
-        let generator = JsGenerator::new();
-        let ctx = GenerationContext::new();
+        let generator: JsGenerator = JsGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
         let item = StructInfo {
             name: String::from("WithFnPtr"),
             fields: vec![FieldInfo {
@@ -440,7 +440,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx);
         // In the interface, fn ptr fields should be typed as number.
         assert!(
             output.contains("callback: number;"),
@@ -457,8 +457,8 @@ mod tests {
     /// Test that Array<T> fields expand in interface and offsets.
     #[test]
     fn js_array_field_expands() {
-        let generator = JsGenerator::new();
-        let ctx = GenerationContext::new();
+        let generator: JsGenerator = JsGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
         let item = StructInfo {
             name: String::from("WithArray"),
             fields: vec![FieldInfo {
@@ -471,7 +471,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx);
         assert!(
             output.contains("items: number;"),
             "Array items should be number in interface: {}",

@@ -16,7 +16,7 @@ impl LuaGenerator {
 
     /// Check if a rust_type string represents a function pointer.
     fn is_function_pointer(rust_type: &str) -> bool {
-        let type_str = Self::strip_option(rust_type);
+        let type_str: &str = Self::strip_option(rust_type);
         type_str.contains("extern\"C\"fn") || type_str.contains("extern\"C\"")
     }
 
@@ -65,7 +65,7 @@ impl LuaGenerator {
     fn rust_type_to_lua(rust_type: &str) -> String {
         // Handle Option<...> wrapper — unwrap for type resolution.
         if Self::is_option(rust_type) {
-            let inner = &rust_type["Option<".len()..rust_type.len() - 1];
+            let inner: &str = &rust_type["Option<".len()..rust_type.len() - 1];
             return Self::rust_type_to_lua(inner);
         }
 
@@ -100,21 +100,21 @@ impl LuaGenerator {
         }
 
         if rust_type.starts_with('*') {
-            let rest = rust_type.trim_start_matches('*').trim();
+            let rest: &str = rust_type.trim_start_matches('*').trim();
             if rest.starts_with("const") {
-                let inner = rest.trim_start_matches("const").trim();
+                let inner: &str = rest.trim_start_matches("const").trim();
                 if inner.contains("c_void") {
                     return String::from("const void*");
                 }
-                let lua_inner = Self::rust_type_to_lua(inner);
+                let lua_inner: String = Self::rust_type_to_lua(inner);
                 return format!("const {}*", lua_inner);
             }
             if rest.starts_with("mut") {
-                let inner = rest.trim_start_matches("mut").trim();
+                let inner: &str = rest.trim_start_matches("mut").trim();
                 if inner.contains("c_void") {
                     return String::from("void*");
                 }
-                let lua_inner = Self::rust_type_to_lua(inner);
+                let lua_inner: String = Self::rust_type_to_lua(inner);
                 return format!("{}*", lua_inner);
             }
             return String::from("void*");
@@ -158,14 +158,14 @@ impl LuaGenerator {
     /// The declarator name is spliced in by the caller so the resulting
     /// typedef is valid C: `typedef RET (*NAME)(PARAMS);`.
     fn convert_function_pointer(type_name: &str) -> (String, String) {
-        let type_str = Self::strip_option(type_name);
+        let type_str: &str = Self::strip_option(type_name);
 
-        let fn_start = type_str.find("fn(").unwrap_or(0);
-        let params_start = fn_start + 3;
+        let fn_start: usize = type_str.find("fn(").unwrap_or(0);
+        let params_start: usize = fn_start + 3;
 
         // Find the matching closing paren for the fn parameter list.
         let mut depth = 1i32;
-        let mut params_end = params_start;
+        let mut params_end: usize = params_start;
         for (i, c) in type_str[params_start..].chars().enumerate() {
             match c {
                 '(' | '<' | '[' => depth += 1,
@@ -181,8 +181,8 @@ impl LuaGenerator {
         }
 
         let lua_return: String = if type_str.len() > params_end + 1 {
-            let after = &type_str[params_end + 1..];
-            let trimmed = after.trim_start_matches('-').trim_start_matches('>').trim();
+            let after: &str = &type_str[params_end + 1..];
+            let trimmed: &str = after.trim_start_matches('-').trim_start_matches('>').trim();
             if trimmed.is_empty() {
                 String::from("void")
             } else {
@@ -196,7 +196,7 @@ impl LuaGenerator {
             return (lua_return, String::new());
         }
 
-        let params_str = &type_str[params_start..params_end];
+        let params_str: &str = &type_str[params_start..params_end];
         let params: Vec<String> = Self::parse_function_params(params_str);
 
         (lua_return, params.join(", "))
@@ -222,7 +222,7 @@ impl LuaGenerator {
                     current_param.push(c);
                 }
                 ',' if depth == 0 => {
-                    let param = current_param.trim().to_string();
+                    let param: String = current_param.trim().to_string();
                     if !param.is_empty() {
                         params.push(Self::convert_param(&param));
                     }
@@ -263,7 +263,7 @@ impl LuaGenerator {
     }
 
     fn format_c_comment(doc: &str, indent: usize) -> String {
-        let indent_str = " ".repeat(indent);
+        let indent_str: String = " ".repeat(indent);
         doc.lines()
             .map(|line: &str| format!("{}// {}\n", indent_str, line))
             .collect::<Vec<String>>()
@@ -294,7 +294,7 @@ impl LuaGenerator {
 
 impl CodeGenerator for LuaGenerator {
     fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
-        let c_type = match item.rust_type.as_str() {
+        let c_type: &str = match item.rust_type.as_str() {
             "u64" => "uint64_t",
             "u32" => "uint32_t",
             "i64" => "int64_t",
@@ -347,7 +347,7 @@ impl CodeGenerator for LuaGenerator {
                 continue;
             }
 
-            let lua_type = Self::rust_type_to_lua(&field.rust_type);
+            let lua_type: String = Self::rust_type_to_lua(&field.rust_type);
             output.push_str(&format!("        {} {};\n", lua_type, field.name));
         }
 
@@ -408,7 +408,7 @@ impl CodeGenerator for LuaGenerator {
         output.push_str(&format!("    typedef union {} {{\n", item.name));
 
         for variant in &item.variants {
-            let lua_type = Self::rust_type_to_lua(&variant.type_name);
+            let lua_type: String = Self::rust_type_to_lua(&variant.type_name);
             output.push_str(&format!("        {} {};\n", lua_type, variant.name));
         }
 
@@ -417,13 +417,13 @@ impl CodeGenerator for LuaGenerator {
     }
 
     fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
-        let _ret_type = item
+        let _ret_type: String = item
             .return_type
             .as_ref()
             .map(|t| Self::rust_type_to_lua(t))
             .unwrap_or_else(|| "void".to_string());
 
-        let params = item
+        let params: String = item
             .params
             .iter()
             .map(|p| format!("{} {}", Self::rust_type_to_lua(&p.rust_type), p.name))
@@ -533,8 +533,8 @@ mod tests {
     /// Test that Array<T> fields expand into 3 sub-fields.
     #[test]
     fn lua_array_field_expands() {
-        let generator = LuaGenerator::new();
-        let ctx = GenerationContext::new();
+        let generator: LuaGenerator = LuaGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
         let item = StructInfo {
             name: String::from("WithArray"),
             fields: vec![FieldInfo {
@@ -547,7 +547,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx);
         assert!(
             output.contains("void* data;"),
             "Array items should be void*: {}",

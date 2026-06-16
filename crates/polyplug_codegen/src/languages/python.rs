@@ -17,7 +17,7 @@ impl PythonGenerator {
     /// Check if a rust_type string represents a function pointer.
     fn is_function_pointer(rust_type: &str) -> bool {
         // Strip Option<...> wrapper first.
-        let type_str = Self::strip_option(rust_type);
+        let type_str: &str = Self::strip_option(rust_type);
         type_str.contains("extern\"C\"fn") || type_str.contains("extern\"C\"")
     }
 
@@ -72,14 +72,14 @@ impl PythonGenerator {
     /// The compact `quote!()` output looks like:
     /// `unsafeextern"C"fn(*constHostApi,*constPluginDescriptor)->AbiError`
     fn parse_function_pointer(type_name: &str) -> Option<(String, Vec<String>)> {
-        let type_str = Self::strip_option(type_name);
+        let type_str: &str = Self::strip_option(type_name);
 
-        let fn_start = type_str.find("fn(")?;
-        let params_start = fn_start + 3;
+        let fn_start: usize = type_str.find("fn(")?;
+        let params_start: usize = fn_start + 3;
 
         // Find the matching closing paren for the fn parameter list.
         let mut depth = 1i32;
-        let mut params_end = params_start;
+        let mut params_end: usize = params_start;
         for (i, c) in type_str[params_start..].chars().enumerate() {
             match c {
                 '(' | '<' | '[' => depth += 1,
@@ -94,11 +94,11 @@ impl PythonGenerator {
             }
         }
 
-        let params_str = &type_str[params_start..params_end];
-        let return_type = if type_str.len() > params_end + 1 {
+        let params_str: &str = &type_str[params_start..params_end];
+        let return_type: String = if type_str.len() > params_end + 1 {
             // After `)` there should be `->ReturnType` or `)-> ` or `)->`.
-            let after = &type_str[params_end + 1..];
-            let trimmed = after.trim_start_matches('-').trim_start_matches('>').trim();
+            let after: &str = &type_str[params_end + 1..];
+            let trimmed: &str = after.trim_start_matches('-').trim_start_matches('>').trim();
             if trimmed.is_empty() {
                 "None".to_string()
             } else {
@@ -109,8 +109,8 @@ impl PythonGenerator {
         };
 
         // Parse parameters separated by commas at depth 0.
-        let mut params = Vec::new();
-        let mut current = String::new();
+        let mut params: Vec<String> = Vec::new();
+        let mut current: String = String::new();
         let mut pdepth = 0i32;
         for c in params_str.chars() {
             match c {
@@ -123,7 +123,7 @@ impl PythonGenerator {
                     current.push(c);
                 }
                 ',' if pdepth == 0 => {
-                    let p = current.trim();
+                    let p: &str = current.trim();
                     if !p.is_empty() {
                         params.push(Self::convert_fn_param(p));
                     }
@@ -153,9 +153,9 @@ impl PythonGenerator {
             .unwrap_or_else(|| ("None".to_string(), Vec::new()));
 
         // Build a unique Python identifier for this callback type.
-        let callback_name = format!("_{}_{}_t", to_snake_case(struct_name), field_name);
+        let callback_name: String = format!("_{}_{}_t", to_snake_case(struct_name), field_name);
 
-        let mut typedef = format!(
+        let mut typedef: String = format!(
             "{} = ctypes.CFUNCTYPE({}, {})\n",
             callback_name,
             return_type,
@@ -253,7 +253,7 @@ impl PythonGenerator {
     fn rust_type_to_python(rust_type: &str) -> String {
         // Handle Option<...> wrapper.
         if Self::is_option(rust_type) {
-            let inner = &rust_type["Option<".len()..rust_type.len() - 1];
+            let inner: &str = &rust_type["Option<".len()..rust_type.len() - 1];
             // Option<fn ptr> is still a fn ptr type in ctypes (nullable).
             if Self::is_function_pointer(rust_type) {
                 // The actual type resolution happens at the struct level,
@@ -310,14 +310,14 @@ impl PythonGenerator {
             "()" => String::from("None"),
             other => {
                 // Strip Rust path prefixes (e.g., "crate::host::HostContractInstance" → "HostContractInstance").
-                let stripped = other.rsplit("::").next().unwrap_or(other);
+                let stripped: &str = other.rsplit("::").next().unwrap_or(other);
                 String::from(stripped)
             }
         }
     }
 
     fn format_docstring(doc: &str, indent_level: usize) -> String {
-        let indent = "    ".repeat(indent_level);
+        let indent: String = "    ".repeat(indent_level);
         // Doc text carried over from rustdoc may contain backslashes (e.g. the
         // escaped `\[dependency\]` table reference). In a regular docstring
         // those are invalid escape sequences and raise SyntaxWarning on import
@@ -327,7 +327,7 @@ impl PythonGenerator {
         if lines.len() == 1 {
             format!("{}{}\"\"\"{}\"\"\"\n", indent, prefix, lines[0])
         } else {
-            let mut result = format!("{}{}\"\"\"{}\n", indent, prefix, lines[0]);
+            let mut result: String = format!("{}{}\"\"\"{}\n", indent, prefix, lines[0]);
             for line in &lines[1..] {
                 result.push_str(&format!("{}{}\n", indent, line));
             }
@@ -339,7 +339,7 @@ impl PythonGenerator {
 
 /// Convert PascalCase or camelCase to snake_case.
 fn to_snake_case(s: &str) -> String {
-    let mut result = String::new();
+    let mut result: String = String::new();
     for (i, c) in s.chars().enumerate() {
         if c.is_uppercase() {
             if i > 0 {
@@ -476,13 +476,13 @@ impl CodeGenerator for PythonGenerator {
     }
 
     fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
-        let ret_type = item
+        let ret_type: String = item
             .return_type
             .as_ref()
             .map(|t| Self::rust_type_to_python(t))
             .unwrap_or_else(|| "None".to_string());
 
-        let params = item
+        let params: String = item
             .params
             .iter()
             .map(|p| format!("{}: {}", p.name, Self::rust_type_to_python(&p.rust_type)))
@@ -522,7 +522,7 @@ mod tests {
     /// Test that CFUNCTYPE typedefs use proper ctypes types (not raw Rust syntax).
     #[test]
     fn python_cfunctype_uses_ctypes_params() {
-        let rust_type = "unsafeextern\"C\"fn(host:*constHostApi,contract_id:u64)->AbiError";
+        let rust_type: &str = "unsafeextern\"C\"fn(host:*constHostApi,contract_id:u64)->AbiError";
         let Some((return_type, params)) = PythonGenerator::parse_function_pointer(rust_type) else {
             panic!("parse_function_pointer returned None for: {rust_type}");
         };
@@ -549,7 +549,8 @@ mod tests {
     /// Test that CFUNCTYPE handles Option<fn ptr> (nullable).
     #[test]
     fn python_cfunctype_option_nullable() {
-        let rust_type = "Option<unsafeextern\"C\"fn(*mutcore::ffi::c_void,*constReloadPhase)>";
+        let rust_type: &str =
+            "Option<unsafeextern\"C\"fn(*mutcore::ffi::c_void,*constReloadPhase)>";
         let (typedef, _type_name) =
             PythonGenerator::generate_cfunctype("RuntimeConfig", "on_reload", rust_type);
         assert!(
@@ -567,8 +568,8 @@ mod tests {
     /// Test that a struct with fn ptr fields generates CFUNCTYPE typedefs.
     #[test]
     fn python_struct_with_fn_ptr_generates_cfunctype() {
-        let generator = PythonGenerator::new();
-        let ctx = GenerationContext::new();
+        let generator: PythonGenerator = PythonGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
         let item = StructInfo {
             name: String::from("TestStruct"),
             fields: vec![
@@ -588,7 +589,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx);
         assert!(
             output.contains("CFUNCTYPE"),
             "struct with fn ptr should emit CFUNCTYPE: {}",
@@ -604,8 +605,8 @@ mod tests {
     /// Test that Array<T> fields expand into 3 sub-fields.
     #[test]
     fn python_array_field_expands() {
-        let generator = PythonGenerator::new();
-        let ctx = GenerationContext::new();
+        let generator: PythonGenerator = PythonGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
         let item = StructInfo {
             name: String::from("WithArray"),
             fields: vec![FieldInfo {
@@ -618,7 +619,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx);
         assert!(
             output.contains(r#"("items", ctypes.c_void_p)"#),
             "Array items should be c_void_p: {}",
@@ -639,7 +640,7 @@ mod tests {
     /// Test that compact fn ptr param with pointer is correctly converted.
     #[test]
     fn python_fn_ptr_with_const_ptr_param() {
-        let rust_type = "unsafeextern\"C\"fn(ptr:*constu8,len:usize)->()";
+        let rust_type: &str = "unsafeextern\"C\"fn(ptr:*constu8,len:usize)->()";
         let Some((return_type, params)) = PythonGenerator::parse_function_pointer(rust_type) else {
             panic!("parse_function_pointer returned None for: {rust_type}");
         };

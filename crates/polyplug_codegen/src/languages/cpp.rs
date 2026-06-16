@@ -37,7 +37,7 @@ impl CppGenerator {
     fn rust_type_to_cpp(rust_type: &str) -> String {
         // Handle Option<...> wrapper.
         if Self::is_option(rust_type) {
-            let inner = &rust_type["Option<".len()..rust_type.len() - 1];
+            let inner: &str = &rust_type["Option<".len()..rust_type.len() - 1];
             return Self::rust_type_to_cpp(inner);
         }
 
@@ -66,15 +66,15 @@ impl CppGenerator {
         }
 
         if rust_type.starts_with('*') {
-            let rest = rust_type.trim_start_matches('*').trim();
+            let rest: &str = rust_type.trim_start_matches('*').trim();
             if rest.starts_with("const") {
-                let inner = rest.trim_start_matches("const").trim();
-                let cpp_inner = Self::rust_type_to_cpp(inner);
+                let inner: &str = rest.trim_start_matches("const").trim();
+                let cpp_inner: String = Self::rust_type_to_cpp(inner);
                 return format!("const {}*", cpp_inner);
             }
             if rest.starts_with("mut") {
-                let inner = rest.trim_start_matches("mut").trim();
-                let cpp_inner = Self::rust_type_to_cpp(inner);
+                let inner: &str = rest.trim_start_matches("mut").trim();
+                let cpp_inner: String = Self::rust_type_to_cpp(inner);
                 return format!("{}*", cpp_inner);
             }
             return String::from("void*");
@@ -113,14 +113,14 @@ impl CppGenerator {
     }
 
     fn convert_function_pointer(type_name: &str) -> String {
-        let type_str = Self::strip_option(type_name);
+        let type_str: &str = Self::strip_option(type_name);
 
-        let fn_start = type_str.find("fn(").unwrap_or(0);
-        let params_start = fn_start + 3;
+        let fn_start: usize = type_str.find("fn(").unwrap_or(0);
+        let params_start: usize = fn_start + 3;
 
         // Find the matching closing paren for the fn parameter list.
         let mut depth = 1i32;
-        let mut params_end = params_start;
+        let mut params_end: usize = params_start;
         for (i, c) in type_str[params_start..].chars().enumerate() {
             match c {
                 '(' | '<' | '[' => depth += 1,
@@ -135,9 +135,9 @@ impl CppGenerator {
             }
         }
 
-        let cpp_return = if type_str.len() > params_end + 1 {
-            let after = &type_str[params_end + 1..];
-            let trimmed = after.trim_start_matches('-').trim_start_matches('>').trim();
+        let cpp_return: String = if type_str.len() > params_end + 1 {
+            let after: &str = &type_str[params_end + 1..];
+            let trimmed: &str = after.trim_start_matches('-').trim_start_matches('>').trim();
             if trimmed.is_empty() {
                 String::from("void")
             } else {
@@ -151,8 +151,8 @@ impl CppGenerator {
             return format!("{}(*)()", cpp_return);
         }
 
-        let params_str = &type_str[params_start..params_end];
-        let params = Self::parse_function_params(params_str);
+        let params_str: &str = &type_str[params_start..params_end];
+        let params: Vec<String> = Self::parse_function_params(params_str);
 
         if params.is_empty() {
             return format!("{}(*)()", cpp_return);
@@ -181,7 +181,7 @@ impl CppGenerator {
                     current_param.push(c);
                 }
                 ',' if depth == 0 => {
-                    let param = current_param.trim().to_string();
+                    let param: String = current_param.trim().to_string();
                     if !param.is_empty() {
                         params.push(Self::convert_param(&param));
                     }
@@ -231,12 +231,12 @@ impl CppGenerator {
     }
 
     fn format_doc_comment(doc: &str, indent: usize) -> String {
-        let indent_str = " ".repeat(indent);
+        let indent_str: String = " ".repeat(indent);
         let lines: Vec<&str> = doc.lines().collect();
         if lines.len() == 1 {
             format!("{}/// {}\n", indent_str, lines[0])
         } else {
-            let mut result = format!("{}/// {}\n", indent_str, lines[0]);
+            let mut result: String = format!("{}/// {}\n", indent_str, lines[0]);
             for line in &lines[1..] {
                 if line.is_empty() {
                     result.push_str(&format!("{}///\n", indent_str));
@@ -256,12 +256,12 @@ impl CppGenerator {
         field_name: &str,
         rust_type: &str,
     ) -> (String, String) {
-        let fn_type = Self::convert_function_pointer(rust_type);
-        let typedef_name = format!("{}_{}_fn", struct_name, field_name);
+        let fn_type: String = Self::convert_function_pointer(rust_type);
+        let typedef_name: String = format!("{}_{}_fn", struct_name, field_name);
 
-        let typedef = format!("using {} = {};\n", typedef_name, fn_type);
+        let typedef: String = format!("using {} = {};\n", typedef_name, fn_type);
 
-        let mut extra = String::new();
+        let mut extra: String = String::new();
         if Self::is_option(rust_type) {
             extra.push_str("// Nullable function pointer.\n");
         }
@@ -276,7 +276,7 @@ impl CppGenerator {
     /// pointers, and primitive types impose no ordering constraint and yield
     /// `None`.
     pub fn value_dependency(rust_type: &str) -> Option<String> {
-        let inner = Self::strip_option(rust_type);
+        let inner: &str = Self::strip_option(rust_type);
 
         if Self::is_array(inner)
             || inner.starts_with('*')
@@ -286,10 +286,10 @@ impl CppGenerator {
             return None;
         }
 
-        let cpp = Self::rust_type_to_cpp(inner);
+        let cpp: String = Self::rust_type_to_cpp(inner);
         // A by-value dependency is a named aggregate type — i.e. anything that
         // did not map to a primitive, pointer, or void.
-        let is_named = cpp.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+        let is_named: bool = cpp.chars().next().is_some_and(|c| c.is_ascii_uppercase());
         if is_named { Some(cpp) } else { None }
     }
 
@@ -320,7 +320,7 @@ pub enum ForwardKind {
 
 impl CodeGenerator for CppGenerator {
     fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
-        let value = Self::format_constant_value(&item.value, &item.rust_type);
+        let value: String = Self::format_constant_value(&item.value, &item.rust_type);
         format!("#define {} {}\n", item.name, value)
     }
 
@@ -371,7 +371,7 @@ impl CodeGenerator for CppGenerator {
                 continue;
             }
 
-            let cpp_type = Self::rust_type_to_cpp(&field.rust_type);
+            let cpp_type: String = Self::rust_type_to_cpp(&field.rust_type);
             output.push_str(&format!("    {} {};\n", cpp_type, field.name));
         }
 
@@ -397,7 +397,7 @@ impl CodeGenerator for CppGenerator {
             output.push_str(&Self::format_doc_comment(doc, 0));
         }
 
-        let repr = Self::rust_type_to_cpp(&item.repr);
+        let repr: String = Self::rust_type_to_cpp(&item.repr);
         output.push_str(&format!("enum class {} : {} {{\n", item.name, repr));
         for (i, variant) in item.variants.iter().enumerate() {
             if let Some(doc) = &variant.doc {
@@ -425,7 +425,7 @@ impl CodeGenerator for CppGenerator {
 
         output.push_str(&format!("union {} {{\n", item.name));
         for variant in &item.variants {
-            let cpp_type = Self::rust_type_to_cpp(&variant.type_name);
+            let cpp_type: String = Self::rust_type_to_cpp(&variant.type_name);
             output.push_str(&format!("    {} {};\n", cpp_type, variant.name));
         }
         output.push_str("};\n\n");
@@ -433,13 +433,13 @@ impl CodeGenerator for CppGenerator {
     }
 
     fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
-        let ret_type = item
+        let ret_type: String = item
             .return_type
             .as_ref()
             .map(|t| Self::rust_type_to_cpp(t))
             .unwrap_or_else(|| "void".to_string());
 
-        let params = item
+        let params: String = item
             .params
             .iter()
             .map(|p| format!("{} {}", Self::rust_type_to_cpp(&p.rust_type), p.name))
@@ -465,7 +465,7 @@ impl CodeGenerator for CppGenerator {
     }
 
     fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        let mut header = String::from("#pragma once\n");
+        let mut header: String = String::from("#pragma once\n");
         header.push_str("#include <cstdint>\n");
         header.push_str("#include <cstddef>\n");
         header.push_str("#include <cstring>\n");
@@ -520,8 +520,8 @@ mod tests {
     /// Test that Array<T> fields expand into 3 sub-fields.
     #[test]
     fn cpp_array_field_expands() {
-        let generator = CppGenerator::new();
-        let ctx = GenerationContext::new();
+        let generator: CppGenerator = CppGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
         let item = StructInfo {
             name: String::from("WithArray"),
             fields: vec![FieldInfo {
@@ -534,7 +534,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx);
         assert!(
             output.contains("void* data;"),
             "Array items should be void*: {}",
