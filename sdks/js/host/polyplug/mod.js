@@ -80,6 +80,16 @@ import {
   GUEST_CONTRACT_HANDLE_SIZE,
 } from "../../abi/abi.ts";
 
+// Re-export the contract-ID helpers from the auto-generated abi.ts (their single
+// definition, per sdk_validator.yaml method_targets) so host code that imports
+// from this module keeps a stable surface without a duplicate implementation.
+export {
+  fnv1a64,
+  guestContractId,
+  hostContractId,
+  bundleId,
+} from "../../abi/abi.ts";
+
 // DispatchType discriminants (match polyplug_abi::DispatchType #[repr(u32)]).
 const DISPATCH_TYPE_NATIVE = 0;
 const DISPATCH_TYPE_VIRTUAL_MACHINE = 1;
@@ -143,13 +153,6 @@ export const NULL_HANDLE = Object.freeze({ index: NULL_HANDLE_INDEX, generation:
 export const COMPATIBILITY_STRICT = 0;
 export const COMPATIBILITY_RELAXED = 1;
 export const COMPATIBILITY_YOLO = 2;
-
-/** FNV-1a offset basis for 64-bit hash */
-const FNV_OFFSET = 0xcbf29ce484222325n;
-/** FNV-1a prime for 64-bit hash */
-const FNV_PRIME = 0x00000100000001B3n;
-/** 64-bit mask */
-const MASK_64 = 0xFFFFFFFFFFFFFFFFn;
 
 // ─── FFI Symbols: Only create and destroy ───────────────────────────────────────
 // All operations are accessed through HostApi struct fields.
@@ -418,52 +421,6 @@ export function buildHostContractInterface(spec) {
   // GC cannot reclaim memory the runtime still points into.
   const owned = [...callbacks, functionsBuf, ifaceBuf, instances];
   return { interfacePtr, owned };
-}
-
-/**
- * Compute FNV-1a 64-bit hash.
- * @param {Uint8Array | string} data - Data to hash
- * @returns {bigint} 64-bit hash
- */
-export function fnv1a64(data) {
-    const bytes = typeof data === 'string' ? _encoder.encode(data) : data;
-    let h = FNV_OFFSET;
-    for (const b of bytes) {
-        h = (h ^ BigInt(b)) * FNV_PRIME;
-        h = h & MASK_64;
-    }
-    return h;
-}
-
-/**
- * Compute guest contract ID using FNV-1a 64-bit hash.
- * Guest contract IDs use a distinct prefix to avoid collisions with host contracts.
- * @param {string} name - Contract name (e.g., "pipeline.Decoder")
- * @param {number} majorVersion - Major version number
- * @returns {bigint} 64-bit contract ID
- */
-export function guestContractId(name, majorVersion) {
-    return fnv1a64(`guest_contract:${name}@${majorVersion}`);
-}
-
-/**
- * Compute host contract ID using FNV-1a 64-bit hash.
- * Host contract IDs use a distinct prefix to avoid collisions with plugin contracts.
- * @param {string} name - Host contract name (must start with "host.", e.g., "host.logger")
- * @param {number} majorVersion - Major version number
- * @returns {bigint} 64-bit host contract ID
- */
-export function hostContractId(name, majorVersion) {
-    return fnv1a64(`host_contract:${name}@${majorVersion}`);
-}
-
-/**
- * Compute bundle ID using FNV-1a 64-bit hash.
- * @param {string} name - Bundle name
- * @returns {bigint} 64-bit bundle ID
- */
-export function bundleId(name) {
-    return fnv1a64(name);
 }
 
 /**

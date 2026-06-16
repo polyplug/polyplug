@@ -640,6 +640,67 @@ export function split(sv: StringView | string, delimiter: string): string[] {
     if (delimiter.length === 0) return [s];
     return s.split(delimiter);
 }
+
+/** FNV-1a 64-bit offset basis (matches polyplug_utils::fnv1a_64). */
+const FNV_OFFSET_BASIS_64: bigint = 0xcbf29ce484222325n;
+/** FNV-1a 64-bit prime (matches polyplug_utils::fnv1a_64). */
+const FNV_PRIME_64: bigint = 0x00000100000001b3n;
+/** 64-bit wrap mask applied after every FNV-1a round. */
+const U64_WRAP_MASK: bigint = 0xffffffffffffffffn;
+/** Shared UTF-8 encoder for hashing string inputs. */
+const ID_TEXT_ENCODER: TextEncoder = new TextEncoder();
+
+/**
+ * Compute the FNV-1a 64-bit hash of UTF-8 bytes or a string.
+ *
+ * This is the canonical ID primitive mirrored from `polyplug_utils::fnv1a_64`;
+ * `bundleId`, `guestContractId`, and `hostContractId` are all derived from it so
+ * every language computes byte-identical identifiers.
+ * @param data - The bytes to hash, or a string encoded as UTF-8 first.
+ * @returns The 64-bit hash as a bigint.
+ */
+export function fnv1a64(data: Uint8Array | string): bigint {
+    const bytes: Uint8Array = typeof data === 'string' ? ID_TEXT_ENCODER.encode(data) : data;
+    let h: bigint = FNV_OFFSET_BASIS_64;
+    for (const b of bytes) {
+        h = (h ^ BigInt(b)) * FNV_PRIME_64;
+        h = h & U64_WRAP_MASK;
+    }
+    return h;
+}
+
+/**
+ * Compute a guest contract ID (matches polyplug_utils::guest_contract_id).
+ *
+ * Guest contract IDs use a distinct prefix to avoid collisions with host contracts.
+ * @param name - Contract name (e.g., "pipeline.Decoder").
+ * @param majorVersion - Major version number.
+ * @returns The 64-bit contract ID as a bigint.
+ */
+export function guestContractId(name: string, majorVersion: number): bigint {
+    return fnv1a64(`guest_contract:${name}@${majorVersion}`);
+}
+
+/**
+ * Compute a host contract ID (matches polyplug_utils::host_contract_id).
+ *
+ * Host contract IDs use a distinct prefix to avoid collisions with guest contracts.
+ * @param name - Host contract name (must start with "host.", e.g., "host.logger").
+ * @param majorVersion - Major version number.
+ * @returns The 64-bit host contract ID as a bigint.
+ */
+export function hostContractId(name: string, majorVersion: number): bigint {
+    return fnv1a64(`host_contract:${name}@${majorVersion}`);
+}
+
+/**
+ * Compute a bundle ID (matches polyplug_utils::bundle_id).
+ * @param name - Bundle name.
+ * @returns The 64-bit bundle ID as a bigint.
+ */
+export function bundleId(name: string): bigint {
+    return fnv1a64(name);
+}
 "#;
 
 /// C++ helper function definitions (no #pragma once, no #include directives).

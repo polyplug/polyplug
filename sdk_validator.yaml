@@ -70,7 +70,7 @@ method_targets:
       - sdks/csharp/abi/Abi.cs
   js:
     ContractId:
-      - sdks/js/host/polyplug/mod.js
+      - sdks/js/abi/abi.ts
   cpp:
     ContractId:
       - sdks/cpp/host/polyplug/id.hpp
