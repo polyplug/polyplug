@@ -13,25 +13,21 @@ local VALIDATOR_FACTORY = nil
 function M.set_validator_factory(factory)
     VALIDATOR_FACTORY = factory
 end
-function M._register_VALIDATOR()
-    if VALIDATOR_FACTORY == nil then
-        error("polyplug: set_validator_factory(...) was not called at import time")
-    end
+function M._register_VALIDATOR(registrations)
     local functions = {}
-    functions[0] = function(instance, args_ptr, out_ptr)
+    functions[0] = function(instance, args_ptr, out_ptr, arena_ptr, arena_alloc)
         if instance == nil or instance.validate == nil then error("polyplug: no implementation for validate") end
         local args_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
         local result = instance:validate(args_sv[0])
-        if out_ptr ~= 0 and result ~= nil then
-            local out_ref = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
-            out_ref[0] = result
-        end
         if out_ptr ~= 0 and result == nil then
             error("polyplug: implementation returned nil for a StringView-returning function")
         end
+        if out_ptr ~= 0 then
+            local out_ref = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
+            out_ref[0] = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, result)
+        end
     end
-    _G._polyplug_handlers = _G._polyplug_handlers or {}
-    _G._polyplug_handlers["pipeline.Validator"] = {
+    registrations["pipeline.Validator"] = {
         contract_version = 1,
         plugin_name = "validator",
         factory = VALIDATOR_FACTORY,
@@ -41,14 +37,21 @@ end
 
 
 -- Registration entry point called by the LuaLoader.
+-- Returns (registrations, abi_error): the per-contract handler table the
+-- loader consumes, plus the canonical AbiError ({ code, message }). Nothing is
+-- deposited into any global/module namespace (Rule 12) — the loader reads BOTH
+-- return values. The host pointer threads to each author factory; no host
+-- pointer or handler table is stored in this module.
 function polyplug_init(host_ptr, ctx_ptr)
     if host_ptr == nil or ctx_ptr == nil then
-        return { code = polyplug_guest.AbiErrorCode.Generic, message = "null host or ctx pointer in polyplug_init" }
+        return {}, { code = polyplug_guest.AbiErrorCode.Generic, message = "null host or ctx pointer in polyplug_init" }
     end
-    polyplug_guest.store_host_interface(host_ptr)
-    M._register_VALIDATOR()
-    -- Canonical AbiError shape (code + message); the LuaLoader reads both.
-    return { code = polyplug_guest.AbiErrorCode.Ok }
+    local registrations = {}
+    if VALIDATOR_FACTORY == nil then
+        return {}, { code = polyplug_guest.AbiErrorCode.Generic, message = "set_validator_factory(...) was not called at import time" }
+    end
+    M._register_VALIDATOR(registrations)
+    return registrations, { code = polyplug_guest.AbiErrorCode.Ok }
 end
 
 return M

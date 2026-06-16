@@ -19,10 +19,10 @@ local function new_decoder(host)
     function self:decode(input)
         if not self.logged_online then
             self.logged_online = true
-            polyplug.log(polyplug.LogLevel.Info, 'guest.lua_decoder', 'decoder online')
+            polyplug.log(host, polyplug.LogLevel.Info, 'guest.lua_decoder', 'decoder online')
         end
         local s = polyplug_abi.to_str(input):gsub(',', '|')
-        return polyplug.alloc_string('DECODED:' .. s)
+        return 'DECODED:' .. s
     end
 
     return self

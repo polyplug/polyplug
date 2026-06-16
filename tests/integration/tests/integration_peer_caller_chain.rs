@@ -93,24 +93,23 @@ local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
 local polyplug_abi = require("polyplug_abi")
 
-local function impl_echo(instance, args_ptr, out_ptr)
+local function impl_echo(instance, args_ptr, out_ptr, arena_ptr, arena_alloc)
     local in_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
     local s = polyplug_abi.to_str(in_sv[0])
-    local out_view = polyplug_guest.alloc_string_arena("{prefix}" .. s)
+    local out_view = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, "{prefix}" .. s)
     local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
     out_sv[0] = out_view
 end
 
 function polyplug_init(registrar_ptr, ctx_ptr)
-    polyplug_guest.store_host_interface(registrar_ptr)
-    _G._polyplug_handlers = {{
+    return {{
         ["{contract}"] = {{
             contract_version = 1,
             plugin_name = "{contract}-provider",
             factory = function(_host) return {{}} end,
             functions = {{ [0] = impl_echo }},
         }},
-    }}
+    }}, {{ code = 0 }}
 end
 "#
     )
@@ -128,49 +127,52 @@ local polyplug_abi = require("polyplug_abi")
 
 local PEER_ID = 0x{peer_id:016X}ULL
 
-local function impl_call(instance, args_ptr, out_ptr)
-    local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
-    local host_ptr = polyplug_guest.get_host_interface()
-    if host_ptr == nil then
-        out_sv[0] = polyplug_guest.alloc_string_arena("{prefix}NO-HOST")
-        return
+local function new_consumer(host)
+    local self = {{ _host = host }}
+    function self:call(args_ptr, out_ptr, arena_ptr, arena_alloc)
+        local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
+        local host_ptr = self._host
+        if host_ptr == nil or host_ptr == 0 then
+            out_sv[0] = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, "{prefix}NO-HOST")
+            return
+        end
+        local host = ffi.cast("HostApi*", ffi.cast("uintptr_t", host_ptr))
+        local handle = host.find_guest_contract(host, PEER_ID, {min_version})
+        local interface = host.resolve_guest_contract(host, handle)
+        if interface == nil then
+            out_sv[0] = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, "{prefix}NO-PEER")
+            return
+        end
+        local out_instance = ffi.new("GuestContractInstance[1]")
+        local loader_data = ffi.new("VmLoaderData")
+        interface.create_instance(loader_data, host, nil, out_instance)
+        local peer_instance = out_instance[0]
+        peer_instance.contract_id = PEER_ID
+        local in_ptr = ffi.cast("const void*", ffi.cast("uintptr_t", args_ptr))
+        local peer_out = ffi.new("StringView[1]")
+        local out_err = ffi.new("AbiError[1]")
+        host.call_guest_method(host, peer_instance, 0, in_ptr, ffi.cast("void*", peer_out), nil, out_err)
+        local err = out_err[0]
+        interface.destroy_instance(loader_data, host, peer_instance)
+        if err.code ~= 0 then
+            out_sv[0] = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, "{prefix}ERR")
+            return
+        end
+        local peer_result = polyplug_abi.to_str(peer_out[0])
+        out_sv[0] = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, "{prefix}" .. peer_result)
     end
-    local host = ffi.cast("HostApi*", ffi.cast("uintptr_t", host_ptr))
-    local handle = host.find_guest_contract(host, PEER_ID, {min_version})
-    local interface = host.resolve_guest_contract(host, handle)
-    if interface == nil then
-        out_sv[0] = polyplug_guest.alloc_string_arena("{prefix}NO-PEER")
-        return
-    end
-    local out_instance = ffi.new("GuestContractInstance[1]")
-    local loader_data = ffi.new("VmLoaderData")
-    interface.create_instance(loader_data, host, nil, out_instance)
-    local peer_instance = out_instance[0]
-    peer_instance.contract_id = PEER_ID
-    local in_ptr = ffi.cast("const void*", ffi.cast("uintptr_t", args_ptr))
-    local peer_out = ffi.new("StringView[1]")
-    local out_err = ffi.new("AbiError[1]")
-    host.call_guest_method(host, peer_instance, 0, in_ptr, ffi.cast("void*", peer_out), nil, out_err)
-    local err = out_err[0]
-    interface.destroy_instance(loader_data, host, peer_instance)
-    if err.code ~= 0 then
-        out_sv[0] = polyplug_guest.alloc_string_arena("{prefix}ERR")
-        return
-    end
-    local peer_result = polyplug_abi.to_str(peer_out[0])
-    out_sv[0] = polyplug_guest.alloc_string_arena("{prefix}" .. peer_result)
+    return self
 end
 
 function polyplug_init(registrar_ptr, ctx_ptr)
-    polyplug_guest.store_host_interface(registrar_ptr)
-    _G._polyplug_handlers = {{
+    return {{
         ["{contract}"] = {{
             contract_version = 1,
             plugin_name = "{contract}-consumer",
-            factory = function(_host) return {{}} end,
-            functions = {{ [0] = impl_call }},
+            factory = new_consumer,
+            functions = {{ [0] = function(instance, a, o, ap, aa) instance:call(a, o, ap, aa) end }},
         }},
-    }}
+    }}, {{ code = 0 }}
 end
 "#
     )

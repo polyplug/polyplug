@@ -11,7 +11,7 @@ local function new_encoder(host)
     function self:encode(input)
         local s = polyplug_abi.to_str(input)
         if s:sub(1, 12) == 'TRANSFORMED:' then s = s:sub(13) end
-        return polyplug.alloc_string(s:gsub('|', ','))
+        return (s:gsub('|', ','))
     end
 
     return self

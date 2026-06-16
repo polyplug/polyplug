@@ -83,17 +83,17 @@ local polyplug_abi = require("polyplug_abi")
 
 -- echo(input: StringView) -> StringView
 -- Prepends "PEER:" and returns the result sourced from the per-call arena.
-local function impl_echo(instance, args_ptr, out_ptr)
+local function impl_echo(instance, args_ptr, out_ptr, arena_ptr, arena_alloc)
     local in_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
     local s = polyplug_abi.to_str(in_sv[0])
     local result = "PEER:" .. s
-    local out_view = polyplug_guest.alloc_string_arena(result)
+    local out_view = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, result)
     local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
     out_sv[0] = out_view
 end
 
 function polyplug_init(registrar_ptr, ctx_ptr)
-    _G._polyplug_handlers = {
+    return {
         ["test.peer"] = {
             contract_version = 1,
             plugin_name = "test-peer-provider-lua",
@@ -102,7 +102,7 @@ function polyplug_init(registrar_ptr, ctx_ptr)
                 [0] = impl_echo,
             },
         },
-    }
+    }, { code = 0 }
 end
 "#
 }
@@ -132,57 +132,61 @@ local TEST_PEER_ID = 0x8402886CF97A6E7DULL
 -- invoke(input: StringView) -> StringView
 -- Peer-calls test.peer@1::echo(input) via host.call_guest_method and returns
 -- the result (the borrowed StringView from the peer call).
-local function impl_invoke(instance, args_ptr, out_ptr)
-    local host_ptr = polyplug_guest.get_host_interface()
-    if host_ptr == nil then
-        return
+-- The author factory captures the threaded host pointer on the instance; the
+-- peer-caller idiom reads it from `self` — no per-VM global (Rule 12). Mirrors the
+-- generated peer_callers.lua `resolve(host_ptr)`.
+local function new_consumer(host)
+    local self = { _host = host }
+    function self:invoke(args_ptr, out_ptr)
+        local host_ptr = self._host
+        if host_ptr == nil or host_ptr == 0 then
+            return
+        end
+        local host = ffi.cast("HostApi*", ffi.cast("uintptr_t", host_ptr))
+
+        -- Resolve the peer contract.
+        local handle = host.find_guest_contract(host, TEST_PEER_ID, 1)
+        local interface = host.resolve_guest_contract(host, handle)
+        if interface == nil then
+            return
+        end
+
+        -- Create a peer instance (stateless contract: instance.data may be null).
+        -- Out-param ABI: create_instance writes the instance through a trailing pointer.
+        local out_instance = ffi.new("GuestContractInstance[1]")
+        local loader_data = ffi.new("VmLoaderData")
+        interface.create_instance(loader_data, host, nil, out_instance)
+        local peer_instance = out_instance[0]
+        -- Stamp the peer contract id so call_guest_method routes by it (create_instance
+        -- returns a null-id handle for stateless/VM peers). Mirrors generated peer_callers.lua.
+        peer_instance.contract_id = TEST_PEER_ID
+
+        -- Forward args directly: both contracts share StringView in / StringView out.
+        local in_sv_ptr = ffi.cast("const void*", ffi.cast("uintptr_t", args_ptr))
+        local out_sv_ptr = ffi.cast("void*", ffi.cast("uintptr_t", out_ptr))
+
+        -- Dispatch through call_guest_method (null arena: host-alloc fallback).
+        -- Out-param ABI: the AbiError is written through a trailing pointer.
+        local out_err = ffi.new("AbiError[1]")
+        host.call_guest_method(host, peer_instance, 0, in_sv_ptr, out_sv_ptr, nil, out_err)
+
+        -- Destroy instance (stateless no-op, but honour the lifecycle).
+        interface.destroy_instance(loader_data, host, peer_instance)
     end
-    local host = ffi.cast("HostApi*", ffi.cast("uintptr_t", host_ptr))
-
-    -- Resolve the peer contract.
-    local handle = host.find_guest_contract(host, TEST_PEER_ID, 1)
-    local interface = host.resolve_guest_contract(host, handle)
-    if interface == nil then
-        return
-    end
-
-    -- Create a peer instance (stateless contract: instance.data may be null).
-    -- Out-param ABI: create_instance writes the instance through a trailing pointer.
-    local out_instance = ffi.new("GuestContractInstance[1]")
-    local loader_data = ffi.new("VmLoaderData")
-    interface.create_instance(loader_data, host, nil, out_instance)
-    local peer_instance = out_instance[0]
-    -- Stamp the peer contract id so call_guest_method routes by it (create_instance
-    -- returns a null-id handle for stateless/VM peers). Mirrors generated peer_callers.lua.
-    peer_instance.contract_id = TEST_PEER_ID
-
-    -- Forward args directly: both contracts share StringView in / StringView out.
-    local in_sv_ptr = ffi.cast("const void*", ffi.cast("uintptr_t", args_ptr))
-    local out_sv_ptr = ffi.cast("void*", ffi.cast("uintptr_t", out_ptr))
-
-    -- Dispatch through call_guest_method (null arena: host-alloc fallback).
-    -- Out-param ABI: the AbiError is written through a trailing pointer.
-    local out_err = ffi.new("AbiError[1]")
-    host.call_guest_method(host, peer_instance, 0, in_sv_ptr, out_sv_ptr, nil, out_err)
-
-    -- Destroy instance (stateless no-op, but honour the lifecycle).
-    interface.destroy_instance(loader_data, host, peer_instance)
+    return self
 end
 
 function polyplug_init(registrar_ptr, ctx_ptr)
-    -- Store the host interface so the peer-caller idiom (get_host_interface) works.
-    -- The generated init.lua does this; a hand-written guest must too.
-    polyplug_guest.store_host_interface(registrar_ptr)
-    _G._polyplug_handlers = {
+    return {
         ["test.consumer"] = {
             contract_version = 1,
             plugin_name = "test-peer-consumer-lua",
-            factory = function(_host) return {} end,
+            factory = new_consumer,
             functions = {
-                [0] = impl_invoke,
+                [0] = function(instance, a, o) instance:invoke(a, o) end,
             },
         },
-    }
+    }, { code = 0 }
 end
 "#
 }

@@ -18,9 +18,8 @@ function PipelineValidatorPeer:new(interface, instance, host)
     return obj
 end
 
-function PipelineValidatorPeer.resolve()
-    local host_ptr = polyplug_guest.get_host_interface()
-    if host_ptr == nil then
+function PipelineValidatorPeer.resolve(host_ptr)
+    if host_ptr == nil or host_ptr == 0 then
         return nil
     end
     local host = ffi.cast("HostApi*", ffi.cast("uintptr_t", host_ptr))

@@ -298,8 +298,9 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     out.push_str("local M = {}\n\n");
 
     // The LuaLoader (Rust side) drives registration: after it execs the bundle
-    // script and calls polyplug_init, it reads _G._polyplug_handlers and builds
-    // the GuestContractInterface itself, wrapping each Lua handler in an
+    // script and calls polyplug_init, it reads the per-contract registrations
+    // table polyplug_init RETURNS (nothing is deposited into any global — Rule 12)
+    // and builds the GuestContractInterface itself, wrapping each Lua handler in an
     // extern "C" trampoline. Guest code therefore NEVER constructs a
     // GuestContractInterface cdata or ffi.cast()s a Lua function into a
     // struct-returning C function pointer — LuaJIT cannot create callbacks for
@@ -308,12 +309,13 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     // handlers, mirroring tests/fixtures/test_plugin_lua/test_plugin.lua.
     //
     // Each handler has the low-level dispatch signature (instance, args_ptr,
-    // out_ptr): `instance` is the resolved per-instance impl object the loader
-    // passes as the first argument, and args_ptr/out_ptr are i64 integers (see
-    // polyplug_lua::loader::lua_dispatch). The generated wrapper marshals args/out
-    // around a method call ON the instance — the loader owns per-instance state
-    // and builds each impl from the author factory registered via
-    // `set_<plugin>_factory`.
+    // out_ptr, arena_ptr, arena_alloc): `instance` is the resolved per-instance
+    // impl object the loader passes as the first argument, args_ptr/out_ptr/arena_ptr
+    // are i64 integers, and `arena_alloc(size, arena)` is the loader-supplied arena
+    // allocator threaded as the final argument (see polyplug_lua::loader::lua_dispatch).
+    // The generated wrapper marshals args/out around a method call ON the instance —
+    // the loader owns per-instance state and builds each impl from the author factory
+    // registered via `set_<plugin>_factory`.
 
     // Collect the (plugin, contract) pairs to register, preserving order.
     let mut registrations: Vec<(&str, &ResolvedContract)> = Vec::new();
@@ -332,24 +334,42 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
         }
     }
 
-    // Define the global polyplug_init the LuaLoader calls. It populates
-    // _G._polyplug_handlers with the per-contract dispatch tables. The example
+    // Define the global polyplug_init the LuaLoader calls. It RETURNS the
+    // per-contract registrations table (and an AbiError); nothing is deposited into
+    // any global namespace (Rule 12). The example
     // guests require this module and call set_<plugin>_factory at module top
     // level, so the author factory is already stored by the time polyplug_init
     // runs; the loader calls it to build the default impl and each per-instance
     // impl.
     out.push_str("\n-- Registration entry point called by the LuaLoader.\n");
+    out.push_str("-- Returns (registrations, abi_error): the per-contract handler table the\n");
+    out.push_str(
+        "-- loader consumes, plus the canonical AbiError ({ code, message }). Nothing is\n",
+    );
+    out.push_str(
+        "-- deposited into any global/module namespace (Rule 12) — the loader reads BOTH\n",
+    );
+    out.push_str("-- return values. The host pointer threads to each author factory; no host\n");
+    out.push_str("-- pointer or handler table is stored in this module.\n");
     out.push_str("function polyplug_init(host_ptr, ctx_ptr)\n");
     out.push_str("    if host_ptr == nil or ctx_ptr == nil then\n");
-    out.push_str("        return { code = polyplug_guest.AbiErrorCode.Generic, message = \"null host or ctx pointer in polyplug_init\" }\n");
+    out.push_str("        return {}, { code = polyplug_guest.AbiErrorCode.Generic, message = \"null host or ctx pointer in polyplug_init\" }\n");
     out.push_str("    end\n");
-    out.push_str("    polyplug_guest.store_host_interface(host_ptr)\n");
+    out.push_str("    local registrations = {}\n");
     for (plugin_name, _contract) in &registrations {
         let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
-        out.push_str(&format!("    M._register_{plugin_var}()\n"));
+        let plugin_lower: String = plugin_name.to_lowercase().replace(['.', '-'], "_");
+        // The author factory must have been registered at import time. Mirror
+        // python: surface a Generic AbiError (not a raise) so the loader fails the
+        // load cleanly through the return channel.
+        out.push_str(&format!("    if {plugin_var}_FACTORY == nil then\n"));
+        out.push_str(&format!(
+            "        return {{}}, {{ code = polyplug_guest.AbiErrorCode.Generic, message = \"set_{plugin_lower}_factory(...) was not called at import time\" }}\n"
+        ));
+        out.push_str("    end\n");
+        out.push_str(&format!("    M._register_{plugin_var}(registrations)\n"));
     }
-    out.push_str("    -- Canonical AbiError shape (code + message); the LuaLoader reads both.\n");
-    out.push_str("    return { code = polyplug_guest.AbiErrorCode.Ok }\n");
+    out.push_str("    return registrations, { code = polyplug_guest.AbiErrorCode.Ok }\n");
     out.push_str("end\n\n");
 
     out.push_str("return M\n");
@@ -601,34 +621,29 @@ fn generate_guest_plugin_interface(
     out.push_str(&format!("    {plugin_var}_FACTORY = factory\n"));
     out.push_str("end\n");
 
-    // _register_<plugin>() builds the low-level dispatch handlers and stores them
-    // under a per-contract entry in _G._polyplug_handlers, keyed by contract name.
+    // _register_<plugin>(registrations) builds the low-level dispatch handlers and
+    // stores them under a per-contract entry in the `registrations` table that
+    // polyplug_init returns to the loader (keyed by contract name) — no global.
     // The loader iterates every entry and registers one GuestContractInterface per
     // contract, so multi-contract bundles register ALL their contracts. Each handler
-    // has the signature (instance, args_ptr, out_ptr): `instance` is the resolved
-    // per-instance impl object the loader passes, and args_ptr/out_ptr are i64
-    // pointer integers. The handler marshals inputs, invokes the contract method ON
-    // the instance, and writes the result to out_ptr. The handler entry also carries
-    // the author factory the loader calls to build each impl.
-    out.push_str(&format!("function M._register_{plugin_var}()\n"));
-    out.push_str(&format!("    if {plugin_var}_FACTORY == nil then\n"));
+    // has the signature (instance, args_ptr, out_ptr, arena_ptr, arena_alloc):
+    // `instance` is the resolved per-instance impl object the loader passes,
+    // args_ptr/out_ptr/arena_ptr are i64 integers, and `arena_alloc(size, arena)` is
+    // the loader-supplied arena allocator. The handler marshals inputs, invokes the
+    // contract method ON the instance, and writes the result to out_ptr. The handler
+    // entry also carries the author factory the loader calls to build each impl.
     out.push_str(&format!(
-        "        error(\"polyplug: {set_factory_name}(...) was not called at import time\")\n"
+        "function M._register_{plugin_var}(registrations)\n"
     ));
-    out.push_str("    end\n");
     out.push_str("    local functions = {}\n");
     for (idx, func) in contract.functions.iter().enumerate() {
         out.push_str(&format!(
-            "    functions[{idx}] = function(instance, args_ptr, out_ptr)\n"
+            "    functions[{idx}] = function(instance, args_ptr, out_ptr, arena_ptr, arena_alloc)\n"
         ));
         emit_lua_guest_handler_body(out, func, enums, &contract.name);
         out.push_str("    end\n");
     }
-    out.push_str("    _G._polyplug_handlers = _G._polyplug_handlers or {}\n");
-    out.push_str(&format!(
-        "    _G._polyplug_handlers[\"{}\"] = {{\n",
-        contract.name
-    ));
+    out.push_str(&format!("    registrations[\"{}\"] = {{\n", contract.name));
     out.push_str(&format!(
         "        contract_version = {},\n",
         contract.version.major
@@ -767,7 +782,7 @@ fn emit_lua_guest_marshal_return(
     match ret {
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {}
         ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-            emit_lua_guest_marshal_ref_return(out, "StringView");
+            emit_lua_guest_marshal_string_return(out);
         }
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
             emit_lua_guest_marshal_ref_return(out, "Buffer");
@@ -784,7 +799,27 @@ fn emit_lua_guest_marshal_return(
     }
 }
 
-/// Marshal a reference-cdata return (StringView/Buffer/struct): the impl returns a
+/// Marshal a `StringView` return: the impl returns a plain Lua string and the
+/// GENERATED handler arena-allocates it into the caller's out slot via the
+/// threaded `arena_alloc`/`arena_ptr` (no per-VM global, no author-side arena —
+/// mirrors the python reference). A nil result raises (loader maps to Generic).
+fn emit_lua_guest_marshal_string_return(out: &mut String) {
+    out.push_str("        if out_ptr ~= 0 and result == nil then\n");
+    out.push_str(
+        "            error(\"polyplug: implementation returned nil for a StringView-returning function\")\n",
+    );
+    out.push_str("        end\n");
+    out.push_str("        if out_ptr ~= 0 then\n");
+    out.push_str(
+        "            local out_ref = ffi.cast(\"StringView*\", ffi.cast(\"uintptr_t\", out_ptr))\n",
+    );
+    out.push_str(
+        "            out_ref[0] = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, result)\n",
+    );
+    out.push_str("        end\n");
+}
+
+/// Marshal a reference-cdata return (Buffer/struct): the impl returns a
 /// cdata of `c_type`; copy it into the caller's out slot. A nil result raises.
 fn emit_lua_guest_marshal_ref_return(out: &mut String, c_type: &str) {
     out.push_str("        if out_ptr ~= 0 and result ~= nil then\n");
@@ -1490,8 +1525,8 @@ fn generate_lua_guest_host_contract_caller(
     out.push_str("    if host_ptr == nil then\n");
     out.push_str("        return nil\n");
     out.push_str("    end\n");
-    // `host_ptr` arrives from polyplug_guest.get_host_interface() as a plain Lua
-    // number (the host pointer the loader stored at init). Cast through uintptr_t
+    // `host_ptr` is the threaded host pointer (a plain Lua number), passed in by
+    // the caller — no per-VM global (Rule 12). Cast through uintptr_t
     // first, exactly like the host-side caller path: a direct ffi.cast("HostApi*",
     // number) yields a pointer LuaJIT then rejects as the first FFI argument
     // ("bad argument #1"). Pass the typed `host` cdata to every HostApi call.
@@ -1971,14 +2006,14 @@ fn generate_lua_guest_peer_caller(
     out.push_str("    return obj\n");
     out.push_str("end\n\n");
 
-    // .resolve() — factory: get host → find → resolve → create_instance.
-    // `host_ptr` comes from `polyplug_guest.get_host_interface()`, which returns
-    // a plain Lua number. Cast through uintptr_t first (matching the host-contract
-    // caller's from_host path) — a direct ffi.cast("HostApi*", number) is rejected
-    // by LuaJIT as the first FFI argument.
-    out.push_str(&format!("function {}.resolve()\n", class_name));
-    out.push_str("    local host_ptr = polyplug_guest.get_host_interface()\n");
-    out.push_str("    if host_ptr == nil then\n");
+    // .resolve(host_ptr) — factory: find → resolve → create_instance.
+    // `host_ptr` is threaded in explicitly by the caller (the author factory
+    // captured it; no per-VM global — Rule 12). It is a plain Lua number; cast
+    // through uintptr_t first (matching the host-contract caller's from_host path)
+    // — a direct ffi.cast("HostApi*", number) is rejected by LuaJIT as the first
+    // FFI argument.
+    out.push_str(&format!("function {}.resolve(host_ptr)\n", class_name));
+    out.push_str("    if host_ptr == nil or host_ptr == 0 then\n");
     out.push_str("        return nil\n");
     out.push_str("    end\n");
     out.push_str("    local host = ffi.cast(\"HostApi*\", ffi.cast(\"uintptr_t\", host_ptr))\n");
@@ -3109,12 +3144,12 @@ mod tests {
             "missing __index: {out}"
         );
         assert!(
-            out.contains("function PipelineValidatorPeer.resolve()"),
+            out.contains("function PipelineValidatorPeer.resolve(host_ptr)"),
             "missing resolve factory: {out}"
         );
         assert!(
-            out.contains("polyplug_guest.get_host_interface()"),
-            "resolve must use polyplug_guest.get_host_interface(): {out}"
+            !out.contains("polyplug_guest.get_host_interface()"),
+            "resolve must thread host_ptr explicitly, not read a global: {out}"
         );
         assert!(
             out.contains("ffi.cast(\"HostApi*\", ffi.cast(\"uintptr_t\", host_ptr))"),

@@ -13,10 +13,10 @@ local function new_transformer(host)
         if s:sub(1, 8) == 'DECODED:' then s = s:sub(9) end
         local name, value, count = s:match('^([^|]*)|([^|]*)|([^|]*)$')
         if name and count and tonumber(count) then
-            return polyplug.alloc_string(string.format(
-                'TRANSFORMED:%s|%s (transformed)|%d', name:upper(), value, tonumber(count) + 1))
+            return string.format(
+                'TRANSFORMED:%s|%s (transformed)|%d', name:upper(), value, tonumber(count) + 1)
         end
-        return polyplug.alloc_string('INVALID:format')
+        return 'INVALID:format'
     end
 
     return self

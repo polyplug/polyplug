@@ -47,16 +47,6 @@ M.LogLevel = {
     Trace = 5,
 }
 
-local _host_interface_ptr = nil
-
-function M.store_host_interface(ptr)
-    _host_interface_ptr = ptr
-end
-
-function M.get_host_interface()
-    return _host_interface_ptr
-end
-
 function M.cast_host_interface(ptr_int)
     return ffi.cast("HostApi*", ffi.cast("uintptr_t", ptr_int))
 end
@@ -72,10 +62,13 @@ end
 -- Allocate a string in HOST memory and return a StringView pointing at it.
 -- Cross-boundary data MUST use the host allocator (CLAUDE.md rule 8),
 -- so the returned bytes outlive this call and may be handed back to the host.
-function M.alloc_string(s)
-    local host_ptr = _host_interface_ptr
-    if host_ptr == nil then
-        error("alloc_string: host interface not stored (call store_host_interface first)")
+--
+-- `host_ptr` is the HostApi pointer threaded explicitly into the guest (the
+-- author factory receives it; the generated dispatch threads it) — no host
+-- pointer is stored in this module (Rule 12).
+function M.alloc_string(host_ptr, s)
+    if host_ptr == nil or host_ptr == 0 then
+        error("alloc_string: host pointer is nil")
     end
     local host = ffi.cast("HostApi*", ffi.cast("uintptr_t", host_ptr))
     local len = #s
@@ -96,19 +89,19 @@ function M.alloc_string(s)
     return view
 end
 
--- Allocate a return-value string from the current per-call CallArena.
+-- Allocate a return-value string from THIS call's CallArena.
 --
 -- Use this for strings RETURNED from a contract function: the bytes are served
--- from the host's per-call arena (published by the loader via the
--- `_polyplug_arena_alloc` bridge) and stay valid until the next call on the same
--- caller, so the guest never frees them. When no arena is active the bridge
--- falls back to `host->alloc`, so this behaves like `alloc_string`. For data
--- that must outlive the call, use `alloc_string` and free it explicitly.
-function M.alloc_string_arena(s)
-    local arena_alloc = _G._polyplug_arena_alloc
-    if arena_alloc == nil then
-        return M.alloc_string(s)
-    end
+-- from the host's per-call arena and stay valid until the caller's next
+-- arena-backed call, so the guest never frees them. For data that must outlive
+-- the call, use `alloc_string` and free it explicitly.
+--
+-- `arena_alloc(size, arena) -> integer` is the loader-supplied allocator passed
+-- as the FINAL positional argument of every dispatch call (NOT a module global);
+-- `arena_ptr` is the `arena` integer the dispatch passed to the handler. Both are
+-- threaded explicitly so concurrent and same-VM reentrant dispatch stay correct —
+-- each call's arena travels with its own call frame (Rule 12).
+function M.alloc_string_arena(arena_alloc, arena_ptr, s)
     local len = #s
     local view = ffi.new("StringView")
     if len == 0 then
@@ -116,7 +109,7 @@ function M.alloc_string_arena(s)
         view.len = 0
         return view
     end
-    local addr = arena_alloc(len)
+    local addr = arena_alloc(len, arena_ptr)
     if addr == 0 then
         error("alloc_string_arena: arena allocation failed")
     end
@@ -128,21 +121,22 @@ function M.alloc_string_arena(s)
 end
 
 -- Send a log record to the host's logging funnel (RuntimeConfig log callback,
--- or the host's stderr default).
+-- or the host's stderr default) by calling `HostApi.log` DIRECTLY through the
+-- threaded host pointer — no loader-injected `_polyplug_log` bridge (Rule 12).
 --
--- `level` is one of M.LogLevel (unknown values are clamped to Error by the
--- loader), `scope` is a short stable tag chosen by the guest — the suggested
--- convention is "guest.<plugin-name>" — and `message` is delivered verbatim.
---
--- The `_polyplug_log` bridge is injected into the VM by the polyplug Lua
--- loader; outside a polyplug VM (e.g. plain LuaJIT unit tests of plugin code)
--- it is absent and this helper degrades to a no-op.
-function M.log(level, scope, message)
-    local log_fn = _G._polyplug_log
-    if log_fn == nil then
+-- `host_ptr` is the HostApi pointer threaded into the guest (the author factory
+-- receives it); a nil/0 host_ptr is a no-op, so plugins may call this
+-- unconditionally (e.g. plain LuaJIT unit tests with no host). `level` is one of
+-- M.LogLevel (the host clamps unknown values to Error), `scope` is a short stable
+-- tag — convention "guest.<plugin-name>" — and `message` is delivered verbatim.
+function M.log(host_ptr, level, scope, message)
+    if host_ptr == nil or host_ptr == 0 then
         return
     end
-    log_fn(level, scope, message)
+    -- Self-passing convention: log(this, level, scope, message). The host reads
+    -- both views only for the duration of this synchronous call.
+    local host = ffi.cast("HostApi*", ffi.cast("uintptr_t", host_ptr))
+    host.log(host, level, M.string_view(scope), M.string_view(message))
 end
 
 function M.ok()

@@ -13,9 +13,9 @@ local function new_validator(host)
         if s:sub(1, 8) == 'DECODED:' then s = s:sub(9) end
         local name, value, count = s:match('^([^|]*)|([^|]*)|([^|]*)$')
         if name and name ~= '' and value ~= '' and tonumber(count) then
-            return polyplug.alloc_string('VALID:' .. s)
+            return 'VALID:' .. s
         end
-        return polyplug.alloc_string('INVALID:expected name|value|count')
+        return 'INVALID:expected name|value|count'
     end
 
     return self

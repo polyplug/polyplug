@@ -208,12 +208,11 @@ local function new_transformer(host)\n\
     local self = {}\n\
     function self:transform(input)\n\
         local msg = 'lua-guest called host.logger'\n\
-        local host_ptr = polyplug.get_host_interface()\n\
-        local logger = host_contracts.HostLoggerContract.from_host(host_ptr, 0)\n\
+        local logger = host_contracts.HostLoggerContract.from_host(host, 0)\n\
         if logger ~= nil then\n\
             logger:log(msg)\n\
         end\n\
-        return polyplug.alloc_string('OK:' .. msg)\n\
+        return 'OK:' .. msg\n\
     end\n\
     return self\n\
 end\n\

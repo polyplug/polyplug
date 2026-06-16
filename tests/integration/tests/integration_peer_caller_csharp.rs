@@ -261,24 +261,24 @@ local function make_validator(host)
     return {}
 end
 
-local function impl_validate(instance, args_ptr, out_ptr)
+local function impl_validate(instance, args_ptr, out_ptr, arena_ptr, arena_alloc)
     local in_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
     local s = polyplug_abi.to_str(in_sv[0])
     local result = "PEER:" .. s
-    local out_view = polyplug_guest.alloc_string_arena(result)
+    local out_view = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, result)
     local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
     out_sv[0] = out_view
 end
 
 function polyplug_init(registrar_ptr, ctx_ptr)
-    _G._polyplug_handlers = {
+    return {
         ["pipeline.Validator"] = {
             contract_version = 1,
             plugin_name = "test-validator-provider-csharp",
             factory = make_validator,
             functions = { [0] = impl_validate },
         },
-    }
+    }, { code = 0 }
 end
 "#
 }

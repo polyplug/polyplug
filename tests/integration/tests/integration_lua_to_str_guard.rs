@@ -40,7 +40,7 @@ local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
 local polyplug_abi = require("polyplug_abi")
 
-local function impl_probe(instance, args_ptr, out_ptr)
+local function impl_probe(instance, args_ptr, out_ptr, arena_ptr, arena_alloc)
     -- Misuse on purpose: a Lua string is NOT a StringView cdata.
     local ok, err = pcall(polyplug_abi.to_str, "already a Lua string")
     local result
@@ -49,21 +49,20 @@ local function impl_probe(instance, args_ptr, out_ptr)
     else
         result = "RAISED:" .. tostring(err)
     end
-    local out_view = polyplug_guest.alloc_string_arena(result)
+    local out_view = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, result)
     local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
     out_sv[0] = out_view
 end
 
 function polyplug_init(registrar_ptr, ctx_ptr)
-    polyplug_guest.store_host_interface(registrar_ptr)
-    _G._polyplug_handlers = {
+    return {
         ["test.probe"] = {
             contract_version = 1,
             plugin_name = "to-str-guard-probe",
             factory = function(_host) return {} end,
             functions = { [0] = impl_probe },
         },
-    }
+    }, { code = polyplug_guest.AbiErrorCode.Ok }
 end
 "#
 }

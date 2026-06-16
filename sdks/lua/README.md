@@ -124,11 +124,15 @@ LuaJIT FFI wrappers over the polyplug C ABI:
 
 ### Guest Library (`guest/`)
 
-Helpers for Lua plugins (the entry point is generated; the loader calls it):
-- `store_host_interface` / `get_host_interface` — per-VM host pointer (each VM
-  is per-runtime-per-bundle, so this is instance state, not a process global)
-- `alloc_string` / `alloc_string_arena` — host-allocator / per-call-arena strings
-- `log(level, scope, message)` — host logging funnel
+Helpers for Lua plugins (the entry point is generated; the loader calls it).
+The host pointer and per-call arena allocator are threaded explicitly — nothing
+is stored in any module/VM global (Rule 12):
+- `alloc_string(host_ptr, s)` — allocate in HOST memory (outlives the call); the
+  `host_ptr` is the one threaded into the author factory
+- `alloc_string_arena(arena_alloc, arena_ptr, s)` — per-call-arena string; both
+  the allocator and arena pointer arrive as explicit dispatch arguments
+- `log(host_ptr, level, scope, message)` — calls `HostApi.log` directly through
+  the threaded host pointer (no `_polyplug_log` bridge)
 - `ok()` / `err(code, message)` — `AbiError` constructors
 - Error boundary — Plugin errors don't take down host
 

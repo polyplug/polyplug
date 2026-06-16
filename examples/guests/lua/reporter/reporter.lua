@@ -13,10 +13,10 @@ local function new_reporter(host)
         if s:sub(1, 12) == 'TRANSFORMED:' then s = s:sub(13) end
         local name, value, count = s:match('^([^|]*)|([^|]*)|([^|]*)$')
         if name then
-            return polyplug.alloc_string(string.format(
-                'Report: %s has value \'%s\' with count %s', name, value, count))
+            return string.format(
+                'Report: %s has value \'%s\' with count %s', name, value, count)
         end
-        return polyplug.alloc_string('INVALID:format')
+        return 'INVALID:format'
     end
 
     return self

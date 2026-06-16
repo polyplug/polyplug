@@ -4,15 +4,17 @@
 --
 -- DESIGN: This plugin does NOT create LuaJIT FFI callbacks directly,
 -- because LuaJIT FFI callbacks cannot return structs by value (e.g. AbiError).
--- Instead, polyplug_init populates _G._polyplug_handlers with pure Lua
--- function implementations. The LuaLoader (Rust side) wraps these in
--- extern "C" trampolines and builds the GuestContractInterface itself.
+-- Instead, polyplug_init RETURNS (registrations, abi_error) — a per-contract
+-- handler table of pure Lua functions plus the canonical AbiError. Nothing is
+-- deposited into any global namespace (Rule 12). The LuaLoader (Rust side) wraps
+-- these in extern "C" trampolines and builds the GuestContractInterface itself.
 --
 -- PER-INSTANCE MODEL: the loader owns per-instance state. The handler entry
 -- carries a `factory(host_ptr) -> impl` the loader calls once per create_instance
 -- (and once at load for the stateless default impl). Each `functions[i]` entry
--- has the signature (instance, args_ptr, out_ptr): the loader passes the resolved
--- impl object as the first argument, and the entry calls the contract method on it.
+-- has the signature (instance, args_ptr, out_ptr, arena_ptr, arena_alloc): the
+-- loader passes the resolved impl object as the first argument and threads the
+-- per-call arena pointer + allocator as the final two.
 
 local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
@@ -53,10 +55,10 @@ local function new_test_add(host)
     -- region with zero host allocations; the returned view stays valid until the
     -- caller's next arena-backed call. args_ptr -> StringView input, out_ptr ->
     -- StringView output slot.
-    function self:echo(args_ptr, out_ptr)
+    function self:echo(args_ptr, out_ptr, arena_ptr, arena_alloc)
         local in_sv = ffi.cast("const StringView*", ffi.cast("uintptr_t", args_ptr))
         local s = polyplug_abi.to_str(in_sv[0])
-        local out_view = polyplug_guest.alloc_string_arena(s)
+        local out_view = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, s)
         local out_sv = ffi.cast("StringView*", ffi.cast("uintptr_t", out_ptr))
         out_sv[0] = out_view
     end
@@ -65,14 +67,16 @@ local function new_test_add(host)
 end
 
 -- polyplug_init is called by LuaLoader with the HostApi pointer as i64.
--- It does NOT call register_plugin directly — the LuaLoader (Rust) does that
--- after reading _G._polyplug_handlers and creating Rust-side trampolines.
+-- It RETURNS (registrations, abi_error): the per-contract handler table plus the
+-- canonical AbiError. Nothing is deposited into any global namespace (Rule 12) —
+-- the loader consumes the return values and creates the Rust-side trampolines.
+-- Each function entry has the signature (instance, args_ptr, out_ptr, arena_ptr,
+-- arena_alloc): the loader passes the resolved impl as the first argument and the
+-- threaded per-call arena pointer + allocator as the final two.
 function polyplug_init(registrar_ptr, ctx_ptr)
     -- The loader derives the contract_id canonically from contract_name +
     -- contract_version via guest_contract_id("test.add", 1); no id is baked here.
-    -- Each function entry takes the resolved instance as its first argument and
-    -- calls the matching method on it.
-    _G._polyplug_handlers = {
+    local registrations = {
         ["test.add"] = {
             contract_version = 1,
             plugin_name = "test-plugin-lua",
@@ -83,8 +87,11 @@ function polyplug_init(registrar_ptr, ctx_ptr)
                 [1] = function(instance, a, o) instance:add_primitive(a, o) end, -- function_id 1: add_primitive
                 [2] = function(instance, a, o) instance:version(a, o) end,       -- function_id 2: version
                 [3] = function(instance, a, o) instance:reset(a, o) end,         -- function_id 3: reset
-                [4] = function(instance, a, o) instance:echo(a, o) end,          -- function_id 4: echo (arena return)
+                [4] = function(instance, a, o, arena_ptr, arena_alloc)           -- function_id 4: echo (arena return)
+                    instance:echo(a, o, arena_ptr, arena_alloc)
+                end,
             },
         },
     }
+    return registrations, { code = polyplug_guest.AbiErrorCode.Ok }
 end

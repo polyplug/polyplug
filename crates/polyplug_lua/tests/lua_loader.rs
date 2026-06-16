@@ -1,10 +1,11 @@
 //! Integration tests for LuaLoader and the Lua VM initialization / bundle loading pipeline.
 //!
-//! Registration shape: each `_polyplug_handlers[<contract>]` entry carries a
-//! `factory(host_ptr) -> impl` (the loader calls it to build the default impl and
-//! every per-instance impl) and a `functions` table whose entries have the
-//! signature `(instance, args_ptr, out_ptr)` — the loader passes the resolved
-//! per-instance impl object as the first argument.
+//! Registration shape: `polyplug_init` RETURNS `(registrations, abi_error)`; each
+//! `registrations[<contract>]` entry carries a `factory(host_ptr) -> impl` (the
+//! loader calls it to build the default impl and every per-instance impl) and a
+//! `functions` table whose entries have the signature `(instance, args_ptr,
+//! out_ptr, arena_ptr, arena_alloc)` — the loader passes the resolved per-instance
+//! impl object as the first argument and threads the per-call arena + allocator.
 
 #![allow(clippy::expect_used)]
 
@@ -69,14 +70,14 @@ local ffi = require("ffi")
 local function impl_noop(_instance, _args_ptr, _out_ptr)
 end
 function polyplug_init(_registrar_ptr, _ctx_ptr)
-    _G._polyplug_handlers = {
+    return {
         ["test.loader"] = {
             contract_version = 1,
             plugin_name      = "test-loader-unit",
             factory          = function(_host) return {} end,
             functions        = { [0] = impl_noop },
         },
-    }
+    }, { code = 0 }
 end
 "#
 }
@@ -88,14 +89,14 @@ local ffi = require("ffi")
 local function impl_a(_instance, _args_ptr, _out_ptr) end
 local function impl_b(_instance, _args_ptr, _out_ptr) end
 function polyplug_init(_registrar_ptr, _ctx_ptr)
-    _G._polyplug_handlers = {
+    return {
         ["test.two"] = {
             contract_version = 1,
             plugin_name      = "test-two-unit",
             factory          = function(_host) return {} end,
             functions        = { [0] = impl_a, [1] = impl_b },
         },
-    }
+    }, { code = 0 }
 end
 "#
 }
@@ -110,7 +111,7 @@ local function impl_first(_instance, _args_ptr, _out_ptr) end
 local function impl_second_a(_instance, _args_ptr, _out_ptr) end
 local function impl_second_b(_instance, _args_ptr, _out_ptr) end
 function polyplug_init(_registrar_ptr, _ctx_ptr)
-    _G._polyplug_handlers = {
+    return {
         ["test.first"] = {
             contract_version = 1,
             plugin_name      = "test-multi-first",
@@ -123,7 +124,7 @@ function polyplug_init(_registrar_ptr, _ctx_ptr)
             factory          = function(_host) return {} end,
             functions        = { [0] = impl_second_a, [1] = impl_second_b },
         },
-    }
+    }, { code = 0 }
 end
 "#
 }
@@ -956,14 +957,14 @@ local function impl_fail(_instance, _args_ptr, _out_ptr)
     error("boom from lua guest")
 end
 function polyplug_init(_registrar_ptr, _ctx_ptr)
-    _G._polyplug_handlers = {
+    return {
         ["test.loader"] = {
             contract_version = 1,
             plugin_name      = "test-loader-fail",
             factory          = function(_host) return {} end,
             functions        = { [0] = impl_fail },
         },
-    }
+    }, { code = 0 }
 end
 "#
 }
@@ -1047,32 +1048,38 @@ fn dispatch_failure_is_logged_through_host_logger() {
     );
 }
 
-// ── 17. Guest logging — the injected `_polyplug_log` bridge ──────────────────
+// ── 17. Guest logging — direct `HostApi.log` through the threaded host pointer ─
 
-/// A Lua plugin whose single function logs through the polyplug_guest SDK
-/// helper (which forwards to the loader-injected `_polyplug_log` global) and
-/// once through the raw global with an out-of-range level.
+/// A Lua plugin whose single function logs through the polyplug_guest SDK helper
+/// `pg.log(host, ...)`, which calls `HostApi.log` directly via FFI (no
+/// loader-injected `_polyplug_log` global — Rule 12). The host pointer is threaded
+/// in through the author factory. The second call passes an out-of-range level so
+/// the host funnel's clamp-to-Error is exercised.
 fn logging_plugin_script() -> &'static [u8] {
     br#"
 local pg = require("polyplug_guest")
-local function impl_log(_instance, _args_ptr, _out_ptr)
-    pg.log(pg.LogLevel.Info, "guest.test-log", "hello from lua guest")
-    _polyplug_log(99, "guest.test-log", "out of range level")
+local function new_logger(host)
+    local self = {}
+    function self:log_fn(_args_ptr, _out_ptr)
+        pg.log(host, pg.LogLevel.Info, "guest.test-log", "hello from lua guest")
+        pg.log(host, 99, "guest.test-log", "out of range level")
+    end
+    return self
 end
 function polyplug_init(_host_ptr, _ctx_ptr)
-    _G._polyplug_handlers = {
+    return {
         ["test.loader"] = {
             contract_version = 1,
             plugin_name      = "test-loader-guest-log",
-            factory          = function(_host) return {} end,
-            functions        = { [0] = impl_log },
+            factory          = new_logger,
+            functions        = { [0] = function(instance, a, o) instance:log_fn(a, o) end },
         },
-    }
+    }, { code = 0 }
 end
 "#
 }
 
-/// A guest calling the injected `_polyplug_log` (via the SDK `pg.log` helper)
+/// A guest calling `HostApi.log` (via the SDK `pg.log(host, ...)` helper)
 /// mid-dispatch must deliver (level, scope, message) verbatim through the host
 /// logger installed via `RuntimeBuilder::logger`, and an out-of-range level
 /// must clamp to `LogLevel::Error`. The log call happens while `lua_dispatch`
@@ -1172,15 +1179,14 @@ fn load_init_returning_error_code_fails_load() {
         br#"
 local function impl_noop(_instance, _args_ptr, _out_ptr) end
 function polyplug_init(_reg, _ctx)
-    _G._polyplug_handlers = {
+    return {
         ["test.initerr"] = {
             contract_version = 1,
             plugin_name      = "test-init-err",
             factory          = function(_host) return {} end,
             functions        = { [0] = impl_noop },
         },
-    }
-    return 1  -- AbiErrorCode.Generic
+    }, { code = 1 }  -- AbiErrorCode.Generic
 end
 "#,
     );
@@ -1207,15 +1213,14 @@ fn load_init_returning_ok_code_succeeds() {
         br#"
 local function impl_noop(_instance, _args_ptr, _out_ptr) end
 function polyplug_init(_reg, _ctx)
-    _G._polyplug_handlers = {
+    return {
         ["test.initok"] = {
             contract_version = 1,
             plugin_name      = "test-init-ok",
             factory          = function(_host) return {} end,
             functions        = { [0] = impl_noop },
         },
-    }
-    return 0  -- AbiErrorCode.Ok
+    }, { code = 0 }  -- AbiErrorCode.Ok
 end
 "#,
     );

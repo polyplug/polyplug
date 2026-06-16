@@ -54,7 +54,7 @@ const ABI_LUA_DIR: &str = env!("POLYPLUG_ABI_LUA_DIR");
 ///
 /// `host_register_guest_contract` attributes each registration to the bundle id at
 /// the top of the runtime's init-bundle stack (`current_init_bundle_id`). The Lua
-/// `polyplug_init` only populates `_G._polyplug_handlers`; the actual
+/// `polyplug_init` only RETURNS the registrations table; the actual
 /// `register_guest_contract` calls happen later in `load_inner`. The window must
 /// therefore stay open across BOTH phases, and `pop` must run on EVERY exit path —
 /// including the many `?` early-returns between init and the end of the registration
@@ -103,6 +103,12 @@ impl Drop for InitBundleGuard<'_> {
 pub struct LuaLoaderData {
     pub _vm: Lua,
     pub functions: Vec<Function>,
+    /// Per-VM arena allocator `arena_alloc(size, arena) -> integer`, threaded as
+    /// the FINAL argument of every dispatch call (NOT injected as a VM global —
+    /// Rule 12). It bumps exactly the per-call [`CallArena`] whose pointer the
+    /// dispatch passes, or falls back to `host->alloc` when that pointer is 0, so a
+    /// concurrent or same-VM reentrant dispatch can never perturb this call's arena.
+    pub arena_alloc: Function,
     /// Author factory `factory(host_ptr_int) -> impl`, called once per
     /// `create_instance` to build a fresh implementation object bound to its
     /// owning runtime's host pointer.
@@ -145,19 +151,15 @@ pub struct LuaLoaderData {
     /// `LuaLoaderData`, never globally, so it is Rule-12 compliant. Contention is
     /// trivial: the vec holds 0..N concurrent caller threads and never duplicates.
     pub in_dispatch_threads: Mutex<Vec<ThreadId>>,
-    /// Per-VM serialization of the arena publish→call→clear span in [`lua_dispatch`].
+    /// Per-VM serialization of the guest dispatch call in [`lua_dispatch`].
     ///
-    /// The arena pointer is published as the `_polyplug_arena` VM global, the guest
-    /// is called, and the global is cleared — three SEPARATE mlua operations. mlua's
-    /// internal `send` lock serializes each individual operation but NOT the
-    /// sequence, so without this lock a CROSS-thread concurrent dispatch could
-    /// overwrite the global between this thread's publish and its guest call (the
-    /// guest then allocates from the wrong arena), or clear the global to 0
-    /// mid-call (the guest then falls back to `host->alloc` and leaks). Holding this
-    /// lock across the whole span makes both impossible: a cross-thread caller
-    /// blocks here until the in-flight call finishes, exactly the serialization mlua
-    /// would impose on the VM lock anyway. Same-thread nested reentrancy is refused
-    /// (`ReentrantCall`) BEFORE this lock is taken, so the lock can never deadlock
+    /// The per-call arena pointer and its allocator are now threaded as explicit
+    /// dispatch ARGUMENTS (no `_polyplug_arena` VM global), so each call carries its
+    /// own arena on its own call frame and a concurrent dispatch can no longer
+    /// perturb it. This lock remains as explicit per-VM serialization of the call —
+    /// belt-and-suspenders with mlua's own internal `send` lock — so cross-thread
+    /// callers queue rather than interleave VM work. Same-thread nested reentrancy is
+    /// refused (`ReentrantCall`) BEFORE this lock is taken, so it can never deadlock
     /// against its own thread. It lives on the per-VM `LuaLoaderData`, never
     /// globally, so it is Rule-12 compliant.
     pub dispatch_lock: Mutex<()>,
@@ -361,14 +363,6 @@ unsafe extern "C" fn lua_destroy_instance(
 
 // ─── Lua Dispatch Function ─────────────────────────────────────────────────────
 
-/// The Lua global holding the active per-call [`CallArena`] pointer as an integer.
-///
-/// `lua_dispatch` publishes the arena pointer here under the VM lock for the
-/// duration of one call and clears it (sets it to 0) afterwards, so the
-/// `_polyplug_arena_alloc` bridge can serve the guest's return buffers from the
-/// arena. A value of 0 means "no arena" — the bridge falls back to `host->alloc`.
-const ARENA_GLOBAL: &str = "_polyplug_arena";
-
 /// Dispatch function for Lua plugins using VM dispatch pattern.
 ///
 /// # Safety
@@ -496,33 +490,32 @@ unsafe fn lua_dispatch_impl(
     let args_i64: i64 = args as usize as i64;
     let out_i64: i64 = out as usize as i64;
 
-    // Publish the per-call arena pointer so the _polyplug_arena_alloc bridge can
-    // serve allocations from it. The publish→call→clear span is THREE separate mlua
-    // operations; mlua's internal `send` lock serializes each one but not the
-    // sequence, so the per-VM `dispatch_lock` is held across the whole span. Without
-    // it, a cross-thread concurrent dispatch could overwrite the global between this
-    // publish and the guest call (wrong arena), or clear it to 0 mid-call (the guest
-    // would fall back to host->alloc and leak). Same-thread reentrancy was already
-    // refused above, so this lock cannot deadlock against its own thread; a
-    // cross-thread caller blocks here, exactly the serialization mlua imposes on the
-    // VM lock anyway. Poison recovery: the unit value cannot be left logically
-    // corrupt, so reusing it is sound. Production code, so no unwrap.
-    // The lock scope ends with the clear: the logger callback below must run
-    // with no guard held (RuntimeConfig::log lock rule).
+    // Call the guest under the per-VM `dispatch_lock`, passing the per-call arena
+    // pointer and its allocator as explicit arguments (no VM global is touched —
+    // Rule 12). The lock provides explicit per-VM serialization of the call (a
+    // cross-thread caller queues here); same-thread reentrancy was already refused
+    // above, so it cannot deadlock against its own thread. Poison recovery: the unit
+    // value cannot be left logically corrupt, so reusing it is sound. Production
+    // code, so no unwrap. The lock scope ends with the call: the logger callback
+    // below must run with no guard held (RuntimeConfig::log lock rule).
     let call_result: Result<(), mlua::Error> = {
         let _dispatch_lock: std::sync::MutexGuard<'_, ()> = data
             .dispatch_lock
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
 
+        // The per-call arena pointer and its allocator are threaded as explicit
+        // dispatch arguments — nothing is published into or cleared from any VM
+        // global (Rule 12). Each call carries its own arena on its own frame, so a
+        // concurrent or same-VM reentrant dispatch cannot perturb it.
         let arena_i64: i64 = arena as usize as i64;
-        let _ = data._vm.globals().set(ARENA_GLOBAL, arena_i64);
-
-        let call_result: Result<(), mlua::Error> =
-            lua_fn.call::<()>((instance_value, args_i64, out_i64));
-
-        let _ = data._vm.globals().set(ARENA_GLOBAL, 0_i64);
-        call_result
+        lua_fn.call::<()>((
+            instance_value,
+            args_i64,
+            out_i64,
+            arena_i64,
+            data.arena_alloc.clone(),
+        ))
     };
 
     match call_result {
@@ -542,8 +535,9 @@ unsafe fn lua_dispatch_impl(
 /// Lua plugin loader — loads Lua plugin bundles via the embedded LuaJIT VM.
 ///
 /// The Lua script must define a global function `polyplug_init(host_ptr, ctx_ptr)`
-/// which populates `_G._polyplug_handlers` with plugin metadata and function tables
-/// and returns the canonical `AbiError` shape (a `{ code, message }` table).
+/// which RETURNS `(registrations, abi_error)`: the per-contract handler table
+/// (plugin metadata + function tables) plus the canonical `AbiError` `{ code,
+/// message }` table. Nothing is deposited into any global namespace (Rule 12).
 pub struct LuaLoader {
     /// Configuration for this loader instance.
     pub config: LuaConfig,
@@ -636,26 +630,27 @@ impl LuaLoader {
             })
     }
 
-    /// Register `_polyplug_arena_alloc(size) -> integer` on the plugin VM.
+    /// Build the per-VM arena allocator `arena_alloc(size, arena) -> integer`.
     ///
-    /// The bridge serves the guest's per-call return buffers from the active
-    /// [`CallArena`] published by `lua_dispatch` in the `_polyplug_arena` global.
-    /// When no arena is active (the global is 0), it falls back to `host->alloc`,
-    /// preserving today's per-value allocation behaviour. Returns the allocated
-    /// address as an integer (0 on failure), matching the Lua pointer convention.
-    fn register_arena_alloc(
+    /// The returned [`Function`] is stored on each contract's [`LuaLoaderData`] and
+    /// threaded as the FINAL argument of every dispatch call — it is NEVER injected
+    /// into the VM global namespace (Rule 12). It serves the guest's per-call return
+    /// buffers from the [`CallArena`] whose pointer the dispatch passes as the
+    /// `arena` argument; when that pointer is 0 it falls back to `host->alloc`,
+    /// preserving the per-value allocation behaviour. Returns the allocated address
+    /// as an integer (0 on failure), matching the Lua pointer convention.
+    fn build_arena_alloc(
         lua: &Lua,
         bundle: &str,
         host_interface: *const HostApi,
-    ) -> Result<(), LoaderError> {
+    ) -> Result<Function, LoaderError> {
         // Capture the host pointer as a usize: raw pointers are not Send, but the
         // pointee is 'static HostApi for the runtime lifetime, so reconstructing it
         // inside the (Send) closure is sound.
         let host_addr: usize = host_interface as usize;
 
-        let arena_alloc_fn: Function = lua
-            .create_function(move |lua_ctx: &Lua, size: u32| -> mlua::Result<i64> {
-                let arena_addr: i64 = lua_ctx.globals().get::<i64>(ARENA_GLOBAL).unwrap_or(0);
+        lua.create_function(
+            move |_lua_ctx: &Lua, (size, arena_addr): (u32, i64)| -> mlua::Result<i64> {
                 let arena: *mut CallArena = arena_addr as usize as *mut CallArena;
                 let ptr: *mut u8 = if arena.is_null() {
                     let host: *const HostApi = host_addr as *const HostApi;
@@ -667,79 +662,18 @@ impl LuaLoader {
                         unsafe { ((*host).alloc)(host, size as usize, 1) }
                     }
                 } else {
-                    // SAFETY: `arena` is the valid per-call CallArena published by
-                    // lua_dispatch under the VM lock; alloc bumps within it or chains
-                    // a host-allocated overflow block.
+                    // SAFETY: `arena` is the valid per-call CallArena whose pointer the
+                    // dispatch threaded in; alloc bumps within it or chains a
+                    // host-allocated overflow block.
                     unsafe { (*arena).alloc(size as usize, 1) }
                 };
                 Ok(ptr as usize as i64)
-            })
-            .map_err(|e: mlua::Error| LoaderError::InitFailed {
-                bundle: bundle.to_owned(),
-                error: format!("Lua VM init failed: _polyplug_arena_alloc creation failed: {e}"),
-            })?;
-
-        lua.globals()
-            .set("_polyplug_arena_alloc", arena_alloc_fn)
-            .map_err(|e: mlua::Error| LoaderError::InitFailed {
-                bundle: bundle.to_owned(),
-                error: format!("Lua VM init failed: _polyplug_arena_alloc set failed: {e}"),
-            })
-    }
-
-    /// Register `_polyplug_log(level, scope, message)` on the plugin VM.
-    ///
-    /// The bridge delivers guest log records to the host's logging funnel
-    /// (`RuntimeConfig::log` callback or the stderr default) through the
-    /// instance-owned [`LoggerHandle`] copy captured at load time — per-VM
-    /// captured state, no statics (Rule 12). `level` is validated via
-    /// [`LogLevel::from_u32`]; unknown or out-of-range values clamp to
-    /// [`LogLevel::Error`], matching `HostApi.log` semantics. `scope` and
-    /// `message` are delivered verbatim (lossy-decoded only if the guest passes
-    /// non-UTF-8 bytes); the suggested scope convention is
-    /// `"guest.<plugin-name>"`.
-    ///
-    /// # Lock analysis (why logging mid-dispatch cannot deadlock)
-    ///
-    /// The bridge runs inside guest code, i.e. while `lua_dispatch` holds BOTH
-    /// the per-VM `dispatch_lock` (the publish→call→clear span) and mlua's
-    /// internal `send`-feature VM lock on the calling thread. That is sound:
-    /// the ONLY code that ever acquires `dispatch_lock` or enters this VM is
-    /// `lua_dispatch` itself, and the host logging callback is contractually
-    /// forbidden from re-entering the runtime (`RuntimeBuilder::logger` /
-    /// `RuntimeConfig::log` callback contract), so no path from inside the
-    /// callback can reach `lua_dispatch` — or any other loader entry point —
-    /// and therefore none can attempt to take either lock. The general
-    /// "never log under a lock guard" rule exists to keep host callbacks
-    /// lock-free from the RUNTIME's locks; no runtime lock is held across a
-    /// guest dispatch, so that invariant holds here too.
-    fn register_log(lua: &Lua, bundle: &str, logger: LoggerHandle) -> Result<(), LoaderError> {
-        let log_fn: Function = lua
-            .create_function(
-                move |_lua_ctx: &Lua,
-                      (level, scope, message): (i64, mlua::String, mlua::String)|
-                      -> mlua::Result<()> {
-                    let log_level: LogLevel = u32::try_from(level)
-                        .ok()
-                        .and_then(LogLevel::from_u32)
-                        .unwrap_or(LogLevel::Error);
-                    let scope_str: String = scope.to_string_lossy();
-                    let message_str: String = message.to_string_lossy();
-                    logger.log(log_level, &scope_str, || message_str);
-                    Ok(())
-                },
-            )
-            .map_err(|e: mlua::Error| LoaderError::InitFailed {
-                bundle: bundle.to_owned(),
-                error: format!("Lua VM init failed: _polyplug_log creation failed: {e}"),
-            })?;
-
-        lua.globals()
-            .set("_polyplug_log", log_fn)
-            .map_err(|e: mlua::Error| LoaderError::InitFailed {
-                bundle: bundle.to_owned(),
-                error: format!("Lua VM init failed: _polyplug_log set failed: {e}"),
-            })
+            },
+        )
+        .map_err(|e: mlua::Error| LoaderError::InitFailed {
+            bundle: bundle.to_owned(),
+            error: format!("Lua VM init failed: arena allocator creation failed: {e}"),
+        })
     }
 
     /// Resolve a [`BundleSource`] into the Lua source text plus the contextual
@@ -909,29 +843,25 @@ impl LuaLoader {
         // The interface already has the runtime pointer set.
         let host_interface: *const HostApi = runtime.as_context_ptr();
 
-        // Register the per-call arena allocator bridge so the guest can route its
-        // return-value buffers through the host's CallArena (zero host allocations
-        // after warmup). Must be registered before dispatch; init runs first but
-        // dispatch happens later, so registering here is sufficient.
-        Self::register_arena_alloc(&lua, &bundle_name, host_interface)?;
-
-        // Register the guest logging bridge so plugin code (and the
-        // polyplug_guest.lua `log` helper) can route diagnostics into the
-        // host's logging funnel. The captured handle is an instance-owned copy
-        // of the runtime's logger — per-VM state, no statics (Rule 12).
-        Self::register_log(&lua, &bundle_name, runtime.logger())?;
+        // Build the per-call arena allocator so the guest can route its return-value
+        // buffers through the host's CallArena (zero host allocations after warmup).
+        // It is threaded as a dispatch ARGUMENT (stored on each contract's
+        // LuaLoaderData, cloned below) rather than injected as a VM global — Rule 12.
+        // The guest log helper calls `HostApi.log` directly through the threaded host
+        // pointer, so there is no `_polyplug_log` bridge to register.
+        let arena_alloc: Function = Self::build_arena_alloc(&lua, &bundle_name, host_interface)?;
 
         // Open the init-bundle window for BOTH the init call and the registration
         // loop below: `host_register_guest_contract` attributes each registration to
         // the bundle id on top of this stack, and the `register_guest_contract` calls
-        // happen later in this function (after init only populates _G._polyplug_handlers).
+        // happen later in this function (after init returns the registrations table).
         // The guard's Drop pops once on every exit path — including the `?`
         // early-returns between here and the end of the registration loop — so the
         // stack never leaks an entry and registrations carry the real bundle id.
         let _init_window: InitBundleGuard<'_> = InitBundleGuard::enter(runtime, bundle_id);
 
-        // Call polyplug_init — it populates _G._polyplug_handlers.
-        // New signature: polyplug_init(host, ctx) - self-passing pattern.
+        // Call polyplug_init — it RETURNS (registrations, abi_error).
+        // Signature: polyplug_init(host, ctx) - self-passing pattern.
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
         let bundle_path_static: &'static str = Box::leak(bundle_dir_str.clone().into_boxed_str());
         let ctx: polyplug_abi::BundleInitContext = polyplug_abi::BundleInitContext {
@@ -946,30 +876,28 @@ impl LuaLoader {
         // as the first parameter to each HostApi function call.
         let host_interface_i64: i64 = host_interface as usize as i64;
         let ctx_ptr: i64 = &ctx as *const polyplug_abi::BundleInitContext as i64;
-        let init_result: Result<Value, mlua::Error> =
-            init_fn.call::<Value>((host_interface_i64, ctx_ptr));
 
-        let init_value: Value = init_result.map_err(|e: mlua::Error| LoaderError::InitFailed {
-            bundle: bundle_name.clone(),
-            error: format!("Lua polyplug_init raised error: {}", e),
-        })?;
+        // polyplug_init RETURNS (registrations, abi_error): the per-contract handler
+        // table plus the canonical AbiError `{ code, message }`. Nothing is deposited
+        // into any global/module namespace (Rule 12) — the loader consumes both
+        // return values directly. The registrations shape is per-contract:
+        // `registrations[contract_name] = { contract_version, plugin_name, factory,
+        // functions }`; the loop below registers EVERY entry.
+        let (handlers, abi_error): (Table, Table) = init_fn
+            .call::<(Table, Table)>((host_interface_i64, ctx_ptr))
+            .map_err(|e: mlua::Error| LoaderError::InitFailed {
+                bundle: bundle_name.clone(),
+                error: format!("Lua polyplug_init failed: {}", e),
+            })?;
 
-        // Honor the AbiError returned by polyplug_init. Generated guests return
-        // the canonical AbiError shape — a `{ code, message }` table (Ok = 0).
-        // Handler-table-only fixtures return nothing (nil), treated as success;
-        // a bare numeric code is also accepted for backward tolerance. A non-zero
-        // code means the guest refused to initialize — fail the load, surfacing
-        // the guest's own `message` when present rather than just the code.
-        let (init_code, init_message): (u32, Option<String>) = match &init_value {
-            Value::Integer(code) => (*code as u32, None),
-            Value::Number(code) => (*code as u32, None),
-            Value::Table(t) => (
-                t.get::<u32>("code").unwrap_or(0_u32),
-                t.get::<String>("message").ok().filter(|s| !s.is_empty()),
-            ),
-            _ => (0_u32, None),
-        };
+        // Honor the AbiError. A non-Ok code means the guest refused to initialize —
+        // fail the load, surfacing the guest's own `message` when present.
+        let init_code: u32 = abi_error.get::<u32>("code").unwrap_or(0_u32);
         if init_code != AbiErrorCode::Ok as u32 {
+            let init_message: Option<String> = abi_error
+                .get::<String>("message")
+                .ok()
+                .filter(|s: &String| !s.is_empty());
             let error: String = match init_message {
                 Some(msg) => msg,
                 None => format!("Lua polyplug_init returned error code {}", init_code),
@@ -979,21 +907,6 @@ impl LuaLoader {
                 error,
             });
         }
-
-        // Read the handler table that polyplug_init populated. Its shape is
-        // per-contract: `_polyplug_handlers[contract_name] = { contract_version,
-        // plugin_name, functions }`. Multi-contract bundles add one entry per
-        // contract; the loop below registers EVERY entry.
-        let handlers: Table =
-            lua.globals()
-                .get::<Table>("_polyplug_handlers")
-                .map_err(|_: mlua::Error| LoaderError::InitFailed {
-                    bundle: bundle_name.clone(),
-                    error: format!(
-                        "Lua plugin missing _polyplug_handlers: bundle={}",
-                        bundle_name
-                    ),
-                })?;
 
         // Iterate every contract entry and register each one. The Lua VM is shared
         // across all contracts in this bundle: each per-contract LuaLoaderData holds
@@ -1107,6 +1020,7 @@ impl LuaLoader {
             let loader_data: LuaVm = LuaVm(Box::new(LuaLoaderData {
                 _vm: lua.clone(),
                 functions: lua_functions,
+                arena_alloc: arena_alloc.clone(),
                 factory,
                 default_impl,
                 instances: Mutex::new(HashMap::new()),
@@ -1221,7 +1135,7 @@ impl LuaLoader {
         if registered == 0 {
             return Err(LoaderError::InitFailed {
                 bundle: bundle_name,
-                error: "Lua plugin registered no contracts: _polyplug_handlers is empty".to_owned(),
+                error: "Lua plugin registered no contracts: polyplug_init returned an empty registrations table".to_owned(),
             });
         }
 
@@ -1351,9 +1265,9 @@ mod tests {
     /// default impl and any per-instance impls.
     fn unload_plugin_script() -> &'static [u8] {
         br#"
-local function impl_noop(_instance, _a, _o) end
+local function impl_noop(_instance, _a, _o, _arena_ptr, _arena_alloc) end
 function polyplug_init(_host, _ctx)
-    _G._polyplug_handlers = {
+    local registrations = {
         ["test.unload"] = {
             contract_version = 1,
             plugin_name      = "test-unload",
@@ -1361,6 +1275,7 @@ function polyplug_init(_host, _ctx)
             functions        = { [0] = impl_noop },
         },
     }
+    return registrations, { code = 0 }
 end
 "#
     }
@@ -1618,9 +1533,13 @@ end
                 vm.create_table().expect("create default impl table"),
             ))
             .expect("register default impl");
+        let arena_alloc: Function =
+            LuaLoader::build_arena_alloc(&vm, "make_loader_data", core::ptr::null())
+                .expect("build arena allocator");
         let boxed: Box<LuaLoaderData> = Box::new(LuaLoaderData {
             _vm: vm,
             functions,
+            arena_alloc,
             factory,
             default_impl,
             instances: Mutex::new(HashMap::new()),
@@ -1891,47 +1810,42 @@ end
         );
     }
 
-    /// Concurrency regression for the racy arena publish→call→clear span in
-    /// `lua_dispatch`.
+    /// Concurrency property of the threaded-arena dispatch: two threads dispatching
+    /// into the SAME VM with DISTINCT per-call arenas keep their arena-backed returns
+    /// isolated.
     ///
-    /// `lua_dispatch` publishes the per-call arena as the `_polyplug_arena` VM
-    /// global, calls the guest (which allocates its return buffer through the
-    /// `_polyplug_arena_alloc` bridge reading that global), then clears the global
-    /// to 0 — THREE separate mlua operations. mlua's internal `send` lock serializes
-    /// each individual operation but NOT the sequence, so the lock is briefly free
-    /// between A's publish and A's call, and between A's call and A's clear. In
-    /// those gaps a concurrent dispatch B can publish its OWN arena (so A's guest
-    /// allocates from B's arena) or clear the global to 0 mid-span (so A's guest
-    /// falls back to host->alloc). Both corrupt A's arena-backed return.
-    ///
-    /// This test hammers two threads dispatching into the SAME VM with DISTINCT
-    /// per-thread arenas for many iterations. Each guest fn allocates from the
-    /// bridge and reports the address; the Rust side verifies the address lands in
-    /// the buffer of the arena THAT THREAD dispatched with. A single misattributed
-    /// allocation (the bug) lands in the other thread's buffer or is null, failing
-    /// the per-iteration assertion. With the per-VM `dispatch_lock` holding the
-    /// whole publish→call→clear span atomic, every allocation is correctly
-    /// attributed. The two buffers are deliberately disjoint so a cross-arena
-    /// allocation is unambiguously detectable.
+    /// The per-call arena pointer and its allocator are threaded as explicit
+    /// arguments of `lua_dispatch` (no `_polyplug_arena` VM global), so each call
+    /// carries its own arena on its own frame and a concurrent dispatch can never
+    /// perturb it. This test hammers two threads dispatching into the same VM with
+    /// distinct per-thread arenas for many iterations; each guest fn allocates from
+    /// the threaded `arena_alloc` (using the threaded arena pointer) and reports the
+    /// address, and the Rust side verifies the address lands in the buffer of the
+    /// arena THAT THREAD dispatched with. A single misattributed allocation lands in
+    /// the other thread's buffer or is null, failing the per-iteration assertion. The
+    /// two buffers are deliberately disjoint so a cross-arena allocation is
+    /// unambiguously detectable.
     #[test]
     fn lua_dispatch_concurrent_arena_returns_stay_isolated() {
         // SAFETY: test-only VM; no untrusted scripts are executed here.
         let lua: Lua = unsafe { Lua::unsafe_new() };
 
-        // Register the production arena bridge with a null host: with a real arena
-        // active the bridge bumps the arena; if the global is wrongly cleared to 0
-        // the bridge falls back to host->alloc, which with a null host yields 0.
-        LuaLoader::register_arena_alloc(&lua, "concurrent-arena-test", core::ptr::null())
-            .expect("register_arena_alloc must succeed");
-
-        // Both worker functions are identical: allocate 64 bytes via the bridge and
-        // write the returned address into the out slot. fn_id selects which thread.
+        // Both worker functions are identical: allocate 64 bytes from the threaded
+        // arena allocator (the dispatch passes `arena_alloc` and `arena_ptr` as the
+        // 5th and 4th arguments) and write the returned address into the out slot.
+        // fn_id selects which thread.
         let make_alloc_fn = |lua: &Lua| -> Function {
             lua.create_function(
-                |lua_ctx: &Lua, (_instance, _a, out_ptr): (Value, i64, i64)| -> mlua::Result<()> {
-                    let alloc: Function =
-                        lua_ctx.globals().get::<Function>("_polyplug_arena_alloc")?;
-                    let addr: i64 = alloc.call::<i64>(64_u32)?;
+                |_lua_ctx: &Lua,
+                 (_instance, _a, out_ptr, arena_ptr, arena_alloc): (
+                    Value,
+                    i64,
+                    i64,
+                    i64,
+                    Function,
+                )|
+                 -> mlua::Result<()> {
+                    let addr: i64 = arena_alloc.call::<i64>((64_u32, arena_ptr))?;
                     let out: *mut i64 = out_ptr as usize as *mut i64;
                     // SAFETY: out_ptr is a valid local i64 supplied by the test.
                     unsafe { *out = addr };
@@ -1999,7 +1913,7 @@ end
                 let p: usize = out as usize;
                 if !(p >= a_lo && p < a_hi) {
                     return Err(format!(
-                        "A iter {i}: allocation {p:#x} escaped arena A buffer [{a_lo:#x}, {a_hi:#x}) — racy publish/clear misattributed it"
+                        "A iter {i}: allocation {p:#x} escaped arena A buffer [{a_lo:#x}, {a_hi:#x}) — threaded arena was misattributed"
                     ));
                 }
             }
@@ -2036,7 +1950,7 @@ end
                 let p: usize = out as usize;
                 if !(p >= b_lo && p < b_hi) {
                     return Err(format!(
-                        "B iter {i}: allocation {p:#x} escaped arena B buffer [{b_lo:#x}, {b_hi:#x}) — racy publish/clear misattributed it"
+                        "B iter {i}: allocation {p:#x} escaped arena B buffer [{b_lo:#x}, {b_hi:#x}) — threaded arena was misattributed"
                     ));
                 }
             }

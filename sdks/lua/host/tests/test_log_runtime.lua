@@ -7,7 +7,7 @@
 -- `polyplug_lua_log_trampoline` and a PolyplugLuaLogBridge carried in
 -- log_user_data. This test drives the WHOLE delivery chain on a real runtime:
 --
---   lua guest VM (_polyplug_log) -> loader log bridge -> runtime logging
+--   lua guest VM (pg.log -> HostApi.log) -> runtime logging
 --   funnel (LoggerHandle) -> RuntimeConfig.log = polyplug_lua_log_trampoline
 --   -> PolyplugLuaLogBridge -> LuaJIT scalar callback -> user Lua function
 --
@@ -64,8 +64,9 @@ local polyplug = require("polyplug.runtime")
 local lua_loader = require("polyplug.loaders.lua")
 
 -- ─── Fixture: minimal lua guest bundle that logs at init time ────────────────
--- The polyplug_lua loader injects `_polyplug_log(level, scope, message)` into
--- every plugin VM; it delivers straight into the runtime's logging funnel
+-- The guest calls `pg.log(host, level, scope, message)`, which invokes
+-- `HostApi.log` directly through the threaded host pointer (no `_polyplug_log`
+-- global — Rule 12); it delivers straight into the runtime's logging funnel
 -- (the same sink as every runtime diagnostic). The staged plugin emits one
 -- Warn record during polyplug_init, then registers a no-op contract.
 local bundle_name = "log_test_plugin"
@@ -93,19 +94,22 @@ manifest_out:close()
 
 local bundle_out = assert(io.open(tmp_dir .. "/bundle.lua", "w"))
 bundle_out:write([=[
+local pg = require("polyplug_guest")
 local function make_log_test(_host) return {} end
 local function impl_noop(_instance, _args, _out) end
 function polyplug_init(_host, _ctx)
     -- Warn (2): passes the default log_max_level so the host callback sees it.
-    _polyplug_log(2, "guest.log_test", "lua guest warn via funnel")
-    _G._polyplug_handlers = {
+    -- pg.log calls HostApi.log directly through the threaded host pointer (no
+    -- loader-injected _polyplug_log global — Rule 12).
+    pg.log(_host, 2, "guest.log_test", "lua guest warn via funnel")
+    return {
         ["log.test"] = {
             contract_version = 1,
             plugin_name      = "log-test",
             factory          = make_log_test,
             functions        = { [0] = impl_noop },
         },
-    }
+    }, { code = 0 }
 end
 ]=])
 bundle_out:close()
