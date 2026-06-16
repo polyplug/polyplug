@@ -205,9 +205,9 @@ fn test_interface_factory_thunks_have_panic_safety() {
         "Thunks must use std::panic::catch_unwind for panic safety:\n{interfaces}"
     );
 
-    // Each thunk must use AssertUnwindSafe
+    // Each thunk must use AssertUnwindSafe (core re-export; std_instead_of_core lint)
     assert!(
-        interfaces.contains("std::panic::AssertUnwindSafe"),
+        interfaces.contains("core::panic::AssertUnwindSafe"),
         "Thunks must use AssertUnwindSafe wrapper:\n{interfaces}"
     );
 

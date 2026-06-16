@@ -74,6 +74,8 @@ impl PipelineValidatorContractPeer {
         let host: *const HostApi = host.as_ptr();
         // SAFETY: host is checked for null via as_ref() which returns None on null.
         let iface_api: &HostApi = unsafe { host.as_ref()? };
+        // SAFETY: iface_api is the reborrowed non-null HostApi; find_guest_contract is an
+        // ABI function pointer safe to call with a valid host (returns a zero handle if absent).
         let handle: GuestContractHandle =
             unsafe { (iface_api.find_guest_contract)(host, 0x45173A959EEC57C5_u64, 1_u32) };
         // SAFETY: handle is the value returned by find_guest_contract; resolve_guest_contract
@@ -85,10 +87,10 @@ impl PipelineValidatorContractPeer {
         }
         // A null instance.data is valid: stateless contracts return a null
         // handle from create_instance and use it as an opaque dispatch token.
-        // SAFETY: interface is non-null (checked above) and points to a valid
-        // GuestContractInterface produced by resolve_guest_contract.
         // Route creation through the host so the runtime tracks the instance.
         let mut created: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is non-null (checked above) and points to a valid
+        // GuestContractInterface produced by resolve_guest_contract.
         unsafe {
             (iface_api.create_guest_instance)(host, interface, core::ptr::null(), &mut created);
         };
@@ -183,14 +185,16 @@ impl Drop for PipelineValidatorContractPeer {
         // Route destruction through the host so the runtime drops the instance from
         // its live-instance accounting. A null host pointer means there is no
         // runtime to mediate the lifecycle, so skip the destroy.
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is
+        // null, so the borrow only occurs for a valid HostApi.
         let host_api: &HostApi = match unsafe { self.host.as_ref() } {
             Some(api) => api,
             None => return,
         };
-        // SAFETY: instance was created by create_guest_instance on the resolved interface.
-        // The interface pointer is stored for the lifetime of this wrapper and is valid.
         // We guard on instance.data to skip the call for stateless (null-data) contracts.
         if !self.instance.data.is_null() {
+            // SAFETY: instance was created by create_guest_instance on the resolved interface.
+            // The interface pointer is stored for the lifetime of this wrapper and is valid.
             unsafe {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }

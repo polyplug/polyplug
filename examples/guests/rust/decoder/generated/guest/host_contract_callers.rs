@@ -66,6 +66,8 @@ impl HostLoggerCaller {
         let host: &HostApi = unsafe { &*host };
         // Resolve the contract vtable. This is the source of dispatch metadata
         // (dispatch_type, function_count, functions) — NOT the instance.
+        // SAFETY: `host` is the reborrowed non-null HostApi; resolve_host_contract_interface
+        // is an ABI function pointer safe to call with a valid host (returns null if absent).
         let interface: *const HostContractInterface = unsafe {
             (host.resolve_host_contract_interface)(host, 0xF53EB5F2845853BB_u64, min_version)
         };
@@ -74,6 +76,8 @@ impl HostLoggerCaller {
         }
         // Obtain the per-instance state. Native dispatch functions receive this
         // pointer as their first argument; the host thunk dereferences it.
+        // SAFETY: `host` is the reborrowed non-null HostApi; get_host_contract is an ABI
+        // function pointer safe to call with a valid host (null-data instance if absent).
         let instance: HostContractInstance =
             unsafe { (host.get_host_contract)(host, 0xF53EB5F2845853BB_u64, min_version) };
         Some(HostLoggerCaller {

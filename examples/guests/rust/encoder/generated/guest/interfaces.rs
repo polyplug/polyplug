@@ -93,7 +93,7 @@ unsafe extern "C" fn ENCODER_create_instance(
     // for create_instance; it stays valid for the runtime's lifetime.
     let host_ctx: HostContext = unsafe { HostContext::new(host) };
     let implementation: Box<dyn PipelineEncoderGuestContract> =
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
             // SAFETY: the author defines `polyplug_create_encoder` in the plugin crate
             // with `#[unsafe(no_mangle)]`; same-crate Rust ABI, signature enforced
             // by the extern declaration above.
@@ -155,7 +155,7 @@ extern "C" fn encoder_encode_abi(
         // SAFETY: instance.data was produced by create_instance via Box::into_raw
         // and stays valid until destroy_instance; the host never mutates it.
         let state: &EncoderPluginState = unsafe { &*(instance.data as *const EncoderPluginState) };
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
             let impl_ref: &dyn PipelineEncoderGuestContract = state.implementation.as_ref();
             if args.is_null() {
                 return AbiError {
@@ -175,7 +175,7 @@ extern "C" fn encoder_encode_abi(
                 Ok(val) => {
                     // SAFETY: out is a valid *mut StringView per ABI contract.
                     unsafe {
-                        std::ptr::write(out as *mut StringView, val);
+                        core::ptr::write(out as *mut StringView, val);
                     }
                     abi_error_ok()
                 }
@@ -186,8 +186,8 @@ extern "C" fn encoder_encode_abi(
             Err(_) => AbiError::panic_caught(),
         }
     })();
-    // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.
     if !out_err.is_null() {
+        // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.
         unsafe {
             out_err.write(__result_err);
         }

@@ -131,8 +131,8 @@ fn sv_to_owned(sv: StringView) -> Result<String, String> {
     // valid UTF-8 byte run owned by the host allocator for the duration of this
     // call. We copy it out immediately into an owned String and never retain the
     // borrow past this function.
-    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(sv.ptr, sv.len) };
-    let text: &str = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+    let bytes: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
+    let text: &str = core::str::from_utf8(bytes).map_err(|e| e.to_string())?;
     Ok(text.to_owned())
 }
 

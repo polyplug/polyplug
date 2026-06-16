@@ -72,11 +72,11 @@ pub unsafe extern "C" fn polyplug_init(
             patch: 0,
         },
     };
-    // SAFETY: desc and interface are 'static; &mut err is a valid out-param.
     let mut err_ENCODER: AbiError = AbiError {
         code: AbiErrorCode::Ok as u32,
         message: StringView::null(),
     };
+    // SAFETY: desc and interface are 'static; &mut err is a valid out-param.
     unsafe {
         (host.register_guest_contract)(
             host,

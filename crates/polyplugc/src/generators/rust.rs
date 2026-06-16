@@ -867,7 +867,7 @@ fn emit_guest_instance_machinery(
          \x20   // for create_instance; it stays valid for the runtime's lifetime.\n\
          \x20   let host_ctx: HostContext = unsafe {{ HostContext::new(host) }};\n\
          \x20   let implementation: Box<dyn {trait_name}> =\n\
-         \x20       match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{\n\
+         \x20       match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {{\n\
          \x20           // SAFETY: the author defines `{factory_name}` in the plugin crate\n\
          \x20           // with `#[unsafe(no_mangle)]`; same-crate Rust ABI, signature enforced\n\
          \x20           // by the extern declaration above.\n\
@@ -965,7 +965,7 @@ fn generate_guest_abi_wrapper(
          \x20   // and stays valid until destroy_instance; the host never mutates it.\n\
          \x20   let state: &{state_struct} = unsafe {{ &*(instance.data as *const {state_struct}) }};\n"
     ));
-    out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
+    out.push_str("    match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {\n");
     out.push_str(&format!(
         "        let impl_ref: &dyn {trait_name} = state.implementation.as_ref();\n"
     ));
@@ -995,7 +995,7 @@ fn generate_guest_abi_wrapper(
             "                // SAFETY: out is a valid *mut {ret_ty} per ABI contract.\n"
         ));
         out.push_str(&format!(
-            "                unsafe {{ std::ptr::write(out as *mut {ret_ty}, val); }}\n"
+            "                unsafe {{ core::ptr::write(out as *mut {ret_ty}, val); }}\n"
         ));
         out.push_str("                abi_error_ok()\n");
         out.push_str("            }\n");
@@ -1013,10 +1013,12 @@ fn generate_guest_abi_wrapper(
     out.push_str("        Err(_) => AbiError::panic_caught(),\n");
     out.push_str("    }\n");
     out.push_str("    })();\n");
+    out.push_str("    if !out_err.is_null() {\n");
     out.push_str(
-        "    // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.\n",
+        "        // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.\n",
     );
-    out.push_str("    if !out_err.is_null() { unsafe { out_err.write(__result_err); } }\n");
+    out.push_str("        unsafe { out_err.write(__result_err); }\n");
+    out.push_str("    }\n");
     out.push_str("}\n\n");
 
     Ok(())
@@ -1179,12 +1181,12 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "        version: Version {{ major: {version_major}, minor: {version_minor}, patch: 0 }},\n"
             ));
             out.push_str("    };\n");
-            out.push_str(
-                "    // SAFETY: desc and interface are 'static; &mut err is a valid out-param.\n",
-            );
             out.push_str(&format!(
                 "    let mut err_{plugin_upper}: AbiError = AbiError {{ code: AbiErrorCode::Ok as u32, message: StringView::null() }};\n"
             ));
+            out.push_str(
+                "    // SAFETY: desc and interface are 'static; &mut err is a valid out-param.\n",
+            );
             out.push_str("    unsafe {\n");
             out.push_str(&format!(
                 "        (host.register_guest_contract)(host, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_INTERFACE as *const GuestContractInterface, &mut err_{plugin_upper});\n"
@@ -1220,10 +1222,10 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "        version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"
             ));
             out.push_str("    };\n");
+            out.push_str(&format!("    let mut err_{upper}: AbiError = AbiError {{ code: AbiErrorCode::Ok as u32, message: StringView::null() }};\n"));
             out.push_str(
                 "    // SAFETY: desc and interface are 'static; &mut err is a valid out-param.\n",
             );
-            out.push_str(&format!("    let mut err_{upper}: AbiError = AbiError {{ code: AbiErrorCode::Ok as u32, message: StringView::null() }};\n"));
             out.push_str("    unsafe {\n");
             out.push_str(&format!(
                 "        (host.register_guest_contract)(host, &desc_{upper} as *const PluginDescriptor, &{upper}_INTERFACE as *const GuestContractInterface, &mut err_{upper});\n"
@@ -1396,6 +1398,10 @@ fn generate_host_contract_caller(
         "    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {\n",
     );
     out.push_str("        // Resolve the interface from the handle via HostApi method\n");
+    out.push_str("        // SAFETY: host is reborrowed via as_ref() (returns None if null); resolve_guest_contract\n");
+    out.push_str(
+        "        // is an ABI function pointer safe to call with a valid host and any handle.\n",
+    );
     out.push_str("        let interface: *const GuestContractInterface = unsafe {\n");
     out.push_str("            let iface: &HostApi = host.as_ref()?;\n");
     out.push_str("            (iface.resolve_guest_contract)(host, handle)\n");
@@ -1413,6 +1419,8 @@ fn generate_host_contract_caller(
     out.push_str(
         "        let mut instance: GuestContractInstance = GuestContractInstance::null();\n",
     );
+    out.push_str("        // SAFETY: host is reborrowed via as_ref() (returns None if null); create_guest_instance\n");
+    out.push_str("        // is an ABI function pointer that writes the new instance through the out-param.\n");
     out.push_str("        unsafe {\n");
     out.push_str("            let host_api: &HostApi = host.as_ref()?;\n");
     out.push_str(
@@ -1451,11 +1459,14 @@ fn generate_host_contract_caller(
     );
     out.push_str("        // accounting stays accurate. If the host pointer is null there is no\n");
     out.push_str("        // runtime to mediate the lifecycle, so leave the instance untouched.\n");
+    out.push_str("        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.\n");
     out.push_str("        let host_api: &HostApi = match unsafe { self.host.as_ref() } {\n");
     out.push_str("            Some(api) => api,\n");
     out.push_str("            None => return,\n");
     out.push_str("        };\n");
     out.push_str("        if !self.instance.data.is_null() {\n");
+    out.push_str("            // SAFETY: instance was created by create_guest_instance on this interface and is\n");
+    out.push_str("            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.\n");
     out.push_str("            unsafe {\n");
     out.push_str(
         "                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);\n",
@@ -1465,6 +1476,8 @@ fn generate_host_contract_caller(
     out.push_str(
         "        let mut new_instance: GuestContractInstance = GuestContractInstance::null();\n",
     );
+    out.push_str("        // SAFETY: interface is valid for this wrapper; create_guest_instance writes the new\n");
+    out.push_str("        // instance through the out-param.\n");
     out.push_str("        unsafe {\n");
     out.push_str(
         "            (host_api.create_guest_instance)(self.host, self.interface, core::ptr::null(), &mut new_instance);\n",
@@ -1495,15 +1508,18 @@ fn generate_host_contract_caller(
         "        // from its live-instance accounting. A null host pointer means there is\n",
     );
     out.push_str("        // no runtime to mediate the lifecycle, so skip the destroy.\n");
+    out.push_str("        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.\n");
     out.push_str("        let host_api: &HostApi = match unsafe { self.host.as_ref() } {\n");
     out.push_str("            Some(api) => api,\n");
     out.push_str("            None => return,\n");
     out.push_str("        };\n");
-    out.push_str(
-        "        // SAFETY: instance was created by create_guest_instance and is valid.\n",
-    );
-    out.push_str("        // The interface pointer is stored for the lifetime of this wrapper.\n");
     out.push_str("        if !self.instance.data.is_null() {\n");
+    out.push_str(
+        "            // SAFETY: instance was created by create_guest_instance and is valid.\n",
+    );
+    out.push_str(
+        "            // The interface pointer is stored for the lifetime of this wrapper.\n",
+    );
     out.push_str("            unsafe {\n");
     out.push_str(
         "                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);\n",
@@ -2249,7 +2265,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     ));
     out.push_str(&format!("        singleton: {singleton},\n"));
     out.push_str("        dispatch_type: DispatchType::Native,\n");
-    out.push_str("        runtime: std::ptr::null_mut(),\n");
+    out.push_str("        runtime: core::ptr::null_mut(),\n");
     out.push_str("        user_data: impl_ptr as *mut c_void,\n");
     out.push_str(&format!("        create_instance: {create_stub_name},\n"));
     out.push_str(&format!("        destroy_instance: {destroy_stub_name},\n"));
@@ -2355,7 +2371,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     ));
     out.push_str(&format!("        singleton: {singleton},\n"));
     out.push_str("        dispatch_type: DispatchType::VirtualMachine,\n");
-    out.push_str("        runtime: std::ptr::null_mut(),\n");
+    out.push_str("        runtime: core::ptr::null_mut(),\n");
     out.push_str("        user_data: bridge_data,\n");
     out.push_str(&format!(
         "        create_instance: {vm_create_stub_name},\n"
@@ -2400,7 +2416,7 @@ fn generate_host_thunk(
 
     // Panic safety wrapper. The result AbiError is computed, then written through
     // the `out_err` out-param per the out-param ABI.
-    out.push_str("        let __thunk_err: AbiError = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
+    out.push_str("        let __thunk_err: AbiError = match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {\n");
 
     // Cast impl_ptr to trait reference
     // SAFETY: impl_ptr is a pointer to a leaked Box<*const dyn Trait>.
@@ -2412,6 +2428,12 @@ fn generate_host_thunk(
     out.push_str(&format!(
         "            let fat_ptr: *const *const dyn {trait_name} = impl_ptr as *const *const dyn {trait_name};\n"
     ));
+    out.push_str(
+        "            // SAFETY: impl_ptr came from Box::into_raw(Box::new(fat_ptr)); the wrapper Box is leaked\n",
+    );
+    out.push_str(
+        "            // for the program's lifetime and the inner fat pointer has a valid vtable.\n",
+    );
     out.push_str(&format!(
         "            let impl_ref: &dyn {trait_name} = unsafe {{ &**fat_ptr }};\n"
     ));
@@ -2436,7 +2458,7 @@ fn generate_host_thunk(
             "            // SAFETY: out is a valid *mut {ret_ty} per ABI contract.\n"
         ));
         out.push_str(&format!(
-            "            unsafe {{ std::ptr::write(out as *mut {ret_ty}, result); }}\n"
+            "            unsafe {{ core::ptr::write(out as *mut {ret_ty}, result); }}\n"
         ));
     } else {
         out.push_str("            let _ = out;\n");
@@ -2454,10 +2476,12 @@ fn generate_host_thunk(
     ));
     out.push_str("            },\n");
     out.push_str("        };\n");
+    out.push_str("        if !out_err.is_null() {\n");
     out.push_str(
-        "        // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.\n",
+        "            // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.\n",
     );
-    out.push_str("        if !out_err.is_null() { unsafe { out_err.write(__thunk_err); } }\n");
+    out.push_str("            unsafe { out_err.write(__thunk_err); }\n");
+    out.push_str("        }\n");
     out.push_str("    }\n\n");
 }
 
@@ -2749,6 +2773,8 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
         "        // Resolve the contract vtable. This is the source of dispatch metadata\n",
     );
     out.push_str("        // (dispatch_type, function_count, functions) — NOT the instance.\n");
+    out.push_str("        // SAFETY: `host` is the reborrowed non-null HostApi; resolve_host_contract_interface\n");
+    out.push_str("        // is an ABI function pointer safe to call with a valid host (returns null if absent).\n");
     out.push_str("        let interface: *const HostContractInterface = unsafe {\n");
     out.push_str(&format!(
         "            (host.resolve_host_contract_interface)(host, 0x{:016X}_u64, min_version)\n",
@@ -2762,6 +2788,8 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
         "        // Obtain the per-instance state. Native dispatch functions receive this\n",
     );
     out.push_str("        // pointer as their first argument; the host thunk dereferences it.\n");
+    out.push_str("        // SAFETY: `host` is the reborrowed non-null HostApi; get_host_contract is an ABI\n");
+    out.push_str("        // function pointer safe to call with a valid host (null-data instance if absent).\n");
     out.push_str("        let instance: HostContractInstance = unsafe {\n");
     out.push_str(&format!(
         "            (host.get_host_contract)(host, 0x{:016X}_u64, min_version)\n",
@@ -3322,6 +3350,8 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
         "        // SAFETY: host is checked for null via as_ref() which returns None on null.\n",
     );
     out.push_str("        let iface_api: &HostApi = unsafe { host.as_ref()? };\n");
+    out.push_str("        // SAFETY: iface_api is the reborrowed non-null HostApi; find_guest_contract is an\n");
+    out.push_str("        // ABI function pointer safe to call with a valid host (returns a zero handle if absent).\n");
     out.push_str(&format!(
         "        let handle: GuestContractHandle = unsafe {{\n\
          \x20           (iface_api.find_guest_contract)(host, 0x{:016X}_u64, {min_version}_u32)\n\
@@ -3343,15 +3373,15 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
         "        // handle from create_instance and use it as an opaque dispatch token.\n",
     );
     out.push_str(
-        "        // SAFETY: interface is non-null (checked above) and points to a valid\n",
-    );
-    out.push_str("        // GuestContractInterface produced by resolve_guest_contract.\n");
-    out.push_str(
         "        // Route creation through the host so the runtime tracks the instance.\n",
     );
     out.push_str(
         "        let mut created: GuestContractInstance = GuestContractInstance::null();\n",
     );
+    out.push_str(
+        "        // SAFETY: interface is non-null (checked above) and points to a valid\n",
+    );
+    out.push_str("        // GuestContractInterface produced by resolve_guest_contract.\n");
     out.push_str("        unsafe {\n");
     out.push_str(
         "            (iface_api.create_guest_instance)(host, interface, core::ptr::null(), &mut created);\n",
@@ -3421,16 +3451,18 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
         "        // its live-instance accounting. A null host pointer means there is no\n",
     );
     out.push_str("        // runtime to mediate the lifecycle, so skip the destroy.\n");
+    out.push_str("        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is\n");
+    out.push_str("        // null, so the borrow only occurs for a valid HostApi.\n");
     out.push_str("        let host_api: &HostApi = match unsafe { self.host.as_ref() } {\n");
     out.push_str("            Some(api) => api,\n");
     out.push_str("            None => return,\n");
     out.push_str("        };\n");
-    out.push_str(
-        "        // SAFETY: instance was created by create_guest_instance on the resolved interface.\n",
-    );
-    out.push_str("        // The interface pointer is stored for the lifetime of this wrapper and is valid.\n");
     out.push_str("        // We guard on instance.data to skip the call for stateless (null-data) contracts.\n");
     out.push_str("        if !self.instance.data.is_null() {\n");
+    out.push_str(
+        "            // SAFETY: instance was created by create_guest_instance on the resolved interface.\n",
+    );
+    out.push_str("            // The interface pointer is stored for the lifetime of this wrapper and is valid.\n");
     out.push_str("            unsafe {\n");
     out.push_str(
         "                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);\n",

@@ -50,9 +50,11 @@ pub fn create_host_logger_interface(
         out_err: *mut AbiError,
     ) {
         let __thunk_err: AbiError =
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
                 let fat_ptr: *const *const dyn HostLogger =
                     impl_ptr as *const *const dyn HostLogger;
+                // SAFETY: impl_ptr came from Box::into_raw(Box::new(fat_ptr)); the wrapper Box is leaked
+                // for the program's lifetime and the inner fat pointer has a valid vtable.
                 let impl_ref: &dyn HostLogger = unsafe { &**fat_ptr };
                 // SAFETY: args is a valid *const StringView per ABI contract.
                 let message_sv: StringView = unsafe { *(args as *const StringView) };
@@ -68,8 +70,8 @@ pub fn create_host_logger_interface(
                     message: string_view_from_static(b"panic in host.logger::log"),
                 },
             };
-        // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.
         if !out_err.is_null() {
+            // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.
             unsafe {
                 out_err.write(__thunk_err);
             }
@@ -84,9 +86,11 @@ pub fn create_host_logger_interface(
         out_err: *mut AbiError,
     ) {
         let __thunk_err: AbiError =
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
                 let fat_ptr: *const *const dyn HostLogger =
                     impl_ptr as *const *const dyn HostLogger;
+                // SAFETY: impl_ptr came from Box::into_raw(Box::new(fat_ptr)); the wrapper Box is leaked
+                // for the program's lifetime and the inner fat pointer has a valid vtable.
                 let impl_ref: &dyn HostLogger = unsafe { &**fat_ptr };
                 // SAFETY: args is a valid *const HostLoggerLogWithLevelArgs per ABI contract.
                 let packed: &HostLoggerLogWithLevelArgs =
@@ -104,8 +108,8 @@ pub fn create_host_logger_interface(
                     message: string_view_from_static(b"panic in host.logger::log_with_level"),
                 },
             };
-        // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.
         if !out_err.is_null() {
+            // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.
             unsafe {
                 out_err.write(__thunk_err);
             }
@@ -155,7 +159,7 @@ pub fn create_host_logger_interface(
         },
         singleton: false,
         dispatch_type: DispatchType::Native,
-        runtime: std::ptr::null_mut(),
+        runtime: core::ptr::null_mut(),
         user_data: impl_ptr as *mut c_void,
         create_instance: host_logger_create_instance_stub,
         destroy_instance: host_logger_destroy_instance_stub,
@@ -229,7 +233,7 @@ pub fn create_host_logger_interface_vm(
         },
         singleton: false,
         dispatch_type: DispatchType::VirtualMachine,
-        runtime: std::ptr::null_mut(),
+        runtime: core::ptr::null_mut(),
         user_data: bridge_data,
         create_instance: host_logger_vm_create_instance_stub,
         destroy_instance: host_logger_vm_destroy_instance_stub,

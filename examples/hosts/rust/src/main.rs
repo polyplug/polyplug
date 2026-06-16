@@ -96,7 +96,7 @@ fn run() -> Result<(), String> {
         .register_host_contract(HOSTLOGGER_CONTRACT_ID, vtable)
         .map_err(|e| format!("failed to register host.logger contract: {e}"))?;
 
-    let scan: scanner::ScanResult = scanner::scan_dirs(std::slice::from_ref(&plugin_path));
+    let scan: scanner::ScanResult = scanner::scan_dirs(core::slice::from_ref(&plugin_path));
     for diagnostic in &scan.diagnostics {
         eprintln!("warning: {diagnostic}");
     }
@@ -127,8 +127,11 @@ fn run() -> Result<(), String> {
                 len: input.len(),
             })
             .map_err(|e| format!("decode failed: {}", e.code))?;
+        // SAFETY: result_sv was returned by the guest method on success; per the
+        // ABI its ptr is non-null and valid for `result_sv.len` bytes of
+        // host-allocated UTF-8 for the duration of this borrow.
         let result: &str = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(result_sv.ptr, result_sv.len))
+            core::str::from_utf8(core::slice::from_raw_parts(result_sv.ptr, result_sv.len))
         }
         .map_err(|e| e.to_string())?;
         println!("[decoder] decode(\"{}\") = \"{}\"", input, result);
@@ -144,8 +147,11 @@ fn run() -> Result<(), String> {
                 len: decoded.len(),
             })
             .map_err(|e| format!("transform failed: {}", e.code))?;
+        // SAFETY: result_sv was returned by the guest method on success; per the
+        // ABI its ptr is non-null and valid for `result_sv.len` bytes of
+        // host-allocated UTF-8 for the duration of this borrow.
         let result: &str = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(result_sv.ptr, result_sv.len))
+            core::str::from_utf8(core::slice::from_raw_parts(result_sv.ptr, result_sv.len))
         }
         .map_err(|e| e.to_string())?;
         println!("[transformer] transform(\"{}\") = \"{}\"", decoded, result);
@@ -161,8 +167,11 @@ fn run() -> Result<(), String> {
                 len: transformed.len(),
             })
             .map_err(|e| format!("encode failed: {}", e.code))?;
+        // SAFETY: result_sv was returned by the guest method on success; per the
+        // ABI its ptr is non-null and valid for `result_sv.len` bytes of
+        // host-allocated UTF-8 for the duration of this borrow.
         let result: &str = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(result_sv.ptr, result_sv.len))
+            core::str::from_utf8(core::slice::from_raw_parts(result_sv.ptr, result_sv.len))
         }
         .map_err(|e| e.to_string())?;
         println!("[encoder] encode(\"{}\") = \"{}\"", transformed, result);
@@ -177,8 +186,11 @@ fn run() -> Result<(), String> {
                 len: transformed.len(),
             })
             .map_err(|e| format!("report failed: {}", e.code))?;
+        // SAFETY: result_sv was returned by the guest method on success; per the
+        // ABI its ptr is non-null and valid for `result_sv.len` bytes of
+        // host-allocated UTF-8 for the duration of this borrow.
         let result: &str = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(result_sv.ptr, result_sv.len))
+            core::str::from_utf8(core::slice::from_raw_parts(result_sv.ptr, result_sv.len))
         }
         .map_err(|e| e.to_string())?;
         println!("[reporter] report(\"{}\") = \"{}\"", transformed, result);
@@ -193,8 +205,11 @@ fn run() -> Result<(), String> {
                 len: decoded.len(),
             })
             .map_err(|e| format!("validate failed: {}", e.code))?;
+        // SAFETY: result_sv was returned by the guest method on success; per the
+        // ABI its ptr is non-null and valid for `result_sv.len` bytes of
+        // host-allocated UTF-8 for the duration of this borrow.
         let result: &str = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(result_sv.ptr, result_sv.len))
+            core::str::from_utf8(core::slice::from_raw_parts(result_sv.ptr, result_sv.len))
         }
         .map_err(|e| e.to_string())?;
         println!("[validator] validate(\"{}\") = \"{}\"", decoded, result);
@@ -257,7 +272,7 @@ fn run() -> Result<(), String> {
             }
         }
         let elapsed_ns: u128 = start.elapsed().as_nanos();
-        if std::hint::black_box(hits) == iters {
+        if core::hint::black_box(hits) == iters {
             println!(
                 "HOSTCALL_NS={:.2} LANG=rust",
                 elapsed_ns as f64 / iters as f64

@@ -83,6 +83,8 @@ impl PipelineDecoderContract {
     /// - `None` if interface not found or `create_instance` failed
     pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
         // Resolve the interface from the handle via HostApi method
+        // SAFETY: host is reborrowed via as_ref() (returns None if null); resolve_guest_contract
+        // is an ABI function pointer safe to call with a valid host and any handle.
         let interface: *const GuestContractInterface = unsafe {
             let iface: &HostApi = host.as_ref()?;
             (iface.resolve_guest_contract)(host, handle)
@@ -94,6 +96,8 @@ impl PipelineDecoderContract {
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         let mut instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: host is reborrowed via as_ref() (returns None if null); create_guest_instance
+        // is an ABI function pointer that writes the new instance through the out-param.
         unsafe {
             let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
@@ -122,16 +126,21 @@ impl PipelineDecoderContract {
         // Route create/destroy through the host so the runtime's live-instance
         // accounting stays accurate. If the host pointer is null there is no
         // runtime to mediate the lifecycle, so leave the instance untouched.
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
         let host_api: &HostApi = match unsafe { self.host.as_ref() } {
             Some(api) => api,
             None => return,
         };
         if !self.instance.data.is_null() {
+            // SAFETY: instance was created by create_guest_instance on this interface and is
+            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
             unsafe {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
         let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is valid for this wrapper; create_guest_instance writes the new
+        // instance through the out-param.
         unsafe {
             (host_api.create_guest_instance)(
                 self.host,
@@ -233,13 +242,14 @@ impl Drop for PipelineDecoderContract {
         // Destroy instance via host-mediated lifecycle so the runtime drops it
         // from its live-instance accounting. A null host pointer means there is
         // no runtime to mediate the lifecycle, so skip the destroy.
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
         let host_api: &HostApi = match unsafe { self.host.as_ref() } {
             Some(api) => api,
             None => return,
         };
-        // SAFETY: instance was created by create_guest_instance and is valid.
-        // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
+            // SAFETY: instance was created by create_guest_instance and is valid.
+            // The interface pointer is stored for the lifetime of this wrapper.
             unsafe {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
@@ -287,6 +297,8 @@ impl DataTransformerContract {
     /// - `None` if interface not found or `create_instance` failed
     pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
         // Resolve the interface from the handle via HostApi method
+        // SAFETY: host is reborrowed via as_ref() (returns None if null); resolve_guest_contract
+        // is an ABI function pointer safe to call with a valid host and any handle.
         let interface: *const GuestContractInterface = unsafe {
             let iface: &HostApi = host.as_ref()?;
             (iface.resolve_guest_contract)(host, handle)
@@ -298,6 +310,8 @@ impl DataTransformerContract {
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         let mut instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: host is reborrowed via as_ref() (returns None if null); create_guest_instance
+        // is an ABI function pointer that writes the new instance through the out-param.
         unsafe {
             let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
@@ -326,16 +340,21 @@ impl DataTransformerContract {
         // Route create/destroy through the host so the runtime's live-instance
         // accounting stays accurate. If the host pointer is null there is no
         // runtime to mediate the lifecycle, so leave the instance untouched.
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
         let host_api: &HostApi = match unsafe { self.host.as_ref() } {
             Some(api) => api,
             None => return,
         };
         if !self.instance.data.is_null() {
+            // SAFETY: instance was created by create_guest_instance on this interface and is
+            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
             unsafe {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
         let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is valid for this wrapper; create_guest_instance writes the new
+        // instance through the out-param.
         unsafe {
             (host_api.create_guest_instance)(
                 self.host,
@@ -437,13 +456,14 @@ impl Drop for DataTransformerContract {
         // Destroy instance via host-mediated lifecycle so the runtime drops it
         // from its live-instance accounting. A null host pointer means there is
         // no runtime to mediate the lifecycle, so skip the destroy.
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
         let host_api: &HostApi = match unsafe { self.host.as_ref() } {
             Some(api) => api,
             None => return,
         };
-        // SAFETY: instance was created by create_guest_instance and is valid.
-        // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
+            // SAFETY: instance was created by create_guest_instance and is valid.
+            // The interface pointer is stored for the lifetime of this wrapper.
             unsafe {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
@@ -491,6 +511,8 @@ impl PipelineEncoderContract {
     /// - `None` if interface not found or `create_instance` failed
     pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
         // Resolve the interface from the handle via HostApi method
+        // SAFETY: host is reborrowed via as_ref() (returns None if null); resolve_guest_contract
+        // is an ABI function pointer safe to call with a valid host and any handle.
         let interface: *const GuestContractInterface = unsafe {
             let iface: &HostApi = host.as_ref()?;
             (iface.resolve_guest_contract)(host, handle)
@@ -502,6 +524,8 @@ impl PipelineEncoderContract {
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         let mut instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: host is reborrowed via as_ref() (returns None if null); create_guest_instance
+        // is an ABI function pointer that writes the new instance through the out-param.
         unsafe {
             let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
@@ -530,16 +554,21 @@ impl PipelineEncoderContract {
         // Route create/destroy through the host so the runtime's live-instance
         // accounting stays accurate. If the host pointer is null there is no
         // runtime to mediate the lifecycle, so leave the instance untouched.
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
         let host_api: &HostApi = match unsafe { self.host.as_ref() } {
             Some(api) => api,
             None => return,
         };
         if !self.instance.data.is_null() {
+            // SAFETY: instance was created by create_guest_instance on this interface and is
+            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
             unsafe {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
         let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is valid for this wrapper; create_guest_instance writes the new
+        // instance through the out-param.
         unsafe {
             (host_api.create_guest_instance)(
                 self.host,
@@ -641,13 +670,14 @@ impl Drop for PipelineEncoderContract {
         // Destroy instance via host-mediated lifecycle so the runtime drops it
         // from its live-instance accounting. A null host pointer means there is
         // no runtime to mediate the lifecycle, so skip the destroy.
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
         let host_api: &HostApi = match unsafe { self.host.as_ref() } {
             Some(api) => api,
             None => return,
         };
-        // SAFETY: instance was created by create_guest_instance and is valid.
-        // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
+            // SAFETY: instance was created by create_guest_instance and is valid.
+            // The interface pointer is stored for the lifetime of this wrapper.
             unsafe {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
@@ -695,6 +725,8 @@ impl DataReporterContract {
     /// - `None` if interface not found or `create_instance` failed
     pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
         // Resolve the interface from the handle via HostApi method
+        // SAFETY: host is reborrowed via as_ref() (returns None if null); resolve_guest_contract
+        // is an ABI function pointer safe to call with a valid host and any handle.
         let interface: *const GuestContractInterface = unsafe {
             let iface: &HostApi = host.as_ref()?;
             (iface.resolve_guest_contract)(host, handle)
@@ -706,6 +738,8 @@ impl DataReporterContract {
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         let mut instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: host is reborrowed via as_ref() (returns None if null); create_guest_instance
+        // is an ABI function pointer that writes the new instance through the out-param.
         unsafe {
             let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
@@ -734,16 +768,21 @@ impl DataReporterContract {
         // Route create/destroy through the host so the runtime's live-instance
         // accounting stays accurate. If the host pointer is null there is no
         // runtime to mediate the lifecycle, so leave the instance untouched.
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
         let host_api: &HostApi = match unsafe { self.host.as_ref() } {
             Some(api) => api,
             None => return,
         };
         if !self.instance.data.is_null() {
+            // SAFETY: instance was created by create_guest_instance on this interface and is
+            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
             unsafe {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
         let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is valid for this wrapper; create_guest_instance writes the new
+        // instance through the out-param.
         unsafe {
             (host_api.create_guest_instance)(
                 self.host,
@@ -845,13 +884,14 @@ impl Drop for DataReporterContract {
         // Destroy instance via host-mediated lifecycle so the runtime drops it
         // from its live-instance accounting. A null host pointer means there is
         // no runtime to mediate the lifecycle, so skip the destroy.
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
         let host_api: &HostApi = match unsafe { self.host.as_ref() } {
             Some(api) => api,
             None => return,
         };
-        // SAFETY: instance was created by create_guest_instance and is valid.
-        // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
+            // SAFETY: instance was created by create_guest_instance and is valid.
+            // The interface pointer is stored for the lifetime of this wrapper.
             unsafe {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
@@ -899,6 +939,8 @@ impl PipelineValidatorContract {
     /// - `None` if interface not found or `create_instance` failed
     pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
         // Resolve the interface from the handle via HostApi method
+        // SAFETY: host is reborrowed via as_ref() (returns None if null); resolve_guest_contract
+        // is an ABI function pointer safe to call with a valid host and any handle.
         let interface: *const GuestContractInterface = unsafe {
             let iface: &HostApi = host.as_ref()?;
             (iface.resolve_guest_contract)(host, handle)
@@ -910,6 +952,8 @@ impl PipelineValidatorContract {
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         let mut instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: host is reborrowed via as_ref() (returns None if null); create_guest_instance
+        // is an ABI function pointer that writes the new instance through the out-param.
         unsafe {
             let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
@@ -938,16 +982,21 @@ impl PipelineValidatorContract {
         // Route create/destroy through the host so the runtime's live-instance
         // accounting stays accurate. If the host pointer is null there is no
         // runtime to mediate the lifecycle, so leave the instance untouched.
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
         let host_api: &HostApi = match unsafe { self.host.as_ref() } {
             Some(api) => api,
             None => return,
         };
         if !self.instance.data.is_null() {
+            // SAFETY: instance was created by create_guest_instance on this interface and is
+            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
             unsafe {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
         let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is valid for this wrapper; create_guest_instance writes the new
+        // instance through the out-param.
         unsafe {
             (host_api.create_guest_instance)(
                 self.host,
@@ -1049,13 +1098,14 @@ impl Drop for PipelineValidatorContract {
         // Destroy instance via host-mediated lifecycle so the runtime drops it
         // from its live-instance accounting. A null host pointer means there is
         // no runtime to mediate the lifecycle, so skip the destroy.
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
         let host_api: &HostApi = match unsafe { self.host.as_ref() } {
             Some(api) => api,
             None => return,
         };
-        // SAFETY: instance was created by create_guest_instance and is valid.
-        // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
+            // SAFETY: instance was created by create_guest_instance and is valid.
+            // The interface pointer is stored for the lifetime of this wrapper.
             unsafe {
                 (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
