@@ -39,6 +39,10 @@ name = "contract_dispatch"
 harness = false
 
 [[bench]]
+name = "revision_check"
+harness = false
+
+[[bench]]
 name = "ffi_resolve"
 harness = false
 
