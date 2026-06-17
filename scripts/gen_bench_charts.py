@@ -151,7 +151,12 @@ def _header(title: str, subtitle: str, width: int) -> tuple:
 
 
 def _chart_hbar_linear(out: Path, title: str, subtitle: str, rows: list) -> None:
-    """Horizontal linear-scale bar chart; rows = [(label, ns, color)]."""
+    """Horizontal linear-scale bar chart; rows = [(label, ns, color)].
+
+    Rows are sorted fastest → slowest so every bar chart reads monotonically
+    (the label carries the meaning, never the position).
+    """
+    rows: list = sorted(rows, key=lambda r: r[1])
     width: int = 720
     pad_l: int = 250
     pad_r: int = 96
@@ -176,7 +181,12 @@ def _chart_hbar_linear(out: Path, title: str, subtitle: str, rows: list) -> None
 
 
 def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str) -> None:
-    """Horizontal log-scale bar chart; rows = [(label, ns, color)]."""
+    """Horizontal log-scale bar chart; rows = [(label, ns, color)].
+
+    Rows are sorted fastest → slowest so every bar chart reads monotonically
+    (the label carries the meaning, never the position).
+    """
+    rows: list = sorted(rows, key=lambda r: r[1])
     width: int = 760
     pad_l: int = 250
     pad_r: int = 96
@@ -185,7 +195,8 @@ def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str)
     row_h: int = 40
     note_lines: list = _wrap(note, width, 9)
     bars_bottom: int = pad_t + row_h * len(rows)
-    note_y0: int = bars_bottom + 40
+    axis_caption_y: int = bars_bottom + 34
+    note_y0: int = bars_bottom + 56
     height: int = note_y0 + 14 * (len(note_lines) - 1) + 12
     plot_w: int = width - pad_l - pad_r
 
@@ -212,6 +223,16 @@ def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str)
         parts.append(_text(pad_l - 12, y + row_h / 2 + 4, label, 11, _FG, "end"))
         parts.append(_rect(pad_l, y + 6, max(bar_w, 2.0), row_h - 16, color))
         parts.append(_text(pad_l + bar_w + 8, y + row_h / 2 + 4, _fmt_ns(ns), 11, _FG, "start"))
+    parts.append(
+        _text(
+            pad_l + plot_w / 2,
+            axis_caption_y,
+            "time per call — log scale, lower is better →",
+            10,
+            _MUTED,
+            "middle",
+        )
+    )
     for li, line in enumerate(note_lines):
         parts.append(_text(24, note_y0 + li * 14, line, 9, _MUTED, "start"))
     out.write_text(_svg(width, height, "".join(parts)))
@@ -293,7 +314,7 @@ def _chart_heatmap(
     pad_t: int = 104 + extra_y
     grid_bottom: int = pad_t + cell_h * n_rows
     note_lines: list = _wrap(note, width, 9)
-    note_y0: int = grid_bottom + 68
+    note_y0: int = grid_bottom + 92
     height: int = note_y0 + 14 * (len(note_lines) - 1) + 10
 
     present: list = [v for v in cells.values() if v is not None]
@@ -336,6 +357,14 @@ def _chart_heatmap(
         parts.append(_rect(lx, leg_y, 4, 10, _heat_color(k / 39)))
     parts.append(_text(pad_l - 8, leg_y + 9, "faster", 9, _MUTED, "end"))
     parts.append(_text(pad_l + 40 * 4 + 8, leg_y + 9, "slower", 9, _MUTED, "start"))
+    # Numeric anchors under the gradient so a cell's color reads as a real time.
+    leg_w: float = 40 * 4
+    fast_ns: float = min(present)
+    slow_ns: float = max(present)
+    mid_ns: float = 10.0 ** ((lo + hi) / 2)
+    parts.append(_text(pad_l, leg_y + 24, _fmt_ns(fast_ns), 9, _MUTED, "middle"))
+    parts.append(_text(pad_l + leg_w / 2, leg_y + 24, _fmt_ns(mid_ns), 9, _MUTED, "middle"))
+    parts.append(_text(pad_l + leg_w, leg_y + 24, _fmt_ns(slow_ns), 9, _MUTED, "middle"))
     for li, line in enumerate(note_lines):
         parts.append(_text(24, note_y0 + li * 14, line, 9, _MUTED, "start"))
     out.write_text(_svg(width, height, "".join(parts)))
@@ -346,12 +375,14 @@ def _chart_heatmap(
 
 def chart_counter_inc(criterion_dir: Path, out: Path) -> None:
     """Per-call cost of each counter_inc mechanism (linear bars)."""
+    # Native-arm labels are kept identical to chart_hero so the shared bars read
+    # the same across both charts.
     bars: list = [
-        ("native/inline_never", "direct call (floor)", _FLOOR),
-        ("ffi/by_value", "raw dlsym FFI", _NEUTRAL),
+        ("native/inline_never", "direct function call (no plugins)", _FLOOR),
+        ("ffi/by_value", "raw FFI (dlsym, no safety)", _NEUTRAL),
         ("native/abi_marshalled", "ABI convention (static)", _NEUTRAL),
-        ("polyplug/dispatch", "polyplug — Rust plugin", _HILITE),
-        ("polyplug/dispatch_cpp", "polyplug — C++ plugin", _HILITE),
+        ("polyplug/dispatch", "polyplug — native plugin (Rust)", _HILITE),
+        ("polyplug/dispatch_cpp", "polyplug — native plugin (C++)", _HILITE),
     ]
     rows: list = [
         (label, per_call_ns(criterion_dir, f"counter_inc_1m/{fid}"), color)
@@ -407,7 +438,11 @@ def chart_payload_scaling(criterion_dir: Path, out: Path) -> None:
 
 
 def chart_marshalling(criterion_dir: Path, out: Path) -> None:
-    """Borrowed view vs owned copy return cost across payload sizes (log-y lines)."""
+    """Borrowed view vs owned copy return cost across payload sizes (log-y lines).
+
+    Canonical view of the borrow-vs-copy story; native_round_trip.svg shows the
+    same effect as bars by return type, payload_scaling.svg as call-cost vs work.
+    """
     sizes: list = [16, 64, 256, 1024, 4096, 16384, 65536, 262_144, 1_048_576]
     series: list = [
         ("borrowed", "borrowed view (zero-copy)", _HILITE),
@@ -451,7 +486,9 @@ def chart_native_round_trip(criterion_dir: Path, out: Path) -> None:
         rows,
         "The round trip itself is ~2 ns — resolve is cached, dispatch is one indirect call. "
         "The only thing that grows the cost is copying data out: borrowed zero-copy views stay "
-        "flat, owned copies pay a host alloc + memcpy that scales with the payload.",
+        "flat, owned copies pay a host alloc + memcpy that scales with the payload. Same story "
+        "over a size sweep: marshalling.svg (borrow vs copy) and payload_scaling.svg (call cost "
+        "vs work done).",
     )
 
 
@@ -467,7 +504,8 @@ def chart_amortization(criterion_dir: Path, out: Path) -> None:
         "One-time setup costs (paid once, not per call)",
         "loading / looking up / hot-reloading a plugin — log scale; none of these touch the per-call hot path",
         rows,
-        "find+resolve is the only one a caller might repeat — and it is ~20 ns (a HashMap hit). "
+        "find+resolve is the only one a caller might repeat — and it is ~20 ns (a HashMap hit), "
+        "warm; cold_start.svg shows the one-time cold-cache first call. "
         "Load and reload are dominated by the OS dlopen/mmap, not polyplug; see PROFILING.md.",
     )
 
@@ -528,7 +566,8 @@ def chart_cold_start(criterion_dir: Path, out: Path) -> None:
 
 
 def chart_hero(criterion_dir: Path, out: Path) -> None:
-    """README hero: one plugin call end to end, every bar live from criterion.
+    """README hero (embedded only in README.md, not PERFORMANCE.md): one plugin
+    call end to end, every bar live from criterion.
 
     One log-scale chart that tells the whole story at a glance: what a plugin
     call costs next to a direct call and raw FFI, and what each VM language
@@ -629,8 +668,13 @@ _LANG_LABEL: dict = {
     "js": "JavaScript",
     "python": "Python",
 }
-_MATRIX_HOSTS: list = ["rust", "cpp", "csharp", "python", "lua", "js"]
-_MATRIX_GUESTS: list = ["rust", "cpp", "csharp", "lua", "js", "python"]
+# ONE canonical language order (compiled → scripted) drives every axis and
+# label, so the same language sits in the same place across all charts. Bar
+# charts additionally sort by value; the matrix is a 2D grid that cannot be
+# value-sorted on both axes, so it uses this order on both for consistency.
+_LANG_ORDER: list = list(_LANG_LABEL)
+_MATRIX_HOSTS: list = _LANG_ORDER
+_MATRIX_GUESTS: list = _LANG_ORDER
 
 
 def chart_cross_language_matrix(data_path: Path, out: Path) -> None:
@@ -812,7 +856,16 @@ def chart_soak_rss(data_path: Path, out: Path) -> bool:
         gx: float = x_of(c)
         parts.append(_line(gx, pad_t, gx, pad_t + plot_h, _GRID, 1))
         parts.append(_text(gx, pad_t + plot_h + 18, f"{c:,}", 10, _MUTED, "middle"))
-    parts.append(_text(pad_l + plot_w / 2, height - 8, "load/unload cycles", 11, _MUTED, "middle"))
+    parts.append(
+        _text(
+            pad_l + plot_w / 2,
+            height - 8,
+            "load/unload cycles  ·  linear y axis (a leak slopes up; flat = no leak)",
+            11,
+            _MUTED,
+            "middle",
+        )
+    )
 
     # The RSS polyline. A rising slope here is a leak signal; the color flags it.
     # Drift mirrors the soak test's steady-state heuristic exactly
