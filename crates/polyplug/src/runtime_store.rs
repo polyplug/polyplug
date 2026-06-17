@@ -9,6 +9,7 @@
 //! find_all_guest_contracts(). DuplicateProvider is only raised when the SAME bundle_id
 //! tries to register the SAME contract_id twice (outside a reload window).
 
+use core::ops::ControlFlow;
 use core::sync::atomic::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -821,6 +822,53 @@ impl RuntimeStore {
         })
     }
 
+    /// Shared epoch-pinned read-path traversal for the provider-enumeration methods.
+    ///
+    /// Pins a crossbeam-epoch guard, loads the published `ReadView`, null-checks it,
+    /// looks up the `contract_id`'s live slot indices, and invokes `f` once per slot
+    /// whose interface is present and satisfies the MAJOR-version floor
+    /// (`iface.contract_version_major >= min_version`) — in the published index
+    /// order. `f` receives the slot index, the slot's generation, and a borrow of
+    /// the matching `SlotIfaceView`; returning `ControlFlow::Break` stops the scan
+    /// early (e.g. an `out` slice filling up, or an ambiguity short-circuit).
+    ///
+    /// The guard is a local of this function, so it stays pinned for the ENTIRE
+    /// traversal — every `f` invocation runs while the guard is alive. Any pointer
+    /// or reference `f` derives from the borrowed `SlotIfaceView` (such as the
+    /// interface pointer) therefore refers to memory the live snapshot owns and
+    /// epoch reclamation cannot free until this pin ends, which is strictly after
+    /// `f` returns. Dereferencing such a pointer after the pin ends is the caller's
+    /// responsibility (see `resolve_single_provider`).
+    fn for_each_live_provider<F>(&self, contract_id: GuestContractId, min_version: u32, mut f: F)
+    where
+        F: FnMut(u32, u32, &SlotIfaceView) -> ControlFlow<()>,
+    {
+        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+        let shared: crossbeam_epoch::Shared<'_, ReadView> =
+            self.published.load(Ordering::Acquire, &guard);
+        // SAFETY: `published` is never null while the store is alive (see
+        // `find_guest_contract`). The view stays valid for this guard's pin.
+        let view: &ReadView = match unsafe { shared.as_ref() } {
+            Some(v) => v,
+            None => return,
+        };
+
+        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
+            Some(v) => v,
+            None => return,
+        };
+
+        for &slot_idx in indices.iter() {
+            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
+            if let Some(ref iface) = entry.iface
+                && iface.contract_version_major >= min_version
+                && f(slot_idx, entry.generation, iface).is_break()
+            {
+                break;
+            }
+        }
+    }
+
     /// Find all plugins satisfying the given contract_id and minimum version.
     pub fn find_all_guest_contracts(
         &self,
@@ -832,37 +880,19 @@ impl RuntimeStore {
             return 0usize;
         }
 
-        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-        let shared: crossbeam_epoch::Shared<'_, ReadView> =
-            self.published.load(Ordering::Acquire, &guard);
-        // SAFETY: `published` is never null while the store is alive (see
-        // `find_guest_contract`). The view stays valid for this guard's pin.
-        let view: &ReadView = match unsafe { shared.as_ref() } {
-            Some(v) => v,
-            None => return 0usize,
-        };
-
-        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
-            Some(v) => v,
-            None => return 0usize,
-        };
-
         let mut write_count: usize = 0usize;
-        for &slot_idx in indices.iter() {
+        self.for_each_live_provider(contract_id, min_version, |slot_idx, generation, _iface| {
+            out[write_count] = GuestContractHandle {
+                index: slot_idx,
+                generation,
+            };
+            write_count += 1usize;
             if write_count >= out.len() {
-                break;
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
             }
-            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
-            if let Some(ref iface) = entry.iface
-                && iface.contract_version_major >= min_version
-            {
-                out[write_count] = GuestContractHandle {
-                    index: slot_idx,
-                    generation: entry.generation,
-                };
-                write_count += 1usize;
-            }
-        }
+        });
         write_count
     }
 
@@ -885,64 +915,31 @@ impl RuntimeStore {
             return 0usize;
         }
 
-        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-        let shared: crossbeam_epoch::Shared<'_, ReadView> =
-            self.published.load(Ordering::Acquire, &guard);
-        // SAFETY: `published` is never null while the store is alive (see
-        // `find_guest_contract`). The view stays valid for this guard's pin.
-        let view: &ReadView = match unsafe { shared.as_ref() } {
-            Some(v) => v,
-            None => return 0usize,
-        };
-
-        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
-            Some(v) => v,
-            None => return 0usize,
-        };
-
         let mut write_count: usize = 0usize;
-        for &slot_idx in indices.iter() {
+        self.for_each_live_provider(contract_id, min_version, |slot_idx, generation, _iface| {
+            // Pack handle directly: generation in the high 32 bits, index low.
+            out[write_count] = ((generation as u64) << 32) | (slot_idx as u64);
+            write_count += 1usize;
             if write_count >= out.len() {
-                break;
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
             }
-            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
-            if let Some(ref iface) = entry.iface
-                && iface.contract_version_major >= min_version
-            {
-                // Pack handle directly: generation in the high 32 bits, index low.
-                out[write_count] = ((entry.generation as u64) << 32) | (slot_idx as u64);
-                write_count += 1usize;
-            }
-        }
+        });
         write_count
     }
 
     /// Count plugins satisfying the given contract_id and minimum version.
     pub fn count_guest_contracts(&self, contract_id: GuestContractId, min_version: u32) -> usize {
-        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-        let shared: crossbeam_epoch::Shared<'_, ReadView> =
-            self.published.load(Ordering::Acquire, &guard);
-        // SAFETY: `published` is never null while the store is alive (see
-        // `find_guest_contract`). The view stays valid for this guard's pin.
-        let view: &ReadView = match unsafe { shared.as_ref() } {
-            Some(v) => v,
-            None => return 0,
-        };
-
-        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
-            Some(v) => v,
-            None => return 0,
-        };
-
         let mut count: usize = 0;
-        for &slot_idx in indices.iter() {
-            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
-            if let Some(ref iface) = entry.iface
-                && iface.contract_version_major >= min_version
-            {
+        self.for_each_live_provider(
+            contract_id,
+            min_version,
+            |_slot_idx, _generation, _iface| {
                 count += 1;
-            }
-        }
+                ControlFlow::Continue(())
+            },
+        );
         count
     }
 
@@ -976,48 +973,34 @@ impl RuntimeStore {
         contract_id: GuestContractId,
         min_version: u32,
     ) -> SingleProviderResolution {
-        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-        let shared: crossbeam_epoch::Shared<'_, ReadView> =
-            self.published.load(Ordering::Acquire, &guard);
-        // SAFETY: `published` is never null while the store is alive (see
-        // `find_guest_contract`). The view stays valid for this guard's pin.
-        let view: &ReadView = match unsafe { shared.as_ref() } {
-            Some(v) => v,
-            None => return SingleProviderResolution::NotFound,
-        };
-
-        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
-            Some(v) => v,
-            None => return SingleProviderResolution::NotFound,
-        };
-
         // Single pass: count live matches and remember the first one's interface
         // pointer. `count_guest_contracts` and `find_guest_contract` (min_version=0)
-        // both walk `indices` with the same liveness + version filter, so iterating
-        // once here is behaviour-identical to running them in sequence — the first
-        // match is exactly the slot `find_guest_contract` would have returned.
+        // both walk the provider indices with the same liveness + version filter, so
+        // iterating once here is behaviour-identical to running them in sequence —
+        // the first match is exactly the slot `find_guest_contract` would have
+        // returned.
         let mut count: usize = 0;
         let mut first_interface: *const GuestContractInterface = core::ptr::null();
-        for &slot_idx in indices.iter() {
-            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
-            if let Some(ref iface) = entry.iface
-                && iface.contract_version_major >= min_version
-            {
-                if count == 0 {
-                    first_interface = iface.interface.as_ref() as *const GuestContractInterface;
-                }
-                count += 1;
-                if count > 1 {
-                    // Ambiguous: no need to scan further, the cross-call is refused.
-                    return SingleProviderResolution::Multiple;
-                }
+        self.for_each_live_provider(contract_id, min_version, |_slot_idx, _generation, iface| {
+            if count == 0 {
+                // The pointer borrows the snapshot-owned `Arc`. It is taken while the
+                // helper's epoch guard is pinned and remains valid for the documented
+                // runtime-mediated use; see this method's doc comment.
+                first_interface = iface.interface.as_ref() as *const GuestContractInterface;
             }
-        }
+            count += 1;
+            if count > 1 {
+                // Ambiguous: no need to scan further, the cross-call is refused.
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
 
-        if count == 1 {
-            SingleProviderResolution::Resolved(first_interface)
-        } else {
-            SingleProviderResolution::NotFound
+        match count {
+            0 => SingleProviderResolution::NotFound,
+            1 => SingleProviderResolution::Resolved(first_interface),
+            _ => SingleProviderResolution::Multiple,
         }
     }
 
@@ -1041,33 +1024,14 @@ impl RuntimeStore {
         contract_id: GuestContractId,
         min_version: u32,
     ) -> Vec<GuestContractHandle> {
-        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-        let shared: crossbeam_epoch::Shared<'_, ReadView> =
-            self.published.load(Ordering::Acquire, &guard);
-        // SAFETY: `published` is never null while the store is alive (see
-        // `find_guest_contract`). The view stays valid for this guard's pin.
-        let view: &ReadView = match unsafe { shared.as_ref() } {
-            Some(v) => v,
-            None => return Vec::new(),
-        };
-
-        let indices: &Vec<u32> = match view.contract_index.get(&contract_id) {
-            Some(v) => v,
-            None => return Vec::new(),
-        };
-
-        let mut collected: Vec<GuestContractHandle> = Vec::with_capacity(indices.len());
-        for &slot_idx in indices.iter() {
-            let entry: &SlotEntryView = &view.slots[slot_idx as usize];
-            if let Some(ref iface) = entry.iface
-                && iface.contract_version_major >= min_version
-            {
-                collected.push(GuestContractHandle {
-                    index: slot_idx,
-                    generation: entry.generation,
-                });
-            }
-        }
+        let mut collected: Vec<GuestContractHandle> = Vec::new();
+        self.for_each_live_provider(contract_id, min_version, |slot_idx, generation, _iface| {
+            collected.push(GuestContractHandle {
+                index: slot_idx,
+                generation,
+            });
+            ControlFlow::Continue(())
+        });
         collected
     }
 
