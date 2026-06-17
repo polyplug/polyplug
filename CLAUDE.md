@@ -760,8 +760,9 @@ fn test_something_else() { }
 polyplug/
 ├── CLAUDE.md                        this file (stays at root)
 ├── README.md                        stays at root (GitHub convention)
+├── CHANGELOG.md                      stays at root (GitHub convention)
 ├── docs/                            ALL other documentation (.md) lives here —
-│                                    incl. TRUST_MODEL.md, ROADMAP.md, RELEASING.md
+│                                    incl. TRUST_MODEL.md, ROADMAP.md, ABI_ARCHITECTURE.md
 ├── crates/
 │   ├── polyplug/                    core runtime
 │   │   └── src/
@@ -854,7 +855,7 @@ polyplug/
 | `pub use other_crate::Type` | consumers import from source crate directly |
 | SDK static / module-global holding runtime or plugin state (any language, host or guest) | state flows through instances and context parameters |
 | duplicate "helper" implementations outside the `sdk_validator.yaml` target files | helpers live only in validated files; golden set in `sdk_validator.yaml` |
-| documentation `.md` at repo root (except CLAUDE.md, README.md) | all docs live in `docs/` |
+| documentation `.md` at repo root (except CLAUDE.md, README.md, CHANGELOG.md) | all docs live in `docs/` |
 
 ---
 
