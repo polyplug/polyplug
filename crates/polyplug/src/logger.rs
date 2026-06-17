@@ -44,9 +44,8 @@ pub struct LoggerHandle {
 // runtime's entire lifetime, from any thread. This mirrors how HostApi
 // pointers are shared across threads under the same host contract.
 unsafe impl Send for LoggerHandle {}
-// SAFETY: LoggerHandle has no interior mutability; concurrent `log` calls only
-// read the fields and invoke the callback, which the host contract requires to
-// be safe from any thread.
+// SAFETY: see the Send impl above — no interior mutability and the host-supplied
+// callback is required to be safe from any thread, so shared reads are sound.
 unsafe impl Sync for LoggerHandle {}
 
 impl LoggerHandle {

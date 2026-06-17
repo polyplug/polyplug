@@ -356,9 +356,12 @@ impl BundleLoader for DotnetLoader {
         // (success and error) so the stack never leaks an entry.
         runtime.push_init_bundle_id(bundle_id);
 
-        // SAFETY: managed_init is a valid fn ptr from CLR. host_interface and ctx are non-null and valid.
-        // InitFn signature: (host, ctx) -> AbiError (canonical 24-byte struct, same as every generator).
-        // The HostApi pointer is passed directly (self-passing pattern).
+        // SAFETY: `managed_init` was resolved from the CLR as the bundle's
+        // `polyplug_init` and matches the canonical `InitFn` signature
+        // `(host, ctx) -> AbiError`. `host_interface` is the runtime's own HostApi
+        // pointer (non-null, valid for the runtime's lifetime); `&ctx` borrows a live
+        // stack local that outlives this call. The callee only reads both for the
+        // duration of the call.
         let result: AbiError = unsafe { managed_init(host_interface, &ctx) };
 
         // Pop bundle_id from the init stack after init completes (always, including

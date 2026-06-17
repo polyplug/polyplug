@@ -31,16 +31,11 @@ use crate::logger::{LoggerHandle, RecoverPoisoned, RecoveringGuard};
 /// Outcome of [`RuntimeStore::resolve_single_provider`] — the single-read-guard
 /// primitive behind the `call_guest_method` HostApi cross-dispatch path.
 ///
-/// The cross-call must, under ONE read guard, (1) count live providers for the
-/// contract, (2) reject ambiguous multi-provider routing, and (3) resolve the
-/// sole provider's interface pointer. Splitting that across `count` + `find` +
-/// `resolve` took three separate read-guard acquisitions; this enum lets the
-/// store do all three under a single guard and hand the caller exactly the
-/// information it needs to reproduce the original observable behaviour.
+/// Under ONE read guard it counts live providers for the contract, rejects
+/// ambiguous multi-provider routing, and resolves the sole provider's interface
+/// pointer.
 pub enum SingleProviderResolution {
     /// No live provider matched the contract id at the requested version floor.
-    /// The caller maps this to the same `NotFound` outcome the former
-    /// `find_guest_contract` not-found path produced.
     NotFound,
     /// More than one live provider is registered for the contract. Routing keys
     /// solely on `contract_id`, so the target is ambiguous and the caller must
@@ -48,7 +43,7 @@ pub enum SingleProviderResolution {
     Multiple,
     /// Exactly one live provider matched; the contained pointer is its interface,
     /// borrowed from the published snapshot's `Arc` and valid while the loading
-    /// guard is pinned, exactly as `resolve_guest_contract` returns.
+    /// guard is pinned.
     Resolved(*const GuestContractInterface),
 }
 
@@ -231,12 +226,9 @@ impl RuntimeStoreData {
         }
     }
 
-    /// Tear down a single published slot — the one canonical teardown atom.
-    ///
-    /// This is the SOURCE OF TRUTH for retiring a slot. Both `invalidate_bundle`
-    /// (unload) and the dropped-contract branch of `apply_reload_swap` (when the
-    /// reloaded version no longer provides a contract the old version had) route
-    /// through here so the teardown semantics stay identical (DRY).
+    /// Tear down a single published slot — the canonical teardown atom shared by
+    /// `invalidate_bundle` (unload) and the dropped-contract branch of
+    /// `apply_reload_swap`.
     ///
     /// For the slot at `slot_idx` it:
     /// - bumps `slot.generation` (so every handle minted against the old generation
@@ -248,10 +240,9 @@ impl RuntimeStoreData {
     /// - removes the slot index from `guest_contract_index` for its contract_id,
     ///   dropping the now-empty key.
     ///
-    /// It deliberately does NOT touch `bundle_data` — bundle-level bookkeeping is the
-    /// caller's responsibility because it differs per caller (unload removes the whole
-    /// bundle entry, reload removes a single slot index). An out-of-bounds `slot_idx`
-    /// is a no-op.
+    /// It deliberately does NOT touch `bundle_data` — that bookkeeping differs per
+    /// caller (unload removes the whole bundle entry, reload removes a single slot
+    /// index). An out-of-bounds `slot_idx` is a no-op.
     ///
     /// Note: reload's surviving-contract path performs an in-place interface swap
     /// instead of calling this helper — that path keeps the slot live (same
@@ -385,11 +376,10 @@ impl ReadView {
 }
 
 /// Thread-safe plugin registry.
-//
-//  Uses a single RwLock to protect all mutable state, reducing lock acquisition
-//  overhead on the cold (write) path. Writes (registration/unload) are rare, so
-//  contention is minimal. The hot read methods (find, resolve_guest_contract) serve
-//  from a lock-free published `ReadView` snapshot under an epoch guard.
+///
+/// Mutable state is protected by a single RwLock (writes — registration/unload —
+/// are rare). The hot read methods (`find`, `resolve_guest_contract`) serve from a
+/// lock-free published `ReadView` snapshot under an epoch guard, taking no lock.
 pub struct RuntimeStore {
     /// Single RwLock protecting all mutable registry state.
     data: RwLock<RuntimeStoreData>,
@@ -457,8 +447,6 @@ impl RuntimeStore {
     /// for the entire lifetime of the `Registry`. The caller must ensure the backing library
     /// is not unloaded while this registry holds the pointer.
     //
-    //  The contract_id is read directly from the interface pointer.
-    //
     //  Returns Err if:
     //  - contract_id is already registered to a DIFFERENT contract_name (hash collision)
     //  - contract_id is already registered by the SAME bundle_id and the bundle is not
@@ -511,12 +499,11 @@ impl RuntimeStore {
         // to reject.
         let is_reloading: bool = data.reloading_bundles.contains(&bundle_id);
 
-        // Check existing slots for this contract_id
         if let Some(existing_indices) = data.guest_contract_index.get(&contract_id) {
             for &existing_idx in existing_indices.iter() {
                 let existing_slot: &PluginSlot = &data.slots[existing_idx as usize];
                 if let Some(ref existing_entry) = existing_slot.entry {
-                    // Hash collision: same contract_id, different contract_name
+                    // Hash collision: same contract_id, different contract_name.
                     if existing_entry.contract_name != contract_name {
                         return Err(RegistryError::ContractIdCollision {
                             id: contract_id.id(),
@@ -536,7 +523,6 @@ impl RuntimeStore {
             }
         }
 
-        // Find a vacant slot or push a new one
         let slot_idx: u32 = data
             .slots
             .iter()
@@ -650,8 +636,7 @@ impl RuntimeStore {
                 .push(slot_idx);
         }
 
-        // Update bundle_data: push slot_idx into plugin_slots Vec for this bundle_id.
-        // Note: descriptor is populated separately via register_bundle_metadata().
+        // The descriptor is populated separately via register_bundle_metadata().
         data.bundle_data
             .entry(bundle_id)
             .or_insert_with(|| BundleData {
@@ -897,12 +882,9 @@ impl RuntimeStore {
     }
 
     /// Find all plugins satisfying the given contract_id and minimum version,
-    /// packing handles directly into a u64 buffer.
-    ///
-    /// This is an optimized version of `find_all_guest_contracts` that avoids
-    /// intermediate allocation by packing handles directly during iteration.
-    /// Each handle is packed as: `(generation as u64) << 32 | index as u64`,
-    /// matching [`GuestContractHandle::pack`].
+    /// packing each handle into the `out` u64 buffer as
+    /// `(generation as u64) << 32 | index as u64`, matching
+    /// [`GuestContractHandle::pack`].
     ///
     /// Returns the number of packed handles written to `out`.
     pub fn find_all_guest_contracts_packed(

@@ -1778,7 +1778,6 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
-    // Find the host contract interface
     let host_contracts_guard: RecoveringGuard<
         std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>>,
     > = runtime
@@ -1786,7 +1785,6 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
         .read()
         .recover_poisoned(runtime.logger, "runtime");
 
-    // Find interface matching contract_id and version
     let interface: Option<&HostContractInterface> = host_contracts_guard
         .values()
         .find(|iface| {
@@ -1888,7 +1886,6 @@ pub(crate) unsafe extern "C" fn host_resolve_host_contract_interface(
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
-    // Find the host contract interface
     let host_contracts_guard: RecoveringGuard<
         std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>>,
     > = runtime
@@ -1896,7 +1893,6 @@ pub(crate) unsafe extern "C" fn host_resolve_host_contract_interface(
         .read()
         .recover_poisoned(runtime.logger, "runtime");
 
-    // Find interface matching contract_id and version
     host_contracts_guard
         .values()
         .find(|iface| {

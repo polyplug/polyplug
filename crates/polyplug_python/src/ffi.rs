@@ -1,4 +1,4 @@
-// SAFETY: std::ptr/slice/str functions are functionally identical to core versions;
+// std::ptr/slice/str functions are functionally identical to core versions;
 // we use std for consistency with FFI code patterns that may need std features.
 #![allow(clippy::std_instead_of_core)]
 

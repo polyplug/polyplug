@@ -510,8 +510,8 @@ mod tests {
             .expect("register");
 
         // Call it
-        // SAFETY: the registered JS function treats args/out as opaque BigInts and
-        // never dereferences them, so passing null pointers is sound here.
+        // SAFETY: the registered JS function never dereferences args/out, so passing
+        // null pointers is sound here.
         let result: AbiError =
             unsafe { bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut()) };
         assert!(result.is_ok());
@@ -562,8 +562,8 @@ mod tests {
             .expect("register");
 
         // Call it - should return error
-        // SAFETY: the registered JS function throws before touching args/out, so
-        // passing null pointers is sound here.
+        // SAFETY: the registered JS function never dereferences args/out, so passing
+        // null pointers is sound here.
         let result: AbiError =
             unsafe { bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut()) };
         assert_eq!(result.code, AbiErrorCode::HostContractCallFailed as u32);
