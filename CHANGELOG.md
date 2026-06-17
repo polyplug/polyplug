@@ -24,7 +24,7 @@ glue is produced from a single `.toml` contract by the `polyplugc` CLI.
 #### Core runtime & ABI
 
 - Two-export host FFI surface (`polyplug_runtime_create` / `polyplug_runtime_destroy`);
-  all other operations flow through the `HostApi` function table (184 bytes, `align = 8`).
+  all other operations flow through the `HostApi` function table (192 bytes, `align = 8`).
 - Single canonical plugin entry point: `polyplug_init(host, ctx)`, with registration
   via the self-passing `host->register_guest_contract(host, &descriptor, &interface)`.
 - Out-parameter ABI calling convention shared by every generator, with the canonical
@@ -33,6 +33,13 @@ glue is produced from a single `.toml` contract by the `polyplugc` CLI.
 - Host-mediated guest instance lifecycle (`create_guest_instance` / `destroy_guest_instance`)
   so the runtime pins the epoch across construction/destruction and attributes each
   live instance to its contract.
+- Self-revalidating generated callers: host→guest and peer callers cache the resolved
+  interface for fast dispatch and detect a hot-reload/unload through the new
+  `HostApi.revision_counter` field — a pointer to a runtime registry revision counter that
+  callers poll with one acquire load before each dispatch (no per-call call into the
+  runtime). On a change the caller transparently re-resolves and recreates its instance,
+  so a cached interface pointer can never dangle after a reload/unload and authors never
+  have to manage cached pointers by hand. Applied across all six language generators.
 - Cross-boundary allocation through the `alloc` / `free` `HostApi` fields; all boundary
   strings are UTF-8 `StringView` (ptr + len), never null-terminated C strings.
 - Host-provided logging threaded through `RuntimeConfig.log` and the `HostApi.log` field,

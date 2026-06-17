@@ -225,13 +225,13 @@ The following table summarizes the sizes and alignments of the core ABI types on
 
 | Type | Size (bytes) | Alignment (bytes) | Key Fields |
 |------|--------------|-------------------|------------|
-| `HostApi` | 184 | 8 | `runtime` opaque ptr + 21 function pointers + trailing `reserved` data ptr |
+| `HostApi` | 192 | 8 | `runtime` opaque ptr + 22 function pointers + trailing `reserved` data ptr |
 | `GuestContractInterface` | 56 | 8 | `contract_id`, `contract_version`, `dispatch_type`, `create_instance`, `destroy_instance`, `dispatch` union |
 | `GuestContractHandle` | 8 | 4 | `index: u32`, `generation: u32` |
 | `StringView` | 16 | 8 | `ptr`, `len` |
 | `AbiError` | 24 | 8 | `code`, `message` (StringView) |
 
-`HostApi`'s 21 function pointers (offsets verified in
+`HostApi`'s 22 function pointers (offsets verified in
 `crates/polyplug_abi/src/host/host_api.rs`): `register_guest_contract` (8), `alloc` (16),
 `free` (24), `find_guest_contract` (32), `find_all_guest_contracts` (40),
 `resolve_guest_contract` (48), `get_host_contract` (56),
@@ -239,8 +239,8 @@ The following table summarizes the sizes and alignments of the core ABI types on
 `load_bundle` (88), `reload_bundle` (96), `register_host_contract` (104),
 `register_loader` (112), `get_last_error` (120), `get_error_len` (128),
 `call_guest_method` (136), `unload_bundle` (144), `log` (152),
-`create_guest_instance` (160), `destroy_guest_instance` (168),
-`reserved` (176, data pointer — always null). There is no
+`create_guest_instance` (160), `destroy_guest_instance` (168), `revision_counter` (176),
+`reserved` (184, data pointer — always null). There is no
 `find_by_bundle` or `resolve_plugin` pointer in `HostApi`.
 
 ### Pointer Validity After Resolution
@@ -331,7 +331,7 @@ The core polyplug ABI **freezes at v1.0**. There is no public release yet, so th
 
 ### Frozen Surface Areas
 The following structures have the layouts and sizes that will be frozen at v1.0. At/after v1.0, any modification to these (e.g., adding a field or changing field order) is a breaking change. Sizes are verified by the layout tests in `crates/polyplug_abi`.
-- **`HostApi` (184 bytes)**: An opaque `runtime` pointer followed by 21 function pointers and a trailing `reserved` data pointer (full list in §5).
+- **`HostApi` (192 bytes)**: An opaque `runtime` pointer followed by 22 function pointers and a trailing `reserved` data pointer (full list in §5).
 - **`GuestContractInterface` (56 bytes)**: `contract_id`, `contract_version`, `dispatch_type`, the `create_instance`/`destroy_instance` callbacks, and the `dispatch` union.
 - **`GuestContractHandle` (8 bytes)**: `index: u32` (offset 0) and `generation: u32` (offset 4), align 4.
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
@@ -341,7 +341,7 @@ To support future capabilities without breaking the ABI, the host exposes contra
 `HostApi::get_host_contract(contract_id, min_version)` (and
 `resolve_host_contract_interface`). New host-side capabilities are added as new host contracts
 that plugins resolve by ID, rather than by extending the frozen `HostApi` struct.
-The trailing `reserved: *const c_void` field (offset 176) is the only sanctioned
+The trailing `reserved: *const c_void` field (offset 184) is the only sanctioned
 post-freeze expansion slot; producers set it to null, consumers must not read it.
 
 ## Hot-Reload Safety Guarantees

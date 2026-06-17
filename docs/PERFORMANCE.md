@@ -1063,13 +1063,14 @@ python3 scripts/gen_bench_charts.py --soak target/soak/soak_rss.txt \
 ### Leak found and fixed — `HostApi` is reclaimed at teardown
 
 The soak surfaced a genuine **core leak in the `Runtime` lifecycle**, ~184 bytes
-per runtime built-and-dropped. It was **not** in load, unload, dispatch, or the
+per runtime built-and-dropped (the `HostApi` was 184 bytes at the time; it is 192
+bytes today after the `revision_counter` field was added). It was **not** in load, unload, dispatch, or the
 `dlopen`/`dlclose` machinery (a build-and-drop-only bisection leaked at the same
 slope; a pure `dlopen`+`dlclose` loop with no runtime is flat). Root cause:
 `RuntimeBuilder::build` used `Box::leak(Box::new(HostApi { … }))` to obtain the
 `&'static HostApi` the FFI required, and there was no owner that reclaimed it —
 `Arc<Runtime>` teardown freed the `Runtime` but not the leaked `HostApi`
-(184 bytes, matching the observed per-cycle growth).
+(184 bytes then, matching the per-cycle growth the soak observed at the time).
 
 **Fix:** the `Runtime` now *owns* its `HostApi` as a `Box<HostApi>` placed as the
 last struct field, so it drops after `registry`/`loaders` (whose teardown

@@ -254,10 +254,10 @@ concept on every user and shipped zero consumers; anything they could carry is
 already an app-defined host contract.
 
 The `get_extension` slot on `HostApi` was replaced by a single trailing
-`reserved: *const c_void` (null) at the end of the struct (offset 176, after the
-instance-lifecycle callbacks). The struct is 184 bytes — the tail is
+`reserved: *const c_void` (null) at the end of the struct (offset 184, after the
+instance-lifecycle callbacks and `revision_counter`). The struct is 192 bytes — the tail is
 `call_guest_method`@136, `unload_bundle`@144, `log`@152, `create_guest_instance`@160,
-`destroy_guest_instance`@168, `reserved`@176. `reserved` is silent forward-compat
+`destroy_guest_instance`@168, `revision_counter`@176, `reserved`@184. `reserved` is silent forward-compat
 room (it can later point to a versioned table) with no narrative.
 
 ## Cross-call Dispatch (plugin → plugin) ✅ Done
