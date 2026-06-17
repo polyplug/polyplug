@@ -9,6 +9,8 @@ use std::path::PathBuf;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::collect_peer_contracts;
+use super::peer_min_version;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -16,7 +18,6 @@ use crate::ir::PrimitiveType;
 use crate::ir::ReprType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedField;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
@@ -3329,54 +3330,6 @@ fn host_method_pascal_case(name: &str) -> String {
 
 // ─── Peer Caller Generation ───────────────────────────────────────────────────
 
-/// Collect every contract in `ir.contracts` whose contract_id appears in the
-/// bundle's declared dependencies.  Returns an empty vec when there is no bundle
-/// or when no dependency matches any known contract.
-fn collect_peer_contracts(ir: &ValidatedIr) -> Vec<&ResolvedContract> {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return Vec::new(),
-    };
-
-    ir.contracts
-        .iter()
-        .filter(|c: &&ResolvedContract| {
-            deps.iter().any(|d: &ResolvedDependency| {
-                let dep_contract_id: u64 = match d {
-                    ResolvedDependency::ByContract { contract_id, .. } => *contract_id,
-                    ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
-                };
-                dep_contract_id == c.contract_id
-            })
-        })
-        .collect()
-}
-
-/// Look up the `min_version` (packed u32 — major in high 16 bits) declared for
-/// `target_contract_id` in the bundle dependencies.  Returns 0 when not found.
-fn peer_min_version(ir: &ValidatedIr, target_contract_id: u64) -> u32 {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return 0,
-    };
-    for d in deps {
-        match d {
-            ResolvedDependency::ByContract {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            ResolvedDependency::ByBundle {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            _ => {}
-        }
-    }
-    0
-}
-
 /// Convert a guest contract name (e.g. `pipeline.Validator`) to a TypeScript
 /// peer-caller class name (e.g. `ValidatorPeer`).
 fn guest_contract_name_to_ts_peer(name: &str) -> String {
@@ -3607,6 +3560,7 @@ mod tests {
     use crate::ir::EnumVariant;
     use crate::ir::PrimitiveType;
     use crate::ir::ReprType;
+    use crate::ir::ResolvedDependency;
     use crate::ir::ResolvedFunction;
     use crate::ir::ResolvedHostContract;
     use crate::ir::ResolvedParam;

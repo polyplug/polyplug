@@ -2,15 +2,17 @@
 
 use std::path::PathBuf;
 
+use super::CALL_ARENA_BUF_LEN;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::collect_peer_contracts;
+use super::peer_min_version;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -152,7 +154,9 @@ fn emit_cs_call_arena_helpers(out: &mut String) {
         "    /// this buffer; outputs larger than it spill into host-allocated overflow\n",
     );
     out.push_str("    /// blocks that are retained across resets and freed only by FreeAll.\n");
-    out.push_str("    public const nuint CALL_ARENA_BUF_LEN = 512;\n");
+    out.push_str(&format!(
+        "    public const nuint CALL_ARENA_BUF_LEN = {CALL_ARENA_BUF_LEN};\n"
+    ));
     out.push_str(
         "    /// <summary>Alignment used to free host-allocated overflow blocks.</summary>\n",
     );
@@ -2632,57 +2636,6 @@ fn cs_enum_for_type<'a>(ty: &ResolvedTypeRef, enums: &'a [EnumDef]) -> Option<&'
         ResolvedTypeRef::UserDefined(name) => enums.iter().find(|e: &&EnumDef| &e.name == name),
         _ => None,
     }
-}
-
-// ─── Peer caller collection helpers ──────────────────────────────────────────
-
-/// Collect contracts from `ir.contracts` whose `contract_id` matches any entry
-/// in the bundle's declared dependencies. Returns an empty vec when there is no
-/// bundle (--api mode) or when no dependency maps to a known contract.
-fn collect_peer_contracts(ir: &ValidatedIr) -> Vec<&ResolvedContract> {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return Vec::new(),
-    };
-
-    ir.contracts
-        .iter()
-        .filter(|c: &&ResolvedContract| {
-            deps.iter().any(|d: &ResolvedDependency| {
-                let dep_contract_id: u64 = match d {
-                    ResolvedDependency::ByContract { contract_id, .. } => *contract_id,
-                    ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
-                };
-                dep_contract_id == c.contract_id
-            })
-        })
-        .collect()
-}
-
-/// Return the `min_version` (major) for the dependency whose `contract_id`
-/// matches `target_contract_id`. Returns 0 when no match is found; callers
-/// guard against an empty peer set before reaching this.
-fn peer_min_version(ir: &ValidatedIr, target_contract_id: u64) -> u32 {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return 0,
-    };
-    for d in deps {
-        match d {
-            ResolvedDependency::ByContract {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            ResolvedDependency::ByBundle {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            _ => {}
-        }
-    }
-    0
 }
 
 /// Generate the full `guest/PeerCallers.cs` file for all peer contracts.

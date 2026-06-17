@@ -1,9 +1,12 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use super::CALL_ARENA_BUF_LEN;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::collect_peer_contracts;
+use super::peer_min_version;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -11,7 +14,6 @@ use crate::ir::PrimitiveType;
 use crate::ir::ReprType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -324,7 +326,7 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
         // itself — the VM bridge does, through the arena it is handed — so only
         // construction (inline in __init__) and reset are needed here.
         out.push_str("# Size of each caller's inline call-arena buffer.\n");
-        out.push_str("CALL_ARENA_BUF_LEN: int = 512\n");
+        out.push_str(&format!("CALL_ARENA_BUF_LEN: int = {CALL_ARENA_BUF_LEN}\n"));
         out.push_str("_OVERFLOW_BLOCK_ALIGN: int = ctypes.sizeof(ctypes.c_void_p)\n\n");
         out.push_str("def _arena_reset(arena: CallArena) -> None:\n");
         out.push_str("    \"\"\"Rewind the arena for reuse: retain all overflow blocks.\n\n");
@@ -3071,54 +3073,6 @@ fn python_pack_field_type(ty: &ResolvedTypeRef, enums: &[EnumDef]) -> String {
 
 // ─── Guest peer-caller generation ────────────────────────────────────────────
 
-/// Collect every contract in `ir.contracts` whose `contract_id` appears in the
-/// bundle's declared dependencies.  Returns an empty vec when there is no bundle
-/// or when no dependency matches any known contract.
-fn collect_peer_contracts(ir: &ValidatedIr) -> Vec<&ResolvedContract> {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return Vec::new(),
-    };
-    ir.contracts
-        .iter()
-        .filter(|c: &&ResolvedContract| {
-            deps.iter().any(|d: &ResolvedDependency| {
-                let dep_contract_id: u64 = match d {
-                    ResolvedDependency::ByContract { contract_id, .. } => *contract_id,
-                    ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
-                };
-                dep_contract_id == c.contract_id
-            })
-        })
-        .collect()
-}
-
-/// Return the `min_version` (major) for the dependency whose `contract_id`
-/// matches `target`.  Returns 0 when no match is found (callers guard against
-/// an empty peer set first).
-fn peer_min_version(ir: &ValidatedIr, target_contract_id: u64) -> u32 {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return 0,
-    };
-    for d in deps {
-        match d {
-            ResolvedDependency::ByContract {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            ResolvedDependency::ByBundle {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            _ => {}
-        }
-    }
-    0
-}
-
 /// Generate the full `guest/peer_callers.py` file for all peer contracts.
 fn generate_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> String {
     let any_arena: bool = peers
@@ -3175,7 +3129,7 @@ fn generate_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract
 
     if any_arena {
         // Same arena constant and helpers as host/callers.py (Rule 10 parity).
-        out.push_str("CALL_ARENA_BUF_LEN: int = 512\n");
+        out.push_str(&format!("CALL_ARENA_BUF_LEN: int = {CALL_ARENA_BUF_LEN}\n"));
         out.push_str("_OVERFLOW_BLOCK_ALIGN: int = ctypes.sizeof(ctypes.c_void_p)\n\n");
         out.push_str("def _arena_reset(arena: CallArena) -> None:\n");
         out.push_str("    \"\"\"Rewind the arena for reuse: retain all overflow blocks.\"\"\"\n");
@@ -3455,6 +3409,7 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
     use crate::ir::ReprType;
+    use crate::ir::ResolvedDependency;
     use crate::ir::Version;
     use polyplug_codegen::ResolvedBundleFile;
 

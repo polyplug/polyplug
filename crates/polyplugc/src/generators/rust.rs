@@ -4,10 +4,13 @@
 //! - Host-side: type-safe Rust wrappers to call plugins (for app developers)
 //! - Guest-side: ABI entry point, allocator hookup, interface stubs (for plugin developers)
 
+use super::CALL_ARENA_BUF_LEN;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::collect_peer_contracts;
 use super::is_native_runtime;
+use super::peer_min_version;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -140,7 +143,9 @@ impl CodeGenerator for RustGenerator {
         callers_out
             .push_str("/// from this buffer; outputs larger than it spill into host-allocated\n");
         callers_out.push_str("/// overflow blocks that the arena frees on the next reset.\n");
-        callers_out.push_str("const CALL_ARENA_BUF_LEN: usize = 512;\n\n");
+        callers_out.push_str(&format!(
+            "const CALL_ARENA_BUF_LEN: usize = {CALL_ARENA_BUF_LEN};\n\n"
+        ));
         callers_out.push_str("/// Host-side error type for contract calls.\n");
         callers_out.push_str("#[derive(Debug)]\n");
         callers_out.push_str("pub struct ContractError {\n");
@@ -3181,54 +3186,6 @@ fn emit_guest_host_contract_out_setup(out: &mut String, returns: &Option<Resolve
 const _: fn() = || {
     let _: String = rust_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U8));
 };
-
-/// Collect every contract in `ir.contracts` whose contract_id appears in the
-/// bundle's declared dependencies.  Returns an empty vec when there is no bundle
-/// or when no dependency matches any known contract.
-fn collect_peer_contracts(ir: &ValidatedIr) -> Vec<&ResolvedContract> {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return Vec::new(),
-    };
-
-    ir.contracts
-        .iter()
-        .filter(|c: &&ResolvedContract| {
-            deps.iter().any(|d: &ResolvedDependency| {
-                let dep_contract_id: u64 = match d {
-                    ResolvedDependency::ByContract { contract_id, .. } => *contract_id,
-                    ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
-                };
-                dep_contract_id == c.contract_id
-            })
-        })
-        .collect()
-}
-
-/// Return the `min_version` (major) for a dependency whose contract_id matches `target`.
-/// Returns 0 if no matching dependency is found (callers guard against empty peer set first).
-fn peer_min_version(ir: &ValidatedIr, target_contract_id: u64) -> u32 {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return 0,
-    };
-    for d in deps {
-        match d {
-            ResolvedDependency::ByContract {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            ResolvedDependency::ByBundle {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            _ => {}
-        }
-    }
-    0
-}
 
 /// Generate the full `guest/peer_callers.rs` file for all peer contracts.
 fn generate_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> String {

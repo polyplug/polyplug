@@ -4,17 +4,19 @@
 //! - Host-side: header-only C++ callers (RAII wrapper + interface dispatch)
 //! - Guest-side: extern "C" ABI wrappers + abstract base classes + interface statics
 
+use super::CALL_ARENA_BUF_LEN;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::collect_peer_contracts;
 use super::is_native_runtime;
+use super::peer_min_version;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -1098,7 +1100,9 @@ fn emit_cpp_call_arena_helpers(out: &mut String) {
     out.push_str("/// Variable-size VM return values (strings, buffers) are bump-allocated from\n");
     out.push_str("/// this buffer; outputs larger than it spill into host-allocated overflow\n");
     out.push_str("/// blocks that are retained across resets and freed only at teardown.\n");
-    out.push_str("static constexpr size_t CALL_ARENA_BUF_LEN = 512;\n\n");
+    out.push_str(&format!(
+        "static constexpr size_t CALL_ARENA_BUF_LEN = {CALL_ARENA_BUF_LEN};\n\n"
+    ));
 
     out.push_str("/// Minimum size of a host-allocated overflow block, including its header.\n");
     out.push_str("static constexpr size_t POLYPLUG_OVERFLOW_BLOCK_MIN = 4096;\n");
@@ -2754,54 +2758,6 @@ const _: fn() = || {
 
 // ─── Peer caller collection helpers ──────────────────────────────────────────
 
-/// Collect contracts from `ir.contracts` whose `contract_id` matches any entry
-/// in the bundle's declared dependencies.  Returns an empty vec when there is
-/// no bundle or no matching dependency.
-fn collect_peer_contracts(ir: &ValidatedIr) -> Vec<&ResolvedContract> {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return Vec::new(),
-    };
-
-    ir.contracts
-        .iter()
-        .filter(|c: &&ResolvedContract| {
-            deps.iter().any(|d: &ResolvedDependency| {
-                let dep_contract_id: u64 = match d {
-                    ResolvedDependency::ByContract { contract_id, .. } => *contract_id,
-                    ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
-                };
-                dep_contract_id == c.contract_id
-            })
-        })
-        .collect()
-}
-
-/// Return the `min_version` (major) for the dependency matching `target_contract_id`.
-/// Returns 0 if no matching dependency is found.
-fn peer_min_version(ir: &ValidatedIr, target_contract_id: u64) -> u32 {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return 0,
-    };
-    for d in deps {
-        match d {
-            ResolvedDependency::ByContract {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            ResolvedDependency::ByBundle {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            _ => {}
-        }
-    }
-    0
-}
-
 // ─── Peer callers file generator ─────────────────────────────────────────────
 
 /// Generate the full `guest/peer_callers.hpp` file for all peer contracts.
@@ -3186,6 +3142,7 @@ mod tests {
 
     use super::*;
     use crate::ir::ReprType;
+    use crate::ir::ResolvedDependency;
     use crate::ir::ResolvedParam;
     use crate::ir::Version;
 

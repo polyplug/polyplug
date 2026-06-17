@@ -3,13 +3,14 @@ use std::path::PathBuf;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::collect_peer_contracts;
+use super::peer_min_version;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -98,7 +99,7 @@ impl CodeGenerator for LuaGenerator {
         }
 
         // ── guest/peer_callers.lua ─────────────────────────────────────────────
-        let peer_contracts: Vec<&ResolvedContract> = collect_lua_peer_contracts(ir);
+        let peer_contracts: Vec<&ResolvedContract> = collect_peer_contracts(ir);
         if !peer_contracts.is_empty() {
             let peer_callers_lua: String =
                 generate_lua_guest_peer_callers_file(ir, &peer_contracts);
@@ -1855,54 +1856,6 @@ fn emit_lua_guest_host_contract_out_setup(
 
 // ─── Guest Peer Caller Generation ─────────────────────────────────────────────
 
-/// Collect every contract in `ir.contracts` whose `contract_id` appears in the
-/// bundle's declared dependencies.  Returns an empty vec when there is no bundle
-/// or when no dependency matches any known contract.
-fn collect_lua_peer_contracts(ir: &ValidatedIr) -> Vec<&ResolvedContract> {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return Vec::new(),
-    };
-
-    ir.contracts
-        .iter()
-        .filter(|c: &&ResolvedContract| {
-            deps.iter().any(|d: &ResolvedDependency| {
-                let dep_contract_id: u64 = match d {
-                    ResolvedDependency::ByContract { contract_id, .. } => *contract_id,
-                    ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
-                };
-                dep_contract_id == c.contract_id
-            })
-        })
-        .collect()
-}
-
-/// Return the `min_version` (major) for the dependency whose `contract_id` matches `target`.
-/// Returns 0 when no matching dependency is found (callers guard the empty-peer-set case first).
-fn peer_min_version_lua(ir: &ValidatedIr, target_contract_id: u64) -> u32 {
-    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
-        Some(b) => &b.dependencies,
-        None => return 0,
-    };
-    for d in deps {
-        match d {
-            ResolvedDependency::ByContract {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            ResolvedDependency::ByBundle {
-                contract_id,
-                min_version,
-                ..
-            } if *contract_id == target_contract_id => return *min_version,
-            _ => {}
-        }
-    }
-    0
-}
-
 /// Convert a guest contract name to the Lua peer-caller class name.
 /// e.g. "pipeline.Validator" -> "PipelineValidatorPeer"
 fn contract_name_to_lua_peer_class(name: &str) -> String {
@@ -1951,7 +1904,7 @@ fn generate_lua_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedCont
     out.push_str("local M = {}\n\n");
 
     for contract in peers {
-        let min_ver: u32 = peer_min_version_lua(ir, contract.contract_id);
+        let min_ver: u32 = peer_min_version(ir, contract.contract_id);
         generate_lua_guest_peer_caller(&mut out, contract, min_ver, &ir.enums);
     }
 
@@ -2588,6 +2541,7 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
     use crate::ir::ReprType;
+    use crate::ir::ResolvedDependency;
     use crate::ir::Version;
     use polyplug_codegen::ResolvedBundleFile;
 
@@ -3117,7 +3071,7 @@ mod tests {
             }),
         };
 
-        let peers: Vec<&ResolvedContract> = collect_lua_peer_contracts(&ir);
+        let peers: Vec<&ResolvedContract> = collect_peer_contracts(&ir);
         assert!(
             !peers.is_empty(),
             "should find peer contract for declared dependency"
@@ -3199,7 +3153,7 @@ mod tests {
             host_contracts: vec![],
             bundle: None,
         };
-        let peers: Vec<&ResolvedContract> = collect_lua_peer_contracts(&ir_no_bundle);
+        let peers: Vec<&ResolvedContract> = collect_peer_contracts(&ir_no_bundle);
         assert!(
             peers.is_empty(),
             "should produce no peers when there is no bundle"
@@ -3241,7 +3195,7 @@ mod tests {
                 needs_reinit_on_dep_reload: false,
             }),
         };
-        let peers2: Vec<&ResolvedContract> = collect_lua_peer_contracts(&ir_no_deps);
+        let peers2: Vec<&ResolvedContract> = collect_peer_contracts(&ir_no_deps);
         assert!(
             peers2.is_empty(),
             "should produce no peers when bundle has no declared dependencies"

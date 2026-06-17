@@ -9,9 +9,62 @@ pub(crate) mod lua;
 pub(crate) mod python;
 pub(crate) mod rust;
 
+use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
 use crate::ir::ValidatedIr;
 use polyplug_codegen::PolyplugcError;
+
+/// Arena buffer length (bytes) emitted by every language generator.
+pub(crate) const CALL_ARENA_BUF_LEN: usize = 512;
+
+/// Collect every contract in `ir.contracts` whose `contract_id` appears in the
+/// bundle's declared dependencies.  Returns an empty vec when there is no bundle
+/// or when no dependency matches any known contract.
+pub(crate) fn collect_peer_contracts(ir: &ValidatedIr) -> Vec<&ResolvedContract> {
+    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
+        Some(b) => &b.dependencies,
+        None => return Vec::new(),
+    };
+
+    ir.contracts
+        .iter()
+        .filter(|c: &&ResolvedContract| {
+            deps.iter().any(|d: &ResolvedDependency| {
+                let dep_contract_id: u64 = match d {
+                    ResolvedDependency::ByContract { contract_id, .. } => *contract_id,
+                    ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
+                };
+                dep_contract_id == c.contract_id
+            })
+        })
+        .collect()
+}
+
+/// Return the `min_version` (major) for a dependency whose `contract_id` matches
+/// `target_contract_id`.  Returns 0 when no match is found; callers guard against
+/// an empty peer set before reaching this.
+pub(crate) fn peer_min_version(ir: &ValidatedIr, target_contract_id: u64) -> u32 {
+    let deps: &[ResolvedDependency] = match ir.bundle.as_ref() {
+        Some(b) => &b.dependencies,
+        None => return 0,
+    };
+    for d in deps {
+        match d {
+            ResolvedDependency::ByContract {
+                contract_id,
+                min_version,
+                ..
+            } if *contract_id == target_contract_id => return *min_version,
+            ResolvedDependency::ByBundle {
+                contract_id,
+                min_version,
+                ..
+            } if *contract_id == target_contract_id => return *min_version,
+            _ => {}
+        }
+    }
+    0
+}
 
 /// Check if a runtime is a native runtime.
 pub fn is_native_runtime(runtime: &str) -> bool {
