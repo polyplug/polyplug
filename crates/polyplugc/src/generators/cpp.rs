@@ -3334,7 +3334,6 @@ mod tests {
 
     #[test]
     fn generate_cpp_host_contract_has_factory_method() {
-
         let contract = ResolvedContract {
             name: "test.add".to_owned(),
             contract_id: 0x123456789ABCDEF0,
@@ -4129,7 +4128,6 @@ mod tests {
     /// must produce a PeerCallers class in guest/peer_callers.hpp.
     #[test]
     fn peer_caller_emitted_for_declared_dependency() {
-
         let contract_id: u64 = 0xDEAD_BEEF_1234_5678_u64;
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],

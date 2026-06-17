@@ -3069,7 +3069,6 @@ mod tests {
 
     #[test]
     fn peer_caller_emitted_for_declared_dependency() {
-
         let contract: ResolvedContract = ResolvedContract {
             name: "pipeline.Validator".to_owned(),
             contract_id: 0xAAAA_BBBB_CCCC_DDDD_u64,
@@ -3181,7 +3180,6 @@ mod tests {
 
     #[test]
     fn no_peer_callers_without_dependencies() {
-
         let contract: ResolvedContract = ResolvedContract {
             name: "pipeline.Validator".to_owned(),
             contract_id: 0xAAAA_BBBB_CCCC_DDDD_u64,

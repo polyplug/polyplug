@@ -3839,7 +3839,6 @@ mod tests {
 
     #[test]
     fn host_caller_with_stringview_return_uses_arena() {
-
         let contract: ResolvedContract = ResolvedContract {
             name: "pipeline.decoder".to_owned(),
             contract_id: 0x1234_5678_9ABC_DEF0_u64,
@@ -3889,7 +3888,6 @@ mod tests {
 
     #[test]
     fn host_caller_with_primitive_return_passes_null_arena() {
-
         let contract: ResolvedContract = ResolvedContract {
             name: "math.adder".to_owned(),
             contract_id: 0x0FED_CBA9_8765_4321_u64,
@@ -3927,7 +3925,6 @@ mod tests {
 
     #[test]
     fn generate_host_contract_trait_produces_trait() {
-
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x1234_5678_9ABC_DEF0_u64,
@@ -3982,7 +3979,6 @@ mod tests {
 
     #[test]
     fn generate_host_contracts_file_produces_file() {
-
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
@@ -4022,7 +4018,6 @@ mod tests {
 
     #[test]
     fn generate_host_with_host_contracts_produces_host_contracts_file() {
-
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -4140,7 +4135,6 @@ mod tests {
 
     #[test]
     fn guest_host_contract_method_stringview_return_emits_borrowed_str() {
-
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.cache".to_owned(),
             contract_id: 0xAAAA_BBBB_CCCC_DDDD_u64,
@@ -4179,7 +4173,6 @@ mod tests {
 
     #[test]
     fn guest_host_contract_method_buffer_return_emits_borrowed_slice() {
-
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.store".to_owned(),
             contract_id: 0x1111_2222_3333_4444_u64,
@@ -4302,7 +4295,6 @@ mod tests {
 
     #[test]
     fn generate_guest_host_contract_caller_produces_struct() {
-
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x1234_5678_9ABC_DEF0_u64,
@@ -4344,7 +4336,6 @@ mod tests {
 
     #[test]
     fn generate_guest_host_contracts_file_produces_file() {
-
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
@@ -4381,7 +4372,6 @@ mod tests {
 
     #[test]
     fn generate_guest_with_host_contracts_produces_host_contract_callers_file() {
-
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -4447,7 +4437,6 @@ mod tests {
 
     #[test]
     fn generate_host_interface_factories_file_produces_file() {
-
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
@@ -4501,7 +4490,6 @@ mod tests {
 
     #[test]
     fn generate_host_with_host_contracts_produces_interface_factories_file() {
-
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -4567,7 +4555,6 @@ mod tests {
 
     #[test]
     fn interface_factory_has_safety_comments() {
-
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
@@ -4839,7 +4826,6 @@ mod tests {
 
     #[test]
     fn no_peer_callers_without_dependencies() {
-
         // Case 1: bundle field is None (--api mode)
         let ir_no_bundle: ValidatedIr = ValidatedIr {
             types: vec![],
