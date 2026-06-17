@@ -997,12 +997,10 @@ impl Runtime {
             let bundle_deps: Vec<crate::runtime_store::BundleDependency> =
                 manifest.parsed_bundle_dependencies();
 
-            // Parse version from manifest
-            let bundle_version: Version = manifest.version.parse::<Version>().unwrap_or(Version {
-                major: 0,
-                minor: 0,
-                patch: 0,
-            });
+            // Parse version from manifest. A malformed version is malformed manifest
+            // content — reject it rather than silently coercing to 0.0.0.
+            let bundle_version: Version =
+                parse_manifest_version(&manifest.version, &manifest.name, &manifest.path)?;
 
             // Convert loader string to SupportedLanguage. An unrecognized loader
             // string falls back to Rust (see `supported_language_from_str`); surface
