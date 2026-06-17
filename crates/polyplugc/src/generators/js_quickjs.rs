@@ -3534,8 +3534,8 @@ fn generate_ts_peer_caller_class(
     out.push_str("        }\n");
     // Snapshot the registry revision at resolve time. The bridge reads the runtime's
     // monotonic counter (bumped on every load/reload/unload) and returns it as [lo, hi]
-    // f64 halves. `revision` is absent on older bridges — treat that as 0 (no tracking).
-    out.push_str("        const _rev = bridge.revision ? bridge.revision() : [0, 0];\n");
+    // f64 halves. The loader always installs `revision` on the bridge, so call it directly.
+    out.push_str("        const _rev = bridge.revision();\n");
     out.push_str(&format!(
         "        return new {}(bridge, hostPtr, _rev[0], _rev[1]);\n",
         class_name
@@ -3558,9 +3558,7 @@ fn generate_ts_peer_caller_class(
     out.push_str("        if (handle === null || handle === undefined) {\n");
     out.push_str("            return false;\n");
     out.push_str("        }\n");
-    out.push_str(
-        "        const _rev = this._bridge.revision ? this._bridge.revision() : [0, 0];\n",
-    );
+    out.push_str("        const _rev = this._bridge.revision();\n");
     out.push_str("        this._revLo = _rev[0];\n");
     out.push_str("        this._revHi = _rev[1];\n");
     out.push_str("        return true;\n");
@@ -3568,7 +3566,7 @@ fn generate_ts_peer_caller_class(
 
     // True when the live registry revision differs from the one cached at resolve time.
     out.push_str("    private _revisionChanged(): boolean {\n");
-    out.push_str("        if (!this._bridge || !this._bridge.revision) {\n");
+    out.push_str("        if (!this._bridge) {\n");
     out.push_str("            return false;\n");
     out.push_str("        }\n");
     out.push_str("        const _rev = this._bridge.revision();\n");

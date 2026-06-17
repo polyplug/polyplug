@@ -60,7 +60,7 @@ export class ValidatorPeer {
         if (handle === null || handle === undefined) {
             return null;
         }
-        const _rev = bridge.revision ? bridge.revision() : [0, 0];
+        const _rev = bridge.revision();
         return new ValidatorPeer(bridge, hostPtr, _rev[0], _rev[1]);
     }
 
@@ -72,14 +72,14 @@ export class ValidatorPeer {
         if (handle === null || handle === undefined) {
             return false;
         }
-        const _rev = this._bridge.revision ? this._bridge.revision() : [0, 0];
+        const _rev = this._bridge.revision();
         this._revLo = _rev[0];
         this._revHi = _rev[1];
         return true;
     }
 
     private _revisionChanged(): boolean {
-        if (!this._bridge || !this._bridge.revision) {
+        if (!this._bridge) {
             return false;
         }
         const _rev = this._bridge.revision();
