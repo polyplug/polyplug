@@ -6,11 +6,24 @@
 #include "polyplug/abi.hpp"
 #include "polyplug/runtime.hpp"
 #include <array>
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 
 namespace polyplug_generated {
+
+/// Read the runtime's registry revision through `revision_ptr` with one
+/// acquire atomic load. Returns 0 when the pointer is null (no runtime),
+/// making the per-call staleness check a no-op.
+inline uint64_t polyplug_load_revision(const uint64_t* revision_ptr) noexcept {
+    if (revision_ptr == nullptr) { return 0; }
+    // SAFETY: revision_ptr was returned by HostApi.revision_counter and points at
+    // the runtime's revision counter — a Rust AtomicU64, layout-compatible with
+    // std::atomic<std::uint64_t> — whose address is stable for the runtime's lifetime.
+    return reinterpret_cast<const std::atomic<std::uint64_t>*>(revision_ptr)->load(std::memory_order_acquire);
+}
 
 /// Size of each caller's inline call-arena buffer.
 ///
@@ -178,7 +191,12 @@ public:
         // handle from `create_instance` and use it as an opaque dispatch token.
         GuestContractInstance instance{};
         host->create_guest_instance(host, iface, nullptr, &instance);
-        return PipelineDecoderContract(iface, instance, host);
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        const uint64_t* revision_ptr = host->revision_counter(host);
+        const uint64_t cached_revision = polyplug_load_revision(revision_ptr);
+        return PipelineDecoderContract(iface, instance, host, handle, revision_ptr, cached_revision);
     }
 
     /// Destructor - calls `destroy_instance` to clean up.
@@ -187,6 +205,13 @@ public:
         // arena_buf_ is null only on a moved-from caller.
         if (arena_buf_) {
             polyplug_arena_free_all(&arena_);
+        }
+        // If the registry changed since we resolved, the cached interface and
+        // instance are stale — a reload/unload reclaimed their backing — so calling
+        // the dead interface's destroy would be UB; the reload/unload already
+        // reclaimed the instance, so skip the destroy entirely.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {
+            return;
         }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
@@ -201,6 +226,9 @@ public:
         : interface_(other.interface_),
           instance_(other.instance_),
           host_(other.host_),
+          handle_(other.handle_),
+          revision_ptr_(other.revision_ptr_),
+          cached_revision_(other.cached_revision_),
           arena_buf_(std::move(other.arena_buf_)),
           arena_(other.arena_) {
         other.instance_.data = nullptr;  // Prevent double-destroy.
@@ -211,11 +239,13 @@ public:
             if (arena_buf_) {
                 polyplug_arena_free_all(&arena_);
             }
-            // Destroy current instance first
-            if (instance_.data != nullptr) {
+            // Destroy current instance first — but only if the registry has not
+            // changed under us; a reload/unload already reclaimed a stale instance.
+            if (instance_.data != nullptr && polyplug_load_revision(revision_ptr_) == cached_revision_) {
                 host_->destroy_guest_instance(host_, interface_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+            handle_ = other.handle_; revision_ptr_ = other.revision_ptr_; cached_revision_ = other.cached_revision_;
             arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
         }
         return *this;
@@ -234,6 +264,14 @@ public:
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     void reset() noexcept {
+        // If the registry changed under us, the cached interface/instance are
+        // stale (a reload/unload reclaimed their backing). revalidate() abandons
+        // the dead instance and builds a fresh one on the current interface —
+        // exactly the fresh instance reset() promises — so defer to it.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {
+            revalidate();
+            return;
+        }
         if (instance_.data != nullptr) {
             host_->destroy_guest_instance(host_, interface_, instance_);
         }
@@ -245,6 +283,12 @@ public:
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
     StringView decode(StringView input) {
+        // Per-call staleness check: re-resolve before dispatch if the registry changed,
+        // so the cached interface pointer is never used once it dangles.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate()) {
+            static constexpr const char* err_msg = "contract not found";
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::NotFound), StringView{reinterpret_cast<const uint8_t*>(err_msg), 18}});
+        }
         // Reset the arena at call start: frees the previous call's overflow
         // blocks and rewinds the primary region, invalidating prior views.
         polyplug_arena_reset(&arena_);
@@ -280,20 +324,56 @@ public:
     }
 
 private:
+    /// Re-resolve the cached interface after the registry changed under us.
+    ///
+    /// A hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot,
+    /// so it resolves to null and `false` is returned (the contract is gone).
+    ///
+    /// The old instance is ABANDONED, never destroyed: after a reload its
+    /// interface and the guest state it created are already epoch-reclaimed, so
+    /// calling the dead interface's destroy would be UB.
+    bool revalidate() noexcept {
+        if (host_ == nullptr) {
+            return false;
+        }
+        const GuestContractInterface* iface = host_->resolve_guest_contract(host_, handle_);
+        if (iface == nullptr) {
+            return false;
+        }
+        GuestContractInstance inst{};
+        host_->create_guest_instance(host_, iface, nullptr, &inst);
+        interface_ = iface;
+        instance_ = inst;
+        cached_revision_ = polyplug_load_revision(revision_ptr_);
+        return true;
+    }
+
     /// Resolved interface pointer from the registry.
     const GuestContractInterface* interface_;
     /// Instance handle created by `create_instance`.
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
     const HostApi* host_;
+    /// Contract handle, retained so the cache can re-resolve after a hot-reload
+    /// (which swaps a new interface into the same slot) or report a gone contract.
+    GuestContractHandle handle_;
+    /// Pointer to the runtime's registry revision counter, fetched once via
+    /// `HostApi.revision_counter`. Polled before each dispatch (one atomic load,
+    /// no call into the runtime); null when there is no runtime.
+    const uint64_t* revision_ptr_;
+    /// Revision value read when the interface was resolved. Compared before each
+    /// dispatch against the live counter to detect a reload/unload and re-resolve,
+    /// so the cached interface pointer never dangles.
+    uint64_t cached_revision_;
     /// Stable-address backing buffer for the per-call arena. Held by unique_ptr
     /// so the arena's interior pointers survive moving the caller value.
     std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;
     /// Per-call bump arena over `arena_buf_`, reset at each arena-backed call.
     CallArena arena_;
 
-    explicit PipelineDecoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)
-        : interface_(iface), instance_(inst), host_(host),
+    explicit PipelineDecoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision)
+        : interface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision),
           arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),
           arena_(polyplug_arena_new(arena_buf_->data(), CALL_ARENA_BUF_LEN, host)) {}
 };
@@ -337,7 +417,12 @@ public:
         // handle from `create_instance` and use it as an opaque dispatch token.
         GuestContractInstance instance{};
         host->create_guest_instance(host, iface, nullptr, &instance);
-        return DataTransformerContract(iface, instance, host);
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        const uint64_t* revision_ptr = host->revision_counter(host);
+        const uint64_t cached_revision = polyplug_load_revision(revision_ptr);
+        return DataTransformerContract(iface, instance, host, handle, revision_ptr, cached_revision);
     }
 
     /// Destructor - calls `destroy_instance` to clean up.
@@ -346,6 +431,13 @@ public:
         // arena_buf_ is null only on a moved-from caller.
         if (arena_buf_) {
             polyplug_arena_free_all(&arena_);
+        }
+        // If the registry changed since we resolved, the cached interface and
+        // instance are stale — a reload/unload reclaimed their backing — so calling
+        // the dead interface's destroy would be UB; the reload/unload already
+        // reclaimed the instance, so skip the destroy entirely.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {
+            return;
         }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
@@ -360,6 +452,9 @@ public:
         : interface_(other.interface_),
           instance_(other.instance_),
           host_(other.host_),
+          handle_(other.handle_),
+          revision_ptr_(other.revision_ptr_),
+          cached_revision_(other.cached_revision_),
           arena_buf_(std::move(other.arena_buf_)),
           arena_(other.arena_) {
         other.instance_.data = nullptr;  // Prevent double-destroy.
@@ -370,11 +465,13 @@ public:
             if (arena_buf_) {
                 polyplug_arena_free_all(&arena_);
             }
-            // Destroy current instance first
-            if (instance_.data != nullptr) {
+            // Destroy current instance first — but only if the registry has not
+            // changed under us; a reload/unload already reclaimed a stale instance.
+            if (instance_.data != nullptr && polyplug_load_revision(revision_ptr_) == cached_revision_) {
                 host_->destroy_guest_instance(host_, interface_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+            handle_ = other.handle_; revision_ptr_ = other.revision_ptr_; cached_revision_ = other.cached_revision_;
             arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
         }
         return *this;
@@ -393,6 +490,14 @@ public:
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     void reset() noexcept {
+        // If the registry changed under us, the cached interface/instance are
+        // stale (a reload/unload reclaimed their backing). revalidate() abandons
+        // the dead instance and builds a fresh one on the current interface —
+        // exactly the fresh instance reset() promises — so defer to it.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {
+            revalidate();
+            return;
+        }
         if (instance_.data != nullptr) {
             host_->destroy_guest_instance(host_, interface_, instance_);
         }
@@ -404,6 +509,12 @@ public:
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
     StringView transform(StringView input) {
+        // Per-call staleness check: re-resolve before dispatch if the registry changed,
+        // so the cached interface pointer is never used once it dangles.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate()) {
+            static constexpr const char* err_msg = "contract not found";
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::NotFound), StringView{reinterpret_cast<const uint8_t*>(err_msg), 18}});
+        }
         // Reset the arena at call start: frees the previous call's overflow
         // blocks and rewinds the primary region, invalidating prior views.
         polyplug_arena_reset(&arena_);
@@ -439,20 +550,56 @@ public:
     }
 
 private:
+    /// Re-resolve the cached interface after the registry changed under us.
+    ///
+    /// A hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot,
+    /// so it resolves to null and `false` is returned (the contract is gone).
+    ///
+    /// The old instance is ABANDONED, never destroyed: after a reload its
+    /// interface and the guest state it created are already epoch-reclaimed, so
+    /// calling the dead interface's destroy would be UB.
+    bool revalidate() noexcept {
+        if (host_ == nullptr) {
+            return false;
+        }
+        const GuestContractInterface* iface = host_->resolve_guest_contract(host_, handle_);
+        if (iface == nullptr) {
+            return false;
+        }
+        GuestContractInstance inst{};
+        host_->create_guest_instance(host_, iface, nullptr, &inst);
+        interface_ = iface;
+        instance_ = inst;
+        cached_revision_ = polyplug_load_revision(revision_ptr_);
+        return true;
+    }
+
     /// Resolved interface pointer from the registry.
     const GuestContractInterface* interface_;
     /// Instance handle created by `create_instance`.
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
     const HostApi* host_;
+    /// Contract handle, retained so the cache can re-resolve after a hot-reload
+    /// (which swaps a new interface into the same slot) or report a gone contract.
+    GuestContractHandle handle_;
+    /// Pointer to the runtime's registry revision counter, fetched once via
+    /// `HostApi.revision_counter`. Polled before each dispatch (one atomic load,
+    /// no call into the runtime); null when there is no runtime.
+    const uint64_t* revision_ptr_;
+    /// Revision value read when the interface was resolved. Compared before each
+    /// dispatch against the live counter to detect a reload/unload and re-resolve,
+    /// so the cached interface pointer never dangles.
+    uint64_t cached_revision_;
     /// Stable-address backing buffer for the per-call arena. Held by unique_ptr
     /// so the arena's interior pointers survive moving the caller value.
     std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;
     /// Per-call bump arena over `arena_buf_`, reset at each arena-backed call.
     CallArena arena_;
 
-    explicit DataTransformerContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)
-        : interface_(iface), instance_(inst), host_(host),
+    explicit DataTransformerContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision)
+        : interface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision),
           arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),
           arena_(polyplug_arena_new(arena_buf_->data(), CALL_ARENA_BUF_LEN, host)) {}
 };
@@ -496,7 +643,12 @@ public:
         // handle from `create_instance` and use it as an opaque dispatch token.
         GuestContractInstance instance{};
         host->create_guest_instance(host, iface, nullptr, &instance);
-        return PipelineEncoderContract(iface, instance, host);
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        const uint64_t* revision_ptr = host->revision_counter(host);
+        const uint64_t cached_revision = polyplug_load_revision(revision_ptr);
+        return PipelineEncoderContract(iface, instance, host, handle, revision_ptr, cached_revision);
     }
 
     /// Destructor - calls `destroy_instance` to clean up.
@@ -505,6 +657,13 @@ public:
         // arena_buf_ is null only on a moved-from caller.
         if (arena_buf_) {
             polyplug_arena_free_all(&arena_);
+        }
+        // If the registry changed since we resolved, the cached interface and
+        // instance are stale — a reload/unload reclaimed their backing — so calling
+        // the dead interface's destroy would be UB; the reload/unload already
+        // reclaimed the instance, so skip the destroy entirely.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {
+            return;
         }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
@@ -519,6 +678,9 @@ public:
         : interface_(other.interface_),
           instance_(other.instance_),
           host_(other.host_),
+          handle_(other.handle_),
+          revision_ptr_(other.revision_ptr_),
+          cached_revision_(other.cached_revision_),
           arena_buf_(std::move(other.arena_buf_)),
           arena_(other.arena_) {
         other.instance_.data = nullptr;  // Prevent double-destroy.
@@ -529,11 +691,13 @@ public:
             if (arena_buf_) {
                 polyplug_arena_free_all(&arena_);
             }
-            // Destroy current instance first
-            if (instance_.data != nullptr) {
+            // Destroy current instance first — but only if the registry has not
+            // changed under us; a reload/unload already reclaimed a stale instance.
+            if (instance_.data != nullptr && polyplug_load_revision(revision_ptr_) == cached_revision_) {
                 host_->destroy_guest_instance(host_, interface_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+            handle_ = other.handle_; revision_ptr_ = other.revision_ptr_; cached_revision_ = other.cached_revision_;
             arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
         }
         return *this;
@@ -552,6 +716,14 @@ public:
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     void reset() noexcept {
+        // If the registry changed under us, the cached interface/instance are
+        // stale (a reload/unload reclaimed their backing). revalidate() abandons
+        // the dead instance and builds a fresh one on the current interface —
+        // exactly the fresh instance reset() promises — so defer to it.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {
+            revalidate();
+            return;
+        }
         if (instance_.data != nullptr) {
             host_->destroy_guest_instance(host_, interface_, instance_);
         }
@@ -563,6 +735,12 @@ public:
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
     StringView encode(StringView input) {
+        // Per-call staleness check: re-resolve before dispatch if the registry changed,
+        // so the cached interface pointer is never used once it dangles.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate()) {
+            static constexpr const char* err_msg = "contract not found";
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::NotFound), StringView{reinterpret_cast<const uint8_t*>(err_msg), 18}});
+        }
         // Reset the arena at call start: frees the previous call's overflow
         // blocks and rewinds the primary region, invalidating prior views.
         polyplug_arena_reset(&arena_);
@@ -598,20 +776,56 @@ public:
     }
 
 private:
+    /// Re-resolve the cached interface after the registry changed under us.
+    ///
+    /// A hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot,
+    /// so it resolves to null and `false` is returned (the contract is gone).
+    ///
+    /// The old instance is ABANDONED, never destroyed: after a reload its
+    /// interface and the guest state it created are already epoch-reclaimed, so
+    /// calling the dead interface's destroy would be UB.
+    bool revalidate() noexcept {
+        if (host_ == nullptr) {
+            return false;
+        }
+        const GuestContractInterface* iface = host_->resolve_guest_contract(host_, handle_);
+        if (iface == nullptr) {
+            return false;
+        }
+        GuestContractInstance inst{};
+        host_->create_guest_instance(host_, iface, nullptr, &inst);
+        interface_ = iface;
+        instance_ = inst;
+        cached_revision_ = polyplug_load_revision(revision_ptr_);
+        return true;
+    }
+
     /// Resolved interface pointer from the registry.
     const GuestContractInterface* interface_;
     /// Instance handle created by `create_instance`.
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
     const HostApi* host_;
+    /// Contract handle, retained so the cache can re-resolve after a hot-reload
+    /// (which swaps a new interface into the same slot) or report a gone contract.
+    GuestContractHandle handle_;
+    /// Pointer to the runtime's registry revision counter, fetched once via
+    /// `HostApi.revision_counter`. Polled before each dispatch (one atomic load,
+    /// no call into the runtime); null when there is no runtime.
+    const uint64_t* revision_ptr_;
+    /// Revision value read when the interface was resolved. Compared before each
+    /// dispatch against the live counter to detect a reload/unload and re-resolve,
+    /// so the cached interface pointer never dangles.
+    uint64_t cached_revision_;
     /// Stable-address backing buffer for the per-call arena. Held by unique_ptr
     /// so the arena's interior pointers survive moving the caller value.
     std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;
     /// Per-call bump arena over `arena_buf_`, reset at each arena-backed call.
     CallArena arena_;
 
-    explicit PipelineEncoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)
-        : interface_(iface), instance_(inst), host_(host),
+    explicit PipelineEncoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision)
+        : interface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision),
           arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),
           arena_(polyplug_arena_new(arena_buf_->data(), CALL_ARENA_BUF_LEN, host)) {}
 };
@@ -655,7 +869,12 @@ public:
         // handle from `create_instance` and use it as an opaque dispatch token.
         GuestContractInstance instance{};
         host->create_guest_instance(host, iface, nullptr, &instance);
-        return DataReporterContract(iface, instance, host);
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        const uint64_t* revision_ptr = host->revision_counter(host);
+        const uint64_t cached_revision = polyplug_load_revision(revision_ptr);
+        return DataReporterContract(iface, instance, host, handle, revision_ptr, cached_revision);
     }
 
     /// Destructor - calls `destroy_instance` to clean up.
@@ -664,6 +883,13 @@ public:
         // arena_buf_ is null only on a moved-from caller.
         if (arena_buf_) {
             polyplug_arena_free_all(&arena_);
+        }
+        // If the registry changed since we resolved, the cached interface and
+        // instance are stale — a reload/unload reclaimed their backing — so calling
+        // the dead interface's destroy would be UB; the reload/unload already
+        // reclaimed the instance, so skip the destroy entirely.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {
+            return;
         }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
@@ -678,6 +904,9 @@ public:
         : interface_(other.interface_),
           instance_(other.instance_),
           host_(other.host_),
+          handle_(other.handle_),
+          revision_ptr_(other.revision_ptr_),
+          cached_revision_(other.cached_revision_),
           arena_buf_(std::move(other.arena_buf_)),
           arena_(other.arena_) {
         other.instance_.data = nullptr;  // Prevent double-destroy.
@@ -688,11 +917,13 @@ public:
             if (arena_buf_) {
                 polyplug_arena_free_all(&arena_);
             }
-            // Destroy current instance first
-            if (instance_.data != nullptr) {
+            // Destroy current instance first — but only if the registry has not
+            // changed under us; a reload/unload already reclaimed a stale instance.
+            if (instance_.data != nullptr && polyplug_load_revision(revision_ptr_) == cached_revision_) {
                 host_->destroy_guest_instance(host_, interface_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+            handle_ = other.handle_; revision_ptr_ = other.revision_ptr_; cached_revision_ = other.cached_revision_;
             arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
         }
         return *this;
@@ -711,6 +942,14 @@ public:
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     void reset() noexcept {
+        // If the registry changed under us, the cached interface/instance are
+        // stale (a reload/unload reclaimed their backing). revalidate() abandons
+        // the dead instance and builds a fresh one on the current interface —
+        // exactly the fresh instance reset() promises — so defer to it.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {
+            revalidate();
+            return;
+        }
         if (instance_.data != nullptr) {
             host_->destroy_guest_instance(host_, interface_, instance_);
         }
@@ -722,6 +961,12 @@ public:
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
     StringView report(StringView input) {
+        // Per-call staleness check: re-resolve before dispatch if the registry changed,
+        // so the cached interface pointer is never used once it dangles.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate()) {
+            static constexpr const char* err_msg = "contract not found";
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::NotFound), StringView{reinterpret_cast<const uint8_t*>(err_msg), 18}});
+        }
         // Reset the arena at call start: frees the previous call's overflow
         // blocks and rewinds the primary region, invalidating prior views.
         polyplug_arena_reset(&arena_);
@@ -757,20 +1002,56 @@ public:
     }
 
 private:
+    /// Re-resolve the cached interface after the registry changed under us.
+    ///
+    /// A hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot,
+    /// so it resolves to null and `false` is returned (the contract is gone).
+    ///
+    /// The old instance is ABANDONED, never destroyed: after a reload its
+    /// interface and the guest state it created are already epoch-reclaimed, so
+    /// calling the dead interface's destroy would be UB.
+    bool revalidate() noexcept {
+        if (host_ == nullptr) {
+            return false;
+        }
+        const GuestContractInterface* iface = host_->resolve_guest_contract(host_, handle_);
+        if (iface == nullptr) {
+            return false;
+        }
+        GuestContractInstance inst{};
+        host_->create_guest_instance(host_, iface, nullptr, &inst);
+        interface_ = iface;
+        instance_ = inst;
+        cached_revision_ = polyplug_load_revision(revision_ptr_);
+        return true;
+    }
+
     /// Resolved interface pointer from the registry.
     const GuestContractInterface* interface_;
     /// Instance handle created by `create_instance`.
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
     const HostApi* host_;
+    /// Contract handle, retained so the cache can re-resolve after a hot-reload
+    /// (which swaps a new interface into the same slot) or report a gone contract.
+    GuestContractHandle handle_;
+    /// Pointer to the runtime's registry revision counter, fetched once via
+    /// `HostApi.revision_counter`. Polled before each dispatch (one atomic load,
+    /// no call into the runtime); null when there is no runtime.
+    const uint64_t* revision_ptr_;
+    /// Revision value read when the interface was resolved. Compared before each
+    /// dispatch against the live counter to detect a reload/unload and re-resolve,
+    /// so the cached interface pointer never dangles.
+    uint64_t cached_revision_;
     /// Stable-address backing buffer for the per-call arena. Held by unique_ptr
     /// so the arena's interior pointers survive moving the caller value.
     std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;
     /// Per-call bump arena over `arena_buf_`, reset at each arena-backed call.
     CallArena arena_;
 
-    explicit DataReporterContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)
-        : interface_(iface), instance_(inst), host_(host),
+    explicit DataReporterContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision)
+        : interface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision),
           arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),
           arena_(polyplug_arena_new(arena_buf_->data(), CALL_ARENA_BUF_LEN, host)) {}
 };
@@ -814,7 +1095,12 @@ public:
         // handle from `create_instance` and use it as an opaque dispatch token.
         GuestContractInstance instance{};
         host->create_guest_instance(host, iface, nullptr, &instance);
-        return PipelineValidatorContract(iface, instance, host);
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        const uint64_t* revision_ptr = host->revision_counter(host);
+        const uint64_t cached_revision = polyplug_load_revision(revision_ptr);
+        return PipelineValidatorContract(iface, instance, host, handle, revision_ptr, cached_revision);
     }
 
     /// Destructor - calls `destroy_instance` to clean up.
@@ -823,6 +1109,13 @@ public:
         // arena_buf_ is null only on a moved-from caller.
         if (arena_buf_) {
             polyplug_arena_free_all(&arena_);
+        }
+        // If the registry changed since we resolved, the cached interface and
+        // instance are stale — a reload/unload reclaimed their backing — so calling
+        // the dead interface's destroy would be UB; the reload/unload already
+        // reclaimed the instance, so skip the destroy entirely.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {
+            return;
         }
         // Destroy instance via factory
         // SAFETY: instance was created by create_instance and is valid.
@@ -837,6 +1130,9 @@ public:
         : interface_(other.interface_),
           instance_(other.instance_),
           host_(other.host_),
+          handle_(other.handle_),
+          revision_ptr_(other.revision_ptr_),
+          cached_revision_(other.cached_revision_),
           arena_buf_(std::move(other.arena_buf_)),
           arena_(other.arena_) {
         other.instance_.data = nullptr;  // Prevent double-destroy.
@@ -847,11 +1143,13 @@ public:
             if (arena_buf_) {
                 polyplug_arena_free_all(&arena_);
             }
-            // Destroy current instance first
-            if (instance_.data != nullptr) {
+            // Destroy current instance first — but only if the registry has not
+            // changed under us; a reload/unload already reclaimed a stale instance.
+            if (instance_.data != nullptr && polyplug_load_revision(revision_ptr_) == cached_revision_) {
                 host_->destroy_guest_instance(host_, interface_, instance_);
             }
             interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+            handle_ = other.handle_; revision_ptr_ = other.revision_ptr_; cached_revision_ = other.cached_revision_;
             arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;
         }
         return *this;
@@ -870,6 +1168,14 @@ public:
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     void reset() noexcept {
+        // If the registry changed under us, the cached interface/instance are
+        // stale (a reload/unload reclaimed their backing). revalidate() abandons
+        // the dead instance and builds a fresh one on the current interface —
+        // exactly the fresh instance reset() promises — so defer to it.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {
+            revalidate();
+            return;
+        }
         if (instance_.data != nullptr) {
             host_->destroy_guest_instance(host_, interface_, instance_);
         }
@@ -881,6 +1187,12 @@ public:
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
     StringView validate(StringView input) {
+        // Per-call staleness check: re-resolve before dispatch if the registry changed,
+        // so the cached interface pointer is never used once it dangles.
+        if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate()) {
+            static constexpr const char* err_msg = "contract not found";
+            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::NotFound), StringView{reinterpret_cast<const uint8_t*>(err_msg), 18}});
+        }
         // Reset the arena at call start: frees the previous call's overflow
         // blocks and rewinds the primary region, invalidating prior views.
         polyplug_arena_reset(&arena_);
@@ -916,20 +1228,56 @@ public:
     }
 
 private:
+    /// Re-resolve the cached interface after the registry changed under us.
+    ///
+    /// A hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot,
+    /// so it resolves to null and `false` is returned (the contract is gone).
+    ///
+    /// The old instance is ABANDONED, never destroyed: after a reload its
+    /// interface and the guest state it created are already epoch-reclaimed, so
+    /// calling the dead interface's destroy would be UB.
+    bool revalidate() noexcept {
+        if (host_ == nullptr) {
+            return false;
+        }
+        const GuestContractInterface* iface = host_->resolve_guest_contract(host_, handle_);
+        if (iface == nullptr) {
+            return false;
+        }
+        GuestContractInstance inst{};
+        host_->create_guest_instance(host_, iface, nullptr, &inst);
+        interface_ = iface;
+        instance_ = inst;
+        cached_revision_ = polyplug_load_revision(revision_ptr_);
+        return true;
+    }
+
     /// Resolved interface pointer from the registry.
     const GuestContractInterface* interface_;
     /// Instance handle created by `create_instance`.
     GuestContractInstance instance_;
     /// Host interface pointer (needed for create/destroy_instance).
     const HostApi* host_;
+    /// Contract handle, retained so the cache can re-resolve after a hot-reload
+    /// (which swaps a new interface into the same slot) or report a gone contract.
+    GuestContractHandle handle_;
+    /// Pointer to the runtime's registry revision counter, fetched once via
+    /// `HostApi.revision_counter`. Polled before each dispatch (one atomic load,
+    /// no call into the runtime); null when there is no runtime.
+    const uint64_t* revision_ptr_;
+    /// Revision value read when the interface was resolved. Compared before each
+    /// dispatch against the live counter to detect a reload/unload and re-resolve,
+    /// so the cached interface pointer never dangles.
+    uint64_t cached_revision_;
     /// Stable-address backing buffer for the per-call arena. Held by unique_ptr
     /// so the arena's interior pointers survive moving the caller value.
     std::unique_ptr<std::array<uint8_t, CALL_ARENA_BUF_LEN>> arena_buf_;
     /// Per-call bump arena over `arena_buf_`, reset at each arena-backed call.
     CallArena arena_;
 
-    explicit PipelineValidatorContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)
-        : interface_(iface), instance_(inst), host_(host),
+    explicit PipelineValidatorContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision)
+        : interface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision),
           arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),
           arena_(polyplug_arena_new(arena_buf_->data(), CALL_ARENA_BUF_LEN, host)) {}
 };

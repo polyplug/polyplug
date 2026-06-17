@@ -1378,6 +1378,23 @@ fn generate_host_contract_caller(
     out.push_str("    instance: GuestContractInstance,\n");
     out.push_str("    /// Host interface pointer (needed for create/destroy_instance).\n");
     out.push_str("    host: *const HostApi,\n");
+    out.push_str(
+        "    /// Contract handle, retained so the cache can re-resolve after a hot-reload\n\
+         \x20   /// (which swaps a new interface into the same slot) or report a gone contract.\n",
+    );
+    out.push_str("    handle: GuestContractHandle,\n");
+    out.push_str(
+        "    /// Pointer to the runtime's registry revision counter, fetched once via\n\
+         \x20   /// `HostApi.revision_counter`. Polled directly before each dispatch (one\n\
+         \x20   /// atomic load, no call into the runtime); null when there is no runtime.\n",
+    );
+    out.push_str("    revision_ptr: *const u64,\n");
+    out.push_str(
+        "    /// Revision value read when the interface was resolved. Compared before each\n\
+         \x20   /// dispatch against the live counter to detect a reload/unload and re-resolve,\n\
+         \x20   /// so the cached interface pointer never dangles.\n",
+    );
+    out.push_str("    cached_revision: u64,\n");
     if needs_arena {
         out.push_str(
             "    /// Stable-address backing buffer for the per-call arena. Boxed so the\n\
@@ -1435,6 +1452,35 @@ fn generate_host_contract_caller(
         "            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);\n",
     );
     out.push_str("        };\n");
+    out.push_str(
+        "        // Fetch the registry revision counter ONCE, then read its current value, so\n\
+         \x20       // every later call can detect a reload/unload with a direct atomic load (no\n\
+         \x20       // call back into the runtime) and re-resolve before dispatching.\n",
+    );
+    out.push_str(
+        "        // SAFETY: host is non-null here (resolve above reborrowed it via as_ref());\n",
+    );
+    out.push_str(
+        "        // as_ref() re-guards null, and revision_counter is an ABI fn ptr safe to call.\n",
+    );
+    out.push_str("        let revision_ptr: *const u64 = unsafe {\n");
+    out.push_str("            match host.as_ref() {\n");
+    out.push_str("                Some(host_api) => (host_api.revision_counter)(host),\n");
+    out.push_str("                None => core::ptr::null(),\n");
+    out.push_str("            }\n");
+    out.push_str("        };\n");
+    out.push_str("        let cached_revision: u64 = if revision_ptr.is_null() {\n");
+    out.push_str("            0\n");
+    out.push_str("        } else {\n");
+    out.push_str(
+        "            // SAFETY: revision_ptr was returned by revision_counter and points to the\n",
+    );
+    out.push_str("            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.\n");
+    out.push_str("            unsafe {\n");
+    out.push_str("                (*(revision_ptr as *const core::sync::atomic::AtomicU64))\n");
+    out.push_str("                    .load(core::sync::atomic::Ordering::Acquire)\n");
+    out.push_str("            }\n");
+    out.push_str("        };\n");
     if needs_arena {
         out.push_str(
             "        // Box the backing buffer first so the arena's interior pointers refer\n",
@@ -1447,13 +1493,34 @@ fn generate_host_contract_caller(
             "        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);\n",
         );
         out.push_str(&format!(
-            "        Some({struct_name} {{ interface, instance, host, arena_buf, arena }})\n"
+            "        Some({struct_name} {{ interface, instance, host, handle, revision_ptr, cached_revision, arena_buf, arena }})\n"
         ));
     } else {
         out.push_str(&format!(
-            "        Some({struct_name} {{ interface, instance, host }})\n"
+            "        Some({struct_name} {{ interface, instance, host, handle, revision_ptr, cached_revision }})\n"
         ));
     }
+    out.push_str("    }\n\n");
+    out.push_str(
+        "    /// Read the registry revision through the cached pointer — one aligned atomic\n\
+         \x20   /// load, no call into the runtime. Returns the cached value (i.e. \"unchanged\")\n\
+         \x20   /// when there is no counter (null host/runtime), so the staleness check is then\n\
+         \x20   /// a no-op.\n",
+    );
+    out.push_str("    #[inline]\n");
+    out.push_str("    fn live_revision(&self) -> u64 {\n");
+    out.push_str("        if self.revision_ptr.is_null() {\n");
+    out.push_str("            return self.cached_revision;\n");
+    out.push_str("        }\n");
+    out.push_str(
+        "        // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to\n",
+    );
+    out.push_str("        // the runtime's revision counter — an AtomicU64 whose address is stable for the\n");
+    out.push_str("        // runtime's lifetime, i.e. for as long as this caller can dispatch.\n");
+    out.push_str("        unsafe {\n");
+    out.push_str("            (*(self.revision_ptr as *const core::sync::atomic::AtomicU64))\n");
+    out.push_str("                .load(core::sync::atomic::Ordering::Acquire)\n");
+    out.push_str("        }\n");
     out.push_str("    }\n\n");
     out.push_str("    /// Check if this caller holds a resolved contract interface.\n");
     out.push_str("    pub fn is_valid(&self) -> bool {\n");
@@ -1472,6 +1539,20 @@ fn generate_host_contract_caller(
     out.push_str("            Some(api) => api,\n");
     out.push_str("            None => return,\n");
     out.push_str("        };\n");
+    out.push_str(
+        "        // If the registry changed under us, the cached interface/instance are stale\n",
+    );
+    out.push_str(
+        "        // (a reload/unload reclaimed their backing). revalidate() abandons the dead\n",
+    );
+    out.push_str(
+        "        // instance and builds a fresh one on the current interface — exactly the\n",
+    );
+    out.push_str("        // fresh instance reset() promises — so defer to it and skip the unsafe destroy.\n");
+    out.push_str("        if self.live_revision() != self.cached_revision {\n");
+    out.push_str("            self.revalidate();\n");
+    out.push_str("            return;\n");
+    out.push_str("        }\n");
     out.push_str("        if !self.instance.data.is_null() {\n");
     out.push_str("            // SAFETY: instance was created by create_guest_instance on this interface and is\n");
     out.push_str("            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.\n");
@@ -1492,6 +1573,47 @@ fn generate_host_contract_caller(
     );
     out.push_str("        };\n");
     out.push_str("        self.instance = new_instance;\n");
+    out.push_str("    }\n\n");
+
+    out.push_str(
+        "    /// Re-resolve the cached interface after the registry changed under us.\n\
+         \x20   ///\n\
+         \x20   /// Invoked automatically when a dispatch observes a revision change. A\n\
+         \x20   /// hot-reload swapped a new interface into the same slot, so the retained\n\
+         \x20   /// handle still resolves — to the new interface; an unload vacated the slot,\n\
+         \x20   /// so it resolves to null and `false` is returned (the contract is gone).\n\
+         \x20   ///\n\
+         \x20   /// The old instance is ABANDONED, never destroyed: after a reload its\n\
+         \x20   /// interface — and the guest-side state that interface created — is already\n\
+         \x20   /// epoch-reclaimed, so calling the dead interface's `destroy_instance` would\n\
+         \x20   /// be undefined behaviour. The runtime reclaims the old instance's backing as\n\
+         \x20   /// part of the reload, then a fresh instance is created on the new interface.\n",
+    );
+    out.push_str("    fn revalidate(&mut self) -> bool {\n");
+    out.push_str("        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.\n");
+    out.push_str("        let host_api: &HostApi = match unsafe { self.host.as_ref() } {\n");
+    out.push_str("            Some(api) => api,\n");
+    out.push_str("            None => return false,\n");
+    out.push_str("        };\n");
+    out.push_str("        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.\n");
+    out.push_str("        let interface: *const GuestContractInterface =\n");
+    out.push_str(
+        "            unsafe { (host_api.resolve_guest_contract)(self.host, self.handle) };\n",
+    );
+    out.push_str("        if interface.is_null() {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str(
+        "        let mut instance: GuestContractInstance = GuestContractInstance::null();\n",
+    );
+    out.push_str("        // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.\n");
+    out.push_str("        unsafe {\n");
+    out.push_str("            (host_api.create_guest_instance)(self.host, interface, core::ptr::null(), &mut instance);\n");
+    out.push_str("        }\n");
+    out.push_str("        self.interface = interface;\n");
+    out.push_str("        self.instance = instance;\n");
+    out.push_str("        self.cached_revision = self.live_revision();\n");
+    out.push_str("        true\n");
     out.push_str("    }\n\n");
 
     for func in &contract.functions {
@@ -1521,6 +1643,19 @@ fn generate_host_contract_caller(
     out.push_str("            Some(api) => api,\n");
     out.push_str("            None => return,\n");
     out.push_str("        };\n");
+    out.push_str(
+        "        // If the registry changed since we resolved, the cached interface and instance\n",
+    );
+    out.push_str(
+        "        // are stale — a reload/unload reclaimed their backing — so calling the dead\n",
+    );
+    out.push_str(
+        "        // interface's destroy would be UB; the reload/unload already reclaimed the\n",
+    );
+    out.push_str("        // instance, so skip the destroy entirely.\n");
+    out.push_str("        if self.live_revision() != self.cached_revision {\n");
+    out.push_str("            return;\n");
+    out.push_str("        }\n");
     out.push_str("        if !self.instance.data.is_null() {\n");
     out.push_str(
         "            // SAFETY: instance was created by create_guest_instance and is valid.\n",
@@ -1564,27 +1699,32 @@ fn generate_host_fn_caller(
     ));
     out.push_str("    #[allow(clippy::absurd_extreme_comparisons)]\n");
     let needs_arena: bool = fn_needs_arena(func);
-    let self_param: &str = if needs_arena { "&mut self" } else { "&self" };
     if needs_arena {
         out.push_str(
             "    /// Returns a value borrowing this caller's arena; it stays valid until\n\
              \x20   /// the next arena-backed call on this caller.\n",
         );
     }
+    // Every method takes `&mut self`: the per-call staleness check may re-resolve
+    // (mutating the cached interface/instance/revision), and the arena — when this
+    // method needs one — is reset on the VM dispatch path below.
     out.push_str(&format!(
-        "    pub fn {}({self_param}{}) -> Result<{ret_type}, ContractError> {{\n",
+        "    pub fn {}(&mut self{}) -> Result<{ret_type}, ContractError> {{\n",
         func.name, sig_params
     ));
 
-    if needs_arena {
-        out.push_str(
-            "        // Reset the arena at call start: frees the previous call's overflow\n",
-        );
-        out.push_str(
-            "        // blocks and rewinds the primary region, invalidating prior views.\n",
-        );
-        out.push_str("        self.arena.reset();\n");
-    }
+    out.push_str(
+        "        // Cheap per-call staleness check: read the registry revision directly through\n\
+         \x20       // the cached pointer (one atomic load, no call into the runtime). While it\n\
+         \x20       // matches the value cached when this caller resolved, the interface pointer is\n\
+         \x20       // current and we dispatch directly; on any change (hot-reload or unload) we\n\
+         \x20       // re-resolve first, so the cached pointer is never used once it dangles.\n",
+    );
+    out.push_str(
+        "        if self.live_revision() != self.cached_revision && !self.revalidate() {\n",
+    );
+    out.push_str("            return Err(ContractError::new(AbiErrorCode::NotFound));\n");
+    out.push_str("        }\n");
 
     // args setup
     emit_args_setup(out, func, contract_struct);
@@ -1641,6 +1781,14 @@ fn generate_host_fn_caller(
     out.push_str("                    }\n");
     out.push_str("                }\n");
     out.push_str("                DispatchType::VirtualMachine => {\n");
+    if needs_arena {
+        out.push_str(
+            "                    // Reset the per-call arena here — the VM path is the only one that\n\
+             \x20                   // uses it. Rewinds the primary region and frees the previous call's\n\
+             \x20                   // overflow blocks, invalidating any view returned by a prior call.\n",
+        );
+        out.push_str("                    self.arena.reset();\n");
+    }
     out.push_str("                    (interface.dispatch.vm.call)(\n");
     out.push_str("                        interface.dispatch.vm.loader_data,\n");
     out.push_str("                        self.instance,  // instance parameter\n");
@@ -3279,6 +3427,27 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
         "    /// Host interface pointer used for `call_guest_method` and instance lifecycle.\n",
     );
     out.push_str("    host: *const HostApi,\n");
+    out.push_str(
+        "    /// Peer contract handle, retained so the cache can re-resolve after a hot-reload\n",
+    );
+    out.push_str(
+        "    /// (which swaps a new interface into the same slot) or report a gone contract.\n",
+    );
+    out.push_str("    handle: GuestContractHandle,\n");
+    out.push_str("    /// Pointer to the runtime's registry revision counter, fetched once via\n");
+    out.push_str("    /// `HostApi.revision_counter`. Polled directly before each dispatch (one\n");
+    out.push_str(
+        "    /// atomic load, no call into the runtime); null when there is no runtime.\n",
+    );
+    out.push_str("    revision_ptr: *const u64,\n");
+    out.push_str(
+        "    /// Revision value read when the peer was resolved. Compared before each dispatch\n",
+    );
+    out.push_str(
+        "    /// against the live counter to detect a reload/unload and re-resolve, so the cached\n",
+    );
+    out.push_str("    /// interface pointer and instance never dangle.\n");
+    out.push_str("    cached_revision: u64,\n");
     if needs_arena {
         out.push_str(
             "    /// Stable-address backing buffer for the per-call arena. Boxed so the\n\
@@ -3361,6 +3530,32 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
          \x20       }};\n",
         contract.contract_id
     ));
+    out.push_str(
+        "        // Fetch the registry revision counter ONCE, then read its current value, so\n",
+    );
+    out.push_str(
+        "        // every later call can detect a reload/unload with a direct atomic load (no\n",
+    );
+    out.push_str("        // call back into the runtime) and re-resolve before dispatching.\n");
+    out.push_str(
+        "        // SAFETY: iface_api is the reborrowed non-null HostApi; revision_counter is an\n",
+    );
+    out.push_str("        // ABI function pointer safe to call with a valid host.\n");
+    out.push_str(
+        "        let revision_ptr: *const u64 = unsafe { (iface_api.revision_counter)(host) };\n",
+    );
+    out.push_str("        let cached_revision: u64 = if revision_ptr.is_null() {\n");
+    out.push_str("            0\n");
+    out.push_str("        } else {\n");
+    out.push_str(
+        "            // SAFETY: revision_ptr was returned by revision_counter and points to the\n",
+    );
+    out.push_str("            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.\n");
+    out.push_str("            unsafe {\n");
+    out.push_str("                (*(revision_ptr as *const core::sync::atomic::AtomicU64))\n");
+    out.push_str("                    .load(core::sync::atomic::Ordering::Acquire)\n");
+    out.push_str("            }\n");
+    out.push_str("        };\n");
     if needs_arena {
         out.push_str(
             "        // Box the backing buffer first so the arena's interior pointers refer\n",
@@ -3373,19 +3568,107 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
             "        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);\n",
         );
         out.push_str(&format!(
-            "        Some({struct_name} {{ interface, instance, host, arena_buf, arena }})\n"
+            "        Some({struct_name} {{ interface, instance, host, handle, revision_ptr, cached_revision, arena_buf, arena }})\n"
         ));
     } else {
         out.push_str(&format!(
-            "        Some({struct_name} {{ interface, instance, host }})\n"
+            "        Some({struct_name} {{ interface, instance, host, handle, revision_ptr, cached_revision }})\n"
         ));
     }
+    out.push_str("    }\n\n");
+
+    // live_revision()
+    out.push_str(
+        "    /// Read the registry revision through the cached pointer — one aligned atomic\n",
+    );
+    out.push_str(
+        "    /// load, no call into the runtime. Returns the cached value (\"unchanged\") when\n",
+    );
+    out.push_str("    /// there is no counter (null host/runtime), making the check a no-op.\n");
+    out.push_str("    #[inline]\n");
+    out.push_str("    fn live_revision(&self) -> u64 {\n");
+    out.push_str("        if self.revision_ptr.is_null() {\n");
+    out.push_str("            return self.cached_revision;\n");
+    out.push_str("        }\n");
+    out.push_str(
+        "        // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to\n",
+    );
+    out.push_str("        // the runtime's revision counter — an AtomicU64 whose address is stable for the\n");
+    out.push_str("        // runtime's lifetime, i.e. for as long as this caller can dispatch.\n");
+    out.push_str("        unsafe {\n");
+    out.push_str("            (*(self.revision_ptr as *const core::sync::atomic::AtomicU64))\n");
+    out.push_str("                .load(core::sync::atomic::Ordering::Acquire)\n");
+    out.push_str("        }\n");
     out.push_str("    }\n\n");
 
     // is_valid()
     out.push_str("    /// Returns `true` if this peer holds a resolved (non-null) interface.\n");
     out.push_str("    pub fn is_valid(&self) -> bool {\n");
     out.push_str("        !self.interface.is_null()\n");
+    out.push_str("    }\n\n");
+
+    // revalidate()
+    out.push_str(
+        "    /// Re-resolve the cached peer interface after the registry changed under us.\n",
+    );
+    out.push_str("    ///\n");
+    out.push_str("    /// Invoked automatically when a dispatch observes a revision change. A\n");
+    out.push_str(
+        "    /// hot-reload swapped a new interface into the same slot, so the retained\n",
+    );
+    out.push_str(
+        "    /// handle still resolves — to the new interface; an unload vacated the slot,\n",
+    );
+    out.push_str("    /// so it resolves to null and `false` is returned (the peer is gone).\n");
+    out.push_str("    ///\n");
+    out.push_str("    /// The old instance is ABANDONED, never destroyed: after a reload its\n");
+    out.push_str(
+        "    /// interface — and the guest-side state it created — is already epoch-reclaimed,\n",
+    );
+    out.push_str("    /// so calling the dead interface's `destroy_instance` would be undefined\n");
+    out.push_str(
+        "    /// behaviour. The runtime reclaims the old instance's backing as part of the\n",
+    );
+    out.push_str("    /// reload, then a fresh instance is created on the new interface.\n");
+    out.push_str("    fn revalidate(&mut self) -> bool {\n");
+    out.push_str("        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.\n");
+    out.push_str("        let iface_api: &HostApi = match unsafe { self.host.as_ref() } {\n");
+    out.push_str("            Some(api) => api,\n");
+    out.push_str("            None => return false,\n");
+    out.push_str("        };\n");
+    out.push_str("        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.\n");
+    out.push_str("        let interface: *const GuestContractInterface =\n");
+    out.push_str(
+        "            unsafe { (iface_api.resolve_guest_contract)(self.host, self.handle) };\n",
+    );
+    out.push_str("        if interface.is_null() {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str(
+        "        let mut created: GuestContractInstance = GuestContractInstance::null();\n",
+    );
+    out.push_str("        // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.\n");
+    out.push_str("        unsafe {\n");
+    out.push_str(
+        "            (iface_api.create_guest_instance)(self.host, interface, core::ptr::null(), &mut created);\n",
+    );
+    out.push_str("        }\n");
+    out.push_str(
+        "        // Re-stamp the peer contract id so `host->call_guest_method` keeps routing by\n",
+    );
+    out.push_str(
+        "        // it even when a stateless peer's create_instance returns a null handle.\n",
+    );
+    out.push_str(&format!(
+        "        self.instance = GuestContractInstance {{\n\
+         \x20           data: created.data,\n\
+         \x20           contract_id: polyplug_utils::GuestContractId::from_u64(0x{:016X}_u64),\n\
+         \x20       }};\n",
+        contract.contract_id
+    ));
+    out.push_str("        self.interface = interface;\n");
+    out.push_str("        self.cached_revision = self.live_revision();\n");
+    out.push_str("        true\n");
     out.push_str("    }\n\n");
 
     // Methods
@@ -3417,6 +3700,19 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
     out.push_str("            Some(api) => api,\n");
     out.push_str("            None => return,\n");
     out.push_str("        };\n");
+    out.push_str(
+        "        // If the registry changed since we resolved, the cached interface and instance\n",
+    );
+    out.push_str(
+        "        // are stale — a reload/unload reclaimed their backing — so calling the dead\n",
+    );
+    out.push_str(
+        "        // interface's destroy would be UB; the reload/unload already reclaimed the\n",
+    );
+    out.push_str("        // instance, so skip the destroy entirely.\n");
+    out.push_str("        if self.live_revision() != self.cached_revision {\n");
+    out.push_str("            return;\n");
+    out.push_str("        }\n");
     out.push_str("        // We guard on instance.data to skip the call for stateless (null-data) contracts.\n");
     out.push_str("        if !self.instance.data.is_null() {\n");
     out.push_str(
@@ -3458,7 +3754,9 @@ fn generate_peer_fn_caller(out: &mut String, func: &ResolvedFunction, struct_nam
         func.name, fn_id
     ));
     out.push_str("    #[allow(clippy::absurd_extreme_comparisons)]\n");
-    let self_param: &str = if needs_arena { "&mut self" } else { "&self" };
+    // All methods take `&mut self`: the per-call staleness check may invoke
+    // revalidate(), which re-resolves the interface and recreates the instance.
+    let self_param: &str = "&mut self";
     if needs_arena {
         out.push_str(
             "    /// Returns a value borrowing this caller's arena; it stays valid until\n\
@@ -3470,8 +3768,16 @@ fn generate_peer_fn_caller(out: &mut String, func: &ResolvedFunction, struct_nam
         func.name
     ));
 
-    // Guard: interface must be resolved
-    out.push_str("        if self.interface.is_null() {\n");
+    // Per-call staleness check: re-resolve if the registry changed under us.
+    out.push_str(
+        "        // Cheap per-call staleness check: read the registry revision directly through\n",
+    );
+    out.push_str("        // the cached pointer (one atomic load, no call into the runtime). On any change\n");
+    out.push_str("        // (hot-reload or unload of the peer) we re-resolve first, so the cached interface\n");
+    out.push_str("        // and instance are never used once they dangle.\n");
+    out.push_str(
+        "        if self.live_revision() != self.cached_revision && !self.revalidate() {\n",
+    );
     out.push_str("            return Err(PeerCallError::new(AbiErrorCode::NotFound));\n");
     out.push_str("        }\n");
 
@@ -3874,8 +4180,9 @@ mod tests {
             "primitive-returning caller must not own an arena: {out}"
         );
         assert!(
-            out.contains("pub fn add(&self"),
-            "non-arena method must remain &self: {out}"
+            out.contains("pub fn add(&mut self"),
+            "every method now takes &mut self: the per-call staleness check may call \
+             revalidate(&mut self) to re-resolve after a reload/unload: {out}"
         );
         assert!(
             out.contains("core::ptr::null_mut(),"),

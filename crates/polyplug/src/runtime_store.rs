@@ -10,7 +10,7 @@
 //! tries to register the SAME contract_id twice (outside a reload window).
 
 use core::ops::ControlFlow;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU64, Ordering};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -392,6 +392,17 @@ pub struct RuntimeStore {
     /// published view always mirrors `data`. The superseded view is deferred for
     /// epoch reclamation so any reader still observing it stays valid.
     published: crossbeam_epoch::Atomic<ReadView>,
+    /// Monotonic registry revision, bumped on every mutation (the tail of every
+    /// [`RuntimeStore::publish`]). A generated host→guest caller fetches this word's
+    /// address ONCE (via the `revision_counter` ABI callback, see
+    /// [`RuntimeStore::revision_ptr`]) and then reads it directly before each dispatch:
+    /// while it is unchanged, the caller's cached interface pointer is guaranteed
+    /// current, so it dispatches directly; any change (load / reload-swap / unload)
+    /// tells the caller to re-resolve. This is the one piece of shared state the cheap
+    /// per-call staleness check reads — a single atomic load, no lock, no epoch pin and
+    /// no call back into the runtime — which is why reload (which
+    /// keeps slot generations stable so handles survive it) is still detected.
+    revision: AtomicU64,
     /// Instance-owned copy of the host logging configuration. The store has no
     /// back-reference to its `Runtime`, so the handle is copied in at
     /// construction (Rule 12: instance state, no globals).
@@ -404,6 +415,7 @@ impl RuntimeStore {
         RuntimeStore {
             data: RwLock::new(RuntimeStoreData::new()),
             published: crossbeam_epoch::Atomic::new(ReadView::empty()),
+            revision: AtomicU64::new(0),
             logger: LoggerHandle::default_stderr(),
         }
     }
@@ -413,6 +425,7 @@ impl RuntimeStore {
         RuntimeStore {
             data: RwLock::new(RuntimeStoreData::new()),
             published: crossbeam_epoch::Atomic::new(ReadView::empty()),
+            revision: AtomicU64::new(0),
             logger,
         }
     }
@@ -437,6 +450,29 @@ impl RuntimeStore {
                 guard.defer_destroy(old);
             }
         }
+        // Bump the revision LAST, after the new view is published, with Release
+        // ordering. A caller that observes the new revision (Acquire load in
+        // `current_revision`) is therefore guaranteed to see the freshly published
+        // `ReadView` when it re-resolves, so it never re-caches a superseded view.
+        self.revision.fetch_add(1, Ordering::Release);
+    }
+
+    /// The current registry revision — a single Acquire atomic load, no lock and no
+    /// epoch pin. Any mutation — load, reload-swap, or unload — changes it.
+    pub fn current_revision(&self) -> u64 {
+        self.revision.load(Ordering::Acquire)
+    }
+
+    /// A stable pointer to the registry revision counter, for a generated caller to
+    /// poll directly each dispatch (one aligned atomic load) instead of calling back
+    /// into the runtime. The counter lives inside the `RuntimeStore` — itself owned by
+    /// the `Arc<Runtime>`, whose payload never moves — so the address is valid for the
+    /// whole lifetime of the runtime, i.e. for as long as any caller can dispatch.
+    /// See the `revision_counter` `HostApi` callback.
+    pub fn revision_ptr(&self) -> *const u64 {
+        // AtomicU64 is `#[repr(C)]`-compatible with u64 (same size/alignment, no extra
+        // state), so the address of the atomic is a valid `*const u64` for reads.
+        core::ptr::addr_of!(self.revision).cast::<u64>()
     }
 
     /// Register a plugin interface.

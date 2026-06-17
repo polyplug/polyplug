@@ -6,14 +6,16 @@ local ffi = require("ffi")
 local polyplug_abi = require("polyplug_abi")
 local polyplug_guest = require("polyplug_guest")
 
+local ConstUint64Ptr = ffi.typeof("const uint64_t*")
+
 local M = {}
 
 -- Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 PipelineValidatorPeer = {}
 PipelineValidatorPeer.__index = PipelineValidatorPeer
 
-function PipelineValidatorPeer:new(interface, instance, host)
-    local obj = { _interface = interface, _instance = instance, _host = host }
+function PipelineValidatorPeer:new(interface, instance, host, handle, revision_ptr, cached_revision)
+    local obj = { _interface = interface, _instance = instance, _host = host, _handle = handle, _revision_ptr = revision_ptr, _cached_revision = cached_revision }
     setmetatable(obj, self)
     return obj
 end
@@ -35,15 +37,44 @@ function PipelineValidatorPeer.resolve(host_ptr)
     -- Stamp the peer contract id so call_guest_method routes by it even when a
     -- stateless peer's create_instance returns a null (null-id) handle.
     instance.contract_id = 0x45173A959EEC57C5ULL
-    return PipelineValidatorPeer:new(interface, instance, host)
+    local revision_ptr = host.revision_counter(host)
+    local cached_revision = 0
+    if revision_ptr ~= nil then
+        cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
+    end
+    return PipelineValidatorPeer:new(interface, instance, host, handle, revision_ptr, cached_revision)
 end
 
 function PipelineValidatorPeer:is_valid()
     return self._interface ~= nil
 end
 
+function PipelineValidatorPeer:live_revision()
+    if self._revision_ptr == nil then
+        return self._cached_revision
+    end
+    return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+end
+
+function PipelineValidatorPeer:revalidate()
+    local interface = self._host.resolve_guest_contract(self._host, self._handle)
+    if interface == nil then
+        return false
+    end
+    local new_instance = ffi.new("GuestContractInstance")
+    self._host.create_guest_instance(self._host, interface, nil, new_instance)
+    new_instance.contract_id = 0x45173A959EEC57C5ULL
+    self._interface = interface
+    self._instance = new_instance
+    self._cached_revision = self:live_revision()
+    return true
+end
+
 function PipelineValidatorPeer:validate(input)
     if self._interface == nil then
+        return nil
+    end
+    if self:live_revision() ~= self._cached_revision and not self:revalidate() then
         return nil
     end
     local interface = ffi.cast("GuestContractInterface*", self._interface)

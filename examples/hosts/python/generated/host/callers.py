@@ -99,6 +99,15 @@ class PipelineDecoderContractCaller:
         self._instance = GuestContractInstance()
         host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))
         self._host: ctypes.c_void_p = host
+        # Retain the handle so the cache can re-resolve after a hot-reload (which
+        # swaps a new interface into the same slot) or report a gone contract.
+        self._handle: int = handle
+        # Fetch the registry revision counter ONCE, then read its current value, so
+        # every later call can detect a reload/unload with a direct atomic load (one
+        # aligned 64-bit load through the cached pointer, no call into the runtime)
+        # and re-resolve before dispatching.
+        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0
+        self._cached_revision: int = self._live_revision()
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
         self._owner: object | None = owner
@@ -118,7 +127,11 @@ class PipelineDecoderContractCaller:
         """Destroy instance via host-mediated destroy_guest_instance."""
         # SAFETY: the interface pointer is valid for the wrapper lifetime;
         # destroy_guest_instance tolerates a null instance for stateless contracts.
-        if getattr(self, "_interface", None):
+        # If the registry changed since we resolved, the cached interface and instance
+        # are stale — a reload/unload reclaimed their backing — so destroying through
+        # the dead interface would be UB; the reload/unload already reclaimed the
+        # instance, so skip the destroy entirely.
+        if getattr(self, "_interface", None) and self._live_revision() == self._cached_revision:
             host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
             host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
@@ -154,8 +167,48 @@ class PipelineDecoderContractCaller:
         """Check if this caller holds a resolved contract interface."""
         return bool(getattr(self, "_interface", None))
 
+    def _live_revision(self) -> int:
+        """Read the registry revision through the cached pointer — one aligned
+        atomic load, no call into the runtime. Returns the cached value (i.e.
+        "unchanged") when there is no counter (null host/runtime), so the
+        staleness check is then a no-op.
+        """
+        if not self._revision_ptr:
+            return self._cached_revision
+        return ctypes.c_uint64.from_address(self._revision_ptr).value
+
+    def _revalidate(self) -> bool:
+        """Re-resolve the cached interface after the registry changed under us.
+
+        A hot-reload swapped a new interface into the same slot, so the retained
+        handle still resolves — to the new interface; an unload vacated the slot,
+        so it resolves to null and False is returned (the contract is gone).
+
+        The old instance is ABANDONED, never destroyed: after a reload its
+        interface — and the guest-side state it created — is already epoch-reclaimed,
+        so calling the dead interface's destroy_instance would be UB. A fresh
+        instance is created on the new interface.
+        """
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(self._host, self._handle)
+        if not interface:
+            return False
+        new_instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(self._host, interface, None, ctypes.byref(new_instance))
+        self._interface = interface
+        self._instance = new_instance
+        self._cached_revision = self._live_revision()
+        return True
+
     def reset(self) -> None:
         """Destroy current instance and create a new one (host-mediated)."""
+        # If the registry changed under us, the cached interface/instance are stale
+        # (a reload/unload reclaimed their backing). _revalidate abandons the dead
+        # instance and builds a fresh one on the current interface — exactly the
+        # fresh instance reset() promises — so defer to it and skip the unsafe destroy.
+        if self._live_revision() != self._cached_revision:
+            self._revalidate()
+            return
         host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
         host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
         self._instance = GuestContractInstance()
@@ -165,6 +218,8 @@ class PipelineDecoderContractCaller:
         return self.is_valid()
 
     def decode(self, input: StringView) -> StringView:
+        if self._live_revision() != self._cached_revision and not self._revalidate():
+            raise ContractError("contract not found", AbiErrorCode.NotFound)
         # Returns a value borrowing this caller's arena; it stays valid until
         # the next arena-backed call on this caller.
         # Rewind the arena at call start: retains overflow blocks for reuse,
@@ -233,6 +288,15 @@ class DataTransformerContractCaller:
         self._instance = GuestContractInstance()
         host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))
         self._host: ctypes.c_void_p = host
+        # Retain the handle so the cache can re-resolve after a hot-reload (which
+        # swaps a new interface into the same slot) or report a gone contract.
+        self._handle: int = handle
+        # Fetch the registry revision counter ONCE, then read its current value, so
+        # every later call can detect a reload/unload with a direct atomic load (one
+        # aligned 64-bit load through the cached pointer, no call into the runtime)
+        # and re-resolve before dispatching.
+        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0
+        self._cached_revision: int = self._live_revision()
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
         self._owner: object | None = owner
@@ -252,7 +316,11 @@ class DataTransformerContractCaller:
         """Destroy instance via host-mediated destroy_guest_instance."""
         # SAFETY: the interface pointer is valid for the wrapper lifetime;
         # destroy_guest_instance tolerates a null instance for stateless contracts.
-        if getattr(self, "_interface", None):
+        # If the registry changed since we resolved, the cached interface and instance
+        # are stale — a reload/unload reclaimed their backing — so destroying through
+        # the dead interface would be UB; the reload/unload already reclaimed the
+        # instance, so skip the destroy entirely.
+        if getattr(self, "_interface", None) and self._live_revision() == self._cached_revision:
             host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
             host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
@@ -288,8 +356,48 @@ class DataTransformerContractCaller:
         """Check if this caller holds a resolved contract interface."""
         return bool(getattr(self, "_interface", None))
 
+    def _live_revision(self) -> int:
+        """Read the registry revision through the cached pointer — one aligned
+        atomic load, no call into the runtime. Returns the cached value (i.e.
+        "unchanged") when there is no counter (null host/runtime), so the
+        staleness check is then a no-op.
+        """
+        if not self._revision_ptr:
+            return self._cached_revision
+        return ctypes.c_uint64.from_address(self._revision_ptr).value
+
+    def _revalidate(self) -> bool:
+        """Re-resolve the cached interface after the registry changed under us.
+
+        A hot-reload swapped a new interface into the same slot, so the retained
+        handle still resolves — to the new interface; an unload vacated the slot,
+        so it resolves to null and False is returned (the contract is gone).
+
+        The old instance is ABANDONED, never destroyed: after a reload its
+        interface — and the guest-side state it created — is already epoch-reclaimed,
+        so calling the dead interface's destroy_instance would be UB. A fresh
+        instance is created on the new interface.
+        """
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(self._host, self._handle)
+        if not interface:
+            return False
+        new_instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(self._host, interface, None, ctypes.byref(new_instance))
+        self._interface = interface
+        self._instance = new_instance
+        self._cached_revision = self._live_revision()
+        return True
+
     def reset(self) -> None:
         """Destroy current instance and create a new one (host-mediated)."""
+        # If the registry changed under us, the cached interface/instance are stale
+        # (a reload/unload reclaimed their backing). _revalidate abandons the dead
+        # instance and builds a fresh one on the current interface — exactly the
+        # fresh instance reset() promises — so defer to it and skip the unsafe destroy.
+        if self._live_revision() != self._cached_revision:
+            self._revalidate()
+            return
         host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
         host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
         self._instance = GuestContractInstance()
@@ -299,6 +407,8 @@ class DataTransformerContractCaller:
         return self.is_valid()
 
     def transform(self, input: StringView) -> StringView:
+        if self._live_revision() != self._cached_revision and not self._revalidate():
+            raise ContractError("contract not found", AbiErrorCode.NotFound)
         # Returns a value borrowing this caller's arena; it stays valid until
         # the next arena-backed call on this caller.
         # Rewind the arena at call start: retains overflow blocks for reuse,
@@ -367,6 +477,15 @@ class PipelineEncoderContractCaller:
         self._instance = GuestContractInstance()
         host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))
         self._host: ctypes.c_void_p = host
+        # Retain the handle so the cache can re-resolve after a hot-reload (which
+        # swaps a new interface into the same slot) or report a gone contract.
+        self._handle: int = handle
+        # Fetch the registry revision counter ONCE, then read its current value, so
+        # every later call can detect a reload/unload with a direct atomic load (one
+        # aligned 64-bit load through the cached pointer, no call into the runtime)
+        # and re-resolve before dispatching.
+        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0
+        self._cached_revision: int = self._live_revision()
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
         self._owner: object | None = owner
@@ -386,7 +505,11 @@ class PipelineEncoderContractCaller:
         """Destroy instance via host-mediated destroy_guest_instance."""
         # SAFETY: the interface pointer is valid for the wrapper lifetime;
         # destroy_guest_instance tolerates a null instance for stateless contracts.
-        if getattr(self, "_interface", None):
+        # If the registry changed since we resolved, the cached interface and instance
+        # are stale — a reload/unload reclaimed their backing — so destroying through
+        # the dead interface would be UB; the reload/unload already reclaimed the
+        # instance, so skip the destroy entirely.
+        if getattr(self, "_interface", None) and self._live_revision() == self._cached_revision:
             host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
             host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
@@ -422,8 +545,48 @@ class PipelineEncoderContractCaller:
         """Check if this caller holds a resolved contract interface."""
         return bool(getattr(self, "_interface", None))
 
+    def _live_revision(self) -> int:
+        """Read the registry revision through the cached pointer — one aligned
+        atomic load, no call into the runtime. Returns the cached value (i.e.
+        "unchanged") when there is no counter (null host/runtime), so the
+        staleness check is then a no-op.
+        """
+        if not self._revision_ptr:
+            return self._cached_revision
+        return ctypes.c_uint64.from_address(self._revision_ptr).value
+
+    def _revalidate(self) -> bool:
+        """Re-resolve the cached interface after the registry changed under us.
+
+        A hot-reload swapped a new interface into the same slot, so the retained
+        handle still resolves — to the new interface; an unload vacated the slot,
+        so it resolves to null and False is returned (the contract is gone).
+
+        The old instance is ABANDONED, never destroyed: after a reload its
+        interface — and the guest-side state it created — is already epoch-reclaimed,
+        so calling the dead interface's destroy_instance would be UB. A fresh
+        instance is created on the new interface.
+        """
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(self._host, self._handle)
+        if not interface:
+            return False
+        new_instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(self._host, interface, None, ctypes.byref(new_instance))
+        self._interface = interface
+        self._instance = new_instance
+        self._cached_revision = self._live_revision()
+        return True
+
     def reset(self) -> None:
         """Destroy current instance and create a new one (host-mediated)."""
+        # If the registry changed under us, the cached interface/instance are stale
+        # (a reload/unload reclaimed their backing). _revalidate abandons the dead
+        # instance and builds a fresh one on the current interface — exactly the
+        # fresh instance reset() promises — so defer to it and skip the unsafe destroy.
+        if self._live_revision() != self._cached_revision:
+            self._revalidate()
+            return
         host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
         host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
         self._instance = GuestContractInstance()
@@ -433,6 +596,8 @@ class PipelineEncoderContractCaller:
         return self.is_valid()
 
     def encode(self, input: StringView) -> StringView:
+        if self._live_revision() != self._cached_revision and not self._revalidate():
+            raise ContractError("contract not found", AbiErrorCode.NotFound)
         # Returns a value borrowing this caller's arena; it stays valid until
         # the next arena-backed call on this caller.
         # Rewind the arena at call start: retains overflow blocks for reuse,
@@ -501,6 +666,15 @@ class DataReporterContractCaller:
         self._instance = GuestContractInstance()
         host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))
         self._host: ctypes.c_void_p = host
+        # Retain the handle so the cache can re-resolve after a hot-reload (which
+        # swaps a new interface into the same slot) or report a gone contract.
+        self._handle: int = handle
+        # Fetch the registry revision counter ONCE, then read its current value, so
+        # every later call can detect a reload/unload with a direct atomic load (one
+        # aligned 64-bit load through the cached pointer, no call into the runtime)
+        # and re-resolve before dispatching.
+        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0
+        self._cached_revision: int = self._live_revision()
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
         self._owner: object | None = owner
@@ -520,7 +694,11 @@ class DataReporterContractCaller:
         """Destroy instance via host-mediated destroy_guest_instance."""
         # SAFETY: the interface pointer is valid for the wrapper lifetime;
         # destroy_guest_instance tolerates a null instance for stateless contracts.
-        if getattr(self, "_interface", None):
+        # If the registry changed since we resolved, the cached interface and instance
+        # are stale — a reload/unload reclaimed their backing — so destroying through
+        # the dead interface would be UB; the reload/unload already reclaimed the
+        # instance, so skip the destroy entirely.
+        if getattr(self, "_interface", None) and self._live_revision() == self._cached_revision:
             host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
             host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
@@ -556,8 +734,48 @@ class DataReporterContractCaller:
         """Check if this caller holds a resolved contract interface."""
         return bool(getattr(self, "_interface", None))
 
+    def _live_revision(self) -> int:
+        """Read the registry revision through the cached pointer — one aligned
+        atomic load, no call into the runtime. Returns the cached value (i.e.
+        "unchanged") when there is no counter (null host/runtime), so the
+        staleness check is then a no-op.
+        """
+        if not self._revision_ptr:
+            return self._cached_revision
+        return ctypes.c_uint64.from_address(self._revision_ptr).value
+
+    def _revalidate(self) -> bool:
+        """Re-resolve the cached interface after the registry changed under us.
+
+        A hot-reload swapped a new interface into the same slot, so the retained
+        handle still resolves — to the new interface; an unload vacated the slot,
+        so it resolves to null and False is returned (the contract is gone).
+
+        The old instance is ABANDONED, never destroyed: after a reload its
+        interface — and the guest-side state it created — is already epoch-reclaimed,
+        so calling the dead interface's destroy_instance would be UB. A fresh
+        instance is created on the new interface.
+        """
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(self._host, self._handle)
+        if not interface:
+            return False
+        new_instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(self._host, interface, None, ctypes.byref(new_instance))
+        self._interface = interface
+        self._instance = new_instance
+        self._cached_revision = self._live_revision()
+        return True
+
     def reset(self) -> None:
         """Destroy current instance and create a new one (host-mediated)."""
+        # If the registry changed under us, the cached interface/instance are stale
+        # (a reload/unload reclaimed their backing). _revalidate abandons the dead
+        # instance and builds a fresh one on the current interface — exactly the
+        # fresh instance reset() promises — so defer to it and skip the unsafe destroy.
+        if self._live_revision() != self._cached_revision:
+            self._revalidate()
+            return
         host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
         host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
         self._instance = GuestContractInstance()
@@ -567,6 +785,8 @@ class DataReporterContractCaller:
         return self.is_valid()
 
     def report(self, input: StringView) -> StringView:
+        if self._live_revision() != self._cached_revision and not self._revalidate():
+            raise ContractError("contract not found", AbiErrorCode.NotFound)
         # Returns a value borrowing this caller's arena; it stays valid until
         # the next arena-backed call on this caller.
         # Rewind the arena at call start: retains overflow blocks for reuse,
@@ -635,6 +855,15 @@ class PipelineValidatorContractCaller:
         self._instance = GuestContractInstance()
         host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))
         self._host: ctypes.c_void_p = host
+        # Retain the handle so the cache can re-resolve after a hot-reload (which
+        # swaps a new interface into the same slot) or report a gone contract.
+        self._handle: int = handle
+        # Fetch the registry revision counter ONCE, then read its current value, so
+        # every later call can detect a reload/unload with a direct atomic load (one
+        # aligned 64-bit load through the cached pointer, no call into the runtime)
+        # and re-resolve before dispatching.
+        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0
+        self._cached_revision: int = self._live_revision()
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
         self._owner: object | None = owner
@@ -654,7 +883,11 @@ class PipelineValidatorContractCaller:
         """Destroy instance via host-mediated destroy_guest_instance."""
         # SAFETY: the interface pointer is valid for the wrapper lifetime;
         # destroy_guest_instance tolerates a null instance for stateless contracts.
-        if getattr(self, "_interface", None):
+        # If the registry changed since we resolved, the cached interface and instance
+        # are stale — a reload/unload reclaimed their backing — so destroying through
+        # the dead interface would be UB; the reload/unload already reclaimed the
+        # instance, so skip the destroy entirely.
+        if getattr(self, "_interface", None) and self._live_revision() == self._cached_revision:
             host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
             host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
             self._interface = None  # Prevent reuse after cleanup.
@@ -690,8 +923,48 @@ class PipelineValidatorContractCaller:
         """Check if this caller holds a resolved contract interface."""
         return bool(getattr(self, "_interface", None))
 
+    def _live_revision(self) -> int:
+        """Read the registry revision through the cached pointer — one aligned
+        atomic load, no call into the runtime. Returns the cached value (i.e.
+        "unchanged") when there is no counter (null host/runtime), so the
+        staleness check is then a no-op.
+        """
+        if not self._revision_ptr:
+            return self._cached_revision
+        return ctypes.c_uint64.from_address(self._revision_ptr).value
+
+    def _revalidate(self) -> bool:
+        """Re-resolve the cached interface after the registry changed under us.
+
+        A hot-reload swapped a new interface into the same slot, so the retained
+        handle still resolves — to the new interface; an unload vacated the slot,
+        so it resolves to null and False is returned (the contract is gone).
+
+        The old instance is ABANDONED, never destroyed: after a reload its
+        interface — and the guest-side state it created — is already epoch-reclaimed,
+        so calling the dead interface's destroy_instance would be UB. A fresh
+        instance is created on the new interface.
+        """
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(self._host, self._handle)
+        if not interface:
+            return False
+        new_instance = GuestContractInstance()
+        host_iface.contents.create_guest_instance(self._host, interface, None, ctypes.byref(new_instance))
+        self._interface = interface
+        self._instance = new_instance
+        self._cached_revision = self._live_revision()
+        return True
+
     def reset(self) -> None:
         """Destroy current instance and create a new one (host-mediated)."""
+        # If the registry changed under us, the cached interface/instance are stale
+        # (a reload/unload reclaimed their backing). _revalidate abandons the dead
+        # instance and builds a fresh one on the current interface — exactly the
+        # fresh instance reset() promises — so defer to it and skip the unsafe destroy.
+        if self._live_revision() != self._cached_revision:
+            self._revalidate()
+            return
         host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
         host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)
         self._instance = GuestContractInstance()
@@ -701,6 +974,8 @@ class PipelineValidatorContractCaller:
         return self.is_valid()
 
     def validate(self, input: StringView) -> StringView:
+        if self._live_revision() != self._cached_revision and not self._revalidate():
+            raise ContractError("contract not found", AbiErrorCode.NotFound)
         # Returns a value borrowing this caller's arena; it stays valid until
         # the next arena-backed call on this caller.
         # Rewind the arena at call start: retains overflow blocks for reuse,

@@ -365,6 +365,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
+        revision_counter: stub_revision_counter,
         reserved: core::ptr::null(),
     };
 
@@ -775,6 +776,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
+        revision_counter: stub_revision_counter,
         reserved: core::ptr::null(),
     };
 
@@ -999,4 +1001,8 @@ unsafe extern "C" fn stub_destroy_guest_instance(
     _interface: *const polyplug_abi::GuestContractInterface,
     _instance: polyplug_abi::GuestContractInstance,
 ) {
+}
+
+unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
+    core::ptr::null()
 }

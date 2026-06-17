@@ -35,10 +35,14 @@ export class ValidatorPeer {
 
     private _bridge: any;
     private _hostPtr: { lo: number; hi: number };
+    private _revLo: number;
+    private _revHi: number;
 
-    private constructor(bridge: any, hostPtr: { lo: number; hi: number }) {
+    private constructor(bridge: any, hostPtr: { lo: number; hi: number }, revLo: number, revHi: number) {
         this._bridge = bridge;
         this._hostPtr = hostPtr;
+        this._revLo = revLo;
+        this._revHi = revHi;
     }
 
     /**
@@ -56,7 +60,30 @@ export class ValidatorPeer {
         if (handle === null || handle === undefined) {
             return null;
         }
-        return new ValidatorPeer(bridge, hostPtr);
+        const _rev = bridge.revision ? bridge.revision() : [0, 0];
+        return new ValidatorPeer(bridge, hostPtr, _rev[0], _rev[1]);
+    }
+
+    private _revalidate(): boolean {
+        if (!this._bridge || !this._bridge.findByContract) {
+            return false;
+        }
+        const handle = this._bridge.findByContract(0x9EEC57C5, 0x45173A95, 1);
+        if (handle === null || handle === undefined) {
+            return false;
+        }
+        const _rev = this._bridge.revision ? this._bridge.revision() : [0, 0];
+        this._revLo = _rev[0];
+        this._revHi = _rev[1];
+        return true;
+    }
+
+    private _revisionChanged(): boolean {
+        if (!this._bridge || !this._bridge.revision) {
+            return false;
+        }
+        const _rev = this._bridge.revision();
+        return _rev[0] !== this._revLo || _rev[1] !== this._revHi;
     }
 
     /** Call peer `validate` */
@@ -64,6 +91,9 @@ export class ValidatorPeer {
         const polyplug = this._bridge;
         if (!polyplug || !polyplug.callGuestMethod) {
             return null as any;
+        }
+        if (this._revisionChanged() && !this._revalidate()) {
+            throw new Error(`peer call validate failed: contract gone after reload/unload`);
         }
         const _frees: number[][] = [];
         const _callerAlloc = (sz: number): number[] => { const _a = polyplug.alloc(sz); _frees.push([_a[0], _a[1], sz]); return _a; };

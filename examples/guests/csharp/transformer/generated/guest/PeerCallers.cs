@@ -76,17 +76,32 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
     private GuestContractInstance _instance;
     private HostApi* _host;
     private bool _disposed;
+    /// <summary>Peer contract handle, retained so the cache can re-resolve after a
+    /// hot-reload (which swaps a new interface into the same slot) or report a
+    /// gone peer.</summary>
+    private readonly GuestContractHandle _handle;
+    /// <summary>Pointer to the runtime's registry revision counter, fetched once
+    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one
+    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>
+    private readonly IntPtr _revisionPtr;
+    /// <summary>Revision value read when the peer was resolved. Compared before each
+    /// dispatch against the live counter to detect a reload/unload and re-resolve, so
+    /// the cached interface pointer and instance never dangle.</summary>
+    private ulong _cachedRevision;
     /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
     /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
     private readonly byte* _arenaBuf;
     /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
     private CallArena _arena;
 
-    private PipelineValidatorContractPeer(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
+    private PipelineValidatorContractPeer(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
+        _handle = handle;
+        _revisionPtr = revisionPtr;
+        _cachedRevision = cachedRevision;
         // C-heap allocation: cross-boundary arena data must not live on the managed heap.
         _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
         _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);
@@ -111,17 +126,59 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
         // Stamp the peer contract id so CallGuestMethod routes by it even when a
         // stateless peer's create_instance returns a null (null-id) handle.
         inst.ContractId = 0x45173A959EEC57C5UL;
-        return new PipelineValidatorContractPeer(iface, inst, host);
+        var revisionFn = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)host->RevisionCounter;
+        IntPtr revisionPtr = revisionFn(hostPtr);
+        ulong cachedRevision = revisionPtr == IntPtr.Zero
+            ? 0UL
+            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));
+        return new PipelineValidatorContractPeer(iface, inst, host, handle, revisionPtr, cachedRevision);
     }
 
     /// <summary>True while this peer holds a live interface and has not been disposed.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
+    /// <summary>Read the registry revision through the cached pointer — one
+    /// acquire atomic load, no call into the runtime. Returns the cached value
+    /// ("unchanged") when there is no counter (IntPtr.Zero).</summary>
+    private ulong LiveRevision() {
+        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }
+        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));
+    }
+
+    /// <summary>Re-resolve the cached peer interface after the registry changed
+    /// under us. A hot-reload swapped a new interface into the same slot, so the
+    /// retained handle still resolves — to the new interface; an unload vacated the
+    /// slot, so it resolves to null and false is returned (the peer is gone). The old
+    /// instance is ABANDONED, never destroyed: its interface and guest-side state are
+    /// already epoch-reclaimed, so calling the dead interface's destroy would be UB.</summary>
+    private bool Revalidate() {
+        if (_host == null) { return false; }
+        var resolveFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractHandle, GuestContractInterface*>)_host->ResolveGuestContract;
+        GuestContractInterface* iface = resolveFn((IntPtr)_host, _handle);
+        if (iface == null) { return false; }
+        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance;
+        GuestContractInstance inst = default;
+        createFn((IntPtr)_host, iface, null, &inst);
+        // Re-stamp the peer contract id so CallGuestMethod keeps routing by it even
+        // when a stateless peer's create_instance returns a null (null-id) handle.
+        inst.ContractId = 0x45173A959EEC57C5UL;
+        _interface = iface;
+        _instance = inst;
+        _cachedRevision = LiveRevision();
+        return true;
+    }
+
     /// <summary>Dispose pattern — calls destroy_guest_instance and frees arena memory.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)((IntPtr)_host, _interface, _instance);
-            _instance.Data = nint.Zero;
+            // If the registry changed since we resolved, the cached interface and
+            // instance are stale — a reload/unload reclaimed their backing — so calling
+            // the dead interface's destroy would be UB; the reload/unload already
+            // reclaimed the instance, so skip the destroy entirely.
+            if (LiveRevision() == _cachedRevision) {
+                ((delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)((IntPtr)_host, _interface, _instance);
+                _instance.Data = nint.Zero;
+            }
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
                 CallArenaOps.FreeAll(arenaPtr);
@@ -136,6 +193,10 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
     public Polyplug.Abi.StringView Validate(Polyplug.Abi.StringView input) {
         if (_disposed) {
             throw new ObjectDisposedException(nameof(PipelineValidatorContractPeer));
+        }
+
+        if (LiveRevision() != _cachedRevision && !Revalidate()) {
+            throw new InvalidOperationException("peer not found after reload");
         }
 
         // Rewind the arena at call start: retained overflow blocks and the

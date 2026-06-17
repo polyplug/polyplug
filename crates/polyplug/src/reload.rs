@@ -240,6 +240,15 @@ impl Runtime {
                     return Err(err);
                 }
 
+                // The swap reclaimed the previous interface and the guest-side state
+                // of every instance it created: all pre-reload instances of this
+                // bundle's contracts are now dead (a correct caller revalidates and
+                // recreates its instance on the new interface). Reset their live
+                // accounting so instances abandoned across the reload — never
+                // destroyed through the retired interface — do not inflate the
+                // diagnostic count forever.
+                self.reset_instance_counts_for_contracts(&exported);
+
                 // Mark this bundle visited before cascading so a dependency cycle
                 // (A→B→A) terminates instead of recursing forever.
                 visited.insert(bundle_id);

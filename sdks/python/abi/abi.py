@@ -384,13 +384,14 @@ _host_api_unload_bundle_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uin
 _host_api_log_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32, StringView, StringView)
 _host_api_create_guest_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 _host_api_destroy_guest_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, GuestContractInstance)
+_host_api_revision_counter_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
 class HostApi(ctypes.Structure):
     """ Host Interface — function table passed to guests during initialization.
     
      Contains an opaque runtime pointer and function pointers for guest calls.
      All functions use self-passing pattern (receive HostApi pointer as first parameter).
-     `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
-     Tail offsets: `create_guest_instance` @160, `destroy_guest_instance` @168, `reserved` @176.
+     `HostApi` is `192 bytes` (1 opaque runtime pointer + 22 function pointer fields + 1 reserved data pointer).
+     Tail offsets: `create_guest_instance` @160, `destroy_guest_instance` @168, `revision_counter` @176, `reserved` @184.
     
      # Who provides
      The runtime creates this struct and passes it to `polyplug_init()`.
@@ -398,7 +399,7 @@ class HostApi(ctypes.Structure):
     
      # Nullability
      Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
-     is the sole producer of this struct and populates all 21 callbacks at
+     is the sole producer of this struct and populates all 22 callbacks at
      creation. Consumers never construct or mutate a `HostApi`. Only the
      `runtime` pointer can become null (it is swapped to null by
      `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
@@ -447,11 +448,12 @@ class HostApi(ctypes.Structure):
         ("log", _host_api_log_t),
         ("create_guest_instance", _host_api_create_guest_instance_t),
         ("destroy_guest_instance", _host_api_destroy_guest_instance_t),
+        ("revision_counter", _host_api_revision_counter_t),
         ("reserved", ctypes.c_void_p),
     ]
 
-# Expected size: 184 bytes
-assert ctypes.sizeof(HostApi) == 184, f"HostApi expected 184 bytes, got {ctypes.sizeof(HostApi)}"
+# Expected size: 192 bytes
+assert ctypes.sizeof(HostApi) == 192, f"HostApi expected 192 bytes, got {ctypes.sizeof(HostApi)}"
 
 
 class BundleInitContext(ctypes.Structure):

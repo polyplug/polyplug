@@ -1102,10 +1102,38 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str(&format!(
             "public sealed unsafe class {caller_name} : IDisposable {{\n"
         ));
-        out.push_str("    private readonly GuestContractInterface* _interface;\n");
+        out.push_str("    private GuestContractInterface* _interface;\n");
         out.push_str("    private GuestContractInstance _instance;\n");
         out.push_str("    private readonly HostApi* _host;\n");
         out.push_str("    private bool _disposed;\n");
+        out.push_str(
+            "    /// <summary>Contract handle, retained so the cache can re-resolve after a\n",
+        );
+        out.push_str(
+            "    /// hot-reload (which swaps a new interface into the same slot) or report a\n",
+        );
+        out.push_str("    /// gone contract.</summary>\n");
+        out.push_str("    private readonly GuestContractHandle _handle;\n");
+        out.push_str(
+            "    /// <summary>Pointer to the runtime's registry revision counter, fetched once\n",
+        );
+        out.push_str(
+            "    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one\n",
+        );
+        out.push_str(
+            "    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>\n",
+        );
+        out.push_str("    private readonly IntPtr _revisionPtr;\n");
+        out.push_str(
+            "    /// <summary>Revision value read when the interface was resolved. Compared\n",
+        );
+        out.push_str(
+            "    /// before each dispatch against the live counter to detect a reload/unload and\n",
+        );
+        out.push_str(
+            "    /// re-resolve, so the cached interface pointer never dangles.</summary>\n",
+        );
+        out.push_str("    private ulong _cachedRevision;\n");
         if needs_arena {
             out.push_str(
                 "    /// <summary>Unmanaged backing buffer for the per-call arena. C-heap\n",
@@ -1124,12 +1152,15 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         // Private constructor
         if needs_arena {
             out.push_str(&format!(
-                "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {{\n"
+                "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {{\n"
             ));
             out.push_str("        _interface = iface;\n");
             out.push_str("        _instance = inst;\n");
             out.push_str("        _host = host;\n");
             out.push_str("        _disposed = false;\n");
+            out.push_str("        _handle = handle;\n");
+            out.push_str("        _revisionPtr = revisionPtr;\n");
+            out.push_str("        _cachedRevision = cachedRevision;\n");
             out.push_str(
                 "        // C-heap allocation: cross-boundary arena data must not live on the managed heap.\n",
             );
@@ -1140,12 +1171,15 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
             out.push_str("    }\n\n");
         } else {
             out.push_str(&format!(
-                "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {{\n"
+                "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {{\n"
             ));
             out.push_str("        _interface = iface;\n");
             out.push_str("        _instance = inst;\n");
             out.push_str("        _host = host;\n");
             out.push_str("        _disposed = false;\n");
+            out.push_str("        _handle = handle;\n");
+            out.push_str("        _revisionPtr = revisionPtr;\n");
+            out.push_str("        _cachedRevision = cachedRevision;\n");
             out.push_str("    }\n\n");
         }
 
@@ -1182,8 +1216,18 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;\n");
         out.push_str("        GuestContractInstance inst = default;\n");
         out.push_str("        createFn(host, iface, null, &inst);\n");
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        out.push_str(
+            "        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;\n",
+        );
+        out.push_str("        IntPtr revisionPtr = revisionFn(host);\n");
+        out.push_str("        ulong cachedRevision = revisionPtr == IntPtr.Zero\n");
+        out.push_str("            ? 0UL\n");
+        out.push_str("            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));\n");
         out.push_str(&format!(
-            "        return new {caller_name}(iface, inst, host);\n"
+            "        return new {caller_name}(iface, inst, host, handle, revisionPtr, cachedRevision);\n"
         ));
         out.push_str("    }\n\n");
 
@@ -1191,11 +1235,81 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("    /// <summary>Check if this caller holds a resolved contract interface.</summary>\n");
         out.push_str("    public bool IsValid => !_disposed && _interface != null;\n\n");
 
+        // LiveRevision helper — one acquire atomic load through the cached pointer,
+        // no call into the runtime. Returns the cached value (i.e. "unchanged") when
+        // there is no counter (IntPtr.Zero), so the staleness check is then a no-op.
+        out.push_str(
+            "    /// <summary>Read the registry revision through the cached pointer — one\n",
+        );
+        out.push_str(
+            "    /// acquire atomic load, no call into the runtime. Returns the cached value\n",
+        );
+        out.push_str("    /// (\"unchanged\") when there is no counter (IntPtr.Zero).</summary>\n");
+        out.push_str("    private ulong LiveRevision() {\n");
+        out.push_str("        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }\n");
+        out.push_str("        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));\n");
+        out.push_str("    }\n\n");
+
+        // Revalidate — re-resolve via the retained handle after the registry changed.
+        // Null interface → false (contract gone). Else create a fresh instance, abandon
+        // the old one (already epoch-reclaimed), and update the cache.
+        let create_cast_rv: &str = "((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)";
+        out.push_str(
+            "    /// <summary>Re-resolve the cached interface after the registry changed under\n",
+        );
+        out.push_str(
+            "    /// us. A hot-reload swapped a new interface into the same slot, so the retained\n",
+        );
+        out.push_str(
+            "    /// handle still resolves — to the new interface; an unload vacated the slot, so\n",
+        );
+        out.push_str(
+            "    /// it resolves to null and false is returned (the contract is gone). The old\n",
+        );
+        out.push_str(
+            "    /// instance is ABANDONED, never destroyed: its interface and guest-side state are\n",
+        );
+        out.push_str(
+            "    /// already epoch-reclaimed, so calling the dead interface's destroy would be UB.</summary>\n",
+        );
+        out.push_str("    private bool Revalidate() {\n");
+        out.push_str("        if (_host == null) { return false; }\n");
+        out.push_str(
+            "        var resolveFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractHandle, GuestContractInterface*>)_host->ResolveGuestContract;\n",
+        );
+        out.push_str("        GuestContractInterface* iface = resolveFn(_host, _handle);\n");
+        out.push_str("        if (iface == null) { return false; }\n");
+        out.push_str("        GuestContractInstance inst = default;\n");
+        out.push_str(&format!(
+            "        {create_cast_rv}(_host, iface, null, &inst);\n"
+        ));
+        out.push_str("        _interface = iface;\n");
+        out.push_str("        _instance = inst;\n");
+        out.push_str("        _cachedRevision = LiveRevision();\n");
+        out.push_str("        return true;\n");
+        out.push_str("    }\n\n");
+
         // Reset method - destroy existing, create new
         out.push_str(
             "    /// <summary>Reset instance - destroy existing and create new.</summary>\n",
         );
         out.push_str("    public void Reset() {\n");
+        out.push_str(
+            "        // If the registry changed under us, the cached interface/instance are stale\n",
+        );
+        out.push_str(
+            "        // (a reload/unload reclaimed their backing). Revalidate() abandons the dead\n",
+        );
+        out.push_str(
+            "        // instance and builds a fresh one on the current interface — exactly the\n",
+        );
+        out.push_str(
+            "        // fresh instance Reset() promises — so defer to it and skip the unsafe destroy.\n",
+        );
+        out.push_str("        if (LiveRevision() != _cachedRevision) {\n");
+        out.push_str("            Revalidate();\n");
+        out.push_str("            return;\n");
+        out.push_str("        }\n");
         out.push_str("        if (!_disposed) {\n");
         out.push_str(&format!(
             "            {destroy_cast}(_host, _interface, _instance);\n"
@@ -1214,10 +1328,22 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         );
         out.push_str("    public void Dispose() {\n");
         out.push_str("        if (!_disposed) {\n");
+        out.push_str(
+            "            // If the registry changed since we resolved, the cached interface and\n",
+        );
+        out.push_str(
+            "            // instance are stale — a reload/unload reclaimed their backing — so calling\n",
+        );
+        out.push_str(
+            "            // the dead interface's destroy would be UB; the reload/unload already\n",
+        );
+        out.push_str("            // reclaimed the instance, so skip the destroy entirely.\n");
+        out.push_str("            if (LiveRevision() == _cachedRevision) {\n");
         out.push_str(&format!(
-            "            {destroy_cast}(_host, _interface, _instance);\n"
+            "                {destroy_cast}(_host, _interface, _instance);\n"
         ));
-        out.push_str("            _instance.Data = nint.Zero;\n");
+        out.push_str("                _instance.Data = nint.Zero;\n");
+        out.push_str("            }\n");
         if needs_arena {
             out.push_str(
                 "            // Free all retained overflow blocks, then the C-heap buffer.\n",
@@ -1286,6 +1412,17 @@ fn generate_host_fn_caller(
     out.push_str(&format!(
         "            throw new ObjectDisposedException(nameof({caller_name}));\n"
     ));
+    out.push_str("        }\n\n");
+
+    // Cheap per-call staleness check: read the registry revision directly through the
+    // cached pointer (one atomic load, no call into the runtime). While it matches the
+    // value cached when this caller resolved, the interface pointer is current and we
+    // dispatch directly; on any change (hot-reload or unload) we re-resolve first, so
+    // the cached pointer is never used once it dangles. A gone contract throws.
+    out.push_str("        if (LiveRevision() != _cachedRevision && !Revalidate()) {\n");
+    out.push_str(
+        "            throw new InvalidOperationException(\"contract not found after reload\");\n",
+    );
     out.push_str("        }\n\n");
 
     if needs_arena {
@@ -2683,6 +2820,32 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         out.push_str("    private GuestContractInstance _instance;\n");
         out.push_str("    private HostApi* _host;\n");
         out.push_str("    private bool _disposed;\n");
+        out.push_str(
+            "    /// <summary>Peer contract handle, retained so the cache can re-resolve after a\n",
+        );
+        out.push_str(
+            "    /// hot-reload (which swaps a new interface into the same slot) or report a\n",
+        );
+        out.push_str("    /// gone peer.</summary>\n");
+        out.push_str("    private readonly GuestContractHandle _handle;\n");
+        out.push_str(
+            "    /// <summary>Pointer to the runtime's registry revision counter, fetched once\n",
+        );
+        out.push_str(
+            "    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one\n",
+        );
+        out.push_str(
+            "    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>\n",
+        );
+        out.push_str("    private readonly IntPtr _revisionPtr;\n");
+        out.push_str(
+            "    /// <summary>Revision value read when the peer was resolved. Compared before each\n",
+        );
+        out.push_str(
+            "    /// dispatch against the live counter to detect a reload/unload and re-resolve, so\n",
+        );
+        out.push_str("    /// the cached interface pointer and instance never dangle.</summary>\n");
+        out.push_str("    private ulong _cachedRevision;\n");
         if needs_arena {
             out.push_str(
                 "    /// <summary>Unmanaged backing buffer for the per-call arena. C-heap\n",
@@ -2700,12 +2863,15 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
 
         // Private constructor
         out.push_str(&format!(
-            "    private {peer_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {{\n"
+            "    private {peer_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {{\n"
         ));
         out.push_str("        _interface = iface;\n");
         out.push_str("        _instance = inst;\n");
         out.push_str("        _host = host;\n");
         out.push_str("        _disposed = false;\n");
+        out.push_str("        _handle = handle;\n");
+        out.push_str("        _revisionPtr = revisionPtr;\n");
+        out.push_str("        _cachedRevision = cachedRevision;\n");
         if needs_arena {
             out.push_str(
                 "        // C-heap allocation: cross-boundary arena data must not live on the managed heap.\n",
@@ -2765,8 +2931,18 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
             "        inst.ContractId = 0x{:016X}UL;\n",
             contract.contract_id
         ));
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        out.push_str(
+            "        var revisionFn = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)host->RevisionCounter;\n",
+        );
+        out.push_str("        IntPtr revisionPtr = revisionFn(hostPtr);\n");
+        out.push_str("        ulong cachedRevision = revisionPtr == IntPtr.Zero\n");
+        out.push_str("            ? 0UL\n");
+        out.push_str("            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));\n");
         out.push_str(&format!(
-            "        return new {peer_name}(iface, inst, host);\n"
+            "        return new {peer_name}(iface, inst, host, handle, revisionPtr, cachedRevision);\n"
         ));
         out.push_str("    }\n\n");
 
@@ -2776,6 +2952,73 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         );
         out.push_str("    public bool IsValid => !_disposed && _interface != null;\n\n");
 
+        // LiveRevision helper — one acquire atomic load through the cached pointer,
+        // no call into the runtime. Returns the cached value ("unchanged") when there
+        // is no counter (IntPtr.Zero), making the check a no-op.
+        out.push_str(
+            "    /// <summary>Read the registry revision through the cached pointer — one\n",
+        );
+        out.push_str(
+            "    /// acquire atomic load, no call into the runtime. Returns the cached value\n",
+        );
+        out.push_str("    /// (\"unchanged\") when there is no counter (IntPtr.Zero).</summary>\n");
+        out.push_str("    private ulong LiveRevision() {\n");
+        out.push_str("        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }\n");
+        out.push_str("        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));\n");
+        out.push_str("    }\n\n");
+
+        // Revalidate — re-resolve the cached peer interface via the retained handle after
+        // the registry changed. Null interface → false (peer gone). Else create a fresh
+        // instance, re-stamp the peer contract id (so CallGuestMethod keeps routing by it),
+        // abandon the old instance (already epoch-reclaimed), and update the cache.
+        out.push_str(
+            "    /// <summary>Re-resolve the cached peer interface after the registry changed\n",
+        );
+        out.push_str(
+            "    /// under us. A hot-reload swapped a new interface into the same slot, so the\n",
+        );
+        out.push_str(
+            "    /// retained handle still resolves — to the new interface; an unload vacated the\n",
+        );
+        out.push_str(
+            "    /// slot, so it resolves to null and false is returned (the peer is gone). The old\n",
+        );
+        out.push_str(
+            "    /// instance is ABANDONED, never destroyed: its interface and guest-side state are\n",
+        );
+        out.push_str(
+            "    /// already epoch-reclaimed, so calling the dead interface's destroy would be UB.</summary>\n",
+        );
+        out.push_str("    private bool Revalidate() {\n");
+        out.push_str("        if (_host == null) { return false; }\n");
+        out.push_str(
+            "        var resolveFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractHandle, GuestContractInterface*>)_host->ResolveGuestContract;\n",
+        );
+        out.push_str(
+            "        GuestContractInterface* iface = resolveFn((IntPtr)_host, _handle);\n",
+        );
+        out.push_str("        if (iface == null) { return false; }\n");
+        out.push_str(
+            "        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance;\n",
+        );
+        out.push_str("        GuestContractInstance inst = default;\n");
+        out.push_str("        createFn((IntPtr)_host, iface, null, &inst);\n");
+        out.push_str(
+            "        // Re-stamp the peer contract id so CallGuestMethod keeps routing by it even\n",
+        );
+        out.push_str(
+            "        // when a stateless peer's create_instance returns a null (null-id) handle.\n",
+        );
+        out.push_str(&format!(
+            "        inst.ContractId = 0x{:016X}UL;\n",
+            contract.contract_id
+        ));
+        out.push_str("        _interface = iface;\n");
+        out.push_str("        _instance = inst;\n");
+        out.push_str("        _cachedRevision = LiveRevision();\n");
+        out.push_str("        return true;\n");
+        out.push_str("    }\n\n");
+
         // Dispose — route destruction through the host so the runtime drops the instance.
         let destroy_cast: &str = "((delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)";
         out.push_str(
@@ -2783,10 +3026,22 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         );
         out.push_str("    public void Dispose() {\n");
         out.push_str("        if (!_disposed) {\n");
+        out.push_str(
+            "            // If the registry changed since we resolved, the cached interface and\n",
+        );
+        out.push_str(
+            "            // instance are stale — a reload/unload reclaimed their backing — so calling\n",
+        );
+        out.push_str(
+            "            // the dead interface's destroy would be UB; the reload/unload already\n",
+        );
+        out.push_str("            // reclaimed the instance, so skip the destroy entirely.\n");
+        out.push_str("            if (LiveRevision() == _cachedRevision) {\n");
         out.push_str(&format!(
-            "            {destroy_cast}((IntPtr)_host, _interface, _instance);\n"
+            "                {destroy_cast}((IntPtr)_host, _interface, _instance);\n"
         ));
-        out.push_str("            _instance.Data = nint.Zero;\n");
+        out.push_str("                _instance.Data = nint.Zero;\n");
+        out.push_str("            }\n");
         if needs_arena {
             out.push_str(
                 "            // Free all retained overflow blocks, then the C-heap buffer.\n",
@@ -2861,6 +3116,16 @@ fn generate_peer_fn_caller_cs(
     out.push_str(&format!(
         "            throw new ObjectDisposedException(nameof({peer_name}));\n"
     ));
+    out.push_str("        }\n\n");
+
+    // Cheap per-call staleness check: read the registry revision directly through the
+    // cached pointer (one atomic load, no call into the runtime). On any change (hot-reload
+    // or unload of the peer) we re-resolve first — re-stamping the contract id — so the
+    // cached interface and instance are never used once they dangle. A gone peer throws.
+    out.push_str("        if (LiveRevision() != _cachedRevision && !Revalidate()) {\n");
+    out.push_str(
+        "            throw new InvalidOperationException(\"peer not found after reload\");\n",
+    );
     out.push_str("        }\n\n");
 
     if needs_arena && peer_needs_arena {

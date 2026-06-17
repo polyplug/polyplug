@@ -860,7 +860,9 @@ fn generate_host_callers_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError>
     out.push_str("#include \"polyplug/abi.hpp\"\n");
     out.push_str("#include \"polyplug/runtime.hpp\"\n");
     out.push_str("#include <array>\n");
+    out.push_str("#include <atomic>\n");
     out.push_str("#include <cstddef>\n");
+    out.push_str("#include <cstdint>\n");
     out.push_str("#include <memory>\n");
     out.push_str("#include <optional>\n\n");
     out.push_str("namespace polyplug_generated {\n\n");
@@ -870,6 +872,8 @@ fn generate_host_callers_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError>
             bundle.bundle_id
         ));
     }
+
+    emit_cpp_revision_helper(&mut out);
 
     // Emit the per-caller call-arena helpers only when some contract needs one.
     if ir.contracts.iter().any(contract_needs_arena) {
@@ -1093,6 +1097,37 @@ fn contract_needs_arena(contract: &ResolvedContract) -> bool {
 
 /// Emit the inline call-arena helpers used by per-caller arenas.
 ///
+/// Emit the shared revision-load helper used by every generated caller.
+///
+/// `revision_ptr` is the value returned by `HostApi.revision_counter`: a pointer
+/// to the runtime's registry revision counter (a Rust `AtomicU64`, layout-compatible
+/// with `std::atomic<std::uint64_t>`). C++17 has no `std::atomic_ref`, so the load is
+/// performed by reinterpreting the pointer as `const std::atomic<std::uint64_t>*` and
+/// issuing one acquire load. A null pointer (no runtime) reads as 0, so the per-call
+/// staleness check then compares the cached 0 against 0 — a no-op.
+fn emit_cpp_revision_helper(out: &mut String) {
+    out.push_str("/// Read the runtime's registry revision through `revision_ptr` with one\n");
+    out.push_str("/// acquire atomic load. Returns 0 when the pointer is null (no runtime),\n");
+    out.push_str("/// making the per-call staleness check a no-op.\n");
+    out.push_str(
+        "inline uint64_t polyplug_load_revision(const uint64_t* revision_ptr) noexcept {\n",
+    );
+    out.push_str("    if (revision_ptr == nullptr) { return 0; }\n");
+    out.push_str(
+        "    // SAFETY: revision_ptr was returned by HostApi.revision_counter and points at\n",
+    );
+    out.push_str(
+        "    // the runtime's revision counter — a Rust AtomicU64, layout-compatible with\n",
+    );
+    out.push_str(
+        "    // std::atomic<std::uint64_t> — whose address is stable for the runtime's lifetime.\n",
+    );
+    out.push_str(
+        "    return reinterpret_cast<const std::atomic<std::uint64_t>*>(revision_ptr)->load(std::memory_order_acquire);\n",
+    );
+    out.push_str("}\n\n");
+}
+
 /// `CallArena` in `polyplug/abi.hpp` is a layout-only POD (no methods), so the
 /// bump/overflow allocation and reset logic is emitted here. It is a direct port
 /// of `polyplug_abi::CallArena::{alloc, reset}`; keeping the two in lockstep is
@@ -1351,8 +1386,19 @@ fn generate_cpp_host_contract(
     out.push_str(
         "        GuestContractInstance instance{};\n        host->create_guest_instance(host, iface, nullptr, &instance);\n",
     );
+    out.push_str(
+        "        // Fetch the registry revision counter ONCE, then read its current value, so\n",
+    );
+    out.push_str(
+        "        // every later call can detect a reload/unload with a direct atomic load (no\n",
+    );
+    out.push_str("        // call back into the runtime) and re-resolve before dispatching.\n");
+    out.push_str("        const uint64_t* revision_ptr = host->revision_counter(host);\n");
+    out.push_str(
+        "        const uint64_t cached_revision = polyplug_load_revision(revision_ptr);\n",
+    );
     out.push_str(&format!(
-        "        return {}(iface, instance, host);\n",
+        "        return {}(iface, instance, host, handle, revision_ptr, cached_revision);\n",
         class_name
     ));
     out.push_str("    }\n\n");
@@ -1369,6 +1415,19 @@ fn generate_cpp_host_contract(
         out.push_str("            polyplug_arena_free_all(&arena_);\n");
         out.push_str("        }\n");
     }
+    out.push_str(
+        "        // If the registry changed since we resolved, the cached interface and\n",
+    );
+    out.push_str(
+        "        // instance are stale — a reload/unload reclaimed their backing — so calling\n",
+    );
+    out.push_str(
+        "        // the dead interface's destroy would be UB; the reload/unload already\n",
+    );
+    out.push_str("        // reclaimed the instance, so skip the destroy entirely.\n");
+    out.push_str("        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {\n");
+    out.push_str("            return;\n");
+    out.push_str("        }\n");
     out.push_str("        // Destroy instance via factory\n");
     out.push_str("        // SAFETY: instance was created by create_instance and is valid.\n");
     out.push_str("        if (instance_.data != nullptr) {\n");
@@ -1385,14 +1444,17 @@ fn generate_cpp_host_contract(
     ));
     out.push_str("        : interface_(other.interface_),\n");
     out.push_str("          instance_(other.instance_),\n");
+    out.push_str("          host_(other.host_),\n");
+    out.push_str("          handle_(other.handle_),\n");
+    out.push_str("          revision_ptr_(other.revision_ptr_),\n");
     if needs_arena {
         // The arena's interior pointers refer into *arena_buf_, a heap block whose
         // address is preserved by moving the unique_ptr, so the arena stays valid.
-        out.push_str("          host_(other.host_),\n");
+        out.push_str("          cached_revision_(other.cached_revision_),\n");
         out.push_str("          arena_buf_(std::move(other.arena_buf_)),\n");
         out.push_str("          arena_(other.arena_) {\n");
     } else {
-        out.push_str("          host_(other.host_) {\n");
+        out.push_str("          cached_revision_(other.cached_revision_) {\n");
     }
     out.push_str("        other.instance_.data = nullptr;  // Prevent double-destroy.\n");
     out.push_str("    }\n");
@@ -1407,11 +1469,17 @@ fn generate_cpp_host_contract(
         out.push_str("                polyplug_arena_free_all(&arena_);\n");
         out.push_str("            }\n");
     }
-    out.push_str("            // Destroy current instance first\n");
-    out.push_str("            if (instance_.data != nullptr) {\n");
+    out.push_str(
+        "            // Destroy current instance first — but only if the registry has not\n",
+    );
+    out.push_str(
+        "            // changed under us; a reload/unload already reclaimed a stale instance.\n",
+    );
+    out.push_str("            if (instance_.data != nullptr && polyplug_load_revision(revision_ptr_) == cached_revision_) {\n");
     out.push_str("                host_->destroy_guest_instance(host_, interface_, instance_);\n");
     out.push_str("            }\n");
     out.push_str("            interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;\n");
+    out.push_str("            handle_ = other.handle_; revision_ptr_ = other.revision_ptr_; cached_revision_ = other.cached_revision_;\n");
     if needs_arena {
         out.push_str(
             "            arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;\n",
@@ -1444,6 +1512,20 @@ fn generate_cpp_host_contract(
     out.push_str("    /// Destroy current instance and create a new one.\n");
     out.push_str("    /// Useful for recovering from plugin errors.\n");
     out.push_str("    void reset() noexcept {\n");
+    out.push_str(
+        "        // If the registry changed under us, the cached interface/instance are\n",
+    );
+    out.push_str(
+        "        // stale (a reload/unload reclaimed their backing). revalidate() abandons\n",
+    );
+    out.push_str(
+        "        // the dead instance and builds a fresh one on the current interface —\n",
+    );
+    out.push_str("        // exactly the fresh instance reset() promises — so defer to it.\n");
+    out.push_str("        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {\n");
+    out.push_str("            revalidate();\n");
+    out.push_str("            return;\n");
+    out.push_str("        }\n");
     out.push_str("        if (instance_.data != nullptr) {\n");
     out.push_str("            host_->destroy_guest_instance(host_, interface_, instance_);\n");
     out.push_str("        }\n");
@@ -1451,19 +1533,78 @@ fn generate_cpp_host_contract(
     out.push_str("        host_->create_guest_instance(host_, interface_, nullptr, &instance_);\n");
     out.push_str("    }\n\n");
 
+    // live_revision() + revalidate() private helpers are emitted in the private
+    // section below; the public surface above references them.
+
     // Generate method callers
     for func in &contract.functions {
         generate_cpp_host_function(out, &class_name, func)?;
     }
 
-    // Private members and constructor
+    // Private members, helpers, and constructor
     out.push_str("private:\n");
+
+    // Re-resolve the cached interface after the registry changed under us.
+    out.push_str("    /// Re-resolve the cached interface after the registry changed under us.\n");
+    out.push_str("    ///\n");
+    out.push_str(
+        "    /// A hot-reload swapped a new interface into the same slot, so the retained\n",
+    );
+    out.push_str(
+        "    /// handle still resolves — to the new interface; an unload vacated the slot,\n",
+    );
+    out.push_str(
+        "    /// so it resolves to null and `false` is returned (the contract is gone).\n",
+    );
+    out.push_str("    ///\n");
+    out.push_str("    /// The old instance is ABANDONED, never destroyed: after a reload its\n");
+    out.push_str(
+        "    /// interface and the guest state it created are already epoch-reclaimed, so\n",
+    );
+    out.push_str("    /// calling the dead interface's destroy would be UB.\n");
+    out.push_str("    bool revalidate() noexcept {\n");
+    out.push_str("        if (host_ == nullptr) {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str("        const GuestContractInterface* iface = host_->resolve_guest_contract(host_, handle_);\n");
+    out.push_str("        if (iface == nullptr) {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str("        GuestContractInstance inst{};\n");
+    out.push_str("        host_->create_guest_instance(host_, iface, nullptr, &inst);\n");
+    out.push_str("        interface_ = iface;\n");
+    out.push_str("        instance_ = inst;\n");
+    out.push_str("        cached_revision_ = polyplug_load_revision(revision_ptr_);\n");
+    out.push_str("        return true;\n");
+    out.push_str("    }\n\n");
+
     out.push_str("    /// Resolved interface pointer from the registry.\n");
     out.push_str("    const GuestContractInterface* interface_;\n");
     out.push_str("    /// Instance handle created by `create_instance`.\n");
     out.push_str("    GuestContractInstance instance_;\n");
     out.push_str("    /// Host interface pointer (needed for create/destroy_instance).\n");
     out.push_str("    const HostApi* host_;\n");
+    out.push_str(
+        "    /// Contract handle, retained so the cache can re-resolve after a hot-reload\n",
+    );
+    out.push_str(
+        "    /// (which swaps a new interface into the same slot) or report a gone contract.\n",
+    );
+    out.push_str("    GuestContractHandle handle_;\n");
+    out.push_str("    /// Pointer to the runtime's registry revision counter, fetched once via\n");
+    out.push_str(
+        "    /// `HostApi.revision_counter`. Polled before each dispatch (one atomic load,\n",
+    );
+    out.push_str("    /// no call into the runtime); null when there is no runtime.\n");
+    out.push_str("    const uint64_t* revision_ptr_;\n");
+    out.push_str(
+        "    /// Revision value read when the interface was resolved. Compared before each\n",
+    );
+    out.push_str(
+        "    /// dispatch against the live counter to detect a reload/unload and re-resolve,\n",
+    );
+    out.push_str("    /// so the cached interface pointer never dangles.\n");
+    out.push_str("    uint64_t cached_revision_;\n");
     if needs_arena {
         out.push_str(
             "    /// Stable-address backing buffer for the per-call arena. Held by unique_ptr\n",
@@ -1478,10 +1619,10 @@ fn generate_cpp_host_contract(
     out.push('\n');
     if needs_arena {
         out.push_str(&format!(
-            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)\n",
+            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision)\n",
             class_name
         ));
-        out.push_str("        : interface_(iface), instance_(inst), host_(host),\n");
+        out.push_str("        : interface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision),\n");
         out.push_str(
             "          arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),\n",
         );
@@ -1490,10 +1631,10 @@ fn generate_cpp_host_contract(
         );
     } else {
         out.push_str(&format!(
-            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept\n",
+            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision) noexcept\n",
             class_name
         ));
-        out.push_str("        : interface_(iface), instance_(inst), host_(host) {}\n");
+        out.push_str("        : interface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision) {}\n");
     }
     out.push_str("};\n\n");
     Ok(())
@@ -1535,6 +1676,22 @@ fn generate_cpp_host_function(
         "    {} {}({}) {{\n",
         return_type, func.name, params_str
     ));
+
+    // Cheap per-call staleness check: read the registry revision directly through
+    // the cached pointer (one atomic load, no call into the runtime). While it
+    // matches the value cached at resolve, the interface pointer is current and we
+    // dispatch directly; on any change (hot-reload or unload) we re-resolve first,
+    // so the cached pointer is never used once it dangles.
+    out.push_str(
+        "        // Per-call staleness check: re-resolve before dispatch if the registry changed,\n",
+    );
+    out.push_str("        // so the cached interface pointer is never used once it dangles.\n");
+    out.push_str("        if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate()) {\n");
+    out.push_str("            static constexpr const char* err_msg = \"contract not found\";\n");
+    out.push_str(
+        "            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::NotFound), StringView{reinterpret_cast<const uint8_t*>(err_msg), 18}});\n",
+    );
+    out.push_str("        }\n");
 
     if needs_arena {
         out.push_str(
@@ -2731,6 +2888,7 @@ fn generate_cpp_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract])
     out.push_str("#include \"polyplug/guest.hpp\"\n");
     out.push_str("#include \"polyplug/abi.hpp\"\n");
     out.push_str("#include <array>\n");
+    out.push_str("#include <atomic>\n");
     out.push_str("#include <cstddef>\n");
     out.push_str("#include <cstdint>\n");
     out.push_str("#include <cstdio>\n");
@@ -2739,6 +2897,7 @@ fn generate_cpp_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract])
     out.push_str("#include <optional>\n\n");
     out.push_str("namespace polyplug_plugin {\n\n");
     emit_cpp_log_call_failure_helper(&mut out);
+    emit_cpp_revision_helper(&mut out);
 
     // Emit arena helpers only when at least one peer contract needs the arena.
     let any_needs_arena: bool = peers
@@ -2847,8 +3006,19 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         "        instance.contract_id = 0x{:016X}ULL;\n",
         contract.contract_id
     ));
+    out.push_str(
+        "        // Fetch the registry revision counter ONCE, then read its current value, so\n",
+    );
+    out.push_str(
+        "        // every later call can detect a reload/unload with a direct atomic load and\n",
+    );
+    out.push_str("        // re-resolve before dispatching.\n");
+    out.push_str("        const uint64_t* revision_ptr = host->revision_counter(host);\n");
+    out.push_str(
+        "        const uint64_t cached_revision = polyplug_load_revision(revision_ptr);\n",
+    );
     out.push_str(&format!(
-        "        return {}(iface, instance, host);\n",
+        "        return {}(iface, instance, host, handle, revision_ptr, cached_revision);\n",
         class_name
     ));
     out.push_str("    }\n\n");
@@ -2865,6 +3035,19 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         out.push_str("            polyplug_arena_reset(&arena_);\n");
         out.push_str("        }\n");
     }
+    out.push_str(
+        "        // If the registry changed since we resolved, the cached interface and\n",
+    );
+    out.push_str(
+        "        // instance are stale — a reload/unload reclaimed their backing — so calling\n",
+    );
+    out.push_str(
+        "        // the dead interface's destroy would be UB; the reload/unload already\n",
+    );
+    out.push_str("        // reclaimed the instance, so skip the destroy entirely.\n");
+    out.push_str("        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {\n");
+    out.push_str("            return;\n");
+    out.push_str("        }\n");
     out.push_str(
         "        // SAFETY: instance was created by create_instance on the resolved interface.\n",
     );
@@ -2883,12 +3066,15 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
     ));
     out.push_str("        : iface_(other.iface_),\n");
     out.push_str("          instance_(other.instance_),\n");
+    out.push_str("          host_(other.host_),\n");
+    out.push_str("          handle_(other.handle_),\n");
+    out.push_str("          revision_ptr_(other.revision_ptr_),\n");
     if needs_arena {
-        out.push_str("          host_(other.host_),\n");
+        out.push_str("          cached_revision_(other.cached_revision_),\n");
         out.push_str("          arena_buf_(std::move(other.arena_buf_)),\n");
         out.push_str("          arena_(other.arena_) {\n");
     } else {
-        out.push_str("          host_(other.host_) {\n");
+        out.push_str("          cached_revision_(other.cached_revision_) {\n");
     }
     out.push_str("        other.instance_.data = nullptr;  // Prevent double-destroy.\n");
     out.push_str("    }\n");
@@ -2902,12 +3088,19 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         out.push_str("                polyplug_arena_reset(&arena_);\n");
         out.push_str("            }\n");
     }
-    out.push_str("            if (instance_.data != nullptr) {\n");
+    out.push_str(
+        "            // Destroy current instance first — but only if the registry has not\n",
+    );
+    out.push_str(
+        "            // changed under us; a reload/unload already reclaimed a stale instance.\n",
+    );
+    out.push_str("            if (instance_.data != nullptr && polyplug_load_revision(revision_ptr_) == cached_revision_) {\n");
     out.push_str("                host_->destroy_guest_instance(host_, iface_, instance_);\n");
     out.push_str("            }\n");
     out.push_str(
         "            iface_ = other.iface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;\n",
     );
+    out.push_str("            handle_ = other.handle_; revision_ptr_ = other.revision_ptr_; cached_revision_ = other.cached_revision_;\n");
     if needs_arena {
         out.push_str(
             "            arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;\n",
@@ -2940,8 +3133,50 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         generate_cpp_peer_fn_caller(out, &class_name, func);
     }
 
-    // ── Private members and constructor ─────────────────────────────────────
+    // ── Private members, helpers, and constructor ───────────────────────────
     out.push_str("private:\n");
+
+    // Re-resolve the cached peer interface after the registry changed under us.
+    out.push_str(
+        "    /// Re-resolve the cached peer interface after the registry changed under us.\n",
+    );
+    out.push_str("    ///\n");
+    out.push_str(
+        "    /// A hot-reload swapped a new interface into the same slot, so the retained\n",
+    );
+    out.push_str(
+        "    /// handle still resolves — to the new interface; an unload vacated the slot,\n",
+    );
+    out.push_str("    /// so it resolves to null and `false` is returned (the peer is gone).\n");
+    out.push_str("    ///\n");
+    out.push_str("    /// The old instance is ABANDONED, never destroyed: after a reload its\n");
+    out.push_str(
+        "    /// interface and the guest state it created are already epoch-reclaimed, so\n",
+    );
+    out.push_str(
+        "    /// calling the dead interface's destroy would be UB. The re-stamped contract\n",
+    );
+    out.push_str("    /// id keeps `host->call_guest_method` routing by it for stateless peers.\n");
+    out.push_str("    bool revalidate() noexcept {\n");
+    out.push_str("        if (host_ == nullptr) {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str("        const GuestContractInterface* iface = host_->resolve_guest_contract(host_, handle_);\n");
+    out.push_str("        if (iface == nullptr) {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str("        GuestContractInstance inst{};\n");
+    out.push_str("        host_->create_guest_instance(host_, iface, nullptr, &inst);\n");
+    out.push_str(&format!(
+        "        inst.contract_id = 0x{:016X}ULL;\n",
+        contract.contract_id
+    ));
+    out.push_str("        iface_ = iface;\n");
+    out.push_str("        instance_ = inst;\n");
+    out.push_str("        cached_revision_ = polyplug_load_revision(revision_ptr_);\n");
+    out.push_str("        return true;\n");
+    out.push_str("    }\n\n");
+
     out.push_str("    /// Resolved interface pointer for the peer contract.\n");
     out.push_str("    const GuestContractInterface* iface_;\n");
     out.push_str("    /// Instance handle created from the peer interface.\n");
@@ -2950,6 +3185,27 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         "    /// Host interface pointer used for `call_guest_method` and instance lifecycle.\n",
     );
     out.push_str("    const HostApi* host_;\n");
+    out.push_str(
+        "    /// Peer contract handle, retained so the cache can re-resolve after a hot-reload\n",
+    );
+    out.push_str(
+        "    /// (which swaps a new interface into the same slot) or report a gone contract.\n",
+    );
+    out.push_str("    GuestContractHandle handle_;\n");
+    out.push_str("    /// Pointer to the runtime's registry revision counter, fetched once via\n");
+    out.push_str(
+        "    /// `HostApi.revision_counter`. Polled before each dispatch (one atomic load,\n",
+    );
+    out.push_str("    /// no call into the runtime); null when there is no runtime.\n");
+    out.push_str("    const uint64_t* revision_ptr_;\n");
+    out.push_str(
+        "    /// Revision value read when the peer was resolved. Compared before each dispatch\n",
+    );
+    out.push_str(
+        "    /// against the live counter to detect a reload/unload and re-resolve, so the\n",
+    );
+    out.push_str("    /// cached interface pointer and instance never dangle.\n");
+    out.push_str("    uint64_t cached_revision_;\n");
     if needs_arena {
         out.push_str(
             "    /// Stable-address backing buffer for the per-call arena. Held by unique_ptr\n",
@@ -2964,10 +3220,10 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
     out.push('\n');
     if needs_arena {
         out.push_str(&format!(
-            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host)\n",
+            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision)\n",
             class_name
         ));
-        out.push_str("        : iface_(iface), instance_(inst), host_(host),\n");
+        out.push_str("        : iface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision),\n");
         out.push_str(
             "          arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),\n",
         );
@@ -2976,10 +3232,10 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         );
     } else {
         out.push_str(&format!(
-            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept\n",
+            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision) noexcept\n",
             class_name
         ));
-        out.push_str("        : iface_(iface), instance_(inst), host_(host) {}\n");
+        out.push_str("        : iface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision) {}\n");
     }
     out.push_str("};\n\n");
 }
@@ -3008,7 +3264,9 @@ fn generate_cpp_peer_fn_caller(out: &mut String, class_name: &str, func: &Resolv
         .collect();
     let params_str: String = params.join(", ");
 
-    let self_qual: &str = if needs_arena { "" } else { " const" };
+    // Not const: the per-call staleness check may invoke revalidate(), which
+    // re-resolves the interface/instance and updates the cached revision.
+    let self_qual: &str = "";
 
     out.push_str(&format!(
         "    /// Call peer function `{}` (function_id={}) via host-mediated dispatch.\n",
@@ -3027,6 +3285,22 @@ fn generate_cpp_peer_fn_caller(out: &mut String, class_name: &str, func: &Resolv
 
     // Interface null-guard.
     out.push_str("        if (iface_ == nullptr) {\n");
+    if func.returns.is_some() {
+        out.push_str(&format!("            return {}{{}};\n", return_type));
+    } else {
+        out.push_str("            return;\n");
+    }
+    out.push_str("        }\n");
+
+    // Per-call staleness check: re-resolve before dispatch if the registry changed
+    // (hot-reload or unload of the peer), so the cached interface and instance are
+    // never used once they dangle. This caller is noexcept, so a gone peer funnels
+    // through the host log and returns a zero-initialised value.
+    out.push_str("        if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate()) {\n");
+    out.push_str(&format!(
+        "            detail::log_call_failure(host_, \"guest.peer_caller\", \"{class_name}.{fn_name}\", static_cast<uint32_t>(AbiErrorCode::NotFound));\n",
+        fn_name = func.name
+    ));
     if func.returns.is_some() {
         out.push_str(&format!("            return {}{{}};\n", return_type));
     } else {
@@ -3374,9 +3648,10 @@ mod tests {
             "missing deleted copy constructor: {out}"
         );
 
-        // Check private constructor
+        // Check private constructor (threads the retained handle + revision counter
+        // so the per-call staleness check can re-resolve after a reload/unload).
         assert!(
-            out.contains("explicit TestAddContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host) noexcept"),
+            out.contains("explicit TestAddContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision) noexcept"),
             "missing private constructor: {out}"
         );
 
@@ -3384,6 +3659,37 @@ mod tests {
         assert!(
             out.contains("fn_(instance_, args_ptr,") && out.contains(", &err)"),
             "dispatch must call fn_ with instance_, args_ptr, out_ptr, &err: {out}"
+        );
+
+        // Check revision-counter dangle protection: the caller stores the handle +
+        // revision pointer, performs a per-call staleness check that re-resolves on
+        // change, and the destructor skips destroy once the revision has moved.
+        assert!(
+            out.contains("const uint64_t* revision_ptr_;")
+                && out.contains("uint64_t cached_revision_;"),
+            "missing revision_ptr_/cached_revision_ members: {out}"
+        );
+        assert!(
+            out.contains("GuestContractHandle handle_;"),
+            "missing retained contract handle_ member: {out}"
+        );
+        assert!(
+            out.contains("host->revision_counter(host)"),
+            "factory must fetch the revision counter once: {out}"
+        );
+        assert!(
+            out.contains("bool revalidate() noexcept"),
+            "missing revalidate() helper: {out}"
+        );
+        assert!(
+            out.contains(
+                "if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate())"
+            ),
+            "dispatch must re-resolve before use when the revision changed: {out}"
+        );
+        assert!(
+            out.contains("if (polyplug_load_revision(revision_ptr_) != cached_revision_) {\n            return;\n        }"),
+            "destructor must skip destroy when the revision changed: {out}"
         );
     }
 
@@ -4407,6 +4713,30 @@ mod tests {
         assert!(
             peer_callers.contains("polyplug_generated::LogLevel level"),
             "peer caller params must qualify contract types:\n{peer_callers}"
+        );
+
+        // The C++17 atomic read idiom over the Rust AtomicU64 (no std::atomic_ref)
+        // must be emitted by the shared revision helper in BOTH caller files, so the
+        // per-call staleness check reads the live counter with an acquire load.
+        let atomic_idiom: &str = "reinterpret_cast<const std::atomic<std::uint64_t>*>(revision_ptr)->load(std::memory_order_acquire)";
+        assert!(
+            host_callers.contains("#include <atomic>") && host_callers.contains(atomic_idiom),
+            "host_callers.hpp must include <atomic> and emit the acquire-load idiom:\n{host_callers}"
+        );
+        assert!(
+            peer_callers.contains("#include <atomic>") && peer_callers.contains(atomic_idiom),
+            "peer_callers.hpp must include <atomic> and emit the acquire-load idiom:\n{peer_callers}"
+        );
+        // The peer caller must also re-resolve before dispatch and guard its destroy.
+        assert!(
+            peer_callers.contains(
+                "if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate())"
+            ),
+            "peer dispatch must re-resolve before use when the revision changed:\n{peer_callers}"
+        );
+        assert!(
+            peer_callers.contains("bool revalidate() noexcept"),
+            "peer caller must have a revalidate() helper:\n{peer_callers}"
         );
     }
 }

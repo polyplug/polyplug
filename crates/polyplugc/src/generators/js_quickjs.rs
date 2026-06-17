@@ -893,6 +893,7 @@ fn generate_callers_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str(
         "    resolveGuestContractInterface(handle: number): GuestContractInterfaceView | null;\n",
     );
+    out.push_str("    revisionCounter(): Deno.PointerValue;\n");
     out.push_str("    alloc(size: number, align?: number): Deno.PointerValue;\n");
     out.push_str("    free(ptr: Deno.PointerValue, size: number, align?: number): void;\n");
     out.push_str("}\n\n");
@@ -949,14 +950,28 @@ fn generate_host_caller_class_quickjs(
     out.push_str(&format!("export class {}Contract {{\n", class_name));
     out.push_str("    #rt: Runtime;\n");
     out.push_str("    #view: GuestContractInterfaceView;\n");
-    out.push_str("    #instance: Uint8Array;\n\n");
+    out.push_str("    #instance: Uint8Array;\n");
+    // Retained so the cache can re-resolve after a hot-reload (which swaps a new
+    // interface into the same slot) or report a gone contract after an unload.
+    out.push_str("    #handle: number;\n");
+    // Pointer to the runtime's registry revision counter, fetched once via
+    // `revisionCounter()`. Read directly before each dispatch (one atomic load on the
+    // Deno side); null when there is no counter.
+    out.push_str("    #revisionPtr: Deno.PointerValue;\n");
+    // Revision value read when the interface was resolved. Compared before each
+    // dispatch against the live counter to detect a reload/unload and re-resolve,
+    // so the cached interface pointer and instance never dangle.
+    out.push_str("    #cachedRevision: bigint;\n\n");
 
     out.push_str(
-        "    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array) {\n",
+        "    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {\n",
     );
     out.push_str("        this.#rt = rt;\n");
     out.push_str("        this.#view = view;\n");
     out.push_str("        this.#instance = instance;\n");
+    out.push_str("        this.#handle = handle;\n");
+    out.push_str("        this.#revisionPtr = revisionPtr;\n");
+    out.push_str("        this.#cachedRevision = cachedRevision;\n");
     out.push_str("    }\n\n");
 
     out.push_str(
@@ -977,10 +992,45 @@ fn generate_host_caller_class_quickjs(
     out.push_str("        }\n");
     // A null instance.data is a VALID dispatch token for stateless contracts.
     out.push_str("        const instance = view.createInstance();\n");
+    // Fetch the registry revision counter ONCE and read its current value, so every
+    // later call can detect a reload/unload with a direct atomic load and re-resolve
+    // before dispatching through a stale interface.
+    out.push_str("        const revisionPtr = rt.revisionCounter();\n");
+    out.push_str(
+        "        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);\n",
+    );
     out.push_str(&format!(
-        "        return new {}Contract(rt, view, instance);\n",
+        "        return new {}Contract(rt, view, instance, handle, revisionPtr, cachedRevision);\n",
         class_name
     ));
+    out.push_str("    }\n\n");
+
+    // Read the registry revision through the cached pointer — one atomic load, no call
+    // into the runtime. Returns the cached value ("unchanged") when there is no counter.
+    out.push_str("    #liveRevision(): bigint {\n");
+    out.push_str("        if (this.#revisionPtr === null) {\n");
+    out.push_str("            return this.#cachedRevision;\n");
+    out.push_str("        }\n");
+    out.push_str(
+        "        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);\n",
+    );
+    out.push_str("    }\n\n");
+
+    // Re-resolve the cached interface after the registry changed under us. A hot-reload
+    // swapped a new interface into the same slot, so the retained handle still resolves
+    // (to the new interface); an unload vacated the slot, so it resolves to null and
+    // `false` is returned (the contract is gone). The old instance is ABANDONED, never
+    // destroyed: a reload epoch-reclaimed its interface, so calling the dead interface's
+    // destroyInstance would be undefined behaviour.
+    out.push_str("    #revalidate(): boolean {\n");
+    out.push_str("        const view = this.#rt.resolveGuestContractInterface(this.#handle);\n");
+    out.push_str("        if (view === null || !view.isValid()) {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str("        this.#view = view;\n");
+    out.push_str("        this.#instance = view.createInstance();\n");
+    out.push_str("        this.#cachedRevision = this.#liveRevision();\n");
+    out.push_str("        return true;\n");
     out.push_str("    }\n\n");
 
     out.push_str("    /** True while the resolved interface pointer is valid. */\n");
@@ -990,6 +1040,12 @@ fn generate_host_caller_class_quickjs(
 
     out.push_str("    /** Destroy the instance via the interface `destroy_instance`. */\n");
     out.push_str("    destroy(): void {\n");
+    // If the registry changed since we resolved, the cached interface and instance are
+    // stale — a reload/unload reclaimed their backing — so calling the dead interface's
+    // destroy would be UB; the reload/unload already reclaimed the instance, so skip it.
+    out.push_str("        if (this.#liveRevision() !== this.#cachedRevision) {\n");
+    out.push_str("            return;\n");
+    out.push_str("        }\n");
     out.push_str("        this.#view.destroyInstance(this.#instance);\n");
     out.push_str("    }\n\n");
 
@@ -1035,6 +1091,20 @@ fn generate_host_caller_method_deno(
         param_decls.join(", "),
         ret_ts
     ));
+
+    // Cheap per-call staleness check: read the registry revision through the cached
+    // pointer. While it matches the value cached when this caller resolved, the
+    // interface pointer is current and we dispatch directly; on any change (hot-reload
+    // or unload) we re-resolve first, so the cached pointer is never used once it
+    // dangles. A failed re-resolve means the contract is gone — throw NotFound.
+    out.push_str(
+        "        if (this.#liveRevision() !== this.#cachedRevision && !this.#revalidate()) {\n",
+    );
+    out.push_str(&format!(
+        "            throw new Error('call `{}` failed: contract gone after reload/unload');\n",
+        func.name
+    ));
+    out.push_str("        }\n");
 
     // Validate the function index against the interface's reported function count.
     // VM-dispatch interfaces report a count of 0 (the VM routes by fn_id itself),
@@ -3421,11 +3491,19 @@ fn generate_ts_peer_caller_class(
     // The bridge and host pointer are threaded in explicitly (no global — Rule 12)
     // and stored as instance state so every method reaches the host through them.
     out.push_str("    private _bridge: any;\n");
-    out.push_str("    private _hostPtr: { lo: number; hi: number };\n\n");
+    out.push_str("    private _hostPtr: { lo: number; hi: number };\n");
+    // Registry revision read when this peer was resolved (low/high f64 halves of the
+    // runtime's u64 counter, since QuickJS numbers cannot carry a full u64). Compared
+    // before each dispatch against the live counter to detect a reload/unload of the
+    // peer and re-resolve, so a stale resolution is never dispatched through.
+    out.push_str("    private _revLo: number;\n");
+    out.push_str("    private _revHi: number;\n\n");
 
-    out.push_str("    private constructor(bridge: any, hostPtr: { lo: number; hi: number }) {\n");
+    out.push_str("    private constructor(bridge: any, hostPtr: { lo: number; hi: number }, revLo: number, revHi: number) {\n");
     out.push_str("        this._bridge = bridge;\n");
     out.push_str("        this._hostPtr = hostPtr;\n");
+    out.push_str("        this._revLo = revLo;\n");
+    out.push_str("        this._revHi = revHi;\n");
     out.push_str("    }\n\n");
 
     out.push_str("    /**\n");
@@ -3454,10 +3532,47 @@ fn generate_ts_peer_caller_class(
     out.push_str("        if (handle === null || handle === undefined) {\n");
     out.push_str("            return null;\n");
     out.push_str("        }\n");
+    // Snapshot the registry revision at resolve time. The bridge reads the runtime's
+    // monotonic counter (bumped on every load/reload/unload) and returns it as [lo, hi]
+    // f64 halves. `revision` is absent on older bridges — treat that as 0 (no tracking).
+    out.push_str("        const _rev = bridge.revision ? bridge.revision() : [0, 0];\n");
     out.push_str(&format!(
-        "        return new {}(bridge, hostPtr);\n",
+        "        return new {}(bridge, hostPtr, _rev[0], _rev[1]);\n",
         class_name
     ));
+    out.push_str("    }\n\n");
+
+    // Re-resolve this peer after the registry changed under us: a hot-reload swapped a
+    // new interface into the same slot (findByContract still succeeds), an unload vacated
+    // it (findByContract returns null — the peer is gone, return false). The actual
+    // interface/instance are resolved fresh inside callGuestMethod on each dispatch, so
+    // revalidation only re-confirms reachability and re-snapshots the revision.
+    out.push_str("    private _revalidate(): boolean {\n");
+    out.push_str("        if (!this._bridge || !this._bridge.findByContract) {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str(&format!(
+        "        const handle = this._bridge.findByContract(0x{:08X}, 0x{:08X}, {});\n",
+        contract_id_lo, contract_id_hi, min_version
+    ));
+    out.push_str("        if (handle === null || handle === undefined) {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str(
+        "        const _rev = this._bridge.revision ? this._bridge.revision() : [0, 0];\n",
+    );
+    out.push_str("        this._revLo = _rev[0];\n");
+    out.push_str("        this._revHi = _rev[1];\n");
+    out.push_str("        return true;\n");
+    out.push_str("    }\n\n");
+
+    // True when the live registry revision differs from the one cached at resolve time.
+    out.push_str("    private _revisionChanged(): boolean {\n");
+    out.push_str("        if (!this._bridge || !this._bridge.revision) {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str("        const _rev = this._bridge.revision();\n");
+    out.push_str("        return _rev[0] !== this._revLo || _rev[1] !== this._revHi;\n");
     out.push_str("    }\n\n");
 
     for func in &contract.functions {
@@ -3518,6 +3633,15 @@ fn generate_ts_peer_caller_method(
     } else {
         out.push_str("            return;\n");
     }
+    out.push_str("        }\n");
+    // Cheap per-call staleness check: if the registry revision changed since resolve
+    // (hot-reload or unload of the peer), re-resolve first so a stale resolution is
+    // never dispatched. A failed re-resolve means the peer is gone — throw.
+    out.push_str("        if (this._revisionChanged() && !this._revalidate()) {\n");
+    out.push_str(&format!(
+        "            throw new Error(`peer call {} failed: contract gone after reload/unload`);\n",
+        func.name
+    ));
     out.push_str("        }\n");
     emit_ts_caller_alloc_shim(out);
     out.push_str("        try {\n");

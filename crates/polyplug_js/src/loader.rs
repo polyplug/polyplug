@@ -693,6 +693,55 @@ fn register_host_functions<'js>(
             error: format!("JS runtime js-quickjs error: resolveGuestContract set failed: {e}"),
         })?;
 
+    // ── revision ─────────────────────────────────────────────────────────────────
+    // Reads the runtime's monotonic registry revision counter (HostApi.revision_counter)
+    // with Acquire ordering and returns its current u64 value as [lo, hi] f64 halves
+    // (matching alloc/arenaAlloc — QuickJS numbers cannot carry a full u64 exactly).
+    // A generated peer caller compares this against the value cached at resolve time:
+    // a change means a load/reload/unload republished the registry, so the cached peer
+    // interface and instance may dangle and must be re-resolved before the next dispatch.
+    // QuickJS cannot deref the raw `*const u64`, so the read happens here on the Rust
+    // side; one bridge call per dispatch is negligible against microsecond VM dispatch.
+    let revision_fn: Function<'js> = Function::new(
+        ctx.clone(),
+        move |ctx: Ctx<'js>| -> Result<Array<'js>, rquickjs::Error> {
+            let value: u64 = match host_from_usize(host_interface_usize) {
+                Some(hvt) => {
+                    // SAFETY: hvt points to 'static HostApi data; revision_counter is an ABI
+                    // function pointer satisfied by passing hvt as the self argument.
+                    let ptr: *const u64 = unsafe { ((*hvt).revision_counter)(hvt) };
+                    if ptr.is_null() {
+                        0_u64
+                    } else {
+                        // SAFETY: ptr was returned by revision_counter and points to the
+                        // runtime's revision counter — an AtomicU64 valid for the runtime's
+                        // lifetime. Acquire mirrors the host-side store ordering.
+                        unsafe { (*(ptr as *const AtomicU64)).load(Ordering::Acquire) }
+                    }
+                }
+                None => 0_u64,
+            };
+            let arr: Array<'js> = Array::new(ctx.clone())
+                .map_err(|_| rquickjs::Exception::throw_message(&ctx, "array creation failed"))?;
+            // Store as f64 halves: rquickjs sign-extends u32 > INT32_MAX to negative JS
+            // ints, which corrupts the value; f64 preserves each 32-bit half exactly.
+            let _ = arr.set(0, (value as u32) as f64);
+            let _ = arr.set(1, ((value >> 32) as u32) as f64);
+            Ok(arr)
+        },
+    )
+    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        bundle: bundle_name.to_owned(),
+        error: format!("JS runtime js-quickjs error: revision function creation failed: {e}"),
+    })?;
+
+    polyplug_obj
+        .set("revision", revision_fn)
+        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: revision set failed: {e}"),
+        })?;
+
     // ── callGuestMethod ────────────────────────────────────────────────────────
     // Guarded peer-call path: find → resolve → create_instance → call_guest_method
     // → destroy_instance. The contract_id and min_version come from the generated

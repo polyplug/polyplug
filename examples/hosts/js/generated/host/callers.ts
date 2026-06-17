@@ -13,6 +13,7 @@ interface GuestContractInterfaceView {
 interface Runtime {
     findGuestContract(contractId: bigint, minVersion?: number): number;
     resolveGuestContractInterface(handle: number): GuestContractInterfaceView | null;
+    revisionCounter(): Deno.PointerValue;
     alloc(size: number, align?: number): Deno.PointerValue;
     free(ptr: Deno.PointerValue, size: number, align?: number): void;
 }
@@ -44,11 +45,17 @@ export class PipelineDecoderContract {
     #rt: Runtime;
     #view: GuestContractInterfaceView;
     #instance: Uint8Array;
+    #handle: number;
+    #revisionPtr: Deno.PointerValue;
+    #cachedRevision: bigint;
 
-    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array) {
+    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {
         this.#rt = rt;
         this.#view = view;
         this.#instance = instance;
+        this.#handle = handle;
+        this.#revisionPtr = revisionPtr;
+        this.#cachedRevision = cachedRevision;
     }
 
     /** Resolve the contract and create an instance, or null if unavailable. */
@@ -59,7 +66,27 @@ export class PipelineDecoderContract {
             return null;
         }
         const instance = view.createInstance();
-        return new PipelineDecoderContract(rt, view, instance);
+        const revisionPtr = rt.revisionCounter();
+        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);
+        return new PipelineDecoderContract(rt, view, instance, handle, revisionPtr, cachedRevision);
+    }
+
+    #liveRevision(): bigint {
+        if (this.#revisionPtr === null) {
+            return this.#cachedRevision;
+        }
+        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);
+    }
+
+    #revalidate(): boolean {
+        const view = this.#rt.resolveGuestContractInterface(this.#handle);
+        if (view === null || !view.isValid()) {
+            return false;
+        }
+        this.#view = view;
+        this.#instance = view.createInstance();
+        this.#cachedRevision = this.#liveRevision();
+        return true;
     }
 
     /** True while the resolved interface pointer is valid. */
@@ -69,11 +96,17 @@ export class PipelineDecoderContract {
 
     /** Destroy the instance via the interface `destroy_instance`. */
     destroy(): void {
+        if (this.#liveRevision() !== this.#cachedRevision) {
+            return;
+        }
         this.#view.destroyInstance(this.#instance);
     }
 
     /** Call `decode` */
     decode(input: string): string {
+        if (this.#liveRevision() !== this.#cachedRevision && !this.#revalidate()) {
+            throw new Error('call `decode` failed: contract gone after reload/unload');
+        }
         if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `decode` not available in interface');
         }
@@ -120,11 +153,17 @@ export class DataTransformerContract {
     #rt: Runtime;
     #view: GuestContractInterfaceView;
     #instance: Uint8Array;
+    #handle: number;
+    #revisionPtr: Deno.PointerValue;
+    #cachedRevision: bigint;
 
-    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array) {
+    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {
         this.#rt = rt;
         this.#view = view;
         this.#instance = instance;
+        this.#handle = handle;
+        this.#revisionPtr = revisionPtr;
+        this.#cachedRevision = cachedRevision;
     }
 
     /** Resolve the contract and create an instance, or null if unavailable. */
@@ -135,7 +174,27 @@ export class DataTransformerContract {
             return null;
         }
         const instance = view.createInstance();
-        return new DataTransformerContract(rt, view, instance);
+        const revisionPtr = rt.revisionCounter();
+        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);
+        return new DataTransformerContract(rt, view, instance, handle, revisionPtr, cachedRevision);
+    }
+
+    #liveRevision(): bigint {
+        if (this.#revisionPtr === null) {
+            return this.#cachedRevision;
+        }
+        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);
+    }
+
+    #revalidate(): boolean {
+        const view = this.#rt.resolveGuestContractInterface(this.#handle);
+        if (view === null || !view.isValid()) {
+            return false;
+        }
+        this.#view = view;
+        this.#instance = view.createInstance();
+        this.#cachedRevision = this.#liveRevision();
+        return true;
     }
 
     /** True while the resolved interface pointer is valid. */
@@ -145,11 +204,17 @@ export class DataTransformerContract {
 
     /** Destroy the instance via the interface `destroy_instance`. */
     destroy(): void {
+        if (this.#liveRevision() !== this.#cachedRevision) {
+            return;
+        }
         this.#view.destroyInstance(this.#instance);
     }
 
     /** Call `transform` */
     transform(input: string): string {
+        if (this.#liveRevision() !== this.#cachedRevision && !this.#revalidate()) {
+            throw new Error('call `transform` failed: contract gone after reload/unload');
+        }
         if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `transform` not available in interface');
         }
@@ -196,11 +261,17 @@ export class PipelineEncoderContract {
     #rt: Runtime;
     #view: GuestContractInterfaceView;
     #instance: Uint8Array;
+    #handle: number;
+    #revisionPtr: Deno.PointerValue;
+    #cachedRevision: bigint;
 
-    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array) {
+    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {
         this.#rt = rt;
         this.#view = view;
         this.#instance = instance;
+        this.#handle = handle;
+        this.#revisionPtr = revisionPtr;
+        this.#cachedRevision = cachedRevision;
     }
 
     /** Resolve the contract and create an instance, or null if unavailable. */
@@ -211,7 +282,27 @@ export class PipelineEncoderContract {
             return null;
         }
         const instance = view.createInstance();
-        return new PipelineEncoderContract(rt, view, instance);
+        const revisionPtr = rt.revisionCounter();
+        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);
+        return new PipelineEncoderContract(rt, view, instance, handle, revisionPtr, cachedRevision);
+    }
+
+    #liveRevision(): bigint {
+        if (this.#revisionPtr === null) {
+            return this.#cachedRevision;
+        }
+        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);
+    }
+
+    #revalidate(): boolean {
+        const view = this.#rt.resolveGuestContractInterface(this.#handle);
+        if (view === null || !view.isValid()) {
+            return false;
+        }
+        this.#view = view;
+        this.#instance = view.createInstance();
+        this.#cachedRevision = this.#liveRevision();
+        return true;
     }
 
     /** True while the resolved interface pointer is valid. */
@@ -221,11 +312,17 @@ export class PipelineEncoderContract {
 
     /** Destroy the instance via the interface `destroy_instance`. */
     destroy(): void {
+        if (this.#liveRevision() !== this.#cachedRevision) {
+            return;
+        }
         this.#view.destroyInstance(this.#instance);
     }
 
     /** Call `encode` */
     encode(input: string): string {
+        if (this.#liveRevision() !== this.#cachedRevision && !this.#revalidate()) {
+            throw new Error('call `encode` failed: contract gone after reload/unload');
+        }
         if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `encode` not available in interface');
         }
@@ -272,11 +369,17 @@ export class DataReporterContract {
     #rt: Runtime;
     #view: GuestContractInterfaceView;
     #instance: Uint8Array;
+    #handle: number;
+    #revisionPtr: Deno.PointerValue;
+    #cachedRevision: bigint;
 
-    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array) {
+    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {
         this.#rt = rt;
         this.#view = view;
         this.#instance = instance;
+        this.#handle = handle;
+        this.#revisionPtr = revisionPtr;
+        this.#cachedRevision = cachedRevision;
     }
 
     /** Resolve the contract and create an instance, or null if unavailable. */
@@ -287,7 +390,27 @@ export class DataReporterContract {
             return null;
         }
         const instance = view.createInstance();
-        return new DataReporterContract(rt, view, instance);
+        const revisionPtr = rt.revisionCounter();
+        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);
+        return new DataReporterContract(rt, view, instance, handle, revisionPtr, cachedRevision);
+    }
+
+    #liveRevision(): bigint {
+        if (this.#revisionPtr === null) {
+            return this.#cachedRevision;
+        }
+        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);
+    }
+
+    #revalidate(): boolean {
+        const view = this.#rt.resolveGuestContractInterface(this.#handle);
+        if (view === null || !view.isValid()) {
+            return false;
+        }
+        this.#view = view;
+        this.#instance = view.createInstance();
+        this.#cachedRevision = this.#liveRevision();
+        return true;
     }
 
     /** True while the resolved interface pointer is valid. */
@@ -297,11 +420,17 @@ export class DataReporterContract {
 
     /** Destroy the instance via the interface `destroy_instance`. */
     destroy(): void {
+        if (this.#liveRevision() !== this.#cachedRevision) {
+            return;
+        }
         this.#view.destroyInstance(this.#instance);
     }
 
     /** Call `report` */
     report(input: string): string {
+        if (this.#liveRevision() !== this.#cachedRevision && !this.#revalidate()) {
+            throw new Error('call `report` failed: contract gone after reload/unload');
+        }
         if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `report` not available in interface');
         }
@@ -348,11 +477,17 @@ export class PipelineValidatorContract {
     #rt: Runtime;
     #view: GuestContractInterfaceView;
     #instance: Uint8Array;
+    #handle: number;
+    #revisionPtr: Deno.PointerValue;
+    #cachedRevision: bigint;
 
-    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array) {
+    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {
         this.#rt = rt;
         this.#view = view;
         this.#instance = instance;
+        this.#handle = handle;
+        this.#revisionPtr = revisionPtr;
+        this.#cachedRevision = cachedRevision;
     }
 
     /** Resolve the contract and create an instance, or null if unavailable. */
@@ -363,7 +498,27 @@ export class PipelineValidatorContract {
             return null;
         }
         const instance = view.createInstance();
-        return new PipelineValidatorContract(rt, view, instance);
+        const revisionPtr = rt.revisionCounter();
+        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);
+        return new PipelineValidatorContract(rt, view, instance, handle, revisionPtr, cachedRevision);
+    }
+
+    #liveRevision(): bigint {
+        if (this.#revisionPtr === null) {
+            return this.#cachedRevision;
+        }
+        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);
+    }
+
+    #revalidate(): boolean {
+        const view = this.#rt.resolveGuestContractInterface(this.#handle);
+        if (view === null || !view.isValid()) {
+            return false;
+        }
+        this.#view = view;
+        this.#instance = view.createInstance();
+        this.#cachedRevision = this.#liveRevision();
+        return true;
     }
 
     /** True while the resolved interface pointer is valid. */
@@ -373,11 +528,17 @@ export class PipelineValidatorContract {
 
     /** Destroy the instance via the interface `destroy_instance`. */
     destroy(): void {
+        if (this.#liveRevision() !== this.#cachedRevision) {
+            return;
+        }
         this.#view.destroyInstance(this.#instance);
     }
 
     /** Call `validate` */
     validate(input: string): string {
+        if (this.#liveRevision() !== this.#cachedRevision && !this.#revalidate()) {
+            throw new Error('call `validate` failed: contract gone after reload/unload');
+        }
         if (this.#view.functionCount() > 0 && 0 >= this.#view.functionCount()) {
             throw new Error('function `validate` not available in interface');
         }

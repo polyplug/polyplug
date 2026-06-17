@@ -28,6 +28,7 @@ M.PIPELINE_VALIDATOR_CONTRACT_ID = PIPELINE_VALIDATOR_CONTRACT_ID
 
 -- Cached FFI types for hot path performance
 local NativeDispatchFnType = ffi.typeof("void (*)(GuestContractInstance, const void*, void*, AbiError*)")
+local ConstUint64Ptr = ffi.typeof("const uint64_t*")
 
 -- Methods for PipelineDecoderContract (instance wrapper)
 local PipelineDecoderContract_methods = {
@@ -35,14 +36,43 @@ local PipelineDecoderContract_methods = {
         return self._interface ~= nil and not self._destroyed
     end,
 
+    live_revision = function(self)
+        if self._revision_ptr == nil then
+            return self._cached_revision
+        end
+        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+    end,
+
+    revalidate = function(self)
+        local interface = self._host.resolve_guest_contract(self._host, self._handle)
+        if interface == nil then
+            return false
+        end
+        local new_instance = ffi.new("GuestContractInstance")
+        self._host.create_guest_instance(self._host, interface, nil, new_instance)
+        self._interface = interface
+        self._instance = new_instance
+        self._cached_revision = self:live_revision()
+        self._destroyed = false
+        return true
+    end,
+
     destroy = function(self)
         if self._interface ~= nil and not self._destroyed then
+            if self:live_revision() ~= self._cached_revision then
+                self._destroyed = true
+                return
+            end
             self._host.destroy_guest_instance(self._host, self._interface, self._instance)
             self._destroyed = true
         end
     end,
 
     reset = function(self)
+        if self:live_revision() ~= self._cached_revision then
+            self:revalidate()
+            return
+        end
         self:destroy()
         if self._interface ~= nil then
             local new_instance = ffi.new("GuestContractInstance")
@@ -54,6 +84,9 @@ local PipelineDecoderContract_methods = {
 
     decode = function(self, input)
         if self._interface == nil or self._destroyed then
+            error("invalid caller: interface is nil", 2)
+        end
+        if self:live_revision() ~= self._cached_revision and not self:revalidate() then
             error("invalid caller: interface is nil", 2)
         end
     local input_bytes = tostring(input)
@@ -105,10 +138,21 @@ function M.PipelineDecoderContract_create(runtime, host)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
+    local revision_ptr = nil
+    local cached_revision = 0
+    if host ~= nil then
+        revision_ptr = host.revision_counter(host)
+        if revision_ptr ~= nil then
+            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
+        end
+    end
     local wrapper = {
         _interface = interface,
         _instance = instance,
         _host = host,
+        _handle = handle,
+        _revision_ptr = revision_ptr,
+        _cached_revision = cached_revision,
         _destroyed = false
     }
     setmetatable(wrapper, PipelineDecoderContract_mt)
@@ -121,14 +165,43 @@ local DataTransformerContract_methods = {
         return self._interface ~= nil and not self._destroyed
     end,
 
+    live_revision = function(self)
+        if self._revision_ptr == nil then
+            return self._cached_revision
+        end
+        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+    end,
+
+    revalidate = function(self)
+        local interface = self._host.resolve_guest_contract(self._host, self._handle)
+        if interface == nil then
+            return false
+        end
+        local new_instance = ffi.new("GuestContractInstance")
+        self._host.create_guest_instance(self._host, interface, nil, new_instance)
+        self._interface = interface
+        self._instance = new_instance
+        self._cached_revision = self:live_revision()
+        self._destroyed = false
+        return true
+    end,
+
     destroy = function(self)
         if self._interface ~= nil and not self._destroyed then
+            if self:live_revision() ~= self._cached_revision then
+                self._destroyed = true
+                return
+            end
             self._host.destroy_guest_instance(self._host, self._interface, self._instance)
             self._destroyed = true
         end
     end,
 
     reset = function(self)
+        if self:live_revision() ~= self._cached_revision then
+            self:revalidate()
+            return
+        end
         self:destroy()
         if self._interface ~= nil then
             local new_instance = ffi.new("GuestContractInstance")
@@ -140,6 +213,9 @@ local DataTransformerContract_methods = {
 
     transform = function(self, input)
         if self._interface == nil or self._destroyed then
+            error("invalid caller: interface is nil", 2)
+        end
+        if self:live_revision() ~= self._cached_revision and not self:revalidate() then
             error("invalid caller: interface is nil", 2)
         end
     local input_bytes = tostring(input)
@@ -191,10 +267,21 @@ function M.DataTransformerContract_create(runtime, host)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
+    local revision_ptr = nil
+    local cached_revision = 0
+    if host ~= nil then
+        revision_ptr = host.revision_counter(host)
+        if revision_ptr ~= nil then
+            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
+        end
+    end
     local wrapper = {
         _interface = interface,
         _instance = instance,
         _host = host,
+        _handle = handle,
+        _revision_ptr = revision_ptr,
+        _cached_revision = cached_revision,
         _destroyed = false
     }
     setmetatable(wrapper, DataTransformerContract_mt)
@@ -207,14 +294,43 @@ local PipelineEncoderContract_methods = {
         return self._interface ~= nil and not self._destroyed
     end,
 
+    live_revision = function(self)
+        if self._revision_ptr == nil then
+            return self._cached_revision
+        end
+        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+    end,
+
+    revalidate = function(self)
+        local interface = self._host.resolve_guest_contract(self._host, self._handle)
+        if interface == nil then
+            return false
+        end
+        local new_instance = ffi.new("GuestContractInstance")
+        self._host.create_guest_instance(self._host, interface, nil, new_instance)
+        self._interface = interface
+        self._instance = new_instance
+        self._cached_revision = self:live_revision()
+        self._destroyed = false
+        return true
+    end,
+
     destroy = function(self)
         if self._interface ~= nil and not self._destroyed then
+            if self:live_revision() ~= self._cached_revision then
+                self._destroyed = true
+                return
+            end
             self._host.destroy_guest_instance(self._host, self._interface, self._instance)
             self._destroyed = true
         end
     end,
 
     reset = function(self)
+        if self:live_revision() ~= self._cached_revision then
+            self:revalidate()
+            return
+        end
         self:destroy()
         if self._interface ~= nil then
             local new_instance = ffi.new("GuestContractInstance")
@@ -226,6 +342,9 @@ local PipelineEncoderContract_methods = {
 
     encode = function(self, input)
         if self._interface == nil or self._destroyed then
+            error("invalid caller: interface is nil", 2)
+        end
+        if self:live_revision() ~= self._cached_revision and not self:revalidate() then
             error("invalid caller: interface is nil", 2)
         end
     local input_bytes = tostring(input)
@@ -277,10 +396,21 @@ function M.PipelineEncoderContract_create(runtime, host)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
+    local revision_ptr = nil
+    local cached_revision = 0
+    if host ~= nil then
+        revision_ptr = host.revision_counter(host)
+        if revision_ptr ~= nil then
+            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
+        end
+    end
     local wrapper = {
         _interface = interface,
         _instance = instance,
         _host = host,
+        _handle = handle,
+        _revision_ptr = revision_ptr,
+        _cached_revision = cached_revision,
         _destroyed = false
     }
     setmetatable(wrapper, PipelineEncoderContract_mt)
@@ -293,14 +423,43 @@ local DataReporterContract_methods = {
         return self._interface ~= nil and not self._destroyed
     end,
 
+    live_revision = function(self)
+        if self._revision_ptr == nil then
+            return self._cached_revision
+        end
+        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+    end,
+
+    revalidate = function(self)
+        local interface = self._host.resolve_guest_contract(self._host, self._handle)
+        if interface == nil then
+            return false
+        end
+        local new_instance = ffi.new("GuestContractInstance")
+        self._host.create_guest_instance(self._host, interface, nil, new_instance)
+        self._interface = interface
+        self._instance = new_instance
+        self._cached_revision = self:live_revision()
+        self._destroyed = false
+        return true
+    end,
+
     destroy = function(self)
         if self._interface ~= nil and not self._destroyed then
+            if self:live_revision() ~= self._cached_revision then
+                self._destroyed = true
+                return
+            end
             self._host.destroy_guest_instance(self._host, self._interface, self._instance)
             self._destroyed = true
         end
     end,
 
     reset = function(self)
+        if self:live_revision() ~= self._cached_revision then
+            self:revalidate()
+            return
+        end
         self:destroy()
         if self._interface ~= nil then
             local new_instance = ffi.new("GuestContractInstance")
@@ -312,6 +471,9 @@ local DataReporterContract_methods = {
 
     report = function(self, input)
         if self._interface == nil or self._destroyed then
+            error("invalid caller: interface is nil", 2)
+        end
+        if self:live_revision() ~= self._cached_revision and not self:revalidate() then
             error("invalid caller: interface is nil", 2)
         end
     local input_bytes = tostring(input)
@@ -363,10 +525,21 @@ function M.DataReporterContract_create(runtime, host)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
+    local revision_ptr = nil
+    local cached_revision = 0
+    if host ~= nil then
+        revision_ptr = host.revision_counter(host)
+        if revision_ptr ~= nil then
+            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
+        end
+    end
     local wrapper = {
         _interface = interface,
         _instance = instance,
         _host = host,
+        _handle = handle,
+        _revision_ptr = revision_ptr,
+        _cached_revision = cached_revision,
         _destroyed = false
     }
     setmetatable(wrapper, DataReporterContract_mt)
@@ -379,14 +552,43 @@ local PipelineValidatorContract_methods = {
         return self._interface ~= nil and not self._destroyed
     end,
 
+    live_revision = function(self)
+        if self._revision_ptr == nil then
+            return self._cached_revision
+        end
+        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+    end,
+
+    revalidate = function(self)
+        local interface = self._host.resolve_guest_contract(self._host, self._handle)
+        if interface == nil then
+            return false
+        end
+        local new_instance = ffi.new("GuestContractInstance")
+        self._host.create_guest_instance(self._host, interface, nil, new_instance)
+        self._interface = interface
+        self._instance = new_instance
+        self._cached_revision = self:live_revision()
+        self._destroyed = false
+        return true
+    end,
+
     destroy = function(self)
         if self._interface ~= nil and not self._destroyed then
+            if self:live_revision() ~= self._cached_revision then
+                self._destroyed = true
+                return
+            end
             self._host.destroy_guest_instance(self._host, self._interface, self._instance)
             self._destroyed = true
         end
     end,
 
     reset = function(self)
+        if self:live_revision() ~= self._cached_revision then
+            self:revalidate()
+            return
+        end
         self:destroy()
         if self._interface ~= nil then
             local new_instance = ffi.new("GuestContractInstance")
@@ -398,6 +600,9 @@ local PipelineValidatorContract_methods = {
 
     validate = function(self, input)
         if self._interface == nil or self._destroyed then
+            error("invalid caller: interface is nil", 2)
+        end
+        if self:live_revision() ~= self._cached_revision and not self:revalidate() then
             error("invalid caller: interface is nil", 2)
         end
     local input_bytes = tostring(input)
@@ -449,10 +654,21 @@ function M.PipelineValidatorContract_create(runtime, host)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
+    local revision_ptr = nil
+    local cached_revision = 0
+    if host ~= nil then
+        revision_ptr = host.revision_counter(host)
+        if revision_ptr ~= nil then
+            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
+        end
+    end
     local wrapper = {
         _interface = interface,
         _instance = instance,
         _host = host,
+        _handle = handle,
+        _revision_ptr = revision_ptr,
+        _cached_revision = cached_revision,
         _destroyed = false
     }
     setmetatable(wrapper, PipelineValidatorContract_mt)

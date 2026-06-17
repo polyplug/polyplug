@@ -40,6 +40,7 @@ import {
   HOST_API_REGISTER_LOADER_OFFSET,
   HOST_API_GET_LAST_ERROR_OFFSET,
   HOST_API_GET_ERROR_LEN_OFFSET,
+  HOST_API_REVISION_COUNTER_OFFSET,
   RUNTIME_CONFIG_COMPATIBILITY_OFFSET,
   RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET,
   RUNTIME_CONFIG_ON_RELOAD_OFFSET,
@@ -181,6 +182,7 @@ const HOST_API_OFFSETS = {
   register_loader: HOST_API_REGISTER_LOADER_OFFSET,
   get_last_error: HOST_API_GET_LAST_ERROR_OFFSET,
   get_error_len: HOST_API_GET_ERROR_LEN_OFFSET,
+  revision_counter: HOST_API_REVISION_COUNTER_OFFSET,
 };
 
 // Module-level caches for hot path performance (stateless encode/decode
@@ -990,6 +992,26 @@ export class Runtime {
       return null;
     }
     return new GuestContractInterfaceView(this.#host, interfacePtr);
+  }
+
+  /**
+   * Pointer to the runtime's monotonic registry revision counter (HostApi.revision_counter).
+   *
+   * The counter is a runtime-owned `u64` (atomic) bumped on every load, reload, and
+   * unload. A host caller reads it once at resolve time and again before each dispatch:
+   * an observed change means the cached interface/instance may dangle and must be
+   * re-resolved before use. Read the current value with
+   * `new Deno.UnsafePointerView(ptr).getBigUint64(0, true)`.
+   * @returns {Deno.PointerValue} Pointer to the `u64` counter, or null when absent.
+   */
+  revisionCounter() {
+    return callHostMethod(
+      this.#host,
+      HOST_API_OFFSETS.revision_counter,
+      ["pointer"],
+      "pointer",
+      [this.#host]
+    );
   }
 
   /**

@@ -63,6 +63,17 @@ pub struct PipelineDecoderContract {
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
     host: *const HostApi,
+    /// Contract handle, retained so the cache can re-resolve after a hot-reload
+    /// (which swaps a new interface into the same slot) or report a gone contract.
+    handle: GuestContractHandle,
+    /// Pointer to the runtime's registry revision counter, fetched once via
+    /// `HostApi.revision_counter`. Polled directly before each dispatch (one
+    /// atomic load, no call into the runtime); null when there is no runtime.
+    revision_ptr: *const u64,
+    /// Revision value read when the interface was resolved. Compared before each
+    /// dispatch against the live counter to detect a reload/unload and re-resolve,
+    /// so the cached interface pointer never dangles.
+    cached_revision: u64,
     /// Stable-address backing buffer for the per-call arena. Boxed so the
     /// arena's interior pointers stay valid when the caller is moved.
     arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,
@@ -102,6 +113,27 @@ impl PipelineDecoderContract {
             let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        // SAFETY: host is non-null here (resolve above reborrowed it via as_ref());
+        // as_ref() re-guards null, and revision_counter is an ABI fn ptr safe to call.
+        let revision_ptr: *const u64 = unsafe {
+            match host.as_ref() {
+                Some(host_api) => (host_api.revision_counter)(host),
+                None => core::ptr::null(),
+            }
+        };
+        let cached_revision: u64 = if revision_ptr.is_null() {
+            0
+        } else {
+            // SAFETY: revision_ptr was returned by revision_counter and points to the
+            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.
+            unsafe {
+                (*(revision_ptr as *const core::sync::atomic::AtomicU64))
+                    .load(core::sync::atomic::Ordering::Acquire)
+            }
+        };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
@@ -110,9 +142,30 @@ impl PipelineDecoderContract {
             interface,
             instance,
             host,
+            handle,
+            revision_ptr,
+            cached_revision,
             arena_buf,
             arena,
         })
+    }
+
+    /// Read the registry revision through the cached pointer — one aligned atomic
+    /// load, no call into the runtime. Returns the cached value (i.e. "unchanged")
+    /// when there is no counter (null host/runtime), so the staleness check is then
+    /// a no-op.
+    #[inline]
+    fn live_revision(&self) -> u64 {
+        if self.revision_ptr.is_null() {
+            return self.cached_revision;
+        }
+        // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to
+        // the runtime's revision counter — an AtomicU64 whose address is stable for the
+        // runtime's lifetime, i.e. for as long as this caller can dispatch.
+        unsafe {
+            (*(self.revision_ptr as *const core::sync::atomic::AtomicU64))
+                .load(core::sync::atomic::Ordering::Acquire)
+        }
     }
 
     /// Check if this caller holds a resolved contract interface.
@@ -131,6 +184,14 @@ impl PipelineDecoderContract {
             Some(api) => api,
             None => return,
         };
+        // If the registry changed under us, the cached interface/instance are stale
+        // (a reload/unload reclaimed their backing). revalidate() abandons the dead
+        // instance and builds a fresh one on the current interface — exactly the
+        // fresh instance reset() promises — so defer to it and skip the unsafe destroy.
+        if self.live_revision() != self.cached_revision {
+            self.revalidate();
+            return;
+        }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance on this interface and is
             // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
@@ -152,14 +213,59 @@ impl PipelineDecoderContract {
         self.instance = new_instance;
     }
 
+    /// Re-resolve the cached interface after the registry changed under us.
+    ///
+    /// Invoked automatically when a dispatch observes a revision change. A
+    /// hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot,
+    /// so it resolves to null and `false` is returned (the contract is gone).
+    ///
+    /// The old instance is ABANDONED, never destroyed: after a reload its
+    /// interface — and the guest-side state that interface created — is already
+    /// epoch-reclaimed, so calling the dead interface's `destroy_instance` would
+    /// be undefined behaviour. The runtime reclaims the old instance's backing as
+    /// part of the reload, then a fresh instance is created on the new interface.
+    fn revalidate(&mut self) -> bool {
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return false,
+        };
+        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.
+        let interface: *const GuestContractInterface =
+            unsafe { (host_api.resolve_guest_contract)(self.host, self.handle) };
+        if interface.is_null() {
+            return false;
+        }
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
+        unsafe {
+            (host_api.create_guest_instance)(
+                self.host,
+                interface,
+                core::ptr::null(),
+                &mut instance,
+            );
+        }
+        self.interface = interface;
+        self.instance = instance;
+        self.cached_revision = self.live_revision();
+        true
+    }
+
     /// Call `decode` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
     pub fn decode(&mut self, input: StringView) -> Result<StringView, ContractError> {
-        // Reset the arena at call start: frees the previous call's overflow
-        // blocks and rewinds the primary region, invalidating prior views.
-        self.arena.reset();
+        // Cheap per-call staleness check: read the registry revision directly through
+        // the cached pointer (one atomic load, no call into the runtime). While it
+        // matches the value cached when this caller resolved, the interface pointer is
+        // current and we dispatch directly; on any change (hot-reload or unload) we
+        // re-resolve first, so the cached pointer is never used once it dangles.
+        if self.live_revision() != self.cached_revision && !self.revalidate() {
+            return Err(ContractError::new(AbiErrorCode::NotFound));
+        }
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
         let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
@@ -197,6 +303,10 @@ impl PipelineDecoderContract {
                     }
                 }
                 DispatchType::VirtualMachine => {
+                    // Reset the per-call arena here — the VM path is the only one that
+                    // uses it. Rewinds the primary region and frees the previous call's
+                    // overflow blocks, invalidating any view returned by a prior call.
+                    self.arena.reset();
                     (interface.dispatch.vm.call)(
                         interface.dispatch.vm.loader_data,
                         self.instance, // instance parameter
@@ -247,6 +357,13 @@ impl Drop for PipelineDecoderContract {
             Some(api) => api,
             None => return,
         };
+        // If the registry changed since we resolved, the cached interface and instance
+        // are stale — a reload/unload reclaimed their backing — so calling the dead
+        // interface's destroy would be UB; the reload/unload already reclaimed the
+        // instance, so skip the destroy entirely.
+        if self.live_revision() != self.cached_revision {
+            return;
+        }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance and is valid.
             // The interface pointer is stored for the lifetime of this wrapper.
@@ -277,6 +394,17 @@ pub struct DataTransformerContract {
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
     host: *const HostApi,
+    /// Contract handle, retained so the cache can re-resolve after a hot-reload
+    /// (which swaps a new interface into the same slot) or report a gone contract.
+    handle: GuestContractHandle,
+    /// Pointer to the runtime's registry revision counter, fetched once via
+    /// `HostApi.revision_counter`. Polled directly before each dispatch (one
+    /// atomic load, no call into the runtime); null when there is no runtime.
+    revision_ptr: *const u64,
+    /// Revision value read when the interface was resolved. Compared before each
+    /// dispatch against the live counter to detect a reload/unload and re-resolve,
+    /// so the cached interface pointer never dangles.
+    cached_revision: u64,
     /// Stable-address backing buffer for the per-call arena. Boxed so the
     /// arena's interior pointers stay valid when the caller is moved.
     arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,
@@ -316,6 +444,27 @@ impl DataTransformerContract {
             let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        // SAFETY: host is non-null here (resolve above reborrowed it via as_ref());
+        // as_ref() re-guards null, and revision_counter is an ABI fn ptr safe to call.
+        let revision_ptr: *const u64 = unsafe {
+            match host.as_ref() {
+                Some(host_api) => (host_api.revision_counter)(host),
+                None => core::ptr::null(),
+            }
+        };
+        let cached_revision: u64 = if revision_ptr.is_null() {
+            0
+        } else {
+            // SAFETY: revision_ptr was returned by revision_counter and points to the
+            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.
+            unsafe {
+                (*(revision_ptr as *const core::sync::atomic::AtomicU64))
+                    .load(core::sync::atomic::Ordering::Acquire)
+            }
+        };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
@@ -324,9 +473,30 @@ impl DataTransformerContract {
             interface,
             instance,
             host,
+            handle,
+            revision_ptr,
+            cached_revision,
             arena_buf,
             arena,
         })
+    }
+
+    /// Read the registry revision through the cached pointer — one aligned atomic
+    /// load, no call into the runtime. Returns the cached value (i.e. "unchanged")
+    /// when there is no counter (null host/runtime), so the staleness check is then
+    /// a no-op.
+    #[inline]
+    fn live_revision(&self) -> u64 {
+        if self.revision_ptr.is_null() {
+            return self.cached_revision;
+        }
+        // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to
+        // the runtime's revision counter — an AtomicU64 whose address is stable for the
+        // runtime's lifetime, i.e. for as long as this caller can dispatch.
+        unsafe {
+            (*(self.revision_ptr as *const core::sync::atomic::AtomicU64))
+                .load(core::sync::atomic::Ordering::Acquire)
+        }
     }
 
     /// Check if this caller holds a resolved contract interface.
@@ -345,6 +515,14 @@ impl DataTransformerContract {
             Some(api) => api,
             None => return,
         };
+        // If the registry changed under us, the cached interface/instance are stale
+        // (a reload/unload reclaimed their backing). revalidate() abandons the dead
+        // instance and builds a fresh one on the current interface — exactly the
+        // fresh instance reset() promises — so defer to it and skip the unsafe destroy.
+        if self.live_revision() != self.cached_revision {
+            self.revalidate();
+            return;
+        }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance on this interface and is
             // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
@@ -366,14 +544,59 @@ impl DataTransformerContract {
         self.instance = new_instance;
     }
 
+    /// Re-resolve the cached interface after the registry changed under us.
+    ///
+    /// Invoked automatically when a dispatch observes a revision change. A
+    /// hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot,
+    /// so it resolves to null and `false` is returned (the contract is gone).
+    ///
+    /// The old instance is ABANDONED, never destroyed: after a reload its
+    /// interface — and the guest-side state that interface created — is already
+    /// epoch-reclaimed, so calling the dead interface's `destroy_instance` would
+    /// be undefined behaviour. The runtime reclaims the old instance's backing as
+    /// part of the reload, then a fresh instance is created on the new interface.
+    fn revalidate(&mut self) -> bool {
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return false,
+        };
+        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.
+        let interface: *const GuestContractInterface =
+            unsafe { (host_api.resolve_guest_contract)(self.host, self.handle) };
+        if interface.is_null() {
+            return false;
+        }
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
+        unsafe {
+            (host_api.create_guest_instance)(
+                self.host,
+                interface,
+                core::ptr::null(),
+                &mut instance,
+            );
+        }
+        self.interface = interface;
+        self.instance = instance;
+        self.cached_revision = self.live_revision();
+        true
+    }
+
     /// Call `transform` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
     pub fn transform(&mut self, input: StringView) -> Result<StringView, ContractError> {
-        // Reset the arena at call start: frees the previous call's overflow
-        // blocks and rewinds the primary region, invalidating prior views.
-        self.arena.reset();
+        // Cheap per-call staleness check: read the registry revision directly through
+        // the cached pointer (one atomic load, no call into the runtime). While it
+        // matches the value cached when this caller resolved, the interface pointer is
+        // current and we dispatch directly; on any change (hot-reload or unload) we
+        // re-resolve first, so the cached pointer is never used once it dangles.
+        if self.live_revision() != self.cached_revision && !self.revalidate() {
+            return Err(ContractError::new(AbiErrorCode::NotFound));
+        }
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
         let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
@@ -411,6 +634,10 @@ impl DataTransformerContract {
                     }
                 }
                 DispatchType::VirtualMachine => {
+                    // Reset the per-call arena here — the VM path is the only one that
+                    // uses it. Rewinds the primary region and frees the previous call's
+                    // overflow blocks, invalidating any view returned by a prior call.
+                    self.arena.reset();
                     (interface.dispatch.vm.call)(
                         interface.dispatch.vm.loader_data,
                         self.instance, // instance parameter
@@ -461,6 +688,13 @@ impl Drop for DataTransformerContract {
             Some(api) => api,
             None => return,
         };
+        // If the registry changed since we resolved, the cached interface and instance
+        // are stale — a reload/unload reclaimed their backing — so calling the dead
+        // interface's destroy would be UB; the reload/unload already reclaimed the
+        // instance, so skip the destroy entirely.
+        if self.live_revision() != self.cached_revision {
+            return;
+        }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance and is valid.
             // The interface pointer is stored for the lifetime of this wrapper.
@@ -491,6 +725,17 @@ pub struct PipelineEncoderContract {
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
     host: *const HostApi,
+    /// Contract handle, retained so the cache can re-resolve after a hot-reload
+    /// (which swaps a new interface into the same slot) or report a gone contract.
+    handle: GuestContractHandle,
+    /// Pointer to the runtime's registry revision counter, fetched once via
+    /// `HostApi.revision_counter`. Polled directly before each dispatch (one
+    /// atomic load, no call into the runtime); null when there is no runtime.
+    revision_ptr: *const u64,
+    /// Revision value read when the interface was resolved. Compared before each
+    /// dispatch against the live counter to detect a reload/unload and re-resolve,
+    /// so the cached interface pointer never dangles.
+    cached_revision: u64,
     /// Stable-address backing buffer for the per-call arena. Boxed so the
     /// arena's interior pointers stay valid when the caller is moved.
     arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,
@@ -530,6 +775,27 @@ impl PipelineEncoderContract {
             let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        // SAFETY: host is non-null here (resolve above reborrowed it via as_ref());
+        // as_ref() re-guards null, and revision_counter is an ABI fn ptr safe to call.
+        let revision_ptr: *const u64 = unsafe {
+            match host.as_ref() {
+                Some(host_api) => (host_api.revision_counter)(host),
+                None => core::ptr::null(),
+            }
+        };
+        let cached_revision: u64 = if revision_ptr.is_null() {
+            0
+        } else {
+            // SAFETY: revision_ptr was returned by revision_counter and points to the
+            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.
+            unsafe {
+                (*(revision_ptr as *const core::sync::atomic::AtomicU64))
+                    .load(core::sync::atomic::Ordering::Acquire)
+            }
+        };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
@@ -538,9 +804,30 @@ impl PipelineEncoderContract {
             interface,
             instance,
             host,
+            handle,
+            revision_ptr,
+            cached_revision,
             arena_buf,
             arena,
         })
+    }
+
+    /// Read the registry revision through the cached pointer — one aligned atomic
+    /// load, no call into the runtime. Returns the cached value (i.e. "unchanged")
+    /// when there is no counter (null host/runtime), so the staleness check is then
+    /// a no-op.
+    #[inline]
+    fn live_revision(&self) -> u64 {
+        if self.revision_ptr.is_null() {
+            return self.cached_revision;
+        }
+        // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to
+        // the runtime's revision counter — an AtomicU64 whose address is stable for the
+        // runtime's lifetime, i.e. for as long as this caller can dispatch.
+        unsafe {
+            (*(self.revision_ptr as *const core::sync::atomic::AtomicU64))
+                .load(core::sync::atomic::Ordering::Acquire)
+        }
     }
 
     /// Check if this caller holds a resolved contract interface.
@@ -559,6 +846,14 @@ impl PipelineEncoderContract {
             Some(api) => api,
             None => return,
         };
+        // If the registry changed under us, the cached interface/instance are stale
+        // (a reload/unload reclaimed their backing). revalidate() abandons the dead
+        // instance and builds a fresh one on the current interface — exactly the
+        // fresh instance reset() promises — so defer to it and skip the unsafe destroy.
+        if self.live_revision() != self.cached_revision {
+            self.revalidate();
+            return;
+        }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance on this interface and is
             // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
@@ -580,14 +875,59 @@ impl PipelineEncoderContract {
         self.instance = new_instance;
     }
 
+    /// Re-resolve the cached interface after the registry changed under us.
+    ///
+    /// Invoked automatically when a dispatch observes a revision change. A
+    /// hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot,
+    /// so it resolves to null and `false` is returned (the contract is gone).
+    ///
+    /// The old instance is ABANDONED, never destroyed: after a reload its
+    /// interface — and the guest-side state that interface created — is already
+    /// epoch-reclaimed, so calling the dead interface's `destroy_instance` would
+    /// be undefined behaviour. The runtime reclaims the old instance's backing as
+    /// part of the reload, then a fresh instance is created on the new interface.
+    fn revalidate(&mut self) -> bool {
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return false,
+        };
+        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.
+        let interface: *const GuestContractInterface =
+            unsafe { (host_api.resolve_guest_contract)(self.host, self.handle) };
+        if interface.is_null() {
+            return false;
+        }
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
+        unsafe {
+            (host_api.create_guest_instance)(
+                self.host,
+                interface,
+                core::ptr::null(),
+                &mut instance,
+            );
+        }
+        self.interface = interface;
+        self.instance = instance;
+        self.cached_revision = self.live_revision();
+        true
+    }
+
     /// Call `encode` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
     pub fn encode(&mut self, input: StringView) -> Result<StringView, ContractError> {
-        // Reset the arena at call start: frees the previous call's overflow
-        // blocks and rewinds the primary region, invalidating prior views.
-        self.arena.reset();
+        // Cheap per-call staleness check: read the registry revision directly through
+        // the cached pointer (one atomic load, no call into the runtime). While it
+        // matches the value cached when this caller resolved, the interface pointer is
+        // current and we dispatch directly; on any change (hot-reload or unload) we
+        // re-resolve first, so the cached pointer is never used once it dangles.
+        if self.live_revision() != self.cached_revision && !self.revalidate() {
+            return Err(ContractError::new(AbiErrorCode::NotFound));
+        }
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
         let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
@@ -625,6 +965,10 @@ impl PipelineEncoderContract {
                     }
                 }
                 DispatchType::VirtualMachine => {
+                    // Reset the per-call arena here — the VM path is the only one that
+                    // uses it. Rewinds the primary region and frees the previous call's
+                    // overflow blocks, invalidating any view returned by a prior call.
+                    self.arena.reset();
                     (interface.dispatch.vm.call)(
                         interface.dispatch.vm.loader_data,
                         self.instance, // instance parameter
@@ -675,6 +1019,13 @@ impl Drop for PipelineEncoderContract {
             Some(api) => api,
             None => return,
         };
+        // If the registry changed since we resolved, the cached interface and instance
+        // are stale — a reload/unload reclaimed their backing — so calling the dead
+        // interface's destroy would be UB; the reload/unload already reclaimed the
+        // instance, so skip the destroy entirely.
+        if self.live_revision() != self.cached_revision {
+            return;
+        }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance and is valid.
             // The interface pointer is stored for the lifetime of this wrapper.
@@ -705,6 +1056,17 @@ pub struct DataReporterContract {
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
     host: *const HostApi,
+    /// Contract handle, retained so the cache can re-resolve after a hot-reload
+    /// (which swaps a new interface into the same slot) or report a gone contract.
+    handle: GuestContractHandle,
+    /// Pointer to the runtime's registry revision counter, fetched once via
+    /// `HostApi.revision_counter`. Polled directly before each dispatch (one
+    /// atomic load, no call into the runtime); null when there is no runtime.
+    revision_ptr: *const u64,
+    /// Revision value read when the interface was resolved. Compared before each
+    /// dispatch against the live counter to detect a reload/unload and re-resolve,
+    /// so the cached interface pointer never dangles.
+    cached_revision: u64,
     /// Stable-address backing buffer for the per-call arena. Boxed so the
     /// arena's interior pointers stay valid when the caller is moved.
     arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,
@@ -744,6 +1106,27 @@ impl DataReporterContract {
             let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        // SAFETY: host is non-null here (resolve above reborrowed it via as_ref());
+        // as_ref() re-guards null, and revision_counter is an ABI fn ptr safe to call.
+        let revision_ptr: *const u64 = unsafe {
+            match host.as_ref() {
+                Some(host_api) => (host_api.revision_counter)(host),
+                None => core::ptr::null(),
+            }
+        };
+        let cached_revision: u64 = if revision_ptr.is_null() {
+            0
+        } else {
+            // SAFETY: revision_ptr was returned by revision_counter and points to the
+            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.
+            unsafe {
+                (*(revision_ptr as *const core::sync::atomic::AtomicU64))
+                    .load(core::sync::atomic::Ordering::Acquire)
+            }
+        };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
@@ -752,9 +1135,30 @@ impl DataReporterContract {
             interface,
             instance,
             host,
+            handle,
+            revision_ptr,
+            cached_revision,
             arena_buf,
             arena,
         })
+    }
+
+    /// Read the registry revision through the cached pointer — one aligned atomic
+    /// load, no call into the runtime. Returns the cached value (i.e. "unchanged")
+    /// when there is no counter (null host/runtime), so the staleness check is then
+    /// a no-op.
+    #[inline]
+    fn live_revision(&self) -> u64 {
+        if self.revision_ptr.is_null() {
+            return self.cached_revision;
+        }
+        // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to
+        // the runtime's revision counter — an AtomicU64 whose address is stable for the
+        // runtime's lifetime, i.e. for as long as this caller can dispatch.
+        unsafe {
+            (*(self.revision_ptr as *const core::sync::atomic::AtomicU64))
+                .load(core::sync::atomic::Ordering::Acquire)
+        }
     }
 
     /// Check if this caller holds a resolved contract interface.
@@ -773,6 +1177,14 @@ impl DataReporterContract {
             Some(api) => api,
             None => return,
         };
+        // If the registry changed under us, the cached interface/instance are stale
+        // (a reload/unload reclaimed their backing). revalidate() abandons the dead
+        // instance and builds a fresh one on the current interface — exactly the
+        // fresh instance reset() promises — so defer to it and skip the unsafe destroy.
+        if self.live_revision() != self.cached_revision {
+            self.revalidate();
+            return;
+        }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance on this interface and is
             // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
@@ -794,14 +1206,59 @@ impl DataReporterContract {
         self.instance = new_instance;
     }
 
+    /// Re-resolve the cached interface after the registry changed under us.
+    ///
+    /// Invoked automatically when a dispatch observes a revision change. A
+    /// hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot,
+    /// so it resolves to null and `false` is returned (the contract is gone).
+    ///
+    /// The old instance is ABANDONED, never destroyed: after a reload its
+    /// interface — and the guest-side state that interface created — is already
+    /// epoch-reclaimed, so calling the dead interface's `destroy_instance` would
+    /// be undefined behaviour. The runtime reclaims the old instance's backing as
+    /// part of the reload, then a fresh instance is created on the new interface.
+    fn revalidate(&mut self) -> bool {
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return false,
+        };
+        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.
+        let interface: *const GuestContractInterface =
+            unsafe { (host_api.resolve_guest_contract)(self.host, self.handle) };
+        if interface.is_null() {
+            return false;
+        }
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
+        unsafe {
+            (host_api.create_guest_instance)(
+                self.host,
+                interface,
+                core::ptr::null(),
+                &mut instance,
+            );
+        }
+        self.interface = interface;
+        self.instance = instance;
+        self.cached_revision = self.live_revision();
+        true
+    }
+
     /// Call `report` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
     pub fn report(&mut self, input: StringView) -> Result<StringView, ContractError> {
-        // Reset the arena at call start: frees the previous call's overflow
-        // blocks and rewinds the primary region, invalidating prior views.
-        self.arena.reset();
+        // Cheap per-call staleness check: read the registry revision directly through
+        // the cached pointer (one atomic load, no call into the runtime). While it
+        // matches the value cached when this caller resolved, the interface pointer is
+        // current and we dispatch directly; on any change (hot-reload or unload) we
+        // re-resolve first, so the cached pointer is never used once it dangles.
+        if self.live_revision() != self.cached_revision && !self.revalidate() {
+            return Err(ContractError::new(AbiErrorCode::NotFound));
+        }
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
         let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
@@ -839,6 +1296,10 @@ impl DataReporterContract {
                     }
                 }
                 DispatchType::VirtualMachine => {
+                    // Reset the per-call arena here — the VM path is the only one that
+                    // uses it. Rewinds the primary region and frees the previous call's
+                    // overflow blocks, invalidating any view returned by a prior call.
+                    self.arena.reset();
                     (interface.dispatch.vm.call)(
                         interface.dispatch.vm.loader_data,
                         self.instance, // instance parameter
@@ -889,6 +1350,13 @@ impl Drop for DataReporterContract {
             Some(api) => api,
             None => return,
         };
+        // If the registry changed since we resolved, the cached interface and instance
+        // are stale — a reload/unload reclaimed their backing — so calling the dead
+        // interface's destroy would be UB; the reload/unload already reclaimed the
+        // instance, so skip the destroy entirely.
+        if self.live_revision() != self.cached_revision {
+            return;
+        }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance and is valid.
             // The interface pointer is stored for the lifetime of this wrapper.
@@ -919,6 +1387,17 @@ pub struct PipelineValidatorContract {
     instance: GuestContractInstance,
     /// Host interface pointer (needed for create/destroy_instance).
     host: *const HostApi,
+    /// Contract handle, retained so the cache can re-resolve after a hot-reload
+    /// (which swaps a new interface into the same slot) or report a gone contract.
+    handle: GuestContractHandle,
+    /// Pointer to the runtime's registry revision counter, fetched once via
+    /// `HostApi.revision_counter`. Polled directly before each dispatch (one
+    /// atomic load, no call into the runtime); null when there is no runtime.
+    revision_ptr: *const u64,
+    /// Revision value read when the interface was resolved. Compared before each
+    /// dispatch against the live counter to detect a reload/unload and re-resolve,
+    /// so the cached interface pointer never dangles.
+    cached_revision: u64,
     /// Stable-address backing buffer for the per-call arena. Boxed so the
     /// arena's interior pointers stay valid when the caller is moved.
     arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,
@@ -958,6 +1437,27 @@ impl PipelineValidatorContract {
             let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
+        // Fetch the registry revision counter ONCE, then read its current value, so
+        // every later call can detect a reload/unload with a direct atomic load (no
+        // call back into the runtime) and re-resolve before dispatching.
+        // SAFETY: host is non-null here (resolve above reborrowed it via as_ref());
+        // as_ref() re-guards null, and revision_counter is an ABI fn ptr safe to call.
+        let revision_ptr: *const u64 = unsafe {
+            match host.as_ref() {
+                Some(host_api) => (host_api.revision_counter)(host),
+                None => core::ptr::null(),
+            }
+        };
+        let cached_revision: u64 = if revision_ptr.is_null() {
+            0
+        } else {
+            // SAFETY: revision_ptr was returned by revision_counter and points to the
+            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.
+            unsafe {
+                (*(revision_ptr as *const core::sync::atomic::AtomicU64))
+                    .load(core::sync::atomic::Ordering::Acquire)
+            }
+        };
         // Box the backing buffer first so the arena's interior pointers refer
         // to a stable heap address that survives moving the caller value.
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
@@ -966,9 +1466,30 @@ impl PipelineValidatorContract {
             interface,
             instance,
             host,
+            handle,
+            revision_ptr,
+            cached_revision,
             arena_buf,
             arena,
         })
+    }
+
+    /// Read the registry revision through the cached pointer — one aligned atomic
+    /// load, no call into the runtime. Returns the cached value (i.e. "unchanged")
+    /// when there is no counter (null host/runtime), so the staleness check is then
+    /// a no-op.
+    #[inline]
+    fn live_revision(&self) -> u64 {
+        if self.revision_ptr.is_null() {
+            return self.cached_revision;
+        }
+        // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to
+        // the runtime's revision counter — an AtomicU64 whose address is stable for the
+        // runtime's lifetime, i.e. for as long as this caller can dispatch.
+        unsafe {
+            (*(self.revision_ptr as *const core::sync::atomic::AtomicU64))
+                .load(core::sync::atomic::Ordering::Acquire)
+        }
     }
 
     /// Check if this caller holds a resolved contract interface.
@@ -987,6 +1508,14 @@ impl PipelineValidatorContract {
             Some(api) => api,
             None => return,
         };
+        // If the registry changed under us, the cached interface/instance are stale
+        // (a reload/unload reclaimed their backing). revalidate() abandons the dead
+        // instance and builds a fresh one on the current interface — exactly the
+        // fresh instance reset() promises — so defer to it and skip the unsafe destroy.
+        if self.live_revision() != self.cached_revision {
+            self.revalidate();
+            return;
+        }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance on this interface and is
             // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
@@ -1008,14 +1537,59 @@ impl PipelineValidatorContract {
         self.instance = new_instance;
     }
 
+    /// Re-resolve the cached interface after the registry changed under us.
+    ///
+    /// Invoked automatically when a dispatch observes a revision change. A
+    /// hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot,
+    /// so it resolves to null and `false` is returned (the contract is gone).
+    ///
+    /// The old instance is ABANDONED, never destroyed: after a reload its
+    /// interface — and the guest-side state that interface created — is already
+    /// epoch-reclaimed, so calling the dead interface's `destroy_instance` would
+    /// be undefined behaviour. The runtime reclaims the old instance's backing as
+    /// part of the reload, then a fresh instance is created on the new interface.
+    fn revalidate(&mut self) -> bool {
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return false,
+        };
+        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.
+        let interface: *const GuestContractInterface =
+            unsafe { (host_api.resolve_guest_contract)(self.host, self.handle) };
+        if interface.is_null() {
+            return false;
+        }
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
+        unsafe {
+            (host_api.create_guest_instance)(
+                self.host,
+                interface,
+                core::ptr::null(),
+                &mut instance,
+            );
+        }
+        self.interface = interface;
+        self.instance = instance;
+        self.cached_revision = self.live_revision();
+        true
+    }
+
     /// Call `validate` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
     pub fn validate(&mut self, input: StringView) -> Result<StringView, ContractError> {
-        // Reset the arena at call start: frees the previous call's overflow
-        // blocks and rewinds the primary region, invalidating prior views.
-        self.arena.reset();
+        // Cheap per-call staleness check: read the registry revision directly through
+        // the cached pointer (one atomic load, no call into the runtime). While it
+        // matches the value cached when this caller resolved, the interface pointer is
+        // current and we dispatch directly; on any change (hot-reload or unload) we
+        // re-resolve first, so the cached pointer is never used once it dangles.
+        if self.live_revision() != self.cached_revision && !self.revalidate() {
+            return Err(ContractError::new(AbiErrorCode::NotFound));
+        }
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
         let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
@@ -1053,6 +1627,10 @@ impl PipelineValidatorContract {
                     }
                 }
                 DispatchType::VirtualMachine => {
+                    // Reset the per-call arena here — the VM path is the only one that
+                    // uses it. Rewinds the primary region and frees the previous call's
+                    // overflow blocks, invalidating any view returned by a prior call.
+                    self.arena.reset();
                     (interface.dispatch.vm.call)(
                         interface.dispatch.vm.loader_data,
                         self.instance, // instance parameter
@@ -1103,6 +1681,13 @@ impl Drop for PipelineValidatorContract {
             Some(api) => api,
             None => return,
         };
+        // If the registry changed since we resolved, the cached interface and instance
+        // are stale — a reload/unload reclaimed their backing — so calling the dead
+        // interface's destroy would be UB; the reload/unload already reclaimed the
+        // instance, so skip the destroy entirely.
+        if self.live_revision() != self.cached_revision {
+            return;
+        }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance and is valid.
             // The interface pointer is stored for the lifetime of this wrapper.

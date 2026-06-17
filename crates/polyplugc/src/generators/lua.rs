@@ -279,8 +279,15 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     // GuestContractInterface native dispatch.
     out.push_str("-- Cached FFI types for hot path performance\n");
     out.push_str(
-        "local NativeDispatchFnType = ffi.typeof(\"void (*)(GuestContractInstance, const void*, void*, AbiError*)\")\n\n",
+        "local NativeDispatchFnType = ffi.typeof(\"void (*)(GuestContractInstance, const void*, void*, AbiError*)\")\n",
     );
+    // Pre-parse the revision-counter pointer ctype ONCE at module scope. Every
+    // dispatch reads the registry revision through this cached ctype
+    // (`ffi.cast(ConstUint64Ptr, ptr)[0]`) — casting through a per-call string
+    // would churn the FFI ctype table. The runtime owns the counter (an
+    // AtomicU64); an aligned 64-bit load through this pointer is hardware-atomic
+    // on supported targets, so the staleness check needs no lock.
+    out.push_str("local ConstUint64Ptr = ffi.typeof(\"const uint64_t*\")\n\n");
 
     for contract in &ir.contracts {
         generate_host_contract_caller(&mut out, contract, &ir.enums);
@@ -414,10 +421,53 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
     out.push_str("        return self._interface ~= nil and not self._destroyed\n");
     out.push_str("    end,\n\n");
 
+    // live_revision - read the registry revision through the cached pointer (one
+    // aligned atomic load, no call into the runtime). Returns the cached value
+    // (i.e. "unchanged") when there is no counter (null runtime), so the staleness
+    // check is then a no-op.
+    out.push_str("    live_revision = function(self)\n");
+    out.push_str("        if self._revision_ptr == nil then\n");
+    out.push_str("            return self._cached_revision\n");
+    out.push_str("        end\n");
+    out.push_str("        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]\n");
+    out.push_str("    end,\n\n");
+
+    // revalidate - the registry changed under us (a reload/unload reclaimed the
+    // cached interface/instance). Re-resolve via the retained handle: a hot-reload
+    // swapped a new interface into the same slot (handle resolves to it); an unload
+    // vacated the slot (resolves to nil → return false, contract gone). The old
+    // instance is ABANDONED, never destroyed — its interface is already
+    // epoch-reclaimed, so destroy through it would be UB; the runtime reclaimed it
+    // as part of the reload. A fresh instance is created on the new interface.
+    out.push_str("    revalidate = function(self)\n");
+    out.push_str(
+        "        local interface = self._host.resolve_guest_contract(self._host, self._handle)\n",
+    );
+    out.push_str("        if interface == nil then\n");
+    out.push_str("            return false\n");
+    out.push_str("        end\n");
+    out.push_str("        local new_instance = ffi.new(\"GuestContractInstance\")\n");
+    out.push_str(
+        "        self._host.create_guest_instance(self._host, interface, nil, new_instance)\n",
+    );
+    out.push_str("        self._interface = interface\n");
+    out.push_str("        self._instance = new_instance\n");
+    out.push_str("        self._cached_revision = self:live_revision()\n");
+    out.push_str("        self._destroyed = false\n");
+    out.push_str("        return true\n");
+    out.push_str("    end,\n\n");
+
     // destroy method - routes destruction through the host so the runtime drops the
     // instance from its live-instance accounting, then marks the wrapper destroyed.
+    // If the registry changed since we resolved, the cached interface/instance are
+    // stale — a reload/unload already reclaimed their backing — so destroy through
+    // the dead interface would be UB; skip it and just mark the wrapper destroyed.
     out.push_str("    destroy = function(self)\n");
     out.push_str("        if self._interface ~= nil and not self._destroyed then\n");
+    out.push_str("            if self:live_revision() ~= self._cached_revision then\n");
+    out.push_str("                self._destroyed = true\n");
+    out.push_str("                return\n");
+    out.push_str("            end\n");
     out.push_str("            self._host.destroy_guest_instance(self._host, self._interface, self._instance)\n");
     out.push_str("            self._destroyed = true\n");
     out.push_str("        end\n");
@@ -425,8 +475,14 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
 
     // reset method - destroy current instance, create a fresh one from the
     // still-resolved interface. A null instance.data is valid for stateless
-    // contracts and is preserved as the opaque dispatch token.
+    // contracts and is preserved as the opaque dispatch token. If the registry
+    // changed under us, defer to revalidate(): it builds the fresh instance reset()
+    // promises on the current interface and skips the unsafe destroy of the dead one.
     out.push_str("    reset = function(self)\n");
+    out.push_str("        if self:live_revision() ~= self._cached_revision then\n");
+    out.push_str("            self:revalidate()\n");
+    out.push_str("            return\n");
+    out.push_str("        end\n");
     out.push_str("        self:destroy()\n");
     out.push_str("        if self._interface ~= nil then\n");
     out.push_str("            local new_instance = ffi.new(\"GuestContractInstance\")\n");
@@ -491,10 +547,28 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
     out.push_str("    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.\n");
     out.push_str("    local instance = ffi.new(\"GuestContractInstance\")\n");
     out.push_str("    host.create_guest_instance(host, interface, nil, instance)\n");
+    // Fetch the registry revision counter ONCE, then read its current value, so
+    // every later call can detect a reload/unload with a direct atomic load (no
+    // call back into the runtime) and re-resolve before dispatching. A null host or
+    // null counter makes the staleness check a no-op (live_revision returns the
+    // cached value).
+    out.push_str("    local revision_ptr = nil\n");
+    out.push_str("    local cached_revision = 0\n");
+    out.push_str("    if host ~= nil then\n");
+    out.push_str("        revision_ptr = host.revision_counter(host)\n");
+    out.push_str("        if revision_ptr ~= nil then\n");
+    out.push_str("            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]\n");
+    out.push_str("        end\n");
+    out.push_str("    end\n");
     out.push_str("    local wrapper = {\n");
     out.push_str("        _interface = interface,\n");
     out.push_str("        _instance = instance,\n");
     out.push_str("        _host = host,\n");
+    // Retain the opaque handle so revalidate() can re-resolve after a hot-reload
+    // (same slot, new interface) or report a gone contract (slot vacated).
+    out.push_str("        _handle = handle,\n");
+    out.push_str("        _revision_ptr = revision_ptr,\n");
+    out.push_str("        _cached_revision = cached_revision,\n");
     out.push_str("        _destroyed = false\n");
     out.push_str("    }\n");
     out.push_str(&format!(
@@ -520,6 +594,17 @@ fn generate_host_caller_method(
     // Validity keys off the resolved interface pointer, NOT instance.data:
     // stateless and VM-dispatch guests carry a null instance handle.
     out.push_str("        if self._interface == nil or self._destroyed then\n");
+    out.push_str("            error(\"invalid caller: interface is nil\", 2)\n");
+    out.push_str("        end\n");
+    // Cheap per-call staleness check: read the registry revision directly through
+    // the cached pointer (one atomic load, no call into the runtime). While it
+    // matches the value cached when this caller resolved, the cached interface
+    // pointer is current and we dispatch directly; on any change (hot-reload or
+    // unload) we re-resolve first, so the cached pointer is never used once it
+    // dangles. A failed revalidate means the contract is gone.
+    out.push_str(
+        "        if self:live_revision() ~= self._cached_revision and not self:revalidate() then\n",
+    );
     out.push_str("            error(\"invalid caller: interface is nil\", 2)\n");
     out.push_str("        end\n");
 
@@ -1892,6 +1977,14 @@ fn generate_lua_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedCont
         out.push_str("]])\n\n");
     }
 
+    // Pre-parse the revision-counter pointer ctype ONCE at module scope. Each peer
+    // dispatch reads the registry revision through this cached ctype
+    // (`ffi.cast(ConstUint64Ptr, ptr)[0]`) — casting through a per-call string
+    // would churn the FFI ctype table. The runtime owns the counter (an
+    // AtomicU64); an aligned 64-bit load through this pointer is hardware-atomic on
+    // supported targets.
+    out.push_str("local ConstUint64Ptr = ffi.typeof(\"const uint64_t*\")\n\n");
+
     out.push_str("local M = {}\n\n");
 
     for contract in peers {
@@ -1938,13 +2031,16 @@ fn generate_lua_guest_peer_caller(
     out.push_str(&format!("{} = {{}}\n", class_name));
     out.push_str(&format!("{}.__index = {}\n\n", class_name, class_name));
 
-    // :new(interface, instance, host) — low-level constructor used by resolve().
+    // :new(interface, instance, host, handle, revision_ptr, cached_revision) —
+    // low-level constructor used by resolve(). `handle`, `revision_ptr`, and
+    // `cached_revision` let each dispatch detect a peer reload/unload and re-resolve
+    // before using the cached interface/instance (which a reload reclaims).
     out.push_str(&format!(
-        "function {}:new(interface, instance, host)\n",
+        "function {}:new(interface, instance, host, handle, revision_ptr, cached_revision)\n",
         class_name
     ));
     out.push_str(
-        "    local obj = { _interface = interface, _instance = instance, _host = host }\n",
+        "    local obj = { _interface = interface, _instance = instance, _host = host, _handle = handle, _revision_ptr = revision_ptr, _cached_revision = cached_revision }\n",
     );
     out.push_str("    setmetatable(obj, self)\n");
     out.push_str("    return obj\n");
@@ -1986,14 +2082,62 @@ fn generate_lua_guest_peer_caller(
         "    instance.contract_id = 0x{:016X}ULL\n",
         contract.contract_id
     ));
+    // Fetch the registry revision counter ONCE, then read its current value, so
+    // every later dispatch can detect a peer reload/unload with a direct atomic
+    // load (no call back into the runtime) and re-resolve before dispatching. A
+    // null counter makes the staleness check a no-op (live_revision returns the
+    // cached value).
+    out.push_str("    local revision_ptr = host.revision_counter(host)\n");
+    out.push_str("    local cached_revision = 0\n");
+    out.push_str("    if revision_ptr ~= nil then\n");
+    out.push_str("        cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]\n");
+    out.push_str("    end\n");
     out.push_str(&format!(
-        "    return {}:new(interface, instance, host)\n",
+        "    return {}:new(interface, instance, host, handle, revision_ptr, cached_revision)\n",
         class_name
     ));
     out.push_str("end\n\n");
 
     out.push_str(&format!("function {}:is_valid()\n", class_name));
     out.push_str("    return self._interface ~= nil\n");
+    out.push_str("end\n\n");
+
+    // live_revision - read the registry revision through the cached pointer (one
+    // aligned atomic load, no call into the runtime). Returns the cached value when
+    // there is no counter, making the staleness check a no-op.
+    out.push_str(&format!("function {}:live_revision()\n", class_name));
+    out.push_str("    if self._revision_ptr == nil then\n");
+    out.push_str("        return self._cached_revision\n");
+    out.push_str("    end\n");
+    out.push_str("    return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]\n");
+    out.push_str("end\n\n");
+
+    // revalidate - the peer registry changed under us (a reload/unload reclaimed the
+    // cached interface and instance). Re-resolve via the retained handle: a reload
+    // swapped a new interface into the same slot (handle resolves to it); an unload
+    // vacated the slot (resolves to nil → return false, peer gone). The old instance
+    // is ABANDONED — its interface is already epoch-reclaimed, so dispatching it
+    // through call_guest_method would be UB. A fresh instance is created and the peer
+    // contract id re-stamped so call_guest_method keeps routing by it.
+    out.push_str(&format!("function {}:revalidate()\n", class_name));
+    out.push_str(
+        "    local interface = self._host.resolve_guest_contract(self._host, self._handle)\n",
+    );
+    out.push_str("    if interface == nil then\n");
+    out.push_str("        return false\n");
+    out.push_str("    end\n");
+    out.push_str("    local new_instance = ffi.new(\"GuestContractInstance\")\n");
+    out.push_str(
+        "    self._host.create_guest_instance(self._host, interface, nil, new_instance)\n",
+    );
+    out.push_str(&format!(
+        "    new_instance.contract_id = 0x{:016X}ULL\n",
+        contract.contract_id
+    ));
+    out.push_str("    self._interface = interface\n");
+    out.push_str("    self._instance = new_instance\n");
+    out.push_str("    self._cached_revision = self:live_revision()\n");
+    out.push_str("    return true\n");
     out.push_str("end\n\n");
 
     for func in &contract.functions {
@@ -2028,6 +2172,21 @@ fn generate_lua_guest_peer_method(
     ));
 
     out.push_str("    if self._interface == nil then\n");
+    if has_return {
+        out.push_str("        return nil\n");
+    } else {
+        out.push_str("        return\n");
+    }
+    out.push_str("    end\n");
+
+    // Cheap per-call staleness check: read the registry revision directly through
+    // the cached pointer (one atomic load, no call into the runtime). On any change
+    // (hot-reload or unload of the peer) we re-resolve first, so the cached
+    // interface and instance are never dispatched once they dangle. A failed
+    // revalidate means the peer is gone.
+    out.push_str(
+        "    if self:live_revision() ~= self._cached_revision and not self:revalidate() then\n",
+    );
     if has_return {
         out.push_str("        return nil\n");
     } else {

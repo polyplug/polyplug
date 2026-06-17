@@ -55,10 +55,20 @@ class PipelineValidatorPeer:
     (which received it from its author factory) — no SDK-level host storage.
     """
 
-    def __init__(self, host_ptr: int, interface: int, instance: GuestContractInstance) -> None:
+    def __init__(self, host_ptr: int, handle: GuestContractHandle, interface: int, instance: GuestContractInstance) -> None:
         self._host_ptr: int = host_ptr
+        # Retain the handle so the cache can re-resolve after a hot-reload (which
+        # swaps a new interface into the same slot) or report a gone peer.
+        self._handle: GuestContractHandle = handle
         self._interface: int = interface
         self._instance: GuestContractInstance = instance
+        # Fetch the registry revision counter ONCE, then read its current value, so
+        # every later call can detect a reload/unload with a direct atomic load (one
+        # aligned 64-bit load through the cached pointer, no call into the runtime)
+        # and re-resolve before dispatching.
+        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))
+        self._revision_ptr: int = host.contents.revision_counter(host_ptr) or 0
+        self._cached_revision: int = self._live_revision()
         # Per-caller call arena backed by C-heap memory (not Python GC heap).
         self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
         buf_addr: int = ctypes.cast(self._arena_buf, ctypes.c_void_p).value or 0
@@ -99,11 +109,17 @@ class PipelineValidatorPeer:
         # Stamp the peer contract id so call_guest_method routes by it even when
         # a stateless peer's create_instance returns a null (null-id) handle.
         instance.contract_id = 0x45173A959EEC57C5
-        return cls(host_ptr, interface, instance)
+        return cls(host_ptr, handle, interface, instance)
 
     def __del__(self) -> None:
         """Destroy the peer instance via host-mediated destroy_guest_instance."""
         if not getattr(self, "_interface", None):
+            return
+        # If the registry changed since we resolved, the cached interface and instance
+        # are stale — a reload/unload reclaimed their backing — so destroying through
+        # the dead interface would be UB; the reload/unload already reclaimed the
+        # instance, so skip the destroy entirely.
+        if self._live_revision() != self._cached_revision:
             return
         host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))
         host.contents.destroy_guest_instance(self._host_ptr, self._interface, self._instance)
@@ -115,7 +131,44 @@ class PipelineValidatorPeer:
         """Return True if the peer interface is resolved and live."""
         return bool(getattr(self, "_interface", None))
 
+    def _live_revision(self) -> int:
+        """Read the registry revision through the cached pointer — one aligned
+        atomic load, no call into the runtime. Returns the cached value ("unchanged")
+        when there is no counter (null host/runtime), making the check a no-op.
+        """
+        if not self._revision_ptr:
+            return self._cached_revision
+        return ctypes.c_uint64.from_address(self._revision_ptr).value
+
+    def _revalidate(self) -> bool:
+        """Re-resolve the cached peer interface after the registry changed under us.
+
+        A hot-reload swapped a new interface into the same slot, so the retained
+        handle still resolves — to the new interface; an unload vacated the slot,
+        so it resolves to null and False is returned (the peer is gone).
+
+        The old instance is ABANDONED, never destroyed: after a reload its interface
+        — and the guest-side state it created — is already epoch-reclaimed, so calling
+        the dead interface's destroy_instance would be UB. A fresh instance is created
+        on the new interface and the peer contract id is re-stamped.
+        """
+        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))
+        interface: int = host.contents.resolve_guest_contract(self._host_ptr, self._handle)
+        if not interface:
+            return False
+        instance: GuestContractInstance = GuestContractInstance()
+        host.contents.create_guest_instance(self._host_ptr, interface, None, ctypes.byref(instance))
+        # Re-stamp the peer contract id so call_guest_method keeps routing by it even
+        # when a stateless peer's create_instance returns a null (null-id) handle.
+        instance.contract_id = 0x45173A959EEC57C5
+        self._interface = interface
+        self._instance = instance
+        self._cached_revision = self._live_revision()
+        return True
+
     def validate(self, input: StringView) -> StringView:
+        if self._live_revision() != self._cached_revision and not self._revalidate():
+            raise RuntimeError(f"peer call failed (code {int(AbiErrorCode.NotFound)})")
         # Rewind arena at call start; prior returned views are invalidated.
         _arena_reset(self._arena)
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)

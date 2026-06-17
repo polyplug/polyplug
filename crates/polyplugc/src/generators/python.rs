@@ -807,6 +807,27 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
     out.push_str("        host_iface.contents.create_guest_instance(host, self._interface, None, ctypes.byref(self._instance))\n");
     out.push_str("        self._host: ctypes.c_void_p = host\n");
     out.push_str(
+        "        # Retain the handle so the cache can re-resolve after a hot-reload (which\n",
+    );
+    out.push_str(
+        "        # swaps a new interface into the same slot) or report a gone contract.\n",
+    );
+    out.push_str("        self._handle: int = handle\n");
+    out.push_str(
+        "        # Fetch the registry revision counter ONCE, then read its current value, so\n",
+    );
+    out.push_str(
+        "        # every later call can detect a reload/unload with a direct atomic load (one\n",
+    );
+    out.push_str(
+        "        # aligned 64-bit load through the cached pointer, no call into the runtime)\n",
+    );
+    out.push_str("        # and re-resolve before dispatching.\n");
+    out.push_str(
+        "        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0\n",
+    );
+    out.push_str("        self._cached_revision: int = self._live_revision()\n");
+    out.push_str(
         "        # Pin the runtime: refcounting then guarantees the owner outlives this\n",
     );
     out.push_str("        # caller, so __del__ tears down through a still-live host.\n");
@@ -843,7 +864,19 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
     out.push_str(
         "        # destroy_guest_instance tolerates a null instance for stateless contracts.\n",
     );
-    out.push_str("        if getattr(self, \"_interface\", None):\n");
+    out.push_str(
+        "        # If the registry changed since we resolved, the cached interface and instance\n",
+    );
+    out.push_str(
+        "        # are stale — a reload/unload reclaimed their backing — so destroying through\n",
+    );
+    out.push_str(
+        "        # the dead interface would be UB; the reload/unload already reclaimed the\n",
+    );
+    out.push_str("        # instance, so skip the destroy entirely.\n");
+    out.push_str(
+        "        if getattr(self, \"_interface\", None) and self._live_revision() == self._cached_revision:\n",
+    );
     out.push_str("            host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))\n");
     out.push_str("            host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)\n");
     out.push_str("            self._interface = None  # Prevent reuse after cleanup.\n");
@@ -886,11 +919,75 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
     out.push_str("        \"\"\"Check if this caller holds a resolved contract interface.\"\"\"\n");
     out.push_str("        return bool(getattr(self, \"_interface\", None))\n\n");
 
+    // _live_revision: read the registry revision through the cached pointer.
+    out.push_str("    def _live_revision(self) -> int:\n");
+    out.push_str(
+        "        \"\"\"Read the registry revision through the cached pointer — one aligned\n",
+    );
+    out.push_str("        atomic load, no call into the runtime. Returns the cached value (i.e.\n");
+    out.push_str("        \"unchanged\") when there is no counter (null host/runtime), so the\n");
+    out.push_str("        staleness check is then a no-op.\n");
+    out.push_str("        \"\"\"\n");
+    out.push_str("        if not self._revision_ptr:\n");
+    out.push_str("            return self._cached_revision\n");
+    out.push_str("        return ctypes.c_uint64.from_address(self._revision_ptr).value\n\n");
+
+    // _revalidate: re-resolve via the retained handle after the registry changed.
+    out.push_str("    def _revalidate(self) -> bool:\n");
+    out.push_str(
+        "        \"\"\"Re-resolve the cached interface after the registry changed under us.\n\n",
+    );
+    out.push_str(
+        "        A hot-reload swapped a new interface into the same slot, so the retained\n",
+    );
+    out.push_str(
+        "        handle still resolves — to the new interface; an unload vacated the slot,\n",
+    );
+    out.push_str(
+        "        so it resolves to null and False is returned (the contract is gone).\n\n",
+    );
+    out.push_str("        The old instance is ABANDONED, never destroyed: after a reload its\n");
+    out.push_str(
+        "        interface — and the guest-side state it created — is already epoch-reclaimed,\n",
+    );
+    out.push_str("        so calling the dead interface's destroy_instance would be UB. A fresh\n");
+    out.push_str("        instance is created on the new interface.\n");
+    out.push_str("        \"\"\"\n");
+    out.push_str("        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))\n");
+    out.push_str(
+        "        interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(self._host, self._handle)\n",
+    );
+    out.push_str("        if not interface:\n");
+    out.push_str("            return False\n");
+    out.push_str("        new_instance = GuestContractInstance()\n");
+    out.push_str(
+        "        host_iface.contents.create_guest_instance(self._host, interface, None, ctypes.byref(new_instance))\n",
+    );
+    out.push_str("        self._interface = interface\n");
+    out.push_str("        self._instance = new_instance\n");
+    out.push_str("        self._cached_revision = self._live_revision()\n");
+    out.push_str("        return True\n\n");
+
     // reset method
     out.push_str("    def reset(self) -> None:\n");
     out.push_str(
         "        \"\"\"Destroy current instance and create a new one (host-mediated).\"\"\"\n",
     );
+    out.push_str(
+        "        # If the registry changed under us, the cached interface/instance are stale\n",
+    );
+    out.push_str(
+        "        # (a reload/unload reclaimed their backing). _revalidate abandons the dead\n",
+    );
+    out.push_str(
+        "        # instance and builds a fresh one on the current interface — exactly the\n",
+    );
+    out.push_str(
+        "        # fresh instance reset() promises — so defer to it and skip the unsafe destroy.\n",
+    );
+    out.push_str("        if self._live_revision() != self._cached_revision:\n");
+    out.push_str("            self._revalidate()\n");
+    out.push_str("            return\n");
     out.push_str("        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))\n");
     out.push_str("        host_iface.contents.destroy_guest_instance(self._host, self._interface, self._instance)\n");
     out.push_str("        self._instance = GuestContractInstance()\n");
@@ -921,6 +1018,17 @@ fn generate_host_caller_method(
         "    def {}(self{}) -> {}:\n",
         func.name, sig_params, ret_type
     ));
+    // Cheap per-call staleness check: read the registry revision directly through the
+    // cached pointer (one atomic load, no call into the runtime). While it matches the
+    // value cached when this caller resolved, the interface pointer is current and we
+    // dispatch directly; on any change (hot-reload or unload) we re-resolve first, so
+    // the cached interface pointer is never used once it dangles.
+    out.push_str(
+        "        if self._live_revision() != self._cached_revision and not self._revalidate():\n",
+    );
+    out.push_str(
+        "            raise ContractError(\"contract not found\", AbiErrorCode.NotFound)\n",
+    );
     if needs_arena {
         out.push_str(
             "        # Returns a value borrowing this caller's arena; it stays valid until\n",
@@ -3224,13 +3332,33 @@ fn generate_peer_caller_class(
     out.push_str("    (which received it from its author factory) — no SDK-level host storage.\n");
     out.push_str("    \"\"\"\n\n");
 
-    // __init__: stores host_ptr, interface ptr, instance, and optional arena.
+    // __init__: stores host_ptr, handle, interface ptr, instance, revision, arena.
     out.push_str(
-        "    def __init__(self, host_ptr: int, interface: int, instance: GuestContractInstance) -> None:\n",
+        "    def __init__(self, host_ptr: int, handle: GuestContractHandle, interface: int, instance: GuestContractInstance) -> None:\n",
     );
     out.push_str("        self._host_ptr: int = host_ptr\n");
+    out.push_str(
+        "        # Retain the handle so the cache can re-resolve after a hot-reload (which\n",
+    );
+    out.push_str("        # swaps a new interface into the same slot) or report a gone peer.\n");
+    out.push_str("        self._handle: GuestContractHandle = handle\n");
     out.push_str("        self._interface: int = interface\n");
     out.push_str("        self._instance: GuestContractInstance = instance\n");
+    out.push_str(
+        "        # Fetch the registry revision counter ONCE, then read its current value, so\n",
+    );
+    out.push_str(
+        "        # every later call can detect a reload/unload with a direct atomic load (one\n",
+    );
+    out.push_str(
+        "        # aligned 64-bit load through the cached pointer, no call into the runtime)\n",
+    );
+    out.push_str("        # and re-resolve before dispatching.\n");
+    out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))\n");
+    out.push_str(
+        "        self._revision_ptr: int = host.contents.revision_counter(host_ptr) or 0\n",
+    );
+    out.push_str("        self._cached_revision: int = self._live_revision()\n");
     if needs_arena {
         out.push_str(
             "        # Per-caller call arena backed by C-heap memory (not Python GC heap).\n",
@@ -3301,7 +3429,7 @@ fn generate_peer_caller_class(
         "        instance.contract_id = 0x{:016X}\n",
         contract.contract_id
     ));
-    out.push_str("        return cls(host_ptr, interface, instance)\n\n");
+    out.push_str("        return cls(host_ptr, handle, interface, instance)\n\n");
 
     // __del__: destroy instance
     out.push_str("    def __del__(self) -> None:\n");
@@ -3309,6 +3437,18 @@ fn generate_peer_caller_class(
         "        \"\"\"Destroy the peer instance via host-mediated destroy_guest_instance.\"\"\"\n",
     );
     out.push_str("        if not getattr(self, \"_interface\", None):\n");
+    out.push_str("            return\n");
+    out.push_str(
+        "        # If the registry changed since we resolved, the cached interface and instance\n",
+    );
+    out.push_str(
+        "        # are stale — a reload/unload reclaimed their backing — so destroying through\n",
+    );
+    out.push_str(
+        "        # the dead interface would be UB; the reload/unload already reclaimed the\n",
+    );
+    out.push_str("        # instance, so skip the destroy entirely.\n");
+    out.push_str("        if self._live_revision() != self._cached_revision:\n");
     out.push_str("            return\n");
     out.push_str("        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))\n");
     out.push_str("        host.contents.destroy_guest_instance(self._host_ptr, self._interface, self._instance)\n");
@@ -3323,6 +3463,70 @@ fn generate_peer_caller_class(
     out.push_str("    def is_valid(self) -> bool:\n");
     out.push_str("        \"\"\"Return True if the peer interface is resolved and live.\"\"\"\n");
     out.push_str("        return bool(getattr(self, \"_interface\", None))\n\n");
+
+    // _live_revision: read the registry revision through the cached pointer.
+    out.push_str("    def _live_revision(self) -> int:\n");
+    out.push_str(
+        "        \"\"\"Read the registry revision through the cached pointer — one aligned\n",
+    );
+    out.push_str(
+        "        atomic load, no call into the runtime. Returns the cached value (\"unchanged\")\n",
+    );
+    out.push_str(
+        "        when there is no counter (null host/runtime), making the check a no-op.\n",
+    );
+    out.push_str("        \"\"\"\n");
+    out.push_str("        if not self._revision_ptr:\n");
+    out.push_str("            return self._cached_revision\n");
+    out.push_str("        return ctypes.c_uint64.from_address(self._revision_ptr).value\n\n");
+
+    // _revalidate: re-resolve via the retained handle after the registry changed.
+    out.push_str("    def _revalidate(self) -> bool:\n");
+    out.push_str(
+        "        \"\"\"Re-resolve the cached peer interface after the registry changed under us.\n\n",
+    );
+    out.push_str(
+        "        A hot-reload swapped a new interface into the same slot, so the retained\n",
+    );
+    out.push_str(
+        "        handle still resolves — to the new interface; an unload vacated the slot,\n",
+    );
+    out.push_str("        so it resolves to null and False is returned (the peer is gone).\n\n");
+    out.push_str(
+        "        The old instance is ABANDONED, never destroyed: after a reload its interface\n",
+    );
+    out.push_str(
+        "        — and the guest-side state it created — is already epoch-reclaimed, so calling\n",
+    );
+    out.push_str(
+        "        the dead interface's destroy_instance would be UB. A fresh instance is created\n",
+    );
+    out.push_str("        on the new interface and the peer contract id is re-stamped.\n");
+    out.push_str("        \"\"\"\n");
+    out.push_str("        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))\n");
+    out.push_str(
+        "        interface: int = host.contents.resolve_guest_contract(self._host_ptr, self._handle)\n",
+    );
+    out.push_str("        if not interface:\n");
+    out.push_str("            return False\n");
+    out.push_str("        instance: GuestContractInstance = GuestContractInstance()\n");
+    out.push_str(
+        "        host.contents.create_guest_instance(self._host_ptr, interface, None, ctypes.byref(instance))\n",
+    );
+    out.push_str(
+        "        # Re-stamp the peer contract id so call_guest_method keeps routing by it even\n",
+    );
+    out.push_str(
+        "        # when a stateless peer's create_instance returns a null (null-id) handle.\n",
+    );
+    out.push_str(&format!(
+        "        instance.contract_id = 0x{:016X}\n",
+        contract.contract_id
+    ));
+    out.push_str("        self._interface = interface\n");
+    out.push_str("        self._instance = instance\n");
+    out.push_str("        self._cached_revision = self._live_revision()\n");
+    out.push_str("        return True\n\n");
 
     // Per-function dispatch methods
     for func in &contract.functions {
@@ -3352,6 +3556,16 @@ fn generate_peer_caller_method(
         name = func.name,
     ));
 
+    // Cheap per-call staleness check: read the registry revision directly through the
+    // cached pointer (one atomic load, no call into the runtime). On any change (a
+    // hot-reload or unload of the peer) we re-resolve first, so the cached interface
+    // and instance are never used once they dangle.
+    out.push_str(
+        "        if self._live_revision() != self._cached_revision and not self._revalidate():\n",
+    );
+    out.push_str(
+        "            raise RuntimeError(f\"peer call failed (code {int(AbiErrorCode.NotFound)})\")\n",
+    );
     if needs_arena {
         out.push_str(
             "        # Rewind arena at call start; prior returned views are invalidated.\n",

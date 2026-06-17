@@ -464,6 +464,10 @@ mod tests {
     ) {
     }
 
+    unsafe extern "C" fn stub_revision_counter(_this: *const crate::host::HostApi) -> *const u64 {
+        core::ptr::null()
+    }
+
     fn test_host() -> HostApi {
         HostApi {
             runtime: core::ptr::null_mut(),
@@ -488,6 +492,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: stub_create_guest_instance,
             destroy_guest_instance: stub_destroy_guest_instance,
+            revision_counter: stub_revision_counter,
             reserved: core::ptr::null(),
         }
     }

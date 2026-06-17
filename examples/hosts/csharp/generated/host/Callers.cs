@@ -75,21 +75,36 @@ public static class PipelineDecoderContractConstants {
 /// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
 public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
-    private readonly GuestContractInterface* _interface;
+    private GuestContractInterface* _interface;
     private GuestContractInstance _instance;
     private readonly HostApi* _host;
     private bool _disposed;
+    /// <summary>Contract handle, retained so the cache can re-resolve after a
+    /// hot-reload (which swaps a new interface into the same slot) or report a
+    /// gone contract.</summary>
+    private readonly GuestContractHandle _handle;
+    /// <summary>Pointer to the runtime's registry revision counter, fetched once
+    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one
+    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>
+    private readonly IntPtr _revisionPtr;
+    /// <summary>Revision value read when the interface was resolved. Compared
+    /// before each dispatch against the live counter to detect a reload/unload and
+    /// re-resolve, so the cached interface pointer never dangles.</summary>
+    private ulong _cachedRevision;
     /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
     /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
     private readonly byte* _arenaBuf;
     /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
     private CallArena _arena;
 
-    private PipelineDecoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
+    private PipelineDecoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
+        _handle = handle;
+        _revisionPtr = revisionPtr;
+        _cachedRevision = cachedRevision;
         // C-heap allocation: cross-boundary arena data must not live on the managed heap.
         _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
         _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);
@@ -104,14 +119,54 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn(host, iface, null, &inst);
-        return new PipelineDecoderContractCaller(iface, inst, host);
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;
+        IntPtr revisionPtr = revisionFn(host);
+        ulong cachedRevision = revisionPtr == IntPtr.Zero
+            ? 0UL
+            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));
+        return new PipelineDecoderContractCaller(iface, inst, host, handle, revisionPtr, cachedRevision);
     }
 
     /// <summary>Check if this caller holds a resolved contract interface.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
+    /// <summary>Read the registry revision through the cached pointer — one
+    /// acquire atomic load, no call into the runtime. Returns the cached value
+    /// ("unchanged") when there is no counter (IntPtr.Zero).</summary>
+    private ulong LiveRevision() {
+        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }
+        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));
+    }
+
+    /// <summary>Re-resolve the cached interface after the registry changed under
+    /// us. A hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot, so
+    /// it resolves to null and false is returned (the contract is gone). The old
+    /// instance is ABANDONED, never destroyed: its interface and guest-side state are
+    /// already epoch-reclaimed, so calling the dead interface's destroy would be UB.</summary>
+    private bool Revalidate() {
+        if (_host == null) { return false; }
+        var resolveFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractHandle, GuestContractInterface*>)_host->ResolveGuestContract;
+        GuestContractInterface* iface = resolveFn(_host, _handle);
+        if (iface == null) { return false; }
+        GuestContractInstance inst = default;
+        ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)(_host, iface, null, &inst);
+        _interface = iface;
+        _instance = inst;
+        _cachedRevision = LiveRevision();
+        return true;
+    }
+
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
+        // If the registry changed under us, the cached interface/instance are stale
+        // (a reload/unload reclaimed their backing). Revalidate() abandons the dead
+        // instance and builds a fresh one on the current interface — exactly the
+        // fresh instance Reset() promises — so defer to it and skip the unsafe destroy.
+        if (LiveRevision() != _cachedRevision) {
+            Revalidate();
+            return;
+        }
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
@@ -123,8 +178,14 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
-            _instance.Data = nint.Zero;
+            // If the registry changed since we resolved, the cached interface and
+            // instance are stale — a reload/unload reclaimed their backing — so calling
+            // the dead interface's destroy would be UB; the reload/unload already
+            // reclaimed the instance, so skip the destroy entirely.
+            if (LiveRevision() == _cachedRevision) {
+                ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
+                _instance.Data = nint.Zero;
+            }
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
                 CallArenaOps.FreeAll(arenaPtr);
@@ -139,6 +200,10 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
     public Polyplug.Abi.StringView Decode(Polyplug.Abi.StringView input) {
         if (_disposed) {
             throw new ObjectDisposedException(nameof(PipelineDecoderContractCaller));
+        }
+
+        if (LiveRevision() != _cachedRevision && !Revalidate()) {
+            throw new InvalidOperationException("contract not found after reload");
         }
 
         // Rewind the arena at call start: retained overflow blocks and the primary
@@ -192,21 +257,36 @@ public static class DataTransformerContractConstants {
 /// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
 public sealed unsafe class DataTransformerContractCaller : IDisposable {
-    private readonly GuestContractInterface* _interface;
+    private GuestContractInterface* _interface;
     private GuestContractInstance _instance;
     private readonly HostApi* _host;
     private bool _disposed;
+    /// <summary>Contract handle, retained so the cache can re-resolve after a
+    /// hot-reload (which swaps a new interface into the same slot) or report a
+    /// gone contract.</summary>
+    private readonly GuestContractHandle _handle;
+    /// <summary>Pointer to the runtime's registry revision counter, fetched once
+    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one
+    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>
+    private readonly IntPtr _revisionPtr;
+    /// <summary>Revision value read when the interface was resolved. Compared
+    /// before each dispatch against the live counter to detect a reload/unload and
+    /// re-resolve, so the cached interface pointer never dangles.</summary>
+    private ulong _cachedRevision;
     /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
     /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
     private readonly byte* _arenaBuf;
     /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
     private CallArena _arena;
 
-    private DataTransformerContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
+    private DataTransformerContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
+        _handle = handle;
+        _revisionPtr = revisionPtr;
+        _cachedRevision = cachedRevision;
         // C-heap allocation: cross-boundary arena data must not live on the managed heap.
         _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
         _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);
@@ -221,14 +301,54 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn(host, iface, null, &inst);
-        return new DataTransformerContractCaller(iface, inst, host);
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;
+        IntPtr revisionPtr = revisionFn(host);
+        ulong cachedRevision = revisionPtr == IntPtr.Zero
+            ? 0UL
+            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));
+        return new DataTransformerContractCaller(iface, inst, host, handle, revisionPtr, cachedRevision);
     }
 
     /// <summary>Check if this caller holds a resolved contract interface.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
+    /// <summary>Read the registry revision through the cached pointer — one
+    /// acquire atomic load, no call into the runtime. Returns the cached value
+    /// ("unchanged") when there is no counter (IntPtr.Zero).</summary>
+    private ulong LiveRevision() {
+        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }
+        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));
+    }
+
+    /// <summary>Re-resolve the cached interface after the registry changed under
+    /// us. A hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot, so
+    /// it resolves to null and false is returned (the contract is gone). The old
+    /// instance is ABANDONED, never destroyed: its interface and guest-side state are
+    /// already epoch-reclaimed, so calling the dead interface's destroy would be UB.</summary>
+    private bool Revalidate() {
+        if (_host == null) { return false; }
+        var resolveFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractHandle, GuestContractInterface*>)_host->ResolveGuestContract;
+        GuestContractInterface* iface = resolveFn(_host, _handle);
+        if (iface == null) { return false; }
+        GuestContractInstance inst = default;
+        ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)(_host, iface, null, &inst);
+        _interface = iface;
+        _instance = inst;
+        _cachedRevision = LiveRevision();
+        return true;
+    }
+
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
+        // If the registry changed under us, the cached interface/instance are stale
+        // (a reload/unload reclaimed their backing). Revalidate() abandons the dead
+        // instance and builds a fresh one on the current interface — exactly the
+        // fresh instance Reset() promises — so defer to it and skip the unsafe destroy.
+        if (LiveRevision() != _cachedRevision) {
+            Revalidate();
+            return;
+        }
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
@@ -240,8 +360,14 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
-            _instance.Data = nint.Zero;
+            // If the registry changed since we resolved, the cached interface and
+            // instance are stale — a reload/unload reclaimed their backing — so calling
+            // the dead interface's destroy would be UB; the reload/unload already
+            // reclaimed the instance, so skip the destroy entirely.
+            if (LiveRevision() == _cachedRevision) {
+                ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
+                _instance.Data = nint.Zero;
+            }
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
                 CallArenaOps.FreeAll(arenaPtr);
@@ -256,6 +382,10 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
     public Polyplug.Abi.StringView Transform(Polyplug.Abi.StringView input) {
         if (_disposed) {
             throw new ObjectDisposedException(nameof(DataTransformerContractCaller));
+        }
+
+        if (LiveRevision() != _cachedRevision && !Revalidate()) {
+            throw new InvalidOperationException("contract not found after reload");
         }
 
         // Rewind the arena at call start: retained overflow blocks and the primary
@@ -309,21 +439,36 @@ public static class PipelineEncoderContractConstants {
 /// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
 public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
-    private readonly GuestContractInterface* _interface;
+    private GuestContractInterface* _interface;
     private GuestContractInstance _instance;
     private readonly HostApi* _host;
     private bool _disposed;
+    /// <summary>Contract handle, retained so the cache can re-resolve after a
+    /// hot-reload (which swaps a new interface into the same slot) or report a
+    /// gone contract.</summary>
+    private readonly GuestContractHandle _handle;
+    /// <summary>Pointer to the runtime's registry revision counter, fetched once
+    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one
+    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>
+    private readonly IntPtr _revisionPtr;
+    /// <summary>Revision value read when the interface was resolved. Compared
+    /// before each dispatch against the live counter to detect a reload/unload and
+    /// re-resolve, so the cached interface pointer never dangles.</summary>
+    private ulong _cachedRevision;
     /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
     /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
     private readonly byte* _arenaBuf;
     /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
     private CallArena _arena;
 
-    private PipelineEncoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
+    private PipelineEncoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
+        _handle = handle;
+        _revisionPtr = revisionPtr;
+        _cachedRevision = cachedRevision;
         // C-heap allocation: cross-boundary arena data must not live on the managed heap.
         _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
         _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);
@@ -338,14 +483,54 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn(host, iface, null, &inst);
-        return new PipelineEncoderContractCaller(iface, inst, host);
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;
+        IntPtr revisionPtr = revisionFn(host);
+        ulong cachedRevision = revisionPtr == IntPtr.Zero
+            ? 0UL
+            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));
+        return new PipelineEncoderContractCaller(iface, inst, host, handle, revisionPtr, cachedRevision);
     }
 
     /// <summary>Check if this caller holds a resolved contract interface.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
+    /// <summary>Read the registry revision through the cached pointer — one
+    /// acquire atomic load, no call into the runtime. Returns the cached value
+    /// ("unchanged") when there is no counter (IntPtr.Zero).</summary>
+    private ulong LiveRevision() {
+        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }
+        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));
+    }
+
+    /// <summary>Re-resolve the cached interface after the registry changed under
+    /// us. A hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot, so
+    /// it resolves to null and false is returned (the contract is gone). The old
+    /// instance is ABANDONED, never destroyed: its interface and guest-side state are
+    /// already epoch-reclaimed, so calling the dead interface's destroy would be UB.</summary>
+    private bool Revalidate() {
+        if (_host == null) { return false; }
+        var resolveFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractHandle, GuestContractInterface*>)_host->ResolveGuestContract;
+        GuestContractInterface* iface = resolveFn(_host, _handle);
+        if (iface == null) { return false; }
+        GuestContractInstance inst = default;
+        ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)(_host, iface, null, &inst);
+        _interface = iface;
+        _instance = inst;
+        _cachedRevision = LiveRevision();
+        return true;
+    }
+
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
+        // If the registry changed under us, the cached interface/instance are stale
+        // (a reload/unload reclaimed their backing). Revalidate() abandons the dead
+        // instance and builds a fresh one on the current interface — exactly the
+        // fresh instance Reset() promises — so defer to it and skip the unsafe destroy.
+        if (LiveRevision() != _cachedRevision) {
+            Revalidate();
+            return;
+        }
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
@@ -357,8 +542,14 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
-            _instance.Data = nint.Zero;
+            // If the registry changed since we resolved, the cached interface and
+            // instance are stale — a reload/unload reclaimed their backing — so calling
+            // the dead interface's destroy would be UB; the reload/unload already
+            // reclaimed the instance, so skip the destroy entirely.
+            if (LiveRevision() == _cachedRevision) {
+                ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
+                _instance.Data = nint.Zero;
+            }
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
                 CallArenaOps.FreeAll(arenaPtr);
@@ -373,6 +564,10 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
     public Polyplug.Abi.StringView Encode(Polyplug.Abi.StringView input) {
         if (_disposed) {
             throw new ObjectDisposedException(nameof(PipelineEncoderContractCaller));
+        }
+
+        if (LiveRevision() != _cachedRevision && !Revalidate()) {
+            throw new InvalidOperationException("contract not found after reload");
         }
 
         // Rewind the arena at call start: retained overflow blocks and the primary
@@ -426,21 +621,36 @@ public static class DataReporterContractConstants {
 /// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
 public sealed unsafe class DataReporterContractCaller : IDisposable {
-    private readonly GuestContractInterface* _interface;
+    private GuestContractInterface* _interface;
     private GuestContractInstance _instance;
     private readonly HostApi* _host;
     private bool _disposed;
+    /// <summary>Contract handle, retained so the cache can re-resolve after a
+    /// hot-reload (which swaps a new interface into the same slot) or report a
+    /// gone contract.</summary>
+    private readonly GuestContractHandle _handle;
+    /// <summary>Pointer to the runtime's registry revision counter, fetched once
+    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one
+    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>
+    private readonly IntPtr _revisionPtr;
+    /// <summary>Revision value read when the interface was resolved. Compared
+    /// before each dispatch against the live counter to detect a reload/unload and
+    /// re-resolve, so the cached interface pointer never dangles.</summary>
+    private ulong _cachedRevision;
     /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
     /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
     private readonly byte* _arenaBuf;
     /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
     private CallArena _arena;
 
-    private DataReporterContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
+    private DataReporterContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
+        _handle = handle;
+        _revisionPtr = revisionPtr;
+        _cachedRevision = cachedRevision;
         // C-heap allocation: cross-boundary arena data must not live on the managed heap.
         _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
         _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);
@@ -455,14 +665,54 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn(host, iface, null, &inst);
-        return new DataReporterContractCaller(iface, inst, host);
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;
+        IntPtr revisionPtr = revisionFn(host);
+        ulong cachedRevision = revisionPtr == IntPtr.Zero
+            ? 0UL
+            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));
+        return new DataReporterContractCaller(iface, inst, host, handle, revisionPtr, cachedRevision);
     }
 
     /// <summary>Check if this caller holds a resolved contract interface.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
+    /// <summary>Read the registry revision through the cached pointer — one
+    /// acquire atomic load, no call into the runtime. Returns the cached value
+    /// ("unchanged") when there is no counter (IntPtr.Zero).</summary>
+    private ulong LiveRevision() {
+        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }
+        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));
+    }
+
+    /// <summary>Re-resolve the cached interface after the registry changed under
+    /// us. A hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot, so
+    /// it resolves to null and false is returned (the contract is gone). The old
+    /// instance is ABANDONED, never destroyed: its interface and guest-side state are
+    /// already epoch-reclaimed, so calling the dead interface's destroy would be UB.</summary>
+    private bool Revalidate() {
+        if (_host == null) { return false; }
+        var resolveFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractHandle, GuestContractInterface*>)_host->ResolveGuestContract;
+        GuestContractInterface* iface = resolveFn(_host, _handle);
+        if (iface == null) { return false; }
+        GuestContractInstance inst = default;
+        ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)(_host, iface, null, &inst);
+        _interface = iface;
+        _instance = inst;
+        _cachedRevision = LiveRevision();
+        return true;
+    }
+
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
+        // If the registry changed under us, the cached interface/instance are stale
+        // (a reload/unload reclaimed their backing). Revalidate() abandons the dead
+        // instance and builds a fresh one on the current interface — exactly the
+        // fresh instance Reset() promises — so defer to it and skip the unsafe destroy.
+        if (LiveRevision() != _cachedRevision) {
+            Revalidate();
+            return;
+        }
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
@@ -474,8 +724,14 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
-            _instance.Data = nint.Zero;
+            // If the registry changed since we resolved, the cached interface and
+            // instance are stale — a reload/unload reclaimed their backing — so calling
+            // the dead interface's destroy would be UB; the reload/unload already
+            // reclaimed the instance, so skip the destroy entirely.
+            if (LiveRevision() == _cachedRevision) {
+                ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
+                _instance.Data = nint.Zero;
+            }
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
                 CallArenaOps.FreeAll(arenaPtr);
@@ -490,6 +746,10 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
     public Polyplug.Abi.StringView Report(Polyplug.Abi.StringView input) {
         if (_disposed) {
             throw new ObjectDisposedException(nameof(DataReporterContractCaller));
+        }
+
+        if (LiveRevision() != _cachedRevision && !Revalidate()) {
+            throw new InvalidOperationException("contract not found after reload");
         }
 
         // Rewind the arena at call start: retained overflow blocks and the primary
@@ -543,21 +803,36 @@ public static class PipelineValidatorContractConstants {
 /// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
 public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
-    private readonly GuestContractInterface* _interface;
+    private GuestContractInterface* _interface;
     private GuestContractInstance _instance;
     private readonly HostApi* _host;
     private bool _disposed;
+    /// <summary>Contract handle, retained so the cache can re-resolve after a
+    /// hot-reload (which swaps a new interface into the same slot) or report a
+    /// gone contract.</summary>
+    private readonly GuestContractHandle _handle;
+    /// <summary>Pointer to the runtime's registry revision counter, fetched once
+    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one
+    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>
+    private readonly IntPtr _revisionPtr;
+    /// <summary>Revision value read when the interface was resolved. Compared
+    /// before each dispatch against the live counter to detect a reload/unload and
+    /// re-resolve, so the cached interface pointer never dangles.</summary>
+    private ulong _cachedRevision;
     /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
     /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
     private readonly byte* _arenaBuf;
     /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
     private CallArena _arena;
 
-    private PipelineValidatorContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host) {
+    private PipelineValidatorContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
+        _handle = handle;
+        _revisionPtr = revisionPtr;
+        _cachedRevision = cachedRevision;
         // C-heap allocation: cross-boundary arena data must not live on the managed heap.
         _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
         _arena = CallArenaOps.New(_arenaBuf, CallArenaOps.CALL_ARENA_BUF_LEN, (IntPtr)host);
@@ -572,14 +847,54 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn(host, iface, null, &inst);
-        return new PipelineValidatorContractCaller(iface, inst, host);
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;
+        IntPtr revisionPtr = revisionFn(host);
+        ulong cachedRevision = revisionPtr == IntPtr.Zero
+            ? 0UL
+            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));
+        return new PipelineValidatorContractCaller(iface, inst, host, handle, revisionPtr, cachedRevision);
     }
 
     /// <summary>Check if this caller holds a resolved contract interface.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
+    /// <summary>Read the registry revision through the cached pointer — one
+    /// acquire atomic load, no call into the runtime. Returns the cached value
+    /// ("unchanged") when there is no counter (IntPtr.Zero).</summary>
+    private ulong LiveRevision() {
+        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }
+        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));
+    }
+
+    /// <summary>Re-resolve the cached interface after the registry changed under
+    /// us. A hot-reload swapped a new interface into the same slot, so the retained
+    /// handle still resolves — to the new interface; an unload vacated the slot, so
+    /// it resolves to null and false is returned (the contract is gone). The old
+    /// instance is ABANDONED, never destroyed: its interface and guest-side state are
+    /// already epoch-reclaimed, so calling the dead interface's destroy would be UB.</summary>
+    private bool Revalidate() {
+        if (_host == null) { return false; }
+        var resolveFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractHandle, GuestContractInterface*>)_host->ResolveGuestContract;
+        GuestContractInterface* iface = resolveFn(_host, _handle);
+        if (iface == null) { return false; }
+        GuestContractInstance inst = default;
+        ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance)(_host, iface, null, &inst);
+        _interface = iface;
+        _instance = inst;
+        _cachedRevision = LiveRevision();
+        return true;
+    }
+
     /// <summary>Reset instance - destroy existing and create new.</summary>
     public void Reset() {
+        // If the registry changed under us, the cached interface/instance are stale
+        // (a reload/unload reclaimed their backing). Revalidate() abandons the dead
+        // instance and builds a fresh one on the current interface — exactly the
+        // fresh instance Reset() promises — so defer to it and skip the unsafe destroy.
+        if (LiveRevision() != _cachedRevision) {
+            Revalidate();
+            return;
+        }
         if (!_disposed) {
             ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
         }
@@ -591,8 +906,14 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
     /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
     public void Dispose() {
         if (!_disposed) {
-            ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
-            _instance.Data = nint.Zero;
+            // If the registry changed since we resolved, the cached interface and
+            // instance are stale — a reload/unload reclaimed their backing — so calling
+            // the dead interface's destroy would be UB; the reload/unload already
+            // reclaimed the instance, so skip the destroy entirely.
+            if (LiveRevision() == _cachedRevision) {
+                ((delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, GuestContractInstance, void>)_host->DestroyGuestInstance)(_host, _interface, _instance);
+                _instance.Data = nint.Zero;
+            }
             // Free all retained overflow blocks, then the C-heap buffer.
             fixed (CallArena* arenaPtr = &_arena) {
                 CallArenaOps.FreeAll(arenaPtr);
@@ -607,6 +928,10 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
     public Polyplug.Abi.StringView Validate(Polyplug.Abi.StringView input) {
         if (_disposed) {
             throw new ObjectDisposedException(nameof(PipelineValidatorContractCaller));
+        }
+
+        if (LiveRevision() != _cachedRevision && !Revalidate()) {
+            throw new InvalidOperationException("contract not found after reload");
         }
 
         // Rewind the arena at call start: retained overflow blocks and the primary

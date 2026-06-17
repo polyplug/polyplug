@@ -192,6 +192,7 @@ impl RuntimeBuilder {
             log: crate::runtime::host_log,
             create_guest_instance: crate::runtime::host_create_guest_instance,
             destroy_guest_instance: crate::runtime::host_destroy_guest_instance,
+            revision_counter: crate::runtime::host_revision_counter,
             reserved: core::ptr::null(),
         });
 

@@ -438,6 +438,27 @@ impl Runtime {
         }
     }
 
+    /// Reset the live stateful-instance accounting for `contracts` to zero.
+    ///
+    /// Called after a successful reload swap. The swap epoch-reclaims the previous
+    /// interface and the guest-side state of every instance it created, so all
+    /// pre-reload instances of these contracts are dead: a correct caller observes
+    /// the registry revision change and revalidates (recreating its instance on the
+    /// new interface), and even runtime-mediated dispatch on a pre-reload instance
+    /// would touch reclaimed backing. Post-reload instances are created fresh and
+    /// re-increment from zero. Without this, instances abandoned across the reload
+    /// (never destroyed through the now-dead interface) would inflate the diagnostic
+    /// count permanently.
+    pub(crate) fn reset_instance_counts_for_contracts(&self, contracts: &[GuestContractId]) {
+        let mut guard: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<GuestContractId, u64>>> =
+            self.instance_counts
+                .lock()
+                .recover_poisoned(self.logger, "runtime");
+        contracts.iter().for_each(|cid: &GuestContractId| {
+            guard.remove(cid);
+        });
+    }
+
     /// Sum the live stateful-instance counts across the given contract ids.
     ///
     /// Used by the reload/unload UB-warning to report how many guest instances a
@@ -1757,6 +1778,30 @@ pub unsafe extern "C" fn host_resolve_guest_contract(
     }
 }
 
+/// HostApi.revision_counter callback — returns a pointer to the runtime's registry
+/// revision counter, which a generated host→guest caller fetches ONCE at construction
+/// and then polls directly (a single aligned atomic load, no call back into the
+/// runtime) before each dispatch. While the polled value is unchanged the caller's
+/// cached interface pointer is current and it dispatches directly; any change (load /
+/// reload-swap / unload) makes the caller re-resolve. See the `revision_counter` field
+/// doc on `HostApi` and [`RuntimeStore::revision_ptr`].
+///
+/// Returns null if `this` is null; a caller receiving null treats its cache as
+/// always-current (there is no runtime to mediate reloads against).
+///
+/// # Safety
+/// `this` must be a valid `HostApi` pointer whose `runtime` field points to a live
+/// `Runtime`.
+pub(crate) unsafe extern "C" fn host_revision_counter(this: *const HostApi) -> *const u64 {
+    if this.is_null() {
+        return core::ptr::null();
+    }
+    // SAFETY: this is a valid HostApi pointer passed by the host.
+    // (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+    runtime.registry.revision_ptr()
+}
+
 /// HostApi.get_host_contract callback — returns an instance for a host contract.
 ///
 /// For singleton contracts: returns cached instance (creates on first call).
@@ -2970,6 +3015,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
+            revision_counter: host_revision_counter,
             reserved: core::ptr::null(),
         };
 
@@ -4425,6 +4471,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
+            revision_counter: host_revision_counter,
             reserved: core::ptr::null(),
         };
 
@@ -4470,6 +4517,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
+            revision_counter: host_revision_counter,
             reserved: core::ptr::null(),
         };
 
@@ -4592,6 +4640,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
+            revision_counter: host_revision_counter,
             reserved: core::ptr::null(),
         };
 
@@ -4683,6 +4732,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
+            revision_counter: host_revision_counter,
             reserved: core::ptr::null(),
         };
 
@@ -4785,6 +4835,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
+            revision_counter: host_revision_counter,
             reserved: core::ptr::null(),
         };
 
