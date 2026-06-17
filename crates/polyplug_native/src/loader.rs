@@ -93,23 +93,16 @@ impl NativeLoader {
     }
 }
 
-impl BundleLoader for NativeLoader {
-    fn loader_name(&self) -> &'static str {
-        "native"
-    }
-
-    /// The native loader serves both Rust and C++ `cdylib` bundles (which share the
-    /// native ABI); it claims Rust as its reference language. This value is not used
-    /// for once-per-process boot tracking (native has no shared boot state).
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
-    }
-
-    fn supports_hot_reload(&self) -> bool {
-        true
-    }
-
-    fn load(
+impl NativeLoader {
+    /// Shared load body used by both `load()` and `reload()`.
+    ///
+    /// Opens the library at the path declared in `manifest`, checks the ABI
+    /// version sentinel, calls `polyplug_init`, and stores the handle. If a
+    /// handle for the same bundle was already live (superseded on reload or a
+    /// double-load), it is scheduled for epoch-deferred `dlclose` rather than
+    /// dropped inline — old registry slots may still hold raw fn pointers into
+    /// the prior mapping, so reclaim is deferred until no reader is pinned.
+    fn load_inner(
         &self,
         manifest: &ManifestData,
         source: &BundleSource,
@@ -145,7 +138,6 @@ impl BundleLoader for NativeLoader {
 
         let path_str: String = bundle_path.to_string_lossy().into_owned();
 
-        // ─── Step 1: dlopen the library ────────────────────────────────────────────
         // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
         let library: libloading::Library = unsafe {
             libloading::Library::new(&bundle_path).map_err(|e| LoaderError::InitFailed {
@@ -154,7 +146,6 @@ impl BundleLoader for NativeLoader {
             })?
         };
 
-        // ─── Step 2: Check ABI version sentinel BEFORE calling init ──────────────────────
         // SAFETY: polyplug_abi_version is a C function with signature `extern "C" fn() -> u32`.
         let abi_version_symbol: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
             library
@@ -181,18 +172,15 @@ impl BundleLoader for NativeLoader {
             });
         }
 
-        // ─── Step 3: Resolve init symbol ──────────────────────────────────────────────
-        // SAFETY: polyplug_init is guaranteed by the plugin build process.
-        // New signature: fn(host_abi: *const HostApi, ctx: *const BundleInitContext) -> AbiError
         let init_fn_ptr: unsafe extern "C" fn(
             *const HostApi,
             *const BundleInitContext,
         ) -> AbiError = {
+            // SAFETY: polyplug_init is an exported C symbol from the plugin library,
+            // validated to exist by library.get(). The signature matches the ABI contract.
             let sym: libloading::Symbol<
                 '_,
                 unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
-                // SAFETY: polyplug_init is an exported C symbol from the plugin library,
-                // validated to exist by library.get(). The signature matches the ABI contract.
             > = unsafe {
                 library
                     .get(b"polyplug_init\0")
@@ -203,7 +191,6 @@ impl BundleLoader for NativeLoader {
             *sym
         };
 
-        // ─── Step 4: Create BundleInitContext ────────────────────────────────────────────
         // All strings crossing the ABI are UTF-8 (`StringView`). A non-UTF-8 (or WTF-8
         // on Windows) bundle path cannot be smuggled across as "UTF-8": reject it with
         // a clear error instead.
@@ -229,11 +216,9 @@ impl BundleLoader for NativeLoader {
             },
         };
 
-        // ─── Step 5: Push bundle_id for dependency enforcement ────────────────────────
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(expected_bundle_id.id());
 
-        // ─── Step 6: Get HostApi and call init ────────────────────────────────────
         // The runtime does NOT wrap this call in catch_unwind. Each language's
         // generated glue converts its own failures into an AbiError return before
         // crossing this boundary (the responsibility contract — docs/TRUST_MODEL.md).
@@ -251,7 +236,6 @@ impl BundleLoader for NativeLoader {
         // ctx is a stack-allocated BundleInitContext that outlives the call.
         let init_result: AbiError = unsafe { init_fn_ptr(host_abi, &ctx) };
 
-        // ─── Step 7: Pop bundle_id ────────────────────────────────────────────────
         runtime.pop_init_bundle_id();
 
         if init_result.code != AbiErrorCode::Ok as u32 {
@@ -274,7 +258,6 @@ impl BundleLoader for NativeLoader {
             });
         }
 
-        // ─── Step 8: Store library handle ─────────────────────────────────────────────
         // If a bundle with the same id was already loaded (e.g. its file was replaced
         // on disk → a different mapping), SCHEDULE the superseded handle for
         // epoch-deferred `dlclose` instead of dropping it inline: old registry slots
@@ -292,159 +275,41 @@ impl BundleLoader for NativeLoader {
 
         Ok(())
     }
+}
+
+impl BundleLoader for NativeLoader {
+    fn loader_name(&self) -> &'static str {
+        "native"
+    }
+
+    /// The native loader serves both Rust and C++ `cdylib` bundles (which share the
+    /// native ABI); it claims Rust as its reference language. This value is not used
+    /// for once-per-process boot tracking (native has no shared boot state).
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Rust
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        true
+    }
+
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        source: &BundleSource,
+        runtime: &Runtime,
+    ) -> Result<(), LoaderError> {
+        self.load_inner(manifest, source, runtime)
+    }
 
     fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError> {
-        let bundle_id: BundleId = BundleId::new(&manifest.name);
-
-        if manifest.file.is_empty() {
-            return Err(LoaderError::ManifestMissingFile {
-                bundle: manifest.name.clone(),
-            });
-        }
-
-        let bundle_path: PathBuf = manifest.path.join(&manifest.file);
-
-        let path_str: String = bundle_path.to_string_lossy().into_owned();
-
-        // ─── Step 1: Load new library (inline, same as load()) ───────────────────────────
-        // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
-        let new_library: libloading::Library = unsafe {
-            libloading::Library::new(&bundle_path).map_err(|e| LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!("failed to load plugin library at {}: {}", path_str, e),
-            })?
-        };
-
-        // ─── Step 2: Check ABI version sentinel ──────────────────────────────────────────
-        // SAFETY: polyplug_abi_version is a C function with signature `extern "C" fn() -> u32`.
-        let abi_version_symbol: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
-            new_library
-                .get(b"polyplug_abi_version\0")
-                .map_err(|_| LoaderError::InitFailed {
-                    bundle: manifest.name.clone(),
-                    error: format!(
-                        "missing symbol 'polyplug_abi_version' in bundle '{}'",
-                        path_str
-                    ),
-                })?
-        };
-        // SAFETY: abi_version_symbol was obtained from new_library.get() which validated
-        // the symbol exists. The function has signature `extern "C" fn() -> u32`.
-        let found_version: u32 = unsafe { abi_version_symbol() };
-        if found_version != POLYPLUG_ABI_VERSION {
-            return Err(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!(
-                    "ABI version mismatch in {}: expected={}, found={}",
-                    path_str, POLYPLUG_ABI_VERSION, found_version
-                ),
-            });
-        }
-
-        // ─── Step 3: Resolve init symbol ────────────────────────────────────────────────
-        // SAFETY: polyplug_init is guaranteed by the plugin build process.
-        let init_fn_ptr: unsafe extern "C" fn(
-            *const HostApi,
-            *const BundleInitContext,
-        ) -> AbiError = {
-            let sym: libloading::Symbol<
-                '_,
-                unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
-                // SAFETY: polyplug_init is an exported C symbol from the new plugin library,
-                // validated to exist by new_library.get(). The signature matches the ABI contract.
-            > = unsafe {
-                new_library
-                    .get(b"polyplug_init\0")
-                    .map_err(|_| LoaderError::InitSymbolMissing {
-                        bundle: manifest.name.clone(),
-                    })?
-            };
-            *sym
-        };
-
-        // ─── Step 4: Create BundleInitContext ──────────────────────────────────────────────
-        // All strings crossing the ABI are UTF-8 (`StringView`). Reject a non-UTF-8
-        // (or WTF-8 on Windows) bundle path rather than smuggling it across.
-        let bundle_dir: &std::path::Path =
-            bundle_path.parent().unwrap_or(std::path::Path::new("."));
-        let bundle_dir_str: &str = match bundle_dir.to_str() {
-            Some(s) => s,
-            None => {
-                return Err(LoaderError::InitFailed {
-                    bundle: manifest.name.clone(),
-                    error: format!(
-                        "bundle path is not valid UTF-8: {}",
-                        bundle_dir.to_string_lossy()
-                    ),
-                });
-            }
-        };
-        let ctx: BundleInitContext = BundleInitContext {
-            bundle_id: BundleId::new(&manifest.name).id(),
-            bundle_path: polyplug_abi::types::StringView {
-                ptr: bundle_dir_str.as_ptr(),
-                len: bundle_dir_str.len(),
-            },
-        };
-
-        // ─── Step 5: Push bundle_id for dependency enforcement ──────────────────────────
-        let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
-        runtime.push_init_bundle_id(expected_bundle_id.id());
-
-        // ─── Step 6: Get HostApi and call init ────────────────────────────────────
-        // No catch_unwind — same responsibility contract as load(): an unwind or
-        // exception escaping a plugin's own generated glue across this ABI call is a
-        // plugin defect with a defined outcome (process abort), not something the
-        // runtime absorbs. The init-stack push is balanced by the pop below on the
-        // normal return path.
-        let host_abi: *const HostApi = runtime.host_abi();
-        // SAFETY: host_abi is a valid HostApi pointer obtained from the runtime.
-        // init_fn_ptr is a valid function pointer resolved from the new plugin library.
-        // ctx is a stack-allocated BundleInitContext that outlives the call.
-        let init_result: AbiError = unsafe { init_fn_ptr(host_abi, &ctx) };
-
-        // ─── Step 7: Pop bundle_id ────────────────────────────────────────────────
-        runtime.pop_init_bundle_id();
-
-        if init_result.code != AbiErrorCode::Ok as u32 {
-            let error_msg: String = if init_result.message.ptr.is_null() {
-                format!("init returned error code {:?}", init_result.code)
-            } else {
-                // SAFETY: ptr is non-null and points to valid UTF-8 bytes
-                let bytes: &[u8] = unsafe {
-                    core::slice::from_raw_parts(init_result.message.ptr, init_result.message.len)
-                };
-                String::from_utf8_lossy(bytes).into_owned()
-            };
-            return Err(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: error_msg,
-            });
-        }
-
-        // ─── Step 8: Remove and SCHEDULE old library for reclaim ──────────────────────────
-        // The old library is NOT dlclose'd inline: a concurrent caller may still hold
-        // a raw function pointer resolved from the old vtable, and unmapping its code
-        // pages would dangle that pointer (SIGSEGV). Scheduling it for epoch-deferred
-        // `dlclose` runs the unmap only once no reader is pinned, honoring the
-        // documented hot-reload guarantee that the old vtable stays alive until all
-        // in-flight calls complete — then the code pages are actually reclaimed.
-        if let Some(old_library) = self
-            .libraries
-            .lock()
-            .recover_poisoned(runtime.logger(), "loader.native")
-            .remove(&bundle_id)
-        {
-            self.schedule_reclaim(old_library);
-        }
-
-        // ─── Step 9: Store new library ───────────────────────────────────────────────────
-        self.libraries
-            .lock()
-            .recover_poisoned(runtime.logger(), "loader.native")
-            .insert(bundle_id, new_library);
-
-        Ok(())
+        // reload re-reads the on-disk file (only path-backed bundles can be
+        // hot-reloaded — the runtime gates hot-reload before calling this).
+        self.load_inner(
+            manifest,
+            &BundleSource::Path(manifest.path.clone()),
+            runtime,
+        )
     }
 
     /// Reclaim the bundle's `libloading::Library` via epoch-deferred `dlclose`.
