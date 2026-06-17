@@ -815,7 +815,16 @@ def chart_soak_rss(data_path: Path, out: Path) -> bool:
     parts.append(_text(pad_l + plot_w / 2, height - 8, "load/unload cycles", 11, _MUTED, "middle"))
 
     # The RSS polyline. A rising slope here is a leak signal; the color flags it.
-    drift: float = (ys[-1] - ys[0]) / ys[0] if ys[0] else 0.0
+    # Drift mirrors the soak test's steady-state heuristic exactly
+    # (`soak_load_unload.rs`): skip the first quartile as warmup / allocator-arena
+    # growth, then compare the last-quartile mean to the second-quartile mean. A
+    # naive first-vs-last ratio would count the one-time warmup jump as a leak.
+    q: int = max(len(ys) // 4, 1)
+    mid_slice: list = ys[q : min(2 * q, len(ys))]
+    tail_slice: list = ys[len(ys) - q :]
+    mid_mean: float = sum(mid_slice) / len(mid_slice) if mid_slice else 0.0
+    tail_mean: float = sum(tail_slice) / len(tail_slice) if tail_slice else 0.0
+    drift: float = (tail_mean - mid_mean) / mid_mean if mid_mean else 0.0
     line_color: str = _SLOW if drift > 0.10 else _HILITE
     pts: list = [f"{x_of(c):.1f},{y_of(v):.1f}" for c, v in rows]
     parts.append(

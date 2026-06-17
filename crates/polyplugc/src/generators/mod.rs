@@ -96,7 +96,6 @@ pub(crate) struct GeneratedFile {
     pub content: String,
     /// If true, always write this file (skip cache check).
     /// Used for manifest.toml which must always be regenerated.
-    #[allow(dead_code)]
     pub force_regenerate: bool,
 }
 /// Collection of generated files.

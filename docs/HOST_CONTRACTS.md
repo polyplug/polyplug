@@ -2,7 +2,7 @@
 
 ## Terminology Note
 
-This document uses the following terminology (current as of v1.1):
+This document uses the following terminology (current as of the pre-1.0 ABI):
 - **HostApi**: The runtime's ABI function table provided to guests during `polyplug_init`
 - **HostContractInterface**: A contract the host implements for guests to call
 

@@ -4,7 +4,7 @@ This document covers performance characteristics and optimization strategies for
 
 ## Terminology Note
 
-This document uses the following terminology (current as of v1.1):
+This document uses the following terminology (current as of the pre-1.0 ABI):
 - **GuestContractInterface**: The interface struct a plugin provides for the host to call
 - **HostApi**: The runtime's ABI table provided to guests
 
@@ -122,7 +122,7 @@ code.)
 | **C++** | C ABI | ~24 ns | ~1.3x |
 | **C#** | .NET function pointer | ~36 ns | ~1.9x |
 | **Lua** | LuaJIT FFI | ~250 ns | ~13x |
-| **Python** | ctypes | ~790 ns | ~41x |
+| **Python** | ctypes | ~789 ns | ~41x |
 | **JavaScript** | Deno FFI | ~2.2 µs | ~115x |
 
 A Rust host is the floor: it links `libpolyplug` as a normal crate and calls its
@@ -210,7 +210,7 @@ const result = interface.call(0, input);
 
 **One hot path — ctypes:**
 
-- **Overhead**: ~790 ns per call (measured, `just bench-hostcall`)
+- **Overhead**: ~789 ns per call (measured, `just bench-hostcall`)
 - **Requirements**: None (built-in)
 - **Best for**: Plugin functions >10μs, where the overhead drops below ~8%
 
@@ -236,7 +236,7 @@ interface = rt.resolve_guest_contract(handle)  # raw interface pointer
 
 ### When to Use Each Backend
 
-| Plugin Function Duration | Python host (~790 ns/call) | Other Languages |
+| Plugin Function Duration | Python host (~789 ns/call) | Other Languages |
 |-------------------------|----------------------------|-----------------|
 | < 1 μs (trivial) | ≥ 44% overhead | Use Rust/C++/C# |
 | 1-10 μs (light) | 7-44% overhead | Any language OK |
@@ -244,7 +244,7 @@ interface = rt.resolve_guest_contract(handle)  # raw interface pointer
 | > 100 μs (heavy) | < 0.8% overhead | Negligible |
 
 > The percentages derive from the *measured* Python host-call overhead above
-> (~790 ns per call, `just bench-hostcall`) — your hardware will shift the
+> (~789 ns per call, `just bench-hostcall`) — your hardware will shift the
 > absolute numbers, not the shape.
 
 ### Language Selection Guide
@@ -254,7 +254,7 @@ interface = rt.resolve_guest_contract(handle)  # raw interface pointer
 | Maximum performance | Rust or C++ | ~19-24 ns per runtime call (measured) |
 | Game engines | C++ or Lua | LuaJIT keeps the hot path compiled (~250 ns/call) |
 | Web backends | JavaScript (Deno) | Async support — but the FFI hop is the highest measured (~2.2 µs/call), so cache resolved pointers |
-| Data science | Python | Ecosystem; ~790 ns/call is negligible for >10 µs functions |
+| Data science | Python | Ecosystem; ~789 ns/call is negligible for >10 µs functions |
 | Scripting/embedded | Lua | Small footprint, fast FFI |
 
 ---
@@ -537,7 +537,7 @@ for data in dataset:
 For hot paths called millions of times (measured host-call overheads — see
 [Reaching the runtime](#reaching-the-runtime-host-call-overhead)):
 - C++: ~24 ns per runtime call
-- Python (ctypes): ~790 ns per runtime call
+- Python (ctypes): ~789 ns per runtime call
 - Difference: ~33x
 
 If your hot path is truly performance-critical, write the host in Rust, C++,
