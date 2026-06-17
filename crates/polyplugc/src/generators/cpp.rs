@@ -1701,6 +1701,11 @@ fn qualified_user_type(name: &str) -> String {
 /// C++ type name with contract-defined types fully qualified as
 /// `polyplug_generated::<Type>`. Used everywhere except `types.hpp` field
 /// emission (see `cpp_types_hpp_type_name`).
+/// C++ spelling of an ABI type as used everywhere the raw ABI representation is
+/// required: `types.hpp` fields, host trait params/returns, host thunk arguments,
+/// and the guest caller's packed arg structs. The ergonomic guest-caller param /
+/// return spellings (borrowed `std::string_view` / `std::span`) live in their own
+/// functions because they differ from this ABI spelling.
 fn cpp_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
         ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
@@ -1792,30 +1797,6 @@ fn host_contract_name_to_cpp_trait(name: &str) -> String {
         pascal
     } else {
         "Host".to_owned() + &pascal
-    }
-}
-
-/// Generate C++ host-side type name for trait method parameters.
-fn cpp_host_param_type_name(ty: &ResolvedTypeRef) -> String {
-    match ty {
-        ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => qualified_user_type(name),
-    }
-}
-
-/// Generate C++ host-side return type name for trait methods.
-fn cpp_host_return_type_name(ty: &ResolvedTypeRef) -> String {
-    match ty {
-        ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => qualified_user_type(name),
     }
 }
 
@@ -2158,7 +2139,7 @@ fn emit_cpp_guest_host_contract_args_setup(
 
     out.push_str(&format!("        struct {} {{", struct_name));
     for param in &func.params {
-        let cpp_ty: String = cpp_guest_caller_abi_type_name(&param.ty);
+        let cpp_ty: String = cpp_type_name(&param.ty);
         out.push_str(&format!(" {} {};", cpp_ty, param.name));
     }
     out.push_str(" };\n");
@@ -2184,19 +2165,6 @@ fn emit_cpp_guest_host_contract_args_setup(
         field_inits.join(", ")
     ));
     out.push_str("        const void* args_ptr = &args_val;\n");
-}
-
-/// Get the ABI type name for packing into arg structs.
-/// For StringView parameters, we need the ABI type, not std::string_view.
-fn cpp_guest_caller_abi_type_name(ty: &ResolvedTypeRef) -> String {
-    match ty {
-        ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => qualified_user_type(name),
-    }
 }
 
 /// Get the raw ABI type name for the `out` local in a guest caller method.
@@ -2290,14 +2258,14 @@ fn generate_cpp_host_trait_method(out: &mut String, func: &ResolvedFunction) {
     let return_type: String = func
         .returns
         .as_ref()
-        .map(cpp_host_return_type_name)
+        .map(cpp_type_name)
         .unwrap_or_else(|| "void".to_owned());
 
     let params: Vec<String> = func
         .params
         .iter()
         .map(|p| {
-            let cpp_ty: String = cpp_host_param_type_name(&p.ty);
+            let cpp_ty: String = cpp_type_name(&p.ty);
             match &p.ty {
                 ResolvedTypeRef::UserDefined(_) => format!("const {}& {}", cpp_ty, p.name),
                 ResolvedTypeRef::AbiType(_) => format!("{} {}", cpp_ty, p.name),
@@ -2606,7 +2574,7 @@ fn generate_cpp_host_thunk(
         let ret_ty: String = func
             .returns
             .as_ref()
-            .map(cpp_host_return_type_name)
+            .map(cpp_type_name)
             .unwrap_or_else(|| "void".to_owned());
         out.push_str(&format!(
             "            *static_cast<{}*>(out) = result;\n",
@@ -2627,7 +2595,7 @@ fn generate_cpp_host_thunk(
 fn generate_cpp_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
     if func.params.len() == 1 {
         let param: &crate::ir::ResolvedParam = &func.params[0];
-        let ty_name: String = cpp_host_abi_type_name(&param.ty);
+        let ty_name: String = cpp_type_name(&param.ty);
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                 // Pass the raw StringView through to the impl: the generated
@@ -2665,7 +2633,7 @@ fn generate_cpp_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
         let pack_struct: String = format!("{}Args", func.name.to_uppercase());
         out.push_str(&format!("            struct {} {{\n", pack_struct));
         for param in &func.params {
-            let cpp_ty: String = cpp_host_abi_type_name(&param.ty);
+            let cpp_ty: String = cpp_type_name(&param.ty);
             out.push_str(&format!("                {} {};\n", cpp_ty, param.name));
         }
         out.push_str("            };\n");
@@ -2690,7 +2658,7 @@ fn generate_cpp_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
                     ));
                 }
                 _ => {
-                    let cpp_ty: String = cpp_host_abi_type_name(&param.ty);
+                    let cpp_ty: String = cpp_type_name(&param.ty);
                     out.push_str(&format!(
                         "            {} {} = packed->{};\n",
                         cpp_ty, param.name, param.name
@@ -2725,7 +2693,7 @@ fn generate_cpp_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_r
         let ret_ty: String = func
             .returns
             .as_ref()
-            .map(cpp_host_return_type_name)
+            .map(cpp_type_name)
             .unwrap_or_else(|| "void".to_owned());
         out.push_str(&format!(
             "            {} result = impl->{}({});\n",
@@ -2736,18 +2704,6 @@ fn generate_cpp_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_r
             "            impl->{}({});\n",
             func.name, call_args
         ));
-    }
-}
-
-/// Generate ABI type name for host thunk arguments.
-fn cpp_host_abi_type_name(ty: &ResolvedTypeRef) -> String {
-    match ty {
-        ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
-        ResolvedTypeRef::UserDefined(name) => qualified_user_type(name),
     }
 }
 
@@ -3443,41 +3399,21 @@ mod tests {
     }
 
     #[test]
-    fn cpp_host_param_type_name_mappings() {
+    fn cpp_type_name_mappings() {
         assert_eq!(
-            cpp_host_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            cpp_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
             "uint32_t"
         );
         assert_eq!(
-            cpp_host_param_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            cpp_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
             "StringView"
         );
         assert_eq!(
-            cpp_host_param_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            cpp_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
             "Buffer"
         );
         assert_eq!(
-            cpp_host_param_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
-            "polyplug_generated::MyStruct"
-        );
-    }
-
-    #[test]
-    fn cpp_host_return_type_name_mappings() {
-        assert_eq!(
-            cpp_host_return_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
-            "uint32_t"
-        );
-        assert_eq!(
-            cpp_host_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
-            "StringView"
-        );
-        assert_eq!(
-            cpp_host_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
-            "Buffer"
-        );
-        assert_eq!(
-            cpp_host_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            cpp_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
             "polyplug_generated::MyStruct"
         );
     }

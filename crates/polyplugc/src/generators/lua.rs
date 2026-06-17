@@ -1375,24 +1375,15 @@ fn host_contract_name_to_lua_caller(name: &str) -> String {
 }
 
 /// Generate Lua type annotation for host contract method parameters.
-/// For host interfaces, we use ergonomic Lua types:
+/// Generate the Lua docstring type annotation for a host contract method's
+/// params and returns. The mapping is identical for both positions — Lua's
+/// annotation type universe (number / string / userdata / nil) does not
+/// distinguish param vs return spellings:
 /// - StringView -> string
 /// - Buffer -> string (Lua uses strings for byte buffers)
 /// - UserDefined -> userdata
 /// - Primitives -> number (Lua's numeric type)
-fn lua_host_param_type_annotation(ty: &ResolvedTypeRef) -> String {
-    match ty {
-        ResolvedTypeRef::Primitive(_) => "number".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "string".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "userdata".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "nil".to_owned(),
-        ResolvedTypeRef::UserDefined(_) => "userdata".to_owned(),
-    }
-}
-
-/// Generate Lua return type annotation for host contract methods.
-fn lua_host_return_type_annotation(ty: &ResolvedTypeRef) -> String {
+fn lua_host_type_annotation(ty: &ResolvedTypeRef) -> String {
     match ty {
         ResolvedTypeRef::Primitive(_) => "number".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
@@ -1423,7 +1414,7 @@ fn generate_lua_host_contract_metatable(out: &mut String, contract: &ResolvedHos
 
     for func in &contract.functions {
         let return_type: String = match &func.returns {
-            Some(ty) => lua_host_return_type_annotation(ty),
+            Some(ty) => lua_host_type_annotation(ty),
             None => "nil".to_owned(),
         };
 
@@ -1432,7 +1423,7 @@ fn generate_lua_host_contract_metatable(out: &mut String, contract: &ResolvedHos
             out.push_str(&format!(
                 "--- @param {} {}\n",
                 param.name,
-                lua_host_param_type_annotation(&param.ty)
+                lua_host_type_annotation(&param.ty)
             ));
         }
         out.push_str(&format!("--- @return {}\n", return_type));
@@ -2638,45 +2629,33 @@ mod tests {
     #[test]
     fn lua_host_param_type_stringview() {
         let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
-        assert_eq!(lua_host_param_type_annotation(&ty), "string");
+        assert_eq!(lua_host_type_annotation(&ty), "string");
     }
 
     #[test]
     fn lua_host_param_type_buffer() {
         let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
-        assert_eq!(lua_host_param_type_annotation(&ty), "string");
+        assert_eq!(lua_host_type_annotation(&ty), "string");
     }
 
     #[test]
     fn lua_host_param_type_primitives() {
         assert_eq!(
-            lua_host_param_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            lua_host_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
             "number"
         );
         assert_eq!(
-            lua_host_param_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::I64)),
+            lua_host_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::I64)),
             "number"
         );
         assert_eq!(
-            lua_host_param_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::F64)),
+            lua_host_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::F64)),
             "number"
         );
         assert_eq!(
-            lua_host_param_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::Bool)),
+            lua_host_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::Bool)),
             "number"
         );
-    }
-
-    #[test]
-    fn lua_host_return_type_stringview() {
-        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
-        assert_eq!(lua_host_return_type_annotation(&ty), "string");
-    }
-
-    #[test]
-    fn lua_host_return_type_buffer() {
-        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
-        assert_eq!(lua_host_return_type_annotation(&ty), "string");
     }
 
     #[test]
