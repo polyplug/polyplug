@@ -462,7 +462,7 @@ fn generate_host_caller_class_stub(out: &mut String, contract: &ResolvedContract
     out.push_str("    def reset(self) -> None: ...\n");
     out.push_str("    def __bool__(self) -> bool: ...\n");
     for func in &contract.functions {
-        generate_host_caller_stub_method(out, func, &struct_name);
+        generate_host_caller_stub_method(out, func);
     }
     out.push('\n');
 }
@@ -676,11 +676,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
         let trait_name: String = contract_name_to_guest_trait(&contract.name);
         out.push_str(&format!("class {trait_name}:\n"));
         for func in &contract.functions {
-            generate_guest_trait_stub_method(
-                &mut out,
-                func,
-                &contract_name_to_struct(&contract.name),
-            );
+            generate_guest_trait_stub_method(&mut out, func);
         }
         out.push('\n');
         let upper: String = contract_name_to_upper_snake(&contract.name);
@@ -919,7 +915,7 @@ fn generate_host_caller_method(
 ) {
     let fn_id: u32 = func.function_id;
     let needs_arena: bool = fn_needs_arena(func);
-    let sig_params: String = build_python_sig_params(func, contract_struct);
+    let sig_params: String = build_python_sig_params(func);
     let ret_type: String = python_return_type(&func.returns);
     out.push_str(&format!(
         "    def {}(self{}) -> {}:\n",
@@ -1015,12 +1011,8 @@ fn generate_host_caller_method(
     }
 }
 
-fn generate_host_caller_stub_method(
-    out: &mut String,
-    func: &ResolvedFunction,
-    contract_struct: &str,
-) {
-    let sig_params: String = build_python_sig_params(func, contract_struct);
+fn generate_host_caller_stub_method(out: &mut String, func: &ResolvedFunction) {
+    let sig_params: String = build_python_sig_params(func);
     let ret_type: String = python_return_type(&func.returns);
     out.push_str(&format!(
         "    def {}(self{}) -> {}: ...\n",
@@ -1028,14 +1020,13 @@ fn generate_host_caller_stub_method(
     ));
 }
 
-fn build_python_sig_params(func: &ResolvedFunction, contract_struct: &str) -> String {
+fn build_python_sig_params(func: &ResolvedFunction) -> String {
     if func.params.is_empty() {
         return String::new();
     }
     if func.params.len() == 1 {
         let param: &ResolvedParam = &func.params[0];
         let ty_name: String = python_type_name(&param.ty);
-        let _ = contract_struct;
         return format!(", {}: {}", param.name, ty_name);
     }
     let params: Vec<String> = func
@@ -1208,7 +1199,7 @@ fn generate_guest_contract_trait(out: &mut String, contract: &ResolvedContract) 
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
     out.push_str(&format!("class {}:\n", trait_name));
     for func in &contract.functions {
-        generate_guest_trait_method(out, func, &contract_name_to_struct(&contract.name));
+        generate_guest_trait_method(out, func);
     }
     let upper: String = contract_name_to_upper_snake(&contract.name);
     emit_python_factory_slot(out, &upper, &trait_name);
@@ -1243,12 +1234,12 @@ fn generate_guest_plugin_trait(out: &mut String, plugin_name: &str, contract: &R
     let class_name: String = plugin_guest_trait_name(plugin_name, &contract.name);
     out.push_str(&format!("class {class_name}:\n"));
     for func in &contract.functions {
-        generate_guest_trait_method(out, func, &contract_name_to_struct(&contract.name));
+        generate_guest_trait_method(out, func);
     }
     emit_python_factory_slot(out, &plugin_lower, &class_name);
 }
 
-fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction, _contract_struct: &str) {
+fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction) {
     let sig_params: String = build_python_guest_impl_sig_params(func);
     let ret_type: String = python_guest_impl_return_type(&func.returns);
     out.push_str(&format!(
@@ -1258,11 +1249,7 @@ fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction, _contr
     out.push_str("        raise NotImplementedError\n");
 }
 
-fn generate_guest_trait_stub_method(
-    out: &mut String,
-    func: &ResolvedFunction,
-    _contract_struct: &str,
-) {
+fn generate_guest_trait_stub_method(out: &mut String, func: &ResolvedFunction) {
     let sig_params: String = build_python_guest_impl_sig_params(func);
     let ret_type: String = python_guest_impl_return_type(&func.returns);
     out.push_str(&format!(
@@ -3192,8 +3179,7 @@ fn generate_guest_peer_callers_stub(ir: &ValidatedIr, peers: &[&ResolvedContract
         out.push_str("    def __del__(self) -> None: ...\n");
         out.push_str("    def is_valid(self) -> bool: ...\n");
         for func in &contract.functions {
-            let struct_name: String = contract_name_to_struct(&contract.name);
-            let sig_params: String = build_python_sig_params(func, &struct_name);
+            let sig_params: String = build_python_sig_params(func);
             let ret_type: String = python_return_type(&func.returns);
             out.push_str(&format!(
                 "    def {name}(self{sig_params}) -> {ret_type}: ...\n",
@@ -3358,7 +3344,7 @@ fn generate_peer_caller_method(
 ) {
     let fn_id: u32 = func.function_id;
     let needs_arena: bool = fn_needs_arena(func);
-    let sig_params: String = build_python_sig_params(func, contract_struct);
+    let sig_params: String = build_python_sig_params(func);
     let ret_type: String = python_return_type(&func.returns);
 
     out.push_str(&format!(
