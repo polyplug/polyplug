@@ -18,5 +18,6 @@ polyplug_js = { path = "../../../crates/polyplug_js" }
 polyplug_lua = { path = "../../../crates/polyplug_lua" }
 polyplug_python = { path = "../../../crates/polyplug_python" }
 polyplug_dotnet = { path = "../../../crates/polyplug_dotnet" }
+libloading = { workspace = true }
 [lints]
 workspace = true

@@ -243,6 +243,20 @@ fn run() -> Result<(), String> {
         );
     }
 
+    // Baseline anchor (opt-in: POLYPLUG_BENCH_ITERS + POLYPLUG_BENCH_DECODE_SO): the
+    // SAME decode work the ROUNDTRIP cell above measures, reached WITHOUT polyplug —
+    // directly in-process, and via a raw `dlsym` of the guest's `polyplug_bench_decode`
+    // export. Measured the exact same way (warm loop over `iters`), so the matrix's
+    // native cell minus these is polyplug's overhead over hand-rolled FFI for real
+    // string-returning work. Only the native (rust/cpp) hosts emit these.
+    if let Ok(iters_str) = env::var("POLYPLUG_BENCH_ITERS")
+        && let Ok(iters) = iters_str.parse::<u64>()
+        && iters > 0
+        && let Ok(so_path) = env::var("POLYPLUG_BENCH_DECODE_SO")
+    {
+        run_decode_baselines(&so_path, input, iters);
+    }
+
     // Host-call micro-benchmark (opt-in via POLYPLUG_BENCH_ITERS): times the BARE
     // host → runtime call — one find_guest_contract lookup per iteration, no guest
     // dispatch. A Rust host links the crate directly (no FFI), so this bar is the
@@ -284,6 +298,97 @@ fn run() -> Result<(), String> {
 
     println!("\ndone.");
     Ok(())
+}
+
+/// The decode transformation, host-side — byte-identical to the guest's
+/// `decode_body` (`examples/guests/rust/decoder`). Used by the **direct** baseline
+/// arm: the same work the plugin does, with NO plugin boundary at all (the floor).
+#[inline]
+fn decode_reference(input: &str) -> String {
+    format!("DECODED:{}", input.replace(',', "|"))
+}
+
+/// Measure the two no-polyplug baselines for the decode round trip, the same way
+/// the `ROUNDTRIP_NS` cell is measured (warm loop over `iters`), and print
+/// `BASELINE_DIRECT_NS` / `BASELINE_FFI_NS`:
+///   - **direct**  — `decode_reference` in-process: no plugin, no FFI (the floor).
+///   - **raw FFI** — `dlsym` the guest cdylib's `polyplug_bench_decode` (the SAME
+///     compiled body the contract runs) and call it the way a plugin author would
+///     by hand: call, read the result, free it. No registry, no instance, no safety.
+///
+/// Both arms allocate and release the result each call, so they differ from each
+/// other only in the calling mechanism.
+fn run_decode_baselines(so_path: &str, input: &str, iters: u64) {
+    let warmup: u64 = iters.min(10_000);
+
+    // ── direct: the decode body, no boundary ──────────────────────────────────
+    let mut acc: usize = 0;
+    for _ in 0..warmup {
+        acc = acc.wrapping_add(decode_reference(core::hint::black_box(input)).len());
+    }
+    let start: std::time::Instant = std::time::Instant::now();
+    for _ in 0..iters {
+        acc = acc.wrapping_add(decode_reference(core::hint::black_box(input)).len());
+    }
+    let direct_ns: f64 = start.elapsed().as_nanos() as f64 / iters as f64;
+    core::hint::black_box(acc);
+    println!("BASELINE_DIRECT_NS={direct_ns:.2} LANG=rust");
+
+    // ── raw FFI: dlsym the guest's own polyplug_bench_decode ──────────────────
+    // SAFETY: so_path is a cdylib built by the example fixtures; the two symbols
+    // below are exported by the decoder guest with the signatures transmuted to.
+    let library: libloading::Library = match unsafe { libloading::Library::new(so_path) } {
+        Ok(lib) => lib,
+        Err(e) => {
+            eprintln!("baseline: cannot load {so_path}: {e}");
+            return;
+        }
+    };
+    // SAFETY: the decoder cdylib exports these exact symbols and signatures.
+    let decode: libloading::Symbol<
+        '_,
+        unsafe extern "C" fn(*const u8, usize, *mut *mut u8, *mut usize),
+    > = match unsafe { library.get(b"polyplug_bench_decode\0") } {
+        Ok(symbol) => symbol,
+        Err(e) => {
+            eprintln!("baseline: no polyplug_bench_decode in {so_path}: {e}");
+            return;
+        }
+    };
+    // SAFETY: matching free export for the buffers `decode` returns.
+    let free: libloading::Symbol<'_, unsafe extern "C" fn(*mut u8, usize)> =
+        match unsafe { library.get(b"polyplug_bench_decode_free\0") } {
+            Ok(symbol) => symbol,
+            Err(e) => {
+                eprintln!("baseline: no polyplug_bench_decode_free in {so_path}: {e}");
+                return;
+            }
+        };
+
+    let mut acc2: usize = 0;
+    let one_call = |acc: &mut usize| {
+        let mut out_ptr: *mut u8 = core::ptr::null_mut();
+        let mut out_len: usize = 0;
+        // SAFETY: input is a valid byte range; out_ptr/out_len are valid out-params;
+        // the returned buffer is read then freed via the matching free symbol.
+        unsafe {
+            decode(input.as_ptr(), input.len(), &mut out_ptr, &mut out_len);
+            if !out_ptr.is_null() {
+                *acc = acc.wrapping_add(out_len);
+                free(out_ptr, out_len);
+            }
+        }
+    };
+    for _ in 0..warmup {
+        one_call(&mut acc2);
+    }
+    let start_ffi: std::time::Instant = std::time::Instant::now();
+    for _ in 0..iters {
+        one_call(&mut acc2);
+    }
+    let ffi_ns: f64 = start_ffi.elapsed().as_nanos() as f64 / iters as f64;
+    core::hint::black_box(acc2);
+    println!("BASELINE_FFI_NS={ffi_ns:.2} LANG=rust");
 }
 
 /// Helper: Find a plugin implementing a contract and create a caller instance.

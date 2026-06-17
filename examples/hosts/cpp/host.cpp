@@ -10,9 +10,14 @@
 #include "generated/host/interface_factories.hpp"
 #include "generated/host/host_callers.hpp"
 
+#include <dlfcn.h>
+
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -250,6 +255,88 @@ int main() {
                 const double ns =
                     std::chrono::duration<double, std::nano>(elapsed).count() / static_cast<double>(iters);
                 std::cout << "ROUNDTRIP_NS=" << ns << " LANG=cpp\n";
+            }
+        }
+    }
+
+    // No-polyplug baselines (opt-in via POLYPLUG_BENCH_ITERS + POLYPLUG_BENCH_DECODE_SO):
+    // anchor the ROUNDTRIP_NS cell above against the same decode body run WITHOUT the
+    // plugin runtime. Measured with the identical warmup + timed-loop methodology and
+    // the same steady_clock used by ROUNDTRIP right above.
+    //   - direct  — decode_body in-process: no plugin, no FFI (the floor).
+    //   - raw FFI — dlsym the guest cdylib's polyplug_bench_decode (the SAME compiled
+    //     body the contract runs) and call it the way a plugin author would by hand:
+    //     call, read the result, free it. No registry, no instance, no safety.
+    if (const char* iters_env = std::getenv("POLYPLUG_BENCH_ITERS")) {
+        const char* decode_so = std::getenv("POLYPLUG_BENCH_DECODE_SO");
+        const long iters = std::atol(iters_env);
+        if (iters > 0 && decode_so != nullptr) {
+            const long warmup = iters < 10000 ? iters : 10000;
+
+            // ── direct: the decode body, no boundary ─────────────────────────────
+            // In-host copy of the transformation so this arm has NO boundary at all.
+            const auto decode_local = [](std::string_view in) -> std::string {
+                std::string s(in);
+                std::replace(s.begin(), s.end(), ',', '|');
+                return "DECODED:" + s;
+            };
+            volatile size_t direct_sink = 0;
+            for (long i = 0; i < warmup; ++i) {
+                direct_sink = direct_sink + decode_local(input).size();
+            }
+            direct_sink = 0;
+            const auto direct_start = std::chrono::steady_clock::now();
+            for (long i = 0; i < iters; ++i) {
+                direct_sink = direct_sink + decode_local(input).size();
+            }
+            const auto direct_elapsed = std::chrono::steady_clock::now() - direct_start;
+            const double direct_ns =
+                std::chrono::duration<double, std::nano>(direct_elapsed).count() /
+                static_cast<double>(iters);
+            (void)direct_sink;
+            std::printf("BASELINE_DIRECT_NS=%.2f LANG=cpp\n", direct_ns);
+
+            // ── raw FFI: dlsym the guest's own polyplug_bench_decode ─────────────
+            void* lib = dlopen(decode_so, RTLD_NOW);
+            if (lib == nullptr) {
+                std::cerr << "baseline: cannot dlopen " << decode_so << ": " << dlerror() << "\n";
+            } else {
+                using decode_fn = void (*)(const uint8_t*, size_t, uint8_t**, size_t*);
+                using free_fn = void (*)(uint8_t*, size_t);
+                auto decode = reinterpret_cast<decode_fn>(dlsym(lib, "polyplug_bench_decode"));
+                auto decode_free = reinterpret_cast<free_fn>(dlsym(lib, "polyplug_bench_decode_free"));
+                if (decode == nullptr || decode_free == nullptr) {
+                    std::cerr << "baseline: missing polyplug_bench_decode/_free in " << decode_so
+                              << "\n";
+                } else {
+                    const uint8_t* in_ptr = reinterpret_cast<const uint8_t*>(input.data());
+                    const size_t in_len = input.size();
+                    volatile size_t ffi_sink = 0;
+                    const auto one_call = [&]() {
+                        uint8_t* out_ptr = nullptr;
+                        size_t out_len = 0;
+                        decode(in_ptr, in_len, &out_ptr, &out_len);
+                        if (out_ptr != nullptr) {
+                            ffi_sink = ffi_sink + out_len;
+                            decode_free(out_ptr, out_len);
+                        }
+                    };
+                    for (long i = 0; i < warmup; ++i) {
+                        one_call();
+                    }
+                    ffi_sink = 0;
+                    const auto ffi_start = std::chrono::steady_clock::now();
+                    for (long i = 0; i < iters; ++i) {
+                        one_call();
+                    }
+                    const auto ffi_elapsed = std::chrono::steady_clock::now() - ffi_start;
+                    const double ffi_ns =
+                        std::chrono::duration<double, std::nano>(ffi_elapsed).count() /
+                        static_cast<double>(iters);
+                    (void)ffi_sink;
+                    std::printf("BASELINE_FFI_NS=%.2f LANG=cpp\n", ffi_ns);
+                }
+                dlclose(lib);
             }
         }
     }

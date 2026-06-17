@@ -151,13 +151,35 @@ for guest in "${GUEST_LANGS[@]}"; do
 
     echo "--- guest=$guest ---" >&2
     for host in "${HOSTS[@]}"; do
-        ns="$(run_host "$host" | grep -oE 'ROUNDTRIP_NS=[0-9.]+' | head -1 | cut -d= -f2)"
+        # Native diagonal (rust→rust, cpp→cpp): expose the guest's own cdylib so the
+        # host can also measure the no-polyplug baseline — the SAME decode work
+        # reached directly and via raw dlsym (BASELINE_DIRECT_NS / BASELINE_FFI_NS).
+        # The baseline is guest-independent, so we only collect it on the native
+        # diagonal cell where the matching raw export is present.
+        if [ "$host" = "$guest" ] && { [ "$guest" = "rust" ] || [ "$guest" = "cpp" ]; }; then
+            export POLYPLUG_BENCH_DECODE_SO="$(find "$guest_dir" -name '*.so' | head -1)"
+        else
+            unset POLYPLUG_BENCH_DECODE_SO
+        fi
+
+        out="$(run_host "$host")"
+        ns="$(printf '%s' "$out" | grep -oE 'ROUNDTRIP_NS=[0-9.]+' | head -1 | cut -d= -f2)"
         if [ -n "$ns" ]; then
             printf '%s %s %s\n' "$host" "$guest" "$ns" | tee -a "$MATRIX" >&2
         else
             echo "  $host × $guest: failed/unavailable" >&2
         fi
+
+        # Baseline anchor rows (native diagonal only) — written as sentinel triples
+        # `__baseline__ <lang>_<arm> <ns>` so the chart can pull them out below the grid.
+        if [ -n "${POLYPLUG_BENCH_DECODE_SO:-}" ]; then
+            d="$(printf '%s' "$out" | grep -oE 'BASELINE_DIRECT_NS=[0-9.]+' | head -1 | cut -d= -f2)"
+            f="$(printf '%s' "$out" | grep -oE 'BASELINE_FFI_NS=[0-9.]+' | head -1 | cut -d= -f2)"
+            [ -n "$d" ] && printf '__baseline__ %s_direct %s\n' "$host" "$d" | tee -a "$MATRIX" >&2
+            [ -n "$f" ] && printf '__baseline__ %s_ffi %s\n' "$host" "$f" | tee -a "$MATRIX" >&2
+        fi
     done
+    unset POLYPLUG_BENCH_DECODE_SO
 
     rm -rf "$guest_dir"
 done
