@@ -601,17 +601,20 @@ python3 scripts/gen_bench_charts.py --soak target/soak/soak_rss.txt \
 ```
 
 > **Honest finding (measured this run, one developer machine).** Churn is
-> ~17,500–18,600 full load→dispatch→unload→drop cycles/sec. RSS does **not** stay flat:
-> it climbs **linearly** (~3.1 → ~20.6 MiB over 100,000 cycles, ~0.17 KiB/cycle,
-> constant slope across both halves). A build-and-drop-only bisection leaks at the
-> *same* slope, while a pure `dlopen`+`dlclose` loop with no runtime is flat — so
-> this is a **real core leak in the `Runtime` lifecycle** (~168 bytes/runtime),
-> not the loader or libc. Root cause: `RuntimeBuilder::build` `Box::leak`s the
-> `&'static HostApi` the FFI needs and there is no `impl Drop for Runtime` to
-> reclaim it. **Filed for a core fix; this bench task does not modify core.** The
-> chart (`docs/assets/benches/soak_rss.svg`) draws the rising line on purpose;
-> once the leak is fixed the same soak should redraw it flat. See
-> `docs/PERFORMANCE.md` (load/unload churn soak) for the full write-up.
+> ~17,500–18,600 full load→dispatch→unload→drop cycles/sec, and RSS stays **flat**:
+> ~3.0 MiB after warm-up, holding steady across 100,000 cycles (a single tiny step
+> is allocator noise, not slope). That flat line is the result of a fix. An earlier
+> version of this soak *did* climb linearly (~3.1 → ~20.6 MiB over 100,000 cycles);
+> a build-and-drop-only bisection isolated it to a **real core leak in the `Runtime`
+> lifecycle** — while a pure `dlopen`+`dlclose` loop with no runtime stayed flat, so
+> it was neither the loader nor libc. Root cause: `RuntimeBuilder::build` `Box::leak`ed
+> the `&'static HostApi` the FFI needs (the 184-byte `HostApi` struct, matching the
+> observed per-cycle growth) with no owner to reclaim it. **Fixed** (commit
+> `7a9d96fa`): the `Runtime` now *owns* its `HostApi` as a `Box<HostApi>` final field
+> that drops at teardown after the loaders `dlclose`, and the regression is locked by
+> `crates/polyplug/tests/leak_host_abi.rs`. The chart
+> (`docs/assets/benches/soak_rss.svg`) now draws flat. See `docs/PERFORMANCE.md`
+> (load/unload churn soak) for the full write-up.
 
 ## Future benchmark ideas (documented, not yet built)
 
@@ -625,9 +628,10 @@ aren't lost. **Priority: benches for what we currently ship come first.**
 > from criterion), **one-time cost amortization** (`amortization` — load /
 > resolve / hot-reload), **dispatch by argument shape** (`contract_dispatch`),
 > and **return marshalling** (`contract_dispatch::marshalling` — borrowed view vs
-> owned copy). Charts: `docs/assets/benches/{hero,counter_inc,dispatch_by_shape,
-> payload_scaling,marshalling,native_round_trip,amortization,cross_lang_guest,
-> call_arena,cold_start}.svg`
+> owned copy). Charts: `docs/assets/benches/{hero,plugin_call_cost,dispatch_by_shape,
+> payload_scaling,marshalling,native_round_trip,amortization,
+> call_arena,cold_start}.svg` — `plugin_call_cost.svg` is the merged all-language
+> dispatch chart (native overhead tier + VM tier, log scale)
 > (criterion-sourced, `just bench-charts`) plus the live-sweep pair
 > `cross_lang_host.svg` (`just bench-hostcall`) and `cross_lang_matrix.svg`
 > (`just bench-roundtrip`), and the env-gated soak chart `soak_rss.svg`

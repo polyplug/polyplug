@@ -338,9 +338,33 @@ example host, no guest dispatch (see
 
 ### Expected Results
 
-> Methodology: criterion 0.8, `--release`, 100 samples/bench. The illustrative
-> numbers here and below were taken on an AMD Ryzen 9 5900X (12-core) / 32 GiB
-> Linux box. Re-run on your own quiet machine and trust **ratios**, not absolute ns.
+> **Methodology.** criterion 0.8, `--release`, 100 samples per benchmark; every
+> number is criterion's **median** point estimate (robust to the scheduler noise a
+> developer machine adds). The committed SVG charts read those same medians live
+> from `target/criterion` via `scripts/gen_bench_charts.py`, so a chart can never
+> drift from the data it claims to show.
+>
+> **Machine.** AMD Ryzen 9 5900X (12 cores / 24 threads), 32 GiB, Linux. Quiet box;
+> the numbers here and below are one run captured 2026-06-12. Re-run on your own
+> hardware and trust the **ratios and gaps**, not the absolute nanoseconds.
+>
+> **Variance — why these medians are trustworthy.** criterion's bootstrap 95%
+> confidence interval sits within a few percent of the median for every headline
+> arm, so the bars are stable run-to-run, not cherry-picked from noise:
+>
+> | Benchmark | median | 95% CI | spread |
+> |---|---|---|---|
+> | `counter_inc` direct call (floor) | 1.08 ns | 1.08–1.09 ns | ±1.3% |
+> | `counter_inc` raw FFI (`dlsym`) | 1.95 ns | 1.94–1.97 ns | ±1.3% |
+> | `counter_inc` polyplug — Rust `.so` | 2.40 ns | 2.37–2.44 ns | ±2.7% |
+> | `counter_inc` polyplug — C++ `.so` | 2.61 ns | 2.60–2.64 ns | ±1.5% |
+> | `call_arena` overflow — warm reuse | 3.74 ns | 3.69–3.79 ns | ±2.8% |
+> | `call_arena` overflow — cold malloc | 34.0 ns | 33.7–34.3 ns | ±1.8% |
+> | `lua_dispatch` warm VM call | 33.6 ns | 33.4–33.9 ns | ±1.4% |
+> | `python_dispatch` warm GIL call | 61.9 ns | 61.2–63.2 ns | ±3.2% |
+>
+> Regenerate this table for your own machine from `target/criterion/*/new/estimates.json`
+> (the `confidence_interval` field) after a local `cargo bench`.
 
 **Rust core (`cargo bench -p polyplug`):**
 ```
@@ -361,7 +385,14 @@ so each per-call number isolates exactly one cost. Arms 3–5 load the
 polyplug arms is polyplug's safety machinery, and the only difference between
 the Rust and C++ polyplug arms is the plugin's source language.
 
-![counter_inc per-call cost](assets/benches/counter_inc.svg)
+![what one plugin call costs, by plugin language — a native-overhead tier and a VM tier, log scale](assets/benches/plugin_call_cost.svg)
+
+*This is the merged all-language dispatch chart. Its **native tier** (the five arms
+in the table below) is where polyplug's own overhead lives; its **VM tier** is each
+embedded interpreter's per-call cost, broken down under
+[Calling into a plugin](#calling-into-a-plugin-guest-dispatch). The two tiers are
+shaded apart and never ranked together, because a VM bar is mostly the interpreter,
+not polyplug.*
 
 | Arm | Mechanism | ns/call | Throughput | vs floor |
 |---|---|---|---|---|
@@ -483,6 +514,25 @@ What the grid shows:
 Every one of the 36 pairings is measured — all six app languages (Rust / C++ /
 C# / Lua / Python / JS) against all six plugin languages, with no gaps.
 
+**The strip beneath the grid is the floor — the same work *without* polyplug.** A
+heatmap cell is only meaningful against a baseline, so the native diagonal cells
+(Rust→Rust, C++→C++) are anchored by the *identical* `decode()` work reached two
+other ways: `direct` is the transformation alone — no plugin, no FFI — and `raw FFI`
+is the hand-rolled `dlsym` call you'd write to reach a plugin *without* a runtime.
+Both call the **same compiled decode body** the registered contract runs (the guest
+exports a raw `polyplug_bench_decode` symbol right next to it), measured in the
+**same host loop** as the cell. So the native cell minus `raw FFI` is exactly what
+polyplug's safety, lifecycle, and dispatch add on top of a hand-rolled plugin call
+for real, string-returning work. The takeaway: the decode work itself (`direct`) is
+the bulk of the cost; `raw FFI` adds little over it (the bare dynamic boundary is
+cheap); and `polyplug` adds a modest constant on top — here ~15–30 ns over raw FFI —
+for everything it gives you over a hand-rolled `dlsym`: type-checked registration,
+lifecycle, hot-reload, and epoch-safe unload. On a call doing heavier work that
+constant shrinks toward a rounding error (the same effect `payload_scaling.svg`
+shows for raw dispatch). (The baseline is native-only; a VM guest's cost is its
+interpreter, measured in the [guest-dispatch](#calling-into-a-plugin-guest-dispatch)
+section.)
+
 - **A C# app loading a C# plugin reuses the host's own .NET runtime.** A native
   app (Rust / C++ / …) loads a C# plugin by spinning up a .NET runtime through the
   loader; a C# app already *is* a .NET process, so the loader loads the plugin into
@@ -500,7 +550,9 @@ Reproduce locally with `just bench-roundtrip` (or
 `examples/hosts/roundtrip_bench.sh`): for each guest language it builds a
 single-language plugin set, runs every available host against it in a timed loop,
 and renders `cross_lang_matrix.svg` directly — there is no committed data file, the
-chart is regenerated from the live run.
+chart is regenerated from the live run. On the native diagonal cells (Rust→Rust,
+C++→C++) the host also times the no-polyplug `direct` and `raw FFI` baselines in the
+same loop, which become the strip beneath the grid.
 
 ---
 
@@ -745,7 +797,10 @@ The reverse direction — your app calling into the runtime — is
 [Reaching the runtime](#reaching-the-runtime-host-call-overhead) far above. And the *whole* call, for every language pairing, is the
 [cross-language matrix](#call-cost-for-any-language-combination).)
 
-![calling into a plugin — per-call cost by plugin language](assets/benches/cross_lang_guest.svg)
+These bars are the **VM tier of the merged dispatch chart** shown under
+[The safety tax](#the-safety-tax--polyplug-vs-raw-ffi-vs-a-direct-call) above
+(one chart, no duplicate copy to drift); this section breaks each VM loader's
+number down.
 
 **Every bar is read live from criterion** — native from the `counter_inc` run,
 and each VM from its loader's warm steady-state dispatch bench below (`.NET`

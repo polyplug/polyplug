@@ -136,6 +136,20 @@ def _wrap(text: str, width_px: int, font_size: int, margin: int = 24) -> list:
     return lines or [""]
 
 
+def _label_gutter(labels: list, font_size: int, minimum: int = 250) -> int:
+    """Left gutter (bar-start x) wide enough that the longest right-anchored row
+    label clears the left margin instead of running off the canvas.
+
+    Row labels are drawn right-anchored at ``pad_l - 12`` and extend left; a label
+    of pixel width ``w`` needs ``pad_l >= w + 12 + left_margin`` to stay on-canvas.
+    Monospace advance is ≈0.6 em; 0.62 adds a little slack so glyphs never clip.
+    """
+    left_margin: int = 24
+    gap: int = 12
+    longest_px: float = max((len(label) * font_size * 0.62 for label in labels), default=0.0)
+    return max(minimum, int(math.ceil(longest_px + gap + left_margin)))
+
+
 def _header(title: str, subtitle: str, width: int) -> tuple:
     """Build the title + word-wrapped subtitle block. Returns (svg_str, extra_y)
     where extra_y is the additional vertical space used by wrapped subtitle lines
@@ -157,14 +171,14 @@ def _chart_hbar_linear(out: Path, title: str, subtitle: str, rows: list) -> None
     (the label carries the meaning, never the position).
     """
     rows: list = sorted(rows, key=lambda r: r[1])
-    width: int = 720
-    pad_l: int = 250
     pad_r: int = 96
+    plot_w: int = 374
+    pad_l: int = _label_gutter([r[0] for r in rows], 12)
+    width: int = pad_l + plot_w + pad_r
     header_svg, extra_y = _header(title, subtitle, width)
     pad_t: int = 56 + extra_y
     row_h: int = 46
     height: int = pad_t + row_h * len(rows) + 30
-    plot_w: int = width - pad_l - pad_r
     vmax: float = max(ns for _, ns, _ in rows) * 1.12
 
     parts: list = [header_svg]
@@ -187,9 +201,10 @@ def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str)
     (the label carries the meaning, never the position).
     """
     rows: list = sorted(rows, key=lambda r: r[1])
-    width: int = 760
-    pad_l: int = 250
     pad_r: int = 96
+    plot_w: int = 414
+    pad_l: int = _label_gutter([r[0] for r in rows], 11)
+    width: int = pad_l + plot_w + pad_r
     header_svg, extra_y = _header(title, subtitle, width)
     pad_t: int = 60 + extra_y
     row_h: int = 40
@@ -198,7 +213,6 @@ def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str)
     axis_caption_y: int = bars_bottom + 34
     note_y0: int = bars_bottom + 56
     height: int = note_y0 + 14 * (len(note_lines) - 1) + 12
-    plot_w: int = width - pad_l - pad_r
 
     vmax: float = max(ns for _, ns, _ in rows)
     axis_hi: float = math.log10(vmax * 1.6)
@@ -223,6 +237,91 @@ def _chart_hbar_log(out: Path, title: str, subtitle: str, rows: list, note: str)
         parts.append(_text(pad_l - 12, y + row_h / 2 + 4, label, 11, _FG, "end"))
         parts.append(_rect(pad_l, y + 6, max(bar_w, 2.0), row_h - 16, color))
         parts.append(_text(pad_l + bar_w + 8, y + row_h / 2 + 4, _fmt_ns(ns), 11, _FG, "start"))
+    parts.append(
+        _text(
+            pad_l + plot_w / 2,
+            axis_caption_y,
+            "time per call — log scale, lower is better →",
+            10,
+            _MUTED,
+            "middle",
+        )
+    )
+    for li, line in enumerate(note_lines):
+        parts.append(_text(24, note_y0 + li * 14, line, 9, _MUTED, "start"))
+    out.write_text(_svg(width, height, "".join(parts)))
+
+
+def _chart_hbar_log_tiered(
+    out: Path, title: str, subtitle: str, tiers: list, note: str
+) -> None:
+    """Log-scale horizontal bars split into shaded tiers that never merge.
+
+    ``tiers`` = ``[(caption, band_fill, rows)]`` with ``rows = [(label, ns, color)]``.
+    Rows are sorted fastest→slowest *within* a tier, but the tiers keep their own
+    order and their own shaded background band. This exists for one chart — native
+    vs VM dispatch — where lumping two differently-measured groups into a single
+    ranking would be dishonest (a 40 ns LuaJIT bar must never read as "polyplug is
+    20x slower than Rust"; that 40 ns is the interpreter, not polyplug).
+    """
+    layout: list = []
+    pad_r: int = 96
+    plot_w: int = 414
+    row_h: int = 38
+    cap_h: int = 24  # vertical gutter for a tier caption above its bars
+    tier_gap: int = 12
+
+    sorted_tiers: list = [
+        (caption, band_fill, sorted(rows, key=lambda r: r[1]))
+        for caption, band_fill, rows in tiers
+    ]
+    all_rows: list = [r for _, _, rows in sorted_tiers for r in rows]
+    pad_l: int = _label_gutter([r[0] for r in all_rows], 11)
+    width: int = pad_l + plot_w + pad_r
+    header_svg, extra_y = _header(title, subtitle, width)
+    pad_t: int = 60 + extra_y
+
+    y: int = pad_t
+    for caption, band_fill, rows in sorted_tiers:
+        band_top: int = y
+        bars_y0: int = y + cap_h
+        band_bottom: int = bars_y0 + row_h * len(rows)
+        layout.append((caption, band_fill, rows, band_top, bars_y0, band_bottom))
+        y = band_bottom + tier_gap
+
+    bars_bottom: int = layout[-1][5]
+    axis_caption_y: int = bars_bottom + 30
+    note_lines: list = _wrap(note, width, 9)
+    note_y0: int = bars_bottom + 52
+    height: int = note_y0 + 14 * (len(note_lines) - 1) + 12
+
+    vmax: float = max(ns for _, ns, _ in all_rows)
+    axis_hi: float = math.log10(vmax * 1.6)
+
+    def x_of(ns: float) -> float:
+        frac: float = max(math.log10(ns), 0.3) / axis_hi
+        return pad_l + plot_w * frac
+
+    parts: list = [header_svg]
+    # tier bands first, so gridlines and bars sit on top of the shading
+    for _, band_fill, _, band_top, _, band_bottom in layout:
+        parts.append(_rect(pad_l, band_top + 4, plot_w, band_bottom - band_top - 4, band_fill))
+    # decade gridlines (1 ns, 10 ns, 100 ns, 1 µs …) across the whole block
+    decade: int = 0
+    while 10.0**decade <= vmax * 1.6:
+        gx: float = pad_l + plot_w * (decade / axis_hi)
+        parts.append(_line(gx, pad_t - 4, gx, bars_bottom, _GRID, 1))
+        parts.append(_text(gx, bars_bottom + 14, _fmt_ns(10.0**decade), 9, _MUTED, "middle"))
+        decade += 1
+    # tier captions + bars
+    for caption, _, rows, band_top, bars_y0, _ in layout:
+        parts.append(_text(pad_l, band_top + 17, caption, 10, _MUTED, "start"))
+        for i, (label, ns, color) in enumerate(rows):
+            ry: float = bars_y0 + i * row_h
+            bar_w: float = x_of(ns) - pad_l
+            parts.append(_text(pad_l - 12, ry + row_h / 2 + 4, label, 11, _FG, "end"))
+            parts.append(_rect(pad_l, ry + 6, max(bar_w, 2.0), row_h - 16, color))
+            parts.append(_text(pad_l + bar_w + 8, ry + row_h / 2 + 4, _fmt_ns(ns), 11, _FG, "start"))
     parts.append(
         _text(
             pad_l + plot_w / 2,
@@ -301,9 +400,23 @@ def _heat_color(t: float) -> str:
 
 
 def _chart_heatmap(
-    out: Path, title: str, subtitle: str, col_labels: list, row_labels: list, cells: dict, note: str
+    out: Path,
+    title: str,
+    subtitle: str,
+    col_labels: list,
+    row_labels: list,
+    cells: dict,
+    note: str,
+    baseline_bars: list = None,
+    baseline_title: str = "",
 ) -> None:
-    """Grid heatmap; cells = {(row_label, col_label): ns or None}. Color = speed."""
+    """Grid heatmap; cells = {(row_label, col_label): ns or None}. Color = speed.
+
+    `baseline_bars` (optional) is a list of (label, ns, color) drawn as a small
+    horizontal-bar strip beneath the grid — used to anchor the grid against a
+    no-polyplug floor (the same work reached directly / via raw FFI / through
+    polyplug). `baseline_title` captions that strip.
+    """
     n_rows: int = len(row_labels)
     n_cols: int = len(col_labels)
     cell_w: int = 96
@@ -314,7 +427,9 @@ def _chart_heatmap(
     pad_t: int = 104 + extra_y
     grid_bottom: int = pad_t + cell_h * n_rows
     note_lines: list = _wrap(note, width, 9)
-    note_y0: int = grid_bottom + 92
+    strip_row_h: int = 18
+    strip_h: int = 16 + strip_row_h * len(baseline_bars) + 14 if baseline_bars else 0
+    note_y0: int = grid_bottom + 92 + strip_h
     height: int = note_y0 + 14 * (len(note_lines) - 1) + 10
 
     present: list = [v for v in cells.values() if v is not None]
@@ -365,6 +480,18 @@ def _chart_heatmap(
     parts.append(_text(pad_l, leg_y + 24, _fmt_ns(fast_ns), 9, _MUTED, "middle"))
     parts.append(_text(pad_l + leg_w / 2, leg_y + 24, _fmt_ns(mid_ns), 9, _MUTED, "middle"))
     parts.append(_text(pad_l + leg_w, leg_y + 24, _fmt_ns(slow_ns), 9, _MUTED, "middle"))
+    # Baseline strip — the no-polyplug floor each native diagonal cell sits above.
+    if baseline_bars:
+        strip_y0: float = grid_bottom + 92
+        parts.append(_text(24, strip_y0, baseline_title, 10, _FG, "start"))
+        bvmax: float = max(ns for _, ns, _ in baseline_bars) * 1.14
+        bar_max_w: float = width - pad_l - 86
+        for i, (label, ns, color) in enumerate(baseline_bars):
+            by: float = strip_y0 + 16 + i * strip_row_h
+            bw: float = bar_max_w * ns / bvmax
+            parts.append(_text(pad_l - 12, by + 9, label, 10, _FG, "end"))
+            parts.append(_rect(pad_l, by + 1, max(bw, 1.5), 11, color))
+            parts.append(_text(pad_l + bw + 8, by + 9, _fmt_ns(ns), 10, _FG, "start"))
     for li, line in enumerate(note_lines):
         parts.append(_text(24, note_y0 + li * 14, line, 9, _MUTED, "start"))
     out.write_text(_svg(width, height, "".join(parts)))
@@ -373,26 +500,63 @@ def _chart_heatmap(
 # ─── charts ───────────────────────────────────────────────────────────────────
 
 
-def chart_counter_inc(criterion_dir: Path, out: Path) -> None:
-    """Per-call cost of each counter_inc mechanism (linear bars)."""
-    # Native-arm labels are kept identical to chart_hero so the shared bars read
-    # the same across both charts.
-    bars: list = [
-        ("native/inline_never", "direct function call (no plugins)", _FLOOR),
-        ("ffi/by_value", "raw FFI (dlsym, no safety)", _NEUTRAL),
-        ("native/abi_marshalled", "ABI convention (static)", _NEUTRAL),
-        ("polyplug/dispatch", "polyplug — native plugin (Rust)", _HILITE),
-        ("polyplug/dispatch_cpp", "polyplug — native plugin (C++)", _HILITE),
+def chart_plugin_call_cost(criterion_dir: Path, out: Path) -> None:
+    """One chart, every language: the cost of one plugin call and its return.
+
+    The merged successor to the old counter_inc + cross_lang_guest charts. Two
+    tiers, shaded separately and never sorted into one ranking, because they are
+    not the same measurement:
+
+      - NATIVE — the bar is essentially all polyplug overhead. From the floor
+        (a direct call, no plugin) up through raw FFI, polyplug's ABI calling
+        convention, and a real Rust/C++ plugin `.so`. This is where polyplug's own
+        dispatch cost lives: ~1 ns over a raw function call.
+      - VM — the bar is dominated by the embedded interpreter's own per-call cost
+        (LuaJIT / CLR / QuickJS / CPython), which you pay however you embed that VM.
+        polyplug's dispatch is the same few ns underneath; the rest is the language.
+
+    Every bar is read live from criterion (median, per-call via throughput), so the
+    chart can never drift from the measured numbers. Native arms come from
+    `counter_inc_1m`; each VM arm from its loader's warm steady-state dispatch bench.
+    """
+    native: list = [
+        ("direct call — no plugin (the floor)", "counter_inc_1m/native/inline_never", _FLOOR),
+        ("raw FFI — dlsym, no safety", "counter_inc_1m/ffi/by_value", _NEUTRAL),
+        ("polyplug ABI convention (static)", "counter_inc_1m/native/abi_marshalled", _NEUTRAL),
+        ("polyplug — Rust plugin (.so)", "counter_inc_1m/polyplug/dispatch", _HILITE),
+        ("polyplug — C++ plugin (.so)", "counter_inc_1m/polyplug/dispatch_cpp", _HILITE),
     ]
-    rows: list = [
-        (label, per_call_ns(criterion_dir, f"counter_inc_1m/{fid}"), color)
-        for fid, label, color in bars
+    vm: list = [
+        ("polyplug — Lua plugin (LuaJIT)", "lua_dispatch/vm_dispatch_single_call", _NEUTRAL),
+        ("polyplug — .NET plugin (CLR)", "clr_dispatch/clr_init_call", _NEUTRAL),
+        ("polyplug — JS plugin (QuickJS)", "cached_dispatch/cached_context_single_call", _NEUTRAL),
+        ("polyplug — Python plugin (GIL, cached)", "cached_dispatch/cached_python_single_call", _SLOW),
     ]
-    _chart_hbar_linear(
+    tiers: list = [
+        (
+            "NATIVE plugins — the whole bar is polyplug overhead (~1 ns over a raw call)",
+            "#0e1f17",
+            [(label, per_call_ns(criterion_dir, fid), color) for label, fid, color in native],
+        ),
+        (
+            "VM plugins — the bar is mostly the interpreter's own per-call cost, not polyplug",
+            "#241c0a",
+            [(label, per_call_ns(criterion_dir, fid), color) for label, fid, color in vm],
+        ),
+    ]
+    _chart_hbar_log_tiered(
         out,
-        "What does a safe plugin call cost?",
-        "counter_inc — the same 1,000,000-call loop, reaching the function a different way each bar (lower is better)",
-        rows,
+        "What does it cost to call one plugin function?",
+        "one call into a plugin and back, by plugin language — log scale, lower is better",
+        tiers,
+        "Native dispatch is ~2 ns whatever language wrote the plugin (Rust, C++, C, …) — about "
+        "one nanosecond over a raw function call, and the whole bar is polyplug. VM plugins add "
+        "their interpreter's warm per-call cost: that time belongs to LuaJIT / the CLR / QuickJS / "
+        "CPython and you pay it however you embed them, with polyplug's same few-ns dispatch "
+        "underneath. The two tiers are shaded apart and never ranked together, so the ~40 ns Lua "
+        "bar is never misread as 'polyplug is 20x slower than Rust'. One decade longer = 10x "
+        "slower (log scale). All bars measured live by cargo bench on one machine — trust the "
+        "ordering and the gaps, not the absolute ns; see PERFORMANCE.md for the machine + method.",
     )
 
 
@@ -504,7 +668,7 @@ def chart_amortization(criterion_dir: Path, out: Path) -> None:
         "One-time setup costs (paid once, not per call)",
         "loading / looking up / hot-reloading a plugin — log scale; none of these touch the per-call hot path",
         rows,
-        "find+resolve is the only one a caller might repeat — and it is ~20 ns (a HashMap hit), "
+        "find+resolve is the only one a caller might repeat — and it is ~25 ns (a HashMap hit), "
         "warm; cold_start.svg shows the one-time cold-cache first call. "
         "Load and reload are dominated by the OS dlopen/mmap, not polyplug; see PROFILING.md.",
     )
@@ -570,33 +734,51 @@ def chart_hero(criterion_dir: Path, out: Path) -> None:
     call end to end, every bar live from criterion.
 
     One log-scale chart that tells the whole story at a glance: what a plugin
-    call costs next to a direct call and raw FFI, and what each VM language
-    adds. Sources (all `median.point_estimate`, per-call via throughput):
+    call costs next to a direct call and raw FFI, and what each VM language adds.
+    Same two-tier shading as the fuller `plugin_call_cost` chart so the native and
+    VM bars are never read as one ranking. Sources (all `median.point_estimate`,
+    per-call via throughput):
       - direct call / raw FFI / polyplug native : the counter_inc_1m arms
       - .NET   : clr_dispatch/clr_init_call (warm [UnmanagedCallersOnly])
       - Lua    : lua_dispatch/vm_dispatch_single_call (warm LuaJIT call)
       - JS     : cached_dispatch/cached_context_single_call (cached QuickJS ctx)
       - Python : cached_dispatch/cached_python_single_call (GIL held, cached fn)
     """
-    rows: list = [
-        ("direct function call (no plugins)", per_call_ns(criterion_dir, "counter_inc_1m/native/inline_never"), _FLOOR),
-        ("raw FFI (dlsym, no safety)", per_call_ns(criterion_dir, "counter_inc_1m/ffi/by_value"), _FLOOR),
-        ("polyplug — native plugin (Rust/C++)", per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch"), _HILITE),
-        ("polyplug — .NET plugin", per_call_ns(criterion_dir, "clr_dispatch/clr_init_call"), _NEUTRAL),
-        ("polyplug — Lua plugin (LuaJIT)", per_call_ns(criterion_dir, "lua_dispatch/vm_dispatch_single_call"), _NEUTRAL),
-        ("polyplug — JS plugin (QuickJS)", per_call_ns(criterion_dir, "cached_dispatch/cached_context_single_call"), _NEUTRAL),
-        ("polyplug — Python plugin (cached)", per_call_ns(criterion_dir, "cached_dispatch/cached_python_single_call"), _SLOW),
+    native: list = [
+        ("direct function call (no plugins)", "counter_inc_1m/native/inline_never", _FLOOR),
+        ("raw FFI (dlsym, no safety)", "counter_inc_1m/ffi/by_value", _FLOOR),
+        ("polyplug — native plugin (Rust/C++)", "counter_inc_1m/polyplug/dispatch", _HILITE),
     ]
-    _chart_hbar_log(
+    vm: list = [
+        ("polyplug — .NET plugin (CLR)", "clr_dispatch/clr_init_call", _NEUTRAL),
+        ("polyplug — Lua plugin (LuaJIT)", "lua_dispatch/vm_dispatch_single_call", _NEUTRAL),
+        ("polyplug — Python plugin (GIL, cached)", "cached_dispatch/cached_python_single_call", _NEUTRAL),
+        ("polyplug — JS plugin (QuickJS)", "cached_dispatch/cached_context_single_call", _SLOW),
+    ]
+    tiers: list = [
+        (
+            "NATIVE — the whole bar is polyplug overhead (~1 ns over a raw call)",
+            "#0e1f17",
+            [(label, per_call_ns(criterion_dir, fid), color) for label, fid, color in native],
+        ),
+        (
+            "VM — mostly the interpreter's own per-call cost, not polyplug",
+            "#241c0a",
+            [(label, per_call_ns(criterion_dir, fid), color) for label, fid, color in vm],
+        ),
+    ]
+    _chart_hbar_log_tiered(
         out,
         "One plugin call, end to end",
         "time to call one plugin function and get the answer back, by plugin language "
         "(log scale, lower is better)",
-        rows,
+        tiers,
         "All bars measured live by cargo bench on one machine. A native plugin costs about "
-        "one extra nanosecond over a raw function call; VM plugins add their interpreter's "
-        "warm per-call cost (Python: GIL held, function cached — its attach-per-call arm is "
-        "close behind, see PERFORMANCE.md). A bar twice as long is 10x slower (log scale).",
+        "one extra nanosecond over a raw function call, and the whole bar is polyplug. VM "
+        "plugins add their interpreter's warm per-call cost (Python: GIL held, function cached "
+        "— its attach-per-call arm is close behind, see PERFORMANCE.md); that cost is the "
+        "language, not polyplug. The tiers are shaded apart and never ranked together. One "
+        "decade longer = 10x slower (log scale).",
     )
 
 
@@ -612,37 +794,6 @@ def chart_hero(criterion_dir: Path, out: Path) -> None:
 # live from the HOSTCALL sweep (`examples/hosts/roundtrip_bench.sh --hostcall`),
 # which times one find_guest_contract call through the runtime in every example
 # host. All numbers are from one machine; trust the ordering.
-
-
-def chart_cross_language_guest(criterion_dir: Path, out: Path) -> None:
-    """Per-call dispatch cost, runtime -> guest, by plugin language (log scale).
-
-    Every bar is read live from the warm steady-state dispatch bench for that
-    language, so the chart can never drift from the measured numbers:
-      - Rust / C++  : counter_inc (native cdylib, marshalled call)
-      - .NET        : clr_dispatch/clr_init_call (warm [UnmanagedCallersOnly])
-      - Lua         : lua_dispatch/vm_dispatch_single_call (warm LuaJIT call)
-      - Python      : cached_dispatch/cached_python_single_call (GIL held, cached fn)
-      - JavaScript  : cached_dispatch/cached_context_single_call (cached QuickJS ctx)
-    """
-    rows: list = [
-        ("Rust (native cdylib)", per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch"), _HILITE),
-        ("C++ (native cdylib)", per_call_ns(criterion_dir, "counter_inc_1m/polyplug/dispatch_cpp"), _HILITE),
-        (".NET (CLR, UnmanagedCallersOnly)", per_call_ns(criterion_dir, "clr_dispatch/clr_init_call"), _NEUTRAL),
-        ("Lua (LuaJIT)", per_call_ns(criterion_dir, "lua_dispatch/vm_dispatch_single_call"), _NEUTRAL),
-        ("Python (GIL held, cached)", per_call_ns(criterion_dir, "cached_dispatch/cached_python_single_call"), _NEUTRAL),
-        ("JavaScript (QuickJS, cached)", per_call_ns(criterion_dir, "cached_dispatch/cached_context_single_call"), _NEUTRAL),
-    ]
-    _chart_hbar_log(
-        out,
-        "Calling into a plugin, by plugin language",
-        "warm per-call cost the runtime pays to run a plugin written in each language (log scale, lower is better)",
-        rows,
-        "All bars measured live: native from counter_inc; .NET/Lua/Python/JS from each loader's "
-        "warm cached-dispatch bench. Python's attach-per-call arm (gil_acquire_and_call) measures "
-        "~56 ns — almost the same as the cached bar, since an uncontended GIL re-attach is nearly "
-        "free; the old ~13 µs figure was a recompile-per-iteration artifact (see PERFORMANCE.md).",
-    )
 
 
 def _read_matrix(path: Path) -> dict:
@@ -694,6 +845,37 @@ def chart_cross_language_matrix(data_path: Path, out: Path) -> None:
     if not any(v is not None for v in cells.values()):
         print(f"  skip {out.name}: no matrix data in {data_path}", file=sys.stderr)
         return
+
+    # Baseline strip: the SAME decode() work without polyplug, measured by the
+    # native hosts in the same loop (sentinel rows `__baseline__ <lang>_<arm>`).
+    # `direct` = the work alone (no plugin); `raw FFI` = hand-rolled dlsym; and the
+    # native diagonal cell (`polyplug`) is shown alongside so the gap is visible.
+    base: dict = {key[1]: val for key, val in raw.items() if key[0] == "__baseline__"}
+    baseline_bars: list = []
+    for lang, label in (("rust", "Rust"), ("cpp", "C++")):
+        direct: float = base.get(f"{lang}_direct")
+        ffi: float = base.get(f"{lang}_ffi")
+        cell: float = raw.get((lang, lang))
+        if direct is not None:
+            baseline_bars.append((f"{label} · direct (no plugin)", direct, _FLOOR))
+        if ffi is not None:
+            baseline_bars.append((f"{label} · raw FFI", ffi, _NEUTRAL))
+        if cell is not None:
+            baseline_bars.append((f"{label} · polyplug", cell, _HILITE))
+
+    note: str = (
+        "Each cell is measured end to end (build the argument, call, read the returned string). "
+        "Compiled hosts (Rust/C++/C#) add a small constant; scripted hosts pay per-call marshalling. "
+        "A C# app loading a C# plugin reuses the host's own .NET runtime. "
+    )
+    if baseline_bars:
+        note += (
+            "The strip above is the SAME decode() work with NO polyplug — direct (the work alone) "
+            "and hand-rolled raw FFI — so the native cell minus raw FFI is polyplug's overhead for "
+            "real string-returning work. "
+        )
+    note += "Local-only; see examples/hosts/roundtrip_bench.sh."
+
     _chart_heatmap(
         out,
         "Call cost: any app language × any plugin language",
@@ -701,9 +883,9 @@ def chart_cross_language_matrix(data_path: Path, out: Path) -> None:
         col_labels,
         row_labels,
         cells,
-        "Each cell is measured end to end (build the argument, call, read the returned string). "
-        "Compiled hosts (Rust/C++/C#) add a small constant; scripted hosts pay per-call marshalling. "
-        "A C# app loading a C# plugin reuses the host's own .NET runtime. Local-only; see examples/hosts/roundtrip_bench.sh.",
+        note,
+        baseline_bars=baseline_bars or None,
+        baseline_title="Same decode() work, no polyplug — the floor each native diagonal cell sits above:",
     )
 
 
@@ -958,13 +1140,12 @@ def main() -> int:
     # stale data). cross_lang_matrix.svg likewise renders only via --matrix.
     charts: list = [
         ("hero.svg", chart_hero),
-        ("counter_inc.svg", chart_counter_inc),
+        ("plugin_call_cost.svg", chart_plugin_call_cost),
         ("dispatch_by_shape.svg", chart_dispatch_by_shape),
         ("payload_scaling.svg", chart_payload_scaling),
         ("marshalling.svg", chart_marshalling),
         ("native_round_trip.svg", chart_native_round_trip),
         ("amortization.svg", chart_amortization),
-        ("cross_lang_guest.svg", chart_cross_language_guest),
         ("call_arena.svg", chart_call_arena),
         ("cold_start.svg", chart_cold_start),
     ]
