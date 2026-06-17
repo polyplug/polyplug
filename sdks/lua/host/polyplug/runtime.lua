@@ -36,10 +36,6 @@ ffi.cdef([[
 
 local M = {}
 
-local bit = require("bit")
-local FNV_OFFSET = 0xcbf29ce484222325ULL
-local FNV_PRIME = 0x00000100000001B3ULL
-
 -- GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes); the null
 -- handle is index == u32::MAX. Null checks test the `.index` field of the returned cdata.
 M.NULL_HANDLE_INDEX = 0xFFFFFFFF
@@ -86,26 +82,12 @@ local REGISTER_HOST_CONTRACT_FN_T = ffi.typeof("void(*)(const HostApi*, const Ho
 local REGISTER_LOADER_FN_T = ffi.typeof("void(*)(const HostApi*, void*, AbiError*)")
 
 M.bundle_id = abi.bundle_id
+M.host_contract_id = abi.host_contract_id
 
 -- Compatibility modes matching polyplug_abi::Compatibility #[repr(u32)]
 M.COMPATIBILITY_STRICT = 0
 M.COMPATIBILITY_RELAXED = 1
 M.COMPATIBILITY_YOLO = 2
-
---- Compute the host contract ID for "host_contract:name@major_version" using FNV-1a 64-bit.
--- @param name string         The host contract name (must start with "host.").
--- @param major_version number The major version.
--- @return number             The host contract ID.
-function M.host_contract_id(name, major_version)
-    local s = "host_contract:" .. name .. "@" .. tostring(major_version)
-    local h = FNV_OFFSET
-    for i = 1, #s do
-        local b = s:byte(i)
-        h = bit.bxor(h, b)
-        h = h * FNV_PRIME
-    end
-    return h
-end
 
 local function get_lib()
     if not M._lib then
