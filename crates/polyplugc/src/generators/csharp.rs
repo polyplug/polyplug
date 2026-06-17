@@ -1245,7 +1245,7 @@ fn generate_host_fn_caller(
     out: &mut String,
     func: &ResolvedFunction,
     _contract: &ResolvedContract,
-    _contract_struct: &str,
+    contract_struct: &str,
 ) {
     let fn_id: u32 = func.function_id;
     let method_name: String = pascal_case(&func.name);
@@ -1255,7 +1255,7 @@ fn generate_host_fn_caller(
     let params_sig: String = if func.params.is_empty() {
         String::new()
     } else if needs_arg_pack(&func.params) {
-        let args_struct: String = format!("{}{}Args", _contract_struct, method_name);
+        let args_struct: String = format!("{}{}Args", contract_struct, method_name);
         format!("ref {args_struct} args")
     } else {
         let p: &ResolvedParam = &func.params[0];
@@ -1282,7 +1282,7 @@ fn generate_host_fn_caller(
     // Instance validity check. A null instance handle is valid (stateless
     // contracts); only a disposed wrapper is an error.
     out.push_str("        if (_disposed) {\n");
-    let caller_name: String = format!("{}Caller", _contract_struct);
+    let caller_name: String = format!("{}Caller", contract_struct);
     out.push_str(&format!(
         "            throw new ObjectDisposedException(nameof({caller_name}));\n"
     ));
@@ -2467,10 +2467,6 @@ fn generate_cs_host_thunk(
 
     // Handle return value
     if has_return {
-        let _ret_ty: String = match func.returns.as_ref() {
-            Some(ret) => cs_host_return_type_name(ret),
-            None => String::from("void"),
-        };
         out.push_str("        // SAFETY: outPtr is a valid pointer per ABI contract.\n");
         out.push_str("        unsafe { Marshal.StructureToPtr(result, outPtr, false); }\n");
     } else {
@@ -2588,10 +2584,6 @@ fn generate_cs_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_re
     };
 
     if has_return {
-        let _ret_ty: String = match func.returns.as_ref() {
-            Some(ret) => cs_host_return_type_name(ret),
-            None => String::from("void"),
-        };
         out.push_str(&format!(
             "        var result = impl.{}({});\n",
             pascal_case(&func.name),
