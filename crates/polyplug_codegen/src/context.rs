@@ -25,6 +25,22 @@ pub struct GenerationContext {
     pub indent_str: String,
 }
 
+/// The primitive ABI type keys every language context maps, defined once so a
+/// language's value list cannot drift out of sync with the others. Each factory
+/// supplies its 12 target-language spellings in this exact order.
+const PRIMITIVE_TYPE_KEYS: [&str; 12] = [
+    "u64", "u32", "u16", "u8", "i64", "i32", "i16", "i8", "usize", "isize", "bool", "()",
+];
+
+/// Pair `PRIMITIVE_TYPE_KEYS` with `values` (same order) into a type map.
+fn primitive_type_map(values: [&str; 12]) -> HashMap<String, String> {
+    PRIMITIVE_TYPE_KEYS
+        .into_iter()
+        .zip(values)
+        .map(|(key, value): (&str, &str)| (String::from(key), String::from(value)))
+        .collect()
+}
+
 impl GenerationContext {
     /// Create a new context with the given language and type mappings.
     pub fn new(language: Language, type_map: HashMap<String, String>) -> GenerationContext {
@@ -180,91 +196,76 @@ impl GenerationContext {
 
     /// Create a C++ generation context with standard type mappings.
     pub fn cpp() -> GenerationContext {
-        let mut type_map: HashMap<String, String> = HashMap::new();
-        type_map.insert(String::from("u64"), String::from("uint64_t"));
-        type_map.insert(String::from("u32"), String::from("uint32_t"));
-        type_map.insert(String::from("u16"), String::from("uint16_t"));
-        type_map.insert(String::from("u8"), String::from("uint8_t"));
-        type_map.insert(String::from("i64"), String::from("int64_t"));
-        type_map.insert(String::from("i32"), String::from("int32_t"));
-        type_map.insert(String::from("i16"), String::from("int16_t"));
-        type_map.insert(String::from("i8"), String::from("int8_t"));
-        type_map.insert(String::from("usize"), String::from("size_t"));
-        type_map.insert(String::from("isize"), String::from("ptrdiff_t"));
-        type_map.insert(String::from("bool"), String::from("bool"));
-        type_map.insert(String::from("()"), String::from("void"));
+        let type_map: HashMap<String, String> = primitive_type_map([
+            "uint64_t",
+            "uint32_t",
+            "uint16_t",
+            "uint8_t",
+            "int64_t",
+            "int32_t",
+            "int16_t",
+            "int8_t",
+            "size_t",
+            "ptrdiff_t",
+            "bool",
+            "void",
+        ]);
         GenerationContext::new(Language::Cpp, type_map)
     }
 
     /// Create a C# generation context with standard type mappings.
     pub fn csharp() -> GenerationContext {
-        let mut type_map: HashMap<String, String> = HashMap::new();
-        type_map.insert(String::from("u64"), String::from("ulong"));
-        type_map.insert(String::from("u32"), String::from("uint"));
-        type_map.insert(String::from("u16"), String::from("ushort"));
-        type_map.insert(String::from("u8"), String::from("byte"));
-        type_map.insert(String::from("i64"), String::from("long"));
-        type_map.insert(String::from("i32"), String::from("int"));
-        type_map.insert(String::from("i16"), String::from("short"));
-        type_map.insert(String::from("i8"), String::from("sbyte"));
-        type_map.insert(String::from("usize"), String::from("nuint"));
-        type_map.insert(String::from("isize"), String::from("nint"));
-        type_map.insert(String::from("bool"), String::from("bool"));
-        type_map.insert(String::from("()"), String::from("void"));
+        let type_map: HashMap<String, String> = primitive_type_map([
+            "ulong", "uint", "ushort", "byte", "long", "int", "short", "sbyte", "nuint", "nint",
+            "bool", "void",
+        ]);
         GenerationContext::new(Language::CSharp, type_map)
     }
 
     /// Create a Python generation context with ctypes type mappings.
     pub fn python() -> GenerationContext {
-        let mut type_map: HashMap<String, String> = HashMap::new();
-        type_map.insert(String::from("u64"), String::from("ctypes.c_uint64"));
-        type_map.insert(String::from("u32"), String::from("ctypes.c_uint32"));
-        type_map.insert(String::from("u16"), String::from("ctypes.c_uint16"));
-        type_map.insert(String::from("u8"), String::from("ctypes.c_uint8"));
-        type_map.insert(String::from("i64"), String::from("ctypes.c_int64"));
-        type_map.insert(String::from("i32"), String::from("ctypes.c_int32"));
-        type_map.insert(String::from("i16"), String::from("ctypes.c_int16"));
-        type_map.insert(String::from("i8"), String::from("ctypes.c_int8"));
-        type_map.insert(String::from("usize"), String::from("ctypes.c_size_t"));
-        type_map.insert(String::from("isize"), String::from("ctypes.c_ssize_t"));
-        type_map.insert(String::from("bool"), String::from("ctypes.c_bool"));
-        type_map.insert(String::from("()"), String::from("None"));
+        let type_map: HashMap<String, String> = primitive_type_map([
+            "ctypes.c_uint64",
+            "ctypes.c_uint32",
+            "ctypes.c_uint16",
+            "ctypes.c_uint8",
+            "ctypes.c_int64",
+            "ctypes.c_int32",
+            "ctypes.c_int16",
+            "ctypes.c_int8",
+            "ctypes.c_size_t",
+            "ctypes.c_ssize_t",
+            "ctypes.c_bool",
+            "None",
+        ]);
         GenerationContext::new(Language::Python, type_map)
     }
 
     /// Create a Lua generation context with standard type mappings.
     pub fn lua() -> GenerationContext {
-        let mut type_map: HashMap<String, String> = HashMap::new();
-        type_map.insert(String::from("u64"), String::from("uint64_t"));
-        type_map.insert(String::from("u32"), String::from("uint32_t"));
-        type_map.insert(String::from("u16"), String::from("uint16_t"));
-        type_map.insert(String::from("u8"), String::from("uint8_t"));
-        type_map.insert(String::from("i64"), String::from("int64_t"));
-        type_map.insert(String::from("i32"), String::from("int32_t"));
-        type_map.insert(String::from("i16"), String::from("int16_t"));
-        type_map.insert(String::from("i8"), String::from("int8_t"));
-        type_map.insert(String::from("usize"), String::from("size_t"));
-        type_map.insert(String::from("isize"), String::from("ptrdiff_t"));
-        type_map.insert(String::from("bool"), String::from("bool"));
-        type_map.insert(String::from("()"), String::from("void"));
+        let type_map: HashMap<String, String> = primitive_type_map([
+            "uint64_t",
+            "uint32_t",
+            "uint16_t",
+            "uint8_t",
+            "int64_t",
+            "int32_t",
+            "int16_t",
+            "int8_t",
+            "size_t",
+            "ptrdiff_t",
+            "bool",
+            "void",
+        ]);
         GenerationContext::new(Language::Lua, type_map)
     }
 
     /// Create a JavaScript generation context with standard type mappings.
     pub fn javascript() -> GenerationContext {
-        let mut type_map: HashMap<String, String> = HashMap::new();
-        type_map.insert(String::from("u64"), String::from("bigint"));
-        type_map.insert(String::from("u32"), String::from("number"));
-        type_map.insert(String::from("u16"), String::from("number"));
-        type_map.insert(String::from("u8"), String::from("number"));
-        type_map.insert(String::from("i64"), String::from("bigint"));
-        type_map.insert(String::from("i32"), String::from("number"));
-        type_map.insert(String::from("i16"), String::from("number"));
-        type_map.insert(String::from("i8"), String::from("number"));
-        type_map.insert(String::from("usize"), String::from("bigint"));
-        type_map.insert(String::from("isize"), String::from("bigint"));
-        type_map.insert(String::from("bool"), String::from("boolean"));
-        type_map.insert(String::from("()"), String::from("void"));
+        let type_map: HashMap<String, String> = primitive_type_map([
+            "bigint", "number", "number", "number", "bigint", "number", "number", "number",
+            "bigint", "bigint", "boolean", "void",
+        ]);
         GenerationContext::new(Language::JavaScript, type_map)
     }
 }
