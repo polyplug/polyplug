@@ -11,6 +11,7 @@ use polyplug_python::{PythonConfig, PythonLoader};
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[path = "../generated/mod.rs"]
 mod generated;
@@ -91,7 +92,7 @@ fn bundle_dir(workspace: &Path, language: &str, contract: &str) -> PathBuf {
 /// Build a fresh runtime with all five loaders and the host.logger contract
 /// registered. Each language gets its own runtime so duplicate providers never
 /// collide and the single-init Python/CLR interpreters stay clean.
-fn build_runtime() -> Result<&'static Runtime, String> {
+fn build_runtime() -> Result<Arc<Runtime>, String> {
     let config = RuntimeConfig {
         compatibility: polyplug_abi::Compatibility::Strict,
         hot_reload_enabled: false,
@@ -100,20 +101,22 @@ fn build_runtime() -> Result<&'static Runtime, String> {
         ..Default::default()
     };
 
-    let runtime: &'static Runtime = Box::leak(Box::new(
-        Runtime::builder()
-            .loader(NativeLoader::new(NativeConfig {}))
-            .loader(JsLoader::new(JsConfig {}))
-            .loader(LuaLoader::new(LuaConfig::default()))
-            .loader(PythonLoader::new(PythonConfig::default()))
-            .loader(DotnetLoader::new(DotnetConfig {
-                min_framework: String::from("net10.0"),
-                hostfxr: HostfxrLocation::Auto,
-            }))
-            .config(config)
-            .build()
-            .map_err(|e| e.to_string())?,
-    ));
+    // `build()` already returns an `Arc<Runtime>` whose target has a stable address
+    // for the Arc's lifetime, so the generated callers' cached `*const HostApi` stays
+    // valid without leaking. The Arc is returned to `run_language`, which drops it
+    // after its callers, so the runtime outlives them.
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .loader(NativeLoader::new(NativeConfig {}))
+        .loader(JsLoader::new(JsConfig {}))
+        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(PythonLoader::new(PythonConfig::default()))
+        .loader(DotnetLoader::new(DotnetConfig {
+            min_framework: String::from("net10.0"),
+            hostfxr: HostfxrLocation::Auto,
+        }))
+        .config(config)
+        .build()
+        .map_err(|e| e.to_string())?;
 
     let vtable: &'static HostContractInterface =
         create_host_logger_interface(Box::new(ConsoleLogger));
@@ -137,7 +140,7 @@ fn sv_to_owned(sv: StringView) -> Result<String, String> {
 }
 
 /// Find a contract caller by ID in the runtime.
-fn find_contract<T>(runtime: &'static Runtime, contract_id: u64) -> Result<T, String>
+fn find_contract<T>(runtime: &Runtime, contract_id: u64) -> Result<T, String>
 where
     T: ContractCaller,
 {
@@ -153,7 +156,7 @@ where
 /// Invoke every contract for one language and return its (contract -> output)
 /// map. Loads all five bundle dirs into the language's runtime first.
 fn run_language(workspace: &Path, language: &str) -> Result<BTreeMap<String, String>, String> {
-    let runtime: &'static Runtime = build_runtime()?;
+    let runtime: Arc<Runtime> = build_runtime()?;
 
     for contract in CONTRACTS {
         let dir: PathBuf = bundle_dir(workspace, language, contract);
@@ -172,7 +175,7 @@ fn run_language(workspace: &Path, language: &str) -> Result<BTreeMap<String, Str
 
     let (decoder_in, _): (&str, &str) = golden("decoder");
     let mut decoder: PipelineDecoderContract =
-        find_contract::<PipelineDecoderContract>(runtime, PIPELINE_DECODER_CONTRACT_ID)
+        find_contract::<PipelineDecoderContract>(&runtime, PIPELINE_DECODER_CONTRACT_ID)
             .map_err(|e| format!("[{language}] decoder: {e}"))?;
     let decoder_sv: StringView = decoder
         .decode(StringView {
@@ -184,7 +187,7 @@ fn run_language(workspace: &Path, language: &str) -> Result<BTreeMap<String, Str
 
     let (transformer_in, _): (&str, &str) = golden("transformer");
     let mut transformer: DataTransformerContract =
-        find_contract::<DataTransformerContract>(runtime, DATA_TRANSFORMER_CONTRACT_ID)
+        find_contract::<DataTransformerContract>(&runtime, DATA_TRANSFORMER_CONTRACT_ID)
             .map_err(|e| format!("[{language}] transformer: {e}"))?;
     let transformer_sv: StringView = transformer
         .transform(StringView {
@@ -196,7 +199,7 @@ fn run_language(workspace: &Path, language: &str) -> Result<BTreeMap<String, Str
 
     let (encoder_in, _): (&str, &str) = golden("encoder");
     let mut encoder: PipelineEncoderContract =
-        find_contract::<PipelineEncoderContract>(runtime, PIPELINE_ENCODER_CONTRACT_ID)
+        find_contract::<PipelineEncoderContract>(&runtime, PIPELINE_ENCODER_CONTRACT_ID)
             .map_err(|e| format!("[{language}] encoder: {e}"))?;
     let encoder_sv: StringView = encoder
         .encode(StringView {
@@ -208,7 +211,7 @@ fn run_language(workspace: &Path, language: &str) -> Result<BTreeMap<String, Str
 
     let (reporter_in, _): (&str, &str) = golden("reporter");
     let mut reporter: DataReporterContract =
-        find_contract::<DataReporterContract>(runtime, DATA_REPORTER_CONTRACT_ID)
+        find_contract::<DataReporterContract>(&runtime, DATA_REPORTER_CONTRACT_ID)
             .map_err(|e| format!("[{language}] reporter: {e}"))?;
     let reporter_sv: StringView = reporter
         .report(StringView {
@@ -220,7 +223,7 @@ fn run_language(workspace: &Path, language: &str) -> Result<BTreeMap<String, Str
 
     let (validator_in, _): (&str, &str) = golden("validator");
     let mut validator: PipelineValidatorContract =
-        find_contract::<PipelineValidatorContract>(runtime, PIPELINE_VALIDATOR_CONTRACT_ID)
+        find_contract::<PipelineValidatorContract>(&runtime, PIPELINE_VALIDATOR_CONTRACT_ID)
             .map_err(|e| format!("[{language}] validator: {e}"))?;
     let validator_sv: StringView = validator
         .validate(StringView {
@@ -328,35 +331,35 @@ fn print_matrix(grid: &[(String, Vec<bool>)]) {
 
 /// Trait for contract callers - allows generic find_contract helper.
 trait ContractCaller: Sized {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self>;
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self>;
 }
 
 impl ContractCaller for PipelineDecoderContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for DataTransformerContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for PipelineEncoderContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for DataReporterContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for PipelineValidatorContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }

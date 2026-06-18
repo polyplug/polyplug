@@ -13,6 +13,7 @@ use polyplug_native::{NativeConfig, NativeLoader};
 use polyplug_python::{PythonConfig, PythonLoader};
 use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[path = "../generated/mod.rs"]
 mod generated;
@@ -62,33 +63,35 @@ fn run() -> Result<(), String> {
         ..Default::default()
     };
 
-    let runtime: &'static Runtime = Box::leak(Box::new(
-        Runtime::builder()
-            .loader(NativeLoader::new(NativeConfig {}))
-            .loader(JsLoader::new(JsConfig {}))
-            .loader(LuaLoader::new(LuaConfig::default()))
-            .loader(PythonLoader::new(PythonConfig::default()))
-            .loader(DotnetLoader::new(DotnetConfig::default()))
-            .config(config)
-            .on_reload(|_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
-                match phase.phase_type {
-                    ReloadPhaseType::Preparing => {
-                        eprintln!("[HOT-RELOAD] Preparing: (id=0x{:016X})", phase.bundle_id);
-                    }
-                    ReloadPhaseType::Reloaded => {
-                        eprintln!("[HOT-RELOAD] Reloaded: (id=0x{:016X})", phase.bundle_id);
-                    }
-                    ReloadPhaseType::Failed => {
-                        eprintln!("[HOT-RELOAD] Failed: (id=0x{:016X})", phase.bundle_id);
-                    }
-                    ReloadPhaseType::Unloading => {
-                        eprintln!("[HOT-RELOAD] Unloading: (id=0x{:016X})", phase.bundle_id);
-                    }
+    // Hold the runtime in an `Arc` — `build()` already returns one, and its target
+    // has a stable address for the Arc's lifetime, so every generated caller's cached
+    // `*const HostApi` stays valid. The callers live in inner scopes below and drop
+    // before this `Arc` does at the end of `run`, so the runtime outlives them.
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .loader(NativeLoader::new(NativeConfig {}))
+        .loader(JsLoader::new(JsConfig {}))
+        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(PythonLoader::new(PythonConfig::default()))
+        .loader(DotnetLoader::new(DotnetConfig::default()))
+        .config(config)
+        .on_reload(|_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
+            match phase.phase_type {
+                ReloadPhaseType::Preparing => {
+                    eprintln!("[HOT-RELOAD] Preparing: (id=0x{:016X})", phase.bundle_id);
                 }
-            })
-            .build()
-            .map_err(|e| e.to_string())?,
-    ));
+                ReloadPhaseType::Reloaded => {
+                    eprintln!("[HOT-RELOAD] Reloaded: (id=0x{:016X})", phase.bundle_id);
+                }
+                ReloadPhaseType::Failed => {
+                    eprintln!("[HOT-RELOAD] Failed: (id=0x{:016X})", phase.bundle_id);
+                }
+                ReloadPhaseType::Unloading => {
+                    eprintln!("[HOT-RELOAD] Unloading: (id=0x{:016X})", phase.bundle_id);
+                }
+            }
+        })
+        .build()
+        .map_err(|e| e.to_string())?;
 
     let vtable: &'static HostContractInterface =
         create_host_logger_interface(Box::new(ConsoleLogger));
@@ -119,7 +122,7 @@ fn run() -> Result<(), String> {
     println!("Input: \"{input}\"\n");
 
     if let Some(mut decoder) =
-        find_contract::<PipelineDecoderContract>(runtime, PIPELINE_DECODER_CONTRACT_ID)
+        find_contract::<PipelineDecoderContract>(&runtime, PIPELINE_DECODER_CONTRACT_ID)
     {
         let result_sv: StringView = decoder
             .decode(StringView {
@@ -139,7 +142,7 @@ fn run() -> Result<(), String> {
 
     let decoded: String = format!("DECODED:{}", input.replace(',', "|"));
     if let Some(mut transformer) =
-        find_contract::<DataTransformerContract>(runtime, DATA_TRANSFORMER_CONTRACT_ID)
+        find_contract::<DataTransformerContract>(&runtime, DATA_TRANSFORMER_CONTRACT_ID)
     {
         let result_sv: StringView = transformer
             .transform(StringView {
@@ -159,7 +162,7 @@ fn run() -> Result<(), String> {
 
     let transformed: &str = "TRANSFORMED:NAME|value (transformed)|43";
     if let Some(mut encoder) =
-        find_contract::<PipelineEncoderContract>(runtime, PIPELINE_ENCODER_CONTRACT_ID)
+        find_contract::<PipelineEncoderContract>(&runtime, PIPELINE_ENCODER_CONTRACT_ID)
     {
         let result_sv: StringView = encoder
             .encode(StringView {
@@ -178,7 +181,7 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(mut reporter) =
-        find_contract::<DataReporterContract>(runtime, DATA_REPORTER_CONTRACT_ID)
+        find_contract::<DataReporterContract>(&runtime, DATA_REPORTER_CONTRACT_ID)
     {
         let result_sv: StringView = reporter
             .report(StringView {
@@ -197,7 +200,7 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(mut validator) =
-        find_contract::<PipelineValidatorContract>(runtime, PIPELINE_VALIDATOR_CONTRACT_ID)
+        find_contract::<PipelineValidatorContract>(&runtime, PIPELINE_VALIDATOR_CONTRACT_ID)
     {
         let result_sv: StringView = validator
             .validate(StringView {
@@ -222,7 +225,7 @@ fn run() -> Result<(), String> {
     if let Ok(iters_str) = env::var("POLYPLUG_BENCH_ITERS")
         && let Ok(iters) = iters_str.parse::<u64>()
         && let Some(mut bench_decoder) =
-            find_contract::<PipelineDecoderContract>(runtime, PIPELINE_DECODER_CONTRACT_ID)
+            find_contract::<PipelineDecoderContract>(&runtime, PIPELINE_DECODER_CONTRACT_ID)
     {
         let sv: StringView = StringView {
             ptr: input.as_ptr(),
@@ -393,7 +396,7 @@ fn run_decode_baselines(so_path: &str, input: &str, iters: u64) {
 
 /// Helper: Find a plugin implementing a contract and create a caller instance.
 /// Uses generated contract ID constants - no manifest parsing needed.
-fn find_contract<T>(runtime: &'static Runtime, contract_id: u64) -> Option<T>
+fn find_contract<T>(runtime: &Runtime, contract_id: u64) -> Option<T>
 where
     T: ContractCaller,
 {
@@ -406,35 +409,35 @@ where
 
 /// Trait for contract callers - allows generic find_contract helper.
 trait ContractCaller: Sized {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self>;
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self>;
 }
 
 impl ContractCaller for PipelineDecoderContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for DataTransformerContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for PipelineEncoderContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for DataReporterContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for PipelineValidatorContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
