@@ -957,15 +957,29 @@ dereference a raw interface pointer, so a JS peer call still crosses into the lo
 through the `callGuestMethod` bridge, a cost the VM boundary dominates and where the
 resolve is a rounding error.
 
-The `cross_call` bench's `peer/stateless_route` arm (~25 ns) now measures the
-**dynamic** `HostApi.call_guest_method` capability — the uncached, route-by-
-`contract_id` path that remains in the ABI for host-driven dispatch — **not** the
-generated peer glue. It is the cost a caller pays when it does *not* cache; the
-direct cached path the generated callers use is ~10× cheaper. Any extra a real peer
-caller pays beyond the ~2.4 ns dispatch is its language's marshalling, not the
-dispatch (the same two-tier caveat as the dispatch matrix). Refresh these figures on
-a quiet machine with `cargo bench -p polyplug --bench cross_call --bench
-contract_dispatch --bench revision_check`.
+The `cross_call` bench's `peer/stateless_route` arm (**~38.5 ns**, measured) now
+measures the **dynamic** `HostApi.call_guest_method` capability — the uncached,
+route-by-`contract_id` path that remains in the ABI for host-driven dispatch —
+**not** the generated peer glue. It is the cost a caller pays when it does *not*
+cache; the direct cached path the generated callers use is **~16× cheaper**. Any
+extra a real peer caller pays beyond the ~2.4 ns dispatch is its language's
+marshalling, not the dispatch (the same two-tier caveat as the dispatch matrix).
+
+These figures were measured on 2026-06-19 on a quiet machine
+(`cargo bench -p polyplug --bench cross_call --bench contract_dispatch --bench
+revision_check`):
+
+| Path | Time | What it is |
+|---|---|---|
+| `cross_call/peer/stateless_route` | **~38.5 ns** | old peer path — `call_guest_method` route (resolve + FFI round-trip) |
+| `revision_check/staleness_check_then_dispatch` | **~2.45 ns** | new peer path — cached direct dispatch + revision acquire-load |
+| `revision_check/dispatch_only` | **~2.02 ns** | bare cached dispatch (no staleness check) |
+
+The revision staleness-check therefore costs only **~0.43 ns** (one acquire-load +
+compare) on top of bare dispatch, and the generated peer caller is **~15.7×** faster
+than the `call_guest_method` route it replaced. Reproduce with the command above; run
+on a quiet machine for stable absolute ns — the relative gap is robust to load, the
+absolute ns are not.
 
 ---
 

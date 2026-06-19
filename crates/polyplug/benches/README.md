@@ -496,18 +496,21 @@ full resolve chain inside `host_call_guest_method` (count providers → find fir
 → resolve → native dispatch). Two arms:
 
 - `native/single_provider` — the common case: an instance carrying the target
-  contract's own handle, one cross-call to the single registered provider (~25 ns
-  locally).
-- `peer/stateless_route` — the runtime path a generated **guest→guest peer
-  caller** bottoms out in: a *stateless* instance (null `data`, target
-  `contract_id`) dispatched through `call_guest_method`, routed solely by
-  `contract_id` (the #72 fix accepts a null `data` and routes by id). It lands at
-  ~25 ns — **identical** to `native/single_provider`, because both share the same
-  resolve chain; the gap is noise. The honest finding: at the runtime level a peer
-  call and a host-mediated cross-call cost the same. The per-language **generated**
-  marshalling layered on top (QuickJS/CPython/CLR…) is glue that cannot be
-  exercised in a pure in-process bench without a per-language bundle — the same
-  two-tier caveat as the dispatch matrix.
+  contract's own handle, one cross-call to the single registered provider (~38.5 ns
+  locally, measured 2026-06-19).
+- `peer/stateless_route` — the **dynamic** `call_guest_method` capability: a
+  *stateless* instance (null `data`, target `contract_id`) dispatched through
+  `call_guest_method`, routed solely by `contract_id` (the #72 fix accepts a null
+  `data` and routes by id). It lands at ~38.5 ns — **identical** to
+  `native/single_provider`, because both share the same resolve chain; the gap is
+  noise. **Note:** since the peer direct-dispatch epic, a generated guest→guest peer
+  caller no longer bottoms out here — it caches the resolved interface and dispatches
+  directly (~2.45 ns incl. the revision staleness-check, see `revision_check`), so
+  this arm now measures only the uncached dynamic capability a caller pays when it
+  does *not* cache (~16× the cached path). The per-language **generated** marshalling
+  layered on top (QuickJS/CPython/CLR…) is glue that cannot be exercised in a pure
+  in-process bench without a per-language bundle — the same two-tier caveat as the
+  dispatch matrix.
 
 ### `guest_host_call` — the guest → host direction
 
