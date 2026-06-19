@@ -176,7 +176,10 @@ inline CallArena polyplug_arena_new(uint8_t* buf, size_t len, const HostApi* hos
 
 /// Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 ///
-/// Dispatches to the peer through the host-mediated `call_guest_method` path.
+/// Dispatches directly through the cached peer interface — the same near-bare-metal
+/// path as the host->guest caller; no host-mediated round-trip, no per-call registry
+/// resolve, no epoch pin. The declared dependency keeps the peer alive; a hot-reload
+/// is caught by the cached revision counter.
 /// Use `resolve(host)` to obtain an instance; returns `std::nullopt` when
 /// the contract is not registered or the host interface is null.
 ///
@@ -211,10 +214,6 @@ public:
         // Route creation through the host so the runtime tracks the instance.
         GuestContractInstance instance{};
         host->create_guest_instance(host, iface, nullptr, &instance);
-        // Stamp the peer contract id so `host->call_guest_method` routes by it
-        // even when a stateless peer's create_instance returns a null (null-id)
-        // handle. The host-mediated path keys routing on contract_id.
-        instance.contract_id = 0x45173A959EEC57C5ULL;
         // Fetch the registry revision counter ONCE, then read its current value, so
         // every later call can detect a reload/unload with a direct atomic load and
         // re-resolve before dispatching.
@@ -284,7 +283,7 @@ public:
     /// Check if this peer holds a resolved (non-null) interface.
     bool is_valid() const noexcept { return iface_ != nullptr; }
 
-    /// Call peer function `validate` (function_id=0) via host-mediated dispatch.
+    /// Call peer function `validate` (function_id=0) via direct interface dispatch.
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
     StringView validate(StringView input) {
@@ -302,11 +301,24 @@ public:
         const void* args_ptr = &local_input;
         StringView out{};
         void* out_ptr = &out;
-        // SAFETY: host_ is non-null (set in resolve()); iface_ and instance_
-        // are valid for the lifetime of this wrapper. args_ptr/out_ptr match
-        // the ABI contract for this function.
         AbiError err{};
-        host_->call_guest_method(host_, instance_, 0U, args_ptr, out_ptr, &arena_, &err);
+        switch (iface_->dispatch_type) {
+            case DispatchType::Native: {
+                if (0U >= iface_->dispatch.native.function_count) {
+                    detail::log_call_failure(host_, "guest.peer_caller", "PipelineValidatorContractPeer.validate", static_cast<uint32_t>(AbiErrorCode::FunctionNotAvailable));
+                    return StringView{};
+                }
+                auto fn_ = reinterpret_cast<void(*)(GuestContractInstance, const void*, void*, AbiError*)>(iface_->dispatch.native.functions[0U]);
+                // SAFETY: instance_ is the token returned by create_instance and is valid.
+                // args_ptr/out_ptr match the ABI contract for this function.
+                fn_(instance_, args_ptr, out_ptr, &err);
+                break;
+            }
+            case DispatchType::VirtualMachine: {
+                (iface_->dispatch.vm.call)(iface_->dispatch.vm.loader_data, instance_, 0U, args_ptr, out_ptr, &arena_, &err);
+                break;
+            }
+        }
         if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             detail::log_call_failure(host_, "guest.peer_caller", "PipelineValidatorContractPeer.validate", err.code);
             return StringView{};
@@ -323,8 +335,8 @@ private:
     ///
     /// The old instance is ABANDONED, never destroyed: after a reload its
     /// interface and the guest state it created are already epoch-reclaimed, so
-    /// calling the dead interface's destroy would be UB. The re-stamped contract
-    /// id keeps `host->call_guest_method` routing by it for stateless peers.
+    /// calling the dead interface's destroy would be UB. Dispatch then goes
+    /// straight through the freshly resolved interface pointer.
     bool revalidate() noexcept {
         if (host_ == nullptr) {
             return false;
@@ -335,7 +347,6 @@ private:
         }
         GuestContractInstance inst{};
         host_->create_guest_instance(host_, iface, nullptr, &inst);
-        inst.contract_id = 0x45173A959EEC57C5ULL;
         iface_ = iface;
         instance_ = inst;
         cached_revision_ = polyplug_load_revision(revision_ptr_);
@@ -346,7 +357,8 @@ private:
     const GuestContractInterface* iface_;
     /// Instance handle created from the peer interface.
     GuestContractInstance instance_;
-    /// Host interface pointer used for `call_guest_method` and instance lifecycle.
+    /// Host interface pointer used for instance lifecycle (create/destroy) and
+    /// re-resolve — NOT for dispatch, which goes straight through the interface.
     const HostApi* host_;
     /// Peer contract handle, retained so the cache can re-resolve after a hot-reload
     /// (which swaps a new interface into the same slot) or report a gone contract.

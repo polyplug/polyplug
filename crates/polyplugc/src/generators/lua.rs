@@ -2074,14 +2074,6 @@ fn generate_lua_guest_peer_caller(
     out.push_str("    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.\n");
     out.push_str("    local instance = ffi.new(\"GuestContractInstance\")\n");
     out.push_str("    host.create_guest_instance(host, interface, nil, instance)\n");
-    out.push_str(
-        "    -- Stamp the peer contract id so call_guest_method routes by it even when a\n",
-    );
-    out.push_str("    -- stateless peer's create_instance returns a null (null-id) handle.\n");
-    out.push_str(&format!(
-        "    instance.contract_id = 0x{:016X}ULL\n",
-        contract.contract_id
-    ));
     // Fetch the registry revision counter ONCE, then read its current value, so
     // every later dispatch can detect a peer reload/unload with a direct atomic
     // load (no call back into the runtime) and re-resolve before dispatching. A
@@ -2117,8 +2109,7 @@ fn generate_lua_guest_peer_caller(
     // swapped a new interface into the same slot (handle resolves to it); an unload
     // vacated the slot (resolves to nil → return false, peer gone). The old instance
     // is ABANDONED — its interface is already epoch-reclaimed, so dispatching it
-    // through call_guest_method would be UB. A fresh instance is created and the peer
-    // contract id re-stamped so call_guest_method keeps routing by it.
+    // directly would be UB. A fresh instance is created against the new interface.
     out.push_str(&format!("function {}:revalidate()\n", class_name));
     out.push_str(
         "    local interface = self._host.resolve_guest_contract(self._host, self._handle)\n",
@@ -2130,10 +2121,6 @@ fn generate_lua_guest_peer_caller(
     out.push_str(
         "    self._host.create_guest_instance(self._host, interface, nil, new_instance)\n",
     );
-    out.push_str(&format!(
-        "    new_instance.contract_id = 0x{:016X}ULL\n",
-        contract.contract_id
-    ));
     out.push_str("    self._interface = interface\n");
     out.push_str("    self._instance = new_instance\n");
     out.push_str("    self._cached_revision = self:live_revision()\n");
@@ -2148,6 +2135,11 @@ fn generate_lua_guest_peer_caller(
 }
 
 /// Generate one method on a guest peer caller class.
+///
+/// Dispatches directly through the cached peer interface — same near-bare-metal
+/// path as the host->guest caller; no host-mediated round-trip, no per-call
+/// registry resolve, no epoch pin. The declared dependency keeps the peer alive;
+/// a hot-reload is caught by the cached revision counter.
 fn generate_lua_guest_peer_method(
     out: &mut String,
     func: &ResolvedFunction,
@@ -2206,14 +2198,14 @@ fn generate_lua_guest_peer_method(
     emit_lua_guest_host_contract_out_setup(out, &func.returns, enums);
 
     out.push_str(
-        "    -- Out-param ABI: call_guest_method writes the AbiError through a trailing pointer.\n",
+        "    -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.\n",
     );
     out.push_str("    local err = ffi.new(\"AbiError\")\n");
     out.push_str("    if dispatch_type == 0 then\n");
     // Function-id bounds check inside the Native arm only: on a VM interface
     // dispatch.native.function_count aliases bits of dispatch.vm.call through
-    // the union (garbage). The host-mediated call_guest_method path enforces
-    // its own bounds (FunctionNotAvailable).
+    // the union (garbage). The VM-side loader enforces its own bounds
+    // (FunctionNotAvailable).
     out.push_str(&format!(
         "        if {fn_id} >= interface.dispatch.native.function_count then\n"
     ));
@@ -2223,18 +2215,21 @@ fn generate_lua_guest_peer_method(
         out.push_str("            return\n");
     }
     out.push_str("        end\n");
-    // Native dispatch path: call_guest_method routes through the host-mediated ABI.
-    // Pass nil for the arena — a Lua peer caller has no per-caller CallArena; the
-    // bridge falls back to host->alloc (same convention as the host caller's nil
-    // arena comment).
+    // Native dispatch path: call the guest function pointer directly through the
+    // cached interface (same ctype as the host->guest caller — pass the whole
+    // GuestContractInstance value as the first arg). No host-mediated round-trip.
     out.push_str(&format!(
-        "        self._host.call_guest_method(self._host, self._instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
+        "        local fn_ptr = interface.dispatch.native.functions[{fn_id}]\n"
     ));
+    out.push_str("        local fn = ffi.cast(NativeDispatchFnType, fn_ptr)\n");
+    out.push_str("        fn(self._instance, args_ptr, out_ptr, err)\n");
     out.push_str("    elseif dispatch_type == 1 then\n");
-    // VM dispatch path: call_guest_method still applies; the host routes it through
-    // the loader vm.call trampoline internally. Arena is nil for the same reason.
+    // VM dispatch path: call the loader vm.call trampoline directly through the
+    // cached interface. The arena is nil — a Lua peer caller has no per-caller
+    // CallArena, so the bridge falls back to host->alloc (same convention as the
+    // host->guest caller's nil arena).
     out.push_str(&format!(
-        "        self._host.call_guest_method(self._host, self._instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
+        "        interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
     ));
     out.push_str("    else\n");
     if has_return {
@@ -3254,15 +3249,40 @@ mod tests {
             out.contains("function PipelineValidatorPeer:validate(input)"),
             "missing validate method: {out}"
         );
+        // Direct cached-interface dispatch — no host-mediated round-trip.
         assert!(
-            out.contains("call_guest_method(self._host, self._instance,"),
-            "method must dispatch via call_guest_method: {out}"
+            !out.contains("call_guest_method"),
+            "peer must NOT route through the host-mediated call_guest_method: {out}"
         );
-        // Arena must be nil — Lua peer callers have no per-caller CallArena.
-        // Out-param ABI: call_guest_method takes a trailing out_err pointer after the arena.
+        // Branch on the cached interface's dispatch_type.
+        assert!(
+            out.contains("if dispatch_type == 0 then"),
+            "peer must branch on dispatch_type: {out}"
+        );
+        // Native arm: call the guest function pointer directly via NativeDispatchFnType.
+        assert!(
+            out.contains("local fn_ptr = interface.dispatch.native.functions["),
+            "native arm must read the function pointer from the cached interface: {out}"
+        );
+        assert!(
+            out.contains("ffi.cast(NativeDispatchFnType, fn_ptr)"),
+            "native arm must cast through the shared NativeDispatchFnType ctype: {out}"
+        );
+        assert!(
+            out.contains("fn(self._instance, args_ptr, out_ptr, err)"),
+            "native arm must call the fn pointer with the instance directly: {out}"
+        );
+        // VM arm: call the loader vm.call trampoline directly with a nil arena.
+        // Lua peer callers have no per-caller CallArena.
+        assert!(
+            out.contains(
+                "interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance,"
+            ),
+            "vm arm must call vm.call directly with loader_data and the instance: {out}"
+        );
         assert!(
             out.contains(", nil, err)"),
-            "call_guest_method must pass nil arena and out_err: {out}"
+            "vm dispatch must pass a nil arena and the trailing out_err: {out}"
         );
         assert!(
             out.contains("return out_val"),

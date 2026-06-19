@@ -3302,12 +3302,17 @@ fn generate_guest_peer_callers_stub(ir: &ValidatedIr, peers: &[&ResolvedContract
 
 /// Generate one `<Name>Peer` class for a single peer guest contract.
 ///
-/// The class is a thin wrapper over the host-mediated `call_guest_method` path:
-///   `find_guest_contract` → `resolve_guest_contract` → `create_instance`
-///   → per-call: `call_guest_method(host, instance, fn_id, args, out, arena)`.
+/// Resolution is host-mediated once at setup:
+///   `find_guest_contract` → `resolve_guest_contract` → `create_guest_instance`.
+/// Per-call dispatch then goes DIRECTLY through the cached peer interface — the
+/// same near-bare-metal path as the host→guest caller; no host-mediated
+/// round-trip, no per-call registry resolve, no epoch pin. The declared
+/// dependency keeps the peer alive; a hot-reload is caught by the cached
+/// revision counter, which triggers a re-resolve before the dead interface is
+/// ever touched.
 ///
 /// `resolve(host_ptr)` takes the per-instance host pointer the author factory
-/// received (`polyplug_create_<plugin>`), so every peer call routes through the
+/// received (`polyplug_create_<plugin>`), so resolution routes through the
 /// runtime that owns the calling instance — no host pointer is stored in the
 /// guest SDK.
 fn generate_peer_caller_class(
@@ -3324,7 +3329,7 @@ fn generate_peer_caller_class(
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("class {class_name}:\n"));
-    out.push_str("    \"\"\"Guest→guest peer caller dispatching through host-mediated call_guest_method.\n\n");
+    out.push_str("    \"\"\"Guest→guest peer caller dispatching directly through the cached peer interface.\n\n");
     out.push_str(
         "    Per-instance state (interface, instance, arena) is instance-owned; the host\n",
     );
@@ -3421,14 +3426,6 @@ fn generate_peer_caller_class(
     out.push_str(
         "        host.contents.create_guest_instance(host_ptr, interface, None, ctypes.byref(instance))\n",
     );
-    out.push_str(
-        "        # Stamp the peer contract id so call_guest_method routes by it even when\n",
-    );
-    out.push_str("        # a stateless peer's create_instance returns a null (null-id) handle.\n");
-    out.push_str(&format!(
-        "        instance.contract_id = 0x{:016X}\n",
-        contract.contract_id
-    ));
     out.push_str("        return cls(host_ptr, handle, interface, instance)\n\n");
 
     // __del__: destroy instance
@@ -3501,7 +3498,7 @@ fn generate_peer_caller_class(
     out.push_str(
         "        the dead interface's destroy_instance would be UB. A fresh instance is created\n",
     );
-    out.push_str("        on the new interface and the peer contract id is re-stamped.\n");
+    out.push_str("        on the new interface and cached for direct dispatch.\n");
     out.push_str("        \"\"\"\n");
     out.push_str("        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))\n");
     out.push_str(
@@ -3513,16 +3510,6 @@ fn generate_peer_caller_class(
     out.push_str(
         "        host.contents.create_guest_instance(self._host_ptr, interface, None, ctypes.byref(instance))\n",
     );
-    out.push_str(
-        "        # Re-stamp the peer contract id so call_guest_method keeps routing by it even\n",
-    );
-    out.push_str(
-        "        # when a stateless peer's create_instance returns a null (null-id) handle.\n",
-    );
-    out.push_str(&format!(
-        "        instance.contract_id = 0x{:016X}\n",
-        contract.contract_id
-    ));
     out.push_str("        self._interface = interface\n");
     out.push_str("        self._instance = instance\n");
     out.push_str("        self._cached_revision = self._live_revision()\n");
@@ -3538,8 +3525,13 @@ fn generate_peer_caller_class(
 
 /// Generate one dispatch method on a peer caller class.
 ///
-/// Uses `call_guest_method` for both native and VM guests so the host can apply
-/// its guarded dispatch path (resolve→dispatch window, thread guards, etc.).
+/// Dispatches directly through the cached peer interface — the same
+/// near-bare-metal path as the host→guest caller; no host-mediated round-trip,
+/// no per-call registry resolve, no epoch pin. Branches on the resolved
+/// interface's `dispatch_type`: Native guests call the function pointer through
+/// ctypes; VM guests route through the loader's `vm.call` trampoline. The
+/// declared dependency keeps the peer alive; a hot-reload is caught by the
+/// cached revision counter.
 fn generate_peer_caller_method(
     out: &mut String,
     func: &ResolvedFunction,
@@ -3578,17 +3570,65 @@ fn generate_peer_caller_method(
     // out slot setup
     emit_python_host_out_setup(out, &func.returns, enums);
 
-    // Dispatch via call_guest_method (host-mediated, guarded).
-    out.push_str("        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))\n");
-    // Out-param ABI: call_guest_method writes the AbiError through a trailing pointer.
+    // Direct dispatch through the cached peer interface — identical mechanism to
+    // the host→guest caller (generate_host_caller_method). Branch on the resolved
+    // interface's dispatch_type: Native guests (C++/Rust/native Python) call the
+    // function pointer directly; VM guests (Lua, JS) route through the loader's
+    // vm.call trampoline with the canonical 6-arg signature. No host-mediated
+    // round-trip, no per-call registry resolve, no epoch pin.
+    out.push_str("        # SAFETY: the interface pointer is valid for the wrapper lifetime.\n");
+    out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
+    out.push_str("        interface: GuestContractInterface = iface_ptr.contents\n");
+    out.push_str(
+        "        # Out-param ABI: dispatch writes the AbiError through a trailing pointer.\n",
+    );
     out.push_str("        err: AbiError = AbiError()\n");
+    out.push_str("        if interface.dispatch_type == DispatchType.Native:\n");
+    // Function-id bounds check inside the Native arm only: on a VM interface
+    // dispatch.native.function_count aliases bits of dispatch.vm.call through
+    // the union (garbage). The VM-side loader enforces its own bounds
+    // (FunctionNotAvailable).
+    out.push_str(&format!(
+        "            if {fn_id} >= interface.dispatch.native.function_count:\n"
+    ));
+    out.push_str("                raise RuntimeError(f\"peer call failed (code {int(AbiErrorCode.FunctionNotAvailable)})\")\n");
+    out.push_str("            functions_ptr: int = interface.dispatch.native.functions\n");
+    out.push_str(&format!(
+        "            fn_ptr: int = ctypes.cast(functions_ptr + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
+    ));
+    out.push_str(
+        "            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
+    );
+    // Native dispatch passes the instance handle by value as the first argument,
+    // matching the canonical fn(instance, args, out) -> AbiError signature.
+    out.push_str(
+        "            # SAFETY: instance is valid for the wrapper lifetime; args_ptr points\n",
+    );
+    out.push_str(
+        "            # to valid args, out_ptr to a valid return-type buffer per the ABI contract.\n",
+    );
+    out.push_str("            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))\n");
+    out.push_str("        else:\n");
+    // VM dispatch: call through interface.dispatch.vm.call with the canonical
+    // 6-arg signature (loader_data, instance, fn_id, args, out, arena). Arena-
+    // backed functions hand the peer this caller's per-call arena; other
+    // functions pass a null (None) arena, which selects the host->alloc fallback.
+    out.push_str(
+        "            # SAFETY: the union's vm variant is active per dispatch_type; args/out\n",
+    );
     if needs_arena {
+        out.push_str(
+            "            # are valid per the ABI contract. The arena was reset at call start.\n",
+        );
         out.push_str(&format!(
-            "        host.contents.call_guest_method(self._host_ptr, self._instance, {fn_id}, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))\n"
+            "            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))\n"
         ));
     } else {
+        out.push_str(
+            "            # are valid per the ABI contract. The null arena selects the host->alloc fallback.\n",
+        );
         out.push_str(&format!(
-            "        host.contents.call_guest_method(self._host_ptr, self._instance, {fn_id}, args_ptr, out_ptr, None, ctypes.byref(err))\n"
+            "            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, None, ctypes.byref(err))\n"
         ));
     }
     out.push_str("        if err.code != AbiErrorCode.Ok:\n");
@@ -4477,10 +4517,24 @@ mod tests {
             !result.contains("get_host_interface"),
             "resolve() must not read a stored host pointer: {result}"
         );
-        // Uses host-mediated call_guest_method
+        // Dispatches DIRECTLY through the cached peer interface — no host-mediated
+        // call_guest_method round-trip. Branches on dispatch_type and routes
+        // Native through dispatch.native.functions, VM through dispatch.vm.call.
         assert!(
-            result.contains("call_guest_method"),
-            "must dispatch via call_guest_method: {result}"
+            !result.contains("call_guest_method"),
+            "must NOT dispatch via host-mediated call_guest_method: {result}"
+        );
+        assert!(
+            result.contains("interface.dispatch_type == DispatchType.Native"),
+            "peer dispatch must branch on the interface dispatch_type: {result}"
+        );
+        assert!(
+            result.contains("interface.dispatch.native.functions"),
+            "Native peer dispatch must call the native function pointer: {result}"
+        );
+        assert!(
+            result.contains("interface.dispatch.vm.call(interface.dispatch.vm.loader_data"),
+            "VM peer dispatch must route through the vm.call trampoline: {result}"
         );
         // Correct contract id in find_guest_contract call
         assert!(

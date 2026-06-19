@@ -3466,6 +3466,17 @@ fn generate_ts_peer_caller_class(
     out.push_str(&format!(
         "/**\n * Peer caller for guest contract `{}` (id=0x{:016X})\n *\n\
          * Dispatches through the host-mediated `callGuestMethod` bridge.\n\
+         *\n\
+         * This is the deliberate QuickJS exception to the direct-dispatch peer model:\n\
+         * the native-dispatch languages (rust/cpp/csharp/python/lua) cache the resolved\n\
+         * interface pointer and dispatch straight through it. A QuickJS guest cannot\n\
+         * dereference raw pointers — it reaches host capabilities ONLY through the threaded\n\
+         * `bridge` (Rule 12) — so the peer call necessarily crosses into the Rust loader via\n\
+         * `callGuestMethod`. The loader-side resolve there is dominated by the QuickJS VM\n\
+         * boundary and argument marshalling by orders of magnitude, so eliminating it would\n\
+         * add bridge ABI surface for no measurable gain. The revision snapshot + per-call\n\
+         * staleness check below keep correctness parity with the direct-dispatch callers.\n\
+         *\n\
          * Uses per-call create+destroy (stateless contract model).\n\
          * Stateful peers would require a retained instance-handle API.\n */\n",
         contract.name, contract.contract_id

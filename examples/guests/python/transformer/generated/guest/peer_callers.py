@@ -48,7 +48,7 @@ _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, GuestContractInstance, ctypes.c_void
 
 # Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 class PipelineValidatorPeer:
-    """Guest→guest peer caller dispatching through host-mediated call_guest_method.
+    """Guest→guest peer caller dispatching directly through the cached peer interface.
 
     Per-instance state (interface, instance, arena) is instance-owned; the host
     pointer is passed explicitly to resolve() by the calling implementation
@@ -106,9 +106,6 @@ class PipelineValidatorPeer:
         # create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> None.
         instance: GuestContractInstance = GuestContractInstance()
         host.contents.create_guest_instance(host_ptr, interface, None, ctypes.byref(instance))
-        # Stamp the peer contract id so call_guest_method routes by it even when
-        # a stateless peer's create_instance returns a null (null-id) handle.
-        instance.contract_id = 0x45173A959EEC57C5
         return cls(host_ptr, handle, interface, instance)
 
     def __del__(self) -> None:
@@ -150,7 +147,7 @@ class PipelineValidatorPeer:
         The old instance is ABANDONED, never destroyed: after a reload its interface
         — and the guest-side state it created — is already epoch-reclaimed, so calling
         the dead interface's destroy_instance would be UB. A fresh instance is created
-        on the new interface and the peer contract id is re-stamped.
+        on the new interface and cached for direct dispatch.
         """
         host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))
         interface: int = host.contents.resolve_guest_contract(self._host_ptr, self._handle)
@@ -158,9 +155,6 @@ class PipelineValidatorPeer:
             return False
         instance: GuestContractInstance = GuestContractInstance()
         host.contents.create_guest_instance(self._host_ptr, interface, None, ctypes.byref(instance))
-        # Re-stamp the peer contract id so call_guest_method keeps routing by it even
-        # when a stateless peer's create_instance returns a null (null-id) handle.
-        instance.contract_id = 0x45173A959EEC57C5
         self._interface = interface
         self._instance = instance
         self._cached_revision = self._live_revision()
@@ -174,9 +168,24 @@ class PipelineValidatorPeer:
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
-        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))
+        # SAFETY: the interface pointer is valid for the wrapper lifetime.
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        interface: GuestContractInterface = iface_ptr.contents
+        # Out-param ABI: dispatch writes the AbiError through a trailing pointer.
         err: AbiError = AbiError()
-        host.contents.call_guest_method(self._host_ptr, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
+        if interface.dispatch_type == DispatchType.Native:
+            if 0 >= interface.dispatch.native.function_count:
+                raise RuntimeError(f"peer call failed (code {int(AbiErrorCode.FunctionNotAvailable)})")
+            functions_ptr: int = interface.dispatch.native.functions
+            fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
+            # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
+            # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
+            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
+        else:
+            # SAFETY: the union's vm variant is active per dispatch_type; args/out
+            # are valid per the ABI contract. The arena was reset at call start.
+            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError(f"peer call failed (code {err.code})")
         return out_val

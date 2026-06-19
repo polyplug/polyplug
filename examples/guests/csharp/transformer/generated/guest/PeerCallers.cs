@@ -67,7 +67,7 @@ internal static unsafe class CallArenaOps {
 
 /// <summary>
 /// Guest-side peer caller for contract `pipeline.Validator` (id=0x45173A959EEC57C5).
-/// Resolves via the host-mediated CallGuestMethod path (offset 136 on HostApi);
+/// Dispatches directly through the cached interface (no host-mediated round-trip);
 /// the host pointer is passed explicitly to Resolve(hostPtr) by the caller.
 /// Returns raw ABI types — do not convert StringView/Buffer to managed strings.
 /// </summary>
@@ -123,9 +123,6 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn(hostPtr, iface, null, &inst);
-        // Stamp the peer contract id so CallGuestMethod routes by it even when a
-        // stateless peer's create_instance returns a null (null-id) handle.
-        inst.ContractId = 0x45173A959EEC57C5UL;
         var revisionFn = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)host->RevisionCounter;
         IntPtr revisionPtr = revisionFn(hostPtr);
         ulong cachedRevision = revisionPtr == IntPtr.Zero
@@ -159,9 +156,6 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance*, void>)_host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn((IntPtr)_host, iface, null, &inst);
-        // Re-stamp the peer contract id so CallGuestMethod keeps routing by it even
-        // when a stateless peer's create_instance returns a null (null-id) handle.
-        inst.ContractId = 0x45173A959EEC57C5UL;
         _interface = iface;
         _instance = inst;
         _cachedRevision = LiveRevision();
@@ -209,11 +203,27 @@ public sealed unsafe class PipelineValidatorContractPeer : IDisposable {
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            // Dispatch via CallGuestMethod (host-mediated, offset 136 on HostApi).
-            var callFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_host->CallGuestMethod;
             AbiError err = default;
-            fixed (CallArena* arenaPtr = &_arena) {
-                callFn((IntPtr)_host, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
+            switch (_interface->DispatchType) {
+                case DispatchType.Native: {
+                    if (0u >= _interface->Dispatch.Native.FunctionCount) {
+                        throw new InvalidOperationException("function not available");
+                    }
+                    nint funcsArray = _interface->Dispatch.Native.Functions;
+                    nint funcPtr = ((nint*)funcsArray)[0];
+                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
+                    dispatch(_instance, argsPtr, outPtr, &err);
+                    break;
+                }
+                case DispatchType.VirtualMachine: {
+                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
+                    fixed (CallArena* arenaPtr = &_arena) {
+                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
+                    }
+                    break;
+                }
+                default:
+                    throw new InvalidOperationException("unknown dispatch type");
             }
             if (err.Code != (uint)AbiErrorCode.Ok) {
                 throw new InvalidOperationException($"peer call failed: code={{err.Code}}");

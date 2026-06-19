@@ -24,6 +24,17 @@ function _ppEncodeUtf8(str: string): Uint8Array {
  * Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
  *
 * Dispatches through the host-mediated `callGuestMethod` bridge.
+*
+* This is the deliberate QuickJS exception to the direct-dispatch peer model:
+* the native-dispatch languages (rust/cpp/csharp/python/lua) cache the resolved
+* interface pointer and dispatch straight through it. A QuickJS guest cannot
+* dereference raw pointers — it reaches host capabilities ONLY through the threaded
+* `bridge` (Rule 12) — so the peer call necessarily crosses into the Rust loader via
+* `callGuestMethod`. The loader-side resolve there is dominated by the QuickJS VM
+* boundary and argument marshalling by orders of magnitude, so eliminating it would
+* add bridge ABI surface for no measurable gain. The revision snapshot + per-call
+* staleness check below keep correctness parity with the direct-dispatch callers.
+*
 * Uses per-call create+destroy (stateless contract model).
 * Stateful peers would require a retained instance-handle API.
  */

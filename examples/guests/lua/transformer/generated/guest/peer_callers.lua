@@ -34,9 +34,6 @@ function PipelineValidatorPeer.resolve(host_ptr)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
-    -- Stamp the peer contract id so call_guest_method routes by it even when a
-    -- stateless peer's create_instance returns a null (null-id) handle.
-    instance.contract_id = 0x45173A959EEC57C5ULL
     local revision_ptr = host.revision_counter(host)
     local cached_revision = 0
     if revision_ptr ~= nil then
@@ -63,7 +60,6 @@ function PipelineValidatorPeer:revalidate()
     end
     local new_instance = ffi.new("GuestContractInstance")
     self._host.create_guest_instance(self._host, interface, nil, new_instance)
-    new_instance.contract_id = 0x45173A959EEC57C5ULL
     self._interface = interface
     self._instance = new_instance
     self._cached_revision = self:live_revision()
@@ -86,15 +82,17 @@ function PipelineValidatorPeer:validate(input)
     local args_ptr = ffi.cast("const void*", input_view)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-    -- Out-param ABI: call_guest_method writes the AbiError through a trailing pointer.
+    -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.
     local err = ffi.new("AbiError")
     if dispatch_type == 0 then
         if 0 >= interface.dispatch.native.function_count then
             return nil
         end
-        self._host.call_guest_method(self._host, self._instance, 0, args_ptr, out_ptr, nil, err)
+        local fn_ptr = interface.dispatch.native.functions[0]
+        local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
+        fn(self._instance, args_ptr, out_ptr, err)
     elseif dispatch_type == 1 then
-        self._host.call_guest_method(self._host, self._instance, 0, args_ptr, out_ptr, nil, err)
+        interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
     else
         return nil
     end

@@ -2776,9 +2776,10 @@ fn cs_enum_for_type<'a>(ty: &ResolvedTypeRef, enums: &'a [EnumDef]) -> Option<&'
 ///   2. Resolves the contract via `FindGuestContract` → `ResolveGuestContract`
 ///      → `CreateInstance` using `delegate* unmanaged[Cdecl]` casts on the
 ///      IntPtr fields of `HostApi`, exactly as the host-side `Callers.cs` does.
-///   3. Dispatches each method via `CallGuestMethod` (offset 136 on HostApi)
-///      with the canonical 6-arg signature:
-///      `(host, instance, fn_id, args, out, arena)`.
+///   3. Dispatches each method DIRECTLY through the cached interface — branching on
+///      `DispatchType` (Native function pointer vs VM `Dispatch.Vm.Call` trampoline),
+///      the same near-bare-metal path as the host->guest caller; no host-mediated
+///      `CallGuestMethod` round-trip, no per-call registry resolve, no epoch pin.
 ///
 /// Returns raw ABI types (StringView/Buffer) — mirrors the host caller exactly.
 fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> String {
@@ -2807,7 +2808,7 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
 
         out.push_str(&format!(
             "/// <summary>\n/// Guest-side peer caller for contract `{}` (id=0x{:016X}).\n\
-             /// Resolves via the host-mediated CallGuestMethod path (offset 136 on HostApi);\n\
+             /// Dispatches directly through the cached interface (no host-mediated round-trip);\n\
              /// the host pointer is passed explicitly to Resolve(hostPtr) by the caller.\n\
              /// Returns raw ABI types — do not convert StringView/Buffer to managed strings.\n\
              /// </summary>\n",
@@ -2921,16 +2922,6 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;\n");
         out.push_str("        GuestContractInstance inst = default;\n");
         out.push_str("        createFn(hostPtr, iface, null, &inst);\n");
-        out.push_str(
-            "        // Stamp the peer contract id so CallGuestMethod routes by it even when a\n",
-        );
-        out.push_str(
-            "        // stateless peer's create_instance returns a null (null-id) handle.\n",
-        );
-        out.push_str(&format!(
-            "        inst.ContractId = 0x{:016X}UL;\n",
-            contract.contract_id
-        ));
         // Fetch the registry revision counter ONCE, then read its current value, so
         // every later call can detect a reload/unload with a direct atomic load (no
         // call back into the runtime) and re-resolve before dispatching.
@@ -2969,8 +2960,9 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
 
         // Revalidate — re-resolve the cached peer interface via the retained handle after
         // the registry changed. Null interface → false (peer gone). Else create a fresh
-        // instance, re-stamp the peer contract id (so CallGuestMethod keeps routing by it),
-        // abandon the old instance (already epoch-reclaimed), and update the cache.
+        // instance, abandon the old instance (already epoch-reclaimed), and update the cache.
+        // Direct dispatch routes through the interface pointer, not by contract id, so no
+        // id is stamped on the instance.
         out.push_str(
             "    /// <summary>Re-resolve the cached peer interface after the registry changed\n",
         );
@@ -3003,16 +2995,6 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         );
         out.push_str("        GuestContractInstance inst = default;\n");
         out.push_str("        createFn((IntPtr)_host, iface, null, &inst);\n");
-        out.push_str(
-            "        // Re-stamp the peer contract id so CallGuestMethod keeps routing by it even\n",
-        );
-        out.push_str(
-            "        // when a stateless peer's create_instance returns a null (null-id) handle.\n",
-        );
-        out.push_str(&format!(
-            "        inst.ContractId = 0x{:016X}UL;\n",
-            contract.contract_id
-        ));
         out.push_str("        _interface = iface;\n");
         out.push_str("        _instance = inst;\n");
         out.push_str("        _cachedRevision = LiveRevision();\n");
@@ -3065,14 +3047,20 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
     out
 }
 
-/// Emit a single peer-caller method that dispatches via `CallGuestMethod`.
+/// Emit a single peer-caller method that dispatches DIRECTLY through the cached
+/// peer interface — the same near-bare-metal path as the host->guest caller; no
+/// host-mediated round-trip, no per-call registry resolve, no epoch pin. The
+/// declared dependency keeps the peer alive; a hot-reload is caught by the cached
+/// revision counter, which re-resolves before dispatch.
 ///
-/// The canonical `call_guest_method` ABI signature (offset 136 on HostApi):
-///   `(host: *HostApi, instance: GuestContractInstance, fn_id: u32,
-///     args: *const u8, out: *mut u8, arena: *mut CallArena, out_err: *mut AbiError) → void`
-///
-/// C# cast used here:
-///   `delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>`
+/// Branches on the resolved interface's `DispatchType` (mirrors
+/// `generate_host_fn_caller`):
+///   - Native: read the function pointer from `Dispatch.Native.Functions[fn_id]`
+///     and call it as
+///     `delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>`
+///     (no `SuppressGCTransition` — see the inline note).
+///   - VirtualMachine: call `Dispatch.Vm.Call` with the canonical 7-arg signature
+///     `delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>`.
 fn generate_peer_fn_caller_cs(
     out: &mut String,
     func: &ResolvedFunction,
@@ -3120,8 +3108,8 @@ fn generate_peer_fn_caller_cs(
 
     // Cheap per-call staleness check: read the registry revision directly through the
     // cached pointer (one atomic load, no call into the runtime). On any change (hot-reload
-    // or unload of the peer) we re-resolve first — re-stamping the contract id — so the
-    // cached interface and instance are never used once they dangle. A gone peer throws.
+    // or unload of the peer) we re-resolve first, so the cached interface and instance are
+    // never used once they dangle. A gone peer throws.
     out.push_str("        if (LiveRevision() != _cachedRevision && !Revalidate()) {\n");
     out.push_str(
         "            throw new InvalidOperationException(\"peer not found after reload\");\n",
@@ -3177,26 +3165,69 @@ fn generate_peer_fn_caller_cs(
         out.push_str("            nint outPtr = nint.Zero;\n");
     }
 
-    // Dispatch via CallGuestMethod (offset 136 on HostApi).
-    // Canonical 6-arg signature: (host, instance, fn_id, args, out, arena).
-    out.push_str(
-        "            // Dispatch via CallGuestMethod (host-mediated, offset 136 on HostApi).\n",
-    );
-    out.push_str(
-        "            var callFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_host->CallGuestMethod;\n",
-    );
+    // Dispatch directly through the cached peer interface — the SAME near-bare-metal
+    // path the host->guest caller uses (generate_host_fn_caller). No host-mediated
+    // CallGuestMethod round-trip, no per-call registry resolve, no epoch pin: the
+    // declared dependency keeps the peer's interface alive (its unload is refused while
+    // we are loaded), and a reload is caught by the revision check above, which re-resolves
+    // before we reach here. Branch on the resolved interface's dispatch type — native
+    // guests (C++/Rust/C#) call the function pointer directly; VM guests (Lua, JS) route
+    // through the loader's vm.call trampoline with the canonical 6-arg signature (Rule 10).
+    //
+    // The native dispatch must NOT use `SuppressGCTransition`: a C# guest's contract entry
+    // points are `[UnmanagedCallersOnly]` methods, and when host and guest share one CLR (a
+    // .NET host loading a .NET plugin via the reused runtime), the call is managed -> managed
+    // and requires the GC transition frame — suppressing it makes the runtime reject the call
+    // ("attempted to call a UnmanagedCallersOnly method from managed code"). The transition is
+    // also needed whenever a guest calls back into the host. The cost is one GC transition per
+    // native dispatch — correctness over a micro-opt.
     out.push_str("            AbiError err = default;\n");
+    out.push_str("            switch (_interface->DispatchType) {\n");
+    out.push_str("                case DispatchType.Native: {\n");
+    // Function-id bounds check against the native dispatch table. Valid only in
+    // the Native arm: reading Dispatch.Native.FunctionCount through the union on
+    // a VM interface would read garbage bits of Dispatch.Vm.Call. The VM-side
+    // loader enforces its own bounds (FunctionNotAvailable).
+    out.push_str(&format!(
+        "                    if ({fn_id}u >= _interface->Dispatch.Native.FunctionCount) {{\n"
+    ));
+    out.push_str(
+        "                        throw new InvalidOperationException(\"function not available\");\n",
+    );
+    out.push_str("                    }\n");
+    out.push_str("                    nint funcsArray = _interface->Dispatch.Native.Functions;\n");
+    out.push_str(&format!(
+        "                    nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
+    ));
+    out.push_str("                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;\n");
+    out.push_str("                    dispatch(_instance, argsPtr, outPtr, &err);\n");
+    out.push_str("                    break;\n");
+    out.push_str("                }\n");
+    out.push_str("                case DispatchType.VirtualMachine: {\n");
+    // Canonical VM dispatch signature: (loader_data, instance, fn_id, args, out, arena, out_err).
+    out.push_str("                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;\n");
     if needs_arena && peer_needs_arena {
-        out.push_str("            fixed (CallArena* arenaPtr = &_arena) {\n");
+        // Arena-backed functions hand the guest this peer's per-call arena so it
+        // can write variable-size returns without per-value host->alloc.
+        out.push_str("                    fixed (CallArena* arenaPtr = &_arena) {\n");
         out.push_str(&format!(
-            "                callFn((IntPtr)_host, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr, &err);\n"
+            "                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr, &err);\n"
         ));
-        out.push_str("            }\n");
+        out.push_str("                    }\n");
     } else {
+        // No variable-size output: a null arena makes the VM bridge fall back to
+        // per-value host allocation.
         out.push_str(&format!(
-            "            callFn((IntPtr)_host, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null, &err);\n"
+            "                    vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null, &err);\n"
         ));
     }
+    out.push_str("                    break;\n");
+    out.push_str("                }\n");
+    out.push_str("                default:\n");
+    out.push_str(
+        "                    throw new InvalidOperationException(\"unknown dispatch type\");\n",
+    );
+    out.push_str("            }\n");
 
     out.push_str("            if (err.Code != (uint)AbiErrorCode.Ok) {\n");
     out.push_str("                throw new InvalidOperationException($\"peer call failed: code={{err.Code}}\");\n");
@@ -4228,9 +4259,24 @@ mod tests {
             content.contains("PipelineValidatorContractPeer"),
             "missing peer class: {content}"
         );
+        // Direct cached-interface dispatch (mirror of the host->guest caller): branch on
+        // DispatchType and dispatch through the native function table AND the VM trampoline —
+        // never via the host-mediated CallGuestMethod.
         assert!(
-            content.contains("CallGuestMethod"),
-            "peer class must dispatch via CallGuestMethod: {content}"
+            !content.contains("CallGuestMethod"),
+            "peer class must NOT route through host-mediated CallGuestMethod: {content}"
+        );
+        assert!(
+            content.contains("switch (_interface->DispatchType)"),
+            "peer dispatch must branch on the cached interface's DispatchType: {content}"
+        );
+        assert!(
+            content.contains("_interface->Dispatch.Native.Functions"),
+            "peer Native arm must call through the native function table: {content}"
+        );
+        assert!(
+            content.contains("_interface->Dispatch.Vm.Call"),
+            "peer VM arm must call through the vm.call trampoline: {content}"
         );
         assert!(
             content.contains("Resolve(IntPtr hostPtr)"),
