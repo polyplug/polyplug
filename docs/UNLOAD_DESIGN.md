@@ -111,6 +111,17 @@ no thread holds a cached pointer into — a bundle before unloading it. Caching 
 is documented **undefined behaviour**. This keeps native dispatch at the speed of a raw
 indirect call.
 
+**Generated cached callers** (the host→guest and guest→guest peer callers emitted by
+`polyplugc`) go further than bare quiescence. They cache the resolved interface but poll
+the registry **revision counter** (one acquire load via `HostApi.revision_counter`)
+before each dispatch and re-resolve when it changed, so a reload never leaves them
+dereferencing a superseded interface. For the peer caller the provider also cannot simply
+vanish: a declared dependency makes the runtime **refuse to unload** a bundle while a
+dependent is live (`DependencyInUse`), so the cached interface stays mapped for as long as
+the caller can use it, and the revision check turns a *reload* into a clean re-resolve.
+Hand-written FFI callers that skip the revision check remain bound by the
+quiesce-before-unload contract above.
+
 Runtime-mediated calls do pin the epoch across dispatch and are therefore safe against a
 concurrent unload:
 

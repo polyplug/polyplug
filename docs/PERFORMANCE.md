@@ -942,17 +942,30 @@ touches the logger at all.
 
 ### Guest → guest peer calls
 
-The `cross_call` bench now carries a second arm, `peer/stateless_route`, next to
-`native/single_provider`. It measures the runtime path a generated **peer caller**
-(guest contract → another guest contract) bottoms out in: a stateless instance
-(null `data`, target `contract_id`) dispatched through `HostApi.call_guest_method`,
-routed solely by `contract_id`. It lands at ~25 ns — **identical** to the
-host-mediated cross-call — because they share the same `host_call_guest_method`
-resolve chain (count + find + resolve). The honest takeaway: at the runtime level
-a peer call costs the same as a host-mediated cross-call; any extra a real peer
-caller pays is its language's marshalling, not the dispatch. (The per-language
-generated marshalling cannot be measured in-process without a per-language bundle
-— the same two-tier caveat as the dispatch matrix.)
+A generated **peer caller** (one guest contract calling another) resolves the
+target interface **once**, then dispatches **directly through that cached
+interface** — the exact same near-bare-metal path as a host→guest caller. The hot
+path is a `contract_dispatch`-class call (**~2.4 ns**, the cached-interface figure
+above) preceded by a single acquire-load of the registry revision counter to catch
+a reload/unload. There is **no per-call `call_guest_method` round-trip, no
+`count + find + resolve` chain, and no epoch pin**: the declared dependency keeps
+the provider loaded (its unload is refused while a dependent is live), so the cached
+interface cannot vanish, and a hot-reload is caught by the revision check, which
+re-resolves (the ~22 ns `amortization/find_and_resolve` cost) only on the one call
+that observes the change. QuickJS guests are the single exception — they cannot
+dereference a raw interface pointer, so a JS peer call still crosses into the loader
+through the `callGuestMethod` bridge, a cost the VM boundary dominates and where the
+resolve is a rounding error.
+
+The `cross_call` bench's `peer/stateless_route` arm (~25 ns) now measures the
+**dynamic** `HostApi.call_guest_method` capability — the uncached, route-by-
+`contract_id` path that remains in the ABI for host-driven dispatch — **not** the
+generated peer glue. It is the cost a caller pays when it does *not* cache; the
+direct cached path the generated callers use is ~10× cheaper. Any extra a real peer
+caller pays beyond the ~2.4 ns dispatch is its language's marshalling, not the
+dispatch (the same two-tier caveat as the dispatch matrix). Refresh these figures on
+a quiet machine with `cargo bench -p polyplug --bench cross_call --bench
+contract_dispatch --bench revision_check`.
 
 ---
 

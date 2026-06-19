@@ -187,14 +187,27 @@ Consider an application that supports multiple audio decoders. Both `flac-bundle
 
 ### Cross-call dispatch (plugin → plugin)
 
-`HostApi::call_guest_method(host, instance, fn_id, args, out, arena)` lets one
-plugin invoke a method on another plugin's guest contract through the host. The
-caller passes a `GuestContractInstance` it already resolved; the host re-resolves
-the target through the registry via `instance.contract_id` on **every** call. The
-host pins the epoch across dispatch (`crossbeam_epoch::pin()`), so a call issued
-after a hot-reload routes to the live (swapped-in) interface and a call racing a
-concurrent unload keeps the resolved interface and its mapping alive until the
-guard unpins.
+The `polyplugc`-generated **peer caller** is how one plugin invokes a method on
+another plugin's guest contract. It resolves the target interface **once** (through
+`find_guest_contract`, which enforces the declared-dependency customs check below)
+and then dispatches **directly through that cached interface** — no per-call host
+round-trip and no epoch pin. Its lifetime safety does **not** rest on the pin: the
+declared dependency makes the runtime **refuse to unload the provider** while a
+dependent is live, so the cached interface cannot be reclaimed under an in-flight
+call, and a hot-reload is caught by an acquire-load of the registry **revision
+counter** before each dispatch, which re-resolves the swapped-in interface only when
+the registry actually changed. (QuickJS guests cannot dereference a raw pointer, so
+a JS peer caller routes through the host-mediated `callGuestMethod` bridge instead.)
+
+The dynamic capability underneath is
+`HostApi::call_guest_method(host, instance, fn_id, args, out, arena)`: the caller
+passes a `GuestContractInstance` it already resolved; the host re-resolves the
+target through the registry via `instance.contract_id` on **every** call. The host
+pins the epoch across dispatch (`crossbeam_epoch::pin()`), so a call issued after a
+hot-reload routes to the live (swapped-in) interface and a call racing a concurrent
+unload keeps the resolved interface and its mapping alive until the guard unpins.
+Generated peer callers no longer use this on their hot path, but it remains the path
+for host-driven dispatch and for callers that hold only a `contract_id`.
 
 - **Arena forwarding**: the `arena` argument is passed straight to VM dispatch
   (Lua, JS, Python) as an explicit per-call argument — never via a VM global
@@ -208,15 +221,15 @@ guard unpins.
   locking and proceeds normally, as do cross-VM calls (e.g. a Lua plugin calling a
   JS plugin).
 
-**Zero per-call authorization.** `call_guest_method` performs **no** dependency
-check of its own — it is a Phase 2 hot path (see §4). Trust is established once,
-at load time, through the declared-dependency verification that runs during the
-init window: while a bundle's `polyplug_init` is in flight (`INIT_BUNDLE_ID != 0`),
-`find_guest_contract` / `find_all_guest_contracts` reject any `contract_id` the
-calling bundle did not declare in its manifest, returning a null handle. A plugin
-can therefore only obtain an instance of a contract it declared a dependency on;
-once it has cleared customs in Phase 1, cross-calling that instance is unchecked
-by design. Outside any init window (host-side lookups, `INIT_BUNDLE_ID == 0`),
+**Zero per-call authorization.** Neither the generated peer caller nor
+`call_guest_method` performs a per-call dependency check — both are Phase 2 hot
+paths (see §4). Trust is established once, at load time, through the
+declared-dependency verification that runs during the init window: while a bundle's
+`polyplug_init` is in flight (`INIT_BUNDLE_ID != 0`), `find_guest_contract` /
+`find_all_guest_contracts` reject any `contract_id` the calling bundle did not
+declare in its manifest, returning a null handle. A plugin can therefore only
+obtain (and cache) an interface for a contract it declared a dependency on; once it
+has cleared customs in Phase 1, cross-calling that instance is unchecked by design. Outside any init window (host-side lookups, `INIT_BUNDLE_ID == 0`),
 lookups are unrestricted. There is no `find_by_bundle`-style scoped enforcement on
 the cross-call path — the instance's own `contract_id` is the only routing input.
 

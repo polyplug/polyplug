@@ -261,16 +261,33 @@ Full tutorial and per-language examples: [`HOST_CONTRACTS.md`](./HOST_CONTRACTS.
 
 ## 7. Cross-dispatch (plugin → plugin)
 
-A plugin can invoke a method on another plugin's guest contract through the host,
-without holding a raw interface pointer of its own.
+A plugin can invoke a method on another plugin's guest contract. The
+`polyplugc`-generated **peer caller** is the path you use: when a bundle declares a
+dependency on another contract, the generator emits a typed caller (e.g.
+`ValidatorPeer`) that resolves the target interface **once** and then dispatches
+**directly through that cached interface** — the same near-bare-metal path as a
+host→guest caller, with no per-call host round-trip, no registry resolve, and no
+epoch pin. Safety comes from the declared dependency, not from per-call work: the
+provider's unload is refused while a dependent is live (so the cached interface
+cannot dangle), and a hot-reload is caught by an acquire-load of the registry
+revision counter before each dispatch, which re-resolves only when the registry
+actually changed. Calling another plugin therefore costs the same as an internal
+method call plus argument marshalling. (QuickJS guests cannot dereference a raw
+interface pointer, so a JS peer caller routes through the `callGuestMethod` bridge
+instead — the one exception, where the VM boundary dwarfs the resolve anyway.)
+
+Underneath, the dynamic capability remains part of the ABI:
 
 - `call_guest_method(host, instance, fn_id, args, out, arena, out_err) -> ()` is the
-  17th `HostApi` function pointer (offset 136). The caller passes a
-  `GuestContractInstance` it already resolved; the host re-resolves the target
-  through the registry via `instance.contract_id` on **every** call, so a call
-  made after a reload routes to the live (swapped-in) interface. The dispatch pins
-  the epoch for its duration, so the target interface and library stay alive for
-  the whole call even if an unload races it.
+  17th `HostApi` function pointer (offset 136). It is the **uncached,
+  runtime-mediated** path: the caller passes a `GuestContractInstance` it already
+  resolved; the host re-resolves the target through the registry via
+  `instance.contract_id` on **every** call, so a call made after a reload routes to
+  the live (swapped-in) interface, and the dispatch pins the epoch for its duration
+  so the target interface and library stay alive even if an unload races it.
+  Generated peer callers no longer use this on their hot path — they cache and
+  dispatch directly — but it remains the capability for host-driven dispatch and for
+  callers that hold only a `contract_id`.
 - **Arena threading:** the `arena` argument is forwarded to VM dispatch (Lua, JS)
   exactly like the per-call arena in §4 of [`ROADMAP.md`](ROADMAP.md); native
   dispatch ignores it (native function pointers carry no arena slot). A **null

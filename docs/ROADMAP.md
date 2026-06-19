@@ -29,7 +29,7 @@ _Last updated: 2026-06-16._
 | **Published SDK packages (crates.io / PyPI / NuGet / npm / luarocks)** | ⏸ Deferred (owner: not publishing yet) |
 | **Quickstart + example gallery** | ✅ Done (B2, #74 — `docs/QUICKSTART.md` guided path + `docs/EXAMPLES.md` gallery) |
 | **polyplugc diagnostics (source spans + suggestions)** | ✅ Done (B3, #73 — `file:line:col` + did-you-mean on parse/validate errors) |
-| **Guest→guest peer callers + runtime tests** | ✅ Done (#69–#72, #75) — peer callers in all 6 generators; runtime execution tests green for **all 6** languages (rust/lua/js/cpp/csharp/python) |
+| **Guest→guest peer callers + runtime tests** | ✅ Done (#69–#72, #75; direct-dispatch upgrade #104–#107) — peer callers in all 6 generators; runtime execution tests green for **all 6** languages (rust/lua/js/cpp/csharp/python). Native-dispatch languages (rust/cpp/csharp/python/lua) now dispatch **directly through the cached interface** (no `call_guest_method` round-trip, no per-call resolve, no epoch pin); JS stays bridge-mediated (QuickJS cannot deref raw pointers) |
 | **CI cost / caching** | ✅ Done (`rust-cache` on every job; cross-lang jobs main-only) |
 | ~~Benchmark regression gate in CI~~ | ❌ Reverted — benchmarks are local-only (owner ruling); run `cargo bench` locally |
 | **Comparison benchmark (`counter_inc`)** | ✅ Done — safe dispatch ~0.5 ns over raw FFI; see `benches/README.md` (local-only) |
@@ -274,6 +274,15 @@ interface; runtime-mediated calls pin the epoch across dispatch, so a concurrent
 unload can't free the interface mid-call), forwards the arena to VM dispatch,
 guards re-entering a VM already dispatching; all 6 SDK ABIs + generators +
 validator.
+
+Direct-dispatch upgrade (#104–#107): `call_guest_method` remains the dynamic,
+runtime-mediated capability above, but the `polyplugc`-generated peer callers no
+longer route through it. They cache the resolved interface and dispatch **directly**
+through it — the same path as a host→guest caller — polling `HostApi.revision_counter`
+to catch a reload and relying on the declared dependency (provider unload refused while
+a dependent is live) for lifetime safety, so the hot path carries no per-call resolve
+and no epoch pin. QuickJS is the one exception: it cannot deref a raw interface pointer,
+so a JS peer caller still crosses the `callGuestMethod` bridge.
 **Zero per-call authorization** — trust comes from load-phase declared-dependency
 verification (`TRUST_MODEL.md` §5).
 
