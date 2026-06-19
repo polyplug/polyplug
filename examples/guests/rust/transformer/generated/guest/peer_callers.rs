@@ -10,6 +10,7 @@ use super::types::*;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::CallArena;
+use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
@@ -39,7 +40,11 @@ impl PeerCallError {
 
 /// Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 ///
-/// Dispatches to the peer through the host-mediated `call_guest_method` path.
+/// Dispatches directly through the cached peer interface — the same near-bare-metal
+/// path as the host→guest caller (no host-mediated `call_guest_method` round-trip,
+/// no per-call registry resolve, no epoch pin). The declared dependency keeps the
+/// peer alive (its unload is refused while we are loaded); a hot-reload is caught by
+/// the cached revision counter, which re-resolves before the next dispatch.
 ///
 /// # Call-arena lifetime
 ///
@@ -53,7 +58,8 @@ pub struct PipelineValidatorContractPeer {
     /// Instance handle created from the peer interface.
     /// A null `instance.data` is valid for stateless contracts.
     instance: GuestContractInstance,
-    /// Host interface pointer used for `call_guest_method` and instance lifecycle.
+    /// Host interface pointer used to resolve the peer and for instance lifecycle
+    /// (create/destroy) — NOT for dispatch, which goes straight through `interface`.
     host: *const HostApi,
     /// Peer contract handle, retained so the cache can re-resolve after a hot-reload
     /// (which swaps a new interface into the same slot) or report a gone contract.
@@ -99,18 +105,11 @@ impl PipelineValidatorContractPeer {
         // A null instance.data is valid: stateless contracts return a null
         // handle from create_instance and use it as an opaque dispatch token.
         // Route creation through the host so the runtime tracks the instance.
-        let mut created: GuestContractInstance = GuestContractInstance::null();
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is non-null (checked above) and points to a valid
         // GuestContractInterface produced by resolve_guest_contract.
         unsafe {
-            (iface_api.create_guest_instance)(host, interface, core::ptr::null(), &mut created);
-        };
-        // Stamp the peer contract id so `host->call_guest_method` routes by it
-        // even when a stateless peer's create_instance returns a null handle
-        // (null contract_id). The host-mediated path keys routing on contract_id.
-        let instance: GuestContractInstance = GuestContractInstance {
-            data: created.data,
-            contract_id: polyplug_utils::GuestContractId::from_u64(0x45173A959EEC57C5_u64),
+            (iface_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
         // Fetch the registry revision counter ONCE, then read its current value, so
         // every later call can detect a reload/unload with a direct atomic load (no
@@ -190,28 +189,23 @@ impl PipelineValidatorContractPeer {
         if interface.is_null() {
             return false;
         }
-        let mut created: GuestContractInstance = GuestContractInstance::null();
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
         unsafe {
             (iface_api.create_guest_instance)(
                 self.host,
                 interface,
                 core::ptr::null(),
-                &mut created,
+                &mut instance,
             );
         }
-        // Re-stamp the peer contract id so `host->call_guest_method` keeps routing by
-        // it even when a stateless peer's create_instance returns a null handle.
-        self.instance = GuestContractInstance {
-            data: created.data,
-            contract_id: polyplug_utils::GuestContractId::from_u64(0x45173A959EEC57C5_u64),
-        };
+        self.instance = instance;
         self.interface = interface;
         self.cached_revision = self.live_revision();
         true
     }
 
-    /// Call peer function `validate` (function_id=0) via host-mediated dispatch.
+    /// Call peer function `validate` (function_id=0) via direct cached-interface dispatch.
     #[allow(clippy::absurd_extreme_comparisons)]
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
@@ -231,22 +225,53 @@ impl PipelineValidatorContractPeer {
         let mut out_val: core::mem::MaybeUninit<StringView> = core::mem::MaybeUninit::uninit();
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
-        let out_ptr: *mut core::ffi::c_void = out_val.as_mut_ptr() as *mut core::ffi::c_void;
-        // SAFETY: host is non-null (set in resolve()); self.host is stored for the
-        // lifetime of the wrapper. instance and args_ptr/out_ptr match the ABI.
+        let out_ptr: *mut () = out_val.as_mut_ptr() as *mut ();
+        // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
+        let interface: &GuestContractInterface = unsafe { &*self.interface };
+        // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let mut err: AbiError = AbiError::ok();
-        // SAFETY: host is non-null; instance and args_ptr/out_ptr/&mut err match the ABI.
+        // SAFETY: args_ptr/out_ptr/&mut err match the ABI contract; instance is valid.
         unsafe {
-            let iface_api: &HostApi = &*self.host;
-            (iface_api.call_guest_method)(
-                self.host,
-                self.instance,
-                0_u32,
-                args_ptr as *const core::ffi::c_void,
-                out_ptr,
-                &mut self.arena as *mut CallArena,
-                &mut err,
-            );
+            match interface.dispatch_type {
+                DispatchType::Native => {
+                    if 0_u32 >= interface.dispatch.native.function_count {
+                        err = AbiError {
+                            code: AbiErrorCode::FunctionNotAvailable as u32,
+                            message: polyplug_abi::string_view_from_static(
+                                b"function not available in interface",
+                            ),
+                        };
+                    } else {
+                        let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
+                        // SAFETY: Transmuting *const () to a function pointer is sound because:
+                        // - Function pointers have the same size and alignment as data pointers on all supported platforms
+                        // - The interface guarantees that the function at this index is a native dispatch function
+                        //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)
+                        let dispatch_fn: unsafe extern "C" fn(
+                            GuestContractInstance,
+                            *const (),
+                            *mut (),
+                            *mut AbiError,
+                        ) = core::mem::transmute(fn_ptr);
+                        dispatch_fn(self.instance, args_ptr, out_ptr, &mut err);
+                    }
+                }
+                DispatchType::VirtualMachine => {
+                    // Reset the per-call arena here — the VM path is the only one that
+                    // uses it. Rewinds the primary region and frees the previous call's
+                    // overflow blocks, invalidating any view returned by a prior call.
+                    self.arena.reset();
+                    (interface.dispatch.vm.call)(
+                        interface.dispatch.vm.loader_data,
+                        self.instance, // instance parameter
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                        &mut self.arena as *mut CallArena,
+                        &mut err,
+                    );
+                }
+            }
         };
         if err.code != AbiErrorCode::Ok as u32 {
             let message: String = if err.message.ptr.is_null() || err.message.len == 0 {

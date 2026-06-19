@@ -1746,6 +1746,50 @@ fn generate_host_fn_caller(
     } else {
         out.push_str("core::ptr::null_mut();\n");
     }
+    emit_native_vm_dispatch(out, fn_id, needs_arena);
+    out.push_str("        if err.code != AbiErrorCode::Ok as u32 {\n");
+    out.push_str("            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {\n");
+    out.push_str("                String::new()\n");
+    out.push_str("            } else {\n");
+    out.push_str("                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.\n");
+    out.push_str(
+        "                // The message is owned by the producer (static or runtime-owned); the\n",
+    );
+    out.push_str(
+        "                // receiver must NEVER free it. We only copy it into an owned String.\n",
+    );
+    out.push_str("                let s: String = unsafe {\n");
+    out.push_str("                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);\n");
+    out.push_str("                    core::str::from_utf8_unchecked(slice).to_owned()\n");
+    out.push_str("                };\n");
+    out.push_str("                s\n");
+    out.push_str("            };\n");
+    out.push_str("            return Err(ContractError { code: AbiErrorCode::from_u32(err.code), message });\n");
+    out.push_str("        }\n");
+
+    // Return
+    if func.returns.is_some() {
+        emit_out_assume_init(out, &func.returns);
+        out.push_str("        Ok(out_val)\n");
+    } else {
+        out.push_str("        Ok(())\n");
+    }
+
+    out.push_str("    }\n\n");
+    Ok(())
+}
+
+/// Emit the direct interface-dispatch block shared by the host→guest caller and
+/// the peer (guest→guest) caller. Both cache the resolved `interface` and dispatch
+/// through it directly — native via the function-pointer table, VM via
+/// `dispatch.vm.call` — so a peer call is the same near-bare-metal path as a host
+/// call: no host-mediated round-trip, no per-call registry resolve, no epoch pin.
+///
+/// Preconditions in the surrounding scope: `args_ptr: *const ()`, `out_ptr: *mut ()`,
+/// and the caller fields `self.interface` / `self.instance` (+ `self.arena` when
+/// `needs_arena`). Leaves the outcome in a local `err: AbiError` for the caller to
+/// inspect; the per-error-type handling stays at each call site.
+fn emit_native_vm_dispatch(out: &mut String, fn_id: u32, needs_arena: bool) {
     out.push_str("        // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.\n");
     out.push_str("        let interface: &GuestContractInterface = unsafe { &*self.interface };\n");
     out.push_str(
@@ -1796,12 +1840,8 @@ fn generate_host_fn_caller(
     out.push_str("                        args_ptr,\n");
     out.push_str("                        out_ptr,\n");
     if needs_arena {
-        // The guest writes its variable-size return into this per-caller arena;
-        // the returned view is valid until the caller's next arena-backed call.
         out.push_str("                        &mut self.arena as *mut CallArena,\n");
     } else {
-        // No variable-size output: a null arena makes the bridge fall back to
-        // per-value host allocation.
         out.push_str("                        core::ptr::null_mut(),\n");
     }
     out.push_str("                        &mut err,\n");
@@ -1809,36 +1849,6 @@ fn generate_host_fn_caller(
     out.push_str("                }\n");
     out.push_str("            }\n");
     out.push_str("        };\n");
-    out.push_str("        if err.code != AbiErrorCode::Ok as u32 {\n");
-    out.push_str("            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {\n");
-    out.push_str("                String::new()\n");
-    out.push_str("            } else {\n");
-    out.push_str("                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.\n");
-    out.push_str(
-        "                // The message is owned by the producer (static or runtime-owned); the\n",
-    );
-    out.push_str(
-        "                // receiver must NEVER free it. We only copy it into an owned String.\n",
-    );
-    out.push_str("                let s: String = unsafe {\n");
-    out.push_str("                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);\n");
-    out.push_str("                    core::str::from_utf8_unchecked(slice).to_owned()\n");
-    out.push_str("                };\n");
-    out.push_str("                s\n");
-    out.push_str("            };\n");
-    out.push_str("            return Err(ContractError { code: AbiErrorCode::from_u32(err.code), message });\n");
-    out.push_str("        }\n");
-
-    // Return
-    if func.returns.is_some() {
-        emit_out_assume_init(out, &func.returns);
-        out.push_str("        Ok(out_val)\n");
-    } else {
-        out.push_str("        Ok(())\n");
-    }
-
-    out.push_str("    }\n\n");
-    Ok(())
 }
 
 /// Build the parameter portion of the Rust function signature (after `&self`).
@@ -3355,6 +3365,9 @@ fn generate_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> 
     out.push_str("use polyplug_abi::StringView;\n");
     out.push_str("use polyplug_abi::AbiError;\n");
     out.push_str("use polyplug_abi::AbiErrorCode;\n");
+    // Peer dispatch now goes directly through the cached interface (emit_native_vm_dispatch),
+    // which matches on the interface's dispatch kind — same as the host→guest caller.
+    out.push_str("use polyplug_abi::DispatchType;\n");
     // Import CallArena when any peer contract needs the arena (returns StringView/Buffer/UserDefined).
     let any_needs_arena: bool = peers
         .iter()
@@ -3404,7 +3417,11 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
     ));
     out.push_str("///\n");
     out.push_str(
-        "/// Dispatches to the peer through the host-mediated `call_guest_method` path.\n",
+        "/// Dispatches directly through the cached peer interface — the same near-bare-metal\n\
+         /// path as the host→guest caller (no host-mediated `call_guest_method` round-trip,\n\
+         /// no per-call registry resolve, no epoch pin). The declared dependency keeps the\n\
+         /// peer alive (its unload is refused while we are loaded); a hot-reload is caught by\n\
+         /// the cached revision counter, which re-resolves before the next dispatch.\n",
     );
     if needs_arena {
         out.push_str("///\n");
@@ -3424,7 +3441,8 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
     out.push_str("    /// A null `instance.data` is valid for stateless contracts.\n");
     out.push_str("    instance: GuestContractInstance,\n");
     out.push_str(
-        "    /// Host interface pointer used for `call_guest_method` and instance lifecycle.\n",
+        "    /// Host interface pointer used to resolve the peer and for instance lifecycle\n\
+         \x20   /// (create/destroy) — NOT for dispatch, which goes straight through `interface`.\n",
     );
     out.push_str("    host: *const HostApi,\n");
     out.push_str(
@@ -3505,7 +3523,7 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
         "        // Route creation through the host so the runtime tracks the instance.\n",
     );
     out.push_str(
-        "        let mut created: GuestContractInstance = GuestContractInstance::null();\n",
+        "        let mut instance: GuestContractInstance = GuestContractInstance::null();\n",
     );
     out.push_str(
         "        // SAFETY: interface is non-null (checked above) and points to a valid\n",
@@ -3513,23 +3531,9 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
     out.push_str("        // GuestContractInterface produced by resolve_guest_contract.\n");
     out.push_str("        unsafe {\n");
     out.push_str(
-        "            (iface_api.create_guest_instance)(host, interface, core::ptr::null(), &mut created);\n",
+        "            (iface_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);\n",
     );
     out.push_str("        };\n");
-    out.push_str(
-        "        // Stamp the peer contract id so `host->call_guest_method` routes by it\n",
-    );
-    out.push_str("        // even when a stateless peer's create_instance returns a null handle\n");
-    out.push_str(
-        "        // (null contract_id). The host-mediated path keys routing on contract_id.\n",
-    );
-    out.push_str(&format!(
-        "        let instance: GuestContractInstance = GuestContractInstance {{\n\
-         \x20           data: created.data,\n\
-         \x20           contract_id: polyplug_utils::GuestContractId::from_u64(0x{:016X}_u64),\n\
-         \x20       }};\n",
-        contract.contract_id
-    ));
     out.push_str(
         "        // Fetch the registry revision counter ONCE, then read its current value, so\n",
     );
@@ -3645,27 +3649,15 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
     out.push_str("            return false;\n");
     out.push_str("        }\n");
     out.push_str(
-        "        let mut created: GuestContractInstance = GuestContractInstance::null();\n",
+        "        let mut instance: GuestContractInstance = GuestContractInstance::null();\n",
     );
     out.push_str("        // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.\n");
     out.push_str("        unsafe {\n");
     out.push_str(
-        "            (iface_api.create_guest_instance)(self.host, interface, core::ptr::null(), &mut created);\n",
+        "            (iface_api.create_guest_instance)(self.host, interface, core::ptr::null(), &mut instance);\n",
     );
     out.push_str("        }\n");
-    out.push_str(
-        "        // Re-stamp the peer contract id so `host->call_guest_method` keeps routing by\n",
-    );
-    out.push_str(
-        "        // it even when a stateless peer's create_instance returns a null handle.\n",
-    );
-    out.push_str(&format!(
-        "        self.instance = GuestContractInstance {{\n\
-         \x20           data: created.data,\n\
-         \x20           contract_id: polyplug_utils::GuestContractId::from_u64(0x{:016X}_u64),\n\
-         \x20       }};\n",
-        contract.contract_id
-    ));
+    out.push_str("        self.instance = instance;\n");
     out.push_str("        self.interface = interface;\n");
     out.push_str("        self.cached_revision = self.live_revision();\n");
     out.push_str("        true\n");
@@ -3731,8 +3723,8 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
 
 /// Generate one caller method for a peer contract function.
 ///
-/// Uses `call_guest_method` (host-mediated path) — same ABI conventions as
-/// `generate_host_fn_caller`. Parameters and return types use `rust_type_name`
+/// Dispatches directly through the cached interface via `emit_native_vm_dispatch` —
+/// the same mechanism `generate_host_fn_caller` uses. Parameters and return types use `rust_type_name`
 /// (raw ABI types: StringView, Buffer, primitives) so the `out_val` buffer is
 /// correctly sized and the host never writes past it. When the return type is
 /// variable-size (`fn_needs_arena`), the method takes `&mut self`, resets the
@@ -3750,7 +3742,7 @@ fn generate_peer_fn_caller(out: &mut String, func: &ResolvedFunction, struct_nam
     };
 
     out.push_str(&format!(
-        "    /// Call peer function `{}` (function_id={}) via host-mediated dispatch.\n",
+        "    /// Call peer function `{}` (function_id={}) via direct cached-interface dispatch.\n",
         func.name, fn_id
     ));
     out.push_str("    #[allow(clippy::absurd_extreme_comparisons)]\n");
@@ -3803,36 +3795,19 @@ fn generate_peer_fn_caller(out: &mut String, func: &ResolvedFunction, struct_nam
         "        // SAFETY: args_ptr points to a valid {param_ty_comment} and out_ptr to a valid {ret_ty_comment}.\n"
     ));
     out.push_str("        // Enforced by the generated caller contract.\n");
-    out.push_str("        let out_ptr: *mut core::ffi::c_void = ");
+    out.push_str("        let out_ptr: *mut () = ");
     if func.returns.is_some() {
-        out.push_str("out_val.as_mut_ptr() as *mut core::ffi::c_void;\n");
+        out.push_str("out_val.as_mut_ptr() as *mut ();\n");
     } else {
         out.push_str("core::ptr::null_mut();\n");
     }
-    // args_ptr also needs to match *const c_void for call_guest_method.
-    out.push_str(
-        "        // SAFETY: host is non-null (set in resolve()); self.host is stored for the\n",
-    );
-    out.push_str(
-        "        // lifetime of the wrapper. instance and args_ptr/out_ptr match the ABI.\n",
-    );
-    out.push_str("        let mut err: AbiError = AbiError::ok();\n");
-    out.push_str("        // SAFETY: host is non-null; instance and args_ptr/out_ptr/&mut err match the ABI.\n");
-    out.push_str("        unsafe {\n");
-    out.push_str("            let iface_api: &HostApi = &*self.host;\n");
-    out.push_str(&format!(
-        "            (iface_api.call_guest_method)(self.host, self.instance, {fn_id}_u32,\n"
-    ));
-    out.push_str("                args_ptr as *const core::ffi::c_void,\n");
-    out.push_str("                out_ptr,\n");
-    if needs_arena {
-        out.push_str("                &mut self.arena as *mut CallArena,\n");
-    } else {
-        out.push_str("                core::ptr::null_mut(),\n");
-    }
-    out.push_str("                &mut err,\n");
-    out.push_str("            );\n");
-    out.push_str("        };\n");
+    // Dispatch directly through the cached peer interface — the SAME near-bare-metal
+    // path the host→guest caller uses (emit_native_vm_dispatch). No host-mediated
+    // call_guest_method round-trip, no per-call registry resolve, no epoch pin: the
+    // declared dependency keeps the peer's interface alive (its unload is refused
+    // while we are loaded), and a reload is caught by the revision check above, which
+    // re-resolves before we reach here.
+    emit_native_vm_dispatch(out, fn_id, needs_arena);
 
     // Error handling — identical to host caller.
     out.push_str("        if err.code != AbiErrorCode::Ok as u32 {\n");
@@ -4941,9 +4916,13 @@ mod tests {
             content.contains("struct PipelineDecoderContractPeer"),
             "missing PipelineDecoderContractPeer struct: {content}"
         );
+        // Peer now dispatches DIRECTLY through the cached interface (same mechanism as
+        // the host→guest caller) — native via the fn-ptr table, VM via dispatch.vm.call —
+        // NOT through the host-mediated call_guest_method round-trip.
         assert!(
-            content.contains("call_guest_method"),
-            "missing call_guest_method: {content}"
+            content.contains("interface.dispatch.native.functions")
+                && content.contains("(interface.dispatch.vm.call)"),
+            "peer must dispatch directly through the cached interface: {content}"
         );
         assert!(
             content.contains("fn resolve(host: polyplug_guest::HostContext)"),
