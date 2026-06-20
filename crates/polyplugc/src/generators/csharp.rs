@@ -527,8 +527,6 @@ fn generate_cs_guest_plugin_interface(
 ) {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
-    #[allow(unused_variables)]
-    let class_name: String = contract_name_to_cs_class(&contract.name);
     let iface_name: String = contract_name_to_cs_interface(&contract.name);
     let contract_id: u64 = contract.contract_id;
     let fn_count: usize = contract.functions.len();

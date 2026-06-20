@@ -1685,7 +1685,7 @@ fn generate_host_fn_caller(
     let fn_id: u32 = func.function_id;
 
     // Build parameter list for the Rust signature
-    let sig_params: String = build_sig_params(func, contract_struct);
+    let sig_params: String = build_sig_params(func);
 
     // Build return type
     let ret_type: String = match &func.returns {
@@ -1853,7 +1853,7 @@ fn emit_native_vm_dispatch(out: &mut String, fn_id: u32, needs_arena: bool) {
 
 /// Build the parameter portion of the Rust function signature (after `&self`).
 /// Returns a string starting with `, ` if there are params, else empty.
-fn build_sig_params(func: &ResolvedFunction, contract_struct: &str) -> String {
+fn build_sig_params(func: &ResolvedFunction) -> String {
     if func.params.is_empty() {
         return String::new();
     }
@@ -1874,7 +1874,6 @@ fn build_sig_params(func: &ResolvedFunction, contract_struct: &str) -> String {
         .map(|p: &ResolvedParam| format!(", {}: {}", p.name, rust_type_name(&p.ty)))
         .collect::<Vec<_>>()
         .join("");
-    let _ = contract_struct; // used elsewhere
     params_str
 }
 
@@ -3734,7 +3733,7 @@ fn generate_peer_fn_caller(out: &mut String, func: &ResolvedFunction, struct_nam
     let needs_arena: bool = fn_needs_arena(func);
 
     // Use the same sig-param builder as the host caller (rust_type_name-based).
-    let sig_params: String = build_sig_params(func, struct_name);
+    let sig_params: String = build_sig_params(func);
 
     let ret_type: String = match &func.returns {
         Some(ty) => rust_type_name(ty),

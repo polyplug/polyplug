@@ -962,7 +962,7 @@ the **former** `HostApi.call_guest_method` path — the uncached, route-by-`cont
 host-mediated dispatch that existed before the direct-dispatch epic.
 `call_guest_method` has since been **removed from the ABI**; generated peer callers
 no longer use it. The arm's measured figure is preserved here as the baseline that
-the direct cached path (**~16× cheaper**) replaced. Any extra a real peer caller
+the direct cached path (**~15.7× cheaper**) replaced. Any extra a real peer caller
 pays beyond the ~2.4 ns dispatch is its language's marshalling, not the dispatch
 (the same two-tier caveat as the dispatch matrix).
 
@@ -1091,8 +1091,8 @@ python3 scripts/gen_bench_charts.py --soak target/soak/soak_rss.txt \
 ### Leak found and fixed — `HostApi` is reclaimed at teardown
 
 The soak surfaced a genuine **core leak in the `Runtime` lifecycle**, ~184 bytes
-per runtime built-and-dropped (the `HostApi` was 184 bytes at the time; it is 192
-bytes today after the `revision_counter` field was added). It was **not** in load, unload, dispatch, or the
+per runtime built-and-dropped (the `HostApi` was 184 bytes at the time, and is
+184 bytes today). It was **not** in load, unload, dispatch, or the
 `dlopen`/`dlclose` machinery (a build-and-drop-only bisection leaked at the same
 slope; a pure `dlopen`+`dlclose` loop with no runtime is flat). Root cause:
 `RuntimeBuilder::build` used `Box::leak(Box::new(HostApi { … }))` to obtain the
