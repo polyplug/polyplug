@@ -6,7 +6,24 @@ v1.0 and the project is still pre-1.0, so any item touching `HostApi` /
 `RuntimeConfig` / dispatch shape must land *before* the freeze — that window is
 the reason "Harden" items are ranked first below.
 
-_Last updated: 2026-06-16._
+_Last updated: 2026-06-21._
+
+---
+
+## Post-0.1.0 priorities (ranked by adopter demand)
+
+polyplug targets **trusted, first-party plugins** — native speed, real language
+runtimes, zero-copy. It is **not** a sandbox; for untrusted code use WASM/Extism.
+These items, ranked by demand from adopter research, strengthen that model rather
+than abandon it.
+
+| Rank | Item | Summary |
+|---|---|---|
+| G1 | Bundle signing + verification | Cryptographic origin/integrity check at load — the primary security control that fits a no-sandbox, trusted-plugin model. Builds on `TRUST_MODEL.md` identity. |
+| G2 | Optional process-isolation mode | Opt-in, per-plugin out-of-process execution — the credible answer to "I sometimes need isolation" while keeping the native fast path the default. |
+| G3 | Resource limits / runaway-plugin watchdog | Per-call wall-clock timeouts at minimum (memory caps later) so a misbehaving trusted plugin can't hang the host. |
+| G4 | Published SDKs per registry | Make each SDK installable (crates.io / PyPI / NuGet / npm / LuaRocks) so plugin authors outside the repo can depend on it. |
+| G5 | Docs website + native-crash debugging guide | Browsable docs site plus a guide for diagnosing native crashes (symbols, core dumps, sanitizers) in trusted-plugin deployments. |
 
 ---
 

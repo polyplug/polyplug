@@ -85,8 +85,16 @@ pub struct DataRecord {
 
 ## C++ Definition
 
+No `#pragma pack`. The shipped C++ SDK relies on **natural `repr(C)` alignment** —
+the same rule the Rust structs use — and locks the layout with `static_assert`
+(mirroring `sdks/cpp/abi/test_layout.cpp`). Padding that Rust's `repr(C)` inserts
+implicitly is written as an explicit field so the layout is self-documenting and
+the assert catches any drift.
+
 ```cpp
-#pragma pack(push, 1)  // ensure no extra padding surprises; layout matches Rust repr(C)
+#include <cstdint>
+#include <cstddef>
+
 struct StringView {
     const uint8_t* ptr;  // UTF-8, NOT null-terminated
     size_t         len;
@@ -96,11 +104,12 @@ struct DataRecord {
     StringView name;
     StringView value;
     uint32_t   count;
-    uint8_t    _pad[4];  // explicit padding to match Rust repr(C)
+    uint8_t    _pad[4];  // explicit tail padding; Rust repr(C) inserts the same 4 bytes
 };
-#pragma pack(pop)
-// static_assert(sizeof(DataRecord) == 40, "DataRecord ABI size mismatch");
-// static_assert(sizeof(StringView) == 16, "StringView ABI size mismatch");
+
+// Lock the layout — natural alignment must reproduce the Rust repr(C) sizes.
+static_assert(sizeof(StringView) == 16, "StringView ABI size mismatch");
+static_assert(sizeof(DataRecord) == 40, "DataRecord ABI size mismatch");
 ```
 
 ---
