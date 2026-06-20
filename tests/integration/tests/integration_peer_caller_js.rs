@@ -1,6 +1,6 @@
 //! Integration test: JS (QuickJS) guest→guest peer caller at runtime.
 //!
-//! This proves the JS `callGuestMethod` peer-caller bridge executes end-to-end
+//! This proves the JS `dispatchPeer` peer-caller bridge executes end-to-end
 //! — not just that the generated `peer_callers.ts` text contains the right
 //! strings. The flow is:
 //!
@@ -9,15 +9,15 @@
 //!      prefixed with `"PEER:"`, written as a `StringView` via `arenaAlloc`.
 //!   2. A **consumer** JS bundle registers contract `test.consumer@1`. Its
 //!      single function `invoke` (fn_id 0) uses the peer-caller idiom from the
-//!      generated `peer_callers.ts` — calling `polyplug.callGuestMethod` — to
+//!      generated `peer_callers.ts` — calling `polyplug.dispatchPeer` — to
 //!      invoke `test.peer@1::echo`, then writes the result to `out`.
 //!   3. Both bundles are loaded into the same `Runtime` (JsLoader). The provider
 //!      is loaded first so `test.peer@1` is registered when the consumer resolves
-//!      it inside `callGuestMethod`.
+//!      it inside `dispatchPeer`.
 //!   4. The test dispatches the consumer's `invoke` with input `"hello"`, reads
 //!      the returned `StringView`, and asserts the value equals `"PEER:hello"`.
 //!
-//! This exercises the JS `callGuestMethod` bridge end-to-end, the
+//! This exercises the JS `dispatchPeer` bridge end-to-end, the
 //! borrowed-view `StringView` return path (arenaAlloc), and the full
 //! guest→host→guest dispatch chain at runtime.
 
@@ -127,7 +127,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
 /// Build the consumer `bundle.js` source.
 ///
 /// Registers `test.consumer@1` with a single function `invoke` (fn_id 0)
-/// that calls the peer `test.peer@1::echo` through `polyplug.callGuestMethod`,
+/// that calls the peer `test.peer@1::echo` through `polyplug.dispatchPeer`,
 /// which is the exact bridge tested by the generated `peer_callers.ts`.
 ///
 /// Arguments:
@@ -138,7 +138,7 @@ fn consumer_js_src(peer_lo: u32, peer_hi: u32, consumer_lo: u32, consumer_hi: u3
         r#"
 function invoke(impl, argsPtr, outPtr, arena, bridge) {{
     try {{
-        if (!bridge || !bridge.callGuestMethod) {{ return 1; }}
+        if (!bridge || !bridge.dispatchPeer) {{ return 1; }}
 
         // Read the input StringView (ptr_lo@0, ptr_hi@4, len@8).
         var inLo  = bridge.readU32(argsPtr);
@@ -162,8 +162,8 @@ function invoke(impl, argsPtr, outPtr, arena, bridge) {{
         bridge.writeU32(oPtr + 8,  0);
         bridge.writeU32(oPtr + 12, 0);
 
-        // Call test.peer@1 fn_id 0 (echo) through the host-mediated bridge.
-        var errCode = bridge.callGuestMethod({peer_lo}, {peer_hi}, 1, 0, aPtr, oPtr);
+        // Call test.peer@1 fn_id 0 (echo) through the direct-dispatch bridge.
+        var errCode = bridge.dispatchPeer({peer_lo}, {peer_hi}, 1, 0, aPtr, oPtr);
         if (errCode !== 0) {{ return errCode; }}
 
         // Read back the StringView from the peer's output and write it to our out.
@@ -324,6 +324,6 @@ fn js_peer_caller_echo_roundtrip() {
 
     assert_eq!(
         result, "PEER:hello",
-        "invoke must return 'PEER:hello' proving callGuestMethod StringView round-trip"
+        "invoke must return 'PEER:hello' proving dispatchPeer StringView round-trip"
     );
 }

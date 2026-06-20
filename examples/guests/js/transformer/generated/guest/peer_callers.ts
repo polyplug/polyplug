@@ -23,17 +23,17 @@ function _ppEncodeUtf8(str: string): Uint8Array {
 /**
  * Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
  *
-* Dispatches through the host-mediated `callGuestMethod` bridge.
+* Dispatches through the threaded `bridge.dispatchPeer` primitive.
 *
-* This is the deliberate QuickJS exception to the direct-dispatch peer model:
-* the native-dispatch languages (rust/cpp/csharp/python/lua) cache the resolved
-* interface pointer and dispatch straight through it. A QuickJS guest cannot
-* dereference raw pointers — it reaches host capabilities ONLY through the threaded
-* `bridge` (Rule 12) — so the peer call necessarily crosses into the Rust loader via
-* `callGuestMethod`. The loader-side resolve there is dominated by the QuickJS VM
-* boundary and argument marshalling by orders of magnitude, so eliminating it would
-* add bridge ABI surface for no measurable gain. The revision snapshot + per-call
-* staleness check below keep correctness parity with the direct-dispatch callers.
+* The loader resolves the peer interface and dispatches DIRECTLY through it —
+* the bridge no longer re-enters the host via `call_guest_method` (which would
+* resolve the same interface a second time). Resolution is per-call here; the
+* native-dispatch languages (rust/cpp/csharp/python/lua) additionally CACHE the
+* resolved interface, which a QuickJS guest cannot (it cannot dereference raw
+* pointers, so it reaches host capabilities ONLY through the threaded `bridge`,
+* Rule 12). `dispatchPeer` is the bridge primitive that performs that loader-side
+* resolve + direct dispatch on the guest's behalf. The revision snapshot +
+* per-call staleness check below keep correctness parity with the cached callers.
 *
 * Uses per-call create+destroy (stateless contract model).
 * Stateful peers would require a retained instance-handle API.
@@ -100,7 +100,7 @@ export class ValidatorPeer {
     /** Call peer `validate` */
     validate(input: string): { ptr_lo: number; ptr_hi: number; len: number } {
         const polyplug = this._bridge;
-        if (!polyplug || !polyplug.callGuestMethod) {
+        if (!polyplug || !polyplug.dispatchPeer) {
             return null as any;
         }
         if (this._revisionChanged() && !this._revalidate()) {
@@ -125,7 +125,7 @@ export class ValidatorPeer {
         polyplug.writeU32(outPtr + 4, 0);
         polyplug.writeU32(outPtr + 8, 0);
         polyplug.writeU32(outPtr + 12, 0);
-        const errCode: number = polyplug.callGuestMethod(0x9EEC57C5, 0x45173A95, 1, 0, argsPtr, outPtr);
+        const errCode: number = polyplug.dispatchPeer(0x9EEC57C5, 0x45173A95, 1, 0, argsPtr, outPtr);
         if (errCode !== 0) {
             throw new Error(`peer call validate failed (code ${errCode})`);
         }

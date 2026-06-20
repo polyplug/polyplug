@@ -3465,17 +3465,17 @@ fn generate_ts_peer_caller_class(
 
     out.push_str(&format!(
         "/**\n * Peer caller for guest contract `{}` (id=0x{:016X})\n *\n\
-         * Dispatches through the host-mediated `callGuestMethod` bridge.\n\
+         * Dispatches through the threaded `bridge.dispatchPeer` primitive.\n\
          *\n\
-         * This is the deliberate QuickJS exception to the direct-dispatch peer model:\n\
-         * the native-dispatch languages (rust/cpp/csharp/python/lua) cache the resolved\n\
-         * interface pointer and dispatch straight through it. A QuickJS guest cannot\n\
-         * dereference raw pointers — it reaches host capabilities ONLY through the threaded\n\
-         * `bridge` (Rule 12) — so the peer call necessarily crosses into the Rust loader via\n\
-         * `callGuestMethod`. The loader-side resolve there is dominated by the QuickJS VM\n\
-         * boundary and argument marshalling by orders of magnitude, so eliminating it would\n\
-         * add bridge ABI surface for no measurable gain. The revision snapshot + per-call\n\
-         * staleness check below keep correctness parity with the direct-dispatch callers.\n\
+         * The loader resolves the peer interface and dispatches DIRECTLY through it —\n\
+         * the bridge no longer re-enters the host via `call_guest_method` (which would\n\
+         * resolve the same interface a second time). Resolution is per-call here; the\n\
+         * native-dispatch languages (rust/cpp/csharp/python/lua) additionally CACHE the\n\
+         * resolved interface, which a QuickJS guest cannot (it cannot dereference raw\n\
+         * pointers, so it reaches host capabilities ONLY through the threaded `bridge`,\n\
+         * Rule 12). `dispatchPeer` is the bridge primitive that performs that loader-side\n\
+         * resolve + direct dispatch on the guest's behalf. The revision snapshot +\n\
+         * per-call staleness check below keep correctness parity with the cached callers.\n\
          *\n\
          * Uses per-call create+destroy (stateless contract model).\n\
          * Stateful peers would require a retained instance-handle API.\n */\n",
@@ -3556,7 +3556,7 @@ fn generate_ts_peer_caller_class(
     // Re-resolve this peer after the registry changed under us: a hot-reload swapped a
     // new interface into the same slot (findByContract still succeeds), an unload vacated
     // it (findByContract returns null — the peer is gone, return false). The actual
-    // interface/instance are resolved fresh inside callGuestMethod on each dispatch, so
+    // interface/instance are resolved fresh inside dispatchPeer on each dispatch, so
     // revalidation only re-confirms reachability and re-snapshots the revision.
     out.push_str("    private _revalidate(): boolean {\n");
     out.push_str("        if (!this._bridge || !this._bridge.findByContract) {\n");
@@ -3596,7 +3596,7 @@ fn generate_ts_peer_caller_class(
 ///
 /// Reuses `emit_ts_guest_host_contract_args_setup` and
 /// `emit_ts_guest_host_contract_out_setup` for identical StringView/Buffer/u64
-/// marshalling.  The call itself routes through `polyplug.callGuestMethod`
+/// marshalling.  The call itself routes through `polyplug.dispatchPeer`
 /// instead of reading a vtable header — that is the key simplification vs the
 /// host-contract method.
 fn generate_ts_peer_caller_method(
@@ -3636,7 +3636,7 @@ fn generate_ts_peer_caller_method(
     ));
 
     out.push_str("        const polyplug = this._bridge;\n");
-    out.push_str("        if (!polyplug || !polyplug.callGuestMethod) {\n");
+    out.push_str("        if (!polyplug || !polyplug.dispatchPeer) {\n");
     if has_return {
         out.push_str("            return null as any;\n");
     } else {
@@ -3661,7 +3661,7 @@ fn generate_ts_peer_caller_method(
 
     // Call the bridge primitive.  It returns the u32 error code directly.
     out.push_str(&format!(
-        "        const errCode: number = polyplug.callGuestMethod(0x{:08X}, 0x{:08X}, {}, {}, argsPtr, outPtr);\n",
+        "        const errCode: number = polyplug.dispatchPeer(0x{:08X}, 0x{:08X}, {}, {}, argsPtr, outPtr);\n",
         contract_id_lo, contract_id_hi, min_version, fn_id
     ));
     // Throw with the ABI error code (JS host SDK convention) instead of
@@ -4412,15 +4412,20 @@ mod tests {
             names.contains(&"guest/peer_callers.ts".to_owned()),
             "expected guest/peer_callers.ts in {names:?}"
         );
-        // The generated file must mention callGuestMethod.
+        // The generated file must dispatch through the bridge's `dispatchPeer`
+        // primitive (direct loader-side dispatch), NOT the removed `callGuestMethod`.
         let peer_file: &GeneratedFile = files
             .files
             .iter()
             .find(|f: &&GeneratedFile| f.path.to_string_lossy() == "guest/peer_callers.ts")
             .expect("peer_callers.ts");
         assert!(
-            peer_file.content.contains("callGuestMethod"),
-            "peer_callers.ts must call callGuestMethod"
+            peer_file.content.contains("dispatchPeer"),
+            "peer_callers.ts must call dispatchPeer"
+        );
+        assert!(
+            !peer_file.content.contains("callGuestMethod"),
+            "peer_callers.ts must not reference the removed callGuestMethod bridge"
         );
         assert!(
             peer_file.content.contains("ValidatorPeer"),

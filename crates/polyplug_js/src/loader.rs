@@ -742,17 +742,24 @@ fn register_host_functions<'js>(
             error: format!("JS runtime js-quickjs error: revision set failed: {e}"),
         })?;
 
-    // ── callGuestMethod ────────────────────────────────────────────────────────
-    // Guarded peer-call path: find → resolve → create_instance → call_guest_method
+    // ── dispatchPeer ───────────────────────────────────────────────────────────
+    // Guarded peer-call path: find → resolve → create_instance → DIRECT dispatch
     // → destroy_instance. The contract_id and min_version come from the generated
     // peer_callers.ts constants so the caller never hard-codes raw numbers.
+    //
+    // The loader resolves the peer interface itself (find_guest_contract +
+    // resolve_guest_contract) and then dispatches DIRECTLY through that interface —
+    // it does NOT re-enter the host via HostApi.call_guest_method (which would
+    // wastefully resolve the same interface a second time). The dispatch logic
+    // mirrors the runtime's own host_call_guest_method_impl exactly (Native:
+    // bounds-checked native function-pointer slot; VirtualMachine: vm.call).
     //
     // Per-call create+destroy: a fresh peer instance is built for the call and
     // destroyed after it. create_instance is handed the PEER's own loader_data
     // (read from the resolved interface) so a VM peer reaches its factory; a
     // same-VM peer's create is refused by the loader's reentrancy guard and falls
     // back to the default impl (routed by the stamped contract id).
-    let call_guest_method_fn: Function<'js> = Function::new(
+    let dispatch_peer_fn: Function<'js> = Function::new(
         ctx.clone(),
         move |_ctx: Ctx<'js>,
               contract_id_lo: u32,
@@ -797,44 +804,93 @@ fn register_host_functions<'js>(
             unsafe {
                 ((*iface).create_instance)(peer_loader_data, hvt, core::ptr::null(), &mut instance)
             };
-            // A same-VM peer create is refused (null-id handle); host call_guest_method
+            // A same-VM peer create is refused (null-id handle); the VM dispatch path
             // routes by instance.contract_id — stamp the id we resolved either way.
             instance.contract_id = GuestContractId::from_u64(contract_id);
+            let args: *const core::ffi::c_void = args_ptr as usize as *const core::ffi::c_void;
+            let out: *mut core::ffi::c_void = out_ptr as usize as *mut core::ffi::c_void;
             let mut err: AbiError = AbiError::ok();
-            // SAFETY: hvt, instance, and iface are all valid; args_ptr/out_ptr are caller-supplied
-            // addresses that the generated peer_callers.ts aligns via polyplug.alloc; a null arena
-            // is the documented fallback for callers that carry no per-call arena; `err` is a
-            // valid, writable out-param for the duration of the call.
-            unsafe {
-                ((*hvt).call_guest_method)(
-                    hvt,
-                    instance,
-                    fn_id,
-                    args_ptr as usize as *const core::ffi::c_void,
-                    out_ptr as usize as *mut core::ffi::c_void,
-                    core::ptr::null_mut(),
-                    &mut err,
-                )
+            // Direct dispatch through the already-resolved interface — no re-entry into
+            // HostApi.call_guest_method. Mirrors runtime.rs host_call_guest_method_impl.
+            // `peer_dt` was read above from this same interface, so we branch on it and
+            // touch only the union variant the dispatch_type proves active.
+            let code: u32 = match peer_dt {
+                DispatchType::Native => {
+                    // SAFETY: iface is non-null (checked above); dispatch_type == Native
+                    // guarantees the `native` union variant is the active one, so reading
+                    // it is sound.
+                    let native: polyplug_abi::NativeDispatch = unsafe { (*iface).dispatch.native };
+                    if fn_id >= native.function_count || native.functions.is_null() {
+                        // SAFETY: iface produced `instance` via create_instance with the peer's
+                        // own loader_data; destroying it with the same loader_data releases the
+                        // per-instance impl before we bail out (a null-id handle is a no-op).
+                        unsafe { ((*iface).destroy_instance)(peer_loader_data, hvt, instance) };
+                        return AbiErrorCode::FunctionNotAvailable as u32;
+                    }
+                    // SAFETY: fn_id < function_count and functions is non-null, so the slot
+                    // at fn_id is within the peer's static function-pointer array.
+                    let slot: *const () = unsafe { *native.functions.add(fn_id as usize) };
+                    if slot.is_null() {
+                        // SAFETY: same as the bounds-check bail-out above — release the
+                        // freshly created instance before returning.
+                        unsafe { ((*iface).destroy_instance)(peer_loader_data, hvt, instance) };
+                        return AbiErrorCode::FunctionNotAvailable as u32;
+                    }
+                    // SAFETY: native dispatch slots carry the frozen native ABI signature
+                    // `extern "C" fn(GuestContractInstance, *const c_void, *mut c_void, *mut AbiError)`
+                    // (see the polyplugc rust generator); `slot` is a non-null pointer to such a
+                    // function. The transmute reinterprets the type-erased `*const ()` as that
+                    // concrete fn pointer, the established native-call form.
+                    let dispatch_fn: unsafe extern "C" fn(
+                        GuestContractInstance,
+                        *const core::ffi::c_void,
+                        *mut core::ffi::c_void,
+                        *mut AbiError,
+                    ) = unsafe { core::mem::transmute(slot) };
+                    // SAFETY: dispatch_fn is transmuted from a valid native function pointer in
+                    // this interface's table; `instance` belongs to this contract; args/out are
+                    // caller-supplied addresses the generated peer_callers.ts aligns via
+                    // polyplug.alloc; `err` is a valid, writable out-param for the call.
+                    unsafe { dispatch_fn(instance, args, out, &mut err) };
+                    err.code
+                }
+                DispatchType::VirtualMachine => {
+                    // SAFETY: iface is non-null (checked above); dispatch_type == VirtualMachine
+                    // guarantees the `vm` union variant is the active one, so reading vm.call and
+                    // vm.loader_data is sound. instance belongs to this contract; args/out are the
+                    // caller-supplied aligned buffers; a null arena is the documented fallback for
+                    // a caller that carries no per-call arena; `err` is a valid, writable out-param.
+                    unsafe {
+                        ((*iface).dispatch.vm.call)(
+                            (*iface).dispatch.vm.loader_data,
+                            instance,
+                            fn_id,
+                            args as *const (),
+                            out as *mut (),
+                            core::ptr::null_mut(),
+                            &mut err,
+                        )
+                    };
+                    err.code
+                }
             };
             // SAFETY: iface is non-null (checked above); instance was produced by create_instance
             // on this same interface, so destroying it with the same peer loader_data releases
             // the per-instance impl (a null-id handle is a no-op).
             unsafe { ((*iface).destroy_instance)(peer_loader_data, hvt, instance) };
-            err.code
+            code
         },
     )
     .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
-        error: format!(
-            "JS runtime js-quickjs error: callGuestMethod function creation failed: {e}"
-        ),
+        error: format!("JS runtime js-quickjs error: dispatchPeer function creation failed: {e}"),
     })?;
 
     polyplug_obj
-        .set("callGuestMethod", call_guest_method_fn)
+        .set("dispatchPeer", dispatch_peer_fn)
         .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
-            error: format!("JS runtime js-quickjs error: callGuestMethod set failed: {e}"),
+            error: format!("JS runtime js-quickjs error: dispatchPeer set failed: {e}"),
         })?;
 
     let alloc_fn: Function<'js> = Function::new(
