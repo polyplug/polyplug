@@ -5,11 +5,6 @@
       "type": "stdio",
       "command": "bunx",
       "args": ["codegraph", "serve", "--mcp"]
-    },
-    "mempalace": {
-      "type": "stdio",
-      "command": "mempalace-mcp",
-      "args": []
     }
   }
 }
