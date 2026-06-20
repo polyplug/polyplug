@@ -2778,8 +2778,8 @@ fn cs_enum_for_type<'a>(ty: &ResolvedTypeRef, enums: &'a [EnumDef]) -> Option<&'
 ///      IntPtr fields of `HostApi`, exactly as the host-side `Callers.cs` does.
 ///   3. Dispatches each method DIRECTLY through the cached interface — branching on
 ///      `DispatchType` (Native function pointer vs VM `Dispatch.Vm.Call` trampoline),
-///      the same near-bare-metal path as the host->guest caller; no host-mediated
-///      `CallGuestMethod` round-trip, no per-call registry resolve, no epoch pin.
+///      the same near-bare-metal path as the host->guest caller; no per-call registry
+///      resolve, no epoch pin.
 ///
 /// Returns raw ABI types (StringView/Buffer) — mirrors the host caller exactly.
 fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> String {
@@ -4260,12 +4260,7 @@ mod tests {
             "missing peer class: {content}"
         );
         // Direct cached-interface dispatch (mirror of the host->guest caller): branch on
-        // DispatchType and dispatch through the native function table AND the VM trampoline —
-        // never via the host-mediated CallGuestMethod.
-        assert!(
-            !content.contains("CallGuestMethod"),
-            "peer class must NOT route through host-mediated CallGuestMethod: {content}"
-        );
+        // DispatchType and dispatch through the native function table AND the VM trampoline.
         assert!(
             content.contains("switch (_interface->DispatchType)"),
             "peer dispatch must branch on the cached interface's DispatchType: {content}"

@@ -3467,9 +3467,9 @@ fn generate_ts_peer_caller_class(
         "/**\n * Peer caller for guest contract `{}` (id=0x{:016X})\n *\n\
          * Dispatches through the threaded `bridge.dispatchPeer` primitive.\n\
          *\n\
-         * The loader resolves the peer interface and dispatches DIRECTLY through it —\n\
-         * the bridge no longer re-enters the host via `call_guest_method` (which would\n\
-         * resolve the same interface a second time). Resolution is per-call here; the\n\
+         * The loader resolves the peer interface and dispatches DIRECTLY through it,\n\
+         * without re-entering the host to resolve the same interface a second time.\n\
+         * Resolution is per-call here; the\n\
          * native-dispatch languages (rust/cpp/csharp/python/lua) additionally CACHE the\n\
          * resolved interface, which a QuickJS guest cannot (it cannot dereference raw\n\
          * pointers, so it reaches host capabilities ONLY through the threaded `bridge`,\n\

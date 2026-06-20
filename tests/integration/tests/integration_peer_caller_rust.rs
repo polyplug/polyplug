@@ -1,14 +1,16 @@
 //! Integration test: Rust guest→guest peer caller pattern at runtime.
 //!
-//! The generated `peer_callers.rs` inside a native cdylib calls
-//! `host->find_guest_contract → resolve_guest_contract → create_instance →
-//! call_guest_method` to cross-dispatch to another loaded contract.
+//! The generated `peer_callers.rs` inside a native cdylib resolves a peer through
+//! `host->find_guest_contract → resolve_guest_contract → create_guest_instance`,
+//! then dispatches DIRECTLY through the cached peer interface (no host-mediated
+//! `call_guest_method` round-trip, no per-call registry resolve, no epoch pin),
+//! re-resolving only when the registry revision counter changes.
 //!
 //! This test replicates that EXACT pattern inline — without needing to compile
 //! a second cdylib — by calling the same sequence of `HostApi` function pointers
-//! through `Runtime::host_abi()`. This is equivalent to what a loaded Rust
-//! peer-caller cdylib would do: both paths go through the same `call_guest_method`
-//! implementation in the runtime.
+//! through `Runtime::host_abi()` and then dispatching through the resolved
+//! `GuestContractInterface` itself. This is equivalent to what a loaded Rust
+//! peer-caller cdylib would do.
 //!
 //! The flow:
 //!   1. A Lua bundle registers `test.peer@1` with one function:
@@ -18,14 +20,16 @@
 //!      `peer_callers.rs` does), it:
 //!        - calls `find_guest_contract` to get a handle for `test.peer@1`
 //!        - calls `resolve_guest_contract` to get `*const GuestContractInterface`
-//!        - calls `create_instance` on the interface
-//!        - constructs a `CallArena` over a stack buffer (512 bytes)
-//!        - calls `call_guest_method` with a `StringView` arg + `StringView` out
+//!        - calls `create_guest_instance` on the host to build the peer instance
+//!        - caches the registry revision counter via `revision_counter`
+//!        - constructs a `CallArena` over a heap buffer (512 bytes)
+//!        - dispatches DIRECTLY through `interface.dispatch.vm.call` (the peer is
+//!          a Lua VM contract), passing the per-call arena
 //!   4. The test asserts the returned `StringView` equals `"PEER:hello"`.
 //!
-//! This directly exercises the `call_guest_method` path and arena lifetime that
-//! the generated Rust peer caller relies on, covering the StringView borrowed-view
-//! return fix from #70/#71.
+//! This directly exercises the cached-interface dispatch path and arena lifetime
+//! that the generated Rust peer caller relies on, covering the StringView
+//! borrowed-view return fix from #70/#71.
 //!
 //! LuaJIT is always vendored, so no skip path is needed.
 
@@ -36,12 +40,12 @@ use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::CallArena;
+use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
-use polyplug_abi::VmLoaderData;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 use polyplug_utils::bundle_id;
@@ -140,13 +144,21 @@ fn write_lua_provider(tmp: &std::path::Path) -> PathBuf {
 /// that `polyplugc` generates in `peer_callers.rs`.
 ///
 /// Compare with `examples/guests/rust/transformer/generated/guest/peer_callers.rs`:
-///   - `resolve()` calls `find_guest_contract` + `resolve_guest_contract` + `create_instance`
-///   - `echo()` resets the arena, marshals the `StringView` arg, calls `call_guest_method`
-///   - `Drop` calls `arena.reset()` + `destroy_instance`
+///   - `resolve()` calls `find_guest_contract` + `resolve_guest_contract` +
+///     `create_guest_instance`, then caches the registry revision counter
+///   - `echo()` revalidates against the revision counter, resets the arena, and
+///     dispatches DIRECTLY through the cached interface (VM path for a Lua peer)
+///   - `Drop` calls `arena.reset()` + `destroy_guest_instance` (host-mediated)
 struct TestPeerCaller {
     interface: *const GuestContractInterface,
     instance: GuestContractInstance,
     host: *const HostApi,
+    /// Peer contract handle, retained so the cache can re-resolve after a reload.
+    handle: GuestContractHandle,
+    /// Pointer to the runtime's registry revision counter, fetched once.
+    revision_ptr: *const u64,
+    /// Revision value read when the peer was resolved.
+    cached_revision: u64,
     /// Stable-address backing buffer for the per-call arena.
     _arena_buf: Box<[u8; 512]>,
     arena: CallArena,
@@ -165,23 +177,26 @@ impl TestPeerCaller {
         if interface.is_null() {
             return None;
         }
+        // Route creation through the host so the runtime tracks the instance.
+        // A null instance.data is valid for stateless/VM contracts.
         // SAFETY: interface is non-null and valid for the runtime lifetime; the
         // instance is written through the trailing out-param.
-        let mut created: GuestContractInstance = GuestContractInstance::null();
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
         unsafe {
-            ((*interface).create_instance)(
-                VmLoaderData::null(),
-                host,
-                core::ptr::null(),
-                &mut created as *mut GuestContractInstance,
-            )
+            (iface_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
-        // Stamp the peer contract id so `call_guest_method` routes by it — the VM
-        // provider's create_instance returns a null-id handle. Mirrors the fix in
-        // the generated `peer_callers.rs`.
-        let instance: GuestContractInstance = GuestContractInstance {
-            data: created.data,
-            contract_id: polyplug_utils::GuestContractId::from_u64(peer_id),
+        // Fetch the registry revision counter ONCE, then read its current value so
+        // every later dispatch can detect a reload/unload with a direct atomic load.
+        let revision_ptr: *const u64 = unsafe { (iface_api.revision_counter)(host) };
+        let cached_revision: u64 = if revision_ptr.is_null() {
+            0
+        } else {
+            // SAFETY: revision_ptr was returned by revision_counter and points to the
+            // runtime's revision counter (an AtomicU64), valid for the runtime lifetime.
+            unsafe {
+                (*(revision_ptr as *const core::sync::atomic::AtomicU64))
+                    .load(core::sync::atomic::Ordering::Acquire)
+            }
         };
         let mut arena_buf: Box<[u8; 512]> = Box::new([0u8; 512]);
         let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
@@ -189,43 +204,107 @@ impl TestPeerCaller {
             interface,
             instance,
             host,
+            handle,
+            revision_ptr,
+            cached_revision,
             _arena_buf: arena_buf,
             arena,
         })
     }
 
-    /// Call `test.peer@1::echo(input)` via `call_guest_method`.
+    /// Read the registry revision through the cached pointer — one atomic load.
+    fn live_revision(&self) -> u64 {
+        if self.revision_ptr.is_null() {
+            return self.cached_revision;
+        }
+        // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to
+        // the runtime's revision counter — an AtomicU64 valid for the runtime lifetime.
+        unsafe {
+            (*(self.revision_ptr as *const core::sync::atomic::AtomicU64))
+                .load(core::sync::atomic::Ordering::Acquire)
+        }
+    }
+
+    /// Re-resolve the cached peer interface after the registry changed under us.
+    fn revalidate(&mut self) -> bool {
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when null.
+        let iface_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return false,
+        };
+        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host/handle.
+        let interface: *const GuestContractInterface =
+            unsafe { (iface_api.resolve_guest_contract)(self.host, self.handle) };
+        if interface.is_null() {
+            return false;
+        }
+        let mut instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the instance.
+        unsafe {
+            (iface_api.create_guest_instance)(
+                self.host,
+                interface,
+                core::ptr::null(),
+                &mut instance,
+            );
+        }
+        self.instance = instance;
+        self.interface = interface;
+        self.cached_revision = self.live_revision();
+        true
+    }
+
+    /// Call `test.peer@1::echo(input)` via DIRECT cached-interface dispatch.
     ///
     /// Mirrors `PipelineValidatorContractPeer::validate(&mut self, input: StringView)`.
     /// Returns a `StringView` that borrows the caller's arena; it stays valid until
     /// the next call that resets the arena.
+    #[allow(clippy::absurd_extreme_comparisons)]
     fn echo(&mut self, input: StringView) -> Result<StringView, AbiErrorCode> {
+        // Cheap per-call staleness check: re-resolve on any revision change.
+        if self.live_revision() != self.cached_revision && !self.revalidate() {
+            return Err(AbiErrorCode::NotFound);
+        }
         if self.interface.is_null() {
             return Err(AbiErrorCode::NotFound);
         }
         // Reset at call start: rewinds the arena, invalidating prior views.
         self.arena.reset();
         let input_val: StringView = input;
-        let args_ptr: *const core::ffi::c_void =
-            &input_val as *const StringView as *const core::ffi::c_void;
+        let args_ptr: *const () = &input_val as *const StringView as *const ();
         let mut out_val: StringView = unsafe { core::mem::zeroed() };
-        let out_ptr: *mut core::ffi::c_void =
-            &mut out_val as *mut StringView as *mut core::ffi::c_void;
-        // SAFETY: host is non-null (set in resolve()); interface and instance are
-        // valid for the runtime lifetime. args_ptr/out_ptr are valid StringView slots.
-        // The AbiError is written through the trailing out-param.
+        let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
+        // SAFETY: interface is valid for the runtime lifetime.
+        let interface: &GuestContractInterface = unsafe { &*self.interface };
         let mut err: AbiError = AbiError::ok();
+        // SAFETY: args_ptr/out_ptr/&mut err match the ABI contract; instance is valid.
         unsafe {
-            let iface_api: &HostApi = &*self.host;
-            (iface_api.call_guest_method)(
-                self.host,
-                self.instance,
-                0_u32,
-                args_ptr,
-                out_ptr,
-                &mut self.arena as *mut CallArena,
-                &mut err as *mut AbiError,
-            )
+            match interface.dispatch_type {
+                DispatchType::Native => {
+                    if 0_u32 >= interface.dispatch.native.function_count {
+                        return Err(AbiErrorCode::FunctionNotAvailable);
+                    }
+                    let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
+                    let dispatch_fn: unsafe extern "C" fn(
+                        GuestContractInstance,
+                        *const (),
+                        *mut (),
+                        *mut AbiError,
+                    ) = core::mem::transmute(fn_ptr);
+                    dispatch_fn(self.instance, args_ptr, out_ptr, &mut err);
+                }
+                DispatchType::VirtualMachine => {
+                    (interface.dispatch.vm.call)(
+                        interface.dispatch.vm.loader_data,
+                        self.instance,
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                        &mut self.arena as *mut CallArena,
+                        &mut err,
+                    );
+                }
+            }
         };
         if err.code != AbiErrorCode::Ok as u32 {
             return Err(AbiErrorCode::from_u32(err.code));
@@ -236,16 +315,23 @@ impl TestPeerCaller {
 
 impl Drop for TestPeerCaller {
     fn drop(&mut self) {
-        // Free arena overflow blocks, then destroy the instance.
+        // Free arena overflow blocks, then destroy the instance through the host.
         self.arena.reset();
+        // SAFETY: self.host is the stored host pointer; as_ref() returns None when null.
+        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
+            Some(api) => api,
+            None => return,
+        };
+        // If the registry changed since we resolved, the cached interface/instance
+        // are stale (reload/unload reclaimed their backing) — skip the destroy.
+        if self.live_revision() != self.cached_revision {
+            return;
+        }
         if !self.instance.data.is_null() {
-            // SAFETY: interface is valid; instance was created by this caller.
+            // SAFETY: instance was created via create_guest_instance on the resolved
+            // interface, which is valid for the lifetime of this wrapper.
             unsafe {
-                ((*self.interface).destroy_instance)(
-                    VmLoaderData::null(),
-                    self.host,
-                    self.instance,
-                );
+                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
             }
         }
     }
@@ -298,6 +384,6 @@ fn rust_peer_caller_echo_roundtrip() {
 
     assert_eq!(
         result, "PEER:hello",
-        "echo must return 'PEER:hello' through call_guest_method"
+        "echo must return 'PEER:hello' through direct cached-interface dispatch"
     );
 }

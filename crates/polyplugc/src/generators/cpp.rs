@@ -4440,8 +4440,7 @@ mod tests {
             peer_file.content
         );
         // Peer caller dispatches DIRECTLY through the cached interface (same path
-        // as the host->guest caller), branching on dispatch type — never through
-        // the host-mediated `call_guest_method` round-trip.
+        // as the host->guest caller), branching on dispatch type.
         assert!(
             peer_file.content.contains("switch (iface_->dispatch_type)"),
             "peer caller must branch on dispatch type:\n{}",
@@ -4457,11 +4456,6 @@ mod tests {
         assert!(
             peer_file.content.contains("iface_->dispatch.vm.call"),
             "peer caller VM arm must call dispatch.vm.call:\n{}",
-            peer_file.content
-        );
-        assert!(
-            !peer_file.content.contains("call_guest_method"),
-            "peer caller must NOT use host-mediated call_guest_method:\n{}",
             peer_file.content
         );
         assert!(

@@ -6,10 +6,10 @@
 //! Unlike `test_plugin` (whose registered `add` uses the 2-argument
 //! `fn(*const (), *mut ())` form), this fixture's dispatch function uses the
 //! frozen **native cross-dispatch** signature
-//! `extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError`, which
-//! is the exact signature `host_call_guest_method` transmutes native slots to.
-//! That makes this contract a valid cross-call target through
-//! `HostApi::call_guest_method` / `Runtime::call_guest_method`.
+//! `extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)`,
+//! which is the exact signature the runtime's native dispatch transmutes each
+//! function-table slot to. That makes this contract a valid peer-call target
+//! through direct cached-interface dispatch (`interface.dispatch.native`).
 //!
 //! V1 returns `a.wrapping_add(b)`. The paired `cross_target_plugin_v2` fixture
 //! returns `a.wrapping_add(b).wrapping_add(1000)` so reload routing is
@@ -29,9 +29,9 @@ pub struct AddArgs {
 }
 
 /// Owned instance state for `cross.target`. A real (non-null) instance is
-/// required so that cross-dispatch through `host_call_guest_method` — which
-/// rejects a null `instance.data` — has a valid handle to route. No statics are
-/// used; the value is heap-owned per instance.
+/// produced per `create_instance` and threaded into each direct dispatch as the
+/// `GuestContractInstance` handle. No statics are used; the value is heap-owned
+/// per instance.
 #[repr(C)]
 struct TargetInstance {
     /// Marker proving the instance was produced by this contract's factory.

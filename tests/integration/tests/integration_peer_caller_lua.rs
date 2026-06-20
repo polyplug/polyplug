@@ -9,14 +9,15 @@
 //!   2. A **consumer** Lua bundle registers contract `test.consumer@1`. Its single
 //!      function `invoke(StringView) -> StringView` uses the peer-caller idiom
 //!      from `peer_callers.lua` (inline in the test bundle script) to call
-//!      `test.peer::echo` via `host.call_guest_method`, then returns the result.
+//!      `test.peer::echo` by dispatching DIRECTLY through the cached peer
+//!      interface (`interface.dispatch.vm.call`), then returns the result.
 //!   3. Both bundles are loaded into the same `Runtime` (LuaLoader). The provider
 //!      is loaded first so `test.peer@1` is registered when the consumer resolves it.
 //!   4. The test dispatches the consumer's `invoke` with input `"hello"`, reads
 //!      the returned `StringView`, and asserts the value equals `"PEER:hello"`.
 //!
 //! This exercises the borrowed-view StringView return path (#70/#71 fix) and
-//! the full guest→host→guest dispatch chain at runtime.
+//! the full guest→guest direct-dispatch chain at runtime.
 //!
 //! LuaJIT is always vendored, so no skip path is needed.
 
@@ -112,12 +113,13 @@ end
 
 /// Lua source for the consumer bundle: registers `test.consumer@1` with one
 /// function `invoke(StringView) -> StringView` that uses the peer-caller idiom
-/// to call `test.peer@1::echo` through `host.call_guest_method`, then returns
-/// the result.
+/// to call `test.peer@1::echo` by dispatching DIRECTLY through the cached peer
+/// interface, then returns the result.
 ///
 /// The peer-caller idiom mirrors what `peer_callers.lua` generates:
-///   resolve via find_guest_contract → resolve_guest_contract → create_instance →
-///   call_guest_method → return out_val.
+///   resolve via find_guest_contract → resolve_guest_contract → create_guest_instance,
+///   then dispatch DIRECTLY through `interface.dispatch.vm.call` (no host-mediated
+///   call_guest_method round-trip) → return out_val.
 ///
 /// test.peer@1 contract id: fnv1a_64("guest_contract:test.peer@1")
 ///                        = 0x8402886CF97A6E7D
@@ -125,17 +127,18 @@ fn consumer_lua_src() -> &'static str {
     r#"
 local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
+local polyplug_abi = require("polyplug_abi")
 
 -- Contract ID for test.peer@1: fnv1a_64("guest_contract:test.peer@1")
 -- = 0x8402886CF97A6E7D
 local TEST_PEER_ID = 0x8402886CF97A6E7DULL
 
 -- invoke(input: StringView) -> StringView
--- Peer-calls test.peer@1::echo(input) via host.call_guest_method and returns
--- the result (the borrowed StringView from the peer call).
+-- Peer-calls test.peer@1::echo(input) via DIRECT cached-interface dispatch and
+-- returns the result (the borrowed StringView from the peer call).
 -- The author factory captures the threaded host pointer on the instance; the
 -- peer-caller idiom reads it from `self` — no per-VM global (Rule 12). Mirrors the
--- generated peer_callers.lua `resolve(host_ptr)`.
+-- generated peer_callers.lua `resolve(host_ptr)` + `validate(input)`.
 local function new_consumer(host)
     local self = { _host = host }
     function self:invoke(args_ptr, out_ptr)
@@ -152,27 +155,26 @@ local function new_consumer(host)
             return
         end
 
-        -- Create a peer instance (stateless contract: instance.data may be null).
-        -- Out-param ABI: create_instance writes the instance through a trailing pointer.
-        local out_instance = ffi.new("GuestContractInstance[1]")
-        local loader_data = ffi.new("VmLoaderData")
-        interface.create_instance(loader_data, host, nil, out_instance)
-        local peer_instance = out_instance[0]
-        -- Stamp the peer contract id so call_guest_method routes by it (create_instance
-        -- returns a null-id handle for stateless/VM peers). Mirrors generated peer_callers.lua.
-        peer_instance.contract_id = TEST_PEER_ID
+        -- Create a peer instance through the host so the runtime tracks it
+        -- (stateless contract: instance.data may be null). Out-param ABI:
+        -- create_guest_instance writes the instance through a trailing pointer.
+        local instance = ffi.new("GuestContractInstance")
+        host.create_guest_instance(host, interface, nil, instance)
 
         -- Forward args directly: both contracts share StringView in / StringView out.
-        local in_sv_ptr = ffi.cast("const void*", ffi.cast("uintptr_t", args_ptr))
-        local out_sv_ptr = ffi.cast("void*", ffi.cast("uintptr_t", out_ptr))
+        local args_ptr_v = ffi.cast("const void*", ffi.cast("uintptr_t", args_ptr))
+        local out_ptr_v = ffi.cast("void*", ffi.cast("uintptr_t", out_ptr))
 
-        -- Dispatch through call_guest_method (null arena: host-alloc fallback).
+        -- Dispatch DIRECTLY through the cached interface. The Lua peer is a VM
+        -- contract, so the vm.call branch runs (null arena: host-alloc fallback).
         -- Out-param ABI: the AbiError is written through a trailing pointer.
-        local out_err = ffi.new("AbiError[1]")
-        host.call_guest_method(host, peer_instance, 0, in_sv_ptr, out_sv_ptr, nil, out_err)
+        local err = ffi.new("AbiError")
+        if interface.dispatch_type == 1 then
+            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, instance, 0, args_ptr_v, out_ptr_v, nil, err)
+        end
 
-        -- Destroy instance (stateless no-op, but honour the lifecycle).
-        interface.destroy_instance(loader_data, host, peer_instance)
+        -- Destroy instance through the host (stateless no-op, but honour the lifecycle).
+        host.destroy_guest_instance(host, interface, instance)
     end
     return self
 end

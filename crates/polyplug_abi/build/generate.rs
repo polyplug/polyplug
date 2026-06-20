@@ -876,7 +876,7 @@ const KNOWN_SIZES: &[(&str, usize)] = &[
     ("DispatchMechanisms", 16),
     ("GuestContractInterface", 56),
     ("GuestContractInstance", 16),
-    ("HostApi", 192),
+    ("HostApi", 184),
     ("HostContractInterface", 80),
     ("HostContractInstance", 8),
     ("GuestContractHandle", 8),
@@ -1956,16 +1956,15 @@ fn generate_csharp_layout_tests(sized_structs: &[(&str, usize)]) -> String {
     // Field OFFSET asserts for the frozen tail of HostApi and the logging
     // fields of RuntimeConfig. Size-only asserts cannot catch a transposed
     // or dropped field that another field's padding silently compensates
-    // for; these offsets are frozen ABI (see CLAUDE.md: call_guest_method
-    // @136, unload_bundle @144, log @152, create_guest_instance @160,
-    // destroy_guest_instance @168, reserved @176; RuntimeConfig log
-    // @24, log_user_data @32, log_max_level @40).
-    let offset_asserts: [(&str, &str, usize); 9] = [
-        ("HostApi", "CallGuestMethod", 136),
-        ("HostApi", "UnloadBundle", 144),
-        ("HostApi", "Log", 152),
-        ("HostApi", "CreateGuestInstance", 160),
-        ("HostApi", "DestroyGuestInstance", 168),
+    // for; these offsets are frozen ABI (see CLAUDE.md: unload_bundle @136,
+    // log @144, create_guest_instance @152, destroy_guest_instance @160,
+    // reserved @176; RuntimeConfig log @24, log_user_data @32,
+    // log_max_level @40).
+    let offset_asserts: [(&str, &str, usize); 8] = [
+        ("HostApi", "UnloadBundle", 136),
+        ("HostApi", "Log", 144),
+        ("HostApi", "CreateGuestInstance", 152),
+        ("HostApi", "DestroyGuestInstance", 160),
         ("HostApi", "Reserved", 176),
         ("RuntimeConfig", "Log", 24),
         ("RuntimeConfig", "LogUserData", 32),

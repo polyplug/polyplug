@@ -123,17 +123,17 @@ ffi.cdef[[
     typedef void (*HostApi_register_loader_fn)(const HostApi*, void*, AbiError*);
     typedef size_t (*HostApi_get_last_error_fn)(const HostApi*, uint8_t*, size_t);
     typedef size_t (*HostApi_get_error_len_fn)(const HostApi*);
-    typedef void (*HostApi_call_guest_method_fn)(const HostApi*, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);
     typedef void (*HostApi_unload_bundle_fn)(const HostApi*, uint64_t, AbiError*);
     typedef void (*HostApi_log_fn)(const HostApi*, uint32_t, StringView, StringView);
     typedef void (*HostApi_create_guest_instance_fn)(const HostApi*, const GuestContractInterface*, const void*, GuestContractInstance*);
     typedef void (*HostApi_destroy_guest_instance_fn)(const HostApi*, const GuestContractInterface*, GuestContractInstance);
+    typedef const uint64_t* (*HostApi_revision_counter_fn)(const HostApi*);
     //  Host Interface — function table passed to guests during initialization.
     // 
     //  Contains an opaque runtime pointer and function pointers for guest calls.
     //  All functions use self-passing pattern (receive HostApi pointer as first parameter).
     //  `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
-    //  Tail offsets: `create_guest_instance` @160, `destroy_guest_instance` @168, `reserved` @176.
+    //  Tail offsets: `create_guest_instance` @152, `destroy_guest_instance` @160, `revision_counter` @168, `reserved` @176.
     // 
     //  # Who provides
     //  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -368,57 +368,6 @@ ffi.cdef[[
         //  # Returns
         //  Length of last error message (0 if no error).
         HostApi_get_error_len_fn get_error_len;
-        //  Call a method on another guest contract instance, mediated by the host.
-        // 
-        //  This is the only cross-call path usable from a VM-sandboxed guest
-        //  (Lua/JS/Python/.NET): rather than holding a raw `GuestContractInterface`
-        //  pointer and dispatching directly — which a sandboxed guest cannot do — the
-        //  guest hands the host an opaque `instance` it obtained earlier and the host
-        //  performs the plugin→plugin dispatch on its behalf. Native guests may also
-        //  use it, though they can dispatch directly.
-        // 
-        //  # Lookup semantics
-        //  The target contract is re-resolved through the registry via
-        //  `instance.contract_id` on EVERY call — the result is never cached. This is
-        //  deliberate: after a hot-reload, a fresh cross-call routes to the live
-        //  interface, while the interface superseded by the reload stays alive under
-        //  epoch reclamation until every reader pinned before the swap unpins. Each
-        //  cross-call pins the epoch across its dispatch, so an in-flight call keeps
-        //  the interface it resolved alive until it returns. The caller therefore
-        //  always reaches the current implementation without invalidating outstanding
-        //  instances.
-        // 
-        //  # Multiple providers
-        //  Routing keys solely on `instance.contract_id`. If more than one live
-        //  provider is registered for that `contract_id`, the target is ambiguous:
-        //  the call returns `AbiErrorCode::DuplicateProvider` and does NOT dispatch
-        //  (see `host_call_guest_method` in `polyplug`). Resolution requires exactly
-        //  one registered provider for the contract.
-        // 
-        //  # Arena semantics
-        //  `arena` is forwarded unchanged to VM dispatch as its variable-size return
-        //  buffer. Native dispatch function pointers carry no arena slot in their
-        //  signature, so `arena` is unused on the native path. A null `arena` follows
-        //  the established convention: VM dispatch falls back to per-value
-        //  `host->alloc` (see [`CallArena`]).
-        // 
-        //  # Trust model
-        //  There is zero per-call authorization. Trust is established once, at load
-        //  time, by declared-dependency verification (a bundle may only resolve the
-        //  contracts it declared) per `docs/TRUST_MODEL.md`. Once a guest legitimately
-        //  holds an `instance`, cross-calling it is unrestricted.
-        // 
-        //  # Arguments
-        //  - `this`: HostApi pointer (self-passing)
-        //  - `instance`: Target guest contract instance (carries `contract_id`)
-        //  - `fn_id`: Function index within the target contract
-        //  - `args`: Pointer to packed arguments (ABI-specific layout)
-        //  - `out`: Pointer to the output buffer for the return value
-        //  - `arena`: Optional per-call [`CallArena`] for variable-size return values;
-        //    null is allowed
-        //  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
-        //    success, an error otherwise). Never null.
-        HostApi_call_guest_method_fn call_guest_method;
         //  Unload a guest bundle, invalidating its handles and freeing its resources.
         // 
         //  This performs **true unload**: the bundle's slots have their generation bumped,
@@ -431,8 +380,8 @@ ffi.cdef[[
         //  A raw `GuestContractInterface` pointer cached before the unload and dereferenced
         //  after it is **undefined behaviour**: the host must quiesce the bundle (ensure no
         //  thread is calling into it or holds a pointer into it) before unloading. Runtime-
-        //  mediated calls — `call_guest_method`, `create_guest_instance`, `destroy_guest_instance`
-        //  — pin the epoch across dispatch and are therefore safe against a concurrent unload.
+        //  mediated calls — `create_guest_instance`, `destroy_guest_instance` — pin the epoch
+        //  across dispatch and are therefore safe against a concurrent unload.
         // 
         //  After unload, every handle that was minted for this bundle resolves to
         //  `AbiErrorCode::StaleHandle`, and `find_guest_contract` / `find_all_guest_contracts`
@@ -486,6 +435,49 @@ ffi.cdef[[
         //  Mirror of `create_guest_instance`: the runtime invokes the interface's
         //  `destroy_instance` under an epoch pin and updates its live-instance accounting.
         HostApi_destroy_guest_instance_fn destroy_guest_instance;
+        //  Return a pointer to the runtime's monotonic registry revision counter — the
+        //  shared word a generated host→guest caller polls to keep its cached interface
+        //  safe with NO per-call function call.
+        // 
+        //  Generated callers resolve a contract once and cache the interface pointer so
+        //  the hot path is a direct indirect call with no per-call resolve. To keep that
+        //  cache safe without making the user track dangling pointers, the caller invokes
+        //  THIS function exactly once — at construction — to obtain the address of the
+        //  counter, caches that pointer alongside the counter's current value, and then
+        //  before every dispatch reads the counter *directly through the cached pointer*
+        //  (a single aligned atomic load — one instruction, no call into the runtime).
+        //  While the value is unchanged the cached interface is guaranteed current and the
+        //  caller dispatches directly; when it changes (a bundle was loaded, hot-reloaded,
+        //  or unloaded) the caller re-resolves and refreshes its cache. This is what turns
+        //  the "raw interface pointer cached after reload/unload is UB" footgun into an
+        //  automatically managed, safe cache that costs a memory load per call, not a
+        //  function call.
+        // 
+        //  The pointed-to value is an opaque monotonic counter; callers must treat it only
+        //  as "equal ⇒ unchanged" and never ascribe meaning to its magnitude or deltas. It
+        //  is deliberately a runtime-wide revision rather than a per-slot generation: a
+        //  hot-reload swaps a new interface into the *same* slot WITHOUT bumping that
+        //  slot's generation (so existing handles survive a reload), which a generation
+        //  check would miss — the revision changes on every mutation, so reload is
+        //  detected.
+        // 
+        //  # Memory model
+        //  The runtime bumps the counter under its write lock with `Release` ordering;
+        //  readers should load with `Acquire` where the language allows (Rust/C++/C#). On
+        //  every supported 64-bit target an aligned 64-bit load is itself atomic, so
+        //  languages that cannot express ordering (Python/Lua) still observe a coherent,
+        //  monotonically advancing value. The counter lives inside the `Runtime` (held
+        //  behind an `Arc`, so its address is stable) and is valid for the whole lifetime
+        //  of the runtime — i.e. for as long as any caller may dispatch.
+        // 
+        //  # Arguments
+        //  - `this`: HostApi pointer (self-passing)
+        // 
+        //  # Returns
+        //  A pointer to the `u64` revision counter, or null if `this` is null. A caller
+        //  that receives null treats its cache as always-current (it has no runtime to
+        //  mediate reloads against).
+        HostApi_revision_counter_fn revision_counter;
         //  Reserved. Producers must set this to null; consumers must not read it.
         const void* reserved;
     } HostApi;

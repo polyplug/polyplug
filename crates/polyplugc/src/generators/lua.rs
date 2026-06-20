@@ -3249,11 +3249,7 @@ mod tests {
             out.contains("function PipelineValidatorPeer:validate(input)"),
             "missing validate method: {out}"
         );
-        // Direct cached-interface dispatch — no host-mediated round-trip.
-        assert!(
-            !out.contains("call_guest_method"),
-            "peer must NOT route through the host-mediated call_guest_method: {out}"
-        );
+        // Direct cached-interface dispatch.
         // Branch on the cached interface's dispatch_type.
         assert!(
             out.contains("if dispatch_type == 0 then"),

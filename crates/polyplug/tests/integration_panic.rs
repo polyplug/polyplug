@@ -192,22 +192,6 @@ unsafe extern "C" fn noop_get_error_len(_this: *const HostApi) -> usize {
     0
 }
 
-/// No-op call_guest_method callback.
-unsafe extern "C" fn noop_call_guest_method(
-    _this: *const HostApi,
-    _instance: polyplug_abi::GuestContractInstance,
-    _fn_id: u32,
-    _args: *const core::ffi::c_void,
-    _out: *mut core::ffi::c_void,
-    _arena: *mut polyplug_abi::CallArena,
-    out_err: *mut AbiError,
-) {
-    if !out_err.is_null() {
-        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_err.write(AbiError::ok()) };
-    }
-}
-
 unsafe extern "C" fn noop_unload_bundle(
     _this: *const HostApi,
     _bundle_id: polyplug_utils::BundleId,
@@ -455,7 +439,6 @@ fn test_panic_returns_abi_error_panic() {
         register_loader: noop_register_loader,
         get_last_error: noop_get_last_error,
         get_error_len: noop_get_error_len,
-        call_guest_method: noop_call_guest_method,
         unload_bundle: noop_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,

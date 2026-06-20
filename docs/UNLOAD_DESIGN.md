@@ -122,16 +122,16 @@ the caller can use it, and the revision check turns a *reload* into a clean re-r
 Hand-written FFI callers that skip the revision check remain bound by the
 quiesce-before-unload contract above.
 
-Runtime-mediated calls do pin the epoch across dispatch and are therefore safe against a
-concurrent unload:
+Runtime-mediated lifecycle calls do pin the epoch across their operation and are therefore
+safe against a concurrent unload:
 
-- `call_guest_method` (`HostApi` @136)
-- `create_guest_instance` (`HostApi` @160)
-- `destroy_guest_instance` (`HostApi` @168)
+- `create_guest_instance` (`HostApi` @152)
+- `destroy_guest_instance` (`HostApi` @160)
 
 Because these enter the epoch before resolving and stay pinned across the call, an unload
 racing one of them cannot free the interface or library out from under the in-flight
-dispatch.
+operation. (The former `call_guest_method` field, which also pinned the epoch, has been
+removed from the ABI — peer callers now dispatch directly through the cached interface.)
 
 ### Model-checked with loom
 
@@ -204,17 +204,16 @@ host-held instance still references it.
 2. **Invalidate (under the registry write lock).** Bump the generation of every slot the
    bundle owns, remove the bundle from `guest_contract_index`, `bundle_name_index`, and
    `bundle_declared_deps`, and publish a new `ReadView` that no longer contains the
-   bundle. After this, every old handle resolves to `StaleHandle` and every fresh
-   `call_guest_method` re-resolve fails cleanly — no resolve can hand out a pointer into
+   bundle. After this, every old handle resolves to `StaleHandle` and any fresh
+   `resolve_guest_contract` call fails cleanly — no resolve can hand out a pointer into
    the doomed interface.
 3. **Defer reclamation.** `defer_destroy` the superseded `ReadView` and the bundle's
    interface `Arc`; the loader hands its dylib mapping / VM to the same epoch-deferred
    path. The actual free runs once the epoch advances past every reader pinned before the
    unload.
 
-Re-resolution through `call_guest_method` routes by `instance.contract_id`; once the slot
-is gone from the index, that re-resolve returns `NotFound` / `StaleHandle` and can never
-reach a freed interface.
+Any fresh `resolve_guest_contract` call after invalidation returns `StaleHandle` and can
+never hand out a pointer into the freed interface.
 
 ---
 
@@ -252,7 +251,7 @@ invalidates handles and reclaims the backing resources.
 | Type | Size | Layout |
 |---|---|---|
 | `GuestContractHandle` | 8 bytes, align 4 | `{ index: u32, generation: u32 }` |
-| `HostApi` | 192 bytes, align 8 | 1 runtime ptr + 22 fn-ptr fields + 1 trailing `reserved` data ptr |
+| `HostApi` | 184 bytes, align 8 | 1 runtime ptr + 21 fn-ptr fields + 1 trailing `reserved` data ptr |
 | `RuntimeConfig` | 48 bytes, align 8 | no unload-mode field |
 
 `ReloadPhaseType::Unloading = 3` with the `ReloadPhase::unloading()` constructor models

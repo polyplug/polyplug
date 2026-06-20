@@ -187,7 +187,6 @@ impl RuntimeBuilder {
             register_loader: crate::runtime::host_register_loader,
             get_last_error: crate::runtime::host_get_last_error,
             get_error_len: crate::runtime::host_get_error_len,
-            call_guest_method: crate::runtime::host_call_guest_method,
             unload_bundle: crate::runtime::host_unload_bundle,
             log: crate::runtime::host_log,
             create_guest_instance: crate::runtime::host_create_guest_instance,

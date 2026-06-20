@@ -71,10 +71,6 @@ name = "amortization"
 harness = false
 
 [[bench]]
-name = "cross_call"
-harness = false
-
-[[bench]]
 name = "contention"
 harness = false
 

@@ -41,8 +41,8 @@ impl PeerCallError {
 /// Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 ///
 /// Dispatches directly through the cached peer interface — the same near-bare-metal
-/// path as the host→guest caller (no host-mediated `call_guest_method` round-trip,
-/// no per-call registry resolve, no epoch pin). The declared dependency keeps the
+/// path as the host→guest caller (no per-call registry resolve, no epoch pin).
+/// The declared dependency keeps the
 /// peer alive (its unload is refused while we are loaded); a hot-reload is caught by
 /// the cached revision counter, which re-resolves before the next dispatch.
 ///

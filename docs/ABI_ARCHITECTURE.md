@@ -101,18 +101,18 @@ void host->free(const HostApi* host, uint8_t* ptr, size_t size, size_t align);
 
 ### All Other Operations (via HostApi fields)
 
-`polyplug_runtime_create` returns a pointer to `HostApi`, a `192`-byte
-`#[repr(C)]` struct: one opaque runtime pointer plus 22 function-pointer fields
-(`call_guest_method` at offset 136, `unload_bundle` at offset 144, `log` at
-offset 152, `create_guest_instance` at offset 160, `destroy_guest_instance` at
-offset 168, `revision_counter` at offset 176) followed by a trailing `reserved: *const c_void` data pointer at
-offset 184 (producers set null; consumers must not read it). Host applications
+`polyplug_runtime_create` returns a pointer to `HostApi`, a `184`-byte
+`#[repr(C)]` struct: one opaque runtime pointer plus 21 function-pointer fields
+(`unload_bundle` at offset 136, `log` at offset 144,
+`create_guest_instance` at offset 152, `destroy_guest_instance` at offset 160,
+`revision_counter` at offset 168) followed by a trailing `reserved: *const c_void` data pointer at
+offset 176 (producers set null; consumers must not read it). Host applications
 and plugins call these fields using the self-passing pattern, e.g.
 `host->load_bundle(host, path, path_len)`.
 The fields cover bundle lifecycle (`load_bundle`, `reload_bundle`, `unload_bundle`),
 contract discovery (`find_guest_contract`, `find_all_guest_contracts`,
 `resolve_guest_contract`), instance lifecycle (`create_guest_instance`,
-`destroy_guest_instance`), runtime-mediated dispatch (`call_guest_method`),
+`destroy_guest_instance`),
 registration (`register_guest_contract`, `register_host_contract`,
 `register_loader`), and error handling (`get_last_error`, `get_error_len`),
 among others.
@@ -166,7 +166,7 @@ owner approval. At and after v1.0:
 
 New functionality should use host contract interfaces resolved via
 `HostApi.get_host_contract`. The trailing `reserved: *const c_void` pointer
-(offset 160) is the only sanctioned post-freeze expansion slot; producers set
+(offset 176) is the only sanctioned post-freeze expansion slot; producers set
 it to null, consumers must not read it.
 
 ## ABI Conformance Testing

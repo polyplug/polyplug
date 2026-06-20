@@ -272,22 +272,6 @@ unsafe extern "C" fn stub_get_error_len(_this: *const HostApi) -> usize {
     0
 }
 
-/// Stub call_guest_method — returns success.
-unsafe extern "C" fn stub_call_guest_method(
-    _this: *const HostApi,
-    _instance: GuestContractInstance,
-    _fn_id: u32,
-    _args: *const core::ffi::c_void,
-    _out: *mut core::ffi::c_void,
-    _arena: *mut polyplug_abi::CallArena,
-    out_err: *mut AbiError,
-) {
-    if !out_err.is_null() {
-        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_err.write(AbiError::ok()) };
-    }
-}
-
 unsafe extern "C" fn stub_unload_bundle(
     _this: *const HostApi,
     _bundle_id: BundleId,
@@ -409,7 +393,6 @@ fn test_rust_host_rust_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
@@ -513,7 +496,6 @@ fn test_cpp_host_rust_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
@@ -617,7 +599,6 @@ fn test_csharp_host_rust_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
@@ -721,7 +702,6 @@ fn test_python_host_rust_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
@@ -825,7 +805,6 @@ fn test_lua_host_rust_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
@@ -929,7 +908,6 @@ fn test_js_host_rust_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
@@ -1039,7 +1017,6 @@ fn test_rust_host_cpp_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
@@ -1143,7 +1120,6 @@ fn test_cpp_host_cpp_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
@@ -1247,7 +1223,6 @@ fn test_csharp_host_cpp_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
@@ -1351,7 +1326,6 @@ fn test_python_host_cpp_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
@@ -1455,7 +1429,6 @@ fn test_lua_host_cpp_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
@@ -1559,7 +1532,6 @@ fn test_js_host_cpp_guest() {
         register_loader: stub_register_loader,
         get_last_error: stub_get_last_error,
         get_error_len: stub_get_error_len,
-        call_guest_method: stub_call_guest_method,
         unload_bundle: stub_unload_bundle,
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,

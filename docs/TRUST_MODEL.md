@@ -199,15 +199,13 @@ counter** before each dispatch, which re-resolves the swapped-in interface only 
 the registry actually changed. (QuickJS guests cannot dereference a raw pointer, so
 a JS peer caller routes through the host-mediated `callGuestMethod` bridge instead.)
 
-The dynamic capability underneath is
-`HostApi::call_guest_method(host, instance, fn_id, args, out, arena)`: the caller
-passes a `GuestContractInstance` it already resolved; the host re-resolves the
-target through the registry via `instance.contract_id` on **every** call. The host
-pins the epoch across dispatch (`crossbeam_epoch::pin()`), so a call issued after a
-hot-reload routes to the live (swapped-in) interface and a call racing a concurrent
-unload keeps the resolved interface and its mapping alive until the guard unpins.
-Generated peer callers no longer use this on their hot path, but it remains the path
-for host-driven dispatch and for callers that hold only a `contract_id`.
+There is no longer a `call_guest_method` ABI field. The `polyplugc`-generated peer
+callers for all native languages dispatch directly through the cached interface (the
+same path as any host→guest caller). For QuickJS, the JS loader's `callGuestMethod`
+bridge resolves the interface and dispatches directly without re-entering the host
+ABI. The per-call host round-trip and epoch pin that `call_guest_method` provided
+are gone; the declared-dependency-refuses-unload guarantee is what keeps the cached
+interface valid.
 
 - **Arena forwarding**: the `arena` argument is passed straight to VM dispatch
   (Lua, JS, Python) as an explicit per-call argument — never via a VM global
@@ -221,9 +219,9 @@ for host-driven dispatch and for callers that hold only a `contract_id`.
   locking and proceeds normally, as do cross-VM calls (e.g. a Lua plugin calling a
   JS plugin).
 
-**Zero per-call authorization.** Neither the generated peer caller nor
-`call_guest_method` performs a per-call dependency check — both are Phase 2 hot
-paths (see §4). Trust is established once, at load time, through the
+**Zero per-call authorization.** The generated peer caller performs no per-call
+dependency check — it is a Phase 2 hot path (see §4). Trust is established once,
+at load time, through the
 declared-dependency verification that runs during the init window: while a bundle's
 `polyplug_init` is in flight (`INIT_BUNDLE_ID != 0`), `find_guest_contract` /
 `find_all_guest_contracts` reject any `contract_id` the calling bundle did not
@@ -238,23 +236,23 @@ The following table summarizes the sizes and alignments of the core ABI types on
 
 | Type | Size (bytes) | Alignment (bytes) | Key Fields |
 |------|--------------|-------------------|------------|
-| `HostApi` | 192 | 8 | `runtime` opaque ptr + 22 function pointers + trailing `reserved` data ptr |
+| `HostApi` | 184 | 8 | `runtime` opaque ptr + 21 function pointers + trailing `reserved` data ptr |
 | `GuestContractInterface` | 56 | 8 | `contract_id`, `contract_version`, `dispatch_type`, `create_instance`, `destroy_instance`, `dispatch` union |
 | `GuestContractHandle` | 8 | 4 | `index: u32`, `generation: u32` |
 | `StringView` | 16 | 8 | `ptr`, `len` |
 | `AbiError` | 24 | 8 | `code`, `message` (StringView) |
 
-`HostApi`'s 22 function pointers (offsets verified in
+`HostApi`'s 21 function pointers (offsets verified in
 `crates/polyplug_abi/src/host/host_api.rs`): `register_guest_contract` (8), `alloc` (16),
 `free` (24), `find_guest_contract` (32), `find_all_guest_contracts` (40),
 `resolve_guest_contract` (48), `get_host_contract` (56),
 `resolve_host_contract_interface` (64), `list_bundles` (72), `get_dependencies` (80),
 `load_bundle` (88), `reload_bundle` (96), `register_host_contract` (104),
 `register_loader` (112), `get_last_error` (120), `get_error_len` (128),
-`call_guest_method` (136), `unload_bundle` (144), `log` (152),
-`create_guest_instance` (160), `destroy_guest_instance` (168), `revision_counter` (176),
-`reserved` (184, data pointer — always null). There is no
-`find_by_bundle` or `resolve_plugin` pointer in `HostApi`.
+`unload_bundle` (136), `log` (144),
+`create_guest_instance` (152), `destroy_guest_instance` (160), `revision_counter` (168),
+`reserved` (176, data pointer — always null). There is no
+`find_by_bundle`, `call_guest_method`, or `resolve_plugin` pointer in `HostApi`.
 
 ### Pointer Validity After Resolution
 The C ABI deals in raw handles and pointers: `find_guest_contract` returns a
@@ -344,7 +342,7 @@ The core polyplug ABI **freezes at v1.0**. There is no public release yet, so th
 
 ### Frozen Surface Areas
 The following structures have the layouts and sizes that will be frozen at v1.0. At/after v1.0, any modification to these (e.g., adding a field or changing field order) is a breaking change. Sizes are verified by the layout tests in `crates/polyplug_abi`.
-- **`HostApi` (192 bytes)**: An opaque `runtime` pointer followed by 22 function pointers and a trailing `reserved` data pointer (full list in §5).
+- **`HostApi` (184 bytes)**: An opaque `runtime` pointer followed by 21 function pointers and a trailing `reserved` data pointer (full list in §5).
 - **`GuestContractInterface` (56 bytes)**: `contract_id`, `contract_version`, `dispatch_type`, the `create_instance`/`destroy_instance` callbacks, and the `dispatch` union.
 - **`GuestContractHandle` (8 bytes)**: `index: u32` (offset 0) and `generation: u32` (offset 4), align 4.
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
@@ -407,7 +405,7 @@ The trust model continues to evolve as polyplug expands its reach into more dyna
 
 ### Unload ✅ done
 
-`HostApi.unload_bundle(this, bundle_id)` (offset 144) is live.
+`HostApi.unload_bundle(this, bundle_id)` (offset 136) is live.
 `Runtime::unload_bundle(bundle_id)` refuses if any still-loaded bundle declared a
 dependency on a contract this bundle provides (`RuntimeError::DependencyInUse`);
 `Runtime::unload_bundle_cascade(bundle_id)` unloads dependents first. Unload bumps the
@@ -425,10 +423,11 @@ are freed through crossbeam-epoch: the superseded interface `Arc` and the mappin
 `defer_destroy`d under the write lock and run only once no reader is still pinned in the
 prior epoch.
 
-- **Runtime-mediated calls are epoch-safe.** `call_guest_method` (offset 136),
-  `create_guest_instance` (offset 160), and `destroy_guest_instance` (offset 168) pin the
-  epoch across dispatch, so a call racing a concurrent unload keeps the interface and its
-  mapping alive until the guard unpins.
+- **Runtime-mediated calls are epoch-safe.** `create_guest_instance` (offset 152) and
+  `destroy_guest_instance` (offset 160) pin the epoch across their operation, so a
+  lifecycle call racing a concurrent unload keeps the interface and its mapping alive
+  until the guard unpins. (The former `call_guest_method` field, which also pinned the
+  epoch, has been removed from the ABI — peer callers now dispatch directly.)
 - **Direct FFI host-callers are host-coordinated.** Direct FFI callers do not pin per call;
   they take the fast path and rely on the documented quiesce-before-unload contract. The
   host must not call a bundle concurrently with unloading it (trusted-same-process model).

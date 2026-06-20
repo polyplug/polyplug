@@ -211,7 +211,7 @@ fn main() {
         fixtures_dir.join("depender_plugin").display()
     );
 
-    // Cross-dispatch fixtures (plugin→plugin via HostApi::call_guest_method).
+    // Cross-dispatch fixtures (plugin→plugin via direct cached-interface dispatch).
     // CROSS_CALLER_PLUGIN_DIR    — bundle providing cross.caller@1
     // CROSS_TARGET_PLUGIN_DIR    — bundle providing cross.target@1 (V1)
     // CROSS_TARGET_PLUGIN_V2_DIR — paired reload bundle for cross.target@1 (V2)

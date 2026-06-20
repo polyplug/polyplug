@@ -24,7 +24,7 @@ namespace Polyplug.Abi.Tests
         public void GuestContractInterfaceIs56Bytes() => Assert.Equal(56, Marshal.SizeOf<GuestContractInterface>());
 
         [Fact]
-        public void HostApiIs192Bytes() => Assert.Equal(192, Marshal.SizeOf<HostApi>());
+        public void HostApiIs184Bytes() => Assert.Equal(184, Marshal.SizeOf<HostApi>());
 
         [Fact]
         public void HostContractInstanceIs8Bytes() => Assert.Equal(8, Marshal.SizeOf<HostContractInstance>());
@@ -69,19 +69,16 @@ namespace Polyplug.Abi.Tests
         public void VersionIs12Bytes() => Assert.Equal(12, Marshal.SizeOf<Version>());
 
         [Fact]
-        public void HostApiCallGuestMethodAtOffset136() => Assert.Equal((nint)136, Marshal.OffsetOf<HostApi>(nameof(HostApi.CallGuestMethod)));
+        public void HostApiUnloadBundleAtOffset136() => Assert.Equal((nint)136, Marshal.OffsetOf<HostApi>(nameof(HostApi.UnloadBundle)));
 
         [Fact]
-        public void HostApiUnloadBundleAtOffset144() => Assert.Equal((nint)144, Marshal.OffsetOf<HostApi>(nameof(HostApi.UnloadBundle)));
+        public void HostApiLogAtOffset144() => Assert.Equal((nint)144, Marshal.OffsetOf<HostApi>(nameof(HostApi.Log)));
 
         [Fact]
-        public void HostApiLogAtOffset152() => Assert.Equal((nint)152, Marshal.OffsetOf<HostApi>(nameof(HostApi.Log)));
+        public void HostApiCreateGuestInstanceAtOffset152() => Assert.Equal((nint)152, Marshal.OffsetOf<HostApi>(nameof(HostApi.CreateGuestInstance)));
 
         [Fact]
-        public void HostApiCreateGuestInstanceAtOffset160() => Assert.Equal((nint)160, Marshal.OffsetOf<HostApi>(nameof(HostApi.CreateGuestInstance)));
-
-        [Fact]
-        public void HostApiDestroyGuestInstanceAtOffset168() => Assert.Equal((nint)168, Marshal.OffsetOf<HostApi>(nameof(HostApi.DestroyGuestInstance)));
+        public void HostApiDestroyGuestInstanceAtOffset160() => Assert.Equal((nint)160, Marshal.OffsetOf<HostApi>(nameof(HostApi.DestroyGuestInstance)));
 
         [Fact]
         public void HostApiReservedAtOffset176() => Assert.Equal((nint)176, Marshal.OffsetOf<HostApi>(nameof(HostApi.Reserved)));

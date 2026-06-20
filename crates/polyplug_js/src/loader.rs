@@ -117,8 +117,8 @@ pub struct JsLoaderData {
     /// Next instance id to mint. Starts at 1 so a handle's `data` is never null
     /// (`GuestContractInstance::is_null` keys on `data`).
     pub next_id: AtomicU64,
-    /// Contract id this VM provides — stamped into every instance handle so the
-    /// runtime routes `call_guest_method` by it.
+    /// Contract id this VM provides — stamped into every instance handle so a
+    /// cross-call routes by it.
     pub contract_id: u64,
     pub ctx: Context,
     pub _runtime: Runtime,
@@ -128,8 +128,8 @@ pub struct JsLoaderData {
     /// from any thread and is internally lock-guarded. Two cases must be told
     /// apart, and a plain `AtomicBool` cannot distinguish them:
     ///
-    /// 1. SAME-thread nested dispatch — a plugin→plugin cross-call
-    ///    (`host->call_guest_method`) that resolves back to a contract in THIS
+    /// 1. SAME-thread nested dispatch — a plugin→plugin cross-call that resolves
+    ///    back to a contract in THIS
     ///    same Context while this thread is already mid-dispatch. That would call
     ///    `Context::with` recursively on the same context on the same thread, which
     ///    rquickjs panics/aborts on. This MUST be refused with `ReentrantCall`
@@ -748,10 +748,9 @@ fn register_host_functions<'js>(
     // peer_callers.ts constants so the caller never hard-codes raw numbers.
     //
     // The loader resolves the peer interface itself (find_guest_contract +
-    // resolve_guest_contract) and then dispatches DIRECTLY through that interface —
-    // it does NOT re-enter the host via HostApi.call_guest_method (which would
-    // wastefully resolve the same interface a second time). The dispatch logic
-    // mirrors the runtime's own host_call_guest_method_impl exactly (Native:
+    // resolve_guest_contract) and then dispatches DIRECTLY through that interface,
+    // without re-entering the host to resolve the same interface a second time. The
+    // dispatch logic branches on the resolved interface's dispatch_type (Native:
     // bounds-checked native function-pointer slot; VirtualMachine: vm.call).
     //
     // Per-call create+destroy: a fresh peer instance is built for the call and
@@ -811,9 +810,9 @@ fn register_host_functions<'js>(
             let out: *mut core::ffi::c_void = out_ptr as usize as *mut core::ffi::c_void;
             let mut err: AbiError = AbiError::ok();
             // Direct dispatch through the already-resolved interface — no re-entry into
-            // HostApi.call_guest_method. Mirrors runtime.rs host_call_guest_method_impl.
-            // `peer_dt` was read above from this same interface, so we branch on it and
-            // touch only the union variant the dispatch_type proves active.
+            // the host to re-resolve. `peer_dt` was read above from this same interface,
+            // so we branch on it and touch only the union variant the dispatch_type
+            // proves active.
             let code: u32 = match peer_dt {
                 DispatchType::Native => {
                     // SAFETY: iface is non-null (checked above); dispatch_type == Native
@@ -1270,7 +1269,7 @@ fn register_host_functions<'js>(
                     // the `native` union variant is active, so reading it is sound.
                     let native: polyplug_abi::NativeDispatch = unsafe { (*iface).dispatch.native };
                     // Bounds- and null-check the host function table before indexing it,
-                    // mirroring host_call_guest_method in crates/polyplug/src/runtime.rs.
+                    // mirroring the runtime's native-dispatch path.
                     if native.functions.is_null() || fn_id >= native.function_count {
                         // SAFETY: iface produced `instance`; the helper only destroys a
                         // non-singleton instance, releasing it before we bail out.
@@ -2031,7 +2030,7 @@ impl BundleLoader for JsLoader {
     /// epoch-deferred drop (see [`JsLoader::schedule_reclaim`]): each box's QuickJS
     /// `Context` and `Runtime` are freed only once no crossbeam-epoch reader is pinned,
     /// so any in-flight *runtime-mediated* call (which holds an epoch pin across
-    /// `call_guest_method` dispatch) keeps the VM alive until it completes. Direct FFI
+    /// dispatch) keeps the VM alive until it completes. Direct FFI
     /// host→VM callers the runtime does not mediate are covered by the documented
     /// trusted-same-process contract: exactly like hot-reload, the host MUST NOT call a
     /// bundle's contracts concurrently with unloading it (see `Runtime::unload_bundle`

@@ -28,25 +28,6 @@ use polyplug_utils::{BundleId, GuestContractId};
 use crate::error::RegistryError;
 use crate::logger::{LoggerHandle, RecoverPoisoned, RecoveringGuard};
 
-/// Outcome of [`RuntimeStore::resolve_single_provider`] — the single-read-guard
-/// primitive behind the `call_guest_method` HostApi cross-dispatch path.
-///
-/// Under ONE read guard it counts live providers for the contract, rejects
-/// ambiguous multi-provider routing, and resolves the sole provider's interface
-/// pointer.
-pub enum SingleProviderResolution {
-    /// No live provider matched the contract id at the requested version floor.
-    NotFound,
-    /// More than one live provider is registered for the contract. Routing keys
-    /// solely on `contract_id`, so the target is ambiguous and the caller must
-    /// refuse with `DuplicateProvider` (it never dispatches in this case).
-    Multiple,
-    /// Exactly one live provider matched; the contained pointer is its interface,
-    /// borrowed from the published snapshot's `Arc` and valid while the loading
-    /// guard is pinned.
-    Resolved(*const GuestContractInterface),
-}
-
 /// Built-in stateless `create_instance` stub.
 ///
 /// Some guest runtimes cannot express a function pointer that returns the
@@ -859,7 +840,7 @@ impl RuntimeStore {
     /// interface pointer) therefore refers to memory the live snapshot owns and
     /// epoch reclamation cannot free until this pin ends, which is strictly after
     /// `f` returns. Dereferencing such a pointer after the pin ends is the caller's
-    /// responsibility (see `resolve_single_provider`).
+    /// responsibility.
     fn for_each_live_provider<F>(&self, contract_id: GuestContractId, min_version: u32, mut f: F)
     where
         F: FnMut(u32, u32, &SlotIfaceView) -> ControlFlow<()>,
@@ -961,67 +942,6 @@ impl RuntimeStore {
         count
     }
 
-    /// Count live providers for `contract_id` (a MAJOR-version floor) and, when
-    /// exactly one exists, resolve its interface pointer — all under a SINGLE read
-    /// guard.
-    ///
-    /// This is the cross-call primitive behind the `call_guest_method` HostApi
-    /// callback. It folds what was previously three separate read-guard
-    /// acquisitions (`count_guest_contracts` + `find_guest_contract` +
-    /// `resolve_guest_contract`) into one, eliminating two lock round-trips per
-    /// cross-call while preserving the exact observable outcomes:
-    /// - **0 live providers** → [`SingleProviderResolution::NotFound`] (the same
-    ///   outcome the old `find_guest_contract` not-found path produced).
-    /// - **>1 live provider** → [`SingleProviderResolution::Multiple`]: routing keys
-    ///   only on `contract_id`, so the target is ambiguous; the caller refuses.
-    /// - **exactly 1** → [`SingleProviderResolution::Resolved`] with the sole
-    ///   provider's interface pointer, identical to resolving the handle the old
-    ///   `find_guest_contract` returned (the first live matching slot).
-    ///
-    /// The liveness + version filtering mirrors `count_guest_contracts` /
-    /// `find_guest_contract` exactly (slot entry present, interface present,
-    /// `interface.contract_version.major >= min_version`). The returned pointer is
-    /// borrowed from the snapshot's `Arc` and is valid while the loading guard is
-    /// pinned. The runtime-mediated `call_guest_method` holds its guard across use,
-    /// so the pointer stays valid across a concurrent unload; FFI host callers drop
-    /// the guard before use and rely on the documented quiesce-before-unload host
-    /// contract.
-    pub fn resolve_single_provider(
-        &self,
-        contract_id: GuestContractId,
-        min_version: u32,
-    ) -> SingleProviderResolution {
-        // Single pass: count live matches and remember the first one's interface
-        // pointer. `count_guest_contracts` and `find_guest_contract` (min_version=0)
-        // both walk the provider indices with the same liveness + version filter, so
-        // iterating once here is behaviour-identical to running them in sequence —
-        // the first match is exactly the slot `find_guest_contract` would have
-        // returned.
-        let mut count: usize = 0;
-        let mut first_interface: *const GuestContractInterface = core::ptr::null();
-        self.for_each_live_provider(contract_id, min_version, |_slot_idx, _generation, iface| {
-            if count == 0 {
-                // The pointer borrows the snapshot-owned `Arc`. It is taken while the
-                // helper's epoch guard is pinned and remains valid for the documented
-                // runtime-mediated use; see this method's doc comment.
-                first_interface = iface.interface.as_ref() as *const GuestContractInterface;
-            }
-            count += 1;
-            if count > 1 {
-                // Ambiguous: no need to scan further, the cross-call is refused.
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
-            }
-        });
-
-        match count {
-            0 => SingleProviderResolution::NotFound,
-            1 => SingleProviderResolution::Resolved(first_interface),
-            _ => SingleProviderResolution::Multiple,
-        }
-    }
-
     /// Count AND collect every live provider for `contract_id` at or above
     /// `min_version` (a MAJOR-version floor) under a SINGLE read guard.
     ///
@@ -1094,9 +1014,9 @@ impl RuntimeStore {
     /// to StaleHandle even though the slot was vacated.
     ///
     /// The returned raw pointer is borrowed from the snapshot's `Arc` and is valid
-    /// while the loading guard is pinned. The runtime-mediated `call_guest_method`
-    /// holds its guard across use, so the pointer stays valid across a concurrent
-    /// unload; FFI host callers drop the guard before use and rely on the documented
+    /// while the loading guard is pinned. A runtime-mediated caller that holds its
+    /// guard across use keeps the pointer valid across a concurrent unload; FFI host
+    /// callers drop the guard before use and rely on the documented
     /// quiesce-before-unload host contract.
     pub fn resolve_guest_contract(
         &self,

@@ -25,9 +25,9 @@ function _ppEncodeUtf8(str: string): Uint8Array {
  *
 * Dispatches through the threaded `bridge.dispatchPeer` primitive.
 *
-* The loader resolves the peer interface and dispatches DIRECTLY through it —
-* the bridge no longer re-enters the host via `call_guest_method` (which would
-* resolve the same interface a second time). Resolution is per-call here; the
+* The loader resolves the peer interface and dispatches DIRECTLY through it,
+* without re-entering the host to resolve the same interface a second time.
+* Resolution is per-call here; the
 * native-dispatch languages (rust/cpp/csharp/python/lua) additionally CACHE the
 * resolved interface, which a QuickJS guest cannot (it cannot dereference raw
 * pointers, so it reaches host capabilities ONLY through the threaded `bridge`,

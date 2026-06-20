@@ -4,7 +4,6 @@
 //! behaviour:
 //!   1. Builder scan path now routes through the shared explicit-load path, so
 //!      discovered bundles get dependency declaration + non-empty descriptors.
-//!   2. `call_guest_method` refuses ambiguous routing when >1 provider exists.
 //!   4. `host_register_guest_contract` null-checks descriptor and interface.
 //!   5. `host_get_host_contract` drops the read guard before create_instance
 //!      (no deadlock) and never caches a NULL singleton.
@@ -26,9 +25,9 @@ use polyplug::error::RuntimeError;
 use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug_abi::runtime::{Compatibility, ReloadPhaseType, RuntimeConfig};
 use polyplug_abi::{
-    AbiErrorCode, CallArena, DispatchMechanisms, DispatchType, GuestContractInstance,
-    GuestContractInterface, HostApi, HostContractInstance, HostContractInterface, NativeDispatch,
-    PluginDescriptor, StringView, Version,
+    AbiErrorCode, DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
+    HostApi, HostContractInstance, HostContractInterface, NativeDispatch, PluginDescriptor,
+    StringView, Version,
 };
 use polyplug_utils::{BundleId, GuestContractId, HostContractId};
 
@@ -71,29 +70,6 @@ fn leak_guest_interface(contract_id: u64) -> &'static GuestContractInterface {
             },
         },
     }))
-}
-
-fn register_provider(runtime: &Runtime, contract_id: u64, bundle_id: u64) {
-    let interface: &'static GuestContractInterface = leak_guest_interface(contract_id);
-    let descriptor: PluginDescriptor = PluginDescriptor {
-        name: StringView::from_static(b"provider"),
-        contract_name: StringView::from_static(b"provider.contract"),
-        version: Version {
-            major: 1,
-            minor: 0,
-            patch: 0,
-        },
-    };
-    // SAFETY: interface is leaked and lives for the process lifetime.
-    unsafe {
-        runtime.registry().register_guest_contract(
-            descriptor,
-            interface,
-            "provider.contract".to_owned(),
-            BundleId::from_u64(bundle_id),
-        )
-    }
-    .expect("provider registration should succeed");
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -274,80 +250,10 @@ fn builder_discovered_bundle_declares_deps_and_has_descriptor() {
     );
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// Finding 2 — call_guest_method refuses ambiguous multi-provider routing.
-// ════════════════════════════════════════════════════════════════════════════
-
 fn build_bare_runtime() -> Arc<Runtime> {
     Runtime::builder()
         .build()
         .expect("bare runtime build should succeed")
-}
-
-#[test]
-fn call_guest_method_single_provider_dispatches() {
-    let runtime: Arc<Runtime> = build_bare_runtime();
-    let contract_id: u64 = GuestContractId::new("solo.contract", 1_u32).id();
-    register_provider(&runtime, contract_id, 0x1111_u64);
-
-    let host_abi: *const HostApi = runtime.host_abi();
-    let instance: GuestContractInstance = GuestContractInstance {
-        data: core::ptr::null_mut(),
-        contract_id: GuestContractId::from_u64(contract_id),
-    };
-    // fn_id 0 with function_count 0 → FunctionNotAvailable, but crucially NOT
-    // DuplicateProvider: routing proceeded to a single live interface.
-    let mut err: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
-    // SAFETY: host_abi is valid; instance carries a registered contract_id.
-    unsafe {
-        ((*host_abi).call_guest_method)(
-            host_abi,
-            instance,
-            0_u32,
-            core::ptr::null(),
-            core::ptr::null_mut(),
-            core::ptr::null_mut::<CallArena>(),
-            &mut err,
-        )
-    };
-    assert_eq!(
-        err.code,
-        AbiErrorCode::FunctionNotAvailable as u32,
-        "single provider must dispatch (reaching the function table), not be rejected"
-    );
-}
-
-#[test]
-fn call_guest_method_multiple_providers_rejected() {
-    let runtime: Arc<Runtime> = build_bare_runtime();
-    let contract_id: u64 = GuestContractId::new("dup.contract", 1_u32).id();
-    // Two distinct bundles both provide the SAME contract.
-    register_provider(&runtime, contract_id, 0xAAAA_u64);
-    register_provider(&runtime, contract_id, 0xBBBB_u64);
-
-    let host_abi: *const HostApi = runtime.host_abi();
-    let instance: GuestContractInstance = GuestContractInstance {
-        data: core::ptr::null_mut(),
-        contract_id: GuestContractId::from_u64(contract_id),
-    };
-    let mut err: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
-    // SAFETY: host_abi is valid; instance carries a registered contract_id.
-    unsafe {
-        ((*host_abi).call_guest_method)(
-            host_abi,
-            instance,
-            0_u32,
-            core::ptr::null(),
-            core::ptr::null_mut(),
-            core::ptr::null_mut::<CallArena>(),
-            &mut err,
-        )
-    };
-    assert_eq!(
-        err.code,
-        AbiErrorCode::DuplicateProvider as u32,
-        "ambiguous routing with >1 provider must return DuplicateProvider, not mis-dispatch"
-    );
 }
 
 // ════════════════════════════════════════════════════════════════════════════

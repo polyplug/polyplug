@@ -401,8 +401,8 @@ Every other bench here is single-threaded, so none of them would notice if a
 registry hot path stopped scaling — a read lock quietly becoming a write lock, or
 a new `Mutex` landing on the resolve chain. This one runs **N threads (1, 2, 4,
 8)** all hammering the *same* `Runtime`: each iteration does the full uncached
-hot path — `find_guest_contract` (a registry read-lock) + a `call_guest_method`
-cross-call (the count + resolve chain, more read-locks) + the native dispatch.
+hot path — `find_guest_contract` (a registry read-lock) + the full count + resolve
+chain (more read-locks) + the native dispatch.
 The provider is registered **once**; only the per-call resolve-and-dispatch is
 timed.
 
@@ -447,7 +447,7 @@ the resolve path — that is the regression this bench exists to catch.
 > `runtime_store.rs`). It is `std::sync::RwLock`'s shared reader counter: every
 > `read()` acquire/release is an atomic RMW on one cache line, and an uncached
 > dispatch takes **several** acquire/release cycles per call (find, then count +
-> resolve inside `call_guest_method`). Eight cores bouncing that line serialize on
+> resolve). Eight cores bouncing that line serialize on
 > it, so more threads buy *less* aggregate throughput. The `cached` group is the
 > proof of the mitigation: with the handle resolved once, the hot path touches
 > **no** registry lock, the shared reader counter never moves, and per-round time
@@ -488,29 +488,36 @@ teardown, so the bench does not leak (the `drop_frees_all_blocks` unit test in
 `polyplug_abi` proves the teardown path). Charted as
 `docs/assets/benches/call_arena.svg`.
 
-### `cross_call` — host-mediated cross-dispatch + the peer-caller path
+### `cross_call` — REMOVED (historical note)
 
-Measures the end-to-end cost of the `HostApi.call_guest_method` callback — the
-plugin→plugin cross-dispatch path — through the real `Runtime`, exercising the
+> This benchmark **no longer exists** — the `cross_call.rs` file was deleted along
+> with the `HostApi.call_guest_method` field it measured. This note is kept only to
+> record where the ~38.5 ns historical baseline in `docs/PERFORMANCE.md` came from.
+> Do not try to run `--bench cross_call`; the peer/direct-dispatch path is now
+> measured by `revision_check`.
+
+It measured the end-to-end cost of the former `HostApi.call_guest_method` callback —
+the plugin→plugin cross-dispatch path through the real `Runtime`, exercising the
 full resolve chain inside `host_call_guest_method` (count providers → find first
-→ resolve → native dispatch). Two arms:
+→ resolve → native dispatch). `call_guest_method` has since been **removed from
+the ABI**; generated peer callers now dispatch directly through the cached interface
+(~2.45 ns, see `revision_check`). The figures below are the historical baseline the
+direct-dispatch path replaced.
+
+Two arms:
 
 - `native/single_provider` — the common case: an instance carrying the target
   contract's own handle, one cross-call to the single registered provider (~38.5 ns
   locally, measured 2026-06-19).
-- `peer/stateless_route` — the **dynamic** `call_guest_method` capability: a
-  *stateless* instance (null `data`, target `contract_id`) dispatched through
-  `call_guest_method`, routed solely by `contract_id` (the #72 fix accepts a null
-  `data` and routes by id). It lands at ~38.5 ns — **identical** to
-  `native/single_provider`, because both share the same resolve chain; the gap is
-  noise. **Note:** since the peer direct-dispatch epic, a generated guest→guest peer
-  caller no longer bottoms out here — it caches the resolved interface and dispatches
-  directly (~2.45 ns incl. the revision staleness-check, see `revision_check`), so
-  this arm now measures only the uncached dynamic capability a caller pays when it
-  does *not* cache (~16× the cached path). The per-language **generated** marshalling
-  layered on top (QuickJS/CPython/CLR…) is glue that cannot be exercised in a pure
-  in-process bench without a per-language bundle — the same two-tier caveat as the
-  dispatch matrix.
+- `peer/stateless_route` — the former **dynamic** `call_guest_method` route: a
+  *stateless* instance (null `data`, target `contract_id`) dispatched through the
+  host-mediated path, routed solely by `contract_id`. It lands at ~38.5 ns —
+  **identical** to `native/single_provider`, because both shared the same resolve
+  chain; the gap is noise. This arm measured only the uncached dynamic capability
+  (~16× slower than the direct cached path that replaced it). The per-language
+  **generated** marshalling layered on top (QuickJS/CPython/CLR…) is glue that
+  cannot be exercised in a pure in-process bench without a per-language bundle —
+  the same two-tier caveat as the dispatch matrix.
 
 ### `guest_host_call` — the guest → host direction
 
@@ -661,14 +668,14 @@ aren't lost. **Priority: benches for what we currently ship come first.**
 > (`soak_load_unload`, `--soak` data file — see the soak section above).
 
 > The **runtime-level** guest→host and peer-caller paths are now built too:
-> `guest_host_call` (host-contract call + host→log funnel) and `cross_call`'s
-> `peer/stateless_route` arm. What remains future is only the *per-language
-> generated marshalling on top* of those runtime entry points (the table row
-> below), which needs per-language bundles.
+> `guest_host_call` (host-contract call + host→log funnel) and the direct cached
+> peer dispatch measured by `revision_check`. What remains future is only the
+> *per-language generated marshalling on top* of those runtime entry points (the
+> table row below), which needs per-language bundles.
 
 | Idea | What it would show | The caveat ("it can be argued against") |
 |---|---|---|
-| **per-language guest→host / peer-caller marshalling** | The generated-caller overhead *on top of* the runtime entry point `guest_host_call` / `cross_call::peer` already measure — what a plugin pays in its own language's glue (QuickJS/CPython/CLR…) to call back into the host or a peer contract. | Needs per-language **generated** caller fixtures, so any number conflates the language runtime with polyplug's marshalling. The native rows would be honest; the VM rows mostly measure the interpreter — same two-tier caveat as the dispatch matrix. |
+| **per-language guest→host / peer-caller marshalling** | The generated-caller overhead *on top of* the runtime entry points `guest_host_call` / `revision_check` (direct peer dispatch) already measure — what a plugin pays in its own language's glue (QuickJS/CPython/CLR…) to call back into the host or a peer contract. | Needs per-language **generated** caller fixtures, so any number conflates the language runtime with polyplug's marshalling. The native rows would be honest; the VM rows mostly measure the interpreter — same two-tier caveat as the dispatch matrix. |
 
 If you build any of these, keep them **local-only** (this folder), keep the
 payload-isolation discipline above, and state the caveat next to the number so

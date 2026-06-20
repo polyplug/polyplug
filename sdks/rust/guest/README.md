@@ -315,14 +315,6 @@ pub struct HostApi {
         this: *const HostApi, buf: *mut u8, buf_len: usize,
     ) -> usize,
     pub get_error_len: unsafe extern "C" fn(this: *const HostApi) -> usize,
-    pub call_guest_method: unsafe extern "C" fn(
-        this: *const HostApi,
-        instance: GuestContractInstance,
-        fn_id: u32,
-        args: *const c_void,
-        out: *mut c_void,
-        arena: *mut CallArena,
-    ) -> AbiError,
     pub unload_bundle: unsafe extern "C" fn(
         this: *const HostApi, bundle_id: BundleId,
     ) -> AbiError,

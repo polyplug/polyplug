@@ -25,7 +25,7 @@
 //!      Python consumer resolves it.
 //!   6. The test dispatches the consumer's `transform("hello")` through VM
 //!      dispatch and asserts the result equals `"PEER:hello"` — proving the
-//!      generated Python peer caller routed through `call_guest_method`.
+//!      generated Python peer caller routed through direct cached-interface dispatch.
 //!
 //! Uses the embedded CPython interpreter (pyo3), so it runs wherever the other
 //! `integration_python` loader tests run.

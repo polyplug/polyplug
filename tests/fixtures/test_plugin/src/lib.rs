@@ -22,9 +22,8 @@ pub struct AddArgs {
 /// Uses the frozen native cross-dispatch ABI signature
 /// `extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)` — the
 /// exact shape the runtime's native dispatch transmutes each function-table
-/// slot to (`Runtime::call_guest_method`). `instance` is the live handle for
-/// this contract; this stateless function does not read it beyond honouring the
-/// ABI shape.
+/// slot to. `instance` is the live handle for this contract; this stateless
+/// function does not read it beyond honouring the ABI shape.
 ///
 /// # Safety
 /// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`.

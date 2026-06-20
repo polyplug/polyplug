@@ -132,8 +132,8 @@ pub struct LuaLoaderData {
     /// from any thread and is internally lock-guarded. Two cases must be told
     /// apart, and a plain `AtomicBool` cannot distinguish them:
     ///
-    /// 1. SAME-thread nested dispatch — a plugin→plugin cross-call
-    ///    (`host->call_guest_method`) that resolves back to a contract in THIS
+    /// 1. SAME-thread nested dispatch — a plugin→plugin cross-call that resolves
+    ///    back to a contract in THIS
     ///    same VM while this thread is already mid-dispatch. Re-entering mlua from
     ///    a nested host frame on the same thread would deadlock mlua's internal
     ///    `send`-feature mutex (already held by this thread). This MUST be refused
@@ -1219,7 +1219,7 @@ impl BundleLoader for LuaLoader {
     /// epoch-deferred drop (see [`LuaLoader::schedule_reclaim`]): each box's cloned
     /// `Lua` VM handle is freed only once no crossbeam-epoch reader is pinned, so any
     /// in-flight *runtime-mediated* call (which holds an epoch pin across
-    /// `call_guest_method` dispatch) keeps the VM alive until it completes. Direct
+    /// dispatch) keeps the VM alive until it completes. Direct
     /// FFI host→VM callers the runtime does not mediate are covered by the documented
     /// trusted-same-process contract: exactly like hot-reload, the host MUST NOT call
     /// a bundle's contracts concurrently with unloading it (see `Runtime::unload_bundle`

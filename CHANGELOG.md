@@ -12,6 +12,17 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ## [Unreleased]
 
+### Breaking
+
+- **`HostApi.call_guest_method` removed.** The dynamic, host-mediated guest→guest
+  dispatch field (formerly at offset 136) has been removed from the ABI. All generated
+  peer callers (Rust, C++, C#, Python, Lua) now dispatch directly through the cached
+  interface; JS peer callers dispatch through the loader-side `callGuestMethod` bridge.
+  The struct shrinks from 192 to 184 bytes (21 function pointers); all offsets from
+  `unload_bundle` onward shift down by 8: `unload_bundle` 144→136, `log` 152→144,
+  `create_guest_instance` 160→152, `destroy_guest_instance` 168→160,
+  `revision_counter` 176→168, `reserved` 184→176.
+
 ## [0.1.0]
 
 First public release. polyplug is a universal, cross-language plugin runtime: a
@@ -24,7 +35,7 @@ glue is produced from a single `.toml` contract by the `polyplugc` CLI.
 #### Core runtime & ABI
 
 - Two-export host FFI surface (`polyplug_runtime_create` / `polyplug_runtime_destroy`);
-  all other operations flow through the `HostApi` function table (192 bytes, `align = 8`).
+  all other operations flow through the `HostApi` function table (184 bytes, `align = 8`).
 - Single canonical plugin entry point: `polyplug_init(host, ctx)`, with registration
   via the self-passing `host->register_guest_contract(host, &descriptor, &interface)`.
 - Out-parameter ABI calling convention shared by every generator, with the canonical

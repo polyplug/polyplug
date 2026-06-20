@@ -913,7 +913,7 @@ compiles `noop_dispatch` exactly **once** before the timed loop (caching a
 ## Calling back into the host (guest → host)
 
 Everything above measures host → guest (running a plugin) and guest → guest
-(`cross_call`). The reverse direction — a guest calling a **host-registered
+(the direct cached peer path, see `revision_check`). The reverse direction — a guest calling a **host-registered
 contract** or emitting a log into the host — is measured by the
 `guest_host_call` core bench (`cargo bench -p polyplug --bench guest_host_call`).
 Both arms drive the real `HostApi` callbacks on a real `Runtime` (a hand-built
@@ -957,29 +957,30 @@ dereference a raw interface pointer, so a JS peer call still crosses into the lo
 through the `callGuestMethod` bridge, a cost the VM boundary dominates and where the
 resolve is a rounding error.
 
-The `cross_call` bench's `peer/stateless_route` arm (**~38.5 ns**, measured) now
-measures the **dynamic** `HostApi.call_guest_method` capability — the uncached,
-route-by-`contract_id` path that remains in the ABI for host-driven dispatch —
-**not** the generated peer glue. It is the cost a caller pays when it does *not*
-cache; the direct cached path the generated callers use is **~16× cheaper**. Any
-extra a real peer caller pays beyond the ~2.4 ns dispatch is its language's
-marshalling, not the dispatch (the same two-tier caveat as the dispatch matrix).
+The `cross_call` bench's `peer/stateless_route` arm (**~38.5 ns**, measured) was
+the **former** `HostApi.call_guest_method` path — the uncached, route-by-`contract_id`
+host-mediated dispatch that existed before the direct-dispatch epic.
+`call_guest_method` has since been **removed from the ABI**; generated peer callers
+no longer use it. The arm's measured figure is preserved here as the baseline that
+the direct cached path (**~16× cheaper**) replaced. Any extra a real peer caller
+pays beyond the ~2.4 ns dispatch is its language's marshalling, not the dispatch
+(the same two-tier caveat as the dispatch matrix).
 
-These figures were measured on 2026-06-19 on a quiet machine
-(`cargo bench -p polyplug --bench cross_call --bench contract_dispatch --bench
-revision_check`):
+These figures were measured on 2026-06-19 on a quiet machine:
 
 | Path | Time | What it is |
 |---|---|---|
-| `cross_call/peer/stateless_route` | **~38.5 ns** | old peer path — `call_guest_method` route (resolve + FFI round-trip) |
+| `cross_call/peer/stateless_route` | **~38.5 ns** | former peer path — `call_guest_method` route (resolve + FFI round-trip). **Historical**: measured before removal; both the field and the `cross_call` bench have since been deleted. |
 | `revision_check/staleness_check_then_dispatch` | **~2.45 ns** | new peer path — cached direct dispatch + revision acquire-load |
 | `revision_check/dispatch_only` | **~2.02 ns** | bare cached dispatch (no staleness check) |
 
 The revision staleness-check therefore costs only **~0.43 ns** (one acquire-load +
 compare) on top of bare dispatch, and the generated peer caller is **~15.7×** faster
-than the `call_guest_method` route it replaced. Reproduce with the command above; run
-on a quiet machine for stable absolute ns — the relative gap is robust to load, the
-absolute ns are not.
+than the former `call_guest_method` route it replaced. The ~38.5 ns figure is a
+historical baseline (the `cross_call` bench was removed with the field); the live
+direct-path arms are reproducible with `cargo bench -p polyplug --bench
+contract_dispatch --bench revision_check` — run on a quiet machine for stable
+absolute ns, the relative gap is robust to load, the absolute ns are not.
 
 ---
 

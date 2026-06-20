@@ -26,12 +26,11 @@ Key ABI facts (verified in `crates/polyplug_abi/src/host/host_api.rs`):
 - **FFI surface is exactly two `#[no_mangle]` exports** — `polyplug_runtime_create`
   and `polyplug_runtime_destroy` (`crates/polyplug/src/ffi.rs`). Everything else
   is reached through function-pointer fields on `HostApi`.
-- **`HostApi` is 192 bytes, align 8**: one opaque `runtime` pointer plus 22
-  function pointers (`call_guest_method` at offset 136, `unload_bundle` at
-  offset 144, `log` at offset 152, `create_guest_instance` at offset 160,
-  `destroy_guest_instance` at offset 168, `revision_counter` at offset 176)
-  followed by a trailing
-  `reserved: *const c_void` data pointer at offset 184 (always null;
+- **`HostApi` is 184 bytes, align 8**: one opaque `runtime` pointer plus 21
+  function pointers (`unload_bundle` at offset 136, `log` at offset 144,
+  `create_guest_instance` at offset 152, `destroy_guest_instance` at offset 160,
+  `revision_counter` at offset 168) followed by a trailing
+  `reserved: *const c_void` data pointer at offset 176 (always null;
   forward-compat room only).
   Layout is locked by `layout_host_api` in `host_api.rs`.
 - **Plugin entry point is `polyplug_init(const HostApi*, const BundleInitContext*)`**
@@ -190,9 +189,9 @@ tier; unload always reclaims once it is safe to do so.
   unload keeps both the old interface `Arc` and the still-mapped library alive
   until it unpins. No reader ever observes freed memory.
 - **Runtime-mediated calls are safe; raw FFI must quiesce:** calls that go through
-  the runtime — `call_guest_method` (offset 136), `create_guest_instance`
-  (offset 160), `destroy_guest_instance` (offset 168) — pin the epoch across
-  dispatch and are always safe against a concurrent unload. Direct FFI callers do
+  the runtime — `create_guest_instance` (offset 152), `destroy_guest_instance`
+  (offset 160) — pin the epoch across their operation and are always safe against a
+  concurrent unload. Direct FFI callers do
   **not** pin per call (the fast path); they rely on the documented
   quiesce-before-unload contract. Caching a raw `*const GuestContractInterface` and
   using it after the owning bundle is unloaded is **undefined behaviour** — the
@@ -276,22 +275,18 @@ method call plus argument marshalling. (QuickJS guests cannot dereference a raw
 interface pointer, so a JS peer caller routes through the `callGuestMethod` bridge
 instead — the one exception, where the VM boundary dwarfs the resolve anyway.)
 
-Underneath, the dynamic capability remains part of the ABI:
+There is no longer a `call_guest_method` ABI field — that dynamic, host-mediated
+route was removed when the direct-dispatch epic landed. All generated peer callers
+(native languages: Rust/C++/C#/Python/Lua) dispatch directly through the cached
+interface, with no host round-trip. QuickJS peer callers dispatch directly through
+the loader-side `callGuestMethod` bridge, which also resolves and dispatches without
+re-entering the host ABI.
 
-- `call_guest_method(host, instance, fn_id, args, out, arena, out_err) -> ()` is the
-  17th `HostApi` function pointer (offset 136). It is the **uncached,
-  runtime-mediated** path: the caller passes a `GuestContractInstance` it already
-  resolved; the host re-resolves the target through the registry via
-  `instance.contract_id` on **every** call, so a call made after a reload routes to
-  the live (swapped-in) interface, and the dispatch pins the epoch for its duration
-  so the target interface and library stay alive even if an unload races it.
-  Generated peer callers no longer use this on their hot path — they cache and
-  dispatch directly — but it remains the capability for host-driven dispatch and for
-  callers that hold only a `contract_id`.
-- **Arena threading:** the `arena` argument is forwarded to VM dispatch (Lua, JS)
-  exactly like the per-call arena in §4 of [`ROADMAP.md`](ROADMAP.md); native
-  dispatch ignores it (native function pointers carry no arena slot). A **null
-  arena** means "no arena" — the guest bridge falls back to `host->alloc`.
+- **Arena threading:** the per-call arena allocator is threaded explicitly to VM
+  dispatch (Lua, JS, Python) as a dispatch argument — never via a VM global
+  (Rule 12); native dispatch ignores it (native function pointers carry no arena
+  slot). A **null arena** means "no arena" — the guest bridge falls back to
+  `host->alloc`.
 - **Re-entrancy guard:** a cross-call that would re-enter a VM already executing a
   dispatch *on the same thread* returns `AbiErrorCode::ReentrantCall` (9) — nested
   same-thread entry would deadlock or panic the VM's own lock. Concurrent dispatch

@@ -23,8 +23,8 @@
 //!      C# consumer resolves it through `host->find_guest_contract`.
 //!   6. The test dispatches the consumer's `transform("hello")` via the native
 //!      vtable and asserts the result equals `"PEER:hello"` — proving the
-//!      generated C# peer caller routed through `CallGuestMethod` (the #72
-//!      contract_id-stamping fix) and marshalled the StringView round-trip.
+//!      generated C# peer caller routed through direct cached-interface dispatch
+//!      and marshalled the StringView round-trip.
 //!
 //! Skips cleanly when `dotnet` is unavailable (mirrors the other dotnet tests).
 

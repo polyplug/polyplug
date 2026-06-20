@@ -49,7 +49,7 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 
 /// Drives the GENERATED peer caller (`generated/guest/peer_callers.rs`) end to
 /// end: resolves the declared `pipeline.Validator` dependency through the host
-/// and dispatches `validate` via host-mediated `call_guest_method`.
+/// and dispatches `validate` DIRECTLY through the cached peer interface.
 ///
 /// This is NOT part of the polyplug ABI and is NOT registered in any interface.
 /// The `integration_peer_caller_generated_rust` test resolves it via `dlsym`

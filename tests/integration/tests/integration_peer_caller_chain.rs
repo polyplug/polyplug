@@ -1,9 +1,9 @@
 //! Integration tests: guest→guest peer-caller chains and error paths.
 //!
 //! Complements the per-language happy-path peer tests (#72) by exercising the
-//! routing edges of `host->call_guest_method`:
+//! routing edges of direct cached-interface peer dispatch:
 //!   1. **Multi-hop chain A→B→C** — A peer-calls B, which peer-calls C; proves
-//!      the host-mediated path composes (a guest is simultaneously a callee of
+//!      the direct-dispatch path composes (a guest is simultaneously a callee of
 //!      one bundle and the caller of another). Asserts `A:B:C:hi`.
 //!   2. **Peer not loaded** — the target contract was never registered;
 //!      `resolve_guest_contract` returns null and the guest degrades gracefully.
@@ -143,17 +143,19 @@ local function new_consumer(host)
             out_sv[0] = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, "{prefix}NO-PEER")
             return
         end
-        local out_instance = ffi.new("GuestContractInstance[1]")
-        local loader_data = ffi.new("VmLoaderData")
-        interface.create_instance(loader_data, host, nil, out_instance)
-        local peer_instance = out_instance[0]
-        peer_instance.contract_id = PEER_ID
+        -- Create the peer instance through the host so the runtime tracks it.
+        local peer_instance = ffi.new("GuestContractInstance")
+        host.create_guest_instance(host, interface, nil, peer_instance)
         local in_ptr = ffi.cast("const void*", ffi.cast("uintptr_t", args_ptr))
         local peer_out = ffi.new("StringView[1]")
-        local out_err = ffi.new("AbiError[1]")
-        host.call_guest_method(host, peer_instance, 0, in_ptr, ffi.cast("void*", peer_out), nil, out_err)
-        local err = out_err[0]
-        interface.destroy_instance(loader_data, host, peer_instance)
+        local err = ffi.new("AbiError")
+        -- Dispatch DIRECTLY through the cached interface (Lua peers are VM dispatch).
+        if interface.dispatch_type == 1 then
+            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, peer_instance, 0, in_ptr, ffi.cast("void*", peer_out), nil, err)
+        else
+            err.code = 1
+        end
+        host.destroy_guest_instance(host, interface, peer_instance)
         if err.code ~= 0 then
             out_sv[0] = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, "{prefix}ERR")
             return
@@ -273,7 +275,7 @@ fn lua_peer_chain_three_hops() {
     let result: String = dispatch(&rt, "test.peera", b"hi");
     assert_eq!(
         result, "A:B:C:hi",
-        "A→B→C chain must compose through call_guest_method twice"
+        "A→B→C chain must compose through direct cached-interface dispatch twice"
     );
 }
 

@@ -4517,13 +4517,9 @@ mod tests {
             !result.contains("get_host_interface"),
             "resolve() must not read a stored host pointer: {result}"
         );
-        // Dispatches DIRECTLY through the cached peer interface — no host-mediated
-        // call_guest_method round-trip. Branches on dispatch_type and routes
-        // Native through dispatch.native.functions, VM through dispatch.vm.call.
-        assert!(
-            !result.contains("call_guest_method"),
-            "must NOT dispatch via host-mediated call_guest_method: {result}"
-        );
+        // Dispatches DIRECTLY through the cached peer interface. Branches on
+        // dispatch_type and routes Native through dispatch.native.functions, VM
+        // through dispatch.vm.call.
         assert!(
             result.contains("interface.dispatch_type == DispatchType.Native"),
             "peer dispatch must branch on the interface dispatch_type: {result}"

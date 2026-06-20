@@ -241,45 +241,6 @@ impl Runtime {
         self.registry.resolve_guest_contract(handle)
     }
 
-    /// Host-side convenience wrapper for plugin→plugin cross-dispatch.
-    ///
-    /// Routes through the same internal logic as the `call_guest_method` HostApi
-    /// callback (re-resolving the target by `instance.contract_id` on every call,
-    /// holding no registry lock across the dispatch). The target contract and
-    /// function are addressed by the `instance` handle and `fn_id`.
-    ///
-    /// # Safety
-    /// - `instance` must be a live instance produced by the target contract
-    /// - `args` / `out` must satisfy the target function's ABI argument layout
-    /// - `arena` must be null or a valid [`polyplug_abi::types::CallArena`]
-    ///   for the duration of the call
-    #[inline]
-    pub unsafe fn call_guest_method(
-        &self,
-        instance: polyplug_abi::guest::GuestContractInstance,
-        fn_id: u32,
-        args: *const core::ffi::c_void,
-        out: *mut core::ffi::c_void,
-        arena: *mut polyplug_abi::types::CallArena,
-    ) -> polyplug_abi::types::AbiError {
-        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
-        // SAFETY: host_abi is the runtime's own owned HostApi whose `runtime`
-        // field points to this Runtime; forwarding the args is the same call the
-        // VM/native guests make; `err` is a valid, writable out-param.
-        unsafe {
-            host_call_guest_method(
-                &*self.host_abi as *const HostApi,
-                instance,
-                fn_id,
-                args,
-                out,
-                arena,
-                &mut err,
-            )
-        };
-        err
-    }
-
     /// Register a host contract interface.
     /// Returns `Err(HostContractError::DuplicateContract)` if a contract with the same ID is already registered.
     pub fn register_host_contract(
@@ -693,8 +654,8 @@ impl Runtime {
     ///   assemblies are GC-reclaimed once all references and native frames clear.
     ///
     /// # Host-coordination contract
-    /// Runtime-mediated calls — `call_guest_method`, `create_guest_instance`, and
-    /// `destroy_guest_instance` — pin the epoch across dispatch, so a call racing an
+    /// Runtime-mediated calls — `create_guest_instance` and `destroy_guest_instance` —
+    /// pin the epoch across dispatch, so a call racing an
     /// unload from another thread keeps the interface and its backing library / VM alive
     /// until the call returns. Direct FFI host callers do NOT pin per call (the fast
     /// path): the host MUST NOT call a bundle's contracts through a cached raw interface
@@ -2477,212 +2438,6 @@ pub(crate) unsafe extern "C" fn host_log(
         .log(level, scope_str, || message_str.to_owned());
 }
 
-/// HostApi.call_guest_method callback — host-mediated plugin→plugin cross-dispatch.
-///
-/// Re-resolves the target contract through the registry via `instance.contract_id`
-/// on every call (never caches), so a fresh cross-call always routes to the live
-/// interface while retired interfaces keep in-flight instances valid. See the
-/// `call_guest_method` field doc on [`HostApi`] for the full contract.
-///
-/// # Ambiguous routing
-/// Routing keys solely on `instance.contract_id`, which resolves to the FIRST
-/// provider of that contract. When two or more bundles provide the same contract,
-/// an instance from one provider could be dispatched through another's interface
-/// (wrong state pointer, potential UB). To stay sound, this returns
-/// [`AbiErrorCode::DuplicateProvider`] instead of dispatching whenever more than one
-/// provider is registered for the contract. A single provider dispatches normally.
-///
-/// # Safety
-/// - `this` must be a valid HostApi pointer with valid runtime field
-/// - `instance` must be an instance produced by the target contract
-/// - `args` / `out` must satisfy the target function's ABI argument layout
-/// - `arena` must be null or a valid [`CallArena`] for the duration of the call
-pub(crate) unsafe extern "C" fn host_call_guest_method(
-    this: *const HostApi,
-    instance: polyplug_abi::guest::GuestContractInstance,
-    fn_id: u32,
-    args: *const core::ffi::c_void,
-    out: *mut core::ffi::c_void,
-    arena: *mut polyplug_abi::types::CallArena,
-    out_err: *mut polyplug_abi::types::AbiError,
-) {
-    // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
-    // contract requires callers to pass a valid, non-null out_err pointer.
-    let result: polyplug_abi::types::AbiError =
-        unsafe { host_call_guest_method_impl(this, instance, fn_id, args, out, arena) };
-    if !out_err.is_null() {
-        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_err.write(result) };
-    }
-}
-
-unsafe fn host_call_guest_method_impl(
-    this: *const HostApi,
-    instance: polyplug_abi::guest::GuestContractInstance,
-    fn_id: u32,
-    args: *const core::ffi::c_void,
-    out: *mut core::ffi::c_void,
-    arena: *mut polyplug_abi::types::CallArena,
-) -> polyplug_abi::types::AbiError {
-    // Only the host vtable pointer is a hard precondition. A null `instance.data`
-    // is explicitly VALID: stateless contracts (every VM-backed contract, plus
-    // native contracts with no per-instance state) return a null handle from
-    // `create_instance` and use it as an opaque dispatch token. Routing is keyed
-    // solely on `instance.contract_id` (re-resolved below), so a null `data` that
-    // carries a valid `contract_id` must dispatch normally; a fully-null instance
-    // (contract_id == 0) still fails cleanly as `NotFound` at re-resolution.
-    if this.is_null() {
-        return polyplug_abi::types::AbiError {
-            code: polyplug_abi::types::AbiErrorCode::InvalidPointer as u32,
-            message: polyplug_abi::types::StringView::null(),
-        };
-    }
-
-    // SAFETY: this is a valid HostApi pointer passed by the host.
-    // (*this).runtime contains a valid pointer to Runtime.
-    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    let registry: &RuntimeStore = &runtime.registry;
-
-    // Re-resolve the target contract by id on EVERY call. The resolve drops its own
-    // internal read guard before returning, so no registry lock is held across the
-    // guest dispatch below. The returned pointer stays valid across a concurrent
-    // unload because the outer epoch pin taken below keeps the snapshot whose Arc
-    // backs the interface alive for the duration of the dispatch.
-    let contract_id: u64 = instance.contract_id.id();
-
-    // Conservative routing guard for multi-provider contracts. Routing is keyed
-    // solely on `contract_id`, which resolves to the FIRST provider only. When two
-    // or more bundles provide the same contract, an instance created by provider B
-    // could be dispatched through provider A's interface — a wrong state pointer and
-    // potential UB. Until the ABI carries a provider discriminator, refuse the
-    // cross-call rather than risk mis-dispatch. A single provider is unambiguous and
-    // keeps today's behaviour (including post-reload re-resolution).
-    //
-    // The count, the single-provider check, and the resolve all happen under ONE
-    // registry read guard via `resolve_single_provider` (was three separate guard
-    // acquisitions: count + find + resolve). That internal guard is dropped before
-    // the guest dispatch below, so no registry lock is held across the call; the
-    // returned pointer stays valid across a concurrent unload because the outer epoch
-    // pin taken below keeps the snapshot whose Arc backs the interface alive for the
-    // duration of the dispatch.
-    //
-    // NOTE: the matching `call_guest_method` field doc on `HostApi` in the
-    // `polyplug_abi` crate should be updated to document this DuplicateProvider
-    // outcome (that crate is owned by another agent — follow-up).
-    //
-    // The outer pin keeps the snapshot whose Arc backs `interface_ptr` from being
-    // epoch-reclaimed for the duration of the dispatch, so a concurrent unload
-    // cannot free the interface mid-call. It must outlive the native/vm dispatch
-    // below, so it is bound to a named guard (not `let _ =`, which drops immediately)
-    // that lives to the end of this function.
-    let _dispatch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-    let interface_ptr: *const GuestContractInterface = match registry
-        .resolve_single_provider(GuestContractId::from_u64(contract_id), 0)
-    {
-        crate::runtime_store::SingleProviderResolution::Multiple => {
-            runtime.set_last_error(format!(
-                    "call_guest_method: ambiguous cross-call routing for contract_id={contract_id}: \
-                     multiple providers are registered and routing keys only on contract_id, so the \
-                     target provider cannot be determined unambiguously"
-                ));
-            return polyplug_abi::types::AbiError {
-                code: polyplug_abi::types::AbiErrorCode::DuplicateProvider as u32,
-                message: polyplug_abi::types::StringView::null(),
-            };
-        }
-        crate::runtime_store::SingleProviderResolution::NotFound => {
-            runtime.set_last_error(format!(
-                "call_guest_method: no contract found for contract_id={contract_id}"
-            ));
-            return polyplug_abi::types::AbiError {
-                code: polyplug_abi::types::AbiErrorCode::NotFound as u32,
-                message: polyplug_abi::types::StringView::null(),
-            };
-        }
-        crate::runtime_store::SingleProviderResolution::Resolved(ptr) if !ptr.is_null() => ptr,
-        crate::runtime_store::SingleProviderResolution::Resolved(_) => {
-            runtime.set_last_error(format!(
-                "call_guest_method: contract could not be resolved for contract_id={contract_id}"
-            ));
-            return polyplug_abi::types::AbiError {
-                code: polyplug_abi::types::AbiErrorCode::NotFound as u32,
-                message: polyplug_abi::types::StringView::null(),
-            };
-        }
-    };
-
-    // SAFETY: interface_ptr is non-null and points to a GuestContractInterface owned
-    // by a published snapshot kept alive by the outer epoch pin (`_dispatch_guard`)
-    // for the duration of this dispatch; reading its fields is sound.
-    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
-
-    match interface.dispatch_type {
-        polyplug_abi::dispatch::DispatchType::Native => {
-            // SAFETY: dispatch_type == Native guarantees the `native` union variant
-            // is the active one, so reading it is sound.
-            let native: polyplug_abi::dispatch::NativeDispatch =
-                unsafe { interface.dispatch.native };
-            if fn_id >= native.function_count || native.functions.is_null() {
-                return polyplug_abi::types::AbiError {
-                    code: polyplug_abi::types::AbiErrorCode::FunctionNotAvailable as u32,
-                    message: polyplug_abi::types::StringView::null(),
-                };
-            }
-            // SAFETY: fn_id < function_count and functions is non-null, so the slot
-            // at fn_id is within the static function-pointer array.
-            let slot: *const () = unsafe { *native.functions.add(fn_id as usize) };
-            if slot.is_null() {
-                return polyplug_abi::types::AbiError {
-                    code: polyplug_abi::types::AbiErrorCode::FunctionNotAvailable as u32,
-                    message: polyplug_abi::types::StringView::null(),
-                };
-            }
-            // Native dispatch function pointers carry NO arena parameter in their
-            // ABI signature, so `arena` is intentionally unused on this path.
-            let _ = arena;
-            // SAFETY: native dispatch slots have the frozen native ABI signature
-            // `extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)`
-            // (see polyplugc rust generator); `slot` is a non-null pointer to such
-            // a function. The transmute reinterprets the type-erased `*const ()` as
-            // that concrete fn pointer, which is the established native-call form.
-            let func: unsafe extern "C" fn(
-                polyplug_abi::guest::GuestContractInstance,
-                *const (),
-                *mut (),
-                *mut polyplug_abi::types::AbiError,
-            ) = unsafe { core::mem::transmute(slot) };
-            let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
-            // SAFETY: args/out satisfy the target function's ABI layout per the
-            // caller's contract; instance belongs to this contract; `err` is a
-            // valid, writable out-param for the native call's AbiError result.
-            unsafe { func(instance, args.cast::<()>(), out.cast::<()>(), &mut err) };
-            err
-        }
-        polyplug_abi::dispatch::DispatchType::VirtualMachine => {
-            // SAFETY: dispatch_type == VirtualMachine guarantees the `vm` union
-            // variant is the active one, so reading it is sound.
-            let vm: polyplug_abi::dispatch::VmDispatch = unsafe { interface.dispatch.vm };
-            let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
-            // SAFETY: vm.call is the loader-provided VM dispatch entry point with
-            // the frozen out-param signature; loader_data is the matching opaque
-            // handle. args/out/arena are forwarded unchanged per the VM dispatch
-            // contract; `err` is a valid, writable out-param for its AbiError result.
-            unsafe {
-                (vm.call)(
-                    vm.loader_data,
-                    instance,
-                    fn_id,
-                    args.cast::<()>(),
-                    out.cast::<()>(),
-                    arena,
-                    &mut err,
-                )
-            };
-            err
-        }
-    }
-}
-
 /// HostApi.create_guest_instance callback — host-mediated guest instance creation.
 ///
 /// Invokes the interface's `create_instance` under an epoch pin so a concurrent
@@ -3010,7 +2765,6 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
-            call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
@@ -3130,7 +2884,7 @@ mod tests {
         }
     }
 
-    // ─── call_guest_method tests ─────────────────────────────────────────────
+    // ─── shared native-dispatch test fixtures ────────────────────────────────
 
     /// Native dispatch target: writes the i32 at `args` plus one into `out`.
     unsafe extern "C" fn native_add_one(
@@ -3234,150 +2988,6 @@ mod tests {
 
     fn host_with_runtime(runtime: &Arc<Runtime>) -> *const HostApi {
         runtime.host_abi()
-    }
-
-    #[test]
-    fn call_guest_method_null_this_returns_invalid_pointer() {
-        let instance: polyplug_abi::guest::GuestContractInstance =
-            polyplug_abi::guest::GuestContractInstance {
-                data: &raw const NATIVE_FNS as *mut core::ffi::c_void,
-                contract_id: GuestContractId::from_u64(1),
-            };
-        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
-        // SAFETY: host_call_guest_method tolerates a null `this`; `err` is a valid out-param.
-        unsafe {
-            host_call_guest_method(
-                core::ptr::null(),
-                instance,
-                0,
-                core::ptr::null(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-                &mut err,
-            )
-        };
-        assert_eq!(
-            err.code,
-            polyplug_abi::types::AbiErrorCode::InvalidPointer as u32
-        );
-    }
-
-    #[test]
-    fn call_guest_method_null_instance_returns_not_found() {
-        // A fully-null instance (null data AND null contract_id) is no longer
-        // rejected on the data field — null data is valid for stateless contracts.
-        // Routing keys on contract_id, so contract_id == 0 fails cleanly as NotFound
-        // (never dereferencing data/args/out).
-        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
-        let instance: polyplug_abi::guest::GuestContractInstance =
-            polyplug_abi::guest::GuestContractInstance::null();
-        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
-        // SAFETY: re-resolution of contract_id == 0 fails before any pointer deref;
-        // `err` is a valid out-param.
-        unsafe {
-            host_call_guest_method(
-                host_with_runtime(&runtime),
-                instance,
-                0,
-                core::ptr::null(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-                &mut err,
-            )
-        };
-        assert_eq!(err.code, polyplug_abi::types::AbiErrorCode::NotFound as u32);
-    }
-
-    #[test]
-    fn call_guest_method_null_data_valid_contract_dispatches() {
-        // The peer-caller contract: a stateless instance carries a null `data` but a
-        // valid `contract_id`. call_guest_method must route by contract_id and
-        // dispatch successfully — this is the case the generated peer callers rely on.
-        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
-        let contract_id: u64 = 0x0FED_CBA9_8765_4321;
-        register_native_caller_contract(&runtime.registry, contract_id, 0x1);
-
-        let instance: polyplug_abi::guest::GuestContractInstance =
-            polyplug_abi::guest::GuestContractInstance {
-                data: core::ptr::null_mut(),
-                contract_id: GuestContractId::from_u64(contract_id),
-            };
-        let input: i32 = 41;
-        let mut output: i32 = 0;
-        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
-        // SAFETY: native_add_one reads *const i32 from args and writes *mut i32 to out;
-        // it ignores instance.data, so a null data handle is sound; `err` is a valid out-param.
-        unsafe {
-            host_call_guest_method(
-                host_with_runtime(&runtime),
-                instance,
-                0,
-                &raw const input as *const core::ffi::c_void,
-                &raw mut output as *mut core::ffi::c_void,
-                core::ptr::null_mut(),
-                &mut err,
-            )
-        };
-        assert_eq!(err.code, polyplug_abi::types::AbiErrorCode::Ok as u32);
-        assert_eq!(
-            output, 42,
-            "stateless dispatch must run with null instance.data"
-        );
-    }
-
-    #[test]
-    fn call_guest_method_unknown_contract_returns_not_found() {
-        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
-        let instance: polyplug_abi::guest::GuestContractInstance =
-            polyplug_abi::guest::GuestContractInstance {
-                data: &raw const NATIVE_FNS as *mut core::ffi::c_void,
-                contract_id: GuestContractId::from_u64(0xDEAD_BEEF),
-            };
-        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
-        // SAFETY: this is valid; contract_id is unregistered so lookup fails; `err` is a valid out-param.
-        unsafe {
-            host_call_guest_method(
-                host_with_runtime(&runtime),
-                instance,
-                0,
-                core::ptr::null(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-                &mut err,
-            )
-        };
-        assert_eq!(err.code, polyplug_abi::types::AbiErrorCode::NotFound as u32);
-    }
-
-    #[test]
-    fn call_guest_method_native_happy_path() {
-        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
-        let contract_id: u64 = 0x1234_5678_9ABC_DEF0;
-        register_native_caller_contract(&runtime.registry, contract_id, 0x1);
-
-        let instance: polyplug_abi::guest::GuestContractInstance =
-            polyplug_abi::guest::GuestContractInstance {
-                data: &raw const NATIVE_FNS as *mut core::ffi::c_void,
-                contract_id: GuestContractId::from_u64(contract_id),
-            };
-        let input: i32 = 41;
-        let mut output: i32 = 0;
-        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
-        // SAFETY: native_add_one reads *const i32 from args and writes *mut i32 to out;
-        // `err` is a valid out-param.
-        unsafe {
-            host_call_guest_method(
-                host_with_runtime(&runtime),
-                instance,
-                0,
-                &raw const input as *const core::ffi::c_void,
-                &raw mut output as *mut core::ffi::c_void,
-                core::ptr::null_mut(),
-                &mut err,
-            )
-        };
-        assert!(err.is_ok(), "native dispatch should succeed");
-        assert_eq!(output, 42);
     }
 
     // ─── host-mediated instance lifecycle (instance counter) ─────────────────
@@ -3613,155 +3223,6 @@ mod tests {
             "pop with no entry must not decrement the counter"
         );
         assert_eq!(runtime.current_init_bundle_id(), 0);
-    }
-
-    #[test]
-    fn call_guest_method_native_fn_id_out_of_range() {
-        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
-        let contract_id: u64 = 0x0FED_CBA9_8765_4321;
-        register_native_caller_contract(&runtime.registry, contract_id, 0x2);
-
-        let instance: polyplug_abi::guest::GuestContractInstance =
-            polyplug_abi::guest::GuestContractInstance {
-                data: &raw const NATIVE_FNS as *mut core::ffi::c_void,
-                contract_id: GuestContractId::from_u64(contract_id),
-            };
-        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
-        // SAFETY: function_count is 1; fn_id 5 is out of range and must be rejected;
-        // `err` is a valid out-param.
-        unsafe {
-            host_call_guest_method(
-                host_with_runtime(&runtime),
-                instance,
-                5,
-                core::ptr::null(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-                &mut err,
-            )
-        };
-        assert_eq!(
-            err.code,
-            polyplug_abi::types::AbiErrorCode::FunctionNotAvailable as u32
-        );
-    }
-
-    /// VM dispatch fake: echoes fn_id into `out` and records the forwarded arena.
-    unsafe extern "C" fn vm_echo_call(
-        _loader_data: polyplug_abi::dispatch::VmLoaderData,
-        _instance: polyplug_abi::guest::GuestContractInstance,
-        fn_id: u32,
-        _args: *const (),
-        out: *mut (),
-        _arena: *mut polyplug_abi::types::CallArena,
-        out_err: *mut polyplug_abi::types::AbiError,
-    ) {
-        // SAFETY: the test passes a valid *mut u32 for out.
-        unsafe {
-            *(out as *mut u32) = fn_id;
-        }
-        if !out_err.is_null() {
-            // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
-            unsafe { out_err.write(polyplug_abi::types::AbiError::ok()) };
-        }
-    }
-
-    fn register_vm_caller_contract(
-        registry: &crate::runtime_store::RuntimeStore,
-        contract_id: u64,
-        bundle_id: u64,
-    ) {
-        use polyplug_abi::{
-            DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
-            VmDispatch, VmLoaderData,
-        };
-
-        unsafe extern "C" fn stub_create(
-            _loader_data: VmLoaderData,
-            _host: *const HostApi,
-            _args: *const (),
-            out_instance: *mut GuestContractInstance,
-        ) {
-            if !out_instance.is_null() {
-                // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-                unsafe { out_instance.write(GuestContractInstance::null()) };
-            }
-        }
-        unsafe extern "C" fn stub_destroy(
-            _loader_data: VmLoaderData,
-            _host: *const HostApi,
-            _instance: GuestContractInstance,
-        ) {
-        }
-
-        let interface: &'static GuestContractInterface =
-            Box::leak(Box::new(GuestContractInterface {
-                contract_id: GuestContractId::from_u64(contract_id),
-                contract_version: Version {
-                    major: 1,
-                    minor: 0,
-                    patch: 0,
-                },
-                dispatch_type: DispatchType::VirtualMachine,
-                create_instance: stub_create,
-                destroy_instance: stub_destroy,
-                dispatch: DispatchMechanisms {
-                    vm: VmDispatch {
-                        call: vm_echo_call,
-                        loader_data: VmLoaderData::null(),
-                    },
-                },
-            }));
-        let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
-            name: polyplug_abi::StringView::from_static(b"vmcaller"),
-            contract_name: polyplug_abi::StringView::from_static(b"vmcaller.contract"),
-            version: Version {
-                major: 1,
-                minor: 0,
-                patch: 0,
-            },
-        };
-        // SAFETY: interface is leaked for the process lifetime.
-        let result: Result<GuestContractHandle, crate::error::RegistryError> = unsafe {
-            registry.register_guest_contract(
-                descriptor,
-                interface,
-                "vmcaller.contract".to_owned(),
-                BundleId::from_u64(bundle_id),
-            )
-        };
-        if let Err(e) = result {
-            panic!("failed to register vm caller contract: {e}");
-        }
-    }
-
-    #[test]
-    fn call_guest_method_vm_routing() {
-        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
-        let contract_id: u64 = 0x00AA_BB00_CC00_DD00;
-        register_vm_caller_contract(&runtime.registry, contract_id, 0x3);
-
-        let instance: polyplug_abi::guest::GuestContractInstance =
-            polyplug_abi::guest::GuestContractInstance {
-                data: core::ptr::dangling_mut::<core::ffi::c_void>(),
-                contract_id: GuestContractId::from_u64(contract_id),
-            };
-        let mut output: u32 = 0;
-        let mut err: polyplug_abi::types::AbiError = polyplug_abi::types::AbiError::ok();
-        // SAFETY: vm_echo_call writes the fn_id into *mut u32 out; `err` is a valid out-param.
-        unsafe {
-            host_call_guest_method(
-                host_with_runtime(&runtime),
-                instance,
-                7,
-                core::ptr::null(),
-                &raw mut output as *mut core::ffi::c_void,
-                core::ptr::null_mut(),
-                &mut err,
-            )
-        };
-        assert!(err.is_ok(), "vm dispatch should succeed");
-        assert_eq!(output, 7, "vm fake should echo fn_id");
     }
 
     struct EnforceLoader {
@@ -4466,7 +3927,6 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
-            call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
@@ -4512,7 +3972,6 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
-            call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
@@ -4635,7 +4094,6 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
-            call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
@@ -4727,7 +4185,6 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
-            call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
@@ -4830,7 +4287,6 @@ mod tests {
             register_loader: host_register_loader,
             get_last_error: host_get_last_error,
             get_error_len: host_get_error_len,
-            call_guest_method: host_call_guest_method,
             unload_bundle: host_unload_bundle,
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,

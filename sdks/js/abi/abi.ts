@@ -255,8 +255,8 @@ export const GUEST_CONTRACT_INTERFACE_SIZE: number = 56;
  * 
  *  Contains an opaque runtime pointer and function pointers for guest calls.
  *  All functions use self-passing pattern (receive HostApi pointer as first parameter).
- *  `HostApi` is `192 bytes` (1 opaque runtime pointer + 22 function pointer fields + 1 reserved data pointer).
- *  Tail offsets: `create_guest_instance` @160, `destroy_guest_instance` @168, `revision_counter` @176, `reserved` @184.
+ *  `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
+ *  Tail offsets: `create_guest_instance` @152, `destroy_guest_instance` @160, `revision_counter` @168, `reserved` @176.
  * 
  *  # Who provides
  *  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -264,7 +264,7 @@ export const GUEST_CONTRACT_INTERFACE_SIZE: number = 56;
  * 
  *  # Nullability
  *  Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
- *  is the sole producer of this struct and populates all 22 callbacks at
+ *  is the sole producer of this struct and populates all 21 callbacks at
  *  creation. Consumers never construct or mutate a `HostApi`. Only the
  *  `runtime` pointer can become null (it is swapped to null by
  *  `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
@@ -527,59 +527,6 @@ export interface HostApi {
      */
     get_error_len: number;
     /**
-     *  Call a method on another guest contract instance, mediated by the host.
-     * 
-     *  This is the only cross-call path usable from a VM-sandboxed guest
-     *  (Lua/JS/Python/.NET): rather than holding a raw `GuestContractInterface`
-     *  pointer and dispatching directly — which a sandboxed guest cannot do — the
-     *  guest hands the host an opaque `instance` it obtained earlier and the host
-     *  performs the plugin→plugin dispatch on its behalf. Native guests may also
-     *  use it, though they can dispatch directly.
-     * 
-     *  # Lookup semantics
-     *  The target contract is re-resolved through the registry via
-     *  `instance.contract_id` on EVERY call — the result is never cached. This is
-     *  deliberate: after a hot-reload, a fresh cross-call routes to the live
-     *  interface, while the interface superseded by the reload stays alive under
-     *  epoch reclamation until every reader pinned before the swap unpins. Each
-     *  cross-call pins the epoch across its dispatch, so an in-flight call keeps
-     *  the interface it resolved alive until it returns. The caller therefore
-     *  always reaches the current implementation without invalidating outstanding
-     *  instances.
-     * 
-     *  # Multiple providers
-     *  Routing keys solely on `instance.contract_id`. If more than one live
-     *  provider is registered for that `contract_id`, the target is ambiguous:
-     *  the call returns `AbiErrorCode::DuplicateProvider` and does NOT dispatch
-     *  (see `host_call_guest_method` in `polyplug`). Resolution requires exactly
-     *  one registered provider for the contract.
-     * 
-     *  # Arena semantics
-     *  `arena` is forwarded unchanged to VM dispatch as its variable-size return
-     *  buffer. Native dispatch function pointers carry no arena slot in their
-     *  signature, so `arena` is unused on the native path. A null `arena` follows
-     *  the established convention: VM dispatch falls back to per-value
-     *  `host->alloc` (see [`CallArena`]).
-     * 
-     *  # Trust model
-     *  There is zero per-call authorization. Trust is established once, at load
-     *  time, by declared-dependency verification (a bundle may only resolve the
-     *  contracts it declared) per `docs/TRUST_MODEL.md`. Once a guest legitimately
-     *  holds an `instance`, cross-calling it is unrestricted.
-     * 
-     *  # Arguments
-     *  - `this`: HostApi pointer (self-passing)
-     *  - `instance`: Target guest contract instance (carries `contract_id`)
-     *  - `fn_id`: Function index within the target contract
-     *  - `args`: Pointer to packed arguments (ABI-specific layout)
-     *  - `out`: Pointer to the output buffer for the return value
-     *  - `arena`: Optional per-call [`CallArena`] for variable-size return values;
-     *    null is allowed
-     *  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
-     *    success, an error otherwise). Never null.
-     */
-    call_guest_method: number;
-    /**
      *  Unload a guest bundle, invalidating its handles and freeing its resources.
      * 
      *  This performs **true unload**: the bundle's slots have their generation bumped,
@@ -592,8 +539,8 @@ export interface HostApi {
      *  A raw `GuestContractInterface` pointer cached before the unload and dereferenced
      *  after it is **undefined behaviour**: the host must quiesce the bundle (ensure no
      *  thread is calling into it or holds a pointer into it) before unloading. Runtime-
-     *  mediated calls — `call_guest_method`, `create_guest_instance`, `destroy_guest_instance`
-     *  — pin the epoch across dispatch and are therefore safe against a concurrent unload.
+     *  mediated calls — `create_guest_instance`, `destroy_guest_instance` — pin the epoch
+     *  across dispatch and are therefore safe against a concurrent unload.
      * 
      *  After unload, every handle that was minted for this bundle resolves to
      *  `AbiErrorCode::StaleHandle`, and `find_guest_contract` / `find_all_guest_contracts`
@@ -720,14 +667,13 @@ export const HOST_API_REGISTER_HOST_CONTRACT_OFFSET: number = 104;
 export const HOST_API_REGISTER_LOADER_OFFSET: number = 112;
 export const HOST_API_GET_LAST_ERROR_OFFSET: number = 120;
 export const HOST_API_GET_ERROR_LEN_OFFSET: number = 128;
-export const HOST_API_CALL_GUEST_METHOD_OFFSET: number = 136;
-export const HOST_API_UNLOAD_BUNDLE_OFFSET: number = 144;
-export const HOST_API_LOG_OFFSET: number = 152;
-export const HOST_API_CREATE_GUEST_INSTANCE_OFFSET: number = 160;
-export const HOST_API_DESTROY_GUEST_INSTANCE_OFFSET: number = 168;
-export const HOST_API_REVISION_COUNTER_OFFSET: number = 176;
-export const HOST_API_RESERVED_OFFSET: number = 184;
-export const HOST_API_SIZE: number = 192;
+export const HOST_API_UNLOAD_BUNDLE_OFFSET: number = 136;
+export const HOST_API_LOG_OFFSET: number = 144;
+export const HOST_API_CREATE_GUEST_INSTANCE_OFFSET: number = 152;
+export const HOST_API_DESTROY_GUEST_INSTANCE_OFFSET: number = 160;
+export const HOST_API_REVISION_COUNTER_OFFSET: number = 168;
+export const HOST_API_RESERVED_OFFSET: number = 176;
+export const HOST_API_SIZE: number = 184;
 
 /**
  *  Opaque handle to a host contract instance.
