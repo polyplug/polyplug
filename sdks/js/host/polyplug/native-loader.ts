@@ -11,21 +11,21 @@
 
 /**
  * Platform identifier format: {os}-{arch}
- * Examples: "linux-x64", "darwin-arm64", "win32-x64"
+ * Examples: "linux-x64", "macos-arm64", "windows-x64"
  */
-export type PlatformIdentifier = 
+export type PlatformIdentifier =
   | "linux-x64"
-  | "darwin-x64"
-  | "darwin-arm64"
-  | "win32-x64";
+  | "macos-x64"
+  | "macos-arm64"
+  | "windows-x64";
 
 /**
- * Mapping of Deno OS names to platform identifiers
+ * Mapping of Deno OS names (Deno.build.os) to platform-directory segments.
  */
 const OS_MAP: Record<string, string> = {
   "linux": "linux",
-  "darwin": "darwin",
-  "windows": "win32"
+  "darwin": "macos",
+  "windows": "windows"
 };
 
 /**
@@ -37,49 +37,58 @@ const ARCH_MAP: Record<string, string> = {
 };
 
 /**
+ * Resolve a platform identifier from raw Deno OS/arch names.
+ * Pure function (no Deno.build access) so every OS/arch mapping is testable.
+ * @param {string} os   A Deno.build.os value ("linux", "darwin", "windows").
+ * @param {string} arch A Deno.build.arch value ("x86_64", "aarch64").
+ * @returns {PlatformIdentifier} Platform identifier string.
+ * @throws {Error} If the OS or architecture is not supported.
+ */
+export function platformFor(os: string, arch: string): PlatformIdentifier {
+  const osName = OS_MAP[os];
+  const archName = ARCH_MAP[arch];
+
+  if (!osName) {
+    throw new Error(`Unsupported OS: ${os}`);
+  }
+
+  if (!archName) {
+    throw new Error(`Unsupported architecture: ${arch}`);
+  }
+
+  const platform = `${osName}-${archName}` as PlatformIdentifier;
+
+  const validPlatforms: PlatformIdentifier[] = [
+    "linux-x64",
+    "macos-x64",
+    "macos-arm64",
+    "windows-x64"
+  ];
+
+  if (!validPlatforms.includes(platform)) {
+    throw new Error(`Unsupported platform combination: ${os}-${arch}`);
+  }
+
+  return platform;
+}
+
+/**
  * Get the platform identifier based on current Deno build.
  * @returns {PlatformIdentifier} Platform identifier string
  * @throws {Error} If platform is not supported
  */
 export function getPlatformIdentifier(): PlatformIdentifier {
-  const os = Deno.build.os;
-  const arch = Deno.build.arch;
-  
-  const osName = OS_MAP[os];
-  const archName = ARCH_MAP[arch];
-  
-  if (!osName) {
-    throw new Error(`Unsupported OS: ${os}`);
-  }
-  
-  if (!archName) {
-    throw new Error(`Unsupported architecture: ${arch}`);
-  }
-  
-  const platform = `${osName}-${archName}` as PlatformIdentifier;
-  
-  // Validate against known platforms
-  const validPlatforms: PlatformIdentifier[] = [
-    "linux-x64",
-    "darwin-x64",
-    "darwin-arm64",
-    "win32-x64"
-  ];
-  
-  if (!validPlatforms.includes(platform)) {
-    throw new Error(`Unsupported platform combination: ${os}-${arch}`);
-  }
-  
-  return platform;
+  return platformFor(Deno.build.os, Deno.build.arch);
 }
 
 /**
- * Get the native library filename for the current platform.
- * @returns {string} Native library filename
+ * Resolve the native library filename for a raw Deno OS name.
+ * Pure function (no Deno.build access) so every OS mapping is testable.
+ * @param {string} os A Deno.build.os value ("linux", "darwin", "windows").
+ * @returns {string} Native library filename.
+ * @throws {Error} If the OS is not supported.
  */
-export function getNativeLibraryFilename(): string {
-  const os = Deno.build.os;
-  
+export function nativeLibraryFilenameFor(os: string): string {
   switch (os) {
     case "windows":
       return "polyplug.dll";
@@ -90,6 +99,14 @@ export function getNativeLibraryFilename(): string {
     default:
       throw new Error(`Unsupported OS: ${os}`);
   }
+}
+
+/**
+ * Get the native library filename for the current platform.
+ * @returns {string} Native library filename
+ */
+export function getNativeLibraryFilename(): string {
+  return nativeLibraryFilenameFor(Deno.build.os);
 }
 
 /**
