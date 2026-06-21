@@ -8,7 +8,7 @@ polyplug lets a single host application load and call plugins written in Rust, C
 
 **polyplug is built for _trusted_ plugins** — code you write or vet (first-party features, partner integrations, a vetted-author ecosystem). It runs plugins in-process with no sandbox. If you need to run _untrusted_ third-party code, use a WebAssembly runtime (Extism, Wasmtime) instead — see [When to use polyplug](#when-to-use-polyplug) below. This is the same trust model the most successful native extension ecosystems use (e.g. VS Code extensions): **vet the author, not the sandbox.**
 
-**Status: pre-release.** The project is pre-1.0 and not yet published to any package registry — build from source (see [Installation](#installation)). The full test suite runs on Linux, macOS, and Windows.
+**Status: 0.1.0 — first public release.** Published to crates.io, PyPI, NuGet, LuaRocks, npm, and JSR (see [Installation](#installation)). The ABI is still **pre-1.0** — ABI-visible changes are permitted between releases until the 1.0 freeze (see [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md)). The full test suite runs on Linux, macOS, and Windows.
 
 ![one plugin call, end to end — by plugin language](docs/assets/benches/hero.svg)
 
@@ -58,20 +58,35 @@ Planned (post-0.1.0): **bundle signing/verification** (the primary security cont
 
 ### Installation
 
-polyplug is not yet published to crates.io, PyPI, NuGet, LuaRocks, or npm —
-everything builds from this workspace:
+Each language ships the same package shape — `abi`, `host`, `guest`, and one
+loader per plugin language. Install the host SDK plus whichever loaders you need:
 
 ```bash
-# Core runtime, loaders, and the polyplugc CLI
-cargo build --release
+# Rust (the polyplug crate IS the runtime)
+cargo add polyplug polyplug_abi polyplug_native   # + polyplug_{python,lua,js,dotnet} as needed
+cargo install polyplugc                            # contract → bindings CLI
 
-# Build the example plugin bundles (all six languages)
-bash examples/build_all.sh
+# Python
+pip install polyplug polyplug-abi polyplug-loaders-native
+
+# C# / .NET
+dotnet add package Polyplug.Host
+dotnet add package Polyplug.Loaders.Native
+
+# Lua (LuaJIT)
+luarocks install polyplug polyplug-loader-native
+
+# JavaScript / TypeScript (Deno runtime required)
+deno add jsr:@polyplug/host jsr:@polyplug/loaders-native   # or npm:@polyplug/host
 ```
 
-- **Rust hosts** depend on the `polyplug` and `polyplug_abi` crates by path.
-- **Other host languages** use the SDKs under `sdks/<lang>/host` together with
-  the built loader cdylibs (`target/release/deps/libpolyplug*.so`).
+- The Rust `polyplug` crate is the runtime engine; every other `host` package is
+  an FFI binding that loads it. Guest authors add the `guest` package for their
+  language. The `polyplugc` CLI generates the typed glue from a `.toml` contract.
+- The JS/TS packages target the **Deno** runtime (they use `Deno.dlopen`); the
+  npm packages publish the same code for name reservation and Deno consumption.
+- To build from source instead: `cargo build --release` then
+  `bash examples/build_all.sh`.
 - See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) for the full end-to-end setup.
 
 ### Basic Usage
