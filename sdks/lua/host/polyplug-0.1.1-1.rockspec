@@ -32,11 +32,13 @@ build = {
       ["polyplug.runtime"] = "polyplug/runtime.lua",
       ["polyplug.reload_phase"] = "polyplug/reload_phase.lua",
    },
-   install = {
-      lua = {
-         ["polyplug_core_linux"] = "_native/linux-x64/libpolyplug.so",
-         ["polyplug_core_macos"] = "_native/macos-arm64/libpolyplug.dylib",
-         ["polyplug_core_windows"] = "_native/windows-x64/polyplug.dll",
-      },
+   -- Install ONLY the current platform's native (per-platform override) so the
+   -- build never aborts on another platform's missing binary — an all-platforms
+   -- install list aborts the whole build when one file is absent, leaving zero
+   -- modules installed. The .lua modules above always install regardless.
+   platforms = {
+      linux = { install = { lua = { ["polyplug_core"] = "_native/linux-x64/libpolyplug.so" } } },
+      macosx = { install = { lua = { ["polyplug_core"] = "_native/macos-arm64/libpolyplug.dylib" } } },
+      windows = { install = { lua = { ["polyplug_core"] = "_native/windows-x64/polyplug.dll" } } },
    },
 }

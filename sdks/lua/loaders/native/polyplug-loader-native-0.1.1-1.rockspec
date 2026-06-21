@@ -28,11 +28,12 @@ build = {
    modules = {
       ["polyplug.loaders.native"] = "polyplug/loaders/native.lua",
    },
-   install = {
-      lua = {
-         ["polyplug_native_linux"] = "_native/linux-x64/libpolyplug_native.so",
-         ["polyplug_native_macos"] = "_native/macos-arm64/libpolyplug_native.dylib",
-         ["polyplug_native_windows"] = "_native/windows-x64/polyplug_native.dll",
-      },
+   -- Install ONLY the current platform's native (per-platform override) so
+   -- the build never aborts on another platform's missing binary (which
+   -- would leave zero modules installed). The .lua module always installs.
+   platforms = {
+      linux = { install = { lua = { ["polyplug_native"] = "_native/linux-x64/libpolyplug_native.so" } } },
+      macosx = { install = { lua = { ["polyplug_native"] = "_native/macos-arm64/libpolyplug_native.dylib" } } },
+      windows = { install = { lua = { ["polyplug_native"] = "_native/windows-x64/polyplug_native.dll" } } },
    },
 }

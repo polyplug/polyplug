@@ -28,11 +28,12 @@ build = {
    modules = {
       ["polyplug.loaders.dotnet"] = "polyplug/loaders/dotnet.lua",
    },
-   install = {
-      lua = {
-         ["polyplug_dotnet_linux"] = "_native/linux-x64/libpolyplug_dotnet.so",
-         ["polyplug_dotnet_macos"] = "_native/macos-arm64/libpolyplug_dotnet.dylib",
-         ["polyplug_dotnet_windows"] = "_native/windows-x64/polyplug_dotnet.dll",
-      },
+   -- Install ONLY the current platform's native (per-platform override) so
+   -- the build never aborts on another platform's missing binary (which
+   -- would leave zero modules installed). The .lua module always installs.
+   platforms = {
+      linux = { install = { lua = { ["polyplug_dotnet"] = "_native/linux-x64/libpolyplug_dotnet.so" } } },
+      macosx = { install = { lua = { ["polyplug_dotnet"] = "_native/macos-arm64/libpolyplug_dotnet.dylib" } } },
+      windows = { install = { lua = { ["polyplug_dotnet"] = "_native/windows-x64/polyplug_dotnet.dll" } } },
    },
 }
