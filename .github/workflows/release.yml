@@ -745,6 +745,12 @@ jobs:
     # from prep's dist bundle, so the release only needs the builds to be sound.
     needs: [prep, publish-crates, publish-nuget, publish-npm, publish-jsr, publish-luarocks]
     runs-on: ubuntu-latest
+    # softprops/action-gh-release creates the release and uploads assets, which
+    # requires write access to repository contents. The default GITHUB_TOKEN is
+    # read-only here, so grant the scope explicitly (least privilege: this job
+    # only).
+    permissions:
+      contents: write
     # Fire whenever the builds/tests/prep succeeded; a registry job that failed
     # or is still running does not gate the release. (prep depends on
     # build-native + test-native, so prep success implies those passed.)
