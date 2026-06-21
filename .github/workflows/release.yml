@@ -287,10 +287,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # Dependency-ordered (leaves first). polyplug_utils has no internal deps;
+      # polyplug_codegen must precede polyplug_abi (abi build-depends on codegen);
+      # codegen's dep on abi is a dev-dependency, which crates.io strips at publish,
+      # so there is no real cycle. polyplugc publishes last (depends on codegen).
       - name: Publish to crates.io (dry-run)
         if: inputs.dry-run == 'true'
         run: |
-          for crate in polyplug_abi polyplug polyplug_guest polyplug_codegen polyplugc polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_dotnet; do
+          for crate in polyplug_utils polyplug_codegen polyplug_abi polyplug polyplug_guest polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_dotnet polyplugc; do
             echo "Dry-run: $crate"
             cargo publish -p $crate --dry-run
           done
@@ -300,8 +304,9 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          # Publish all crates - cargo handles dependency resolution locally
-          for crate in polyplug_abi polyplug polyplug_guest polyplug_codegen polyplugc polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_dotnet; do
+          # cargo (>=1.66) waits for each crate to appear in the index before returning,
+          # so the next crate in the order resolves its just-published dependency.
+          for crate in polyplug_utils polyplug_codegen polyplug_abi polyplug polyplug_guest polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_dotnet polyplugc; do
             echo "Publishing $crate..."
             cargo publish -p $crate
           done
