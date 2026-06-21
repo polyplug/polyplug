@@ -687,7 +687,13 @@ jobs:
             dotnet add package Polyplug.Guest
             ```
 
-            ### Node.js
+            ### JavaScript / TypeScript (Deno)
+            From jsr (recommended):
+            ```bash
+            deno add jsr:@polyplug/sdk
+            ```
+            From npm (also Deno — the host loader needs Deno's FFI; a Node
+            backend is planned):
             ```bash
             npm install @polyplug/sdk
             ```

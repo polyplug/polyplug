@@ -1,7 +1,7 @@
 {
   "name": "@polyplug/sdk",
   "version": "0.1.0",
-  "description": "JavaScript/TypeScript SDK for polyplug plugin runtime",
+  "description": "JavaScript/TypeScript SDK for the polyplug plugin runtime (Deno runtime required; Node FFI backend planned)",
   "type": "module",
   "main": "./mod.ts",
   "types": "./mod.ts",

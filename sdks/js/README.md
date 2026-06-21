@@ -1,6 +1,12 @@
 # polyplug JavaScript SDK
 
-Complete JavaScript/TypeScript support for polyplug plugin runtime.
+JavaScript/TypeScript support for the polyplug plugin runtime.
+
+> **Runtime requirement: Deno.** The host library loads the native runtime
+> through Deno's FFI (`Deno.dlopen`) and reads `Deno.build` / `Deno.env`. The
+> package installs and imports under Node.js, but the host loader throws at
+> runtime there because those APIs do not exist. A Node FFI backend (so the same
+> package runs on Node) is planned — until then, use Deno.
 
 ## Structure
 
