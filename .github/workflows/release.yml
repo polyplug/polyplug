@@ -405,8 +405,11 @@ jobs:
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
+          # --check-url makes a re-run skip files already on the index instead of
+          # failing on "file already exists" — the pipeline must be re-runnable
+          # after a partial publish.
           for dist_file in dist/pypi/*; do
-            [ -f "$dist_file" ] && uv publish "$dist_file"
+            [ -f "$dist_file" ] && uv publish --check-url https://pypi.org/simple/ "$dist_file"
           done
 
       - name: Upload PyPI packages
@@ -576,7 +579,7 @@ jobs:
           # Dependency order: abi first (host depends on it), then host/guest,
           # then the loaders (depend on host).
           for d in abi host guest loaders/native loaders/python loaders/lua loaders/js loaders/dotnet; do
-            ( cd "sdks/js/$d" && deno publish --allow-dirty )
+            ( cd "sdks/js/$d" && deno publish --token "$JSR_TOKEN" --allow-dirty )
           done
 
   # ----------------------------- LuaRocks -----------------------------------
