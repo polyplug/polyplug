@@ -1,4 +1,4 @@
-//! Layout calculation tests for polyplug_codegen.
+//! Layout calculation tests for polyplug_abi.
 //!
 //! Verifies that all type layout calculations (size, alignment, offsets) are accurate
 //! for ABI compatibility across all 6 languages. Wrong padding = broken FFI.
@@ -13,6 +13,7 @@
 #![allow(clippy::expect_used)]
 
 use core::mem::{align_of, offset_of, size_of};
+use polyplug_abi::{AbiError, Buffer, GuestContractHandle, StringView};
 
 // ─── Category 1: Primitive Types (6 tests) ─────────────────────────────────────
 
@@ -68,8 +69,6 @@ fn layout_bool_size_align() {
 }
 
 // ─── Category 2: ABI Built-in Types (5 tests) ───────────────────────────────────
-
-use polyplug_abi::{AbiError, Buffer, GuestContractHandle, StringView};
 
 /// StringView: size=16, align=8, ptr@0, len@8
 #[test]

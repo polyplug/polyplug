@@ -1606,7 +1606,6 @@ name = "polyplug_codegen"
 version = "0.1.0"
 dependencies = [
  "libloading",
- "polyplug_abi",
  "polyplug_utils",
  "tempfile",
 ]

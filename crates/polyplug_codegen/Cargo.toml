@@ -17,7 +17,6 @@ polyplug_utils = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 libloading = { workspace = true }
-polyplug_abi = { workspace = true }
 
 [lints]
 workspace = true
