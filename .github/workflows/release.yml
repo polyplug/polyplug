@@ -436,26 +436,6 @@ jobs:
           echo "Built packages that WOULD be published:"
           ls -la dist/pypi/
 
-      - name: Publish to PyPI
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          # twine --skip-existing skips files already on the index by filename
-          # (no hash comparison) so a re-run after a partial publish does not
-          # fail — rebuilt wheels are not byte-reproducible, which makes uv's
-          # hash-comparing --check-url reject already-published files.
-          # Retry on PyPI's upload rate limit (429): skip-existing means each
-          # retry only re-attempts the not-yet-uploaded files. PyPI's throttle
-          # can persist for a while under repeated hits, so be patient — up to
-          # ~2h of 8-min-spaced retries so a single run rides out the window.
-          for attempt in $(seq 1 16); do
-            if uvx twine upload --skip-existing dist/pypi/*; then echo "pypi upload ok"; exit 0; fi
-            echo "pypi upload failed (likely 429); sleeping 8m before retry (attempt $attempt/16)"; sleep 480
-          done
-          echo "pypi upload still failing after retries"; exit 1
-
       - name: Upload PyPI packages
         uses: actions/upload-artifact@v4
         with:
@@ -463,6 +443,39 @@ jobs:
           path: dist/pypi/
           retention-days: 1
           if-no-files-found: ignore
+
+      - name: Publish to PyPI
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          # Upload each distribution on its own so a 429 on one file cannot
+          # abort the others: a single `twine upload dist/*` stops at the first
+          # failure, so when PyPI throttles a new-project registration every
+          # later file is left unpublished. --skip-existing makes each file
+          # idempotent (skips by filename, exits 0) so re-passes and re-runs
+          # only attempt what is still missing. PyPI's new-project throttle
+          # relaxes after a quiet gap rather than under continuous hits, so
+          # space the attempts: a short gap after each deferred file and a
+          # longer gap between full passes.
+          pending="$(ls dist/pypi/*)"
+          for attempt in $(seq 1 10); do
+            next=""
+            for f in $pending; do
+              if uvx twine upload --skip-existing "$f"; then
+                echo "uploaded or already present: $f"
+              else
+                echo "deferred (likely 429): $f"
+                next="$next $f"
+                sleep 60
+              fi
+            done
+            pending="$(echo "$next" | xargs -n1 2>/dev/null || true)"
+            if [ -z "$pending" ]; then echo "all pypi uploads done"; exit 0; fi
+            echo "attempt $attempt: still pending:$pending — sleeping 10m"; sleep 600
+          done
+          echo "pypi uploads still pending after retries:$pending"; exit 1
 
   # ------------------------------ NuGet -------------------------------------
   publish-nuget:
@@ -726,9 +739,16 @@ jobs:
   # --------------------------- GitHub Release -------------------------------
   github-release:
     name: GitHub Release
-    needs: [prep, publish-crates, publish-pypi, publish-nuget, publish-npm, publish-jsr, publish-luarocks]
+    # publish-pypi is intentionally NOT a dependency: its new-project throttle
+    # can take a long time, and the release (plus the LuaRocks upload that needs
+    # it) must not be blocked by one registry. The source tarball asset comes
+    # from prep's dist bundle, so the release only needs the builds to be sound.
+    needs: [prep, publish-crates, publish-nuget, publish-npm, publish-jsr, publish-luarocks]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Fire whenever the builds/tests/prep succeeded; a registry job that failed
+    # or is still running does not gate the release. (prep depends on
+    # build-native + test-native, so prep success implies those passed.)
+    if: ${{ !cancelled() && needs.prep.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Download dist bundle
         uses: actions/download-artifact@v4
