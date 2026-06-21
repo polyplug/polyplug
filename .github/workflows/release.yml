@@ -512,25 +512,22 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Build npm package with embedded natives
+      # Embed the core native into @polyplug/host (the only JS package with natives;
+      # loaders resolve their native via the OS loader / POLYPLUG_NATIVE_LIB).
+      - name: Embed natives into @polyplug/host
         run: |
-          cd sdks/js
-          native_dir="host/polyplug/_native"
+          native_dir="sdks/js/host/polyplug/_native"
           mkdir -p "$native_dir"/{linux-x64,macos-arm64,windows-x64}
-          cp ../../dist/native/linux-x64/libpolyplug.so "$native_dir/linux-x64/"
-          cp ../../dist/native/macos-arm64/libpolyplug.dylib "$native_dir/macos-arm64/"
-          cp ../../dist/native/windows-x64/polyplug.dll "$native_dir/windows-x64/"
+          cp dist/native/linux-x64/libpolyplug.so "$native_dir/linux-x64/"
+          cp dist/native/macos-arm64/libpolyplug.dylib "$native_dir/macos-arm64/"
+          cp dist/native/windows-x64/polyplug.dll "$native_dir/windows-x64/"
 
       - name: Publish to npm (dry-run)
         if: inputs.dry-run
         run: |
           set -e
-          ( cd sdks/js && npm publish --dry-run )
-          # Loader packages (@polyplug/loaders-*) — Deno-only for now; reserve the
-          # names and ship the adapters. They carry no natives (resolved via the OS
-          # loader / POLYPLUG_NATIVE_LIB), so nothing to stage.
-          for n in native python lua js dotnet; do
-            ( cd "sdks/js/loaders/$n" && npm publish --dry-run )
+          for d in abi host guest loaders/native loaders/python loaders/lua loaders/js loaders/dotnet; do
+            ( cd "sdks/js/$d" && npm publish --dry-run )
           done
 
       - name: Publish to npm
@@ -539,9 +536,10 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -e
-          ( cd sdks/js && npm publish --access public )
-          for n in native python lua js dotnet; do
-            ( cd "sdks/js/loaders/$n" && npm publish --access public )
+          # Dependency order: abi first (host depends on it), then host/guest,
+          # then the loaders (depend on host).
+          for d in abi host guest loaders/native loaders/python loaders/lua loaders/js loaders/dotnet; do
+            ( cd "sdks/js/$d" && npm publish --access public )
           done
 
   # ------------------------------- jsr --------------------------------------
@@ -563,11 +561,10 @@ jobs:
         if: inputs.dry-run
         run: |
           set -e
-          ( cd sdks/js && deno publish --dry-run --allow-dirty )
-          # Loader packages — workspace members; their @polyplug/sdk import
-          # resolves locally so they can be dry-run before the SDK is published.
-          for n in native python lua js dotnet; do
-            ( cd "sdks/js/loaders/$n" && deno publish --dry-run --allow-dirty )
+          # Workspace members resolve each other locally, so they can all be
+          # dry-run before anything is published.
+          for d in abi host guest loaders/native loaders/python loaders/lua loaders/js loaders/dotnet; do
+            ( cd "sdks/js/$d" && deno publish --dry-run --allow-dirty )
           done
 
       - name: Publish to jsr.io
@@ -576,10 +573,10 @@ jobs:
           JSR_TOKEN: ${{ secrets.JSR_TOKEN }}
         run: |
           set -e
-          # SDK first so the loaders' @polyplug/sdk dependency resolves on jsr.
-          ( cd sdks/js && deno publish --allow-dirty )
-          for n in native python lua js dotnet; do
-            ( cd "sdks/js/loaders/$n" && deno publish --allow-dirty )
+          # Dependency order: abi first (host depends on it), then host/guest,
+          # then the loaders (depend on host).
+          for d in abi host guest loaders/native loaders/python loaders/lua loaders/js loaders/dotnet; do
+            ( cd "sdks/js/$d" && deno publish --allow-dirty )
           done
 
   # ----------------------------- LuaRocks -----------------------------------
@@ -719,15 +716,16 @@ jobs:
             ```
 
             ### JavaScript / TypeScript (Deno)
-            From jsr (recommended):
+            Discrete packages (jsr recommended; npm mirrors them):
             ```bash
-            deno add jsr:@polyplug/sdk
+            deno add jsr:@polyplug/abi jsr:@polyplug/host jsr:@polyplug/guest
+            # Loaders: jsr:@polyplug/loaders-native / -python / -lua / -js / -dotnet
             ```
-            From npm (also Deno — the host loader needs Deno's FFI; a Node
-            backend is planned):
             ```bash
-            npm install @polyplug/sdk
+            npm install @polyplug/host @polyplug/guest   # + @polyplug/loaders-*
             ```
+            `@polyplug/abi` and `@polyplug/guest` are runtime-agnostic; `@polyplug/host`
+            and the loaders require the Deno runtime for now (a Node FFI backend is planned).
 
             ### Lua
             ```bash

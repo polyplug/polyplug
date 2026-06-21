@@ -91,7 +91,7 @@ fi
 # ── JavaScript (Deno) ─────────────────────────────────────────────────────────
 if command -v deno >/dev/null 2>&1; then
     cat > "$TMP/id.ts" <<EOF
-import { fnv1a64, bundleId, guestContractId, hostContractId } from "$ROOT/sdks/js/host/polyplug/mod.js";
+import { fnv1a64, bundleId, guestContractId, hostContractId } from "$ROOT/sdks/js/abi/abi.ts";
 const h = (x: bigint) => x.toString(16).padStart(16, '0');
 console.log(h(fnv1a64('')), h(bundleId('my-bundle')), h(guestContractId('logger', 1)),
             h(hostContractId('logger', 1)), h(guestContractId('image.decode', 1)));

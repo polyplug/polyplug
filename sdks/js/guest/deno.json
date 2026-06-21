@@ -1,0 +1,6 @@
+{
+    "name": "@polyplug/guest",
+    "version": "0.1.0",
+    "license": "MIT",
+    "exports": "./polyplug_guest.js"
+}

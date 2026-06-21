@@ -9,10 +9,10 @@ polyplug native cdylib bundle loader for JavaScript/TypeScript hosts.
 ## Usage
 
 ```ts
-import { Runtime } from "@polyplug/sdk/host";
+import { Runtime } from "@polyplug/host";
 import { registerNativeLoader } from "@polyplug/loaders-native";
 ```
 
-Requires [`@polyplug/sdk`](https://www.npmjs.com/package/@polyplug/sdk). The
+Requires [`@polyplug/host`](https://www.npmjs.com/package/@polyplug/host). The
 loader native (`libpolyplug_native`) must be resolvable by the OS loader or via the
 `POLYPLUG_NATIVE_LIB` environment variable.

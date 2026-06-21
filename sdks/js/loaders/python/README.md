@@ -9,10 +9,10 @@ polyplug Python bundle loader for JavaScript/TypeScript hosts.
 ## Usage
 
 ```ts
-import { Runtime } from "@polyplug/sdk/host";
+import { Runtime } from "@polyplug/host";
 import { registerPythonLoader } from "@polyplug/loaders-python";
 ```
 
-Requires [`@polyplug/sdk`](https://www.npmjs.com/package/@polyplug/sdk). The
+Requires [`@polyplug/host`](https://www.npmjs.com/package/@polyplug/host). The
 loader native (`libpolyplug_python`) must be resolvable by the OS loader or via the
 `POLYPLUG_NATIVE_LIB` environment variable.

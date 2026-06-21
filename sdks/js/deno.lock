@@ -17,38 +17,45 @@
   },
   "workspace": {
     "members": {
+      "host": {
+        "packageJson": {
+          "dependencies": [
+            "npm:@polyplug/abi@0.1.0"
+          ]
+        }
+      },
       "loaders/dotnet": {
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/sdk@0.1.0"
+            "npm:@polyplug/host@0.1.0"
           ]
         }
       },
       "loaders/js": {
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/sdk@0.1.0"
+            "npm:@polyplug/host@0.1.0"
           ]
         }
       },
       "loaders/lua": {
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/sdk@0.1.0"
+            "npm:@polyplug/host@0.1.0"
           ]
         }
       },
       "loaders/native": {
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/sdk@0.1.0"
+            "npm:@polyplug/host@0.1.0"
           ]
         }
       },
       "loaders/python": {
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/sdk@0.1.0"
+            "npm:@polyplug/host@0.1.0"
           ]
         }
       }

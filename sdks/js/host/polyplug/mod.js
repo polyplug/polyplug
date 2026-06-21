@@ -71,7 +71,7 @@ import {
   HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET,
   HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET,
   HOST_CONTRACT_INTERFACE_SIZE,
-} from "../../abi/abi.ts";
+} from "@polyplug/abi";
 
 // Import the GuestContractHandle layout constants so the by-value struct passing
 // and the array element stride stay locked to the generated ABI definition.
@@ -79,7 +79,7 @@ import {
   GUEST_CONTRACT_HANDLE_INDEX_OFFSET,
   GUEST_CONTRACT_HANDLE_GENERATION_OFFSET,
   GUEST_CONTRACT_HANDLE_SIZE,
-} from "../../abi/abi.ts";
+} from "@polyplug/abi";
 
 // Re-export the contract-ID helpers from the auto-generated abi.ts (their single
 // definition, per sdk_validator.yaml method_targets) so host code that imports
@@ -89,7 +89,7 @@ export {
   guestContractId,
   hostContractId,
   bundleId,
-} from "../../abi/abi.ts";
+} from "@polyplug/abi";
 
 // DispatchType discriminants (match polyplug_abi::DispatchType #[repr(u32)]).
 const DISPATCH_TYPE_NATIVE = 0;

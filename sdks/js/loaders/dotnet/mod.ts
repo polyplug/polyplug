@@ -1,4 +1,4 @@
-import type { Runtime } from "@polyplug/sdk/host";
+import type { Runtime } from "@polyplug/host";
 
 let _lib: Deno.DynamicLibrary<typeof DOTNET_SYMBOLS> | null = null;
 

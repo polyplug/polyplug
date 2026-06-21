@@ -1,20 +1,14 @@
 {
-  "name": "@polyplug/sdk",
-  "version": "0.1.0",
-  "license": "MIT",
   "workspace": [
+    "./abi",
+    "./host",
+    "./guest",
     "./loaders/native",
     "./loaders/python",
     "./loaders/lua",
     "./loaders/js",
     "./loaders/dotnet"
   ],
-  "exports": {
-    ".": "./mod.ts",
-    "./abi": "./abi/polyplug_abi.ts",
-    "./host": "./host/mod.js",
-    "./guest": "./guest/polyplug_guest.js"
-  },
   "compilerOptions": {
     "lib": ["deno.unstable", "deno.ns", "deno.worker"],
     "strict": true,
@@ -27,9 +21,6 @@
   "tasks": {
     "check": "deno check **/*.ts",
     "test": "deno test --allow-ffi --allow-env --allow-read --allow-write"
-  },
-  "publish": {
-    "exclude": ["loaders"]
   },
   "fmt": {
     "useTabs": false,

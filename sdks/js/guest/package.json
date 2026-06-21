@@ -1,0 +1,15 @@
+{
+  "name": "@polyplug/guest",
+  "version": "0.1.0",
+  "description": "polyplug guest library for writing JavaScript/TypeScript plugins",
+  "type": "module",
+  "main": "./polyplug_guest.js",
+  "exports": {
+    ".": { "import": "./polyplug_guest.js" }
+  },
+  "files": ["polyplug_guest.js", "deno.json"],
+  "keywords": ["polyplug", "plugin", "guest"],
+  "author": "polyplug",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/polyplug/polyplug.git", "directory": "sdks/js/guest" }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@polyplug/abi",
+  "version": "0.1.0",
+  "description": "polyplug ABI type definitions for JavaScript/TypeScript",
+  "type": "module",
+  "main": "./polyplug_abi.ts",
+  "types": "./polyplug_abi.ts",
+  "exports": {
+    ".": { "types": "./polyplug_abi.ts", "import": "./polyplug_abi.ts" }
+  },
+  "files": ["abi.ts", "polyplug_abi.ts", "deno.json"],
+  "keywords": ["polyplug", "plugin", "abi", "ffi"],
+  "author": "polyplug",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/polyplug/polyplug.git", "directory": "sdks/js/abi" }
+}

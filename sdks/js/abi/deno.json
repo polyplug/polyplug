@@ -1,0 +1,9 @@
+{
+    "name": "@polyplug/abi",
+    "version": "0.1.0",
+    "license": "MIT",
+    "exports": "./polyplug_abi.ts",
+    "publish": {
+        "exclude": ["test_layout.ts"]
+    }
+}
