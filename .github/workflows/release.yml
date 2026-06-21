@@ -88,16 +88,11 @@ jobs:
       - name: Build CLI tool
         run: cargo build --release -p polyplugc --target ${{ matrix.target }}
 
-      - name: Strip debug symbols (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          strip target/${{ matrix.target }}/release/libpolyplug${{ matrix.ext }}
-          strip target/${{ matrix.target }}/release/libpolyplug_native${{ matrix.ext }} || true
-          strip target/${{ matrix.target }}/release/libpolyplug_python${{ matrix.ext }} || true
-          strip target/${{ matrix.target }}/release/libpolyplug_lua${{ matrix.ext }} || true
-          strip target/${{ matrix.target }}/release/libpolyplug_js${{ matrix.ext }} || true
-          strip target/${{ matrix.target }}/release/libpolyplug_dotnet${{ matrix.ext }} || true
-          strip target/${{ matrix.target }}/release/polyplugc || true
+      # NOTE: no manual `strip` step — the release profile already sets
+      # `strip = "symbols"` (root Cargo.toml [profile.release]), so cargo strips
+      # every cdylib and the CLI at link time while preserving exported symbols.
+      # A redundant macOS `strip` errors on indirect-symbol-table entries
+      # (_Unwind_*, _CCRandomGenerateBytes) that cannot be stripped from a dylib.
 
       - name: Prepare artifacts
         shell: bash
