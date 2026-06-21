@@ -292,29 +292,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-dev liblua5.4-dev
 
-      # Dependency-ordered (leaves first). polyplug_codegen precedes polyplug_abi
-      # (abi build-depends on codegen); codegen's dep on abi is a dev-dependency,
-      # which crates.io strips at publish, so there is no real cycle.
+      # `cargo publish --workspace` resolves inter-member dependency order locally
+      # and publishes each crate once. Inter-member dev-dependencies (e.g.
+      # codegen depending on abi) are stripped at publish, so there is no cycle.
       - name: Publish to crates.io (dry-run)
         if: inputs.dry-run
-        run: |
-          for crate in polyplug_utils polyplug_codegen polyplug_abi polyplug polyplug_guest polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_dotnet polyplugc; do
-            echo "Dry-run: $crate"
-            cargo publish -p $crate --dry-run
-          done
+        run: cargo publish --workspace --dry-run
 
       - name: Publish to crates.io
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          # cargo (>=1.66) waits for each crate to appear in the index before
-          # returning, so the next crate resolves its just-published dependency.
-          for crate in polyplug_utils polyplug_codegen polyplug_abi polyplug polyplug_guest polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_dotnet polyplugc; do
-            echo "Publishing $crate..."
-            cargo publish -p $crate
-          done
-          echo "All crates published successfully"
+        run: cargo publish --workspace
 
   # ------------------------------ PyPI --------------------------------------
   publish-pypi:
@@ -360,16 +349,12 @@ jobs:
             loader_dir="sdks/python/host/loaders/polyplug-loaders-$loader"
             if [ -d "$loader_dir" ]; then
               echo "Building polyplug-loaders-$loader..."
-              if [ "$loader" = "native" ]; then
-                lib_name="libpolyplug_native"
-              else
-                lib_name="libpolyplug_$loader"
-              fi
               pkg_native="$loader_dir/polyplug_loaders_${loader}/_native"
               mkdir -p "$pkg_native"/{linux-x64,macos-arm64,windows-x64}
-              cp dist/native/linux-x64/${lib_name}.so "$pkg_native/linux-x64/" 2>/dev/null || true
-              cp dist/native/macos-arm64/${lib_name}.dylib "$pkg_native/macos-arm64/" 2>/dev/null || true
-              cp dist/native/windows-x64/${lib_name}.dll "$pkg_native/windows-x64/" 2>/dev/null || true
+              # Per-OS native filenames: Unix prefixes `lib`, Windows does not.
+              cp dist/native/linux-x64/libpolyplug_${loader}.so "$pkg_native/linux-x64/"
+              cp dist/native/macos-arm64/libpolyplug_${loader}.dylib "$pkg_native/macos-arm64/"
+              cp dist/native/windows-x64/polyplug_${loader}.dll "$pkg_native/windows-x64/"
               (cd "$loader_dir" && uv build --out-dir "$GITHUB_WORKSPACE/dist/pypi")
             fi
           done
@@ -440,11 +425,11 @@ jobs:
           for loader in Native Python Lua Js Dotnet; do
             loader_dir="sdks/csharp/loaders/$loader"
             loader_lower=$(echo "$loader" | tr '[:upper:]' '[:lower:]')
-            lib_name="libpolyplug_$loader_lower"
             mkdir -p "$loader_dir/runtimes/linux-x64/native" "$loader_dir/runtimes/osx-arm64/native" "$loader_dir/runtimes/win-x64/native"
-            cp dist/native/linux-x64/${lib_name}.so "$loader_dir/runtimes/linux-x64/native/"
-            cp dist/native/macos-arm64/${lib_name}.dylib "$loader_dir/runtimes/osx-arm64/native/"
-            cp dist/native/windows-x64/${lib_name}.dll "$loader_dir/runtimes/win-x64/native/"
+            # Per-OS native filenames: Unix prefixes `lib`, Windows does not.
+            cp dist/native/linux-x64/libpolyplug_${loader_lower}.so "$loader_dir/runtimes/linux-x64/native/"
+            cp dist/native/macos-arm64/libpolyplug_${loader_lower}.dylib "$loader_dir/runtimes/osx-arm64/native/"
+            cp dist/native/windows-x64/polyplug_${loader_lower}.dll "$loader_dir/runtimes/win-x64/native/"
             dotnet pack "$loader_dir" -c Release -o dist/nuget
           done
 
@@ -491,18 +476,19 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Build npm host package with embedded natives
+      - name: Build npm package with embedded natives
         run: |
-          cd sdks/js/host
-          mkdir -p _native/{linux-x64,macos-arm64,windows-x64}
-          cp ../../../dist/native/linux-x64/libpolyplug.so _native/linux-x64/
-          cp ../../../dist/native/macos-arm64/libpolyplug.dylib _native/macos-arm64/
-          cp ../../../dist/native/windows-x64/polyplug.dll _native/windows-x64/
+          cd sdks/js
+          native_dir="host/polyplug/_native"
+          mkdir -p "$native_dir"/{linux-x64,macos-arm64,windows-x64}
+          cp ../../dist/native/linux-x64/libpolyplug.so "$native_dir/linux-x64/"
+          cp ../../dist/native/macos-arm64/libpolyplug.dylib "$native_dir/macos-arm64/"
+          cp ../../dist/native/windows-x64/polyplug.dll "$native_dir/windows-x64/"
 
       - name: Publish to npm (dry-run)
         if: inputs.dry-run
         run: |
-          cd sdks/js/host
+          cd sdks/js
           npm publish --dry-run
 
       - name: Publish to npm
@@ -510,7 +496,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          cd sdks/js/host
+          cd sdks/js
           npm publish --access public
 
   # ------------------------------- jsr --------------------------------------
@@ -532,7 +518,7 @@ jobs:
         if: inputs.dry-run
         run: |
           cd sdks/js
-          deno publish --dry-run --allow-dirty
+          deno publish --dry-run --allow-dirty --allow-slow-types
 
       - name: Publish to jsr.io
         if: startsWith(github.ref, 'refs/tags/v')
@@ -540,7 +526,7 @@ jobs:
           JSR_TOKEN: ${{ secrets.JSR_TOKEN }}
         run: |
           cd sdks/js
-          deno publish --allow-dirty
+          deno publish --allow-dirty --allow-slow-types
 
   # ----------------------------- LuaRocks -----------------------------------
   publish-luarocks:

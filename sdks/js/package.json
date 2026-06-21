@@ -24,7 +24,8 @@
   "files": [
     "**/*.ts",
     "**/*.js",
-    "deno.json"
+    "deno.json",
+    "host/polyplug/_native/**"
   ],
   "keywords": [
     "polyplug",
@@ -37,7 +38,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/polyplug/polyplug.git",
+    "url": "git+https://github.com/polyplug/polyplug.git",
     "directory": "sdks/js"
   },
   "engines": {

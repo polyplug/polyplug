@@ -1,6 +1,7 @@
 {
   "name": "@polyplug/sdk",
   "version": "0.1.0",
+  "license": "MIT",
   "exports": {
     ".": "./mod.ts",
     "./abi": "./abi/polyplug_abi.ts",
