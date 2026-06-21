@@ -356,6 +356,12 @@ jobs:
       # so it must be published too or `pip install polyplug` cannot resolve.
       - name: Build Python abi package
         run: |
+          set -e
+          # Vendor the canonical generated ABI types into the package. The
+          # checked-in polyplug_abi/abi.py is a source-tree shim that re-exports
+          # the unpackaged `abi.abi`; the wheel must instead CONTAIN the types or
+          # `import polyplug_abi` fails after install.
+          cp sdks/python/abi/abi.py sdks/python/polyplug_abi/polyplug_abi/abi.py
           cd sdks/python/polyplug_abi
           uv build --out-dir ../../../dist/pypi
 
@@ -375,18 +381,18 @@ jobs:
 
       - name: Build Python loader packages with embedded natives
         run: |
+          set -e
           for loader in native python lua js dotnet; do
-            loader_dir="sdks/python/host/loaders/polyplug-loaders-$loader"
-            if [ -d "$loader_dir" ]; then
-              echo "Building polyplug-loaders-$loader..."
-              pkg_native="$loader_dir/polyplug_loaders_${loader}/_native"
-              mkdir -p "$pkg_native"/{linux-x64,macos-arm64,windows-x64}
-              # Per-OS native filenames: Unix prefixes `lib`, Windows does not.
-              cp dist/native/linux-x64/libpolyplug_${loader}.so "$pkg_native/linux-x64/"
-              cp dist/native/macos-arm64/libpolyplug_${loader}.dylib "$pkg_native/macos-arm64/"
-              cp dist/native/windows-x64/polyplug_${loader}.dll "$pkg_native/windows-x64/"
-              (cd "$loader_dir" && uv build --out-dir "$GITHUB_WORKSPACE/dist/pypi")
-            fi
+            loader_dir="sdks/python/loaders/$loader"
+            if [ ! -d "$loader_dir" ]; then echo "missing loader dir: $loader_dir" >&2; exit 1; fi
+            echo "Building polyplug-loaders-$loader..."
+            pkg_native="$loader_dir/polyplug_loaders_${loader}/_native"
+            mkdir -p "$pkg_native"/{linux-x64,macos-arm64,windows-x64}
+            # Per-OS native filenames: Unix prefixes `lib`, Windows does not.
+            cp dist/native/linux-x64/libpolyplug_${loader}.so "$pkg_native/linux-x64/"
+            cp dist/native/macos-arm64/libpolyplug_${loader}.dylib "$pkg_native/macos-arm64/"
+            cp dist/native/windows-x64/polyplug_${loader}.dll "$pkg_native/windows-x64/"
+            (cd "$loader_dir" && uv build --out-dir "$GITHUB_WORKSPACE/dist/pypi")
           done
 
       - name: Validate Python packages
