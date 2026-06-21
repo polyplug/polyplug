@@ -29,11 +29,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
             ext: .so
             exe: ""
-          - platform: macos-x64
-            os: macos-13
-            target: x86_64-apple-darwin
-            ext: .dylib
-            exe: ""
           - platform: macos-arm64
             os: macos-14
             target: aarch64-apple-darwin
@@ -134,9 +129,6 @@ jobs:
           - platform: linux-x64
             os: ubuntu-latest
             ext: .so
-          - platform: macos-x64
-            os: macos-13
-            ext: .dylib
           - platform: macos-arm64
             os: macos-14
             ext: .dylib
@@ -210,8 +202,6 @@ jobs:
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
             rid="win-x64"; lib="native/polyplug.dll"
-          elif [ "${{ matrix.platform }}" = "macos-x64" ]; then
-            rid="osx-x64"; lib="native/libpolyplug.dylib"
           elif [ "${{ matrix.platform }}" = "macos-arm64" ]; then
             rid="osx-arm64"; lib="native/libpolyplug.dylib"
           else
@@ -248,16 +238,12 @@ jobs:
 
       - name: Organize native libraries
         run: |
-          mkdir -p dist/native/{linux-x64,macos-x64,macos-arm64,windows-x64}
-          mkdir -p dist/cli/{linux-x64,macos-x64,macos-arm64,windows-x64}
+          mkdir -p dist/native/{linux-x64,macos-arm64,windows-x64}
+          mkdir -p dist/cli/{linux-x64,macos-arm64,windows-x64}
 
           cp native-artifacts/native-linux-x64/libpolyplug.so dist/native/linux-x64/
           cp native-artifacts/native-linux-x64/libpolyplug_*.so dist/native/linux-x64/ 2>/dev/null || true
           cp native-artifacts/native-linux-x64/polyplugc dist/cli/linux-x64/
-
-          cp native-artifacts/native-macos-x64/libpolyplug.dylib dist/native/macos-x64/
-          cp native-artifacts/native-macos-x64/libpolyplug_*.dylib dist/native/macos-x64/ 2>/dev/null || true
-          cp native-artifacts/native-macos-x64/polyplugc dist/cli/macos-x64/
 
           cp native-artifacts/native-macos-arm64/libpolyplug.dylib dist/native/macos-arm64/
           cp native-artifacts/native-macos-arm64/libpolyplug_*.dylib dist/native/macos-arm64/ 2>/dev/null || true
@@ -362,9 +348,8 @@ jobs:
       - name: Build Python host package with embedded natives
         run: |
           cd sdks/python/host
-          mkdir -p polyplug/_native/{linux-x64,macos-x64,macos-arm64,windows-x64}
+          mkdir -p polyplug/_native/{linux-x64,macos-arm64,windows-x64}
           cp ../../../dist/native/linux-x64/libpolyplug.so polyplug/_native/linux-x64/
-          cp ../../../dist/native/macos-x64/libpolyplug.dylib polyplug/_native/macos-x64/
           cp ../../../dist/native/macos-arm64/libpolyplug.dylib polyplug/_native/macos-arm64/
           cp ../../../dist/native/windows-x64/polyplug.dll polyplug/_native/windows-x64/
           uv build --out-dir ../../../dist/pypi
@@ -386,9 +371,8 @@ jobs:
                 lib_name="libpolyplug_$loader"
               fi
               pkg_native="$loader_dir/polyplug_loaders_${loader}/_native"
-              mkdir -p "$pkg_native"/{linux-x64,macos-x64,macos-arm64,windows-x64}
+              mkdir -p "$pkg_native"/{linux-x64,macos-arm64,windows-x64}
               cp dist/native/linux-x64/${lib_name}.so "$pkg_native/linux-x64/" 2>/dev/null || true
-              cp dist/native/macos-x64/${lib_name}.dylib "$pkg_native/macos-x64/" 2>/dev/null || true
               cp dist/native/macos-arm64/${lib_name}.dylib "$pkg_native/macos-arm64/" 2>/dev/null || true
               cp dist/native/windows-x64/${lib_name}.dll "$pkg_native/windows-x64/" 2>/dev/null || true
               (cd "$loader_dir" && uv build --out-dir "$GITHUB_WORKSPACE/dist/pypi")
@@ -447,9 +431,8 @@ jobs:
       - name: Build NuGet host package with embedded natives
         run: |
           host_dir="sdks/csharp/host"
-          mkdir -p "$host_dir/runtimes/linux-x64/native" "$host_dir/runtimes/osx-x64/native" "$host_dir/runtimes/osx-arm64/native" "$host_dir/runtimes/win-x64/native"
+          mkdir -p "$host_dir/runtimes/linux-x64/native" "$host_dir/runtimes/osx-arm64/native" "$host_dir/runtimes/win-x64/native"
           cp dist/native/linux-x64/libpolyplug.so "$host_dir/runtimes/linux-x64/native/"
-          cp dist/native/macos-x64/libpolyplug.dylib "$host_dir/runtimes/osx-x64/native/"
           cp dist/native/macos-arm64/libpolyplug.dylib "$host_dir/runtimes/osx-arm64/native/"
           cp dist/native/windows-x64/polyplug.dll "$host_dir/runtimes/win-x64/native/"
           dotnet pack "$host_dir/Polyplug.Host.csproj" -c Release -o dist/nuget
@@ -463,9 +446,8 @@ jobs:
             loader_dir="sdks/csharp/loaders/$loader"
             loader_lower=$(echo "$loader" | tr '[:upper:]' '[:lower:]')
             lib_name="libpolyplug_$loader_lower"
-            mkdir -p "$loader_dir/runtimes/linux-x64/native" "$loader_dir/runtimes/osx-x64/native" "$loader_dir/runtimes/osx-arm64/native" "$loader_dir/runtimes/win-x64/native"
+            mkdir -p "$loader_dir/runtimes/linux-x64/native" "$loader_dir/runtimes/osx-arm64/native" "$loader_dir/runtimes/win-x64/native"
             cp dist/native/linux-x64/${lib_name}.so "$loader_dir/runtimes/linux-x64/native/"
-            cp dist/native/macos-x64/${lib_name}.dylib "$loader_dir/runtimes/osx-x64/native/"
             cp dist/native/macos-arm64/${lib_name}.dylib "$loader_dir/runtimes/osx-arm64/native/"
             cp dist/native/windows-x64/${lib_name}.dll "$loader_dir/runtimes/win-x64/native/"
             dotnet pack "$loader_dir" -c Release -o dist/nuget
@@ -517,9 +499,8 @@ jobs:
       - name: Build npm host package with embedded natives
         run: |
           cd sdks/js/host
-          mkdir -p _native/{linux-x64,macos-x64,macos-arm64,windows-x64}
+          mkdir -p _native/{linux-x64,macos-arm64,windows-x64}
           cp ../../../dist/native/linux-x64/libpolyplug.so _native/linux-x64/
-          cp ../../../dist/native/macos-x64/libpolyplug.dylib _native/macos-x64/
           cp ../../../dist/native/macos-arm64/libpolyplug.dylib _native/macos-arm64/
           cp ../../../dist/native/windows-x64/polyplug.dll _native/windows-x64/
 
@@ -590,9 +571,8 @@ jobs:
       - name: Build LuaRocks host package with embedded natives
         run: |
           cd sdks/lua/host
-          mkdir -p _native/{linux-x64,macos-x64,macos-arm64,windows-x64}
+          mkdir -p _native/{linux-x64,macos-arm64,windows-x64}
           cp ../../../dist/native/linux-x64/libpolyplug.so _native/linux-x64/
-          cp ../../../dist/native/macos-x64/libpolyplug.dylib _native/macos-x64/
           cp ../../../dist/native/macos-arm64/libpolyplug.dylib _native/macos-arm64/
           cp ../../../dist/native/windows-x64/polyplug.dll _native/windows-x64/
 
@@ -648,7 +628,7 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
-          for platform in linux-x64 macos-x64 macos-arm64 windows-x64; do
+          for platform in linux-x64 macos-arm64 windows-x64; do
             for lib in dist/native/$platform/*; do
               if [ -f "$lib" ]; then
                 name=$(basename "$lib"); ext="${name##*.}"; base="${name%.*}"
