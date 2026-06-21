@@ -14,6 +14,15 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 _No changes yet._
 
+## [0.1.1] - 2026-06-21
+
+### Fixed
+
+- Packaging fixes so installed packages actually import: PyPI abi types vendored
+  + loader natives resolved; npm ships transpiled JS (not raw .ts); jsr declares
+  cross-package deps; Lua rockspecs marked LuaJIT-only. 0.1.0 PyPI packages were
+  non-functional and are yanked.
+
 ## [0.1.0] - 2026-06-21
 
 First public release. polyplug is a universal, cross-language plugin runtime: a
@@ -91,5 +100,6 @@ glue is produced from a single `.toml` contract by the `polyplugc` CLI.
   same host loop (see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)).
 - Nightly hardening lane (Miri / ASAN / TSAN / fuzz) and a criterion regression gate.
 
-[Unreleased]: https://github.com/polyplug/polyplug/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/polyplug/polyplug/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/polyplug/polyplug/releases/tag/v0.1.1
 [0.1.0]: https://github.com/polyplug/polyplug/releases/tag/v0.1.0

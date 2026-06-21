@@ -1,9 +1,9 @@
 package = "polyplug-loader-dotnet"
-version = "0.1.0-1"
+version = "0.1.1-1"
 
 source = {
-   url = "https://github.com/polyplug/polyplug/releases/download/v0.1.0/polyplug-lua-0.1.0.tar.gz",
-   dir = "polyplug-lua-0.1.0",
+   url = "https://github.com/polyplug/polyplug/releases/download/v0.1.1/polyplug-lua-0.1.1.tar.gz",
+   dir = "polyplug-lua-0.1.1",
 }
 
 description = {

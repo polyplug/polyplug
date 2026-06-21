@@ -653,11 +653,11 @@ jobs:
           # Prove every rock installs (dependency-ordered) into a throwaway tree.
           # `luarocks make` builds from the package dir's cwd, ignoring source.url.
           TREE=/tmp/pp-lua-tree
-          ( cd sdks/lua/abi   && luarocks make polyplug-abi-0.1.0-1.rockspec   --tree=$TREE --no-doc --deps-mode=one )
-          ( cd sdks/lua/guest && luarocks make polyplug-guest-0.1.0-1.rockspec --tree=$TREE --no-doc --deps-mode=one )
-          ( cd sdks/lua/host  && luarocks make polyplug-0.1.0-1.rockspec       --tree=$TREE --no-doc --deps-mode=one )
+          ( cd sdks/lua/abi   && luarocks make polyplug-abi-0.1.1-1.rockspec   --tree=$TREE --no-doc --deps-mode=one )
+          ( cd sdks/lua/guest && luarocks make polyplug-guest-0.1.1-1.rockspec --tree=$TREE --no-doc --deps-mode=one )
+          ( cd sdks/lua/host  && luarocks make polyplug-0.1.1-1.rockspec       --tree=$TREE --no-doc --deps-mode=one )
           for n in native python lua js dotnet; do
-            ( cd "sdks/lua/loaders/$n" && luarocks make "polyplug-loader-$n-0.1.0-1.rockspec" --tree=$TREE --no-doc --deps-mode=one )
+            ( cd "sdks/lua/loaders/$n" && luarocks make "polyplug-loader-$n-0.1.1-1.rockspec" --tree=$TREE --no-doc --deps-mode=one )
           done
           echo "All 8 Lua rockspecs lint + install cleanly."
 
@@ -785,14 +785,14 @@ jobs:
         run: |
           set -e
           for r in \
-            sdks/lua/abi/polyplug-abi-0.1.0-1.rockspec \
-            sdks/lua/guest/polyplug-guest-0.1.0-1.rockspec \
-            sdks/lua/host/polyplug-0.1.0-1.rockspec \
-            sdks/lua/loaders/native/polyplug-loader-native-0.1.0-1.rockspec \
-            sdks/lua/loaders/python/polyplug-loader-python-0.1.0-1.rockspec \
-            sdks/lua/loaders/lua/polyplug-loader-lua-0.1.0-1.rockspec \
-            sdks/lua/loaders/js/polyplug-loader-js-0.1.0-1.rockspec \
-            sdks/lua/loaders/dotnet/polyplug-loader-dotnet-0.1.0-1.rockspec; do
+            sdks/lua/abi/polyplug-abi-0.1.1-1.rockspec \
+            sdks/lua/guest/polyplug-guest-0.1.1-1.rockspec \
+            sdks/lua/host/polyplug-0.1.1-1.rockspec \
+            sdks/lua/loaders/native/polyplug-loader-native-0.1.1-1.rockspec \
+            sdks/lua/loaders/python/polyplug-loader-python-0.1.1-1.rockspec \
+            sdks/lua/loaders/lua/polyplug-loader-lua-0.1.1-1.rockspec \
+            sdks/lua/loaders/js/polyplug-loader-js-0.1.1-1.rockspec \
+            sdks/lua/loaders/dotnet/polyplug-loader-dotnet-0.1.1-1.rockspec; do
             echo "Uploading $r"
             luarocks upload "$r" --api-key ${{ secrets.LUAROCKS_API_KEY }}
           done

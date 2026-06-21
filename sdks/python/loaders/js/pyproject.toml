@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyplug-loaders-js"
-version = "0.1.0"
+version = "0.1.1"
 description = "JS (QuickJS) loader for polyplug - loads QuickJS plugins"
 requires-python = ">=3.10"
 license = { text = "MIT" }

@@ -1,6 +1,6 @@
 {
   "name": "@polyplug/abi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "polyplug ABI type definitions for JavaScript/TypeScript",
   "type": "module",
   "main": "./dist/polyplug_abi.js",

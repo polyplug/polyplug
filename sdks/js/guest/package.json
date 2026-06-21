@@ -1,6 +1,6 @@
 {
   "name": "@polyplug/guest",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "polyplug guest library for writing JavaScript/TypeScript plugins",
   "type": "module",
   "main": "./polyplug_guest.js",
