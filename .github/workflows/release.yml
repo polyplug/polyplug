@@ -363,6 +363,13 @@ jobs:
     name: Publish · PyPI
     needs: prep
     runs-on: ubuntu-latest
+    # OIDC trusted publishing: id-token mints the short-lived token gh-action-
+    # pypi-publish exchanges with PyPI. New projects backed by a *pending*
+    # publisher are created on first upload through PyPI's `ratelimited=False`
+    # path, bypassing the new-project creation rate limit that blocks API-token
+    # uploads.
+    permissions:
+      id-token: write
     if: startsWith(github.ref, 'refs/tags/v') || inputs.dry-run
     steps:
       - name: Checkout code
@@ -444,38 +451,17 @@ jobs:
           retention-days: 1
           if-no-files-found: ignore
 
+      # OIDC trusted publishing — no API token. skip-existing leaves the four
+      # already-published distributions untouched and uploads only the new
+      # projects, which are created via their pending publishers (bypassing the
+      # new-project creation rate limit). Each new project name must have a
+      # pending publisher configured on PyPI matching this repo + release.yml.
       - name: Publish to PyPI
         if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          # Upload each distribution on its own so a 429 on one file cannot
-          # abort the others: a single `twine upload dist/*` stops at the first
-          # failure, so when PyPI throttles a new-project registration every
-          # later file is left unpublished. --skip-existing makes each file
-          # idempotent (skips by filename, exits 0) so re-passes and re-runs
-          # only attempt what is still missing. PyPI's new-project throttle
-          # relaxes after a quiet gap rather than under continuous hits, so
-          # space the attempts: a short gap after each deferred file and a
-          # longer gap between full passes.
-          pending="$(ls dist/pypi/*)"
-          for attempt in $(seq 1 10); do
-            next=""
-            for f in $pending; do
-              if uvx twine upload --skip-existing "$f"; then
-                echo "uploaded or already present: $f"
-              else
-                echo "deferred (likely 429): $f"
-                next="$next $f"
-                sleep 60
-              fi
-            done
-            pending="$(echo "$next" | xargs -n1 2>/dev/null || true)"
-            if [ -z "$pending" ]; then echo "all pypi uploads done"; exit 0; fi
-            echo "attempt $attempt: still pending:$pending — sleeping 10m"; sleep 600
-          done
-          echo "pypi uploads still pending after retries:$pending"; exit 1
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/pypi
+          skip-existing: true
 
   # ------------------------------ NuGet -------------------------------------
   publish-nuget:
