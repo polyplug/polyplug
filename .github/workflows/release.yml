@@ -156,9 +156,7 @@ jobs:
         run: |
           mkdir -p sdks/python/host/polyplug/_native/${{ matrix.platform }}
           cp native/*${{ matrix.ext }} sdks/python/host/polyplug/_native/${{ matrix.platform }}/ 2>/dev/null || true
-          cd sdks/python/host
-          PYTHONPATH="$GITHUB_WORKSPACE/sdks/python/host:$GITHUB_WORKSPACE/sdks/python/polyplug_abi:$GITHUB_WORKSPACE/sdks/python" \
-            python3 -c "from polyplug._native import load_native_lib; lib = load_native_lib(); print(f'Python: OK - {lib._name}')"
+          python3 -c "import sys, os; ws=os.environ['GITHUB_WORKSPACE']; sys.path[:0]=[ws+'/sdks/python/host', ws+'/sdks/python/polyplug_abi', ws+'/sdks/python']; from polyplug._native import load_native_lib; print('Python: OK -', load_native_lib()._name)"
 
       - name: Set up Deno
         uses: denoland/setup-deno@v2
@@ -187,7 +185,7 @@ jobs:
           cp native/*${{ matrix.ext }} sdks/lua/host/_native/${{ matrix.platform }}/ 2>/dev/null || true
           cd sdks/lua/host
           LUA_PATH="./?.lua;./?/init.lua;$GITHUB_WORKSPACE/sdks/lua/abi/?.lua;;" \
-            luajit -e "local p = require('polyplug'); print('Lua: OK - ' .. require('polyplug.native').platform())"
+            lua -e "local p = require('polyplug'); print('Lua: OK - ' .. require('polyplug.native').platform())"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
