@@ -541,7 +541,7 @@ jobs:
         if: inputs.dry-run
         run: |
           cd sdks/js
-          deno publish --dry-run --allow-dirty --allow-slow-types
+          deno publish --dry-run --allow-dirty
 
       - name: Publish to jsr.io
         if: startsWith(github.ref, 'refs/tags/v')
@@ -549,7 +549,7 @@ jobs:
           JSR_TOKEN: ${{ secrets.JSR_TOKEN }}
         run: |
           cd sdks/js
-          deno publish --allow-dirty --allow-slow-types
+          deno publish --allow-dirty
 
   # ----------------------------- LuaRocks -----------------------------------
   publish-luarocks:
@@ -606,26 +606,6 @@ jobs:
             ( cd "sdks/lua/loaders/$n" && luarocks make "polyplug-loader-$n-0.1.0-1.rockspec" --tree=$TREE --no-doc --deps-mode=one )
           done
           echo "All 8 Lua rockspecs lint + install cleanly."
-
-      - name: Publish to LuaRocks
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          set -e
-          # Dependency-ordered. --skip-pack uploads only the rockspec; the source
-          # tarball it points at is attached to the GitHub release by the
-          # github-release job.
-          for r in \
-            sdks/lua/abi/polyplug-abi-0.1.0-1.rockspec \
-            sdks/lua/guest/polyplug-guest-0.1.0-1.rockspec \
-            sdks/lua/host/polyplug-0.1.0-1.rockspec \
-            sdks/lua/loaders/native/polyplug-loader-native-0.1.0-1.rockspec \
-            sdks/lua/loaders/python/polyplug-loader-python-0.1.0-1.rockspec \
-            sdks/lua/loaders/lua/polyplug-loader-lua-0.1.0-1.rockspec \
-            sdks/lua/loaders/js/polyplug-loader-js-0.1.0-1.rockspec \
-            sdks/lua/loaders/dotnet/polyplug-loader-dotnet-0.1.0-1.rockspec; do
-            echo "Uploading $r"
-            luarocks upload "$r" --api-key ${{ secrets.LUAROCKS_API_KEY }} --skip-pack
-          done
 
   # --------------------------- GitHub Release -------------------------------
   github-release:
@@ -719,3 +699,39 @@ jobs:
 
             ## Native Libraries
             Native libraries (core + loaders) are embedded in the language packages; no manual install required.
+
+  # ----------------------- LuaRocks upload (post-release) -------------------
+  # Runs only after github-release has published the source tarball asset that
+  # every rockspec's source.url points at. Because the asset already exists, the
+  # upload packs the real source rock (no --skip-pack) so LuaRocks validates the
+  # source checksum — and there is no window where a published rockspec points at
+  # a missing tarball. Dependency-ordered; independently re-runnable.
+  publish-luarocks-upload:
+    name: Publish · LuaRocks (upload)
+    needs: github-release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install LuaRocks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luarocks
+
+      - name: Upload rockspecs to LuaRocks
+        run: |
+          set -e
+          for r in \
+            sdks/lua/abi/polyplug-abi-0.1.0-1.rockspec \
+            sdks/lua/guest/polyplug-guest-0.1.0-1.rockspec \
+            sdks/lua/host/polyplug-0.1.0-1.rockspec \
+            sdks/lua/loaders/native/polyplug-loader-native-0.1.0-1.rockspec \
+            sdks/lua/loaders/python/polyplug-loader-python-0.1.0-1.rockspec \
+            sdks/lua/loaders/lua/polyplug-loader-lua-0.1.0-1.rockspec \
+            sdks/lua/loaders/js/polyplug-loader-js-0.1.0-1.rockspec \
+            sdks/lua/loaders/dotnet/polyplug-loader-dotnet-0.1.0-1.rockspec; do
+            echo "Uploading $r"
+            luarocks upload "$r" --api-key ${{ secrets.LUAROCKS_API_KEY }}
+          done
