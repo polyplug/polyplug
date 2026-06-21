@@ -3,6 +3,9 @@
     "version": "0.1.0",
     "license": "MIT",
     "exports": "./mod.js",
+    "imports": {
+        "@polyplug/abi": "jsr:@polyplug/abi@^0.1.0"
+    },
     "publish": {
         "exclude": ["tests"]
     }

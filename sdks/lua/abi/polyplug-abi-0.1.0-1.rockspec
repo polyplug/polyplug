@@ -18,9 +18,9 @@ description = {
    license = "MIT",
 }
 
-dependencies = {
-   "lua >= 5.1",
-}
+-- Requires LuaJIT (uses the FFI module); stock PUC-Lua is unsupported, so no
+-- "lua >= X" constraint is declared here.
+dependencies = {}
 
 build = {
    type = "builtin",
