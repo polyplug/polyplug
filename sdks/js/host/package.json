@@ -3,11 +3,13 @@
   "version": "0.1.0",
   "description": "polyplug host runtime for JavaScript/TypeScript (Deno runtime required; Node FFI backend planned)",
   "type": "module",
-  "main": "./mod.js",
+  "main": "./dist/mod.js",
+  "module": "./dist/mod.js",
+  "types": "./dist/mod.d.ts",
   "exports": {
-    ".": { "import": "./mod.js" }
+    ".": { "types": "./dist/mod.d.ts", "import": "./dist/mod.js" }
   },
-  "files": ["mod.js", "polyplug/**", "deno.json"],
+  "files": ["dist", "README.md"],
   "keywords": ["polyplug", "plugin", "host", "runtime", "ffi", "deno"],
   "author": "polyplug",
   "license": "MIT",

@@ -1,0 +1,7 @@
+{
+  "extends": "../tsconfig.npm.json",
+  "compilerOptions": {
+    "outDir": "dist"
+  },
+  "include": ["polyplug_abi.ts", "abi.ts"]
+}

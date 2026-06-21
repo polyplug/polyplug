@@ -521,11 +521,28 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      # Embed the core native into @polyplug/host (the only JS package with natives;
-      # loaders resolve their native via the OS loader / POLYPLUG_NATIVE_LIB).
+      # The npm packages ship transpiled .js + .d.ts (Node/Deno refuse to
+      # type-strip .ts under node_modules). The .ts/.js source stays for the
+      # jsr/Deno path; only the published npm surface points at dist/.
+      # Build order: abi (host imports it) -> host (loaders import its types)
+      # -> loaders. guest is already pure .js and needs no transpile.
+      - name: Transpile JS SDKs to dist/ (.js + .d.ts)
+        run: |
+          set -e
+          tsc() { npx -y -p typescript@5.7 tsc "$@"; }
+          ( cd sdks/js/abi  && tsc -p tsconfig.json )
+          ( cd sdks/js/host && tsc -p tsconfig.json )
+          for d in native python lua js dotnet; do
+            ( cd "sdks/js/loaders/$d" && tsc -p tsconfig.json )
+          done
+
+      # Embed the core native into @polyplug/host's transpiled dist (the only JS
+      # package with natives; loaders resolve their native via the OS loader /
+      # POLYPLUG_NATIVE_LIB). native-loader.js resolves "./_native/<platform>/"
+      # relative to its own location (dist/polyplug/), so stage natives there.
       - name: Embed natives into @polyplug/host
         run: |
-          native_dir="sdks/js/host/polyplug/_native"
+          native_dir="sdks/js/host/dist/polyplug/_native"
           mkdir -p "$native_dir"/{linux-x64,macos-arm64,windows-x64}
           cp dist/native/linux-x64/libpolyplug.so "$native_dir/linux-x64/"
           cp dist/native/macos-arm64/libpolyplug.dylib "$native_dir/macos-arm64/"

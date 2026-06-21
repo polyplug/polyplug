@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.npm.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "paths": {
+      "@polyplug/host": ["../../host/dist/mod.d.ts"]
+    }
+  },
+  "include": ["mod.ts"],
+  "files": ["../../deno-shim.d.ts"]
+}
