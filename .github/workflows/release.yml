@@ -302,7 +302,7 @@ jobs:
     runs-on: ubuntu-latest
     # The new-crate stagger below (sleep 11m between never-before-seen crates)
     # can take ~1h, so allow well beyond the 60-minute default.
-    timeout-minutes: 120
+    timeout-minutes: 180
     if: startsWith(github.ref, 'refs/tags/v') || inputs.dry-run
     steps:
       - name: Checkout code
@@ -334,20 +334,29 @@ jobs:
           VER="$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')"
           # Dependency order: utils/abi before their dependents. Do NOT reorder.
           CRATES="polyplug_utils polyplug_abi polyplug polyplug_codegen polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_dotnet polyplugc polyplug_guest"
-          first=1
-          for c in $CRATES; do
-            # already on crates.io at this version? skip (idempotent re-run)
-            code=$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/$c/$VER")
-            if [ "$code" = "200" ]; then echo "skip $c@$VER (already published)"; continue; fi
-            # TEMPORARY WORKAROUND: crates.io throttles NEW crates to ~1 per 10 min
-            # after an initial burst (~5). Staggering each never-before-published
-            # crate keeps a single re-run from choking on the rate limit. Remove
-            # once crates.io raises our new-crate limit (requested via help@crates.io).
-            if [ "$first" = "0" ]; then echo "sleeping 11m before next new-crate publish (crates.io rate limit)"; sleep 660; fi
-            first=0
-            echo "publishing $c@$VER"
-            cargo publish -p "$c"
-          done
+          # Publish one crate, tolerating the two non-fatal cases so a re-run after
+          # a partial publish converges: already-published (skip) and the crates.io
+          # new-crate rate limit (429 -> wait ~10-min refill, retry). crates.io's
+          # API needs a User-Agent or it won't return 200, so the skip-check sends
+          # one. The rate-limit retry is a TEMPORARY workaround until crates.io
+          # raises our new-crate limit (requested via help@crates.io).
+          publish_crate() {
+            c="$1"
+            code=$(curl -s -H 'User-Agent: polyplug-release (help@jsr.io)' -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/$c/$VER")
+            if [ "$code" = "200" ]; then echo "skip $c@$VER (already on crates.io)"; return 0; fi
+            for attempt in 1 2 3 4 5 6 7 8; do
+              echo "publishing $c@$VER (attempt $attempt)"
+              if out=$(cargo publish -p "$c" 2>&1); then echo "$out"; echo "published $c@$VER"; return 0; fi
+              echo "$out"
+              if echo "$out" | grep -qi 'already exists'; then echo "skip $c@$VER (already exists)"; return 0; fi
+              if echo "$out" | grep -qiE '429|too many requests|rate limit'; then
+                echo "rate-limited; sleeping 11m before retrying $c"; sleep 660; continue
+              fi
+              echo "fatal error publishing $c"; return 1
+            done
+            echo "still rate-limited after retries: $c"; return 1
+          }
+          for c in $CRATES; do publish_crate "$c" || exit 1; done
 
   # ------------------------------ PyPI --------------------------------------
   publish-pypi:
@@ -437,7 +446,13 @@ jobs:
           # (no hash comparison) so a re-run after a partial publish does not
           # fail — rebuilt wheels are not byte-reproducible, which makes uv's
           # hash-comparing --check-url reject already-published files.
-          uvx twine upload --skip-existing dist/pypi/*
+          # Retry on PyPI's upload rate limit (429): skip-existing means each
+          # retry only re-attempts the not-yet-uploaded files.
+          for attempt in 1 2 3 4 5 6; do
+            if uvx twine upload --skip-existing dist/pypi/*; then echo "pypi upload ok"; exit 0; fi
+            echo "pypi upload failed (likely 429); sleeping 5m before retry (attempt $attempt)"; sleep 300
+          done
+          echo "pypi upload still failing after retries"; exit 1
 
       - name: Upload PyPI packages
         uses: actions/upload-artifact@v4
