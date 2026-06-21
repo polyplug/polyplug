@@ -403,11 +403,14 @@ jobs:
       - name: Publish to PyPI
         if: startsWith(github.ref, 'refs/tags/v')
         env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          for dist_file in dist/pypi/*; do
-            [ -f "$dist_file" ] && uv publish "$dist_file"
-          done
+          # twine --skip-existing skips files already on the index by filename
+          # (no hash comparison) so a re-run after a partial publish does not
+          # fail — rebuilt wheels are not byte-reproducible, which makes uv's
+          # hash-comparing --check-url reject already-published files.
+          uvx twine upload --skip-existing dist/pypi/*
 
       - name: Upload PyPI packages
         uses: actions/upload-artifact@v4
@@ -576,7 +579,7 @@ jobs:
           # Dependency order: abi first (host depends on it), then host/guest,
           # then the loaders (depend on host).
           for d in abi host guest loaders/native loaders/python loaders/lua loaders/js loaders/dotnet; do
-            ( cd "sdks/js/$d" && deno publish --allow-dirty )
+            ( cd "sdks/js/$d" && deno publish --token "$JSR_TOKEN" --allow-dirty )
           done
 
   # ----------------------------- LuaRocks -----------------------------------
