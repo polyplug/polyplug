@@ -868,6 +868,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y luarocks
+          # `luarocks upload` is an API client and needs a Lua JSON library;
+          # the apt luarocks ships without one. dkjson is pure Lua (no compile)
+          # and installs into luarocks' own tree, which its commands always load.
+          sudo luarocks install dkjson
 
       - name: Upload rockspecs to LuaRocks
         run: |
