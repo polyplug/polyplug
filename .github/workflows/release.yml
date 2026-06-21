@@ -265,6 +265,29 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
 
+      # LuaRocks is source-based: the published rockspecs point at this single
+      # tarball, which merges every Lua module with all-platform prebuilt natives.
+      # The rockspec build.install.lua copies the platform binaries flat next to
+      # the modules; the resolver loads the platform-correct one at runtime.
+      - name: Build LuaRocks source tarball
+        run: |
+          TB="polyplug-lua-${{ steps.version.outputs.version }}"
+          mkdir -p "$TB/polyplug/loaders" "$TB/_native"/{linux-x64,macos-arm64,windows-x64}
+          cp sdks/lua/abi/abi.lua sdks/lua/abi/polyplug_abi.lua "$TB/"
+          cp sdks/lua/guest/polyplug_guest.lua "$TB/"
+          cp sdks/lua/host/polyplug.lua "$TB/"
+          cp sdks/lua/host/polyplug/native.lua sdks/lua/host/polyplug/runtime.lua sdks/lua/host/polyplug/reload_phase.lua "$TB/polyplug/"
+          for n in native python lua js dotnet; do
+            cp "sdks/lua/loaders/$n/polyplug/loaders/$n.lua" "$TB/polyplug/loaders/"
+          done
+          cp dist/native/linux-x64/*.so      "$TB/_native/linux-x64/"
+          cp dist/native/macos-arm64/*.dylib "$TB/_native/macos-arm64/"
+          cp dist/native/windows-x64/*.dll   "$TB/_native/windows-x64/"
+          mkdir -p dist/lua-src
+          tar czf "dist/lua-src/$TB.tar.gz" "$TB"
+          echo "=== LuaRocks tarball ==="
+          tar tzf "dist/lua-src/$TB.tar.gz" | sort
+
       - name: Upload dist bundle
         uses: actions/upload-artifact@v4
         with:
@@ -549,41 +572,59 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y luarocks
 
-      - name: Build LuaRocks host package with embedded natives
+      # Stage all-platform natives into each Lua package dir so a local
+      # `luarocks make` (dry-run validation) finds the files build.install.lua
+      # references relative to each rockspec's directory.
+      - name: Stage natives into Lua package dirs
         run: |
-          cd sdks/lua/host
-          mkdir -p _native/{linux-x64,macos-arm64,windows-x64}
-          cp ../../../dist/native/linux-x64/libpolyplug.so _native/linux-x64/
-          cp ../../../dist/native/macos-arm64/libpolyplug.dylib _native/macos-arm64/
-          cp ../../../dist/native/windows-x64/polyplug.dll _native/windows-x64/
+          mkdir -p sdks/lua/host/_native/{linux-x64,macos-arm64,windows-x64}
+          cp dist/native/linux-x64/libpolyplug.so      sdks/lua/host/_native/linux-x64/
+          cp dist/native/macos-arm64/libpolyplug.dylib sdks/lua/host/_native/macos-arm64/
+          cp dist/native/windows-x64/polyplug.dll      sdks/lua/host/_native/windows-x64/
+          for n in native python lua js dotnet; do
+            d="sdks/lua/loaders/$n/_native"
+            mkdir -p "$d"/{linux-x64,macos-arm64,windows-x64}
+            cp dist/native/linux-x64/libpolyplug_$n.so      "$d/linux-x64/"
+            cp dist/native/macos-arm64/libpolyplug_$n.dylib "$d/macos-arm64/"
+            cp dist/native/windows-x64/polyplug_$n.dll      "$d/windows-x64/"
+          done
 
       - name: Publish to LuaRocks (dry-run)
         if: inputs.dry-run
         run: |
-          cd sdks/lua/host
-          ROCKSPEC=$(ls *.rockspec 2>/dev/null | head -1)
-          if [ -z "$ROCKSPEC" ]; then
-            echo "::error::No .rockspec found under sdks/lua/host — author rockspecs before publishing (tracked in PP-1)."
-            exit 1
-          fi
-          luarocks pack "$ROCKSPEC"
-          echo "Would upload: $ROCKSPEC"
+          set -e
+          for r in $(find sdks/lua -name '*.rockspec' | sort); do
+            echo "lint $r"; luarocks lint "$r"
+          done
+          # Prove every rock installs (dependency-ordered) into a throwaway tree.
+          # `luarocks make` builds from the package dir's cwd, ignoring source.url.
+          TREE=/tmp/pp-lua-tree
+          ( cd sdks/lua/abi   && luarocks make polyplug-abi-0.1.0-1.rockspec   --tree=$TREE --no-doc --deps-mode=one )
+          ( cd sdks/lua/guest && luarocks make polyplug-guest-0.1.0-1.rockspec --tree=$TREE --no-doc --deps-mode=one )
+          ( cd sdks/lua/host  && luarocks make polyplug-0.1.0-1.rockspec       --tree=$TREE --no-doc --deps-mode=one )
+          for n in native python lua js dotnet; do
+            ( cd "sdks/lua/loaders/$n" && luarocks make "polyplug-loader-$n-0.1.0-1.rockspec" --tree=$TREE --no-doc --deps-mode=one )
+          done
+          echo "All 8 Lua rockspecs lint + install cleanly."
 
       - name: Publish to LuaRocks
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          cd sdks/lua/host
-          ROCKSPEC=$(ls *.rockspec 2>/dev/null | head -1)
-          if [ -z "$ROCKSPEC" ]; then
-            echo "::error::No .rockspec found under sdks/lua/host."
-            exit 1
-          fi
-          luarocks upload "$ROCKSPEC" --api-key ${{ secrets.LUAROCKS_API_KEY }}
-          cd ../../sdks/lua/guest
-          GUEST_ROCKSPEC=$(ls *.rockspec 2>/dev/null | head -1)
-          [ -n "$GUEST_ROCKSPEC" ] && luarocks upload "$GUEST_ROCKSPEC" --api-key ${{ secrets.LUAROCKS_API_KEY }}
-          for rock in "$GITHUB_WORKSPACE"/sdks/lua/host/loaders/*/*.rockspec; do
-            [ -f "$rock" ] && luarocks upload "$rock" --api-key ${{ secrets.LUAROCKS_API_KEY }}
+          set -e
+          # Dependency-ordered. --skip-pack uploads only the rockspec; the source
+          # tarball it points at is attached to the GitHub release by the
+          # github-release job.
+          for r in \
+            sdks/lua/abi/polyplug-abi-0.1.0-1.rockspec \
+            sdks/lua/guest/polyplug-guest-0.1.0-1.rockspec \
+            sdks/lua/host/polyplug-0.1.0-1.rockspec \
+            sdks/lua/loaders/native/polyplug-loader-native-0.1.0-1.rockspec \
+            sdks/lua/loaders/python/polyplug-loader-python-0.1.0-1.rockspec \
+            sdks/lua/loaders/lua/polyplug-loader-lua-0.1.0-1.rockspec \
+            sdks/lua/loaders/js/polyplug-loader-js-0.1.0-1.rockspec \
+            sdks/lua/loaders/dotnet/polyplug-loader-dotnet-0.1.0-1.rockspec; do
+            echo "Uploading $r"
+            luarocks upload "$r" --api-key ${{ secrets.LUAROCKS_API_KEY }} --skip-pack
           done
 
   # --------------------------- GitHub Release -------------------------------
@@ -627,6 +668,9 @@ jobs:
           cp pkgs/*.tar.gz release-assets/ 2>/dev/null || true
           cp pkgs/*.nupkg release-assets/ 2>/dev/null || true
           cp pkgs/*.tgz release-assets/ 2>/dev/null || true
+
+          # LuaRocks source tarball — the published rockspecs' source.url points here.
+          cp dist/lua-src/*.tar.gz release-assets/
 
           ( cd release-assets && sha256sum * > SHA256SUMS )
           ls -la release-assets/
