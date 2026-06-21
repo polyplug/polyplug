@@ -352,6 +352,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
+      # polyplug-abi is a runtime dependency of both polyplug and polyplug-guest,
+      # so it must be published too or `pip install polyplug` cannot resolve.
+      - name: Build Python abi package
+        run: |
+          cd sdks/python/polyplug_abi
+          uv build --out-dir ../../../dist/pypi
+
       - name: Build Python host package with embedded natives
         run: |
           cd sdks/python/host
@@ -430,6 +437,12 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+
+      # Polyplug.Abi is a package dependency of Polyplug.Host and Polyplug.Guest
+      # (plain ProjectReference -> nupkg dependency), so it must be published too
+      # or `dotnet add package Polyplug` cannot resolve.
+      - name: Build NuGet abi package
+        run: dotnet pack sdks/csharp/abi/Polyplug.Abi.csproj -c Release -o dist/nuget
 
       - name: Build NuGet host package with embedded natives
         run: |
