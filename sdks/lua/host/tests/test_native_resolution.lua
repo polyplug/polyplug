@@ -201,6 +201,96 @@ else
     print("  SKIP: cannot create staged dir — staged-file branch test skipped")
 end
 
+-- ─── resolve: flat co-located file (luarocks install layout) ─────────────────
+-- In a luarocks install, lua modules and natives land flat in the same dir:
+--   <host-root>/polyplug/native.lua  and  <host-root>/<filename>
+-- resolve() must find the flat file when no staged _native/<platform>/ file exists.
+print("=== resolve: flat co-located file ===")
+
+local flat_base     = "polyplug_flat_test"
+local flat_filename = native.lib_filename(flat_base)
+local flat_path     = root .. "/" .. flat_filename
+local flat_wf       = io.open(flat_path, "w")
+if flat_wf then
+    flat_wf:close()
+    local resolved_flat = native.resolve(absent_key, flat_base)
+    assert_equals(
+        flat_path,
+        resolved_flat,
+        "resolve() returns flat <host-root>/<filename> when present and no staged file exists"
+    )
+
+    -- Staged _native/<platform>/ file must WIN over the flat file (tier 2 precedence).
+    local stage_dir   = root .. "/_native/" .. native.platform()
+    local ok_stage    = os.execute("mkdir -p " .. stage_dir)
+    if ok_stage == 0 or ok_stage == true then
+        local staged_flat = stage_dir .. "/" .. flat_filename
+        local staged_wf   = io.open(staged_flat, "w")
+        if staged_wf then
+            staged_wf:close()
+            local resolved_both = native.resolve(absent_key, flat_base)
+            assert_equals(
+                staged_flat,
+                resolved_both,
+                "staged _native/<platform>/ path wins over flat co-located file when both exist"
+            )
+            os.remove(staged_flat)
+        else
+            print("  SKIP: cannot create staged file — flat-vs-staged precedence test skipped")
+        end
+    else
+        print("  SKIP: cannot create staged dir — flat-vs-staged precedence test skipped")
+    end
+
+    os.remove(flat_path)
+else
+    print("  SKIP: cannot create flat file — flat co-located branch test skipped")
+end
+
+-- ─── resolve: env var wins over staged and flat files ────────────────────────
+-- LuaJIT cannot mutate the process environment, so this asserts env precedence by
+-- relaunching the interpreter with the env var set, exercising the real resolve path.
+print("=== resolve: env var wins over staged and flat ===")
+
+do
+    local probe = [[
+        package.path = ']] .. script_dir .. [[../?.lua;' .. package.path
+        local n = require('polyplug.native')
+        local root = n.host_root()
+        local base = 'polyplug_envwin_test'
+        local fname = n.lib_filename(base)
+        -- Create flat + staged files so env must outrank both.
+        local flat = root .. '/' .. fname
+        local fw = io.open(flat, 'w'); if fw then fw:close() end
+        local sdir = root .. '/_native/' .. n.platform()
+        os.execute('mkdir -p ' .. sdir)
+        local staged = sdir .. '/' .. fname
+        local sw = io.open(staged, 'w'); if sw then sw:close() end
+        local r = n.resolve('POLYPLUG_ENVWIN_TEST', base)
+        io.write(r)
+        os.remove(flat); os.remove(staged)
+    ]]
+    local override = "/explicit/env/override/" .. flat_filename
+    local cmd = "POLYPLUG_ENVWIN_TEST='" .. override ..
+        "' luajit -e \"" .. probe:gsub('"', '\\"') .. "\""
+    local pipe = io.popen(cmd)
+    if pipe then
+        local out = pipe:read("*a")
+        pipe:close()
+        if out and #out > 0 then
+            assert_equals(
+                override,
+                out,
+                "resolve() returns env-var override even when staged and flat files exist"
+            )
+        else
+            print("  SKIP: env-wins subprocess produced no output — skipped")
+        end
+    else
+        print("  SKIP: cannot spawn subprocess for env-wins check — skipped")
+    end
+end
+
 -- ─── Results ─────────────────────────────────────────────────────────────────
 print("\n=== Results ===")
 print(string.format("Tests passed: %d", tests_passed))

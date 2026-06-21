@@ -1,9 +1,10 @@
 -- sdks/lua/host/polyplug/native.lua
 -- Shared native-library resolution helper for the polyplug Lua SDK.
--- Resolves a named library path in three-tier order:
+-- Resolves a named library path in priority order:
 --   1. Explicit env-var override (wins unconditionally).
 --   2. Co-located staged directory: <host-root>/_native/<platform>/<filename>.
---   3. Bare system name (passed to the OS loader as-is).
+--   3. Flat co-located file: <host-root>/<filename> (luarocks install layout).
+--   4. Bare system name (passed to the OS loader as-is).
 -- All loaders and the host module route through this single source of truth.
 
 local ffi = require("ffi")
@@ -90,10 +91,17 @@ function M.resolve(env_var, base)
     end
 
     local staged = M.host_root() .. "/_native/" .. M.platform() .. "/" .. M.lib_filename(base)
-    local f = io.open(staged, "r")
-    if f then
-        f:close()
+    local staged_file = io.open(staged, "r")
+    if staged_file then
+        staged_file:close()
         return staged
+    end
+
+    local flat = M.host_root() .. "/" .. M.lib_filename(base)
+    local flat_file = io.open(flat, "r")
+    if flat_file then
+        flat_file:close()
+        return flat
     end
 
     return base
