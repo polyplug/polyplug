@@ -88,12 +88,6 @@ jobs:
       - name: Build CLI tool
         run: cargo build --release -p polyplugc --target ${{ matrix.target }}
 
-      # NOTE: no manual `strip` step — the release profile already sets
-      # `strip = "symbols"` (root Cargo.toml [profile.release]), so cargo strips
-      # every cdylib and the CLI at link time while preserving exported symbols.
-      # A redundant macOS `strip` errors on indirect-symbol-table entries
-      # (_Unwind_*, _CCRandomGenerateBytes) that cannot be stripped from a dylib.
-
       - name: Prepare artifacts
         shell: bash
         run: |
