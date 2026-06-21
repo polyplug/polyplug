@@ -549,16 +549,25 @@ jobs:
       - name: Publish to jsr.io (dry-run)
         if: inputs.dry-run
         run: |
-          cd sdks/js
-          deno publish --dry-run --allow-dirty
+          set -e
+          ( cd sdks/js && deno publish --dry-run --allow-dirty )
+          # Loader packages — workspace members; their @polyplug/sdk import
+          # resolves locally so they can be dry-run before the SDK is published.
+          for n in native python lua js dotnet; do
+            ( cd "sdks/js/loaders/$n" && deno publish --dry-run --allow-dirty )
+          done
 
       - name: Publish to jsr.io
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           JSR_TOKEN: ${{ secrets.JSR_TOKEN }}
         run: |
-          cd sdks/js
-          deno publish --allow-dirty
+          set -e
+          # SDK first so the loaders' @polyplug/sdk dependency resolves on jsr.
+          ( cd sdks/js && deno publish --allow-dirty )
+          for n in native python lua js dotnet; do
+            ( cd "sdks/js/loaders/$n" && deno publish --allow-dirty )
+          done
 
   # ----------------------------- LuaRocks -----------------------------------
   publish-luarocks:

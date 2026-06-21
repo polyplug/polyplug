@@ -2,6 +2,13 @@
   "name": "@polyplug/sdk",
   "version": "0.1.0",
   "license": "MIT",
+  "workspace": [
+    "./loaders/native",
+    "./loaders/python",
+    "./loaders/lua",
+    "./loaders/js",
+    "./loaders/dotnet"
+  ],
   "exports": {
     ".": "./mod.ts",
     "./abi": "./abi/polyplug_abi.ts",

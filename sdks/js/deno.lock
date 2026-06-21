@@ -14,5 +14,44 @@
     "@std/internal@1.0.14": {
       "integrity": "291516b3d4c35024d6ffbc0a9df5bf4c64116e05b50012cf846710152d2ffdf7"
     }
+  },
+  "workspace": {
+    "members": {
+      "loaders/dotnet": {
+        "packageJson": {
+          "dependencies": [
+            "npm:@polyplug/sdk@0.1.0"
+          ]
+        }
+      },
+      "loaders/js": {
+        "packageJson": {
+          "dependencies": [
+            "npm:@polyplug/sdk@0.1.0"
+          ]
+        }
+      },
+      "loaders/lua": {
+        "packageJson": {
+          "dependencies": [
+            "npm:@polyplug/sdk@0.1.0"
+          ]
+        }
+      },
+      "loaders/native": {
+        "packageJson": {
+          "dependencies": [
+            "npm:@polyplug/sdk@0.1.0"
+          ]
+        }
+      },
+      "loaders/python": {
+        "packageJson": {
+          "dependencies": [
+            "npm:@polyplug/sdk@0.1.0"
+          ]
+        }
+      }
+    }
   }
 }
