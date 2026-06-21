@@ -21,6 +21,9 @@
     "check": "deno check **/*.ts",
     "test": "deno test --allow-ffi --allow-env --allow-read --allow-write"
   },
+  "publish": {
+    "exclude": ["loaders"]
+  },
   "fmt": {
     "useTabs": false,
     "lineWidth": 100,

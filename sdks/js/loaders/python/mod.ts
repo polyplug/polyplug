@@ -1,4 +1,4 @@
-import type { Runtime } from "../../host/polyplug/mod.js";
+import type { Runtime } from "@polyplug/sdk/host";
 
 let _lib: Deno.DynamicLibrary<typeof PYTHON_SYMBOLS> | null = null;
 

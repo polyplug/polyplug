@@ -1,0 +1,39 @@
+{
+  "name": "@polyplug/loaders-dotnet",
+  "version": "0.1.0",
+  "description": "polyplug .NET/C# bundle loader for JavaScript/TypeScript hosts (Deno runtime required; Node FFI backend planned)",
+  "type": "module",
+  "main": "./mod.ts",
+  "types": "./mod.ts",
+  "exports": {
+    ".": {
+      "types": "./mod.ts",
+      "import": "./mod.ts"
+    }
+  },
+  "files": [
+    "mod.ts",
+    "deno.json",
+    "README.md"
+  ],
+  "keywords": [
+    "polyplug",
+    "plugin",
+    "loader",
+    "dotnet",
+    "deno"
+  ],
+  "author": "polyplug",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/polyplug/polyplug.git",
+    "directory": "sdks/js/loaders/dotnet"
+  },
+  "engines": {
+    "deno": ">=1.38.0"
+  },
+  "dependencies": {
+    "@polyplug/sdk": "0.1.0"
+  }
+}

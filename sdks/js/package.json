@@ -22,10 +22,11 @@
     }
   },
   "files": [
-    "**/*.ts",
-    "**/*.js",
-    "deno.json",
-    "host/polyplug/_native/**"
+    "mod.ts",
+    "abi/**",
+    "host/**",
+    "guest/**",
+    "deno.json"
   ],
   "keywords": [
     "polyplug",

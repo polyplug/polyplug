@@ -511,16 +511,25 @@ jobs:
       - name: Publish to npm (dry-run)
         if: inputs.dry-run
         run: |
-          cd sdks/js
-          npm publish --dry-run
+          set -e
+          ( cd sdks/js && npm publish --dry-run )
+          # Loader packages (@polyplug/loaders-*) — Deno-only for now; reserve the
+          # names and ship the adapters. They carry no natives (resolved via the OS
+          # loader / POLYPLUG_NATIVE_LIB), so nothing to stage.
+          for n in native python lua js dotnet; do
+            ( cd "sdks/js/loaders/$n" && npm publish --dry-run )
+          done
 
       - name: Publish to npm
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          cd sdks/js
-          npm publish --access public
+          set -e
+          ( cd sdks/js && npm publish --access public )
+          for n in native python lua js dotnet; do
+            ( cd "sdks/js/loaders/$n" && npm publish --access public )
+          done
 
   # ------------------------------- jsr --------------------------------------
   publish-jsr:
