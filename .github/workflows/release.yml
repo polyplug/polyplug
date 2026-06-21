@@ -157,7 +157,8 @@ jobs:
           mkdir -p sdks/python/host/polyplug/_native/${{ matrix.platform }}
           cp native/*${{ matrix.ext }} sdks/python/host/polyplug/_native/${{ matrix.platform }}/ 2>/dev/null || true
           cd sdks/python/host
-          python3 -c "from polyplug._native import load_native_lib; lib = load_native_lib(); print(f'Python: OK - {lib._name}')"
+          PYTHONPATH="$GITHUB_WORKSPACE/sdks/python/host:$GITHUB_WORKSPACE/sdks/python/polyplug_abi:$GITHUB_WORKSPACE/sdks/python" \
+            python3 -c "from polyplug._native import load_native_lib; lib = load_native_lib(); print(f'Python: OK - {lib._name}')"
 
       - name: Set up Deno
         uses: denoland/setup-deno@v2
@@ -167,15 +168,10 @@ jobs:
       - name: Test Deno native loading
         shell: bash
         run: |
-          mkdir -p sdks/js/host/_native/${{ matrix.platform }}
-          cp native/*${{ matrix.ext }} sdks/js/host/_native/${{ matrix.platform }}/ 2>/dev/null || true
+          mkdir -p sdks/js/host/polyplug/_native/${{ matrix.platform }}
+          cp native/*${{ matrix.ext }} sdks/js/host/polyplug/_native/${{ matrix.platform }}/ 2>/dev/null || true
           cd sdks/js/host
-          deno run --allow-ffi --allow-env --allow-read -e "
-            import { NativeLibLoader } from './native-loader.ts';
-            const loader = new NativeLibLoader();
-            const lib = loader.load();
-            console.log('Deno: OK');
-          "
+          deno eval "import { loadNativeLibrary } from './polyplug/native-loader.ts'; const r = loadNativeLibrary(); console.log('Deno: OK -', r.path);"
 
       - name: Set up LuaJIT (Unix only)
         if: runner.os != 'Windows'
@@ -190,7 +186,8 @@ jobs:
           mkdir -p sdks/lua/host/_native/${{ matrix.platform }}
           cp native/*${{ matrix.ext }} sdks/lua/host/_native/${{ matrix.platform }}/ 2>/dev/null || true
           cd sdks/lua/host
-          luajit -e "local p = require('polyplug'); print('Lua: OK')"
+          LUA_PATH="./?.lua;./?/init.lua;$GITHUB_WORKSPACE/sdks/lua/abi/?.lua;;" \
+            luajit -e "local p = require('polyplug'); print('Lua: OK - ' .. require('polyplug.native').platform())"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
