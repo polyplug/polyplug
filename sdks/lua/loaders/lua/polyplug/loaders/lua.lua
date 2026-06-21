@@ -1,5 +1,6 @@
 --- Lua loader registration for polyplug.
-local ffi = require("ffi")
+local ffi    = require("ffi")
+local native = require("polyplug.native")
 
 pcall(ffi.cdef, [[
     typedef struct { uint8_t _reserved; } PolyplugLuaConfig;
@@ -10,9 +11,7 @@ pcall(ffi.cdef, [[
 local _lib = nil
 local function get_lib()
     if not _lib then
-        -- POLYPLUG_LUA_LIB (set by the test/CI harness) wins over the bare
-        -- library name so the loader cdylib matches the freshly built core.
-        _lib = ffi.load(os.getenv("POLYPLUG_LUA_LIB") or "polyplug_lua")
+        _lib = native.load("POLYPLUG_LUA_LIB", "polyplug_lua")
     end
     return _lib
 end

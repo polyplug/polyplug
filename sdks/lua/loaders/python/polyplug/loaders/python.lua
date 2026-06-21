@@ -1,7 +1,8 @@
 -- sdks/lua/loaders/python/polyplug/loaders/python.lua
 -- Python loader registration for polyplug.
 
-local ffi = require("ffi")
+local ffi    = require("ffi")
+local native = require("polyplug.native")
 
 pcall(ffi.cdef, [[
     typedef struct {
@@ -15,9 +16,7 @@ pcall(ffi.cdef, [[
 local _lib = nil
 local function get_lib()
     if not _lib then
-        -- POLYPLUG_PYTHON_LIB (set by the test/CI harness) wins over the bare
-        -- library name so the loader cdylib matches the freshly built core.
-        _lib = ffi.load(os.getenv("POLYPLUG_PYTHON_LIB") or "polyplug_python")
+        _lib = native.load("POLYPLUG_PYTHON_LIB", "polyplug_python")
     end
     return _lib
 end
