@@ -858,6 +858,9 @@ jobs:
       - name: Upload rockspecs to LuaRocks
         run: |
           set -e
+          # luarocks upload exits non-zero when the revision already exists. Treat
+          # that as a skip so a release re-run (e.g. a re-tag of a published
+          # version) converges instead of failing; any other error is fatal.
           for r in \
             sdks/lua/abi/polyplug-abi-0.1.1-1.rockspec \
             sdks/lua/guest/polyplug-guest-0.1.1-1.rockspec \
@@ -868,5 +871,15 @@ jobs:
             sdks/lua/loaders/js/polyplug-loader-js-0.1.1-1.rockspec \
             sdks/lua/loaders/dotnet/polyplug-loader-dotnet-0.1.1-1.rockspec; do
             echo "Uploading $r"
-            luarocks upload "$r" --api-key ${{ secrets.LUAROCKS_API_KEY }}
+            if out=$(luarocks upload "$r" --api-key ${{ secrets.LUAROCKS_API_KEY }} 2>&1); then
+              echo "$out"
+            else
+              echo "$out"
+              if echo "$out" | grep -qi 'already exists'; then
+                echo "skip $r (already on LuaRocks)"
+              else
+                echo "fatal error uploading $r"
+                exit 1
+              fi
+            fi
           done
