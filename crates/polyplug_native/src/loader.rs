@@ -566,8 +566,15 @@ mod unload_tests {
     ///
     /// Regression for the MEDIUM finding: `as_encoded_bytes()` previously crossed
     /// non-UTF-8 (and WTF-8 on Windows) bytes into `BundleInitContext.bundle_path`.
+    ///
+    /// Linux-only: the test must materialize a directory whose name carries an
+    /// invalid UTF-8 byte (0xFF). ext4/tmpfs store raw path bytes, so this works;
+    /// macOS APFS enforces UTF-8 filenames and rejects the `create_dir_all` with
+    /// `Illegal byte sequence`, so the input cannot be constructed there. The
+    /// loader's rejection path is byte-identical across Unix at runtime — only the
+    /// test's precondition is platform-bound.
     #[test]
-    #[cfg(all(unix, not(miri)))]
+    #[cfg(all(target_os = "linux", not(miri)))]
     fn non_utf8_bundle_path_fails_cleanly() {
         use std::os::unix::ffi::OsStrExt;
 

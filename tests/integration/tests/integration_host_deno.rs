@@ -43,9 +43,18 @@ fn test_deno_host_lib_integration() {
         .join("tests")
         .join("fixtures")
         .join("deno_host_test.ts");
+    // Resolve the SDK's bare `@polyplug/*` specifiers (declared as `jsr:` in the
+    // SDK's own deno.json) to the in-tree source, so the test exercises local
+    // code without fetching from JSR.
+    let import_map: PathBuf = workspace_root
+        .join("tests")
+        .join("fixtures")
+        .join("deno_local_imports.json");
 
     let output: std::process::Output = Command::new("deno")
         .arg("run")
+        .arg("--import-map")
+        .arg(&import_map)
         .arg("--allow-ffi")
         .arg("--allow-env")
         .arg("--allow-read")

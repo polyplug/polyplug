@@ -12,7 +12,16 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ## [Unreleased]
 
-_No changes yet._
+### Fixed
+
+- Build the Linux `x86_64-unknown-linux-gnu` artifacts with the portable
+  x86-64 baseline instead of `-C target-cpu=native`. The committed
+  `.cargo/config.toml` had pinned `target-cpu=native`, which compiles for the
+  build machine's exact CPU features; the resulting binaries crashed with
+  `SIGILL` on any machine lacking those instructions — turning CI red and
+  putting the published 0.1.1 linux-x64 native packages (PyPI / npm / NuGet /
+  LuaRocks) at risk on older CPUs. Local native builds remain available via a
+  user-level `~/.cargo/config.toml` opt-in (documented in `.cargo/config.toml`).
 
 ## [0.1.1] - 2026-06-21
 

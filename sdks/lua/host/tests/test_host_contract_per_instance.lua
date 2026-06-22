@@ -103,7 +103,8 @@ if not gen_ok or not gen_output:find("generated", 1, true) or not exists then
 end
 
 -- ─── Module path: abi + lua loader + the freshly generated host code ─────────
-package.path = script_dir .. "../../abi/?.lua;"
+package.path = script_dir .. "../?.lua;"
+           .. script_dir .. "../../abi/?.lua;"
            .. script_dir .. "../../loaders/lua/?.lua;"
            .. tmp_dir .. "/host/?.lua;"
            .. package.path
