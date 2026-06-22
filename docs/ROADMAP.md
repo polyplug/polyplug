@@ -1,12 +1,13 @@
 # polyplug Roadmap
 
 This is the living tracker: **what shipped**, **what's coming**, **what we
-deferred (and why)**, and **what needs an owner decision**. The ABI freezes at
-v1.0 and the project is still pre-1.0, so any item touching `HostApi` /
-`RuntimeConfig` / dispatch shape must land *before* the freeze — that window is
-the reason "Harden" items are ranked first below.
+deferred (and why)**, and **what needs an owner decision**. The ABI is **pre-1.0**
+and stays there for the foreseeable future — there is **no scheduled 1.0 freeze**,
+so ABI-visible changes (`HostApi` / `RuntimeConfig` / dispatch shape) remain
+permitted between releases. The "Harden" lane is complete and the SDKs are
+published; the open work below is adopter-facing DX and polish.
 
-_Last updated: 2026-06-21._
+_Last updated: 2026-06-23._
 
 ---
 
@@ -20,10 +21,10 @@ than abandon it.
 | Rank | Item | Summary |
 |---|---|---|
 | ~~G1~~ ✅ | ~~Bundle signing + verification~~ **Done** | Shipped: detached Ed25519 `bundle.sig` over a canonical digest, enforced at load via `SignaturePolicy` (`Off`/`WarnOnly`/`Required`); freedom-preserving TOFU. See `TRUST_MODEL.md` § Bundle Signing and the `polyplug_signing` crate. |
-| G2 | Optional process-isolation mode | Opt-in, per-plugin out-of-process execution — the credible answer to "I sometimes need isolation" while keeping the native fast path the default. |
-| G3 | Resource limits / runaway-plugin watchdog | Per-call wall-clock timeouts at minimum (memory caps later) so a misbehaving trusted plugin can't hang the host. |
-| G4 | Published SDKs per registry | Make each SDK installable (crates.io / PyPI / NuGet / npm / LuaRocks) so plugin authors outside the repo can depend on it. |
-| G5 | Docs website + native-crash debugging guide | Browsable docs site plus a guide for diagnosing native crashes (symbols, core dumps, sanitizers) in trusted-plugin deployments. |
+| ~~G4~~ ✅ | ~~Published SDKs per registry~~ **Done** | All six registries publish from `release.yml`: crates.io, PyPI, NuGet, npm, JSR, LuaRocks. Latest release 0.1.1; see [Installation](../README.md#installation). |
+| G5 | Docs website + native-crash debugging guide | Browsable docs site plus a guide for diagnosing native crashes (symbols, core dumps, sanitizers) in trusted-plugin deployments. **← next.** |
+| G2 ⏸ | Optional process-isolation mode | Opt-in, per-plugin out-of-process execution — the credible answer to "I sometimes need isolation" while keeping the native fast path the default. **Deferred** (owner: not now); needs a design/scoping decision before building. |
+| ~~G3~~ ❌ | ~~Resource limits / runaway-plugin watchdog~~ **Non-goal** | A per-call wall-clock watchdog cannot be built without hot-path overhead: knowing a call ran too long requires recording when it started (a clock read ~15–30 ns, or ≥2 atomic stores/call). That violates the ~0.5 ns zero-overhead dispatch invariant, which is sacred. **Per-call timeouts are a host-side concern** — run the call on a worker thread you control and enforce your own deadline, outside polyplug (same pattern as tracing-via-host-contract). |
 
 ---
 
@@ -44,7 +45,7 @@ than abandon it.
 | **TSAN for the resolve→dispatch race** | ✅ Done (nightly, concurrent unload stress test) |
 | **Supply-chain gate (cargo-deny)** | ✅ Done (nightly) |
 | **Cross-language differential parity tests** | ✅ Done (`examples/hosts/parity`, 6 langs × 5 contracts byte-identical) |
-| **Published SDK packages (crates.io / PyPI / NuGet / npm / luarocks)** | ⏸ Deferred (owner: not publishing yet) |
+| **Published SDK packages (crates.io / PyPI / NuGet / npm / JSR / luarocks)** | ✅ Done — all six registries publish from `release.yml`; latest release 0.1.1 |
 | **Quickstart + example gallery** | ✅ Done (B2, #74 — `docs/QUICKSTART.md` guided path + `docs/EXAMPLES.md` gallery) |
 | **polyplugc diagnostics (source spans + suggestions)** | ✅ Done (B3, #73 — `file:line:col` + did-you-mean on parse/validate errors) |
 | **Guest→guest peer callers + runtime tests** | ✅ Done (#69–#72, #75; direct-dispatch upgrade #104–#107) — peer callers in all 6 generators; runtime execution tests green for **all 6** languages (rust/lua/js/cpp/csharp/python). Native-dispatch languages (rust/cpp/csharp/python/lua) now dispatch **directly through the cached interface** (no `call_guest_method` round-trip, no per-call resolve, no epoch pin); JS stays bridge-mediated (QuickJS cannot deref raw pointers) |
@@ -108,15 +109,13 @@ owner is currently budget-constrained.
   weak-upgrades and leak a per-load control block to guarantee what the trusted
   same-process model already delegates to the host.
 
-### Lane B — Adoption / DX ⏸ Deferred (owner: not publishing yet)
+### Lane B — Adoption / DX
 
-Held until the owner decides to publish. Kept here so it isn't lost.
-
-- **B1. Publish SDK packages.** No SDK is installable today (`pip install`,
-  `dotnet add package`, `npm i polyplug`, `luarocks install`, crates.io). The
-  single biggest blocker to anyone outside the repo authoring a plugin.
-  `release.yml` is the starting point. _Outward-facing — owner sign-off on
-  names/registries + a decision to publish pre-1.0._
+- **B1. Publish SDK packages. ✅ Done.** All six registries publish from
+  `release.yml`: `cargo add polyplug` (crates.io), `pip install` (PyPI),
+  `dotnet add package` (NuGet), `npm i` / JSR, and `luarocks install`. Latest
+  release 0.1.1 (0.1.2 prepared, release-on-demand). See
+  [Installation](../README.md#installation).
 - **B2. Quickstart + example gallery. ✅ Done (#74).** `docs/QUICKSTART.md` is a
   guided "write your first plugin in language X" path; `docs/EXAMPLES.md` is a
   gallery of the reference plugins. (Shipped independently of B1's publish gate.)
@@ -181,10 +180,16 @@ scoping:
   process." A sandboxed guest target (seccomp / process isolation) would
   let hosts load *untrusted* plugins — a natural fit for a "universal plugin
   runtime" and a significant market expansion.
-- **Per-call resource limits / timeouts.** Wall-clock + memory caps per guest
-  call, so a misbehaving plugin can't hang or exhaust the host.
 - **Published API-docs site.** `rustdoc` + the `docs/` tree as a browsable site
-  (pairs with Lane B adoption).
+  (this is G5 above).
+
+**Explicit non-goal — in-runtime per-call resource limits / timeouts.** A
+watchdog that enforces a per-call wall-clock deadline must record when each call
+starts (a clock read ~15–30 ns, or ≥2 atomic stores/call), which taxes the
+~0.5 ns zero-overhead dispatch path. That invariant is sacred, so polyplug will
+not add it. Hosts that need a timeout run the call on a worker thread they
+control and enforce their own deadline — outside polyplug — the same way tracing
+is an app concern (see C3).
 
 ---
 

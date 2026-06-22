@@ -308,6 +308,16 @@ Isolating plugin crashes requires either:
 
 polyplug's position: the hot path must be a single indirect call. Plugin crash isolation is incompatible with that goal. App developers who need crash isolation must run untrusted plugins in a separate worker process with their own IPC layer. polyplug is not the right tool for untrusted plugin execution.
 
+### Runaway-plugin watchdog / per-call resource limits — explicit non-goal
+
+**polyplug does not enforce per-call wall-clock timeouts, memory caps, or any in-runtime resource limit on a dispatch.** This is intentional and, like crash isolation, follows from the zero-overhead hot path.
+
+Detecting that a *specific* call exceeded a deadline requires recording when that call started, in a place a monitor thread can read. That recording lives on the dispatch hot path and is not free: a monotonic clock read is ~15–30 ns, and even the cheapest design (no clock read on the hot path, just an atomic "in-flight" flag set at call start and cleared at call end, with the watchdog stamping its own observation time) still costs two atomic stores per call plus cache-coherence traffic. polyplug's safe dispatch is ~0.5 ns over raw FFI; any of these would multiply that by 2–60×. The zero-overhead invariant is non-negotiable, so the watchdog is not built.
+
+There is also no safe way to *interrupt* a running native call: in-process native code is not asynchronously cancellable (it may hold a lock or be mid-allocation), so even a watchdog that detected an overrun could not stop it without risking corruption.
+
+polyplug's position: **per-call timeouts are an application/host concern.** A host that needs to bound a call's duration runs it on a worker thread it controls and enforces its own deadline *around* the polyplug call, leaving dispatch zero-overhead — the same pattern by which tracing is implemented as a `host.logger`-style host contract rather than baked into the runtime.
+
 ### Failure responsibility at the ABI boundary
 
 Who is responsible for turning a failure into an `AbiError` is fixed by contract, not by a catch-all guard somewhere in the runtime:
