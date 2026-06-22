@@ -28,7 +28,7 @@
 //! | [`dispatch`]    | Concurrent dispatch (`resolve` + call through function pointers) while a reload/unload swaps the slot in flight — resolved pointers stay valid under an epoch pin or fail cleanly, never UAF; no torn interface reads. |
 //! | [`reload`]      | Concurrent reload of the same bundle — post-quiesce resolvability invariant; reload critical sections are mutually exclusive (deterministic probe); rapid alternating reload cycles; per-cycle reload callbacks. |
 //! | [`registry`]    | Concurrent `register_guest_contract` / `register_host_contract` / `register_loader` from many threads (`DuplicateProvider` correctness under races); concurrent `find` / `find_all` / `resolve` / `get_dependencies` during load (init-stack counter correctness). |
-//! | [`load_unload`] | Concurrent load + unload of the same and different bundles — retire/reclaim races, exactly-once `destroy_instance`, no use-after-free on retired interfaces. |
+//! | [`load_unload`] | Concurrent load + unload of the same and different bundles — vacate/reclaim races, exactly-once `destroy_instance`, no use-after-free on vacated interfaces. |
 //! | [`multi_runtime`] | Multi-runtime parallelism — N runtimes built, used, and destroyed across threads simultaneously, asserting full Rule-12 isolation (no cross-runtime state bleed) and no leak (bounded RSS). |
 //! | [`logger`]      | Concurrent `host->log` delivery from many threads into one `LoggerHandle` funnel — no lost or torn records, no deadlock. |
 //!

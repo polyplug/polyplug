@@ -161,7 +161,7 @@ pub(crate) struct PluginSlot {
     ///
     /// Stamped into every [`GuestContractHandle`] minted against this slot. Server-side
     /// state only — never part of the ABI. The unload feature bumps this whenever the
-    /// slot is retired so a handle minted against an earlier generation is recognised as
+    /// slot is vacated so a handle minted against an earlier generation is recognised as
     /// stale even after the index is recycled by a later registration. Starts at 0.
     pub generation: u32,
 }
@@ -189,7 +189,7 @@ struct RuntimeStoreData {
     /// never observe a transient second live slot per contract during the window
     /// between `loader.reload()` (which re-runs init, registering fresh slots) and
     /// `apply_reload_swap` (which reconciles). `apply_reload_swap` moves each new
-    /// interface into the already-published old slot and retires the pending slot,
+    /// interface into the already-published old slot and vacates the pending slot,
     /// so the contract stays single-slot throughout.
     reloading_bundles: HashSet<BundleId>,
 }
@@ -228,8 +228,8 @@ impl RuntimeStoreData {
     /// Note: reload's surviving-contract path performs an in-place interface swap
     /// instead of calling this helper — that path keeps the slot live (same
     /// generation) so a handle stays resolvable to the new interface. Routing it
-    /// through `retire_slot` would break that continuity guarantee.
-    fn retire_slot(&mut self, slot_idx: u32) {
+    /// through `vacate_slot` would break that continuity guarantee.
+    fn vacate_slot(&mut self, slot_idx: u32) {
         let slot_idx_usize: usize = slot_idx as usize;
         if slot_idx_usize >= self.slots.len() {
             return;
@@ -644,7 +644,7 @@ impl RuntimeStore {
         // reload the freshly-registered slot is "pending": keeping it out of the find
         // index prevents readers from transiently seeing two live slots per contract.
         // apply_reload_swap later moves the interface into the already-published old
-        // slot and retires this pending slot, so the index is never double-populated.
+        // slot and vacates this pending slot, so the index is never double-populated.
         // `is_reloading` was computed above (the reload set is not mutated in between).
         if !is_reloading {
             data.guest_contract_index
@@ -1008,7 +1008,7 @@ impl RuntimeStore {
     /// - the slot is live at the handle's generation but currently holds no interface
     ///
     /// Returns Err(StaleHandle) if the handle's generation no longer matches the
-    /// slot's generation — the slot was retired by an unload (and possibly reused by
+    /// slot's generation — the slot was vacated by an unload (and possibly reused by
     /// a later registration) after this handle was minted. The generation is checked
     /// before the interface presence so a handle whose bundle was unloaded resolves
     /// to StaleHandle even though the slot was vacated.
@@ -1097,14 +1097,14 @@ impl RuntimeStore {
     }
 
     /// Apply a reload swap for `bundle_id`, moving freshly-registered interfaces
-    /// into the bundle's pre-reload slots and retiring the duplicate new slots.
+    /// into the bundle's pre-reload slots and vacating the duplicate new slots.
     ///
     /// During a reload, the loader calls `polyplug_init`, which registers the new
     /// version's interfaces into brand-new slots (the existing slots are never
     /// vacated by registration). This method reconciles that: for each pre-reload
     /// slot in `old_slots`, it finds the matching newly-registered slot by
     /// `contract_id`, moves the new interface `Arc` into the old slot, and then
-    /// retires the new slot (clears its entry/interface and removes it from the
+    /// vacates the new slot (clears its entry/interface and removes it from the
     /// `guest_contract_index` and the bundle's `plugin_slots`).
     ///
     /// The whole operation runs under a single write lock so that concurrent
@@ -1114,7 +1114,7 @@ impl RuntimeStore {
     /// # Dropped contracts
     /// If a contract that the old version provided is no longer provided by the new
     /// version (no newly-registered slot matches its `contract_id`), the reload does
-    /// NOT fail. Instead the old slot is retired: its interface `Arc` is dropped (the
+    /// NOT fail. Instead the old slot is vacated: its interface `Arc` is dropped (the
     /// published snapshot owns its clone until reclaimed, so an in-flight reader
     /// holding a pinned guard stays valid), and the slot is removed from the find
     /// index so the dropped contract becomes unresolvable via `find_*`. New lookups
@@ -1245,7 +1245,7 @@ impl RuntimeStore {
                     // so an in-flight reader holding a pinned guard stays valid), and
                     // the slot removed from the find index so the contract is no longer
                     // resolvable.
-                    data.retire_slot(old_idx);
+                    data.vacate_slot(old_idx);
                     if let Some(bd) = data.bundle_data.get_mut(&bundle_id) {
                         bd.plugin_slots.retain(|&idx| idx != old_idx);
                     }
@@ -1273,7 +1273,7 @@ impl RuntimeStore {
             // generation so any handle minted against this slot during the reload
             // window — e.g. a pending handle the registration returned — is recognised
             // as stale once the index is recycled by a later registration (ABA
-            // protection), mirroring `retire_slot`'s generation bump without the (now
+            // protection), mirroring `vacate_slot`'s generation bump without the (now
             // absent) Arc teardown.
             data.slots[new_idx as usize].generation =
                 data.slots[new_idx as usize].generation.wrapping_add(1);
@@ -1294,7 +1294,7 @@ impl RuntimeStore {
             // Determine the contract_id of a still-live pending slot, then drop the
             // immutable borrow before mutating the index.
             let contract_id: Option<GuestContractId> = match data.slots.get(new_idx as usize) {
-                // A consumed/retired slot has its entry cleared; skip those.
+                // A consumed/vacated slot has its entry cleared; skip those.
                 Some(slot) if slot.entry.is_some() => {
                     slot.interface.as_ref().map(|i| i.contract_id)
                 }
@@ -1319,7 +1319,7 @@ impl RuntimeStore {
     /// contract_name, version) for introspection. Returns `None` if the handle is
     /// out of bounds, its slot is vacant, or the handle is stale (its generation no
     /// longer matches the slot's). The generation check is what prevents a handle
-    /// minted against a retired slot from observing the descriptor of a later
+    /// minted against a vacated slot from observing the descriptor of a later
     /// occupant after the slot index is recycled. The returned data is owned (no
     /// borrowed `StringView`s), so it stays valid independently of the plugin's
     /// transient init-time buffers.
@@ -1500,7 +1500,7 @@ impl RuntimeStore {
     /// from every index structure.
     ///
     /// This is the invalidate-only unload primitive. Each owned slot is torn down via
-    /// the canonical [`RuntimeStoreData::retire_slot`] helper, which:
+    /// the canonical [`RuntimeStoreData::vacate_slot`] helper, which:
     /// - bumps `slot.generation` (so every handle minted against the old generation now
     ///   resolves to [`RegistryError::StaleHandle`]);
     /// - drops the slot's interface `Arc`. The published epoch snapshot owns its clone
@@ -1531,7 +1531,7 @@ impl RuntimeStore {
         // Tear down each slot via the canonical teardown atom. Bundle-level metadata is
         // removed in bulk below (no per-slot plugin_slots edit needed here).
         for slot_idx in &slot_indices {
-            data.retire_slot(*slot_idx);
+            data.vacate_slot(*slot_idx);
         }
 
         // Remove from bundle_data.
@@ -2099,10 +2099,10 @@ mod tests {
     }
 
     /// Item 8: when the reloaded version drops a previously-provided contract,
-    /// apply_reload_swap must retire the old slot (not error), making the contract
+    /// apply_reload_swap must vacate the old slot (not error), making the contract
     /// unresolvable while not failing the reload.
     #[test]
-    fn reload_dropping_contract_retires_old_slot() {
+    fn reload_dropping_contract_vacates_old_slot() {
         const CID: u64 = 0x5555_6666_7777_8888_u64;
         let registry: RuntimeStore = RuntimeStore::new();
         let bundle_id: BundleId = BundleId::from_u64(0xBBBB_u64);

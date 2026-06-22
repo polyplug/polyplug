@@ -157,7 +157,7 @@ static INTERFACE_MW: GuestContractInterface =
 
 /// Several writer threads concurrently churn the SAME bundle — each loops
 /// `invalidate` then `register` — while resolver threads read. This drives the
-/// retire/reclaim path under genuine multi-writer contention (the single-writer
+/// vacate/reclaim path under genuine multi-writer contention (the single-writer
 /// `stress_concurrent_unload_with_resolvers` only ever has one thread mutating).
 ///
 /// Writers tolerate `DuplicateProvider` (another writer re-registered first) and a

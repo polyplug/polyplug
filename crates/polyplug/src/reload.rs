@@ -78,7 +78,7 @@ impl Runtime {
         // straddle `loader.reload()`, so the registry `RwLock` (dropped between
         // those steps) does not make the sequence atomic. Without this guard, two
         // reloads of the same bundle can interleave so that one reload's snapshot
-        // goes stale and its swap retires a contract's only live slot — see the
+        // goes stale and its swap vacates a contract's only live slot — see the
         // `reload_serialize` field docs. The guard is held across the entire
         // cascade tree; the recursive `reload_bundle_with_visited` (also used for
         // cascade dependents) never re-acquires it, so cascades cannot self-deadlock.
@@ -187,7 +187,7 @@ impl Runtime {
 
         // After the Preparing callback (the host's window to destroy instances),
         // warn if any of this bundle's contracts still have live guest instances.
-        // A retired interface keeps such instances valid today, but they must be
+        // A vacated interface keeps such instances valid today, but they must be
         // destroyed before the bundle is truly freed — surface the hazard, do not
         // block the reload (informational only).
         let exported: Vec<GuestContractId> = self.registry.bundle_exported_contracts(bundle_id);
@@ -219,7 +219,7 @@ impl Runtime {
                 // loader.reload() called polyplug_init, which registered the new
                 // version's interfaces into fresh slots (registration never
                 // vacates the old slots). Move each new interface into its
-                // pre-reload slot and retire the duplicate new slot, atomically.
+                // pre-reload slot and vacate the duplicate new slot, atomically.
                 //
                 // A swap failure is a reload failure: fire the Failed callback (the
                 // active version is kept) before propagating, mirroring the loader
@@ -245,7 +245,7 @@ impl Runtime {
                 // bundle's contracts are now dead (a correct caller revalidates and
                 // recreates its instance on the new interface). Reset their live
                 // accounting so instances abandoned across the reload — never
-                // destroyed through the retired interface — do not inflate the
+                // destroyed through the vacated interface — do not inflate the
                 // diagnostic count forever.
                 self.reset_instance_counts_for_contracts(&exported);
 

@@ -424,7 +424,7 @@ impl Runtime {
     /// Sum the live stateful-instance counts across the given contract ids.
     ///
     /// Used by the reload/unload UB-warning to report how many guest instances a
-    /// bundle's contracts still hold before its interfaces are retired or freed.
+    /// bundle's contracts still hold before its interfaces are vacated or freed.
     pub(crate) fn live_instance_count_for_contracts(&self, contracts: &[GuestContractId]) -> u64 {
         let guard: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<GuestContractId, u64>>> = self
             .instance_counts
@@ -774,7 +774,7 @@ impl Runtime {
     ///
     /// `loader_name` is the loader key captured before invalidate. A missing name
     /// or missing loader is not an error: a bundle with no recoverable loader simply
-    /// has nothing to reclaim (the invalidate already retired its interfaces).
+    /// has nothing to reclaim (the invalidate already vacated its interfaces).
     ///
     /// See [`crate::loader::BundleLoader::unload`] for the loader-side reclaim contract.
     fn reclaim_via_loader(
@@ -2540,7 +2540,7 @@ unsafe fn host_create_guest_instance_impl(
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
-    // Pin the epoch for the duration of construction. A concurrent unload retires
+    // Pin the epoch for the duration of construction. A concurrent unload vacates
     // the interface's snapshot for epoch reclamation; holding this pin across the
     // create call keeps that snapshot alive so `create_instance` cannot run against
     // a freed interface. The guard is named (not `let _ =`) so it lives to the end.

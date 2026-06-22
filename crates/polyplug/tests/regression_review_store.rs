@@ -360,7 +360,7 @@ fn min_version_is_major_floor() {
 // Finding 5 — get_guest_contract_descriptor honours handle.generation.
 // =============================================================================
 
-/// Finding 5: a stale handle (whose slot was retired and reused) must NOT return
+/// Finding 5: a stale handle (whose slot was vacated and reused) must NOT return
 /// the new occupant's descriptor.
 #[test]
 fn descriptor_honours_handle_generation() {
@@ -381,7 +381,7 @@ fn descriptor_honours_handle_generation() {
             .expect("register original")
     };
 
-    // Unload bundle_a — the slot is retired (generation bumped, entry cleared).
+    // Unload bundle_a — the slot is vacated (generation bumped, entry cleared).
     registry
         .invalidate_bundle(bundle_a)
         .expect("invalidate bundle_a");

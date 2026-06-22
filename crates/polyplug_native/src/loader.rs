@@ -71,7 +71,7 @@ impl NativeLoader {
     /// init may have already registered one or more live, resolvable interfaces
     /// before reporting failure (or panicking). Two things must happen, in order:
     ///
-    /// 1. Invalidate whatever the failed init registered so the runtime retires
+    /// 1. Invalidate whatever the failed init registered so the runtime vacates
     ///    those interfaces (the generation bump makes any published handle stale).
     ///    `invalidate_bundle` returns `Ok(0)` when nothing was registered.
     /// 2. SCHEDULE the library for epoch-deferred `dlclose` instead of dropping it
@@ -80,14 +80,14 @@ impl NativeLoader {
     ///    the now-invalidated interface, which the runtime keeps epoch-owned in its
     ///    published `ReadView` until quiescent. The global epoch keeps both the
     ///    interface and this library alive together until no reader is pinned.
-    fn retire_failed_init(
+    fn vacate_failed_init(
         &self,
         bundle_name: &str,
         library: libloading::Library,
         runtime: &Runtime,
     ) {
         let bundle_id: BundleId = BundleId::new(bundle_name);
-        // Ignore the slot count / retired Arcs: we only need the interfaces retired.
+        // Ignore the slot count / vacated Arcs: we only need the interfaces vacated.
         let _ = runtime.registry().invalidate_bundle(bundle_id);
         self.schedule_reclaim(library);
     }
@@ -251,7 +251,7 @@ impl NativeLoader {
             // init ran and may have registered a contract before reporting failure:
             // invalidate those registrations and schedule the library for epoch-deferred
             // dlclose (do not dlclose inline).
-            self.retire_failed_init(&manifest.name, library, runtime);
+            self.vacate_failed_init(&manifest.name, library, runtime);
             return Err(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: error_msg,
@@ -497,7 +497,7 @@ mod unload_tests {
         );
 
         // The failed init's registration must have been invalidated: re-invalidating
-        // the same bundle now reports zero slots (idempotent — nothing left to retire).
+        // the same bundle now reports zero slots (idempotent — nothing left to vacate).
         let count: u32 = runtime
             .registry()
             .invalidate_bundle(bundle_id)
