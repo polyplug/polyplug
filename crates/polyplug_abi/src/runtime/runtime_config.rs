@@ -2,6 +2,7 @@
 
 use crate::runtime::Compatibility;
 use crate::runtime::ReloadPhase;
+use crate::runtime::SignaturePolicy;
 use crate::types::LogLevel;
 use crate::types::StringView;
 
@@ -77,6 +78,16 @@ pub struct RuntimeConfig {
     /// when `log` is null — the stderr default is always capped at
     /// [`LogLevel::Warn`].
     pub log_max_level: u32,
+    /// Bundle signature enforcement policy.
+    ///
+    /// Controls whether `bundle.sig` is required and how violations are handled.
+    /// Defaults to [`SignaturePolicy::Off`], preserving existing behavior for
+    /// unsigned bundles.
+    ///
+    /// # Layout note
+    /// Placed at offset 0x2C (44), filling the 4-byte tail padding that existed
+    /// after `log_max_level` at 0x28. The struct remains 48 bytes, align 8.
+    pub signature_policy: SignaturePolicy,
 }
 
 // SAFETY: RuntimeConfig contains function pointers, plain values, and opaque
@@ -100,6 +111,7 @@ impl Default for RuntimeConfig {
             log: None,
             log_user_data: core::ptr::null_mut(),
             log_max_level: LogLevel::Warn as u32,
+            signature_policy: SignaturePolicy::Off,
         }
     }
 }
@@ -109,7 +121,7 @@ mod tests {
     use core::mem::{align_of, offset_of, size_of};
 
     use super::RuntimeConfig;
-    use crate::runtime::Compatibility;
+    use crate::runtime::{Compatibility, SignaturePolicy};
     use crate::types::LogLevel;
 
     #[test]
@@ -122,7 +134,7 @@ mod tests {
         // log: 8 bytes (fn pointer) at 0x18
         // log_user_data: 8 bytes (pointer) at 0x20
         // log_max_level: 4 bytes (u32) at 0x28
-        // padding: 4 bytes (0x2C-0x2F)
+        // signature_policy: 4 bytes (u32) at 0x2C  ← fills former tail padding
         // Total: 48 bytes, alignment 8
         assert_eq!(size_of::<RuntimeConfig>(), 48);
         assert_eq!(align_of::<RuntimeConfig>(), 8);
@@ -133,6 +145,7 @@ mod tests {
         assert_eq!(offset_of!(RuntimeConfig, log), 0x18);
         assert_eq!(offset_of!(RuntimeConfig, log_user_data), 0x20);
         assert_eq!(offset_of!(RuntimeConfig, log_max_level), 0x28);
+        assert_eq!(offset_of!(RuntimeConfig, signature_policy), 0x2C);
     }
 
     /// The nullable callbacks are `Option<fn>`: the null-pointer optimization
@@ -180,5 +193,6 @@ mod tests {
         assert!(config.log.is_none());
         assert!(config.log_user_data.is_null());
         assert_eq!(config.log_max_level, LogLevel::Warn as u32);
+        assert_eq!(config.signature_policy, SignaturePolicy::Off);
     }
 }

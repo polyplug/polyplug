@@ -118,7 +118,17 @@ Working reference hosts for all six languages live in `examples/hosts/`.
 │       js-quickjs → .js, dotnet → .dll)                            │
 │    • version parses as major.minor[.patch]                        │
 └───────────────────────────────────────────────────────────────────┘
-┌─ 7. SHIP ─────────────────────────────────────────────────────────┐
+┌─ 7. SIGN (optional) ──────────────────────────────────────────────┐
+│  polyplugc keygen --out keys/            (once — keep signing.key  │
+│                                           secret, ship nothing)    │
+│  polyplugc sign --bundle-dir dist/decoder/ --key keys/signing.key  │
+│  Writes dist/decoder/bundle.sig (detached Ed25519 over a digest    │
+│  of every file). Verify any time with:                            │
+│    polyplugc verify --bundle-dir dist/decoder/                     │
+│  Hosts that set SignaturePolicy=Required reject unsigned/tampered  │
+│  bundles at load; the public key travels in bundle.sig (TOFU).    │
+└───────────────────────────────────────────────────────────────────┘
+┌─ 8. SHIP ─────────────────────────────────────────────────────────┐
 │  Send dist/decoder/ to app users — they drop it into the app's    │
 │  plugins directory. Done.                                         │
 └───────────────────────────────────────────────────────────────────┘

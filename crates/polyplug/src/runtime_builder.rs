@@ -1,7 +1,7 @@
 use core::ffi::c_void;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
+use polyplug_abi::runtime::{Compatibility, RuntimeConfig, SignaturePolicy};
 use polyplug_abi::types::{LogLevel, StringView};
 use polyplug_abi::{HostApi, SupportedLanguage};
 
@@ -142,6 +142,13 @@ impl RuntimeBuilder {
 
     pub fn config(mut self, config: RuntimeConfig) -> RuntimeBuilder {
         self.config = config;
+        self
+    }
+
+    /// Set the bundle signature enforcement policy.
+    /// Defaults to `SignaturePolicy::Off` (unsigned bundles load normally).
+    pub fn signature_policy(mut self, policy: SignaturePolicy) -> RuntimeBuilder {
+        self.config.signature_policy = policy;
         self
     }
 

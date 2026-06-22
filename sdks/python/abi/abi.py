@@ -296,6 +296,13 @@ class ReloadPhaseType(enum.IntEnum):
     Unloading = 3
 
 
+class SignaturePolicy(enum.IntEnum):
+    """ How strictly bundle signature verification is enforced at load time."""
+    Off = 0
+    WarnOnly = 1
+    Required = 2
+
+
 class SupportedLanguage(enum.IntEnum):
     """ Supported plugin language identifier — identifies the language/runtime hosting plugins."""
     Rust = 0
@@ -528,6 +535,7 @@ class RuntimeConfig(ctypes.Structure):
         ("log", _runtime_config_log_t),
         ("log_user_data", ctypes.c_void_p),
         ("log_max_level", ctypes.c_uint32),
+        ("signature_policy", ctypes.c_uint32),
     ]
 
 # Expected size: 48 bytes

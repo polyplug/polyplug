@@ -92,15 +92,25 @@ impl JsGenerator {
             "Buffer" => Some((24, 8)),     // { ptr(8), len(8), align(8) }
             "AbiError" => Some((24, 8)),   // { code(4), _pad(4), message(16) }
             "Array" => Some((24, 8)),      // { items(8), len(8), align(8) }
-            // All #[repr(u32)] enums — 4 bytes, 4-aligned
-            "AbiErrorCode" | "DispatchType" | "Compatibility" | "ReloadPhaseType"
-            | "ContractType" | "SupportedLanguage" | "ParseVersionError" => Some((4, 4)),
+            // Enums are resolved from `GenerationContext::enum_reprs` in
+            // `type_size` / `type_align`, keyed by their actual Rust `repr`.
+            _ => None,
+        }
+    }
+
+    /// Map a Rust enum `repr` string to its `(size, alignment)` in bytes.
+    fn repr_layout(repr: &str) -> Option<(usize, usize)> {
+        match repr {
+            "u8" | "i8" => Some((1, 1)),
+            "u16" | "i16" => Some((2, 2)),
+            "u32" | "i32" => Some((4, 4)),
+            "u64" | "i64" => Some((8, 8)),
             _ => None,
         }
     }
 
     /// Compute the byte size of a known Rust type for offset calculation.
-    fn type_size(rust_type: &str) -> usize {
+    fn type_size(rust_type: &str, ctx: &GenerationContext) -> usize {
         let type_str: &str = Self::strip_option(rust_type);
         if type_str.contains("extern\"C\"fn") || type_str.contains("extern\"C\"") {
             return 8; // fn pointer = 8 bytes on 64-bit
@@ -114,6 +124,13 @@ impl JsGenerator {
         if let Some((size, _)) = Self::named_type_layout(type_str) {
             return size;
         }
+        if let Some((size, _)) = ctx
+            .enum_reprs
+            .get(type_str)
+            .and_then(|repr: &String| Self::repr_layout(repr))
+        {
+            return size;
+        }
         match type_str {
             "u64" | "i64" | "usize" | "isize" => 8,
             "u32" | "i32" => 4,
@@ -124,7 +141,7 @@ impl JsGenerator {
     }
 
     /// Compute the alignment of a known Rust type.
-    fn type_align(rust_type: &str) -> usize {
+    fn type_align(rust_type: &str, ctx: &GenerationContext) -> usize {
         let type_str: &str = Self::strip_option(rust_type);
         if type_str.contains("extern\"C\"fn") || type_str.contains("extern\"C\"") {
             return 8;
@@ -136,6 +153,13 @@ impl JsGenerator {
             return 8;
         }
         if let Some((_, align)) = Self::named_type_layout(type_str) {
+            return align;
+        }
+        if let Some((_, align)) = ctx
+            .enum_reprs
+            .get(type_str)
+            .and_then(|repr: &String| Self::repr_layout(repr))
+        {
             return align;
         }
         match type_str {
@@ -183,7 +207,7 @@ impl CodeGenerator for JsGenerator {
         )
     }
 
-    fn generate_struct(&self, item: &StructInfo, _ctx: &GenerationContext) -> String {
+    fn generate_struct(&self, item: &StructInfo, ctx: &GenerationContext) -> String {
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -216,7 +240,7 @@ impl CodeGenerator for JsGenerator {
         let struct_align: usize = item
             .fields
             .iter()
-            .map(|f| Self::type_align(&f.rust_type))
+            .map(|f| Self::type_align(&f.rust_type, ctx))
             .max()
             .unwrap_or(1);
 
@@ -224,7 +248,7 @@ impl CodeGenerator for JsGenerator {
         let mut offset_constants: String = String::new();
 
         for field in &item.fields {
-            let field_align: usize = Self::type_align(&field.rust_type);
+            let field_align: usize = Self::type_align(&field.rust_type, ctx);
             offset = Self::align_up(offset, field_align);
 
             let const_name: String = format!(
@@ -253,7 +277,7 @@ impl CodeGenerator for JsGenerator {
                 ));
                 offset += 8; // align
             } else {
-                offset += Self::type_size(&field.rust_type);
+                offset += Self::type_size(&field.rust_type, ctx);
             }
         }
 
@@ -486,6 +510,50 @@ mod tests {
             output.contains("WITH_ARRAY_ITEMS_OFFSET"),
             "should emit items offset: {}",
             output
+        );
+    }
+
+    /// Regression: a `#[repr(u32)]` enum field must occupy 4 bytes, resolved
+    /// from `enum_reprs`, not the 8-byte unknown-type fallback. A u32 field
+    /// followed by such an enum therefore places the enum at offset 4 and keeps
+    /// the struct 8 bytes. Guards the drift where an enum absent from the JS
+    /// emitter's knowledge silently received the pointer-sized fallback layout
+    /// (offset 8 / size 16), corrupting every downstream DataView offset.
+    #[test]
+    fn js_enum_field_uses_repr_layout_for_offsets() {
+        let generator: JsGenerator = JsGenerator::new();
+        let mut enum_reprs: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        enum_reprs.insert(String::from("MyPolicy"), String::from("u32"));
+        let ctx: GenerationContext = GenerationContext::new().with_enum_reprs(enum_reprs);
+
+        let item = StructInfo {
+            name: String::from("PolicyHolder"),
+            fields: vec![
+                FieldInfo {
+                    name: String::from("level"),
+                    rust_type: String::from("u32"),
+                    doc: None,
+                },
+                FieldInfo {
+                    name: String::from("policy"),
+                    rust_type: String::from("MyPolicy"),
+                    doc: None,
+                },
+            ],
+            doc: None,
+            attributes: vec![],
+            size_hint: None,
+        };
+
+        let output: String = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains("export const POLICY_HOLDER_POLICY_OFFSET: number = 4;"),
+            "repr(u32) enum field must sit at offset 4, got: {output}"
+        );
+        assert!(
+            output.contains("export const POLICY_HOLDER_SIZE: number = 8;"),
+            "u32 + repr(u32) enum struct must be 8 bytes, got: {output}"
         );
     }
 }

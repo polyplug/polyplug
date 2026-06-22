@@ -22,11 +22,13 @@ public sealed class RuntimeBuilder
 {
     private readonly List<string> _pluginDirs;
     private Action<ReloadPhase>? _onReload;
+    private SignaturePolicy? _signaturePolicy;
 
     public RuntimeBuilder()
     {
         _pluginDirs = [];
         _onReload = null;
+        _signaturePolicy = null;
     }
 
     /// <summary>Add a directory to scan for plugin bundles during <see cref="Build"/>.</summary>
@@ -58,16 +60,60 @@ public sealed class RuntimeBuilder
         return this;
     }
 
+    /// <summary>
+    /// Set the bundle signature enforcement policy
+    /// (<see cref="SignaturePolicy"/> discriminant). Defaults to
+    /// <see cref="SignaturePolicy.Off"/> (unsigned bundles load normally)
+    /// when never set.
+    /// </summary>
+    public RuntimeBuilder SignaturePolicy(SignaturePolicy policy)
+    {
+        _signaturePolicy = policy;
+        return this;
+    }
+
     public Runtime Build()
     {
-        Runtime runtime = _onReload is null ? BuildDefault() : BuildWithReloadCallback(_onReload);
+        Runtime runtime = _onReload is null
+            ? BuildWithConfig(_signaturePolicy)
+            : BuildWithReloadCallback(_onReload, _signaturePolicy);
         LoadPluginDirs(runtime);
         return runtime;
     }
 
-    private static Runtime BuildDefault()
+    private static Runtime BuildWithConfig(SignaturePolicy? signaturePolicy)
     {
-        nint handle = Runtime.CreateNative();
+        // No reload callback. With no options at all, pass null for defaults;
+        // otherwise marshal a RuntimeConfig carrying the chosen options.
+        if (signaturePolicy is null)
+        {
+            nint defaultHandle = Runtime.CreateNative();
+            if (defaultHandle == nint.Zero)
+            {
+                Runtime.ThrowLastError("Failed to create runtime.");
+            }
+
+            return new Runtime(defaultHandle, default, default);
+        }
+
+        RuntimeConfig config = new RuntimeConfig
+        {
+            Compatibility = Compatibility.Strict,
+            SignaturePolicy = signaturePolicy.Value,
+        };
+
+        nint configPtr = Marshal.AllocHGlobal(Marshal.SizeOf<RuntimeConfig>());
+        nint handle;
+        try
+        {
+            Marshal.StructureToPtr(config, configPtr, fDeleteOld: false);
+            handle = NativeMethods.PolyplugRuntimeCreate(configPtr);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(configPtr);
+        }
+
         if (handle == nint.Zero)
         {
             Runtime.ThrowLastError("Failed to create runtime.");
@@ -84,7 +130,7 @@ public sealed class RuntimeBuilder
     /// The native core copies the config during the call, so the unmanaged
     /// copy is freed once create returns.
     /// </summary>
-    private static Runtime BuildWithReloadCallback(Action<ReloadPhase> callback)
+    private static Runtime BuildWithReloadCallback(Action<ReloadPhase> callback, SignaturePolicy? signaturePolicy)
     {
         Runtime.ReloadCallbackState state = new Runtime.ReloadCallbackState(callback);
         Runtime.OnReloadTrampoline trampoline = Runtime.OnReloadNative;
@@ -99,6 +145,7 @@ public sealed class RuntimeBuilder
                 HotReloadEnabled = true,
                 OnReload = Marshal.GetFunctionPointerForDelegate(trampoline),
                 OnReloadUserData = GCHandle.ToIntPtr(stateHandle),
+                SignaturePolicy = signaturePolicy ?? Polyplug.Abi.SignaturePolicy.Off,
             };
 
             nint configPtr = Marshal.AllocHGlobal(Marshal.SizeOf<RuntimeConfig>());

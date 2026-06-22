@@ -90,6 +90,12 @@ criterion = { version = "0.8", features = ["html_reports"] }
 # Testing utilities
 tempfile = { version = "3.27" }
 
+# Bundle signing (Ed25519 + SHA-256)
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+sha2 = { version = "0.10" }
+rand_core = { version = "0.6", features = ["getrandom"] }
+polyplug_signing = { version = "0.1.1", path = "crates/polyplug_signing" }
+
 # .NET hosting
 netcorehost = { version = "0.20" }
 pelite = { version = "0.10" }

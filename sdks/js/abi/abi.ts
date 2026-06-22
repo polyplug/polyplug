@@ -1014,6 +1014,18 @@ export interface RuntimeConfig {
      *  [`LogLevel::Warn`].
      */
     log_max_level: number;
+    /**
+     *  Bundle signature enforcement policy.
+     * 
+     *  Controls whether `bundle.sig` is required and how violations are handled.
+     *  Defaults to [`SignaturePolicy::Off`], preserving existing behavior for
+     *  unsigned bundles.
+     * 
+     *  # Layout note
+     *  Placed at offset 0x2C (44), filling the 4-byte tail padding that existed
+     *  after `log_max_level` at 0x28. The struct remains 48 bytes, align 8.
+     */
+    signature_policy: SignaturePolicy;
 }
 
 export const RUNTIME_CONFIG_COMPATIBILITY_OFFSET: number = 0;
@@ -1023,6 +1035,7 @@ export const RUNTIME_CONFIG_ON_RELOAD_USER_DATA_OFFSET: number = 16;
 export const RUNTIME_CONFIG_LOG_OFFSET: number = 24;
 export const RUNTIME_CONFIG_LOG_USER_DATA_OFFSET: number = 32;
 export const RUNTIME_CONFIG_LOG_MAX_LEVEL_OFFSET: number = 40;
+export const RUNTIME_CONFIG_SIGNATURE_POLICY_OFFSET: number = 44;
 export const RUNTIME_CONFIG_SIZE: number = 48;
 
 /**
@@ -1306,6 +1319,22 @@ export const enum ReloadPhaseType {
     Failed = 2,
     /**  Bundle is being unloaded. */
     Unloading = 3,
+}
+
+/**  How strictly bundle signature verification is enforced at load time. */
+export const enum SignaturePolicy {
+    /**  Signature verification is skipped entirely. Unsigned bundles load normally. */
+    Off = 0,
+    /**
+     *  If a bundle is unsigned or the signature is invalid, emit a warning and
+     *  continue loading. Bundles without a valid signature are NOT rejected.
+     */
+    WarnOnly = 1,
+    /**
+     *  Bundles MUST carry a valid `bundle.sig`. Missing or invalid signatures
+     *  cause the load to fail with a `LoaderError`.
+     */
+    Required = 2,
 }
 
 /**  Supported plugin language identifier — identifies the language/runtime hosting plugins. */

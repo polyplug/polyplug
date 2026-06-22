@@ -48,6 +48,7 @@ import {
   RUNTIME_CONFIG_LOG_OFFSET,
   RUNTIME_CONFIG_LOG_USER_DATA_OFFSET,
   RUNTIME_CONFIG_LOG_MAX_LEVEL_OFFSET,
+  RUNTIME_CONFIG_SIGNATURE_POLICY_OFFSET,
   RUNTIME_CONFIG_SIZE,
   RELOAD_PHASE_PHASE_TYPE_OFFSET,
   RELOAD_PHASE_BUNDLE_ID_OFFSET,
@@ -154,6 +155,17 @@ export const NULL_HANDLE = Object.freeze({ index: NULL_HANDLE_INDEX, generation:
 export const COMPATIBILITY_STRICT = 0;
 export const COMPATIBILITY_RELAXED = 1;
 export const COMPATIBILITY_YOLO = 2;
+
+// SignaturePolicy values (match polyplug_abi::SignaturePolicy #[repr(u32)]). The
+// ABI definition in abi.ts is a TypeScript `const enum`, erased at compile time
+// and therefore not importable as a runtime value into this `.js` module; the
+// values are mirrored here so host code can use the named form
+// (SignaturePolicy.Off) instead of magic numbers when setting config.signaturePolicy.
+export const SignaturePolicy = Object.freeze({
+  Off: 0,
+  WarnOnly: 1,
+  Required: 2,
+});
 
 // ─── FFI Symbols: Only create and destroy ───────────────────────────────────────
 // All operations are accessed through HostApi struct fields.
@@ -1120,8 +1132,9 @@ export function openPolyplug(soPath) {
  *
  * RuntimeConfig is the full 48-byte ABI struct: compatibility (u32 @ 0),
  * hot_reload_enabled (bool @ 4), on_reload (fn @ 8), on_reload_user_data (ptr @ 16),
- * log (fn @ 24), log_user_data (ptr @ 32), log_max_level (u32 @ 40). Offsets/size
- * come from the abi.ts constants.
+ * log (fn @ 24), log_user_data (ptr @ 32), log_max_level (u32 @ 40),
+ * signature_policy (u32 @ 44). The struct stays 48 bytes. Offsets/size come from
+ * the abi.ts constants.
  *
  * @param {Deno.DynamicLibrary} lib - Dynamic library
  * @param {Object} [options] - Per-runtime options
@@ -1129,6 +1142,7 @@ export function openPolyplug(soPath) {
  * @param {number} [options.config.compatibility=0] - Compatibility mode (COMPATIBILITY_STRICT=0, RELAXED=1, YOLO=2)
  * @param {boolean} [options.config.hotReloadEnabled=false] - Whether hot-reload is enabled
  * @param {number} [options.config.logMaxLevel=5] - Max LogLevel (1=Error … 5=Trace) delivered to `logger`
+ * @param {number} [options.config.signaturePolicy=0] - Bundle signature enforcement policy (SignaturePolicy.Off=0, WarnOnly=1, Required=2), written at offset 44
  * @param {function(ReloadPhase): void} [options.onReload] - Hot-reload phase callback
  * @param {function(number, string, string): void} [options.logger] - Logger callback (level, scope, message)
  * @returns {Runtime}
@@ -1148,6 +1162,13 @@ export function runtimeNew(lib, options = {}) {
 
     configView.setUint32(RUNTIME_CONFIG_COMPATIBILITY_OFFSET, config?.compatibility ?? COMPATIBILITY_STRICT, true);
     configView.setUint8(RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET, config?.hotReloadEnabled ? 1 : 0);
+
+    // Bundle signature enforcement policy (SignaturePolicy, offset 44). Only
+    // written when explicitly provided; the zeroed buffer already encodes the
+    // SignaturePolicy.Off default (0), preserving existing behavior.
+    if (config?.signaturePolicy !== undefined) {
+      configView.setUint32(RUNTIME_CONFIG_SIGNATURE_POLICY_OFFSET, config.signaturePolicy, true);
+    }
 
     if (onReloadCallback) {
       const ffiReloadCallback = new Deno.UnsafeCallback(_RELOAD_CALLBACK_TYPE,

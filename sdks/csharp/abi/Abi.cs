@@ -864,6 +864,16 @@ public struct RuntimeConfig
     ///  when `log` is null — the stderr default is always capped at
     ///  [`LogLevel::Warn`].
     public uint LogMaxLevel;
+    ///  Bundle signature enforcement policy.
+    ///
+    ///  Controls whether `bundle.sig` is required and how violations are handled.
+    ///  Defaults to [`SignaturePolicy::Off`], preserving existing behavior for
+    ///  unsigned bundles.
+    ///
+    ///  # Layout note
+    ///  Placed at offset 0x2C (44), filling the 4-byte tail padding that existed
+    ///  after `log_max_level` at 0x28. The struct remains 48 bytes, align 8.
+    public SignaturePolicy SignaturePolicy;
 }
 
 /// Expected size: 48 bytes
@@ -1113,6 +1123,19 @@ public enum ReloadPhaseType : uint
     Failed = 2,
     ///  Bundle is being unloaded.
     Unloading = 3,
+}
+
+///  How strictly bundle signature verification is enforced at load time.
+public enum SignaturePolicy : uint
+{
+    ///  Signature verification is skipped entirely. Unsigned bundles load normally.
+    Off = 0,
+    ///  If a bundle is unsigned or the signature is invalid, emit a warning and
+    ///  continue loading. Bundles without a valid signature are NOT rejected.
+    WarnOnly = 1,
+    ///  Bundles MUST carry a valid `bundle.sig`. Missing or invalid signatures
+    ///  cause the load to fail with a `LoaderError`.
+    Required = 2,
 }
 
 ///  Supported plugin language identifier — identifies the language/runtime hosting plugins.

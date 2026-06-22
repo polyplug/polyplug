@@ -144,6 +144,12 @@ pub enum LoaderError {
 
     #[error("loader `{loader_name}` does not support hot-reload")]
     HotReloadUnsupported { loader_name: String },
+
+    #[error("bundle `{bundle}` is not signed and signature_policy is Required")]
+    UnsignedBundle { bundle: String },
+
+    #[error("signature verification failed for bundle `{bundle}`: {reason}")]
+    SignatureVerificationFailed { bundle: String, reason: String },
 }
 
 /// Errors from the plugin registry.
