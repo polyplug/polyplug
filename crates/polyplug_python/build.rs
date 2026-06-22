@@ -8,9 +8,9 @@
 fn main() {
     // pyo3-build-config resolves the same interpreter pyo3 links against.
     let lib_name: String = pyo3_build_config::get()
-        .lib_name
-        .clone()
-        .unwrap_or_default();
+        .lib_name()
+        .unwrap_or_default()
+        .to_owned();
     println!("cargo:rustc-env=POLYPLUG_PYTHON_LIB_NAME={lib_name}");
     println!("cargo:rerun-if-changed=build.rs");
 }
