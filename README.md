@@ -37,8 +37,9 @@ polyplug runs plugins **in-process, with the host's privileges, and no sandbox.*
 - **ABI compatibility is checked at load** — a bundle whose contract version doesn't match is rejected with a clear error, never silent UB.
 - **The runtime's own create/destroy path is crash-isolated** — a bug in polyplug's two C ABI exports surfaces as a null/no-op + recorded error, never a host abort.
 - **`catch_unwind` at every FFI boundary is real** — `panic = "abort"` is intentionally never set. A *plugin* that lets a panic/exception escape its generated glue is a plugin defect with a defined outcome (process abort).
+- **Bundle signing & verification** — a bundle can carry a detached Ed25519 `bundle.sig` over a canonical digest of every file it contains. The host picks a `SignaturePolicy` — `Off` (default), `WarnOnly`, or `Required` — that decides whether an unsigned or tampered bundle is warned about or rejected at load. The model is **freedom-preserving (TOFU)**: verification proves a bundle is intact and self-consistently signed *without* requiring the host to pre-know or allowlist the signer, so app users stay free to load plugins from unknown authors. Sign with `polyplugc keygen` then `polyplugc sign`; an opt-in key-pinning layer can be added later behind the `BundleVerifier` seam without breaking the format.
 
-Planned (post-0.1.0): **bundle signing/verification** (the primary security control for a trusted-plugin model) and an **optional process-isolation mode**. See [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md) for the full threat model and [docs/ROADMAP.md](docs/ROADMAP.md) for the security roadmap.
+Planned (post-0.1.x): an **optional process-isolation mode**. See [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md) for the full threat model and [docs/ROADMAP.md](docs/ROADMAP.md) for the security roadmap.
 
 ## Features
 

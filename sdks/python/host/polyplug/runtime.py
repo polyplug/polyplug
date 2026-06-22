@@ -33,6 +33,7 @@ from polyplug_abi import (
     ReloadPhase,
     ReloadPhaseType,
     RuntimeConfig,
+    SignaturePolicy,
 )
 
 # The ABI-level ReloadPhase ctypes Structure (the on_reload callback receives a
@@ -196,6 +197,7 @@ class Runtime:
         self,
         config: Optional["RuntimeConfig"] = None,
         on_reload: Optional[Callable[[ReloadPhase], None]] = None,
+        signature_policy: Optional[SignaturePolicy] = None,
     ) -> None:
         lib_path: str = _resolve_lib_path()
         self._backend: Backend = _create_backend(lib_path)
@@ -205,6 +207,7 @@ class Runtime:
         # the C callback wrapper outlives the create call).
         self._on_reload_cb: Optional[Callable[[ReloadPhase], None]] = on_reload
         self._config: Optional["RuntimeConfig"] = config
+        self._signature_policy: Optional[SignaturePolicy] = signature_policy
         self._c_callback: Optional[ctypes.CFUNCTYPE] = None
         self._runtime_config: Optional[RuntimeConfig] = None
 
@@ -215,7 +218,11 @@ class Runtime:
         self._host_contract_interfaces: dict[int, HostContractInterface] = {}
 
         # Create HostApi (options or default)
-        if self._on_reload_cb is not None or self._config is not None:
+        if (
+            self._on_reload_cb is not None
+            or self._config is not None
+            or self._signature_policy is not None
+        ):
             host_ptr: int = self._create_runtime_with_options()
         else:
             host_ptr = self._backend.create_host_interface()
@@ -256,6 +263,7 @@ class Runtime:
         - log (fn pointer or null)
         - log_user_data (pointer or null)
         - log_max_level (u32)
+        - signature_policy (u32, offset 44)
 
         The runtime only borrows the config for the duration of the build,
         but the config is retained on the instance so the C callback wrapper
@@ -269,6 +277,12 @@ class Runtime:
             config.hot_reload_enabled = bool(self._config.hot_reload_enabled)
             if hasattr(self._config, "compatibility"):
                 config.compatibility = self._config.compatibility
+            if hasattr(self._config, "signature_policy"):
+                config.signature_policy = self._config.signature_policy
+
+        # signature_policy argument wins over a config-supplied value.
+        if self._signature_policy is not None:
+            config.signature_policy = self._signature_policy
 
         if self._on_reload_cb is not None:
             self._c_callback = self._make_c_callback()

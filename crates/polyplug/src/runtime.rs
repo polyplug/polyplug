@@ -24,13 +24,14 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 use std::thread::ThreadId;
 
-use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
+use polyplug_abi::runtime::{Compatibility, RuntimeConfig, SignaturePolicy};
 use polyplug_abi::types::LogLevel;
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, DependencyInfo, GuestContractHandle, GuestContractInterface,
     HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, StringView,
     SupportedLanguage, types::Version,
 };
+use polyplug_signing::{SigError, verify_bundle as signing_verify_bundle};
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::HostContractError;
@@ -905,6 +906,37 @@ impl Runtime {
         manifest
             .validate()
             .map_err(|e: LoaderError| RuntimeError::Loader(e))?;
+
+        // Enforce the configured bundle signature policy.
+        match self.config.signature_policy {
+            SignaturePolicy::Off => {}
+            SignaturePolicy::WarnOnly => {
+                if let Err(e) = signing_verify_bundle(&manifest.path) {
+                    self.logger.log(LogLevel::Warn, "runtime", || {
+                        format!(
+                            "bundle `{}`: signature check failed (WarnOnly — continuing): {}",
+                            manifest.name, e
+                        )
+                    });
+                }
+            }
+            SignaturePolicy::Required => match signing_verify_bundle(&manifest.path) {
+                Ok(_verified) => {}
+                Err(SigError::MissingSignature { .. }) => {
+                    return Err(RuntimeError::Loader(LoaderError::UnsignedBundle {
+                        bundle: manifest.name.clone(),
+                    }));
+                }
+                Err(e) => {
+                    return Err(RuntimeError::Loader(
+                        LoaderError::SignatureVerificationFailed {
+                            bundle: manifest.name.clone(),
+                            reason: e.to_string(),
+                        },
+                    ));
+                }
+            },
+        }
 
         // Validate function_count entries for this explicit load
         if !opts.ignore_function_count_mismatch {

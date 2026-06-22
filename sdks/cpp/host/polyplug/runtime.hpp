@@ -90,6 +90,15 @@ public:
             return *this;
         }
 
+        /// Set the bundle signature enforcement policy (`SignaturePolicy`
+        /// discriminant). Overrides the `signature_policy` field of a config
+        /// passed via `config()`. Defaults to `SignaturePolicy::Off` (unsigned
+        /// bundles load normally) when never set.
+        Builder& signature_policy(SignaturePolicy policy) noexcept {
+            signature_policy_ = policy;
+            return *this;
+        }
+
         Builder& config(const RuntimeConfig& cfg) noexcept {
             config_ = cfg;
             return *this;
@@ -108,7 +117,8 @@ public:
 
     private:
         Runtime create_runtime() {
-            if (config_.has_value() || on_reload_cb_.has_value() || compatibility_.has_value()) {
+            if (config_.has_value() || on_reload_cb_.has_value() || compatibility_.has_value()
+                || signature_policy_.has_value()) {
                 // Build a RuntimeConfig from stored options.
                 RuntimeConfig cfg{};
                 if (config_.has_value()) {
@@ -117,6 +127,10 @@ public:
                 // compatibility() wins over a config()-supplied value.
                 if (compatibility_.has_value()) {
                     cfg.compatibility = static_cast<Compatibility>(compatibility_.value());
+                }
+                // signature_policy() wins over a config()-supplied value.
+                if (signature_policy_.has_value()) {
+                    cfg.signature_policy = signature_policy_.value();
                 }
                 // The owned functor (if any) is heap-allocated so its address is
                 // stable; the pointer is handed to the runtime as on_reload_user_data
@@ -133,7 +147,8 @@ public:
                 }
                 return Runtime(h, std::move(cb));
             } else {
-                // No config, callback, or compatibility — pass null for defaults.
+                // No config, callback, compatibility, or signature policy — pass
+                // null for defaults.
                 const HostApi* h = polyplug_runtime_create(nullptr);
                 if (h == nullptr) {
                     throw std::runtime_error("polyplug_runtime_create returned null");
@@ -167,6 +182,7 @@ public:
 
         std::vector<std::string> plugin_dirs_{};
         std::optional<uint32_t> compatibility_{};
+        std::optional<SignaturePolicy> signature_policy_{};
         std::optional<RuntimeConfig> config_{};
         std::optional<std::function<void(const ReloadPhase&)>> on_reload_cb_{};
     };

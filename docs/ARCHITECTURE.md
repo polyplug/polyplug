@@ -62,11 +62,13 @@ field on the `HostApi` struct (a frozen 184-byte function table). See
 
 ## Pipeline 1 — bundle load and registration
 
-`Runtime::load_bundle` selects a loader by the manifest's loader name, records the
-bundle's **declared dependencies** *before* running the bundle (so a guest can only
-resolve what it declared — see [`TRUST_MODEL.md`](TRUST_MODEL.md)), then runs the
-bundle's entry point. The guest registers each contract back through the `HostApi`,
-and the runtime publishes a fresh immutable snapshot.
+`Runtime::load_bundle` validates the manifest, enforces the configured
+**signature policy** (an unsigned or tampered bundle is warned about or rejected
+before any loader runs — see [`TRUST_MODEL.md`](TRUST_MODEL.md)), selects a loader
+by the manifest's loader name, records the bundle's **declared dependencies**
+*before* running the bundle (so a guest can only resolve what it declared), then
+runs the bundle's entry point. The guest registers each contract back through the
+`HostApi`, and the runtime publishes a fresh immutable snapshot.
 
 ```mermaid
 sequenceDiagram
@@ -77,6 +79,8 @@ sequenceDiagram
     participant S as RuntimeStore
 
     H->>R: load_bundle(path)
+    R->>R: validate manifest
+    R->>R: enforce SignaturePolicy (verify bundle.sig)
     R->>R: resolve loader from manifest
     R->>S: record declared dependencies (pre-init gate)
     R->>L: load()

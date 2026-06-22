@@ -403,6 +403,48 @@ the prior epoch.
 
 The trust model continues to evolve as polyplug expands its reach into more dynamic environments.
 
+### Bundle Signing ✅ done
+
+A bundle directory can carry a detached `bundle.sig` file produced by the
+`polyplug_signing` crate (Ed25519 over SHA-256, pure Rust). The host's
+`RuntimeConfig.signature_policy` (`SignaturePolicy`: `Off` = 0 default,
+`WarnOnly` = 1, `Required` = 2) is enforced at load, immediately after manifest
+validation and before any loader runs (see `Runtime::load_manifest_with_source`).
+`Required` rejects an unsigned bundle with `LoaderError::UnsignedBundle` and a
+tampered/invalid one with `LoaderError::SignatureVerificationFailed`; `WarnOnly`
+logs the same failure at `LogLevel::Warn` and continues; `Off` skips the check.
+
+**Canonical digest.** The signed message is a SHA-256 over a deterministic buffer
+built from every file in the bundle except `bundle.sig`: for each file, sorted by
+its `/`-relative path, append the path's UTF-8 bytes, a `0x00` separator, and the
+SHA-256 of the file's contents. Any added, removed, or modified file changes the
+digest, so the signature covers the manifest and every artifact uniformly.
+`bundle.sig` (6-byte magic + version + 32-byte verifying key + 64-byte signature)
+embeds the signer's **public** key, which therefore travels with the bundle.
+
+**Trust is freedom-preserving (TOFU), by design.** Verification proves a bundle is
+**intact** and **self-consistently signed** — nothing more. It deliberately does
+**not** require the host to pre-know or allowlist the signer's key: an application
+that loads third-party plugins almost never knows every author up front, and
+forcing an allowlist would defeat the whole point of an open plugin ecosystem.
+App users stay free to load plugins from unknown authors; the policy only governs
+*tamper detection*, not *author approval*. `verify_bundle` returns the embedded
+`VerifyingKey` so a host that *wants* stricter trust can build a key-pinning or
+allowlist layer on top — the `BundleVerifier` trait (with `Ed25519Verifier` as the
+default implementation) is the seam for that, and it can be added without changing
+the on-disk format or the ABI.
+
+**Tooling.** `polyplugc keygen --out <dir>` writes `signing.key` (private, `0o600`
+on Unix) and `verifying.key` (public); `polyplugc sign --bundle-dir <dir> --key
+<signing.key>` runs the same checks as `validate --bundle-dir` then writes
+`bundle.sig`; `polyplugc verify --bundle-dir <dir>` exits non-zero on any failure.
+
+**ABI note.** `signature_policy` was added at offset `0x2C` of `RuntimeConfig`,
+filling the 4-byte tail padding after `log_max_level` — the struct stays 48 bytes,
+align 8 (an owner-approved pre-1.0 ABI change). All six host SDKs mirror the field
+and default it to `Off`, so existing hosts that zero-initialize the config are
+unaffected.
+
 ### Unload ✅ done
 
 `HostApi.unload_bundle(this, bundle_id)` (offset 136) is live.

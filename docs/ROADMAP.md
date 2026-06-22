@@ -19,7 +19,7 @@ than abandon it.
 
 | Rank | Item | Summary |
 |---|---|---|
-| G1 | Bundle signing + verification | Cryptographic origin/integrity check at load — the primary security control that fits a no-sandbox, trusted-plugin model. Builds on `TRUST_MODEL.md` identity. |
+| ~~G1~~ ✅ | ~~Bundle signing + verification~~ **Done** | Shipped: detached Ed25519 `bundle.sig` over a canonical digest, enforced at load via `SignaturePolicy` (`Off`/`WarnOnly`/`Required`); freedom-preserving TOFU. See `TRUST_MODEL.md` § Bundle Signing and the `polyplug_signing` crate. |
 | G2 | Optional process-isolation mode | Opt-in, per-plugin out-of-process execution — the credible answer to "I sometimes need isolation" while keeping the native fast path the default. |
 | G3 | Resource limits / runaway-plugin watchdog | Per-call wall-clock timeouts at minimum (memory caps later) so a misbehaving trusted plugin can't hang the host. |
 | G4 | Published SDKs per registry | Make each SDK installable (crates.io / PyPI / NuGet / npm / LuaRocks) so plugin authors outside the repo can depend on it. |
@@ -37,6 +37,7 @@ than abandon it.
 | Goal 3 — Call arena for VM dispatch | ✅ Done (perf refinement deferred) |
 | Platform support — Windows | ✅ Done |
 | Unload — true unload (epoch-deferred reclaim) | ✅ Done |
+| Bundle signing + verification (Ed25519, `SignaturePolicy`) | ✅ Done |
 | FFI panic safety (per-language self-catch + embedder-guarded exports) | ✅ Done |
 | **Fuzzing the ABI boundary** | ✅ Done (3 targets + nightly smoke) |
 | **Miri + ASAN in CI** | ✅ Done (nightly) |
@@ -182,8 +183,6 @@ scoping:
   runtime" and a significant market expansion.
 - **Per-call resource limits / timeouts.** Wall-clock + memory caps per guest
   call, so a misbehaving plugin can't hang or exhaust the host.
-- **Bundle signing / verification.** `TRUST_MODEL.md` covers identity; add
-  cryptographic signing so a host can verify a bundle's origin before loading.
 - **Published API-docs site.** `rustdoc` + the `docs/` tree as a browsable site
   (pairs with Lane B adoption).
 

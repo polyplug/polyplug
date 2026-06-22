@@ -53,6 +53,16 @@ M.LogLevel = {
     Trace = tonumber(ffi.C.LogLevel_Trace),
 }
 
+-- Bundle signature enforcement policy for the opts.signature_policy option of
+-- Runtime.new, read from the ABI SignaturePolicy enum cdef'd by abi.lua (single
+-- source — cannot drift). Defaults to SignaturePolicy.Off (unsigned bundles
+-- load normally) when the option is not set.
+M.SignaturePolicy = {
+    Off      = tonumber(ffi.C.SignaturePolicy_Off),
+    WarnOnly = tonumber(ffi.C.SignaturePolicy_WarnOnly),
+    Required = tonumber(ffi.C.SignaturePolicy_Required),
+}
+
 -- Exact FFI signature used for HostApi.find_all_guest_contracts. The return
 -- type is the ABI `Array` struct BY VALUE (24 bytes: items ptr + len size_t +
 -- align size_t) — asserted against the generated ABI layout in
@@ -142,6 +152,9 @@ M.Runtime.__index = M.Runtime
 --   opts.log_max_level number    Maximum delivered level (see M.LogLevel);
 --                                defaults to M.LogLevel.Warn. Only meaningful
 --                                with opts.log.
+--   opts.signature_policy number Bundle signature enforcement policy (see
+--                                M.SignaturePolicy); defaults to
+--                                M.SignaturePolicy.Off.
 -- @return Runtime             The runtime instance.
 function M.Runtime.new(opts)
     local lib = get_lib()
@@ -151,7 +164,7 @@ function M.Runtime.new(opts)
     local log_cb_cdata = nil
     local log_bridge = nil
 
-    if opts.config or opts.on_reload or opts.log then
+    if opts.config or opts.on_reload or opts.log or opts.signature_policy then
         -- Build a single RuntimeConfig; the on_reload callback pointer lives
         -- inside it — there is no separate options wrapper.
         local config_c = ffi.new("RuntimeConfig", {
@@ -160,6 +173,7 @@ function M.Runtime.new(opts)
             hot_reload_enabled = (opts.config and opts.config.hot_reload_enabled)
                 and 1 or 0,
             on_reload = nil,
+            signature_policy = opts.signature_policy or M.SignaturePolicy.Off,
         })
 
         if opts.on_reload then

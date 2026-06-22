@@ -12,6 +12,28 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ## [Unreleased]
 
+### Added
+
+- **Bundle signing & verification** (`polyplug_signing` crate): detached Ed25519
+  `bundle.sig` over a canonical SHA-256 digest of every file in a bundle. The host
+  enforces a `SignaturePolicy` (`Off` / `WarnOnly` / `Required`) at load, after
+  manifest validation and before any loader runs. Trust is freedom-preserving
+  (TOFU) — verification proves a bundle is intact and self-consistently signed
+  without requiring the host to pre-know the signer; an opt-in key-pinning layer
+  can be added later behind the `BundleVerifier` seam. See
+  [`docs/TRUST_MODEL.md`](docs/TRUST_MODEL.md).
+- `polyplugc keygen` / `sign` / `verify` subcommands for generating keypairs,
+  signing a bundle directory, and verifying one.
+- `RuntimeBuilder::signature_policy(..)` (Rust) and the equivalent option in the
+  C++, C#, Python, Lua, and JS host SDKs.
+
+### Changed (ABI, pre-1.0)
+
+- `RuntimeConfig` gained a `signature_policy` field (`SignaturePolicy`, `repr(u32)`)
+  at offset `0x2C`, filling the former tail padding after `log_max_level`. The
+  struct size is unchanged (48 bytes, align 8); hosts that zero-initialize the
+  config keep the previous behavior (`Off`). Owner-approved pre-1.0 ABI change.
+
 ### Fixed
 
 - Build the Linux `x86_64-unknown-linux-gnu` artifacts with the portable

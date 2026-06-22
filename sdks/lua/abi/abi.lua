@@ -31,6 +31,7 @@ ffi.cdef[[
     typedef enum DispatchType DispatchType;
     typedef enum Compatibility Compatibility;
     typedef enum ReloadPhaseType ReloadPhaseType;
+    typedef enum SignaturePolicy SignaturePolicy;
     typedef enum SupportedLanguage SupportedLanguage;
     typedef enum AbiErrorCode AbiErrorCode;
     typedef enum LogLevel LogLevel;
@@ -718,6 +719,18 @@ ffi.cdef[[
         ReloadPhaseType_Unloading = 3,
     } ReloadPhaseType;
 
+    //  How strictly bundle signature verification is enforced at load time.
+    typedef enum SignaturePolicy {
+        //  Signature verification is skipped entirely. Unsigned bundles load normally.
+        SignaturePolicy_Off = 0,
+        //  If a bundle is unsigned or the signature is invalid, emit a warning and
+        //  continue loading. Bundles without a valid signature are NOT rejected.
+        SignaturePolicy_WarnOnly = 1,
+        //  Bundles MUST carry a valid `bundle.sig`. Missing or invalid signatures
+        //  cause the load to fail with a `LoaderError`.
+        SignaturePolicy_Required = 2,
+    } SignaturePolicy;
+
     //  Supported plugin language identifier — identifies the language/runtime hosting plugins.
     typedef enum SupportedLanguage {
         SupportedLanguage_Rust = 0,
@@ -949,6 +962,16 @@ ffi.cdef[[
         //  when `log` is null — the stderr default is always capped at
         //  [`LogLevel::Warn`].
         uint32_t log_max_level;
+        //  Bundle signature enforcement policy.
+        // 
+        //  Controls whether `bundle.sig` is required and how violations are handled.
+        //  Defaults to [`SignaturePolicy::Off`], preserving existing behavior for
+        //  unsigned bundles.
+        // 
+        //  # Layout note
+        //  Placed at offset 0x2C (44), filling the 4-byte tail padding that existed
+        //  after `log_max_level` at 0x28. The struct remains 48 bytes, align 8.
+        SignaturePolicy signature_policy;
     } RuntimeConfig;
     // Expected size: 48 bytes
 

@@ -18,44 +18,62 @@
   "workspace": {
     "members": {
       "host": {
+        "dependencies": [
+          "jsr:@polyplug/abi@0.1"
+        ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/abi@0.1.0"
+            "npm:@polyplug/abi@0.1.1"
           ]
         }
       },
       "loaders/dotnet": {
+        "dependencies": [
+          "jsr:@polyplug/host@0.1"
+        ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/host@0.1.0"
+            "npm:@polyplug/host@0.1.1"
           ]
         }
       },
       "loaders/js": {
+        "dependencies": [
+          "jsr:@polyplug/host@0.1"
+        ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/host@0.1.0"
+            "npm:@polyplug/host@0.1.1"
           ]
         }
       },
       "loaders/lua": {
+        "dependencies": [
+          "jsr:@polyplug/host@0.1"
+        ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/host@0.1.0"
+            "npm:@polyplug/host@0.1.1"
           ]
         }
       },
       "loaders/native": {
+        "dependencies": [
+          "jsr:@polyplug/host@0.1"
+        ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/host@0.1.0"
+            "npm:@polyplug/host@0.1.1"
           ]
         }
       },
       "loaders/python": {
+        "dependencies": [
+          "jsr:@polyplug/host@0.1"
+        ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/host@0.1.0"
+            "npm:@polyplug/host@0.1.1"
           ]
         }
       }
