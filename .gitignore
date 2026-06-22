@@ -466,6 +466,9 @@ tests/fixtures/*.so
 tests/fixtures/*.dylib
 tests/fixtures/*.dll
 
+# JS SDK transpile output (tsc dist/, regenerated at publish + by install-smoke)
+sdks/js/**/dist/
+
 # Local dev native library copies
 **/_native/*/
 

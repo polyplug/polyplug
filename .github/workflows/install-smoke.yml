@@ -1,0 +1,121 @@
+name: install-smoke
+
+# Install-from-artifact smoke gate.
+#
+# ci.yml and release.yml's `test-native` job exercise the SDKs by staging natives
+# into the SOURCE TREE and importing from there — so a package that imports fine
+# from source but is broken once BUILT and INSTALLED ships green. That gap let
+# several broken packages reach the registries (a PyPI wheel whose abi module was
+# an unpackaged shim; npm packages shipping raw .ts; a LuaRocks rockspec that
+# installed zero modules). This workflow closes it: for each language it builds
+# the publishable artifact exactly as release.yml does, installs it into a CLEAN
+# environment from that artifact, and imports + LOADS the native — never the
+# source tree.
+#
+# Linux-only by design: every bug in the class above was packaging structure, not
+# platform-specific, so a single-platform gate catches them without a 3-OS matrix.
+#
+# crates.io is intentionally not gated here: it ships the runtime as plain cargo
+# crates (no packaging-structure layer), its correctness is covered by ci.yml, and
+# `cargo publish --dry-run` false-fails for interdependent crates whose bumped
+# version is not yet on the registry. jsr ships the same TypeScript the npm job
+# transpiles and exercises under Deno, so the JS job covers that code path too.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-natives:
+    name: Build natives (linux-x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build native cdylibs
+        run: |
+          cargo build --release \
+            -p polyplug \
+            -p polyplug_native \
+            -p polyplug_python \
+            -p polyplug_lua \
+            -p polyplug_js \
+            -p polyplug_dotnet
+      - name: Upload natives
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-natives-linux-x64
+          path: target/release/*.so
+          retention-days: 1
+          if-no-files-found: error
+
+  python-smoke:
+    name: Install smoke · Python
+    needs: build-natives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-natives-linux-x64
+          path: target/release
+      - run: bash examples/smoke/python_install_smoke.sh
+
+  lua-smoke:
+    name: Install smoke · Lua
+    needs: build-natives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install LuaJIT + LuaRocks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luajit luarocks
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-natives-linux-x64
+          path: target/release
+      - run: bash examples/smoke/lua_install_smoke.sh
+
+  js-smoke:
+    name: Install smoke · JS (npm + Deno)
+    needs: build-natives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-natives-linux-x64
+          path: target/release
+      - run: bash examples/smoke/js_install_smoke.sh
+
+  nuget-smoke:
+    name: Install smoke · NuGet
+    needs: build-natives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-natives-linux-x64
+          path: target/release
+      - run: bash examples/smoke/nuget_install_smoke.sh
