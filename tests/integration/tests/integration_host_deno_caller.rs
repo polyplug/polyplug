@@ -33,6 +33,18 @@ fn deno_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Render an absolute filesystem path as a `file://` URL usable as a Deno module
+/// specifier on every platform. Unix paths begin with `/` (→ `file:///abs`);
+/// Windows paths begin with a drive letter (→ `file:///C:/abs`).
+fn to_file_url(path: &std::path::Path) -> String {
+    let forward: String = path.to_string_lossy().replace('\\', "/");
+    if forward.starts_with('/') {
+        format!("file://{forward}")
+    } else {
+        format!("file:///{forward}")
+    }
+}
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -94,15 +106,11 @@ fn generated_deno_caller_dispatches_struct_param_through_native_guest() {
     }
 
     // Driver imports the generated caller class + the Deno host SDK by absolute
-    // path (the SDK's own relative imports resolve from its workspace location).
-    let host_mod: String = root
-        .join("sdks/js/host/mod.js")
-        .to_string_lossy()
-        .replace('\\', "/");
-    let native_loader_mod: String = root
-        .join("sdks/js/loaders/native/mod.ts")
-        .to_string_lossy()
-        .replace('\\', "/");
+    // `file://` URL (the SDK's own relative imports resolve from its workspace
+    // location). A bare absolute path is a valid module specifier on Unix but not
+    // on Windows (`C:/…` is not a URL), so both are normalized to `file://` URLs.
+    let host_mod: String = to_file_url(&root.join("sdks/js/host/mod.js"));
+    let native_loader_mod: String = to_file_url(&root.join("sdks/js/loaders/native/mod.ts"));
     let driver_ts: String = format!(
         "import {{ openPolyplug, runtimeNew }} from \"{host_mod}\";\n\
          import {{ registerNativeLoader }} from \"{native_loader_mod}\";\n\
