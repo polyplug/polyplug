@@ -150,6 +150,7 @@ polyplug/
 
 ## Documentation
 
+- **Architecture** — See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for diagrams of the runtime pipelines (bundle load, lock-free dispatch, plugin-calls-plugin, loaders, hot-reload, unload)
 - **Quick Start** — See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) to write your first plugin in 10 minutes
 - **Examples** — See [`docs/EXAMPLES.md`](docs/EXAMPLES.md) for the full reference gallery (30 guests × 6 hosts)
 - **Features** — See [`docs/FEATURES.md`](docs/FEATURES.md) for a current-state overview of every shipped feature (arena, hot-reload, unload, platform support, trust model)
