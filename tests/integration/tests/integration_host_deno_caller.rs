@@ -131,8 +131,15 @@ fn generated_deno_caller_dispatches_struct_param_through_native_guest() {
     let driver_path: PathBuf = scratch.join("driver.ts");
     std::fs::write(&driver_path, driver_ts).expect("write driver.ts");
 
+    // Resolve the SDK's bare `@polyplug/*` specifiers (declared as `jsr:` in the
+    // SDK's own deno.json) to the in-tree source. The import map's relative paths
+    // resolve against the map file's location, not the scratch driver's.
+    let import_map: PathBuf = root.join("tests/fixtures/deno_local_imports.json");
+
     let output: std::process::Output = Command::new("deno")
         .arg("run")
+        .arg("--import-map")
+        .arg(&import_map)
         .arg("--allow-ffi")
         .arg("--allow-env")
         .arg("--allow-read")

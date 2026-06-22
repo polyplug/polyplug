@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "@polyplug/abi": "../../sdks/js/abi/polyplug_abi.ts",
+    "@polyplug/host": "../../sdks/js/host/mod.js"
+  }
+}
