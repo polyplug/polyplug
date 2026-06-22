@@ -1,6 +1,6 @@
 {
   "name": "@polyplug/loaders-dotnet",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "polyplug .NET/C# bundle loader for JavaScript/TypeScript hosts (Deno runtime required; Node FFI backend planned)",
   "type": "module",
   "main": "./dist/mod.js",
@@ -34,6 +34,6 @@
     "deno": ">=1.38.0"
   },
   "dependencies": {
-    "@polyplug/host": "0.1.1"
+    "@polyplug/host": "0.1.2"
   }
 }

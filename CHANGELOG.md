@@ -12,6 +12,14 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.1.2] - 2026-06-22
+
+Republishes the Linux `x86_64` native artifacts built with the portable x86-64
+baseline (the 0.1.1 linux-x64 natives could `SIGILL` on older CPUs — see _Fixed_),
+and ships bundle signing. A single coherent version across all six registries.
+
 ### Added
 
 - **Bundle signing & verification** (`polyplug_signing` crate): detached Ed25519
@@ -138,6 +146,7 @@ glue is produced from a single `.toml` contract by the `polyplugc` CLI.
   same host loop (see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)).
 - Nightly hardening lane (Miri / ASAN / TSAN / fuzz) and a criterion regression gate.
 
-[Unreleased]: https://github.com/polyplug/polyplug/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/polyplug/polyplug/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/polyplug/polyplug/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/polyplug/polyplug/releases/tag/v0.1.1
 [0.1.0]: https://github.com/polyplug/polyplug/releases/tag/v0.1.0

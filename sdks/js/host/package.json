@@ -1,6 +1,6 @@
 {
   "name": "@polyplug/host",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "polyplug host runtime for JavaScript/TypeScript (Deno runtime required; Node FFI backend planned)",
   "type": "module",
   "main": "./dist/mod.js",
@@ -15,5 +15,5 @@
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/polyplug/polyplug.git", "directory": "sdks/js/host" },
   "engines": { "deno": ">=1.38.0" },
-  "dependencies": { "@polyplug/abi": "0.1.1" }
+  "dependencies": { "@polyplug/abi": "0.1.2" }
 }

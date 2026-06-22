@@ -4,7 +4,7 @@
     <RootNamespace>Polyplug.Guest</RootNamespace>
     <IsPackable>true</IsPackable>
     <PackageId>Polyplug.Guest</PackageId>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <Description>Guest library for writing polyplug plugins in .NET</Description>
   </PropertyGroup>
   <ItemGroup>

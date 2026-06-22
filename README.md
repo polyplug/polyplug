@@ -8,7 +8,7 @@ polyplug lets a single host application load and call plugins written in Rust, C
 
 **polyplug is built for _trusted_ plugins** — code you write or vet (first-party features, partner integrations, a vetted-author ecosystem). It runs plugins in-process with no sandbox. If you need to run _untrusted_ third-party code, use a WebAssembly runtime (Extism, Wasmtime) instead — see [When to use polyplug](#when-to-use-polyplug) below. This is the same trust model the most successful native extension ecosystems use (e.g. VS Code extensions): **vet the author, not the sandbox.**
 
-**Status: 0.1.1 — first functional public release.** Published to crates.io, PyPI, NuGet, LuaRocks, npm, and JSR (see [Installation](#installation)). The ABI is still **pre-1.0** — ABI-visible changes are permitted between releases until the 1.0 freeze (see [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md)). The full test suite runs on Linux, macOS, and Windows.
+**Status: 0.1.2 — first functional public release.** Published to crates.io, PyPI, NuGet, LuaRocks, npm, and JSR (see [Installation](#installation)). The ABI is still **pre-1.0** — ABI-visible changes are permitted between releases until the 1.0 freeze (see [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md)). The full test suite runs on Linux, macOS, and Windows.
 
 ![one plugin call, end to end — by plugin language](docs/assets/benches/hero.svg)
 
