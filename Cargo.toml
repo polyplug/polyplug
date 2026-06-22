@@ -108,8 +108,8 @@ rquickjs = { version = "0.12" }
 mlua = { version = "0.11" }
 
 # Python
-pyo3 = { version = "0.28" }
-pyo3-build-config = { version = "0.28" }
+pyo3 = { version = "0.29" }
+pyo3-build-config = { version = "0.29" }
 
 # Tree-sitter for Lua parsing
 tree-sitter = "0.26"

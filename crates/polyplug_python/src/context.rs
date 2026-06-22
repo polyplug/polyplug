@@ -110,7 +110,7 @@ pub(crate) fn ensure_python_initialized(config: &PythonConfig) -> Result<(), Loa
 
     // Step 2: Verify version.
     Python::attach(|py| {
-        let ver: pyo3::PythonVersionInfo<'_> = py.version_info();
+        let ver: pyo3::PythonVersionInfo = py.version_info();
         let (req_major, req_minor): (u32, u32) = config.min_version;
         if (ver.major as u32, ver.minor as u32) < (req_major, req_minor) {
             return Err(LoaderError::InitFailed {

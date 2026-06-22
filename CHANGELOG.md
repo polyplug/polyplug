@@ -45,6 +45,13 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
   LuaRocks) at risk on older CPUs. Local native builds remain available via a
   user-level `~/.cargo/config.toml` opt-in (documented in `.cargo/config.toml`).
 
+### Security
+
+- Bump `pyo3` `0.28` → `0.29` to clear two advisories in the Python loader's
+  transitive dependency: an out-of-bounds read in `PyList`/`PyTuple` iterator
+  `nth`/`nth_back` (GHSA-36hh-v3qg-5jq4, high) and a missing `Sync` bound on
+  `PyCFunction::new_closure` (GHSA-chgr-c6px-7xpp, moderate).
+
 ## [0.1.1] - 2026-06-21
 
 ### Fixed
