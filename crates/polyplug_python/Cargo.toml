@@ -11,6 +11,13 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# docs.rs builds in a network-isolated sandbox; pyo3 detects DOCS_RS and links no
+# interpreter. Pin to the Linux target and expose the `docsrs` cfg for doc-cfg.
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lib]
 name = "polyplug_python"
 path = "src/lib.rs"

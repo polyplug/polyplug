@@ -11,6 +11,13 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# docs.rs builds in a network-isolated sandbox; netcorehost loads hostfxr at runtime
+# (no .NET SDK needed at build). Pin to the Linux target and expose the `docsrs` cfg.
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lib]
 name = "polyplug_dotnet"
 path = "src/lib.rs"

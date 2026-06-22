@@ -11,6 +11,13 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# docs.rs builds in a network-isolated sandbox; pin to the Linux target (where the
+# vendored LuaJIT compiles) and expose the `docsrs` cfg for doc-cfg annotations.
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lib]
 name = "polyplug_lua"
 path = "src/lib.rs"
