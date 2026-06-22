@@ -13,4 +13,8 @@ declare namespace Deno {
   type ForeignFunction = any;
   type ForeignLibraryInterface = any;
   type UnsafePointer = any;
+  type PointerValue = any;
+  type PointerObject<T = any> = any;
+  type UnsafeCallbackDefinition = any;
+  type UnsafeCallbackFunction = any;
 }

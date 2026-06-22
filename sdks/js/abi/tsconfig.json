@@ -3,5 +3,6 @@
   "compilerOptions": {
     "outDir": "dist"
   },
-  "include": ["polyplug_abi.ts", "abi.ts"]
+  "include": ["polyplug_abi.ts", "abi.ts", "ffi/index.ts", "ffi/backend.ts", "ffi/deno.ts"],
+  "files": ["../deno-shim.d.ts"]
 }
