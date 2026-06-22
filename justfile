@@ -427,14 +427,13 @@ test-host-js:
         echo "SKIPPED (build failed)"; \
         exit 0; \
     fi
-    @if ! [ -f {{sdks_dir}}/js/host/tests/reload_notification_test.ts ]; then \
-        echo "NOT IMPLEMENTED: sdks/js/host/tests/reload_notification_test.ts not found"; \
+    @if ! [ -f {{sdks_dir}}/js/testing/run_deno.ts ]; then \
+        echo "NOT IMPLEMENTED: sdks/js/testing/run_deno.ts not found"; \
     elif command -v deno >/dev/null 2>&1; then \
-        cd {{sdks_dir}}/js/host/tests && deno test reload_notification_test.ts && \
-        POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug.so}" \
-        POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug_native.so}" \
-        deno test -A reload_runtime_test.ts && \
-        deno test -A host_contract_provider_test.ts; \
+        cd {{sdks_dir}}/js && \
+        POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug.so}" \
+        POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug_native.so}" \
+        deno run --allow-ffi --allow-env --allow-read --allow-write testing/run_deno.ts; \
     else \
         echo "deno not installed, skipping"; \
     fi
