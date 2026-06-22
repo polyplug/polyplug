@@ -1,18 +1,19 @@
 import type { Runtime } from "@polyplug/host";
+import { type FfiLibrary, type FfiSymbolTable, getBackend } from "@polyplug/abi";
 
-let _lib: Deno.DynamicLibrary<typeof LUA_SYMBOLS> | null = null;
+let _lib: FfiLibrary<typeof LUA_SYMBOLS> | null = null;
 
 const LUA_SYMBOLS = {
     polyplug_lua_loader_create: {
         parameters: ["pointer"] as const,
         result: "pointer" as const,
     },
-} satisfies Deno.ForeignLibraryInterface;
+} satisfies FfiSymbolTable;
 
-function getLib(): Deno.DynamicLibrary<typeof LUA_SYMBOLS> {
+function getLib(): FfiLibrary<typeof LUA_SYMBOLS> {
     if (!_lib) {
-        const libPath = Deno.env.get("POLYPLUG_LUA_LIB") ?? "libpolyplug_lua.so";
-        _lib = Deno.dlopen(libPath, LUA_SYMBOLS);
+        const libPath = getBackend().env("POLYPLUG_LUA_LIB") ?? "libpolyplug_lua.so";
+        _lib = getBackend().openLibrary(libPath, LUA_SYMBOLS);
     }
     return _lib;
 }
@@ -23,7 +24,7 @@ function getLib(): Deno.DynamicLibrary<typeof LUA_SYMBOLS> {
 export function registerLuaLoader(rt: Runtime): void {
     const lib = getLib();
     const cfgBuf = new Uint8Array([0]);
-    const cfgPtr = Deno.UnsafePointer.of(cfgBuf);
+    const cfgPtr = getBackend().pointerOf(cfgBuf);
     const loaderPtr = lib.symbols.polyplug_lua_loader_create(cfgPtr);
     if (loaderPtr === null) {
         throw new Error("polyplug: lua loader create failed");

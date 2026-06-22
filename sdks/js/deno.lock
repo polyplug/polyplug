@@ -23,57 +23,62 @@
         ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/abi@0.1.1"
+            "npm:@polyplug/abi@0.1.2"
           ]
         }
       },
       "loaders/dotnet": {
         "dependencies": [
+          "jsr:@polyplug/abi@0.1",
           "jsr:@polyplug/host@0.1"
         ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/host@0.1.1"
+            "npm:@polyplug/host@0.1.2"
           ]
         }
       },
       "loaders/js": {
         "dependencies": [
+          "jsr:@polyplug/abi@0.1",
           "jsr:@polyplug/host@0.1"
         ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/host@0.1.1"
+            "npm:@polyplug/host@0.1.2"
           ]
         }
       },
       "loaders/lua": {
         "dependencies": [
+          "jsr:@polyplug/abi@0.1",
           "jsr:@polyplug/host@0.1"
         ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/host@0.1.1"
+            "npm:@polyplug/host@0.1.2"
           ]
         }
       },
       "loaders/native": {
         "dependencies": [
+          "jsr:@polyplug/abi@0.1",
           "jsr:@polyplug/host@0.1"
         ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/host@0.1.1"
+            "npm:@polyplug/host@0.1.2"
           ]
         }
       },
       "loaders/python": {
         "dependencies": [
+          "jsr:@polyplug/abi@0.1",
           "jsr:@polyplug/host@0.1"
         ],
         "packageJson": {
           "dependencies": [
-            "npm:@polyplug/host@0.1.1"
+            "npm:@polyplug/host@0.1.2"
           ]
         }
       }

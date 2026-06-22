@@ -4,7 +4,8 @@
     "rootDir": ".",
     "outDir": "dist",
     "paths": {
-      "@polyplug/host": ["../../host/dist/mod.d.ts"]
+      "@polyplug/host": ["../../host/dist/mod.d.ts"],
+      "@polyplug/abi": ["../../abi/dist/polyplug_abi.d.ts"]
     }
   },
   "include": ["mod.ts"],

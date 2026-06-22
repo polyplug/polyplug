@@ -4,6 +4,7 @@
     "license": "MIT",
     "exports": "./mod.ts",
     "imports": {
-        "@polyplug/host": "jsr:@polyplug/host@^0.1.0"
+        "@polyplug/host": "jsr:@polyplug/host@^0.1.0",
+        "@polyplug/abi": "jsr:@polyplug/abi@^0.1.0"
     }
 }

@@ -10,15 +10,18 @@
  * @module polyplug
  */
 
-if (typeof Deno === "undefined") {
-  throw new Error(
-    "@polyplug/runtime currently only supports Deno. " +
-    "Node.js and Bun support is planned for future releases. " +
-    "See https://github.com/polyplug/polyplug for updates."
-  );
-}
-
 import { ReloadPhase } from "./reload_phase.js";
+
+// All native FFI crosses through the backend seam — no direct runtime FFI globals
+// in this file. getBackend() resolves the backend for the current runtime and throws a
+// clear error on an unsupported one (replacing the former inline typeof-Deno guard).
+import { getBackend } from "@polyplug/abi";
+/**
+ * @typedef {import("@polyplug/abi").PolyPtr} PolyPtr
+ * @typedef {import("@polyplug/abi").FfiLibrary} FfiLibrary
+ * @typedef {import("@polyplug/abi").FfiCallback} FfiCallback
+ * @typedef {import("@polyplug/abi").FfiFunction} FfiFunction
+ */
 
 // Import offset constants from the auto-generated abi.ts
 import {
@@ -202,6 +205,8 @@ const HOST_API_OFFSETS = {
 const _funcCache = new Map();
 const _encoder = new TextEncoder();
 const _decoder = new TextDecoder();
+// The FFI backend seam (stateless adapter, no runtime/plugin state — Rule 12).
+const _ffi = getBackend();
 
 // Callback type for reload notifications.
 //
@@ -239,12 +244,12 @@ const _LOG_CALLBACK_TYPE = {
  * Deno's UnsafePointerView has no `getUtf8String` — only `getCString` (which
  * needs a NUL terminator the ABI's StringView does not guarantee). Length-
  * bounded UTF-8 must go through `getArrayBuffer` + TextDecoder.
- * @param {Deno.PointerObject} ptr - Non-null pointer to UTF-8 bytes.
+ * @param {PolyPtr} ptr - Non-null pointer to UTF-8 bytes.
  * @param {number} len - Byte count.
  * @returns {string}
  */
 function utf8At(ptr, len) {
-  const bytes = new Deno.UnsafePointerView(ptr).getArrayBuffer(len);
+  const bytes = _ffi.pointerView(ptr).getArrayBuffer(len);
   return new TextDecoder().decode(bytes);
 }
 
@@ -255,7 +260,7 @@ function utf8At(ptr, len) {
  */
 function decodeStringViewStruct(svStruct) {
   const dv = new DataView(svStruct.buffer, svStruct.byteOffset, svStruct.byteLength);
-  const ptr = Deno.UnsafePointer.create(dv.getBigUint64(0, true));
+  const ptr = _ffi.pointerCreate(dv.getBigUint64(0, true));
   const len = Number(dv.getBigUint64(8, true));
   if (ptr === null || len === 0) {
     return "";
@@ -273,13 +278,13 @@ function writeAbiErrorCode(outErrPtr, code) {
   if (outErrPtr === null) {
     return;
   }
-  const ab = new Deno.UnsafePointerView(outErrPtr).getArrayBuffer(ABI_ERROR_SIZE);
+  const ab = _ffi.pointerView(outErrPtr).getArrayBuffer(ABI_ERROR_SIZE);
   new DataView(ab).setUint32(0, code, true);
 }
 
 /**
  * Build a real C `HostContractInterface` for a host-provided contract, with
- * native dispatch backed by `Deno.UnsafeCallback`s and **per-instance** state.
+ * native dispatch backed by FFI callbacks and **per-instance** state.
  *
  * Mirrors the canonical per-instance host-provider model (see the Lua provider):
  * `create_instance` builds a fresh implementation from `factory`, mints a
@@ -289,7 +294,7 @@ function writeAbiErrorCode(outErrPtr, code) {
  * own caching — `singleton: true` makes the runtime create one instance and share
  * it, `singleton: false` makes it call `create_instance` per caller.
  *
- * All `Deno.UnsafeCallback`s and backing buffers are returned in `owned` and MUST
+ * All FFI callbacks and backing buffers are returned in `owned` and MUST
  * be kept alive by the caller for as long as the contract is registered (the
  * runtime holds raw pointers into them). No module-level state is used (Rule 12).
  *
@@ -300,11 +305,11 @@ function writeAbiErrorCode(outErrPtr, code) {
  * @param {number} spec.minor - Contract minor version.
  * @param {boolean} spec.singleton - Whether the runtime should cache one instance.
  * @param {() => object} spec.factory - Builds a fresh impl object per instance.
- * @param {Array<(impl: object, argsPtr: Deno.PointerValue, outPtr: Deno.PointerValue) => number>} spec.methods
+ * @param {Array<(impl: object, argsPtr: PolyPtr, outPtr: PolyPtr) => number>} spec.methods
  *        One thunk per contract method (fn_id = array index). Each reads its args,
  *        calls the impl, writes any return through `outPtr`, and returns an
  *        AbiErrorCode (0 = Ok). Throwing is caught and reported as Panic.
- * @returns {{ interfacePtr: Deno.PointerValue, owned: object[] }}
+ * @returns {{ interfacePtr: PolyPtr, owned: object[] }}
  */
 export function buildHostContractInterface(spec) {
   const { contractIdLo, contractIdHi, major, minor, singleton, factory, methods } = spec;
@@ -314,13 +319,13 @@ export function buildHostContractInterface(spec) {
   let nextId = 1n;
   const defaultImpl = factory();
 
-  /** @type {Deno.UnsafeCallback[]} */
+  /** @type {FfiCallback[]} */
   const callbacks = [];
 
   // One native dispatch callback per method: (instance, args, out, out_err) -> void.
   const functionPointers = [];
   for (const invoke of methods) {
-    const dispatchCb = new Deno.UnsafeCallback(
+    const dispatchCb = _ffi.makeCallback(
       { parameters: [HOST_CONTRACT_INSTANCE_STRUCT, "pointer", "pointer", "pointer"], result: "void" },
       (instanceStruct, argsPtr, outPtr, outErrPtr) => {
         let code = AbiErrorCode.Ok;
@@ -341,12 +346,12 @@ export function buildHostContractInterface(spec) {
       },
     );
     callbacks.push(dispatchCb);
-    functionPointers.push(BigInt(Deno.UnsafePointer.value(dispatchCb.pointer)));
+    functionPointers.push(_ffi.pointerValue(dispatchCb.pointer));
   }
 
   // create_instance(this, args, out_instance): build a fresh impl, mint a non-zero
   // id, store it, and write the id as the new instance's `data`.
-  const createInstanceCb = new Deno.UnsafeCallback(
+  const createInstanceCb = _ffi.makeCallback(
     { parameters: ["pointer", "pointer", "pointer"], result: "void" },
     (_this, _args, outInstancePtr) => {
       let id = 0n;
@@ -360,7 +365,7 @@ export function buildHostContractInterface(spec) {
         id = 0n;
       }
       if (outInstancePtr !== null) {
-        const ab = new Deno.UnsafePointerView(outInstancePtr).getArrayBuffer(8);
+        const ab = _ffi.pointerView(outInstancePtr).getArrayBuffer(8);
         new DataView(ab).setBigUint64(0, id, true);
       }
     },
@@ -368,7 +373,7 @@ export function buildHostContractInterface(spec) {
   callbacks.push(createInstanceCb);
 
   // destroy_instance(this, instance): drop the impl keyed by the instance id.
-  const destroyInstanceCb = new Deno.UnsafeCallback(
+  const destroyInstanceCb = _ffi.makeCallback(
     { parameters: ["pointer", HOST_CONTRACT_INSTANCE_STRUCT], result: "void" },
     (_this, instanceStruct) => {
       try {
@@ -390,7 +395,7 @@ export function buildHostContractInterface(spec) {
   for (let i = 0; i < functionPointers.length; i += 1) {
     functionsView.setBigUint64(i * 8, functionPointers[i], true);
   }
-  const functionsPtr = Deno.UnsafePointer.of(functionsBuf);
+  const functionsPtr = _ffi.pointerOf(functionsBuf);
 
   const ifaceBuf = new Uint8Array(HOST_CONTRACT_INTERFACE_SIZE);
   const ifaceView = new DataView(ifaceBuf.buffer);
@@ -410,12 +415,12 @@ export function buildHostContractInterface(spec) {
   );
   ifaceView.setBigUint64(
     HOST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET,
-    BigInt(Deno.UnsafePointer.value(createInstanceCb.pointer)),
+    _ffi.pointerValue(createInstanceCb.pointer),
     true,
   );
   ifaceView.setBigUint64(
     HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET,
-    BigInt(Deno.UnsafePointer.value(destroyInstanceCb.pointer)),
+    _ffi.pointerValue(destroyInstanceCb.pointer),
     true,
   );
   // dispatch union (native): { function_count: u32, functions: *const *const () }.
@@ -426,11 +431,11 @@ export function buildHostContractInterface(spec) {
   );
   ifaceView.setBigUint64(
     HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET + NATIVE_DISPATCH_FUNCTIONS_OFFSET,
-    BigInt(Deno.UnsafePointer.value(functionsPtr)),
+    _ffi.pointerValue(functionsPtr),
     true,
   );
 
-  const interfacePtr = Deno.UnsafePointer.of(ifaceBuf);
+  const interfacePtr = _ffi.pointerOf(ifaceBuf);
   // `owned` keeps every callback + buffer + the per-instance maps reachable so the
   // GC cannot reclaim memory the runtime still points into.
   const owned = [...callbacks, functionsBuf, ifaceBuf, instances];
@@ -439,23 +444,23 @@ export function buildHostContractInterface(spec) {
 
 /**
  * Read a function pointer from HostApi at given offset.
- * The raw 64-bit value is wrapped into a Deno pointer object so it can be
- * passed to Deno.UnsafeFnPointer (which rejects bare BigInts).
- * @param {Deno.PointerValue} hostPtr - HostApi pointer
+ * The raw 64-bit value is wrapped into a native pointer object so it can be
+ * passed to the backend's function-pointer caller (which rejects bare BigInts).
+ * @param {PolyPtr} hostPtr - HostApi pointer
  * @param {number} offset - Byte offset in struct
- * @returns {Deno.PointerValue} Function pointer
+ * @returns {PolyPtr} Function pointer
  */
 function readHostField(hostPtr, offset) {
-  const view = new Deno.UnsafePointerView(hostPtr);
-  return Deno.UnsafePointer.create(view.getBigUint64(offset));
+  const view = _ffi.pointerView(hostPtr);
+  return _ffi.pointerCreate(view.getBigUint64(offset));
 }
 
 /**
  * Call a HostApi method with self-passing pattern.
- * @param {Deno.PointerValue} hostPtr - HostApi pointer
+ * @param {PolyPtr} hostPtr - HostApi pointer
  * @param {number} fieldOffset - Offset of the function pointer field
  * @param {Array} paramTypes - FFI parameter types
- * @param {string} resultType - FFI result type
+ * @param {string|object} resultType - FFI result type
  * @param {Array} args - Arguments to pass (first arg is always hostPtr)
  * @returns {*} Result from FFI call
  */
@@ -469,14 +474,13 @@ function callHostMethod(hostPtr, fieldOffset, paramTypes, resultType, args) {
   const fnDef = { parameters: paramTypes, result: resultType };
 
   // Call through the function pointer
-  const func = new Deno.UnsafeFnPointer(funcPtr, fnDef);
-  return func.call(...args);
+  return _ffi.callFunction(funcPtr, fnDef, args);
 }
 
 /**
  * Decoded view over a raw `GuestContractInterface*` pointer.
  *
- * `resolveGuestContract` returns a raw `Deno.PointerValue`; Deno FFI does not
+ * `resolveGuestContract` returns a raw native pointer; the FFI backend does not
  * auto-decode C structs. This view reads the `#[repr(C)] GuestContractInterface`
  * fields at their byte offsets (see polyplug_abi guest_contract_interface.rs and
  * the auto-generated abi.ts offset constants) and exposes the lifecycle function
@@ -502,7 +506,7 @@ function callHostMethod(hostPtr, fieldOffset, paramTypes, resultType, args) {
  */
 export class GuestContractInterfaceView {
   #host;          // HostApi pointer
-  #interfacePtr;  // raw GuestContractInterface* (Deno.PointerValue)
+  #interfacePtr;  // raw GuestContractInterface* (PolyPtr)
   #dispatchType;
   #functionCount;
   #createInstancePtr;
@@ -510,23 +514,23 @@ export class GuestContractInterfaceView {
   #nativeFunctionsPtr;  // *const *const () (Native dispatch)
   #vmCallPtr;           // VmDispatch.call fn ptr (VM dispatch)
   #vmLoaderData;        // VmLoaderData (raw u64) (VM dispatch)
-  #fnPtrCache;          // Map<slot, Deno.UnsafeFnPointer> for native dispatch
+  #fnPtrCache;          // Map<slot, FfiFunction> for native dispatch
 
   /**
-   * @param {Deno.PointerValue} host - HostApi pointer
-   * @param {Deno.PointerValue} interfacePtr - Raw GuestContractInterface pointer
+   * @param {PolyPtr} host - HostApi pointer
+   * @param {PolyPtr} interfacePtr - Raw GuestContractInterface pointer
    */
   constructor(host, interfacePtr) {
     this.#host = host;
     this.#interfacePtr = interfacePtr;
     this.#fnPtrCache = new Map();
 
-    const view = new Deno.UnsafePointerView(interfacePtr);
+    const view = _ffi.pointerView(interfacePtr);
     this.#dispatchType = view.getUint32(GUEST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET);
-    this.#createInstancePtr = Deno.UnsafePointer.create(
+    this.#createInstancePtr = _ffi.pointerCreate(
       view.getBigUint64(GUEST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET)
     );
-    this.#destroyInstancePtr = Deno.UnsafePointer.create(
+    this.#destroyInstancePtr = _ffi.pointerCreate(
       view.getBigUint64(GUEST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET)
     );
 
@@ -534,7 +538,7 @@ export class GuestContractInterfaceView {
     if (this.#dispatchType === DISPATCH_TYPE_VIRTUAL_MACHINE) {
       // VmDispatch { call: fn ptr @ 0, loader_data: VmLoaderData @ 8 }.
       this.#functionCount = 0;
-      this.#vmCallPtr = Deno.UnsafePointer.create(
+      this.#vmCallPtr = _ffi.pointerCreate(
         view.getBigUint64(dispatchBase + VM_DISPATCH_CALL_OFFSET)
       );
       this.#vmLoaderData = view.getBigUint64(dispatchBase + VM_DISPATCH_LOADER_DATA_OFFSET);
@@ -542,7 +546,7 @@ export class GuestContractInterfaceView {
     } else {
       // NativeDispatch { function_count: u32 @ 0, functions: *const *const () @ 8 }.
       this.#functionCount = view.getUint32(dispatchBase + NATIVE_DISPATCH_FUNCTION_COUNT_OFFSET);
-      this.#nativeFunctionsPtr = Deno.UnsafePointer.create(
+      this.#nativeFunctionsPtr = _ffi.pointerCreate(
         view.getBigUint64(dispatchBase + NATIVE_DISPATCH_FUNCTIONS_OFFSET)
       );
       this.#vmCallPtr = null;
@@ -550,7 +554,7 @@ export class GuestContractInterfaceView {
     }
   }
 
-  /** @returns {Deno.PointerValue} Raw interface pointer (validity token). */
+  /** @returns {PolyPtr} Raw interface pointer (validity token). */
   interfacePtr() {
     return this.#interfacePtr;
   }
@@ -590,13 +594,13 @@ export class GuestContractInterfaceView {
     // host-mediated path: the interface's dispatch.vm.loader_data for VM contracts, null
     // for native (which ignore it). #vmLoaderData is 0n for native, so the single
     // UnsafePointer.create call yields null there.
-    const fn = new Deno.UnsafeFnPointer(this.#createInstancePtr, {
-      parameters: ["pointer", "pointer", "pointer", "pointer"],
-      result: "void",
-    });
     const instance = new Uint8Array(GUEST_CONTRACT_INSTANCE_SIZE);
-    const loaderData = Deno.UnsafePointer.create(this.#vmLoaderData);
-    fn.call(loaderData, this.#host, null, Deno.UnsafePointer.of(instance));
+    const loaderData = _ffi.pointerCreate(this.#vmLoaderData);
+    _ffi.callFunction(
+      this.#createInstancePtr,
+      { parameters: ["pointer", "pointer", "pointer", "pointer"], result: "void" },
+      [loaderData, this.#host, null, _ffi.pointerOf(instance)],
+    );
     return instance;
   }
 
@@ -611,12 +615,12 @@ export class GuestContractInterfaceView {
     // destroy_instance(loader_data: VmLoaderData, host: *const HostApi,
     // instance: GuestContractInstance). loader_data mirrors create_instance: the
     // interface's dispatch.vm.loader_data for VM, null (0n) for native.
-    const fn = new Deno.UnsafeFnPointer(this.#destroyInstancePtr, {
-      parameters: ["pointer", "pointer", { struct: ["pointer", "u64"] }],
-      result: "void",
-    });
-    const loaderData = Deno.UnsafePointer.create(this.#vmLoaderData);
-    fn.call(loaderData, this.#host, instance);
+    const loaderData = _ffi.pointerCreate(this.#vmLoaderData);
+    _ffi.callFunction(
+      this.#destroyInstancePtr,
+      { parameters: ["pointer", "pointer", { struct: ["pointer", "u64"] }], result: "void" },
+      [loaderData, this.#host, instance],
+    );
   }
 
   /**
@@ -633,15 +637,15 @@ export class GuestContractInterfaceView {
    * carries a null `data`.
    * @param {number} slot - function_id / method index.
    * @param {Uint8Array} instance - GuestContractInstance struct (16 bytes, by value).
-   * @param {Deno.PointerValue} argsPtr - Pointer to packed args (or null).
-   * @param {Deno.PointerValue} outPtr - Pointer to output buffer (or null).
+   * @param {PolyPtr} argsPtr - Pointer to packed args (or null).
+   * @param {PolyPtr} outPtr - Pointer to output buffer (or null).
    * @returns {number} AbiError code (0 = Ok).
    */
   dispatch(slot, instance, argsPtr, outPtr) {
     // Out-param ABI: dispatch fns return void and write their AbiError through a
     // trailing *mut AbiError. Allocate a zeroed buffer and read `code` back.
     const errBuf = new Uint8Array(ABI_ERROR_SIZE);
-    const errPtr = Deno.UnsafePointer.of(errBuf);
+    const errPtr = _ffi.pointerOf(errBuf);
     if (this.#dispatchType === DISPATCH_TYPE_VIRTUAL_MACHINE) {
       if (this.#vmCallPtr === null) {
         return AbiErrorCode.InvalidPointer; // null VM dispatch function.
@@ -651,12 +655,15 @@ export class GuestContractInterfaceView {
       // (`{ data: *mut c_void }`). The `arena` is a `*mut CallArena`; a null arena
       // is the documented legacy fallback to per-value host->alloc (host callers
       // carry no per-call arena).
-      const fn = new Deno.UnsafeFnPointer(this.#vmCallPtr, {
-        parameters: ["pointer", GUEST_CONTRACT_INSTANCE_STRUCT, "u32", "pointer", "pointer", "pointer", "pointer"],
-        result: "void",
-      });
-      const loaderData = Deno.UnsafePointer.create(this.#vmLoaderData);
-      fn.call(loaderData, instance, slot, argsPtr, outPtr, null, errPtr);
+      const loaderData = _ffi.pointerCreate(this.#vmLoaderData);
+      _ffi.callFunction(
+        this.#vmCallPtr,
+        {
+          parameters: ["pointer", GUEST_CONTRACT_INSTANCE_STRUCT, "u32", "pointer", "pointer", "pointer", "pointer"],
+          result: "void",
+        },
+        [loaderData, instance, slot, argsPtr, outPtr, null, errPtr],
+      );
     } else {
       const fn = this.#nativeFnPointer(slot);
       if (fn === null) {
@@ -669,9 +676,9 @@ export class GuestContractInterfaceView {
   }
 
   /**
-   * Resolve (and cache) the native dispatch `Deno.UnsafeFnPointer` for `slot`.
+   * Resolve (and cache) the native dispatch callable for `slot`.
    * @param {number} slot - function_id / method index.
-   * @returns {Deno.UnsafeFnPointer | null}
+   * @returns {FfiFunction | null}
    */
   #nativeFnPointer(slot) {
     const cached = this.#fnPtrCache.get(slot);
@@ -682,13 +689,13 @@ export class GuestContractInterfaceView {
       return null;
     }
     // functions is `*const *const ()`: read the slot-th 8-byte pointer entry.
-    const slotPtrRaw = new Deno.UnsafePointerView(this.#nativeFunctionsPtr).getBigUint64(slot * 8);
-    const fnPtr = Deno.UnsafePointer.create(slotPtrRaw);
+    const slotPtrRaw = _ffi.pointerView(this.#nativeFunctionsPtr).getBigUint64(slot * 8);
+    const fnPtr = _ffi.pointerCreate(slotPtrRaw);
     if (fnPtr === null) {
       return null;
     }
     // Out-param ABI: functions[slot](instance, args, out, out_err) -> void.
-    const fn = new Deno.UnsafeFnPointer(fnPtr, {
+    const fn = _ffi.prepareFunction(fnPtr, {
       parameters: [GUEST_CONTRACT_INSTANCE_STRUCT, "pointer", "pointer", "pointer"],
       result: "void",
     });
@@ -704,15 +711,15 @@ export class GuestContractInterfaceView {
 export class Runtime {
   #lib;
   #host;  // HostApi pointer
-  // Per-instance Deno.UnsafeCallback handles (on_reload / log trampolines).
+  // Per-instance FFI callback handles (on_reload / log trampolines).
   // Owned by THIS runtime (Rule 12: no module globals); closed on destroy.
   #callbacks;
   #destroyed;
 
   /**
-   * @param {Deno.DynamicLibrary} lib - Dynamic library instance
-   * @param {Deno.PointerValue} host - HostApi pointer
-   * @param {Deno.UnsafeCallback[]} [callbacks=[]] - Owned FFI callbacks to close on destroy
+   * @param {FfiLibrary} lib - Dynamic library instance
+   * @param {PolyPtr} host - HostApi pointer
+   * @param {FfiCallback[]} [callbacks=[]] - Owned FFI callbacks to close on destroy
    */
   constructor(lib, host, callbacks = []) {
     this.#lib = lib;
@@ -745,7 +752,7 @@ export class Runtime {
 
   /**
    * Get HostApi pointer.
-   * @returns {Deno.PointerValue}
+   * @returns {PolyPtr}
    */
   host() {
     return this.#host;
@@ -753,7 +760,7 @@ export class Runtime {
 
   /**
    * Get library instance.
-   * @returns {Deno.DynamicLibrary}
+   * @returns {FfiLibrary}
    */
   lib() {
     return this.#lib;
@@ -778,7 +785,7 @@ export class Runtime {
 
     // Get error message via get_last_error
     const buf = new Uint8Array(len);
-    const bufPtr = Deno.UnsafePointer.of(buf);
+    const bufPtr = _ffi.pointerOf(buf);
     callHostMethod(
       this.#host,
       HOST_API_OFFSETS.get_last_error,
@@ -797,7 +804,7 @@ export class Runtime {
    */
   loadBundle(path) {
     const encoded = _encoder.encode(path);
-    const ptr = Deno.UnsafePointer.of(encoded);
+    const ptr = _ffi.pointerOf(encoded);
     // Out-param ABI: load_bundle returns void and writes its AbiError through a
     // trailing *mut AbiError.
     const errBuf = new Uint8Array(ABI_ERROR_SIZE);
@@ -806,7 +813,7 @@ export class Runtime {
       HOST_API_OFFSETS.load_bundle,
       ["pointer", "pointer", "usize", "pointer"],
       "void",
-      [this.#host, ptr, BigInt(encoded.length), Deno.UnsafePointer.of(errBuf)]
+      [this.#host, ptr, BigInt(encoded.length), _ffi.pointerOf(errBuf)]
     );
     const code = new DataView(errBuf.buffer).getUint32(0, true);
     if (code !== 0) {
@@ -821,7 +828,7 @@ export class Runtime {
    */
   reloadBundle(path) {
     const encoded = _encoder.encode(path);
-    const ptr = Deno.UnsafePointer.of(encoded);
+    const ptr = _ffi.pointerOf(encoded);
     // Out-param ABI: reload_bundle returns void and writes its AbiError through a
     // trailing *mut AbiError.
     const errBuf = new Uint8Array(ABI_ERROR_SIZE);
@@ -830,7 +837,7 @@ export class Runtime {
       HOST_API_OFFSETS.reload_bundle,
       ["pointer", "pointer", "usize", "pointer"],
       "void",
-      [this.#host, ptr, BigInt(encoded.length), Deno.UnsafePointer.of(errBuf)]
+      [this.#host, ptr, BigInt(encoded.length), _ffi.pointerOf(errBuf)]
     );
     const code = new DataView(errBuf.buffer).getUint32(0, true);
     if (code !== 0) {
@@ -852,7 +859,7 @@ export class Runtime {
       HOST_API_OFFSETS.unload_bundle,
       ["pointer", "u64", "pointer"],
       "void",
-      [this.#host, bundleId, Deno.UnsafePointer.of(errBuf)]
+      [this.#host, bundleId, _ffi.pointerOf(errBuf)]
     );
     const code = new DataView(errBuf.buffer).getUint32(0, true);
     if (code !== 0) {
@@ -924,7 +931,7 @@ export class Runtime {
     const arrPtrRaw = resultDv.getBigUint64(0, true);
     const arrLen = Number(resultDv.getBigUint64(8, true));
     const arrAlign = resultDv.getBigUint64(16, true);
-    const arrPtr = Deno.UnsafePointer.create(arrPtrRaw);
+    const arrPtr = _ffi.pointerCreate(arrPtrRaw);
 
     if (arrPtr === null || arrLen === 0) {
       return [];
@@ -934,7 +941,7 @@ export class Runtime {
     // `#[repr(C)] { index: u32, generation: u32 }` (8 bytes, align 4), so
     // elements have an 8-byte stride; each is read as a { index, generation }.
     const handles = [];
-    const arrView = new Deno.UnsafePointerView(arrPtr);
+    const arrView = _ffi.pointerView(arrPtr);
     for (let i = 0; i < Math.min(arrLen, cap); i++) {
       const base = i * GUEST_CONTRACT_HANDLE_SIZE;
       handles.push({
@@ -967,7 +974,7 @@ export class Runtime {
    * generation: u32 }`, 8 bytes) passed by value as a two-field u32 struct.
    * The null check tests the `index` field.
    * @param {{ index: number, generation: number }} handle - Guest contract handle
-   * @returns {Deno.PointerValue} Resolved interface pointer (null if invalid/stale)
+   * @returns {PolyPtr} Resolved interface pointer (null if invalid/stale)
    */
   resolveGuestContract(handle) {
     if (handle === null || handle.index === NULL_HANDLE_INDEX) {
@@ -1013,8 +1020,8 @@ export class Runtime {
    * unload. A host caller reads it once at resolve time and again before each dispatch:
    * an observed change means the cached interface/instance may dangle and must be
    * re-resolved before use. Read the current value with
-   * `new Deno.UnsafePointerView(ptr).getBigUint64(0, true)`.
-   * @returns {Deno.PointerValue} Pointer to the `u64` counter, or null when absent.
+   * `getBackend().pointerView(ptr).getBigUint64(0)`.
+   * @returns {PolyPtr} Pointer to the `u64` counter, or null when absent.
    */
   revisionCounter() {
     return callHostMethod(
@@ -1034,7 +1041,7 @@ export class Runtime {
    * size and alignment.
    * @param {number} size - Number of bytes to allocate.
    * @param {number} [align=1] - Allocation alignment.
-   * @returns {Deno.PointerValue} Pointer to the allocated region (or null).
+   * @returns {PolyPtr} Pointer to the allocated region (or null).
    */
   alloc(size, align = 1) {
     return callHostMethod(
@@ -1048,7 +1055,7 @@ export class Runtime {
 
   /**
    * Free a region previously returned by {@link Runtime#alloc}.
-   * @param {Deno.PointerValue} ptr - Pointer to free.
+   * @param {PolyPtr} ptr - Pointer to free.
    * @param {number} size - Size used at allocation time.
    * @param {number} [align=1] - Alignment used at allocation time.
    */
@@ -1068,7 +1075,7 @@ export class Runtime {
   /**
    * Register a host contract interface with the runtime.
    * Calls through HostApi.register_host_contract field.
-   * @param {Deno.PointerValue} hostInterface - Pointer to HostContractInterface struct
+   * @param {PolyPtr} hostInterface - Pointer to HostContractInterface struct
    */
   registerHostContract(hostInterface) {
     // Out-param ABI: register_host_contract returns void and writes its AbiError
@@ -1079,7 +1086,7 @@ export class Runtime {
       HOST_API_OFFSETS.register_host_contract,
       ["pointer", "pointer", "pointer"],
       "void",
-      [this.#host, hostInterface, Deno.UnsafePointer.of(errBuf)]
+      [this.#host, hostInterface, _ffi.pointerOf(errBuf)]
     );
     const code = new DataView(errBuf.buffer).getUint32(0, true);
     if (code !== 0) {
@@ -1092,7 +1099,7 @@ export class Runtime {
    * Calls through HostApi.register_loader field. The loader's runtime name
    * comes from its own BundleLoader::runtime_name(); the AbiError is written
    * through the trailing out-param (code is the first u32).
-   * @param {Deno.PointerValue} loaderPtr - Opaque loader pointer from the loader cdylib's create function.
+   * @param {PolyPtr} loaderPtr - Opaque loader pointer from the loader cdylib's create function.
    */
   registerLoader(loaderPtr) {
     // Out-param ABI: register_loader returns void and writes its AbiError through
@@ -1103,7 +1110,7 @@ export class Runtime {
       HOST_API_OFFSETS.register_loader,
       ["pointer", "pointer", "pointer"],
       "void",
-      [this.#host, loaderPtr, Deno.UnsafePointer.of(errBuf)]
+      [this.#host, loaderPtr, _ffi.pointerOf(errBuf)]
     );
 
     const code = new DataView(errBuf.buffer).getUint32(0, true);
@@ -1116,10 +1123,10 @@ export class Runtime {
 /**
  * Open polyplug library.
  * @param {string} soPath - Path to libpolyplug.so
- * @returns {Deno.DynamicLibrary}
+ * @returns {FfiLibrary}
  */
 export function openPolyplug(soPath) {
-  return Deno.dlopen(soPath, SYMBOLS);
+  return _ffi.openLibrary(soPath, SYMBOLS);
 }
 
 /**
@@ -1136,7 +1143,7 @@ export function openPolyplug(soPath) {
  * signature_policy (u32 @ 44). The struct stays 48 bytes. Offsets/size come from
  * the abi.ts constants.
  *
- * @param {Deno.DynamicLibrary} lib - Dynamic library
+ * @param {FfiLibrary} lib - Dynamic library
  * @param {Object} [options] - Per-runtime options
  * @param {Object} [options.config] - RuntimeConfig fields
  * @param {number} [options.config.compatibility=0] - Compatibility mode (COMPATIBILITY_STRICT=0, RELAXED=1, YOLO=2)
@@ -1152,7 +1159,7 @@ export function runtimeNew(lib, options = {}) {
   const onReloadCallback = options.onReload ?? null;
   const loggerCallback = options.logger ?? null;
 
-  /** @type {Deno.UnsafeCallback[]} */
+  /** @type {FfiCallback[]} */
   const ownedCallbacks = [];
   let host;
 
@@ -1171,7 +1178,7 @@ export function runtimeNew(lib, options = {}) {
     }
 
     if (onReloadCallback) {
-      const ffiReloadCallback = new Deno.UnsafeCallback(_RELOAD_CALLBACK_TYPE,
+      const ffiReloadCallback = _ffi.makeCallback(_RELOAD_CALLBACK_TYPE,
         (_userData, phasePtr) => {
           // _userData is the opaque on_reload_user_data pointer (unused here — the
           // JS closure already captures the callback). phasePtr is a const pointer
@@ -1184,7 +1191,7 @@ export function runtimeNew(lib, options = {}) {
               // Contract: never happens. Defence-in-depth only.
               return;
             }
-            const view = new Deno.UnsafePointerView(phasePtr);
+            const view = _ffi.pointerView(phasePtr);
             const phaseType = view.getUint32(RELOAD_PHASE_PHASE_TYPE_OFFSET);
             const bundleId = view.getBigUint64(RELOAD_PHASE_BUNDLE_ID_OFFSET);
             const bundleNamePtrRaw = view.getBigUint64(RELOAD_PHASE_BUNDLE_NAME_OFFSET);
@@ -1193,12 +1200,12 @@ export function runtimeNew(lib, options = {}) {
             const reasonLen = Number(view.getBigUint64(RELOAD_PHASE_REASON_OFFSET + 8));
 
             let bundleName = "";
-            const bundleNamePtr = Deno.UnsafePointer.create(bundleNamePtrRaw);
+            const bundleNamePtr = _ffi.pointerCreate(bundleNamePtrRaw);
             if (bundleNamePtr !== null && bundleNameLen > 0) {
               bundleName = utf8At(bundleNamePtr, bundleNameLen);
             }
             let reason = "";
-            const reasonPtr = Deno.UnsafePointer.create(reasonPtrRaw);
+            const reasonPtr = _ffi.pointerCreate(reasonPtrRaw);
             if (reasonPtr !== null && reasonLen > 0) {
               reason = utf8At(reasonPtr, reasonLen);
             }
@@ -1210,11 +1217,11 @@ export function runtimeNew(lib, options = {}) {
       );
       ownedCallbacks.push(ffiReloadCallback);
       // on_reload_user_data is left null: the JS closure already captures the callback.
-      configView.setBigUint64(RUNTIME_CONFIG_ON_RELOAD_OFFSET, BigInt(Deno.UnsafePointer.value(ffiReloadCallback.pointer)), true);
+      configView.setBigUint64(RUNTIME_CONFIG_ON_RELOAD_OFFSET, _ffi.pointerValue(ffiReloadCallback.pointer), true);
     }
 
     if (loggerCallback) {
-      const ffiLogCallback = new Deno.UnsafeCallback(_LOG_CALLBACK_TYPE,
+      const ffiLogCallback = _ffi.makeCallback(_LOG_CALLBACK_TYPE,
         (_userData, level, scopeStruct, messageStruct) => {
           // A JS exception must never unwind across the C ABI from inside the
           // runtime's logging funnel: catch-all, report to stderr.
@@ -1227,14 +1234,14 @@ export function runtimeNew(lib, options = {}) {
       );
       ownedCallbacks.push(ffiLogCallback);
       // log_user_data is left null: the JS closure already captures the callback.
-      configView.setBigUint64(RUNTIME_CONFIG_LOG_OFFSET, BigInt(Deno.UnsafePointer.value(ffiLogCallback.pointer)), true);
+      configView.setBigUint64(RUNTIME_CONFIG_LOG_OFFSET, _ffi.pointerValue(ffiLogCallback.pointer), true);
       // Default to Trace (5): deliver everything, filter inside the JS callback.
       configView.setUint32(RUNTIME_CONFIG_LOG_MAX_LEVEL_OFFSET, config?.logMaxLevel ?? 5, true);
     } else if (config?.logMaxLevel !== undefined) {
       configView.setUint32(RUNTIME_CONFIG_LOG_MAX_LEVEL_OFFSET, config.logMaxLevel, true);
     }
 
-    const configPtr = Deno.UnsafePointer.of(configBuf);
+    const configPtr = _ffi.pointerOf(configBuf);
     host = lib.symbols.polyplug_runtime_create(configPtr);
   } else {
     host = lib.symbols.polyplug_runtime_create(null);

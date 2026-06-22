@@ -1,18 +1,19 @@
 import type { Runtime } from "@polyplug/host";
+import { type FfiLibrary, type FfiSymbolTable, getBackend } from "@polyplug/abi";
 
-let _lib: Deno.DynamicLibrary<typeof NATIVE_SYMBOLS> | null = null;
+let _lib: FfiLibrary<typeof NATIVE_SYMBOLS> | null = null;
 
 const NATIVE_SYMBOLS = {
     polyplug_native_loader_create: {
         parameters: ["pointer"] as const,
         result: "pointer" as const,
     },
-} satisfies Deno.ForeignLibraryInterface;
+} satisfies FfiSymbolTable;
 
-function getLib(): Deno.DynamicLibrary<typeof NATIVE_SYMBOLS> {
+function getLib(): FfiLibrary<typeof NATIVE_SYMBOLS> {
     if (!_lib) {
-        const libPath = Deno.env.get("POLYPLUG_NATIVE_LIB") ?? "libpolyplug_native.so";
-        _lib = Deno.dlopen(libPath, NATIVE_SYMBOLS);
+        const libPath = getBackend().env("POLYPLUG_NATIVE_LIB") ?? "libpolyplug_native.so";
+        _lib = getBackend().openLibrary(libPath, NATIVE_SYMBOLS);
     }
     return _lib;
 }
@@ -25,7 +26,7 @@ function getLib(): Deno.DynamicLibrary<typeof NATIVE_SYMBOLS> {
 export function registerNativeLoader(rt: Runtime): void {
     const lib = getLib();
     const cfgBuf = new Uint8Array([0]);
-    const cfgPtr = Deno.UnsafePointer.of(cfgBuf);
+    const cfgPtr = getBackend().pointerOf(cfgBuf);
     const loaderPtr = lib.symbols.polyplug_native_loader_create(cfgPtr);
     if (loaderPtr === null) {
         throw new Error("polyplug: native loader create failed");

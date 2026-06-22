@@ -79,7 +79,9 @@ Deno.test("host-contract provider gives each instance independent state", () => 
   }
   // built[0] is the per-contract default impl (id 0), constructed at build time.
 
-  const ifaceView = new Deno.UnsafePointerView(interfacePtr);
+  // interfacePtr is the seam's opaque PolyPtr; this Deno-native test reads it
+  // back through raw Deno FFI, so re-assert the concrete Deno pointer type here.
+  const ifaceView = new Deno.UnsafePointerView(interfacePtr as Deno.PointerObject);
   const createFn = new Deno.UnsafeFnPointer(
     ptrField<typeof CREATE_DEF>(ifaceView, HOST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET),
     CREATE_DEF,

@@ -1,18 +1,19 @@
 import type { Runtime } from "@polyplug/host";
+import { type FfiLibrary, type FfiSymbolTable, getBackend } from "@polyplug/abi";
 
-let _lib: Deno.DynamicLibrary<typeof JS_SYMBOLS> | null = null;
+let _lib: FfiLibrary<typeof JS_SYMBOLS> | null = null;
 
 const JS_SYMBOLS = {
     polyplug_js_loader_create: {
         parameters: ["pointer"] as const,
         result: "pointer" as const,
     },
-} satisfies Deno.ForeignLibraryInterface;
+} satisfies FfiSymbolTable;
 
-function getLib(): Deno.DynamicLibrary<typeof JS_SYMBOLS> {
+function getLib(): FfiLibrary<typeof JS_SYMBOLS> {
     if (!_lib) {
-        const libPath = Deno.env.get("POLYPLUG_JS_LIB") ?? "libpolyplug_js.so";
-        _lib = Deno.dlopen(libPath, JS_SYMBOLS);
+        const libPath = getBackend().env("POLYPLUG_JS_LIB") ?? "libpolyplug_js.so";
+        _lib = getBackend().openLibrary(libPath, JS_SYMBOLS);
     }
     return _lib;
 }
@@ -24,7 +25,7 @@ function getLib(): Deno.DynamicLibrary<typeof JS_SYMBOLS> {
 export function registerJsLoader(rt: Runtime): void {
     const lib = getLib();
     const cfgBuf = new Uint8Array([0]);
-    const cfgPtr = Deno.UnsafePointer.of(cfgBuf);
+    const cfgPtr = getBackend().pointerOf(cfgBuf);
     const loaderPtr = lib.symbols.polyplug_js_loader_create(cfgPtr);
     if (loaderPtr === null) {
         throw new Error("polyplug: js loader create failed");

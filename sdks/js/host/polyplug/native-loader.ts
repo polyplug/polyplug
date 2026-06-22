@@ -9,6 +9,13 @@
  * @module polyplug/native-loader
  */
 
+import {
+    type FfiLibrary,
+    FfiNotFoundError,
+    type FfiSymbolTable,
+    getBackend,
+} from "@polyplug/abi";
+
 /**
  * Platform identifier format: {os}-{arch}
  * Examples: "linux-x64", "macos-arm64", "windows-x64"
@@ -20,7 +27,7 @@ export type PlatformIdentifier =
   | "windows-x64";
 
 /**
- * Mapping of Deno OS names (Deno.build.os) to platform-directory segments.
+ * Mapping of backend OS names (FfiBackend.platform()) to platform-directory segments.
  */
 const OS_MAP: Record<string, string> = {
   "linux": "linux",
@@ -29,7 +36,7 @@ const OS_MAP: Record<string, string> = {
 };
 
 /**
- * Mapping of Deno arch names to platform identifiers
+ * Mapping of backend arch names to platform identifiers
  */
 const ARCH_MAP: Record<string, string> = {
   "x86_64": "x64",
@@ -37,10 +44,10 @@ const ARCH_MAP: Record<string, string> = {
 };
 
 /**
- * Resolve a platform identifier from raw Deno OS/arch names.
- * Pure function (no Deno.build access) so every OS/arch mapping is testable.
- * @param {string} os   A Deno.build.os value ("linux", "darwin", "windows").
- * @param {string} arch A Deno.build.arch value ("x86_64", "aarch64").
+ * Resolve a platform identifier from raw backend OS/arch names.
+ * Pure function (no backend access) so every OS/arch mapping is testable.
+ * @param {string} os   A backend OS value ("linux", "darwin", "windows").
+ * @param {string} arch A backend arch value ("x86_64", "aarch64").
  * @returns {PlatformIdentifier} Platform identifier string.
  * @throws {Error} If the OS or architecture is not supported.
  */
@@ -73,18 +80,19 @@ export function platformFor(os: string, arch: string): PlatformIdentifier {
 }
 
 /**
- * Get the platform identifier based on current Deno build.
+ * Get the platform identifier based on the current backend's reported platform.
  * @returns {PlatformIdentifier} Platform identifier string
  * @throws {Error} If platform is not supported
  */
 export function getPlatformIdentifier(): PlatformIdentifier {
-  return platformFor(Deno.build.os, Deno.build.arch);
+  const backend = getBackend();
+  return platformFor(backend.platform(), backend.arch());
 }
 
 /**
- * Resolve the native library filename for a raw Deno OS name.
- * Pure function (no Deno.build access) so every OS mapping is testable.
- * @param {string} os A Deno.build.os value ("linux", "darwin", "windows").
+ * Resolve the native library filename for a raw backend OS name.
+ * Pure function (no backend access) so every OS mapping is testable.
+ * @param {string} os A backend OS value ("linux", "darwin", "windows").
  * @returns {string} Native library filename.
  * @throws {Error} If the OS is not supported.
  */
@@ -106,7 +114,7 @@ export function nativeLibraryFilenameFor(os: string): string {
  * @returns {string} Native library filename
  */
 export function getNativeLibraryFilename(): string {
-  return nativeLibraryFilenameFor(Deno.build.os);
+  return nativeLibraryFilenameFor(getBackend().platform());
 }
 
 /**
@@ -172,7 +180,7 @@ export interface NativeLibraryResult {
  */
 export function loadNativeLibrary(options?: LoadNativeOptions): NativeLibraryResult {
   // Check for environment variable override first
-  const envLibPath = Deno.env.get("POLYPLUG_LIB");
+  const envLibPath = getBackend().env("POLYPLUG_LIB");
   if (envLibPath) {
     return {
       path: envLibPath,
@@ -197,9 +205,9 @@ export function loadNativeLibrary(options?: LoadNativeOptions): NativeLibraryRes
   
   // Verify the library file exists
   try {
-    Deno.statSync(libPath);
+    getBackend().statSync(libPath);
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
+    if (error instanceof FfiNotFoundError) {
       throw new Error(
         `Native library not found for ${platform}. ` +
         `Expected at: ${libPath.pathname}\n` +
@@ -218,14 +226,14 @@ export function loadNativeLibrary(options?: LoadNativeOptions): NativeLibraryRes
 }
 
 /**
- * Open the native library and return a DynamicLibrary instance.
- * This is a convenience wrapper around loadNativeLibrary() + Deno.dlopen().
- * 
+ * Open the native library and return a dynamic-library handle.
+ * This is a convenience wrapper around loadNativeLibrary() + backend.openLibrary().
+ *
  * @param {LoadNativeOptions} [options] - Loading options
- * @param {Record<string, Deno.ForeignFunction>} symbols - Symbol definitions
- * @returns {Deno.DynamicLibrary} Dynamic library instance
+ * @param {FfiSymbolTable} symbols - Symbol definitions
+ * @returns {FfiLibrary} Dynamic library handle
  * @throws {Error} If library cannot be loaded
- * 
+ *
  * @example
  * ```typescript
  * const lib = openNativeLibrary({
@@ -233,10 +241,10 @@ export function loadNativeLibrary(options?: LoadNativeOptions): NativeLibraryRes
  * });
  * ```
  */
-export function openNativeLibrary<T extends Record<string, Deno.ForeignFunction>>(
+export function openNativeLibrary<T extends FfiSymbolTable>(
   symbols: T,
   options?: LoadNativeOptions
-): Deno.DynamicLibrary<T> {
+): FfiLibrary<T> {
   const { path } = loadNativeLibrary(options);
-  return Deno.dlopen(path, symbols);
+  return getBackend().openLibrary(path, symbols);
 }
