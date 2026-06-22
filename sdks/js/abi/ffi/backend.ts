@@ -37,10 +37,14 @@ export type PolyPtrTyped<T extends FfiSymbolDef = FfiSymbolDef> = PolyPtr & {
 /**
  * A single foreign-function signature: its parameter types and result type.
  *
- * The element types are the backend's native FFI type tokens (e.g. Deno's
- * `"pointer"`, `"u32"`, `"u64"`, `"usize"`, `"void"`, or a by-value struct
- * descriptor `{ struct: [...] }`). They are passed through opaquely; the seam
- * does not re-validate them, so the exact token vocabulary stays the backend's.
+ * The element types are the seam's CANONICAL FFI type tokens — the Deno-style
+ * vocabulary: `"pointer"`, `"void"`, `"u8".."u64"`, `"i8".."i64"`, `"f32"` /
+ * `"f64"`, `"usize"` / `"isize"`, `"bool"`, and by-value structs written as a
+ * descriptor `{ struct: [...] }`. Call sites and tests author these tokens
+ * directly. The Deno backend consumes them as-is (they are Deno's own FFI
+ * tokens); every non-Deno backend (Node, Bun) TRANSLATES each canonical token
+ * to its native FFI type. The seam itself passes them through opaquely and does
+ * not re-validate them.
  */
 export interface FfiSymbolDef {
     readonly parameters: readonly unknown[];

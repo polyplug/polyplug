@@ -9,6 +9,9 @@
     "./loaders/js",
     "./loaders/dotnet"
   ],
+  "exclude": [
+    "node_modules"
+  ],
   "compilerOptions": {
     "lib": ["deno.unstable", "deno.ns", "deno.worker"],
     "strict": true,

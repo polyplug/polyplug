@@ -1,0 +1,15 @@
+{
+  "name": "@polyplug/js-sdk-workspace",
+  "private": true,
+  "type": "module",
+  "description": "Dev workspace for the polyplug JavaScript/TypeScript SDK. Provides Node module resolution for the runtime-agnostic test suite (bare @polyplug/* specifiers + koffi) without affecting the per-package npm publish artifacts. Deno uses sdks/js/deno.json instead.",
+  "license": "MIT",
+  "workspaces": [
+    "abi",
+    "host"
+  ],
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.22.4"
+  }
+}

@@ -16,7 +16,20 @@
     }
   },
   "workspace": {
+    "packageJson": {
+      "dependencies": [
+        "npm:@types/node@^24.10.1",
+        "npm:tsx@^4.22.4"
+      ]
+    },
     "members": {
+      "abi": {
+        "packageJson": {
+          "dependencies": [
+            "npm:koffi@^2.15.1"
+          ]
+        }
+      },
       "host": {
         "dependencies": [
           "jsr:@polyplug/abi@0.1"

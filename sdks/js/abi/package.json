@@ -7,11 +7,16 @@
   "module": "./dist/polyplug_abi.js",
   "types": "./dist/polyplug_abi.d.ts",
   "exports": {
-    ".": { "types": "./dist/polyplug_abi.d.ts", "import": "./dist/polyplug_abi.js" }
+    ".": {
+      "polyplug-src": "./polyplug_abi.ts",
+      "types": "./dist/polyplug_abi.d.ts",
+      "import": "./dist/polyplug_abi.js"
+    }
   },
   "files": ["dist", "README.md"],
   "keywords": ["polyplug", "plugin", "abi", "ffi"],
   "author": "polyplug",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/polyplug/polyplug.git", "directory": "sdks/js/abi" }
+  "repository": { "type": "git", "url": "git+https://github.com/polyplug/polyplug.git", "directory": "sdks/js/abi" },
+  "dependencies": { "koffi": "^2.15.1" }
 }

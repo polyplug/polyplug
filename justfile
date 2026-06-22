@@ -438,8 +438,28 @@ test-host-js:
         echo "deno not installed, skipping"; \
     fi
 
+# Run JavaScript host-lib tests under Node.js (koffi FFI backend)
+test-host-js-node:
+    @echo "=== Running JavaScript Host Lib Tests (Node.js) ==="
+    @if [ -f {{marker_dir}}/host-js.failed ]; then \
+        echo "SKIPPED (build failed)"; \
+        exit 0; \
+    fi
+    @if ! [ -f {{sdks_dir}}/js/testing/run_node.ts ]; then \
+        echo "NOT IMPLEMENTED: sdks/js/testing/run_node.ts not found"; \
+    elif command -v node >/dev/null 2>&1; then \
+        cd {{sdks_dir}}/js && \
+        if [ ! -d node_modules ]; then npm install; fi && \
+        POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug.so}" \
+        POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug_native.so}" \
+        NODE_OPTIONS="--conditions=polyplug-src" \
+        node_modules/.bin/tsx testing/run_node.ts; \
+    else \
+        echo "node not installed, skipping"; \
+    fi
+
 # Run all host-lib tests
-test-host-libs: test-host-cpp test-host-python test-host-csharp test-host-lua test-host-js
+test-host-libs: test-host-cpp test-host-python test-host-csharp test-host-lua test-host-js test-host-js-node
 
 # Cross-language parity gate for the contract/bundle ID helpers: every SDK's
 # FNV-1a 64-bit implementation must compute byte-identical hashes (a missing

@@ -81,6 +81,14 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+      # Node runs the JS host SDK suite through the koffi FFI backend (Linux-only,
+      # mirroring the Deno/Lua host suites below). Node 24+ strips TypeScript
+      # types; the suite is launched via tsx (npm devDep) because the generated
+      # abi.ts uses `const enum`, which Node's strip-only mode cannot erase.
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Linux'
+        with:
+          node-version: '24'
       - name: Install LuaJIT (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y luajit
@@ -147,6 +155,15 @@ jobs:
           POLYPLUG_NATIVE_LIB: ${{ github.workspace }}/target/debug/libpolyplug_native.so
           POLYPLUG_LUA_LIB: ${{ github.workspace }}/target/debug/libpolyplug_lua.so
           POLYPLUGC: ${{ github.workspace }}/target/debug/polyplugc
+      # The same JS host SDK suite, now under Node.js via the koffi FFI backend
+      # (mirrors the Deno run above). The justfile recipe runs `npm install` if
+      # node_modules is absent, so koffi + tsx are fetched here.
+      - name: Run JS host SDK suite under Node
+        if: runner.os == 'Linux'
+        run: just test-host-js-node
+        env:
+          POLYPLUG_LIB: ${{ github.workspace }}/target/debug/libpolyplug.so
+          POLYPLUG_NATIVE_LIB: ${{ github.workspace }}/target/debug/libpolyplug_native.so
 
   windows:
     name: Windows (build + tests)
