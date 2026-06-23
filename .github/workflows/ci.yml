@@ -89,6 +89,12 @@ jobs:
         if: runner.os == 'Linux'
         with:
           node-version: '24'
+      # Bun runs the same JS host SDK suite through its built-in bun:ffi backend
+      # (Linux-only, mirroring the Deno/Node host runs). Bun transpiles the .ts
+      # suite (incl. the generated abi.ts `const enum`) natively, so no tsx step
+      # is needed.
+      - uses: oven-sh/setup-bun@v2
+        if: runner.os == 'Linux'
       - name: Install LuaJIT (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y luajit
@@ -161,6 +167,15 @@ jobs:
       - name: Run JS host SDK suite under Node
         if: runner.os == 'Linux'
         run: just test-host-js-node
+        env:
+          POLYPLUG_LIB: ${{ github.workspace }}/target/debug/libpolyplug.so
+          POLYPLUG_NATIVE_LIB: ${{ github.workspace }}/target/debug/libpolyplug_native.so
+      # The same JS host SDK suite, now under Bun via the built-in bun:ffi FFI
+      # backend (mirrors the Deno/Node runs above). The justfile recipe runs
+      # `bun install` if node_modules is absent.
+      - name: Run JS host SDK suite under Bun
+        if: runner.os == 'Linux'
+        run: just test-host-js-bun
         env:
           POLYPLUG_LIB: ${{ github.workspace }}/target/debug/libpolyplug.so
           POLYPLUG_NATIVE_LIB: ${{ github.workspace }}/target/debug/libpolyplug_native.so

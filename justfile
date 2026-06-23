@@ -458,8 +458,27 @@ test-host-js-node:
         echo "node not installed, skipping"; \
     fi
 
+# Run JavaScript host-lib tests under Bun (bun:ffi FFI backend)
+test-host-js-bun:
+    @echo "=== Running JavaScript Host Lib Tests (Bun) ==="
+    @if [ -f {{marker_dir}}/host-js.failed ]; then \
+        echo "SKIPPED (build failed)"; \
+        exit 0; \
+    fi
+    @if ! [ -f {{sdks_dir}}/js/testing/run_bun.ts ]; then \
+        echo "NOT IMPLEMENTED: sdks/js/testing/run_bun.ts not found"; \
+    elif command -v bun >/dev/null 2>&1; then \
+        cd {{sdks_dir}}/js && \
+        if [ ! -d node_modules ]; then bun install; fi && \
+        POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug.so}" \
+        POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug_native.so}" \
+        bun --conditions=polyplug-src testing/run_bun.ts; \
+    else \
+        echo "bun not installed, skipping"; \
+    fi
+
 # Run all host-lib tests
-test-host-libs: test-host-cpp test-host-python test-host-csharp test-host-lua test-host-js test-host-js-node
+test-host-libs: test-host-cpp test-host-python test-host-csharp test-host-lua test-host-js test-host-js-node test-host-js-bun
 
 # Cross-language parity gate for the contract/bundle ID helpers: every SDK's
 # FNV-1a 64-bit implementation must compute byte-identical hashes (a missing

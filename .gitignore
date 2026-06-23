@@ -314,6 +314,11 @@ FakesAssemblies/
 .ntvs_analysis.dat
 node_modules/
 
+# JS SDK install lockfiles — the suite uses npm/bun install at run time but never
+# commits a lockfile (matches the absent package-lock.json convention).
+sdks/js/bun.lock
+sdks/js/package-lock.json
+
 # Visual Studio 6 build log
 *.plg
 

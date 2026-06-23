@@ -4,17 +4,18 @@
  * lazily-initialized singleton accessor.
  *
  * The SDK calls {@link getBackend} to obtain the one {@link FfiBackend} for the
- * current JS runtime. {@link detectBackend} chooses the implementation: Deno and
- * Node are supported; Bun arrives in a later increment behind this same
- * interface.
+ * current JS runtime. {@link detectBackend} chooses the implementation: Deno,
+ * Node, and Bun are all supported behind this same interface.
  *
  * Backend loading is split so each runtime only pulls in code it can resolve.
  * `./deno.ts` is statically imported — it touches `Deno.*` only inside methods,
  * so its module graph loads cleanly under every runtime. `./node.ts` imports the
- * npm-only `koffi` package at module scope, which Deno cannot resolve, so it is
- * loaded ONLY on the Node branch via a synchronous `require` (Node permits
- * `require()` of an ESM module with no top-level await). This keeps
- * {@link getBackend} synchronous — the SDK resolves it at module-init time.
+ * npm-only `koffi` package at module scope, which Deno cannot resolve, and
+ * `./bun.ts` imports the Bun-only `bun:ffi` builtin, which neither Deno, Node,
+ * nor `tsc` can resolve — so each is loaded ONLY on its own runtime branch via a
+ * synchronous `require` (a static top-level import of either would poison the
+ * module graph for every other runtime, and break the npm `tsc` build). This
+ * keeps {@link getBackend} synchronous — the SDK resolves it at module-init time.
  *
  * @module abi/ffi
  */
@@ -53,19 +54,25 @@ function isNode(): boolean {
 /**
  * Detect the FFI backend for the current JS runtime.
  *
- * Returns the Deno backend under Deno and the koffi-backed Node backend under
- * Node. Bun is not yet supported and throws a clear error, as does any other
- * runtime.
- * @throws Error when the runtime is Bun (not yet supported) or unrecognised.
+ * Returns the Deno backend under Deno, the `bun:ffi`-backed Bun backend under
+ * Bun, and the koffi-backed Node backend under Node. Any other runtime throws a
+ * clear error.
+ * @throws Error when the runtime is unrecognised (not Deno, Bun, or Node).
  */
 export function detectBackend(): FfiBackend {
     if (typeof Deno !== "undefined") {
         return denoBackend;
     }
     if (isBun()) {
-        throw new Error(
-            "polyplug: Bun FFI backend is coming in a later increment",
-        );
+        // Load the bun:ffi-backed Bun backend synchronously, only under Bun, so
+        // neither Deno, Node, nor tsc has to resolve the bun:ffi builtin (see
+        // file header). Bun's createRequire supports a synchronous require of a
+        // .ts module, and bun.ts has no top-level await.
+        const require: (id: string) => unknown = createRequire(import.meta.url);
+        const mod: { bunBackend: FfiBackend } = require("./bun.ts") as {
+            bunBackend: FfiBackend;
+        };
+        return mod.bunBackend;
     }
     if (isNode()) {
         // Load the koffi-backed Node backend synchronously, only under Node, so
@@ -78,7 +85,7 @@ export function detectBackend(): FfiBackend {
         return mod.nodeBackend;
     }
     throw new Error(
-        "polyplug: unsupported JS runtime (expected Deno or Node; Bun support is coming in a later increment)",
+        "polyplug: unsupported JS runtime (expected Deno, Bun, or Node)",
     );
 }
 
