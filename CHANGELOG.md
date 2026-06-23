@@ -50,6 +50,15 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ### Added
 
+- **`polyplugc` CLI installable from every SDK registry — no Rust required.** New
+  CLI packages distribute the prebuilt `polyplugc` binary, each **embedding** the
+  binary so installs are **fully offline** (no download step): `@polyplug/cli` on
+  npm (per-platform optional packages, esbuild-style — works with `npm i -g`,
+  `bunx`, and `deno install -A npm:@polyplug/cli`), `polyplugc` on PyPI (platform
+  wheels — `pip install` / `uv tool install` / `pipx`), and `Polyplug.Cli` on
+  NuGet (`dotnet tool install -g`, all three RIDs bundled). `cargo install
+  polyplugc` and the prebuilt-binary installer remain. Supported platforms:
+  linux-x64, macos-arm64, windows-x64.
 - **JS SDK runs on Node.js (koffi) and Bun (bun:ffi) in addition to Deno**,
   behind one runtime-detected FFI seam (`sdks/js/abi/ffi/`). `getBackend()` picks
   the backend per runtime — `Deno.dlopen` under Deno, the `koffi` C-FFI module

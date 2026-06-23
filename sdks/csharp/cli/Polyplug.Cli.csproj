@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+
+    <!-- Assembly and namespace -->
+    <AssemblyName>Polyplug.Cli</AssemblyName>
+    <RootNamespace>Polyplug.Cli</RootNamespace>
+
+    <!-- dotnet tool packaging -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>polyplugc</ToolCommandName>
+
+    <!-- NuGet package metadata -->
+    <IsPackable>true</IsPackable>
+    <PackageId>Polyplug.Cli</PackageId>
+    <Version>0.1.2</Version>
+    <Description>Cross-platform dotnet tool that bundles the polyplugc CLI. Generates host/guest bindings from .toml contract definitions. Fully offline — polyplugc binaries for linux-x64, macos-arm64, and win-x64 are embedded in the package.</Description>
+    <PackageTags>polyplug;plugin;codegen;cli;tool</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/polyplug/polyplug</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Authors>Islam Nofl</Authors>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Polyplug.Cli.Tests" />
+  </ItemGroup>
+
+  <!--
+    Copy the embedded binaries to the output directory so they land beside
+    the entry-point assembly during local dotnet run / dotnet test.
+    AppContext.BaseDirectory points at the output dir at runtime.
+    Pack="false" keeps these out of the NuGet package — the explicit items
+    below handle packing with the correct PackagePath.
+  -->
+  <ItemGroup>
+    <Content Include="bin-embed\**\*"
+             CopyToOutputDirectory="PreserveNewest"
+             Pack="false" />
+  </ItemGroup>
+
+  <!--
+    Pack the three polyplugc binaries into the NuGet tool package.
+    PackagePath places them at tools/<tfm>/any/bin-embed/<rid>/<binary> so the
+    .NET tool host unpacks them next to the entry-point assembly at install time.
+    CI populates bin-embed/<rid>/ before dotnet pack; _keep files hold the dirs
+    in git (NuGet excludes dot-files, so _keep is used instead of .gitkeep).
+  -->
+  <ItemGroup>
+    <TfmSpecificPackageFile Include="$(MSBuildProjectDirectory)\bin-embed\linux-x64\polyplugc"
+                            PackagePath="bin-embed\linux-x64\" />
+    <TfmSpecificPackageFile Include="$(MSBuildProjectDirectory)\bin-embed\macos-arm64\polyplugc"
+                            PackagePath="bin-embed\macos-arm64\" />
+    <TfmSpecificPackageFile Include="$(MSBuildProjectDirectory)\bin-embed\win-x64\polyplugc.exe"
+                            PackagePath="bin-embed\win-x64\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

@@ -429,6 +429,28 @@ jobs:
             (cd "$loader_dir" && uv build --out-dir "$GITHUB_WORKSPACE/dist/pypi")
           done
 
+      # polyplugc CLI: one platform wheel per OS, each EMBEDDING the prebuilt
+      # binary so `pip install polyplugc` / `uv tool install polyplugc` is FULLY
+      # OFFLINE. setup.py's has_ext_modules trick makes the wheel platform-tagged;
+      # --plat-name lets this single ubuntu runner emit all three tags. _bin is
+      # cleared between builds so each wheel carries only its own binary.
+      - name: Build polyplugc CLI platform wheels
+        run: |
+          set -e
+          python -m pip install --quiet setuptools wheel
+          cli="sdks/python/cli"
+          build_wheel() {  # <src-binary> <dest-name> <plat-name>
+            rm -rf "$cli/build" "$cli"/*.egg-info \
+                   "$cli/polyplugc/_bin/polyplugc" "$cli/polyplugc/_bin/polyplugc.exe"
+            cp "$1" "$cli/polyplugc/_bin/$2"
+            [ "$2" = "polyplugc" ] && chmod +x "$cli/polyplugc/_bin/$2"
+            ( cd "$cli" && python setup.py bdist_wheel --plat-name "$3" \
+                --dist-dir "$GITHUB_WORKSPACE/dist/pypi" )
+          }
+          build_wheel dist/cli/linux-x64/polyplugc       polyplugc     manylinux2014_x86_64
+          build_wheel dist/cli/macos-arm64/polyplugc     polyplugc     macosx_11_0_arm64
+          build_wheel dist/cli/windows-x64/polyplugc.exe polyplugc.exe win_amd64
+
       - name: Validate Python packages
         run: |
           echo "=== Python packages ==="
@@ -511,6 +533,20 @@ jobs:
             dotnet pack "$loader_dir" -c Release -o dist/nuget
           done
 
+      # polyplugc CLI as a dotnet tool: all three prebuilt binaries are embedded
+      # in the one package and selected by RID at runtime, so
+      # `dotnet tool install -g Polyplug.Cli` is FULLY OFFLINE. (Per-RID dir names
+      # are linux-x64 / macos-arm64 / win-x64; the binaries come from dist/cli/.)
+      - name: Build polyplugc CLI dotnet tool (binaries embedded)
+        run: |
+          set -e
+          cli="sdks/csharp/cli"
+          cp dist/cli/linux-x64/polyplugc       "$cli/bin-embed/linux-x64/polyplugc"
+          cp dist/cli/macos-arm64/polyplugc     "$cli/bin-embed/macos-arm64/polyplugc"
+          cp dist/cli/windows-x64/polyplugc.exe "$cli/bin-embed/win-x64/polyplugc.exe"
+          chmod +x "$cli/bin-embed/linux-x64/polyplugc" "$cli/bin-embed/macos-arm64/polyplugc"
+          dotnet pack "$cli/Polyplug.Cli.csproj" -c Release -o dist/nuget
+
       - name: Publish to NuGet (dry-run)
         if: inputs.dry-run
         run: |
@@ -581,11 +617,24 @@ jobs:
           cp dist/native/macos-arm64/libpolyplug.dylib "$native_dir/macos-arm64/"
           cp dist/native/windows-x64/polyplug.dll "$native_dir/windows-x64/"
 
+      # Embed the prebuilt polyplugc binary into each @polyplug/cli platform
+      # package so the CLI installs FULLY OFFLINE: npm resolves the one optional
+      # package matching the user's os/cpu, which already contains the binary.
+      # Binaries come from prep's dist/cli/<platform>/.
+      - name: Embed polyplugc binary into @polyplug/cli platform packages
+        run: |
+          set -e
+          cp dist/cli/linux-x64/polyplugc       sdks/js/cli/npm/linux-x64/polyplugc
+          cp dist/cli/macos-arm64/polyplugc     sdks/js/cli/npm/darwin-arm64/polyplugc
+          cp dist/cli/windows-x64/polyplugc.exe sdks/js/cli/npm/win32-x64/polyplugc.exe
+          chmod +x sdks/js/cli/npm/linux-x64/polyplugc sdks/js/cli/npm/darwin-arm64/polyplugc
+
       - name: Publish to npm (dry-run)
         if: inputs.dry-run
         run: |
           set -e
-          for d in abi host guest loaders/native loaders/python loaders/lua loaders/js loaders/dotnet; do
+          for d in abi host guest loaders/native loaders/python loaders/lua loaders/js loaders/dotnet \
+                   cli/npm/linux-x64 cli/npm/darwin-arm64 cli/npm/win32-x64 cli; do
             ( cd "sdks/js/$d" && npm publish --dry-run )
           done
 
@@ -600,7 +649,8 @@ jobs:
           # Each publish tolerates an "already published" conflict so a re-run
           # after a partial publish converges instead of failing: if publish
           # errors but the exact name@version is already on the registry, skip.
-          for d in abi host guest loaders/native loaders/python loaders/lua loaders/js loaders/dotnet; do
+          for d in abi host guest loaders/native loaders/python loaders/lua loaders/js loaders/dotnet \
+                   cli/npm/linux-x64 cli/npm/darwin-arm64 cli/npm/win32-x64 cli; do
             ( cd "sdks/js/$d" && (npm publish --access public || { code=$?; npm view "$(node -p "require('./package.json').name")@$(node -p "require('./package.json').version")" version >/dev/null 2>&1 && echo "already published, skipping" || exit $code; }) )
           done
 

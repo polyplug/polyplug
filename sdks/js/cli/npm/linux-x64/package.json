@@ -1,0 +1,17 @@
+{
+  "name": "@polyplug/cli-linux-x64",
+  "version": "0.1.2",
+  "description": "polyplugc prebuilt binary for Linux x64",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "files": [
+    "polyplugc"
+  ],
+  "license": "MIT",
+  "author": "polyplug",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/polyplug/polyplug.git",
+    "directory": "sdks/js/cli/npm/linux-x64"
+  }
+}

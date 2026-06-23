@@ -353,10 +353,34 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build -p polyplug_dotnet --features download-nethost
 
+  # Unit-test the polyplugc CLI wrapper packages (npm/PyPI/NuGet) that ship the
+  # CLI to non-Rust registries. Pure platform-resolution logic — no binary or
+  # network needed; the real binary is injected at release time.
+  cli-packages:
+    name: polyplugc CLI wrappers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: npm CLI wrapper tests
+        run: cd sdks/js/cli && node --test
+      - name: PyPI CLI wrapper tests
+        run: cd sdks/python/cli && python -m unittest discover -s tests
+      - name: NuGet CLI tool tests
+        run: dotnet test sdks/csharp/cli.tests/Polyplug.Cli.Tests.csproj -c Release
+
   ci:
     name: CI
     if: always()
-    needs: [fmt, clippy, sdk_validator, test, windows]
+    needs: [fmt, clippy, sdk_validator, test, windows, cli-packages]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs passed

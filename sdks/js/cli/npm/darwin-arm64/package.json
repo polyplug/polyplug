@@ -1,0 +1,17 @@
+{
+  "name": "@polyplug/cli-darwin-arm64",
+  "version": "0.1.2",
+  "description": "polyplugc prebuilt binary for macOS ARM64",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": [
+    "polyplugc"
+  ],
+  "license": "MIT",
+  "author": "polyplug",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/polyplug/polyplug.git",
+    "directory": "sdks/js/cli/npm/darwin-arm64"
+  }
+}
