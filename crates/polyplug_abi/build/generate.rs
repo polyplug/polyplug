@@ -2079,11 +2079,14 @@ fn to_upper_snake_case_for_generate(s: &str) -> String {
         if c.is_uppercase() {
             // Insert underscore at boundaries:
             // - Before uppercase if previous was lowercase (e.g., `aB` -> `a_B`)
+            // - Before uppercase if previous was a digit (e.g., `25519P` -> `25519_P`,
+            //   so `Ed25519PublicKey` -> `ED25519_PUBLIC_KEY` matching the abi mirror)
             // - Before uppercase if next is lowercase and we have a run of uppercase
             //   (e.g., `ABIError` -> `ABI_Error`)
             if i > 0 {
                 let prev = chars[i - 1];
                 if prev.is_ascii_lowercase()
+                    || prev.is_ascii_digit()
                     || (prev.is_uppercase()
                         && i + 1 < chars.len()
                         && chars[i + 1].is_ascii_lowercase())

@@ -20,7 +20,7 @@ import {
     ARENA_OVERFLOW_BLOCK_SIZE,
     CALL_ARENA_SIZE,
     DEPENDENCY_INFO_SIZE,
-    ED25519PUBLIC_KEY_SIZE,
+    ED25519_PUBLIC_KEY_SIZE,
     STRING_VIEW_SIZE,
     VERSION_SIZE,
 } from "./abi.ts";
@@ -99,7 +99,7 @@ test("DependencyInfo is 24 bytes", () => {
 });
 
 test("Ed25519PublicKey is 32 bytes", () => {
-    assertStrictEquals(ED25519PUBLIC_KEY_SIZE, 32);
+    assertStrictEquals(ED25519_PUBLIC_KEY_SIZE, 32);
 });
 
 test("StringView is 16 bytes", () => {
