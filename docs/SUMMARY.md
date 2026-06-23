@@ -8,6 +8,27 @@
 - [Examples](EXAMPLES.md)
 - [Development Workflow](WORKFLOW.md)
 
+# Languages
+
+- [Rust](languages/rust.md)
+  - [Host (app)](languages/rust-host.md)
+  - [Guest (plugin)](languages/rust-guest.md)
+- [C++](languages/cpp.md)
+  - [Host (app)](languages/cpp-host.md)
+  - [Guest (plugin)](languages/cpp-guest.md)
+- [C#](languages/csharp.md)
+  - [Host (app)](languages/csharp-host.md)
+  - [Guest (plugin)](languages/csharp-guest.md)
+- [Python](languages/python.md)
+  - [Host (app)](languages/python-host.md)
+  - [Guest (plugin)](languages/python-guest.md)
+- [Lua](languages/lua.md)
+  - [Host (app)](languages/lua-host.md)
+  - [Guest (plugin)](languages/lua-guest.md)
+- [JavaScript](languages/js.md)
+  - [Host (app)](languages/js-host.md)
+  - [Guest (plugin)](languages/js-guest.md)
+
 # Concepts & Architecture
 
 - [Architecture Overview](ARCHITECTURE.md)
