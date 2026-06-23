@@ -322,6 +322,44 @@ fn main() {
 
 ---
 
+## Step 10 — (Optional) Sign the bundle
+
+If the host enforces a signature policy, sign the assembled bundle so it loads
+under `SignaturePolicy::Required`. Generate a keypair once and keep
+`signing.key` secret:
+
+```
+polyplugc keygen --out keys/
+polyplugc sign --bundle-dir dist/my_greeter --key keys/signing.key
+polyplugc verify --bundle-dir dist/my_greeter
+```
+
+`sign` runs the same checks as `validate --bundle-dir`, then writes
+`dist/my_greeter/bundle.sig` — a detached Ed25519 signature over a canonical
+digest of every file in the bundle. The signer's **public** key travels inside
+`bundle.sig`, so the host needs no key distribution to verify integrity (TOFU —
+tamper detection, not author approval).
+
+On the host, opt in to enforcement when building the runtime:
+
+```rust
+use polyplug_abi::runtime::SignaturePolicy;
+
+let runtime = Runtime::builder()
+    .loader(NativeLoader::new(NativeConfig {}))
+    .config(config)
+    .signature_policy(SignaturePolicy::Required)   // reject unsigned/tampered bundles
+    .build()
+    .expect("runtime build");
+```
+
+`Required` rejects an unsigned bundle with `LoaderError::UnsignedBundle` and a
+tampered one with `LoaderError::SignatureVerificationFailed`; `WarnOnly` logs the
+failure and continues; `Off` (the default) skips the check. Full detail:
+[`TRUST_MODEL.md`](TRUST_MODEL.md) § Bundle Signing.
+
+---
+
 ## What the generated names look like
 
 The naming convention `polyplugc` applies for a contract `namespace.Type`:
@@ -357,3 +395,5 @@ The naming convention `polyplugc` applies for a contract `namespace.Type`:
 - See `docs/EXAMPLES.md` for the full reference example gallery.
 - Browse `examples/guests/` for working implementations in all six languages.
 - Browse `examples/hosts/` for working host applications in all six languages.
+- See `docs/TRUST_MODEL.md` § Bundle Signing for the full signing/verification
+  model, the canonical digest, and how to layer key-pinning on top.

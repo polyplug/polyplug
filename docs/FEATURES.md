@@ -374,7 +374,49 @@ isolation for untrusted code). Full detail: [`TRUST_MODEL.md`](TRUST_MODEL.md).
 
 ---
 
-## 11. Performance posture
+## 11. Bundle signing & verification
+
+A bundle directory can carry a detached `bundle.sig` (Ed25519 over SHA-256, pure
+Rust via the `polyplug_signing` crate). The host chooses how strictly the
+signature is enforced through `RuntimeConfig.signature_policy`
+(`SignaturePolicy`):
+
+| Policy | Value | Unsigned / invalid bundle |
+|---|---|---|
+| `Off` | 0 (default) | Loads normally — verification is skipped entirely. |
+| `WarnOnly` | 1 | Loads, but logs the failure at `LogLevel::Warn`. |
+| `Required` | 2 | Rejected at load: `LoaderError::UnsignedBundle` (missing) or `LoaderError::SignatureVerificationFailed` (tampered/invalid). |
+
+The check runs immediately after manifest validation and **before any loader
+runs**, so a bad signature never reaches `dlopen`/the VM.
+
+- **Canonical digest** — the signed message is a SHA-256 over a deterministic
+  buffer covering every file in the bundle except `bundle.sig` (each file's
+  `/`-relative path, a `0x00` separator, then the file's SHA-256, all sorted by
+  path). Adding, removing, or editing any file — manifest or artifact — changes
+  the digest, so the signature covers the whole bundle uniformly.
+- **Freedom-preserving (TOFU)** — `bundle.sig` embeds the signer's **public**
+  key, so verification proves a bundle is *intact* and *self-consistently
+  signed* without the host having to pre-know or allowlist the author. App users
+  stay free to load plugins from unknown authors; the policy governs *tamper
+  detection*, not *author approval*. A host that wants stricter trust can build
+  key-pinning on top of the `BundleVerifier` seam (`verify_bundle` returns the
+  embedded `VerifyingKey`) without changing the on-disk format or the ABI.
+- **Tooling** — `polyplugc keygen --out <dir>` writes `signing.key` (private,
+  `0o600` on Unix) and `verifying.key` (public); `polyplugc sign --bundle-dir
+  <dir> --key signing.key` runs the `validate --bundle-dir` checks then writes
+  `bundle.sig`; `polyplugc verify --bundle-dir <dir>` exits non-zero on failure.
+- **ABI** — `signature_policy` occupies the former tail padding of
+  `RuntimeConfig` (offset `0x2C`); the struct stays 48 bytes, align 8. All six
+  host SDKs mirror the field and default it to `Off`, so a zero-initialized
+  config is unaffected.
+
+Full spec — digest algorithm, `bundle.sig`/key file formats, and threat model:
+[`TRUST_MODEL.md`](TRUST_MODEL.md) § Bundle Signing.
+
+---
+
+## 12. Performance posture
 
 - **Native path is near-zero overhead:** the hot path is one guard load, one
   pointer dereference, and one indirect call (~2.4 ns for a trivial native
