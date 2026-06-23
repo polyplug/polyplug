@@ -480,3 +480,63 @@ fn config_path_pinned_key_rejects_bundle_signed_with_untrusted_key() {
         result.err()
     );
 }
+
+/// Proves the documented `RuntimeConfig.trusted_keys` ownership contract: the
+/// runtime COPIES the host's keys during `create`, so the host buffer is only
+/// borrowed for that call and may be freed/reused afterward. The test pins an
+/// untrusted key B via a host-owned buffer, builds the runtime (no `plugin_dir`,
+/// so nothing loads during `build`), then OVERWRITES the host buffer in place with
+/// the real signer's key A and loads a bundle signed by A. If the runtime had
+/// retained the host pointer (instead of copying), it would now observe A and
+/// accept; because it copied B at create, it still rejects. This deterministically
+/// distinguishes copy-at-create from pointer-retention without relying on
+/// allocator reuse.
+#[test]
+fn config_path_trusted_keys_are_copied_at_create_not_retained() {
+    let tmp: TempDir = TempDir::new().expect("tmp dir");
+    let bundle_dir: PathBuf = write_stub_bundle(tmp.path(), "cfg_copy_proof");
+
+    let (signing_key_a, verifying_key_a): (SigningKey, VerifyingKey) = generate_keypair();
+    sign_bundle(&bundle_dir, &signing_key_a).expect("sign bundle");
+    let (_, verifying_key_b): (SigningKey, VerifyingKey) = generate_keypair();
+
+    // Host-owned key buffer pinned to the UNTRUSTED key B.
+    let mut keys: Vec<polyplug_abi::types::Ed25519PublicKey> =
+        vec![polyplug_abi::types::Ed25519PublicKey {
+            bytes: *verifying_key_b.as_bytes(),
+        }];
+
+    let cfg: polyplug_abi::RuntimeConfig = polyplug_abi::RuntimeConfig {
+        signature_policy: SignaturePolicy::Required,
+        trusted_keys: polyplug_abi::Array::new(keys.as_mut_ptr(), keys.len()),
+        ..Default::default()
+    };
+
+    // No plugin_dir → build() copies the keys at create but loads nothing yet.
+    let rt: Arc<Runtime> = Runtime::builder()
+        .loader(NoopLoader)
+        .config(cfg)
+        .build()
+        .expect("build runtime");
+
+    // Mutate the host buffer to the REAL signer (key A) AFTER create. A runtime
+    // that retained the host pointer would now see A and accept; a runtime that
+    // copied B at create still holds B and must reject.
+    keys[0] = polyplug_abi::types::Ed25519PublicKey {
+        bytes: *verifying_key_a.as_bytes(),
+    };
+
+    let result: Result<(), RuntimeError> = rt.load_bundle(&bundle_dir);
+
+    assert!(
+        matches!(
+            result,
+            Err(RuntimeError::Loader(
+                LoaderError::UntrustedSigningKey { .. }
+            ))
+        ),
+        "copy-at-create: post-create mutation of the host buffer must NOT affect the \
+         runtime's pinned set; expected UntrustedSigningKey, got: {:?}",
+        result.err()
+    );
+}

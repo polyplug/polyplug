@@ -196,27 +196,43 @@ impl RuntimeBuilder {
     //  loads them in sorted order, registers interfaces.
     //  Full capability graph resolution is a future enhancement.
     pub fn build(mut self) -> Result<Arc<Runtime>, RuntimeError> {
-        // Resolve the trusted-key buffer behind `config.trusted_keys`. Two paths
-        // feed keys in, and they must not clobber each other:
+        // Resolve the trusted-key allowlist into runtime-owned storage. Keys reach
+        // the builder two ways, and BOTH are copied into the `_trusted_keys` `Vec`
+        // so the runtime owns them for its whole lifetime and `config.trusted_keys`
+        // points at that owned copy. This honors the documented
+        // `RuntimeConfig.trusted_keys` contract: the host's own buffer is only
+        // borrowed for the duration of `create`, and the host may free it as soon
+        // as `create` returns. (Copying is cheap — a handful of 32-byte keys, once,
+        // on the rare construction path.)
         //
-        // * Rust builder API (`trusted_keys()`): `self.trusted_keys` is non-empty.
-        //   Take ownership and repoint the config `Array` at this `Vec`'s heap
-        //   buffer. The `Vec` moves into a `Runtime` field below, so it outlives
-        //   the runtime; moving a `Vec` relocates only its header, never the heap
-        //   buffer the `Array` pointer addresses, so the pointer stays valid for
-        //   the runtime's entire lifetime.
-        // * FFI / `config()` path: a host (any language) set `config.trusted_keys`
-        //   to its own `Array` and did NOT call the Rust `trusted_keys()` API, so
-        //   `self.trusted_keys` is empty. Leave the host-supplied `Array` exactly
-        //   as given — the host owns that buffer and keeps it alive for the
-        //   runtime's lifetime per the `RuntimeConfig.trusted_keys` ownership
-        //   contract. Overwriting it here would silently disable key pinning for
-        //   every non-Rust host.
+        // * Rust builder API (`trusted_keys()`): `self.trusted_keys` is already an
+        //   owned `Vec` — use it directly.
+        // * FFI / `config()` path: a host (any language) populated
+        //   `config.trusted_keys` with its OWN `Array` and did not call the Rust
+        //   API, so copy those elements out into runtime-owned storage here. Not
+        //   copying would either dangle (host frees per contract) or silently drop
+        //   the keys, disabling pinning for every non-Rust host.
         //
-        // When neither path supplies keys, `config.trusted_keys` is the default
-        // empty `Array` (TOFU).
-        let trusted_keys: Vec<Ed25519PublicKey> = self.trusted_keys;
-        if !trusted_keys.is_empty() {
+        // Moving a `Vec` relocates only its 3-word header, never the heap buffer the
+        // `Array` pointer addresses, so the pointer stays valid across the move into
+        // the `Runtime` field below. An empty result leaves `config.trusted_keys`
+        // as the default empty `Array` (TOFU).
+        let mut trusted_keys: Vec<Ed25519PublicKey> = self.trusted_keys;
+        if trusted_keys.is_empty() && !self.config.trusted_keys.is_empty() {
+            let raw: &Array<Ed25519PublicKey> = &self.config.trusted_keys;
+            // SAFETY: on the FFI/`config()` path the host guarantees, per the
+            // `RuntimeConfig.trusted_keys` ownership contract, that `items` is valid
+            // for `len` elements for the duration of this `create` call (where
+            // `build` runs). `is_empty()` above rules out a null pointer / zero
+            // length. We only read the elements and copy their bytes out; the host
+            // pointer is never retained past this block.
+            let host_keys: &[Ed25519PublicKey] =
+                unsafe { core::slice::from_raw_parts(raw.items, raw.len) };
+            trusted_keys = host_keys.to_vec();
+        }
+        if trusted_keys.is_empty() {
+            self.config.trusted_keys = Array::empty();
+        } else {
             self.config.trusted_keys = Array::new(
                 trusted_keys.as_ptr() as *mut Ed25519PublicKey,
                 trusted_keys.len(),

@@ -90,24 +90,22 @@ pub struct Runtime {
     /// the runtime's lifetime — `config.log_user_data` points into this box.
     /// Never read after construction; it exists purely as an owner.
     pub(crate) _logger_closure: Option<Box<crate::logger::LoggerClosure>>,
-    /// Owns the trusted Ed25519 verifying keys supplied through the Rust builder
-    /// API for the runtime's lifetime.
+    /// Owns the runtime's copy of the trusted Ed25519 verifying keys for the
+    /// runtime's lifetime.
     ///
-    /// When a host pins keys via [`RuntimeBuilder::trusted_keys`], the builder
-    /// receives them borrowed for the `build()` call only, so the runtime takes
-    /// its own owned copy here and repoints the persisted `config.trusted_keys`
-    /// `Array` at this `Vec`'s heap buffer — that way no `Array` pointer ever
-    /// dangles into freed builder storage, mirroring how `_logger_closure` backs
-    /// `config.log_user_data`. The `Vec`'s data buffer is stable across the move
-    /// into this field (moving a `Vec` moves only its 3-word header, never the
-    /// heap buffer the `Array` points to).
-    ///
-    /// When keys instead arrive through the FFI / `config()` path (a non-Rust
-    /// host populating `RuntimeConfig.trusted_keys` directly), this `Vec` is empty
-    /// and `config.trusted_keys` keeps pointing at the host-owned buffer, which
-    /// the host guarantees to keep alive for the runtime's lifetime per the
-    /// `RuntimeConfig.trusted_keys` ownership contract. Never read after
-    /// construction; it exists purely as an owner.
+    /// Keys reach the builder either through [`RuntimeBuilder::trusted_keys`] (Rust
+    /// API) or through the FFI / `config()` path (a host populating
+    /// `RuntimeConfig.trusted_keys` directly). In BOTH cases `build()` copies them
+    /// into this `Vec` and repoints the persisted `config.trusted_keys` `Array` at
+    /// this `Vec`'s heap buffer — so `config.trusted_keys` always addresses
+    /// runtime-owned storage, never a borrowed host buffer. The host's own buffer
+    /// is therefore only borrowed for the duration of `create`, satisfying the
+    /// documented `RuntimeConfig.trusted_keys` ownership contract (the host may free
+    /// it once `create` returns). This mirrors how `_logger_closure` backs
+    /// `config.log_user_data`; the `Vec`'s data buffer is stable across the move
+    /// into this field (moving a `Vec` moves only its 3-word header, never the heap
+    /// buffer the `Array` points to). Never read after construction; it exists
+    /// purely as an owner.
     ///
     /// [`RuntimeBuilder::trusted_keys`]: crate::runtime_builder::RuntimeBuilder::trusted_keys
     pub(crate) _trusted_keys: Vec<polyplug_abi::types::Ed25519PublicKey>,
@@ -943,12 +941,16 @@ impl Runtime {
         Ok(())
     }
 
-    /// Copy the host-configured trusted Ed25519 keys out of the config `Array`
-    /// into owned verifying keys.
+    /// Copy the configured trusted Ed25519 keys out of the config `Array` into
+    /// owned verifying keys.
     ///
-    /// The keys are COPIED out — the runtime never retains the host's `Array`
-    /// pointer beyond this call (the builder owns the backing storage only until
-    /// `build()` returns, and the persisted config resets the field to empty).
+    /// `config.trusted_keys` was repointed at runtime-owned storage during
+    /// `build()` (see [`Runtime::_trusted_keys`]), so this reads from a buffer that
+    /// lives for the runtime's whole lifetime — it is safe to call on every bundle
+    /// load, not just during construction. The keys are copied into fresh
+    /// `VerifyingKey`s per call; the `Array` pointer itself is never retained.
+    ///
+    /// [`Runtime::_trusted_keys`]: Runtime#structfield._trusted_keys
     fn collect_trusted_keys(
         &self,
         bundle_name: &str,
