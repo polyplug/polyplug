@@ -175,6 +175,56 @@ fn policy_required_tampered_artifact_returns_verification_failed_error() {
     );
 }
 
+/// A bundle whose artifact is a symlink must be rejected under Required policy:
+/// the canonical digest refuses symlinks (a symlinked artifact would be loaded
+/// but never covered by the signature), so verification fails.
+#[test]
+#[cfg(unix)]
+fn policy_required_symlinked_artifact_returns_verification_failed_error() {
+    use std::os::unix::fs::symlink;
+
+    let tmp: TempDir = TempDir::new().expect("tmp dir");
+    let bundle_dir: PathBuf = tmp.path().join("symlink_bundle");
+    fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+
+    // A real DLL inside the bundle plus a symlink artifact pointing at it.
+    fs::write(bundle_dir.join("real.so"), b"\x7fELF stub").expect("write real artifact");
+    symlink(
+        bundle_dir.join("real.so"),
+        bundle_dir.join("symlink_bundle.so"),
+    )
+    .expect("create symlink artifact");
+
+    let manifest_toml: String = format!(
+        "id = {}\nname = \"symlink_bundle\"\nloader = \"noop\"\nfile = \"symlink_bundle.so\"\nversion = \"1.0.0\"\n",
+        compute_bundle_id("symlink_bundle"),
+    );
+    fs::write(bundle_dir.join("manifest.toml"), manifest_toml).expect("write manifest.toml");
+
+    // Sign BEFORE the symlink exists is impossible (the digest refuses it); so we
+    // attempt to sign — signing must itself fail on the symlink. Either way the
+    // bundle cannot be validly signed, and Required verification rejects it.
+    let (signing_key, _): (SigningKey, VerifyingKey) = generate_keypair();
+    let _ = sign_bundle(&bundle_dir, &signing_key);
+
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
+        .loader(NoopLoader)
+        .plugin_dir(tmp.path().to_path_buf())
+        .signature_policy(SignaturePolicy::Required)
+        .build();
+
+    assert!(
+        matches!(
+            result,
+            Err(RuntimeError::Loader(
+                LoaderError::SignatureVerificationFailed { .. }
+            )) | Err(RuntimeError::Loader(LoaderError::UnsignedBundle { .. }))
+        ),
+        "Required policy: symlinked artifact must be rejected; got: {:?}",
+        result.err()
+    );
+}
+
 #[test]
 fn policy_warn_only_unsigned_bundle_loads_ok_and_emits_warning() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
@@ -209,5 +259,123 @@ fn policy_warn_only_unsigned_bundle_loads_ok_and_emits_warning() {
             .iter()
             .any(|msg: &String| msg.contains("signature check failed")),
         "WarnOnly policy: expected a warning about missing/invalid signature; got: {captured:?}"
+    );
+}
+
+// ─── Key pinning (RuntimeConfig::trusted_keys) ─────────────────────────────────
+
+#[test]
+fn policy_required_pinned_key_accepts_bundle_signed_with_trusted_key() {
+    let tmp: TempDir = TempDir::new().expect("tmp dir");
+    let bundle_dir: PathBuf = write_stub_bundle(tmp.path(), "pinned_ok");
+
+    let (signing_key, verifying_key): (SigningKey, VerifyingKey) = generate_keypair();
+    sign_bundle(&bundle_dir, &signing_key).expect("sign bundle");
+
+    // Pin exactly the key that signed the bundle → accept.
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
+        .loader(NoopLoader)
+        .plugin_dir(tmp.path().to_path_buf())
+        .signature_policy(SignaturePolicy::Required)
+        .trusted_keys(&[verifying_key])
+        .build();
+
+    assert!(
+        result.is_ok(),
+        "Required+pinned: bundle signed by a trusted key must load OK; got: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn policy_required_pinned_key_rejects_bundle_signed_with_untrusted_key() {
+    let tmp: TempDir = TempDir::new().expect("tmp dir");
+    let bundle_dir: PathBuf = write_stub_bundle(tmp.path(), "pinned_untrusted");
+
+    // Sign with key A but pin only an unrelated key B.
+    let (signing_key_a, _): (SigningKey, VerifyingKey) = generate_keypair();
+    sign_bundle(&bundle_dir, &signing_key_a).expect("sign bundle");
+    let (_, verifying_key_b): (SigningKey, VerifyingKey) = generate_keypair();
+
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
+        .loader(NoopLoader)
+        .plugin_dir(tmp.path().to_path_buf())
+        .signature_policy(SignaturePolicy::Required)
+        .trusted_keys(&[verifying_key_b])
+        .build();
+
+    assert!(
+        matches!(
+            result,
+            Err(RuntimeError::Loader(
+                LoaderError::UntrustedSigningKey { .. }
+            ))
+        ),
+        "Required+pinned: an untrusted signing key must fail with UntrustedSigningKey; got: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn policy_warn_only_pinned_key_loads_untrusted_bundle_and_warns() {
+    let tmp: TempDir = TempDir::new().expect("tmp dir");
+    let bundle_dir: PathBuf = write_stub_bundle(tmp.path(), "pinned_warn");
+
+    let (signing_key_a, _): (SigningKey, VerifyingKey) = generate_keypair();
+    sign_bundle(&bundle_dir, &signing_key_a).expect("sign bundle");
+    let (_, verifying_key_b): (SigningKey, VerifyingKey) = generate_keypair();
+
+    let warnings: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let warnings_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&warnings);
+
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
+        .loader(NoopLoader)
+        .plugin_dir(tmp.path().to_path_buf())
+        .signature_policy(SignaturePolicy::WarnOnly)
+        .trusted_keys(&[verifying_key_b])
+        .logger(move |level: LogLevel, _scope: &str, msg: &str| {
+            if level == LogLevel::Warn {
+                warnings_clone
+                    .lock()
+                    .expect("warnings lock")
+                    .push(msg.to_owned());
+            }
+        })
+        .build();
+
+    assert!(
+        result.is_ok(),
+        "WarnOnly+pinned: an untrusted bundle must still load; got: {:?}",
+        result.err()
+    );
+
+    let captured: Vec<String> = warnings.lock().expect("warnings lock").clone();
+    assert!(
+        captured
+            .iter()
+            .any(|msg: &String| msg.contains("signature check failed")),
+        "WarnOnly+pinned: expected a warning about the untrusted key; got: {captured:?}"
+    );
+}
+
+#[test]
+fn policy_off_ignores_pinned_keys() {
+    let tmp: TempDir = TempDir::new().expect("tmp dir");
+    write_stub_bundle(tmp.path(), "off_pinned");
+
+    // An unrelated pinned key is irrelevant under Off: no verification runs.
+    let (_, unrelated): (SigningKey, VerifyingKey) = generate_keypair();
+
+    let result: Result<Arc<Runtime>, RuntimeError> = Runtime::builder()
+        .loader(NoopLoader)
+        .plugin_dir(tmp.path().to_path_buf())
+        .signature_policy(SignaturePolicy::Off)
+        .trusted_keys(&[unrelated])
+        .build();
+
+    assert!(
+        result.is_ok(),
+        "Off policy: an unsigned bundle must load even with pinned keys set; got: {:?}",
+        result.err()
     );
 }

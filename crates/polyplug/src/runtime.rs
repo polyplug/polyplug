@@ -31,7 +31,10 @@ use polyplug_abi::{
     HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, StringView,
     SupportedLanguage, types::Version,
 };
-use polyplug_signing::{SigError, verify_bundle as signing_verify_bundle};
+use polyplug_signing::{
+    BundleVerifier, PinnedKeyVerifier, SigError, verify_bundle as signing_verify_bundle,
+    verifying_key_from_bytes,
+};
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::HostContractError;
@@ -87,6 +90,18 @@ pub struct Runtime {
     /// the runtime's lifetime — `config.log_user_data` points into this box.
     /// Never read after construction; it exists purely as an owner.
     pub(crate) _logger_closure: Option<Box<crate::logger::LoggerClosure>>,
+    /// Owns the host's trusted Ed25519 verifying keys for the runtime's lifetime.
+    ///
+    /// `config.trusted_keys` (the ABI `Array`) points at this `Vec`'s heap
+    /// buffer. The builder receives the keys borrowed for the `build()` call
+    /// only, so the runtime takes its own owned copy and repoints the persisted
+    /// `config.trusted_keys` at it — that way no `Array` pointer ever dangles
+    /// into freed builder storage, mirroring how `_logger_closure` backs
+    /// `config.log_user_data`. The `Vec`'s data buffer is stable across the move
+    /// into this field (moving a `Vec` moves only its 3-word header, never the
+    /// heap buffer the `Array` points to). Never read after construction; it
+    /// exists purely as an owner.
+    pub(crate) _trusted_keys: Vec<polyplug_abi::types::Ed25519PublicKey>,
     /// Last error message for FFI error reporting.
     pub(crate) last_error: Mutex<String>,
     /// Registered host contracts, keyed by contract_id.
@@ -890,6 +905,95 @@ impl Runtime {
         self.load_manifest_with_source(manifest, source, opts)
     }
 
+    /// Verify a bundle's signature under the configured policy.
+    ///
+    /// The verifier choice depends on the host-supplied trusted-key allowlist
+    /// (`RuntimeConfig::trusted_keys`):
+    /// - empty allowlist → TOFU: trust the key embedded in `bundle.sig`;
+    /// - non-empty allowlist → key pinning: additionally require the embedded key
+    ///   to be a member of the allowlist.
+    ///
+    /// A malformed key in the host allowlist is a host configuration error and is
+    /// surfaced as [`LoaderError::MalformedTrustedKey`].
+    fn verify_bundle_signature(
+        &self,
+        bundle_dir: &Path,
+        bundle_name: &str,
+    ) -> Result<(), RuntimeError> {
+        let trusted: Vec<ed25519_dalek::VerifyingKey> = self.collect_trusted_keys(bundle_name)?;
+
+        if trusted.is_empty() {
+            signing_verify_bundle(bundle_dir)
+                .map_err(|e: SigError| Self::map_signature_error(e, bundle_name))?;
+        } else {
+            let verifier: PinnedKeyVerifier = PinnedKeyVerifier::new(trusted);
+            verifier
+                .verify(bundle_dir)
+                .map_err(|e: SigError| Self::map_signature_error(e, bundle_name))?;
+        }
+        Ok(())
+    }
+
+    /// Copy the host-configured trusted Ed25519 keys out of the config `Array`
+    /// into owned verifying keys.
+    ///
+    /// The keys are COPIED out — the runtime never retains the host's `Array`
+    /// pointer beyond this call (the builder owns the backing storage only until
+    /// `build()` returns, and the persisted config resets the field to empty).
+    fn collect_trusted_keys(
+        &self,
+        bundle_name: &str,
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, RuntimeError> {
+        let raw: &Array<polyplug_abi::types::Ed25519PublicKey> = &self.config.trusted_keys;
+        if raw.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // SAFETY: the host owns the `trusted_keys` buffer and guarantees, by the
+        // documented `RuntimeConfig::trusted_keys` ownership contract, that
+        // `items` is valid for `len` elements for the duration of runtime
+        // construction (where this is reached). `is_empty()` above rules out a
+        // null pointer / zero length. We only READ the elements and COPY their
+        // bytes out — no element is retained or mutated, so no aliasing or
+        // lifetime obligation outlives this borrow.
+        let keys: &[polyplug_abi::types::Ed25519PublicKey] =
+            unsafe { core::slice::from_raw_parts(raw.items, raw.len) };
+
+        let mut out: Vec<ed25519_dalek::VerifyingKey> = Vec::with_capacity(keys.len());
+        for key in keys {
+            let verifying_key: ed25519_dalek::VerifyingKey = verifying_key_from_bytes(&key.bytes)
+                .map_err(|e: SigError| {
+                RuntimeError::Loader(LoaderError::MalformedTrustedKey {
+                    bundle: bundle_name.to_owned(),
+                    reason: e.to_string(),
+                })
+            })?;
+            out.push(verifying_key);
+        }
+        Ok(out)
+    }
+
+    /// Translate a signing-layer [`SigError`] into the loader error returned
+    /// under [`SignaturePolicy::Required`].
+    fn map_signature_error(error: SigError, bundle_name: &str) -> RuntimeError {
+        match error {
+            SigError::MissingSignature { .. } => {
+                RuntimeError::Loader(LoaderError::UnsignedBundle {
+                    bundle: bundle_name.to_owned(),
+                })
+            }
+            SigError::UntrustedKey { .. } => {
+                RuntimeError::Loader(LoaderError::UntrustedSigningKey {
+                    bundle: bundle_name.to_owned(),
+                })
+            }
+            other => RuntimeError::Loader(LoaderError::SignatureVerificationFailed {
+                bundle: bundle_name.to_owned(),
+                reason: other.to_string(),
+            }),
+        }
+    }
+
     /// Shared load path: validate the manifest, dispatch to the matching loader with
     /// the given [`BundleSource`], and record bundle metadata on success.
     ///
@@ -907,11 +1011,13 @@ impl Runtime {
             .validate()
             .map_err(|e: LoaderError| RuntimeError::Loader(e))?;
 
-        // Enforce the configured bundle signature policy.
+        // Enforce the configured bundle signature policy. The verifier picks TOFU
+        // vs. key pinning based on whether the host configured a trusted-key
+        // allowlist (`RuntimeConfig::trusted_keys`); see `verify_bundle_signature`.
         match self.config.signature_policy {
             SignaturePolicy::Off => {}
             SignaturePolicy::WarnOnly => {
-                if let Err(e) = signing_verify_bundle(&manifest.path) {
+                if let Err(e) = self.verify_bundle_signature(&manifest.path, &manifest.name) {
                     self.logger.log(LogLevel::Warn, "runtime", || {
                         format!(
                             "bundle `{}`: signature check failed (WarnOnly — continuing): {}",
@@ -920,22 +1026,9 @@ impl Runtime {
                     });
                 }
             }
-            SignaturePolicy::Required => match signing_verify_bundle(&manifest.path) {
-                Ok(_verified) => {}
-                Err(SigError::MissingSignature { .. }) => {
-                    return Err(RuntimeError::Loader(LoaderError::UnsignedBundle {
-                        bundle: manifest.name.clone(),
-                    }));
-                }
-                Err(e) => {
-                    return Err(RuntimeError::Loader(
-                        LoaderError::SignatureVerificationFailed {
-                            bundle: manifest.name.clone(),
-                            reason: e.to_string(),
-                        },
-                    ));
-                }
-            },
+            SignaturePolicy::Required => {
+                self.verify_bundle_signature(&manifest.path, &manifest.name)?;
+            }
         }
 
         // Validate function_count entries for this explicit load

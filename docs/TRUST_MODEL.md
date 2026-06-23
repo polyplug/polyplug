@@ -427,12 +427,21 @@ tampered/invalid one with `LoaderError::SignatureVerificationFailed`; `WarnOnly`
 logs the same failure at `LogLevel::Warn` and continues; `Off` skips the check.
 
 **Canonical digest.** The signed message is a SHA-256 over a deterministic buffer
-built from every file in the bundle except `bundle.sig`: for each file, sorted by
-its `/`-relative path, append the path's UTF-8 bytes, a `0x00` separator, and the
-SHA-256 of the file's contents. Any added, removed, or modified file changes the
-digest, so the signature covers the manifest and every artifact uniformly.
-`bundle.sig` (6-byte magic + version + 32-byte verifying key + 64-byte signature)
-embeds the signer's **public** key, which therefore travels with the bundle.
+built from every file in the bundle except `bundle.sig`. The buffer is prefixed,
+in order, by a fixed domain-separation tag (`polyplug-bundle-sig\0`, 20 bytes), a
+1-byte algorithm version (`0x01`), and the file count as a `u64` little-endian;
+then, for each file sorted by its `/`-relative path, it appends the path's UTF-8
+bytes, a `0x00` separator, and the SHA-256 of the file's contents. Symlinks and
+irregular files (fifo/socket/device) are **rejected**, and an empty bundle is
+**rejected** — a signable bundle is a non-empty plain tree of regular files and
+directories. Because symlinks are excluded from the digest but would still be
+`dlopen`ed, rejecting them closes a signature-bypass hole; the native loader
+additionally confines the artifact path to the bundle directory (no `../`
+traversal, no symlink escape) as defense-in-depth. Any added, removed, or modified
+file changes the digest, so the signature covers the manifest and every artifact
+uniformly. `bundle.sig` (6-byte magic + version + 32-byte verifying key + 64-byte
+signature) embeds the signer's **public** key, which therefore travels with the
+bundle.
 
 **Trust is freedom-preserving (TOFU), by design.** Verification proves a bundle is
 **intact** and **self-consistently signed** — nothing more. It deliberately does
@@ -441,10 +450,33 @@ that loads third-party plugins almost never knows every author up front, and
 forcing an allowlist would defeat the whole point of an open plugin ecosystem.
 App users stay free to load plugins from unknown authors; the policy only governs
 *tamper detection*, not *author approval*. `verify_bundle` returns the embedded
-`VerifyingKey` so a host that *wants* stricter trust can build a key-pinning or
-allowlist layer on top — the `BundleVerifier` trait (with `Ed25519Verifier` as the
-default implementation) is the seam for that, and it can be added without changing
-the on-disk format or the ABI.
+`VerifyingKey` so a host that *wants* stricter trust can opt into the key-pinning
+layer below — the `BundleVerifier` trait is the seam for that (`Ed25519Verifier`
+is the TOFU default; `PinnedKeyVerifier` is the pinning implementation).
+
+**Key pinning (`trusted_keys`) — authenticity on top of integrity.** A host that
+*does* know which authors it trusts can pin them by populating
+`RuntimeConfig.trusted_keys` (an `Array<Ed25519PublicKey>`, where each
+`Ed25519PublicKey` is the raw 32-byte verifying-key encoding). The two layers are
+distinct and complementary:
+
+- **TOFU (empty `trusted_keys`, the default)** gives *integrity + self-consistency*:
+  the bundle is intact and signed by *some* key, but not necessarily by anyone you
+  trust. Self-signing is normal and expected here — it is not forging.
+- **Pinning (non-empty `trusted_keys`)** adds *authenticity*: after the normal
+  Ed25519 verification succeeds, the runtime additionally requires the key embedded
+  in `bundle.sig` to be a member of the allowlist. A bundle re-signed with an
+  attacker's key — which passes TOFU because its self-signature is internally
+  valid — is rejected with `LoaderError::UntrustedSigningKey` (under `Required`) or
+  logged and skipped (under `WarnOnly`). Only **public** verifying keys are pinned;
+  the private signing key stays offline with the author. An empty allowlist would
+  reject every bundle, so the runtime only switches to the pinning verifier when at
+  least one key is configured. `RuntimeBuilder::trusted_keys(&[VerifyingKey])` is
+  the Rust-host ergonomic entry point; the keys are copied into the runtime, which
+  owns the buffer for its lifetime (the persisted config never points at freed
+  caller storage). A malformed key in the host allowlist fails the load with
+  `LoaderError::MalformedTrustedKey`. Pinning never weakens the open-ecosystem
+  default — it is purely opt-in.
 
 **Tooling.** `polyplugc keygen --out <dir>` writes `signing.key` (private, `0o600`
 on Unix) and `verifying.key` (public); `polyplugc sign --bundle-dir <dir> --key
@@ -452,10 +484,13 @@ on Unix) and `verifying.key` (public); `polyplugc sign --bundle-dir <dir> --key
 `bundle.sig`; `polyplugc verify --bundle-dir <dir>` exits non-zero on any failure.
 
 **ABI note.** `signature_policy` was added at offset `0x2C` of `RuntimeConfig`,
-filling the 4-byte tail padding after `log_max_level` — the struct stays 48 bytes,
-align 8 (an owner-approved pre-1.0 ABI change). All six host SDKs mirror the field
-and default it to `Off`, so existing hosts that zero-initialize the config are
-unaffected.
+filling the 4-byte tail padding after `log_max_level`. Key pinning then added
+`trusted_keys` (a 24-byte `Array<Ed25519PublicKey>`) at offset `0x30`, growing the
+struct from 48 to **72 bytes**, align 8 (both owner-approved pre-1.0 ABI changes).
+The new `Ed25519PublicKey` type is a `#[repr(C)]` 32-byte (`align 1`) value. Every
+pre-existing field offset is unchanged; all six host SDK abi mirrors carry the new
+type and field and default `trusted_keys` to an empty `Array`, so existing hosts
+that zero-initialize the config get TOFU and are unaffected.
 
 ### Unload ✅ done
 

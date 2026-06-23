@@ -23,9 +23,14 @@ def test_signature_policy_field_at_offset_44():
     assert RuntimeConfig.signature_policy.offset == 44
 
 
-def test_runtime_config_is_48_bytes():
-    """The struct stays 48 bytes after adding signature_policy."""
-    assert ctypes.sizeof(RuntimeConfig) == 48
+def test_runtime_config_is_72_bytes():
+    """The struct is 72 bytes after adding signature_policy and trusted_keys."""
+    assert ctypes.sizeof(RuntimeConfig) == 72
+
+
+def test_trusted_keys_field_at_offset_48():
+    """trusted_keys (the key-pinning Array) follows signature_policy at offset 48."""
+    assert RuntimeConfig.trusted_keys.offset == 48
 
 
 def test_signature_policy_defaults_to_off():

@@ -11,6 +11,13 @@ use crate::SigError;
 /// The name of the detached signature file — excluded from the digest.
 pub(crate) const SIG_FILE_NAME: &str = "bundle.sig";
 
+/// Domain-separation tag prepended to the canonical buffer so a bundle digest can
+/// never collide with any other SHA-256 pre-image produced by a different protocol.
+const DOMAIN_SEP_TAG: &[u8; 20] = b"polyplug-bundle-sig\0";
+
+/// Canonical-digest algorithm version, prepended after the domain-separation tag.
+const DIGEST_ALGO_VERSION: u8 = 0x01;
+
 /// Compute the canonical 32-byte SHA-256 digest over all bundle files except `bundle.sig`.
 ///
 /// The digest is deterministic: it covers file names and contents in sorted order,
@@ -28,12 +35,26 @@ pub fn canonical_digest(bundle_dir: &Path) -> Result<[u8; 32], SigError> {
     let mut entries: Vec<(String, std::path::PathBuf)> =
         collect_files(bundle_dir, bundle_dir, &bundle_name)?;
 
+    // A signable bundle must contain at least one file.
+    if entries.is_empty() {
+        return Err(SigError::EmptyBundle {
+            bundle: bundle_name,
+        });
+    }
+
     // Sort lexicographically by relative path bytes for determinism.
     entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
 
     // Build the canonical buffer:
-    // For each file in sorted order: relative_path_utf8 + 0x00 + sha256(file_bytes)
+    //   domain-separation tag || algo version || file count (u64 LE)
+    //   followed by, for each file in sorted order:
+    //   relative_path_utf8 + 0x00 + sha256(file_bytes)
     let mut canonical: Vec<u8> = Vec::new();
+    canonical.extend_from_slice(DOMAIN_SEP_TAG);
+    canonical.push(DIGEST_ALGO_VERSION);
+    let file_count: u64 = entries.len() as u64;
+    canonical.extend_from_slice(&file_count.to_le_bytes());
+
     for (rel_path, abs_path) in &entries {
         let file_bytes: Vec<u8> =
             std::fs::read(abs_path).map_err(|e: std::io::Error| SigError::Io {
@@ -84,6 +105,15 @@ fn collect_files(
                     source: e,
                 })?;
 
+        // A symlink is rejected outright: it is excluded from the digest but the
+        // loader would still `dlopen` its target, a signature bypass.
+        if file_type.is_symlink() {
+            return Err(SigError::SymlinkNotAllowed {
+                bundle: bundle_name.to_owned(),
+                path: abs_path.display().to_string(),
+            });
+        }
+
         if file_type.is_dir() {
             let mut sub: Vec<(String, std::path::PathBuf)> =
                 collect_files(&abs_path, bundle_root, bundle_name)?;
@@ -91,7 +121,12 @@ fn collect_files(
         } else if file_type.is_file() {
             let rel: std::path::PathBuf = abs_path
                 .strip_prefix(bundle_root)
-                .unwrap_or(&abs_path)
+                .map_err(
+                    |_: std::path::StripPrefixError| SigError::PathOutsideBundle {
+                        bundle: bundle_name.to_owned(),
+                        path: abs_path.display().to_string(),
+                    },
+                )?
                 .to_path_buf();
 
             // Build a platform-independent relative path using `/` separator.
@@ -112,9 +147,107 @@ fn collect_files(
             }
 
             result.push((rel_str, abs_path));
+        } else {
+            // A signable bundle is a plain tree of regular files and directories;
+            // fifos, sockets, and device nodes are rejected.
+            return Err(SigError::IrregularFile {
+                bundle: bundle_name.to_owned(),
+                path: abs_path.display().to_string(),
+            });
         }
-        // Symlinks are skipped — they are not a supported bundle artifact type.
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn empty_bundle_is_rejected() {
+        let tmp: TempDir = TempDir::new().expect("tmp dir");
+        assert!(matches!(
+            canonical_digest(tmp.path()),
+            Err(SigError::EmptyBundle { .. })
+        ));
+    }
+
+    #[test]
+    fn bundle_with_only_sig_file_is_rejected_as_empty() {
+        let tmp: TempDir = TempDir::new().expect("tmp dir");
+        fs::write(tmp.path().join(SIG_FILE_NAME), b"ignored").expect("write sig");
+        assert!(matches!(
+            canonical_digest(tmp.path()),
+            Err(SigError::EmptyBundle { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_file_in_bundle_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let tmp: TempDir = TempDir::new().expect("tmp dir");
+        fs::write(tmp.path().join("real.so"), b"\x7fELF").expect("write real");
+
+        // Point a symlink at a target outside the bundle.
+        let outside: TempDir = TempDir::new().expect("outside dir");
+        let target: std::path::PathBuf = outside.path().join("evil.so");
+        fs::write(&target, b"evil bytes").expect("write evil");
+        symlink(&target, tmp.path().join("artifact.so")).expect("create symlink");
+
+        assert!(matches!(
+            canonical_digest(tmp.path()),
+            Err(SigError::SymlinkNotAllowed { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_in_bundle_is_rejected_as_irregular() {
+        let tmp: TempDir = TempDir::new().expect("tmp dir");
+        let fifo_path: std::path::PathBuf = tmp.path().join("pipe");
+
+        // Create a fifo via the `mkfifo` utility to avoid a `libc` dependency. Skip
+        // the assertion only if the utility is unavailable on this host.
+        let status: Option<std::process::ExitStatus> = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .status()
+            .ok();
+        match status {
+            Some(s) if s.success() => {}
+            _ => return,
+        }
+
+        assert!(matches!(
+            canonical_digest(tmp.path()),
+            Err(SigError::IrregularFile { .. })
+        ));
+    }
+
+    #[test]
+    fn nested_subdirectory_files_are_covered_by_the_digest() {
+        let tmp: TempDir = TempDir::new().expect("tmp dir");
+        fs::write(tmp.path().join("manifest.toml"), b"name = \"x\"").expect("write manifest");
+        let nested: std::path::PathBuf = tmp.path().join("lib").join("inner");
+        fs::create_dir_all(&nested).expect("create nested dirs");
+        fs::write(nested.join("deep.so"), b"deep bytes").expect("write deep");
+
+        let before: [u8; 32] = canonical_digest(tmp.path()).expect("digest before");
+
+        // Mutate the nested file → the digest must change.
+        fs::write(nested.join("deep.so"), b"DEEP TAMPERED").expect("rewrite deep");
+        let after: [u8; 32] = canonical_digest(tmp.path()).expect("digest after");
+
+        assert_ne!(
+            before, after,
+            "a nested-subdirectory file must be covered by the canonical digest"
+        );
+    }
 }

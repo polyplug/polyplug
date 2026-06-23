@@ -391,25 +391,38 @@ The check runs immediately after manifest validation and **before any loader
 runs**, so a bad signature never reaches `dlopen`/the VM.
 
 - **Canonical digest** — the signed message is a SHA-256 over a deterministic
-  buffer covering every file in the bundle except `bundle.sig` (each file's
-  `/`-relative path, a `0x00` separator, then the file's SHA-256, all sorted by
-  path). Adding, removing, or editing any file — manifest or artifact — changes
-  the digest, so the signature covers the whole bundle uniformly.
-- **Freedom-preserving (TOFU)** — `bundle.sig` embeds the signer's **public**
-  key, so verification proves a bundle is *intact* and *self-consistently
+  buffer covering every file in the bundle except `bundle.sig`. The buffer begins
+  with a domain-separation prefix — the fixed tag `polyplug-bundle-sig\0`, a
+  1-byte algorithm version (`0x01`), and the file count as a `u64` little-endian —
+  followed, for each file sorted by its `/`-relative path, by that path, a `0x00`
+  separator, then the file's SHA-256. Symlinks and irregular files (fifo/socket/
+  device) and an empty bundle are **rejected**, so a symlinked artifact can never
+  be loaded outside the digest. Adding, removing, or editing any file — manifest
+  or artifact — changes the digest, so the signature covers the whole bundle
+  uniformly.
+- **Freedom-preserving (TOFU, default)** — `bundle.sig` embeds the signer's
+  **public** key, so verification proves a bundle is *intact* and *self-consistently
   signed* without the host having to pre-know or allowlist the author. App users
   stay free to load plugins from unknown authors; the policy governs *tamper
-  detection*, not *author approval*. A host that wants stricter trust can build
-  key-pinning on top of the `BundleVerifier` seam (`verify_bundle` returns the
-  embedded `VerifyingKey`) without changing the on-disk format or the ABI.
+  detection*, not *author approval*.
+- **Key pinning (`trusted_keys`, opt-in)** — a host that *does* trust specific
+  authors can populate `RuntimeConfig.trusted_keys` (an `Array<Ed25519PublicKey>`,
+  via `RuntimeBuilder::trusted_keys(&[VerifyingKey])`). When non-empty, the runtime
+  runs the normal verification **then** requires the bundle's embedded key to be in
+  the allowlist — upgrading the guarantee from *integrity* to *authenticity*. A
+  bundle re-signed with an attacker key (which passes TOFU) is rejected with
+  `LoaderError::UntrustedSigningKey` under `Required`, or logged under `WarnOnly`.
+  Only public keys are pinned; the private signing key stays offline. Empty (the
+  default) = TOFU; under `Off` the allowlist is not consulted.
 - **Tooling** — `polyplugc keygen --out <dir>` writes `signing.key` (private,
   `0o600` on Unix) and `verifying.key` (public); `polyplugc sign --bundle-dir
   <dir> --key signing.key` runs the `validate --bundle-dir` checks then writes
   `bundle.sig`; `polyplugc verify --bundle-dir <dir>` exits non-zero on failure.
-- **ABI** — `signature_policy` occupies the former tail padding of
-  `RuntimeConfig` (offset `0x2C`); the struct stays 48 bytes, align 8. All six
-  host SDKs mirror the field and default it to `Off`, so a zero-initialized
-  config is unaffected.
+- **ABI** — `signature_policy` occupies the former tail padding of `RuntimeConfig`
+  (offset `0x2C`); `trusted_keys` (a 24-byte `Array<Ed25519PublicKey>`) follows at
+  offset `0x30`, growing the struct from 48 to **72 bytes**, align 8. All six host
+  SDKs mirror both the field and the new `Ed25519PublicKey` type and default
+  `trusted_keys` to empty, so a zero-initialized config gets TOFU and is unaffected.
 
 Full spec — digest algorithm, `bundle.sig`/key file formats, and threat model:
 [`TRUST_MODEL.md`](TRUST_MODEL.md) § Bundle Signing.

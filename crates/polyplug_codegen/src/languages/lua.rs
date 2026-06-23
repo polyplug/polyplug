@@ -40,6 +40,30 @@ impl LuaGenerator {
         rust_type.starts_with("Array<")
     }
 
+    /// Parse a fixed-size array type in compacted `quote!()` form, e.g. `[u8;32]`.
+    ///
+    /// Returns `(c_element_type, count)` when the input matches `[T;N]` where T is
+    /// a known primitive and N is a positive integer; returns `None` otherwise.
+    fn parse_fixed_array(rust_type: &str) -> Option<(&'static str, usize)> {
+        let inner: &str = rust_type.strip_prefix('[')?.strip_suffix(']')?;
+        let semi: usize = inner.find(';')?;
+        let elem: &str = inner[..semi].trim();
+        let count_str: &str = inner[semi + 1..].trim();
+        let count: usize = count_str.parse().ok().filter(|&n: &usize| n > 0)?;
+        let c_elem: &'static str = match elem {
+            "u8" => "uint8_t",
+            "u16" => "uint16_t",
+            "u32" => "uint32_t",
+            "u64" => "uint64_t",
+            "i8" => "int8_t",
+            "i16" => "int16_t",
+            "i32" => "int32_t",
+            "i64" => "int64_t",
+            _ => return None,
+        };
+        Some((c_elem, count))
+    }
+
     /// Return the named aggregate this field references *by value*, if any.
     ///
     /// LuaJIT can reference a forward-declared type by pointer, but a by-value
@@ -347,6 +371,13 @@ impl CodeGenerator for LuaGenerator {
                 continue;
             }
 
+            // Handle fixed-size primitive arrays, e.g. `[u8;32]` from `quote!()`.
+            // In C cdef the array dimension follows the identifier: `uint8_t bytes[32];`.
+            if let Some((c_elem, count)) = Self::parse_fixed_array(&field.rust_type) {
+                output.push_str(&format!("        {} {}[{}];\n", c_elem, field.name, count));
+                continue;
+            }
+
             let lua_type: String = Self::rust_type_to_lua(&field.rust_type);
             output.push_str(&format!("        {} {};\n", lua_type, field.name));
         }
@@ -527,6 +558,37 @@ mod tests {
             !typedef.contains("void* (*HostApi_find_all_guest_contracts_fn)"),
             "Array<T> return must not be narrowed to void*: {}",
             typedef
+        );
+    }
+
+    /// Test that a fixed-size byte array field `[u8;32]` emits a C array field
+    /// with the dimension after the identifier — `uint8_t bytes[32];`.
+    #[test]
+    fn lua_fixed_byte_array_field_emits_c_array() {
+        let generator: LuaGenerator = LuaGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("Ed25519PublicKey"),
+            fields: vec![FieldInfo {
+                name: String::from("bytes"),
+                rust_type: String::from("[u8;32]"),
+                doc: None,
+            }],
+            doc: None,
+            attributes: vec![],
+            size_hint: Some(32),
+        };
+
+        let output: String = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains("uint8_t bytes[32];"),
+            "fixed byte array should emit C array field: {}",
+            output
+        );
+        assert!(
+            !output.contains("[u8;32]"),
+            "raw Rust array syntax must not appear in output: {}",
+            output
         );
     }
 

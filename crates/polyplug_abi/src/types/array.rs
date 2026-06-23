@@ -88,6 +88,34 @@ impl<T: Sized> Array<T> {
     }
 }
 
+// `Array<T>` is bitwise-copyable for ANY `T`: every field — the `*mut T`
+// pointer, the two `usize` size fields, and the zero-sized `PhantomData<T>` — is
+// `Copy` regardless of whether `T` itself is `Copy`. The manual impls below
+// therefore carry NO `T: Copy` bound (the derive would have added one). Copying
+// an `Array<T>` duplicates the pointer/len/align triple only; it does NOT
+// duplicate the pointed-to buffer, so the caller-frees ownership contract is
+// unchanged (exactly one logical owner must free, as before).
+impl<T: Sized> Clone for Array<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: Sized> Copy for Array<T> {}
+
+// Manual `Debug` (no `T: Debug` bound): the array does not own a borrow it may
+// safely dereference here, so it prints only the FFI fields (pointer, length,
+// alignment) — never the pointed-to elements.
+impl<T: Sized> core::fmt::Debug for Array<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Array")
+            .field("items", &self.items)
+            .field("len", &self.len)
+            .field("align", &self.align)
+            .finish()
+    }
+}
+
 // SAFETY: Array<T> contains a raw pointer and size fields.
 // The pointer ownership is documented (caller-frees).
 unsafe impl<T: Sized + Send> Send for Array<T> {}

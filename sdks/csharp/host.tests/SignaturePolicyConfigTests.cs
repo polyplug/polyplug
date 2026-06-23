@@ -30,10 +30,11 @@ namespace Polyplug.Host.Tests
         }
 
         [Fact]
-        public void RuntimeConfigIs48BytesWithPolicyAtOffset44()
+        public void RuntimeConfigIs72BytesWithPolicyAtOffset44AndTrustedKeysAtOffset48()
         {
-            Assert.Equal(48, Marshal.SizeOf<RuntimeConfig>());
+            Assert.Equal(72, Marshal.SizeOf<RuntimeConfig>());
             Assert.Equal(44, Marshal.OffsetOf<RuntimeConfig>(nameof(RuntimeConfig.SignaturePolicy)).ToInt32());
+            Assert.Equal(48, Marshal.OffsetOf<RuntimeConfig>(nameof(RuntimeConfig.TrustedKeys)).ToInt32());
         }
 
         [Fact]

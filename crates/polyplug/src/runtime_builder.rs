@@ -1,8 +1,9 @@
 use core::ffi::c_void;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use ed25519_dalek::VerifyingKey;
 use polyplug_abi::runtime::{Compatibility, RuntimeConfig, SignaturePolicy};
-use polyplug_abi::types::{LogLevel, StringView};
+use polyplug_abi::types::{Array, Ed25519PublicKey, LogLevel, StringView};
 use polyplug_abi::{HostApi, SupportedLanguage};
 
 use crate::{
@@ -57,6 +58,11 @@ pub struct RuntimeBuilder {
     on_reload_cb: Option<ReloadCallback>,
     config: RuntimeConfig,
     host_language: SupportedLanguage,
+    /// Host-configured trusted Ed25519 verifying keys for bundle key pinning,
+    /// stored as owned ABI key structs. Empty = TOFU (no pinning). At `build()`
+    /// this `Vec` moves into the runtime and `config.trusted_keys` points at its
+    /// heap buffer, so the persisted `Array` never dangles.
+    trusted_keys: Vec<Ed25519PublicKey>,
 }
 
 impl RuntimeBuilder {
@@ -70,6 +76,7 @@ impl RuntimeBuilder {
             on_reload_cb: None,
             config: RuntimeConfig::default(),
             host_language: SupportedLanguage::Rust,
+            trusted_keys: Vec::new(),
         }
     }
 
@@ -152,6 +159,30 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Pin the set of trusted Ed25519 verifying keys (signing key pinning).
+    ///
+    /// With an empty set (the default) the runtime uses Trust-On-First-Use: it
+    /// trusts the key embedded in each `bundle.sig`, so signature verification
+    /// proves integrity but not authenticity. Supplying one or more keys here
+    /// switches to key pinning: after the normal signature check, the runtime
+    /// also requires the bundle's embedded key to be one of these, rejecting a
+    /// bundle re-signed with any other key.
+    ///
+    /// Only effective alongside a non-`Off` [`signature_policy`]; under
+    /// [`SignaturePolicy::Off`] no verification runs. The keys are copied into
+    /// the builder, so the borrowed slice need not outlive this call.
+    ///
+    /// [`signature_policy`]: RuntimeBuilder::signature_policy
+    pub fn trusted_keys(mut self, keys: &[VerifyingKey]) -> RuntimeBuilder {
+        self.trusted_keys = keys
+            .iter()
+            .map(|key: &VerifyingKey| Ed25519PublicKey {
+                bytes: *key.as_bytes(),
+            })
+            .collect();
+        self
+    }
+
     /// Set the host language type.
     /// Defaults to `SupportedLanguage::Rust`.
     pub fn host_language(mut self, language: SupportedLanguage) -> RuntimeBuilder {
@@ -164,7 +195,23 @@ impl RuntimeBuilder {
     //  For MVP: scans plugin_dirs for .so/.dll/.dylib files,
     //  loads them in sorted order, registers interfaces.
     //  Full capability graph resolution is a future enhancement.
-    pub fn build(self) -> Result<Arc<Runtime>, RuntimeError> {
+    pub fn build(mut self) -> Result<Arc<Runtime>, RuntimeError> {
+        // Take ownership of the host's trusted keys and repoint the config
+        // `Array` at this `Vec`'s heap buffer. The `Vec` moves into a `Runtime`
+        // field below, so it outlives the runtime; moving a `Vec` relocates only
+        // its header, never the heap buffer the `Array` pointer addresses, so the
+        // pointer stays valid for the runtime's entire lifetime. An empty set
+        // leaves `config.trusted_keys` as the default empty `Array` (TOFU).
+        let trusted_keys: Vec<Ed25519PublicKey> = self.trusted_keys;
+        if trusted_keys.is_empty() {
+            self.config.trusted_keys = Array::empty();
+        } else {
+            self.config.trusted_keys = Array::new(
+                trusted_keys.as_ptr() as *mut Ed25519PublicKey,
+                trusted_keys.len(),
+            );
+        }
+
         let logger: LoggerHandle = LoggerHandle::from_config(&self.config);
         let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::with_logger(logger));
 
@@ -246,6 +293,7 @@ impl RuntimeBuilder {
             config: self.config,
             logger,
             _logger_closure: self.logger_closure,
+            _trusted_keys: trusted_keys,
             last_error: std::sync::Mutex::new(String::new()),
             host_contracts: std::sync::RwLock::new(HashMap::new()),
             singleton_instances: std::sync::RwLock::new(HashMap::new()),

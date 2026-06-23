@@ -14,6 +14,12 @@
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand_core::OsRng;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use crate::SigError;
 
@@ -116,25 +122,56 @@ pub fn parse_verifying_key(data: &[u8]) -> Result<VerifyingKey, SigError> {
 ///
 /// The caller is responsible for creating `path` with restrictive permissions
 /// (e.g., `0o600` on Unix) before distributing or using the file.
+#[cfg(unix)]
+pub fn save_signing_key(path: &std::path::Path, signing_key: &SigningKey) -> Result<(), SigError> {
+    let buf: [u8; KEY_FILE_LEN] = serialize_signing_key(signing_key);
+
+    // Open with mode 0o600 so a freshly-created file is never world-readable.
+    let mut file: std::fs::File = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e: std::io::Error| SigError::Io {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+
+    // `.mode(0o600)` only applies on creation; a pre-existing file keeps its old
+    // (possibly 0o644) mode. Force 0o600 on the open handle BEFORE writing any
+    // secret bytes, so the seed never exists on disk with broader-than-0600 perms.
+    let permissions: std::fs::Permissions = std::fs::Permissions::from_mode(0o600);
+    file.set_permissions(permissions)
+        .map_err(|e: std::io::Error| SigError::Io {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+
+    file.write_all(&buf)
+        .map_err(|e: std::io::Error| SigError::Io {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+
+    Ok(())
+}
+
+/// Write a signing key to `path` in the documented key file format.
+///
+/// The caller is responsible for creating `path` with restrictive permissions
+/// before distributing or using the file.
+///
+/// On non-Unix platforms this OS provides no file-mode restriction here: the
+/// secret seed is written with the platform's default permissions and the caller
+/// must rely on directory ACLs or other OS-specific mechanisms to protect it.
+#[cfg(not(unix))]
 pub fn save_signing_key(path: &std::path::Path, signing_key: &SigningKey) -> Result<(), SigError> {
     let buf: [u8; KEY_FILE_LEN] = serialize_signing_key(signing_key);
     std::fs::write(path, buf).map_err(|e: std::io::Error| SigError::Io {
         path: path.display().to_string(),
         source: e,
-    })?;
-
-    // Set restrictive permissions on Unix so the private key is not world-readable.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let permissions: std::fs::Permissions = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(path, permissions).map_err(|e: std::io::Error| SigError::Io {
-            path: path.display().to_string(),
-            source: e,
-        })?;
-    }
-
-    Ok(())
+    })
 }
 
 /// Write a verifying key to `path` in the documented key file format.
@@ -198,6 +235,56 @@ mod tests {
             parse_signing_key(&buf),
             Err(SigError::BadKeyType { .. })
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_signing_key_creates_file_with_0o600_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tmp dir");
+        let path: std::path::PathBuf = tmp.path().join("signing.key");
+        let (signing_key, _): (SigningKey, VerifyingKey) = generate_keypair();
+
+        save_signing_key(&path, &signing_key).expect("save signing key");
+
+        let mode: u32 = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "private key file must be exactly 0o600, got {:o}",
+            mode & 0o777
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_signing_key_tightens_preexisting_world_readable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tmp dir");
+        let path: std::path::PathBuf = tmp.path().join("signing.key");
+
+        // Pre-create a 0o644 file at the target path.
+        std::fs::write(&path, b"stale").expect("pre-create file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("set 0o644");
+
+        let (signing_key, _): (SigningKey, VerifyingKey) = generate_keypair();
+        save_signing_key(&path, &signing_key).expect("overwrite signing key");
+
+        let mode: u32 = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "overwriting a 0o644 file must tighten it to 0o600, got {:o}",
+            mode & 0o777
+        );
     }
 
     #[test]

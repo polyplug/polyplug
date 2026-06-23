@@ -61,8 +61,14 @@ In scope (please **do** report):
 - A bundle that bypasses **declared-dependency enforcement** or impersonates
   another bundle's identity despite manifest validation.
 - A way to defeat **bundle signing** under `SignaturePolicy::Required` — e.g.
-  loading a tampered or unsigned bundle without the documented error, or forging
-  a `bundle.sig` that verifies against a different bundle's contents.
+  loading a tampered or unsigned bundle without the documented error, or making a
+  `bundle.sig` verify against a *different* bundle's contents (a digest/integrity
+  break). Note the default model is TOFU: re-signing a bundle with an attacker's
+  own key is **not** a vulnerability under TOFU (self-signing is expected) — the
+  defense against attacker re-signing is opt-in **key pinning**
+  (`RuntimeConfig.trusted_keys`). A bypass of *pinning* — a bundle whose embedded
+  key is outside a non-empty `trusted_keys` allowlist loading without
+  `LoaderError::UntrustedSigningKey` — **is** in scope.
 - A use-after-unload / use-after-reload that is reachable while honoring the
   documented quiesce-before-unload contract.
 - Vulnerabilities in the published SDK packages (PyPI, npm, crates.io, NuGet,

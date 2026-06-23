@@ -19,6 +19,26 @@ impl JsGenerator {
         rust_type.starts_with("Array<")
     }
 
+    /// Parse a fixed-size array type in compacted `quote!()` form, e.g. `[u8;32]`.
+    ///
+    /// Returns `(element_size_bytes, count)` when the input matches `[T;N]` where T
+    /// is a known primitive and N is a positive integer; returns `None` otherwise.
+    fn parse_fixed_array(rust_type: &str) -> Option<(usize, usize)> {
+        let inner: &str = rust_type.strip_prefix('[')?.strip_suffix(']')?;
+        let semi: usize = inner.find(';')?;
+        let elem: &str = inner[..semi].trim();
+        let count_str: &str = inner[semi + 1..].trim();
+        let count: usize = count_str.parse().ok().filter(|&n: &usize| n > 0)?;
+        let elem_size: usize = match elem {
+            "u8" | "i8" => 1,
+            "u16" | "i16" => 2,
+            "u32" | "i32" => 4,
+            "u64" | "i64" => 8,
+            _ => return None,
+        };
+        Some((elem_size, count))
+    }
+
     /// Check if a rust_type is Option<...>.
     fn is_option(rust_type: &str) -> bool {
         rust_type.starts_with("Option<") && rust_type.ends_with('>')
@@ -46,6 +66,13 @@ impl JsGenerator {
         // Handle Array<T> — return a typed object.
         if Self::is_array(rust_type) {
             return String::from("{ items: number; len: number; align: number }");
+        }
+
+        // Handle fixed-size primitive arrays, e.g. `[u8;32]` from `quote!()`.
+        // TS interfaces are structural; the raw bytes live in the FFI buffer,
+        // so a plain `number[]` field type conveys the right intent to callers.
+        if Self::parse_fixed_array(rust_type).is_some() {
+            return String::from("number[]");
         }
 
         if rust_type.contains("extern\"C\"fn") || rust_type.contains("extern\"C\"") {
@@ -118,6 +145,10 @@ impl JsGenerator {
         if Self::is_array(rust_type) {
             return 24; // Array<T>: ptr(8) + len(8) + align(8) = 24 bytes
         }
+        // Fixed-size primitive array: total bytes = elem_size * count.
+        if let Some((elem_size, count)) = Self::parse_fixed_array(type_str) {
+            return elem_size * count;
+        }
         if type_str.starts_with('*') {
             return 8; // raw pointer
         }
@@ -148,6 +179,10 @@ impl JsGenerator {
         }
         if Self::is_array(rust_type) {
             return 8;
+        }
+        // Fixed-size primitive array: alignment equals the element alignment.
+        if let Some((elem_size, _count)) = Self::parse_fixed_array(type_str) {
+            return elem_size;
         }
         if type_str.starts_with('*') {
             return 8;
@@ -509,6 +544,47 @@ mod tests {
         assert!(
             output.contains("WITH_ARRAY_ITEMS_OFFSET"),
             "should emit items offset: {}",
+            output
+        );
+    }
+
+    /// Test that a fixed-size byte array field `[u8;32]` emits `number[]` in the
+    /// interface and that offset/size constants account for the 32-byte footprint.
+    #[test]
+    fn js_fixed_byte_array_field_emits_number_array() {
+        let generator: JsGenerator = JsGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("Ed25519PublicKey"),
+            fields: vec![FieldInfo {
+                name: String::from("bytes"),
+                rust_type: String::from("[u8;32]"),
+                doc: None,
+            }],
+            doc: None,
+            attributes: vec![],
+            size_hint: Some(32),
+        };
+
+        let output: String = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains("bytes: number[];"),
+            "fixed byte array should emit number[] interface field: {}",
+            output
+        );
+        assert!(
+            !output.contains("[u8;32]"),
+            "raw Rust array syntax must not appear in output: {}",
+            output
+        );
+        assert!(
+            output.contains("ED25519_PUBLIC_KEY_BYTES_OFFSET: number = 0;"),
+            "should emit bytes offset constant at 0: {}",
+            output
+        );
+        assert!(
+            output.contains("ED25519_PUBLIC_KEY_SIZE: number = 32;"),
+            "should emit size constant of 32: {}",
             output
         );
     }

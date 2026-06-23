@@ -136,6 +136,50 @@ impl NativeLoader {
             });
         };
 
+        // Path confinement (defense-in-depth): the artifact must resolve to a real
+        // file INSIDE the bundle directory. Reject a `manifest.file` that is a symlink
+        // or that canonicalizes outside the bundle root (`../../evil.so`, an absolute
+        // path), since such an artifact is loaded but never covered by the signing
+        // digest.
+        let is_symlink: bool = std::fs::symlink_metadata(&bundle_path)
+            .map(|m: std::fs::Metadata| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_symlink {
+            return Err(LoaderError::ArtifactPathEscape {
+                bundle: manifest.name.clone(),
+                file: manifest.file.clone(),
+            });
+        }
+        let canonical_artifact: PathBuf =
+            bundle_path
+                .canonicalize()
+                .map_err(|e: std::io::Error| LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "failed to canonicalize artifact path {}: {}",
+                        bundle_path.to_string_lossy(),
+                        e
+                    ),
+                })?;
+        let canonical_root: PathBuf =
+            manifest
+                .path
+                .canonicalize()
+                .map_err(|e: std::io::Error| LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "failed to canonicalize bundle root {}: {}",
+                        manifest.path.to_string_lossy(),
+                        e
+                    ),
+                })?;
+        if !canonical_artifact.starts_with(&canonical_root) {
+            return Err(LoaderError::ArtifactPathEscape {
+                bundle: manifest.name.clone(),
+                file: manifest.file.clone(),
+            });
+        }
+
         let path_str: String = bundle_path.to_string_lossy().into_owned();
 
         // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
@@ -627,6 +671,116 @@ mod unload_tests {
         );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// A `manifest.file` that escapes the bundle directory (`../evil.so`) must be
+    /// rejected by the loader's path-confinement check before any `dlopen`, even
+    /// though the target shared library is a valid, loadable plugin. This covers
+    /// code that is never included in the signing digest.
+    #[test]
+    #[cfg(all(unix, not(miri)))]
+    fn artifact_path_traversal_is_rejected() {
+        let src_dir: PathBuf = test_plugin_dir();
+        let src_manifest: ManifestData =
+            parse_manifest(&src_dir).expect("parse_manifest for test_plugin_dir");
+        let dll_name: String = src_manifest.file.clone();
+        let src_dll: PathBuf = src_dir.join(&dll_name);
+
+        // A bundle dir holding a real DLL "outside.so" right next to (one level up
+        // from) the bundle, with manifest.file pointing at it via `../`.
+        let parent: PathBuf = std::env::temp_dir().join(format!(
+            "polyplug_native_escape_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let bundle_dir: PathBuf = parent.join("bundle");
+        std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+
+        // Place a loadable DLL OUTSIDE the bundle directory.
+        let outside_dll: PathBuf = parent.join("outside.so");
+        std::fs::copy(&src_dll, &outside_dll).expect("copy fixture dll outside bundle");
+
+        let manifest_toml: String = format!(
+            "id = {}\nname = \"{}\"\nversion = \"{}\"\nloader = \"native\"\nprovides = [\"test.add\"]\nfile = \"../outside.so\"\n\n[function_count]\n\"test.add@1\" = 1\n",
+            src_manifest.id, src_manifest.name, src_manifest.version
+        );
+        std::fs::write(bundle_dir.join("manifest.toml"), manifest_toml).expect("write manifest");
+
+        let manifest: ManifestData =
+            parse_manifest(&bundle_dir).expect("parse_manifest for escape bundle");
+        let source: BundleSource = BundleSource::Path(manifest.path.clone());
+        let runtime: Arc<Runtime> = test_runtime();
+        let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
+
+        let result: Result<(), polyplug::error::LoaderError> =
+            loader.load(&manifest, &source, &runtime);
+        assert!(
+            matches!(
+                result,
+                Err(polyplug::error::LoaderError::ArtifactPathEscape { .. })
+            ),
+            "a `../` artifact path must be rejected, got: {result:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    /// A `manifest.file` that is a symlink (even one pointing at a valid DLL inside
+    /// the bundle) must be rejected: a symlinked artifact is loaded by the loader
+    /// but excluded from the signing digest, a signature bypass.
+    #[test]
+    #[cfg(all(unix, not(miri)))]
+    fn symlinked_artifact_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let src_dir: PathBuf = test_plugin_dir();
+        let src_manifest: ManifestData =
+            parse_manifest(&src_dir).expect("parse_manifest for test_plugin_dir");
+        let dll_name: String = src_manifest.file.clone();
+        let src_dll: PathBuf = src_dir.join(&dll_name);
+
+        let bundle_dir: PathBuf = std::env::temp_dir().join(format!(
+            "polyplug_native_symlink_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+
+        // Real DLL inside the bundle, plus a symlink artifact pointing at it.
+        let real_dll: PathBuf = bundle_dir.join("real.so");
+        std::fs::copy(&src_dll, &real_dll).expect("copy fixture dll into bundle");
+        let link_name: &str = "artifact.so";
+        symlink(&real_dll, bundle_dir.join(link_name)).expect("create symlink artifact");
+
+        let manifest_toml: String = format!(
+            "id = {}\nname = \"{}\"\nversion = \"{}\"\nloader = \"native\"\nprovides = [\"test.add\"]\nfile = \"{}\"\n\n[function_count]\n\"test.add@1\" = 1\n",
+            src_manifest.id, src_manifest.name, src_manifest.version, link_name
+        );
+        std::fs::write(bundle_dir.join("manifest.toml"), manifest_toml).expect("write manifest");
+
+        let manifest: ManifestData =
+            parse_manifest(&bundle_dir).expect("parse_manifest for symlink bundle");
+        let source: BundleSource = BundleSource::Path(manifest.path.clone());
+        let runtime: Arc<Runtime> = test_runtime();
+        let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
+
+        let result: Result<(), polyplug::error::LoaderError> =
+            loader.load(&manifest, &source, &runtime);
+        assert!(
+            matches!(
+                result,
+                Err(polyplug::error::LoaderError::ArtifactPathEscape { .. })
+            ),
+            "a symlinked artifact must be rejected, got: {result:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&bundle_dir);
     }
 
     /// On Windows, a mapped DLL holds an exclusive file lock, so `remove_file`

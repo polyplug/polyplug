@@ -26,9 +26,9 @@ assert(runtime.SignaturePolicy.Off == 0, "SignaturePolicy.Off must be 0")
 assert(runtime.SignaturePolicy.WarnOnly == 1, "SignaturePolicy.WarnOnly must be 1")
 assert(runtime.SignaturePolicy.Required == 2, "SignaturePolicy.Required must be 2")
 
--- ─── RuntimeConfig layout: 48 bytes, field present ────────────────────────────
-assert(ffi.sizeof("RuntimeConfig") == 48,
-    "RuntimeConfig must stay 48 bytes, got " .. tostring(ffi.sizeof("RuntimeConfig")))
+-- ─── RuntimeConfig layout: 72 bytes (signature_policy + trusted_keys) ─────────
+assert(ffi.sizeof("RuntimeConfig") == 72,
+    "RuntimeConfig must be 72 bytes, got " .. tostring(ffi.sizeof("RuntimeConfig")))
 
 -- ─── Default (omitted) writes Off (0) ─────────────────────────────────────────
 local default_config = ffi.new("RuntimeConfig", {

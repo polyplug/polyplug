@@ -145,11 +145,26 @@ pub enum LoaderError {
     #[error("loader `{loader_name}` does not support hot-reload")]
     HotReloadUnsupported { loader_name: String },
 
+    #[error(
+        "bundle `{bundle}` artifact `{file}` resolves outside the bundle directory (path traversal or symlink escape)"
+    )]
+    ArtifactPathEscape { bundle: String, file: String },
+
     #[error("bundle `{bundle}` is not signed and signature_policy is Required")]
     UnsignedBundle { bundle: String },
 
     #[error("signature verification failed for bundle `{bundle}`: {reason}")]
     SignatureVerificationFailed { bundle: String, reason: String },
+
+    #[error(
+        "bundle `{bundle}` is signed by a key that is not in the host's trusted-key allowlist (signature_policy=Required with key pinning)"
+    )]
+    UntrustedSigningKey { bundle: String },
+
+    #[error(
+        "host trusted-key allowlist contains a malformed Ed25519 key for bundle `{bundle}`: {reason}"
+    )]
+    MalformedTrustedKey { bundle: String, reason: String },
 }
 
 /// Errors from the plugin registry.

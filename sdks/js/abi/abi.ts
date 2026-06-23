@@ -1023,9 +1023,43 @@ export interface RuntimeConfig {
      * 
      *  # Layout note
      *  Placed at offset 0x2C (44), filling the 4-byte tail padding that existed
-     *  after `log_max_level` at 0x28. The struct remains 48 bytes, align 8.
+     *  after `log_max_level` at 0x28.
      */
     signature_policy: SignaturePolicy;
+    /**
+     *  Host-configured trusted Ed25519 verifying-key allowlist (key pinning).
+     * 
+     *  Controls signing-key authenticity on top of the integrity guarantee that
+     *  [`signature_policy`](Self::signature_policy) provides:
+     * 
+     *  - **Empty (default)** — Trust-On-First-Use (TOFU). The runtime trusts the
+     *    verifying key embedded in each bundle's `bundle.sig`; signature
+     *    verification proves the bundle is internally consistent and untampered,
+     *    but NOT that any particular author signed it.
+     *  - **Non-empty** — Key pinning. After the normal Ed25519 verification, the
+     *    runtime additionally requires the bundle's embedded verifying key to be
+     *    a member of this allowlist; a bundle re-signed with an attacker key is
+     *    rejected even though its self-consistent signature is valid.
+     * 
+     *  Only public (verifying) keys are pinned — the private signing key stays
+     *  offline. This field is read alongside `signature_policy`; with policy
+     *  [`SignaturePolicy::Off`](crate::runtime::SignaturePolicy::Off) no
+     *  verification runs and the allowlist is not consulted.
+     * 
+     *  # Ownership
+     *  Borrowed for the duration of `polyplug_runtime_create` only. The runtime
+     *  COPIES the key bytes it needs out of this buffer during construction and
+     *  never retains the pointer — the host may free the backing storage as soon
+     *  as `create` returns.
+     * 
+     *  # Layout note
+     *  Placed at offset 0x30 (48), immediately after `signature_policy` plus its
+     *  4 bytes of pre-existing tail padding. The struct grows to 72 bytes,
+     *  align 8 (the 24-byte `Array` raises the size from 48 to 72).
+     */
+    trusted_keys: number;
+    trusted_keys_len: number;
+    trusted_keys__align: number;
 }
 
 export const RUNTIME_CONFIG_COMPATIBILITY_OFFSET: number = 0;
@@ -1036,7 +1070,10 @@ export const RUNTIME_CONFIG_LOG_OFFSET: number = 24;
 export const RUNTIME_CONFIG_LOG_USER_DATA_OFFSET: number = 32;
 export const RUNTIME_CONFIG_LOG_MAX_LEVEL_OFFSET: number = 40;
 export const RUNTIME_CONFIG_SIGNATURE_POLICY_OFFSET: number = 44;
-export const RUNTIME_CONFIG_SIZE: number = 48;
+export const RUNTIME_CONFIG_TRUSTED_KEYS_OFFSET: number = 48;
+export const RUNTIME_CONFIG_TRUSTED_KEYS_LEN_OFFSET: number = 56;
+export const RUNTIME_CONFIG_TRUSTED_KEYS_ALIGN_OFFSET: number = 64;
+export const RUNTIME_CONFIG_SIZE: number = 72;
 
 /**
  *  ABI error — returned by value from all ABI calls.
@@ -1253,6 +1290,20 @@ export const DEPENDENCY_INFO_CONTRACT_ID_OFFSET: number = 0;
 export const DEPENDENCY_INFO_MIN_VERSION_OFFSET: number = 8;
 export const DEPENDENCY_INFO_BUNDLE_ID_OFFSET: number = 16;
 export const DEPENDENCY_INFO_SIZE: number = 24;
+
+/**
+ *  Raw Ed25519 public-key bytes (the 32-byte compressed Edwards point encoding).
+ * 
+ *  # Layout
+ *  `#[repr(C)]`, 32 bytes, align 1 — a bare byte array with no padding.
+ */
+export interface Ed25519PublicKey {
+    /**  The 32 raw bytes of the Ed25519 verifying key. */
+    bytes: number[];
+}
+
+export const ED25519_PUBLIC_KEY_BYTES_OFFSET: number = 0;
+export const ED25519_PUBLIC_KEY_SIZE: number = 32;
 
 /**
  *  Non-owning UTF-8 string view.

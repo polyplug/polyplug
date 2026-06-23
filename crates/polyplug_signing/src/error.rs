@@ -26,6 +26,11 @@ pub enum SigError {
     #[error("signature verification failed for bundle `{bundle}`: {reason}")]
     SignatureMismatch { bundle: String, reason: String },
 
+    #[error(
+        "bundle `{bundle}` is signed by a key that is not in the host's trusted-key allowlist (key pinning rejected it)"
+    )]
+    UntrustedKey { bundle: String },
+
     #[error("key file has invalid magic bytes")]
     BadKeyMagic,
 
@@ -50,4 +55,18 @@ pub enum SigError {
 
     #[error("non-UTF-8 file path in bundle `{bundle}`: {path}")]
     NonUtf8Path { bundle: String, path: String },
+
+    #[error("symlinks are not allowed in a signable bundle `{bundle}`: {path}")]
+    SymlinkNotAllowed { bundle: String, path: String },
+
+    #[error(
+        "irregular file (not a regular file or directory) is not allowed in a signable bundle `{bundle}`: {path}"
+    )]
+    IrregularFile { bundle: String, path: String },
+
+    #[error("file path `{path}` is outside bundle root in bundle `{bundle}`")]
+    PathOutsideBundle { bundle: String, path: String },
+
+    #[error("bundle `{bundle}` contains no signable files")]
+    EmptyBundle { bundle: String },
 }

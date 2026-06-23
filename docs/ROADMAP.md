@@ -358,7 +358,7 @@ callback before invalidation so the host can quiesce. It then reclaims the
 superseded interface `Arc` **and** the loader's dylib mapping / VM state via
 crossbeam-epoch deferred reclamation — freed once no reader is still pinned in
 the prior epoch. There is no opt-in mode and no retained tier:
-`RuntimeConfig` is 48 bytes with no unload-mode field. Full model:
+`RuntimeConfig` is 72 bytes with no unload-mode field. Full model:
 `docs/UNLOAD_DESIGN.md`; trust posture: `TRUST_MODEL.md`.
 
 Reads are lock-free: a reader takes a pin guard over the immutable published

@@ -67,6 +67,30 @@ impl PythonGenerator {
         rust_type.starts_with("Array<")
     }
 
+    /// Parse a fixed-size array type in compacted `quote!()` form, e.g. `[u8;32]`.
+    ///
+    /// Returns `(element_type, count)` when the input matches `[T;N]` where T is
+    /// a known primitive and N is a positive integer; returns `None` otherwise.
+    fn parse_fixed_array(rust_type: &str) -> Option<(&'static str, usize)> {
+        let inner: &str = rust_type.strip_prefix('[')?.strip_suffix(']')?;
+        let semi: usize = inner.find(';')?;
+        let elem: &str = inner[..semi].trim();
+        let count_str: &str = inner[semi + 1..].trim();
+        let count: usize = count_str.parse().ok().filter(|&n: &usize| n > 0)?;
+        let ctypes_elem: &'static str = match elem {
+            "u8" => "ctypes.c_uint8",
+            "u16" => "ctypes.c_uint16",
+            "u32" => "ctypes.c_uint32",
+            "u64" => "ctypes.c_uint64",
+            "i8" => "ctypes.c_int8",
+            "i16" => "ctypes.c_int16",
+            "i32" => "ctypes.c_int32",
+            "i64" => "ctypes.c_int64",
+            _ => return None,
+        };
+        Some((ctypes_elem, count))
+    }
+
     /// Parse a function pointer type string and return (return_type, param_types).
     ///
     /// The compact `quote!()` output looks like:
@@ -273,6 +297,11 @@ impl PythonGenerator {
         // misread the hidden return-pointer register as the result (UB/crash).
         if Self::is_array(rust_type) {
             return String::from("Array");
+        }
+
+        // Handle fixed-size primitive arrays, e.g. `[u8;32]` from `quote!()`.
+        if let Some((ctypes_elem, count)) = Self::parse_fixed_array(rust_type) {
+            return format!("{} * {}", ctypes_elem, count);
         }
 
         // Handle function pointers — return c_void_p as fallback.
@@ -633,6 +662,36 @@ mod tests {
         assert!(
             output.contains("items__align"),
             "Array should have align field: {}",
+            output
+        );
+    }
+
+    /// Test that a fixed-size byte array field `[u8;32]` emits a ctypes array field.
+    #[test]
+    fn python_fixed_byte_array_field_emits_ctypes_array() {
+        let generator: PythonGenerator = PythonGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("Ed25519PublicKey"),
+            fields: vec![FieldInfo {
+                name: String::from("bytes"),
+                rust_type: String::from("[u8;32]"),
+                doc: None,
+            }],
+            doc: None,
+            attributes: vec![],
+            size_hint: Some(32),
+        };
+
+        let output: String = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains(r#"("bytes", ctypes.c_uint8 * 32)"#),
+            "fixed byte array should emit ctypes array field: {}",
+            output
+        );
+        assert!(
+            !output.contains("[u8;32]"),
+            "raw Rust array syntax must not appear in output: {}",
             output
         );
     }

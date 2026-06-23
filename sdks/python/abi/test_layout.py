@@ -22,6 +22,7 @@ from abi import (
     ArenaOverflowBlock,
     CallArena,
     DependencyInfo,
+    Ed25519PublicKey,
     StringView,
     Version,
 )
@@ -76,7 +77,7 @@ def test_reload_phase_size():
 
 
 def test_runtime_config_size():
-    assert ctypes.sizeof(RuntimeConfig) == 48, f"RuntimeConfig expected 48 bytes, got {ctypes.sizeof(RuntimeConfig)}"
+    assert ctypes.sizeof(RuntimeConfig) == 72, f"RuntimeConfig expected 72 bytes, got {ctypes.sizeof(RuntimeConfig)}"
 
 
 def test_abi_error_size():
@@ -97,6 +98,10 @@ def test_call_arena_size():
 
 def test_dependency_info_size():
     assert ctypes.sizeof(DependencyInfo) == 24, f"DependencyInfo expected 24 bytes, got {ctypes.sizeof(DependencyInfo)}"
+
+
+def test_ed25519_public_key_size():
+    assert ctypes.sizeof(Ed25519PublicKey) == 32, f"Ed25519PublicKey expected 32 bytes, got {ctypes.sizeof(Ed25519PublicKey)}"
 
 
 def test_string_view_size():

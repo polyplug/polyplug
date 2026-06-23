@@ -15,11 +15,12 @@ static_assert(sizeof(GuestContractHandle) == 8, "GuestContractHandle size mismat
 static_assert(sizeof(BundleInitContext) == 24, "BundleInitContext size mismatch");
 static_assert(sizeof(PluginDescriptor) == 48, "PluginDescriptor size mismatch");
 static_assert(sizeof(ReloadPhase) == 48, "ReloadPhase size mismatch");
-static_assert(sizeof(RuntimeConfig) == 48, "RuntimeConfig size mismatch");
+static_assert(sizeof(RuntimeConfig) == 72, "RuntimeConfig size mismatch");
 static_assert(sizeof(AbiError) == 24, "AbiError size mismatch");
 static_assert(sizeof(Buffer) == 24, "Buffer size mismatch");
 static_assert(sizeof(ArenaOverflowBlock) == 24, "ArenaOverflowBlock size mismatch");
 static_assert(sizeof(CallArena) == 40, "CallArena size mismatch");
 static_assert(sizeof(DependencyInfo) == 24, "DependencyInfo size mismatch");
+static_assert(sizeof(Ed25519PublicKey) == 32, "Ed25519PublicKey size mismatch");
 static_assert(sizeof(StringView) == 16, "StringView size mismatch");
 static_assert(sizeof(Version) == 12, "Version size mismatch");

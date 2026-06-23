@@ -171,8 +171,13 @@ pub struct RuntimeConfig {
     pub log: Option<unsafe extern "C" fn(*mut core::ffi::c_void, u32, StringView, StringView)>,
     pub log_user_data: *mut core::ffi::c_void,
     pub log_max_level: u32,
+
+    /// Bundle signature policy (u32, offset 44) and the key-pinning allowlist
+    /// (offset 48; empty = TOFU). See TRUST_MODEL.md § Bundle Signing.
+    pub signature_policy: SignaturePolicy,
+    pub trusted_keys: Array<Ed25519PublicKey>,
 }
-// sizeof(RuntimeConfig) == 48, align 8 on 64-bit.
+// sizeof(RuntimeConfig) == 72, align 8 on 64-bit.
 ```
 
 #### Why `hot_reload_enabled` Defaults to `false`

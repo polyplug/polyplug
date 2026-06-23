@@ -3,6 +3,8 @@
 use crate::runtime::Compatibility;
 use crate::runtime::ReloadPhase;
 use crate::runtime::SignaturePolicy;
+use crate::types::Array;
+use crate::types::Ed25519PublicKey;
 use crate::types::LogLevel;
 use crate::types::StringView;
 
@@ -86,8 +88,38 @@ pub struct RuntimeConfig {
     ///
     /// # Layout note
     /// Placed at offset 0x2C (44), filling the 4-byte tail padding that existed
-    /// after `log_max_level` at 0x28. The struct remains 48 bytes, align 8.
+    /// after `log_max_level` at 0x28.
     pub signature_policy: SignaturePolicy,
+    /// Host-configured trusted Ed25519 verifying-key allowlist (key pinning).
+    ///
+    /// Controls signing-key authenticity on top of the integrity guarantee that
+    /// [`signature_policy`](Self::signature_policy) provides:
+    ///
+    /// - **Empty (default)** — Trust-On-First-Use (TOFU). The runtime trusts the
+    ///   verifying key embedded in each bundle's `bundle.sig`; signature
+    ///   verification proves the bundle is internally consistent and untampered,
+    ///   but NOT that any particular author signed it.
+    /// - **Non-empty** — Key pinning. After the normal Ed25519 verification, the
+    ///   runtime additionally requires the bundle's embedded verifying key to be
+    ///   a member of this allowlist; a bundle re-signed with an attacker key is
+    ///   rejected even though its self-consistent signature is valid.
+    ///
+    /// Only public (verifying) keys are pinned — the private signing key stays
+    /// offline. This field is read alongside `signature_policy`; with policy
+    /// [`SignaturePolicy::Off`](crate::runtime::SignaturePolicy::Off) no
+    /// verification runs and the allowlist is not consulted.
+    ///
+    /// # Ownership
+    /// Borrowed for the duration of `polyplug_runtime_create` only. The runtime
+    /// COPIES the key bytes it needs out of this buffer during construction and
+    /// never retains the pointer — the host may free the backing storage as soon
+    /// as `create` returns.
+    ///
+    /// # Layout note
+    /// Placed at offset 0x30 (48), immediately after `signature_policy` plus its
+    /// 4 bytes of pre-existing tail padding. The struct grows to 72 bytes,
+    /// align 8 (the 24-byte `Array` raises the size from 48 to 72).
+    pub trusted_keys: Array<Ed25519PublicKey>,
 }
 
 // SAFETY: RuntimeConfig contains function pointers, plain values, and opaque
@@ -112,6 +144,7 @@ impl Default for RuntimeConfig {
             log_user_data: core::ptr::null_mut(),
             log_max_level: LogLevel::Warn as u32,
             signature_policy: SignaturePolicy::Off,
+            trusted_keys: Array::empty(),
         }
     }
 }
@@ -135,9 +168,13 @@ mod tests {
         // log_user_data: 8 bytes (pointer) at 0x20
         // log_max_level: 4 bytes (u32) at 0x28
         // signature_policy: 4 bytes (u32) at 0x2C  ← fills former tail padding
-        // Total: 48 bytes, alignment 8
-        assert_eq!(size_of::<RuntimeConfig>(), 48);
+        // trusted_keys: 24 bytes (Array<Ed25519PublicKey>) at 0x30
+        // Total: 72 bytes, alignment 8
+        assert_eq!(size_of::<RuntimeConfig>(), 72);
         assert_eq!(align_of::<RuntimeConfig>(), 8);
+        // All pre-existing field offsets are unchanged by the trusted_keys
+        // addition — the new field lands in the former tail, growing the struct
+        // without disturbing any prior field.
         assert_eq!(offset_of!(RuntimeConfig, compatibility), 0x0);
         assert_eq!(offset_of!(RuntimeConfig, hot_reload_enabled), 0x4);
         assert_eq!(offset_of!(RuntimeConfig, on_reload), 0x8);
@@ -146,6 +183,7 @@ mod tests {
         assert_eq!(offset_of!(RuntimeConfig, log_user_data), 0x20);
         assert_eq!(offset_of!(RuntimeConfig, log_max_level), 0x28);
         assert_eq!(offset_of!(RuntimeConfig, signature_policy), 0x2C);
+        assert_eq!(offset_of!(RuntimeConfig, trusted_keys), 0x30);
     }
 
     /// The nullable callbacks are `Option<fn>`: the null-pointer optimization
@@ -194,5 +232,8 @@ mod tests {
         assert!(config.log_user_data.is_null());
         assert_eq!(config.log_max_level, LogLevel::Warn as u32);
         assert_eq!(config.signature_policy, SignaturePolicy::Off);
+        // Default = TOFU: an empty trusted-key allowlist so existing zero-init
+        // hosts are unaffected and no pinning is enforced.
+        assert!(config.trusted_keys.is_empty());
     }
 }

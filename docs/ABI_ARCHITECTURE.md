@@ -65,11 +65,13 @@ const HostApi* polyplug_runtime_create(const void* config);
 void polyplug_runtime_destroy(const HostApi* host);
 ```
 
-`config` points at a `RuntimeConfig` (`#[repr(C)]`, **48 bytes, align 8**):
+`config` points at a `RuntimeConfig` (`#[repr(C)]`, **72 bytes, align 8**):
 `compatibility: Compatibility` (u32, offset 0), `hot_reload_enabled: bool`
 (offset 4), `on_reload` callback (offset 8), `on_reload_user_data` (offset 16),
-`log` callback (offset 24), `log_user_data` (offset 32), and `log_max_level`
-(u32, offset 40). The `log` callback —
+`log` callback (offset 24), `log_user_data` (offset 32), `log_max_level`
+(u32, offset 40), `signature_policy: SignaturePolicy` (u32, offset 44), and
+`trusted_keys: Array<Ed25519PublicKey>` (24 bytes, offset 48 — the key-pinning
+allowlist; empty = TOFU). The `log` callback —
 `fn(user_data, level: u32, scope: StringView, message: StringView)` — receives
 every runtime diagnostic at or below `log_max_level` (`LogLevel { Error = 1,
 Warn = 2, Info = 3, Debug = 4, Trace = 5 }`); when null, Error/Warn messages go

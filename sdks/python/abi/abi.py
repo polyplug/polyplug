@@ -242,6 +242,20 @@ class DependencyInfo(ctypes.Structure):
 assert ctypes.sizeof(DependencyInfo) == 24, f"DependencyInfo expected 24 bytes, got {ctypes.sizeof(DependencyInfo)}"
 
 
+class Ed25519PublicKey(ctypes.Structure):
+    """ Raw Ed25519 public-key bytes (the 32-byte compressed Edwards point encoding).
+    
+     # Layout
+     `#[repr(C)]`, 32 bytes, align 1 — a bare byte array with no padding.
+    """
+    _fields_ = [
+        ("bytes", ctypes.c_uint8 * 32),
+    ]
+
+# Expected size: 32 bytes
+assert ctypes.sizeof(Ed25519PublicKey) == 32, f"Ed25519PublicKey expected 32 bytes, got {ctypes.sizeof(Ed25519PublicKey)}"
+
+
 class StringView(ctypes.Structure):
     """ Non-owning UTF-8 string view.
     
@@ -536,10 +550,13 @@ class RuntimeConfig(ctypes.Structure):
         ("log_user_data", ctypes.c_void_p),
         ("log_max_level", ctypes.c_uint32),
         ("signature_policy", ctypes.c_uint32),
+        ("trusted_keys", ctypes.c_void_p),
+        ("trusted_keys_len", ctypes.c_size_t),
+        ("trusted_keys__align", ctypes.c_size_t),
     ]
 
-# Expected size: 48 bytes
-assert ctypes.sizeof(RuntimeConfig) == 48, f"RuntimeConfig expected 48 bytes, got {ctypes.sizeof(RuntimeConfig)}"
+# Expected size: 72 bytes
+assert ctypes.sizeof(RuntimeConfig) == 72, f"RuntimeConfig expected 72 bytes, got {ctypes.sizeof(RuntimeConfig)}"
 
 
 class AbiError(ctypes.Structure):

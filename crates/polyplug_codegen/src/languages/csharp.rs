@@ -41,6 +41,30 @@ impl CSharpGenerator {
         rust_type.starts_with("Array<")
     }
 
+    /// Parse a fixed-size array type in compacted `quote!()` form, e.g. `[u8;32]`.
+    ///
+    /// Returns `(csharp_element_type, count)` when the input matches `[T;N]` where T
+    /// is a known primitive and N is a positive integer; returns `None` otherwise.
+    fn parse_fixed_array(rust_type: &str) -> Option<(&'static str, usize)> {
+        let inner: &str = rust_type.strip_prefix('[')?.strip_suffix(']')?;
+        let semi: usize = inner.find(';')?;
+        let elem: &str = inner[..semi].trim();
+        let count_str: &str = inner[semi + 1..].trim();
+        let count: usize = count_str.parse().ok().filter(|&n: &usize| n > 0)?;
+        let cs_elem: &'static str = match elem {
+            "u8" => "byte",
+            "u16" => "ushort",
+            "u32" => "uint",
+            "u64" => "ulong",
+            "i8" => "sbyte",
+            "i16" => "short",
+            "i32" => "int",
+            "i64" => "long",
+            _ => return None,
+        };
+        Some((cs_elem, count))
+    }
+
     fn rust_type_to_csharp(rust_type: &str) -> String {
         // Handle Option<...> wrapper.
         if Self::is_option(rust_type) {
@@ -163,6 +187,13 @@ impl CodeGenerator for CSharpGenerator {
             output.push('\n');
         }
 
+        // Pre-scan: does any field use a fixed-size primitive array?
+        // If so the struct must be declared `unsafe` to allow `fixed` buffers.
+        let has_fixed_array: bool = item
+            .fields
+            .iter()
+            .any(|f| Self::parse_fixed_array(&f.rust_type).is_some());
+
         // Use Size attribute if size hint is known.
         if let Some(size) = item.size_hint {
             output.push_str(&format!(
@@ -172,7 +203,11 @@ impl CodeGenerator for CSharpGenerator {
         } else {
             output.push_str("[StructLayout(LayoutKind.Sequential)]\n");
         }
-        output.push_str(&format!("public struct {}\n", item.name));
+        if has_fixed_array {
+            output.push_str(&format!("public unsafe struct {}\n", item.name));
+        } else {
+            output.push_str(&format!("public struct {}\n", item.name));
+        }
         output.push_str("{\n");
 
         for field in &item.fields {
@@ -195,6 +230,17 @@ impl CodeGenerator for CSharpGenerator {
             if Self::is_function_pointer(&field.rust_type) {
                 let field_name: String = Self::to_pascal_case(&field.name);
                 output.push_str(&format!("    public IntPtr {};\n", field_name));
+                continue;
+            }
+
+            // Handle fixed-size primitive arrays, e.g. `[u8;32]` from `quote!()`.
+            // C# requires `unsafe fixed` for inline fixed buffers inside structs.
+            if let Some((cs_elem, count)) = Self::parse_fixed_array(&field.rust_type) {
+                let field_name: String = Self::to_pascal_case(&field.name);
+                output.push_str(&format!(
+                    "    public unsafe fixed {} {}[{}];\n",
+                    cs_elem, field_name, count
+                ));
                 continue;
             }
 
@@ -348,6 +394,42 @@ mod tests {
         assert!(
             output.contains("public uint Value;"),
             "non-pointer field should keep its mapped type: {}",
+            output
+        );
+    }
+
+    /// Test that a fixed-size byte array field `[u8;32]` emits an inline fixed
+    /// buffer and that the struct is declared `unsafe` to allow it.
+    #[test]
+    fn csharp_fixed_byte_array_field_emits_fixed_buffer() {
+        let generator: CSharpGenerator = CSharpGenerator::new();
+        let ctx: GenerationContext = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("Ed25519PublicKey"),
+            fields: vec![FieldInfo {
+                name: String::from("bytes"),
+                rust_type: String::from("[u8;32]"),
+                doc: None,
+            }],
+            doc: None,
+            attributes: vec![],
+            size_hint: Some(32),
+        };
+
+        let output: String = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains("public unsafe struct Ed25519PublicKey"),
+            "struct with fixed buffer must be declared unsafe: {}",
+            output
+        );
+        assert!(
+            output.contains("public unsafe fixed byte Bytes[32];"),
+            "fixed byte array should emit unsafe fixed buffer field: {}",
+            output
+        );
+        assert!(
+            !output.contains("[u8;32]"),
+            "raw Rust array syntax must not appear in output: {}",
             output
         );
     }

@@ -23,6 +23,7 @@ polyplug_signing = { workspace = true }
 thiserror = { workspace = true }
 petgraph = { workspace = true }
 crossbeam-epoch = { workspace = true }
+ed25519-dalek = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 
@@ -35,7 +36,6 @@ workspace = true
 [dev-dependencies]
 polyplug_abi = { workspace = true, features = ["tracking"] }
 polyplug_signing = { workspace = true }
-ed25519-dalek = { workspace = true }
 criterion = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }

@@ -1137,11 +1137,11 @@ export function openPolyplug(soPath) {
  * runtimes). The FFI callbacks created for `onReload` / `logger` are owned by
  * the returned Runtime and closed by {@link Runtime#destroy}.
  *
- * RuntimeConfig is the full 48-byte ABI struct: compatibility (u32 @ 0),
+ * RuntimeConfig is the full 72-byte ABI struct: compatibility (u32 @ 0),
  * hot_reload_enabled (bool @ 4), on_reload (fn @ 8), on_reload_user_data (ptr @ 16),
  * log (fn @ 24), log_user_data (ptr @ 32), log_max_level (u32 @ 40),
- * signature_policy (u32 @ 44). The struct stays 48 bytes. Offsets/size come from
- * the abi.ts constants.
+ * signature_policy (u32 @ 44), trusted_keys (Array @ 48). The struct is 72 bytes.
+ * Offsets/size come from the abi.ts constants.
  *
  * @param {FfiLibrary} lib - Dynamic library
  * @param {Object} [options] - Per-runtime options

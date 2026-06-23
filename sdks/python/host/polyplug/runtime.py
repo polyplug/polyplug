@@ -255,7 +255,7 @@ class Runtime:
     def _create_runtime_with_options(self) -> int:
         """Create runtime via polyplug_runtime_create with a RuntimeConfig.
 
-        The RuntimeConfig (48 bytes) has:
+        The RuntimeConfig (72 bytes) has:
         - compatibility (u32)
         - hot_reload_enabled (bool/u8)
         - on_reload (fn pointer or null)
@@ -264,6 +264,7 @@ class Runtime:
         - log_user_data (pointer or null)
         - log_max_level (u32)
         - signature_policy (u32, offset 44)
+        - trusted_keys (Array<Ed25519PublicKey>, offset 48; zeroed = empty = TOFU)
 
         The runtime only borrows the config for the duration of the build,
         but the config is retained on the instance so the C callback wrapper

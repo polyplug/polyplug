@@ -252,7 +252,7 @@ invalidates handles and reclaims the backing resources.
 |---|---|---|
 | `GuestContractHandle` | 8 bytes, align 4 | `{ index: u32, generation: u32 }` |
 | `HostApi` | 184 bytes, align 8 | 1 runtime ptr + 21 fn-ptr fields + 1 trailing `reserved` data ptr |
-| `RuntimeConfig` | 48 bytes, align 8 | no unload-mode field |
+| `RuntimeConfig` | 72 bytes, align 8 | no unload-mode field |
 
 `ReloadPhaseType::Unloading = 3` with the `ReloadPhase::unloading()` constructor models
 the quiesce callback fired before invalidation.

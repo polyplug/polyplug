@@ -48,10 +48,14 @@ static void check(bool cond, const char* what) {
 }
 
 int main() {
-    // Layout floor: the field fills the former tail padding; struct stays 48.
-    check(sizeof(RuntimeConfig) == 48, "RuntimeConfig stays 48 bytes");
+    // Layout floor: signature_policy fills the former tail padding at offset 44;
+    // key pinning then added trusted_keys (a 24-byte Array) at offset 48, growing
+    // the struct from 48 to 72 bytes.
+    check(sizeof(RuntimeConfig) == 72, "RuntimeConfig is 72 bytes");
     check(offsetof(RuntimeConfig, signature_policy) == 44,
           "signature_policy at offset 44");
+    check(offsetof(RuntimeConfig, trusted_keys) == 48,
+          "trusted_keys at offset 48");
     check(static_cast<uint32_t>(SignaturePolicy::Off) == 0, "SignaturePolicy::Off == 0");
     check(static_cast<uint32_t>(SignaturePolicy::WarnOnly) == 1, "SignaturePolicy::WarnOnly == 1");
     check(static_cast<uint32_t>(SignaturePolicy::Required) == 2, "SignaturePolicy::Required == 2");

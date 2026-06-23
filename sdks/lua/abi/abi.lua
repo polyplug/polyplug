@@ -25,6 +25,7 @@ ffi.cdef[[
     typedef struct ArenaOverflowBlock ArenaOverflowBlock;
     typedef struct CallArena CallArena;
     typedef struct DependencyInfo DependencyInfo;
+    typedef struct Ed25519PublicKey Ed25519PublicKey;
     typedef struct StringView StringView;
     typedef struct Version Version;
     typedef enum ContractType ContractType;
@@ -661,6 +662,16 @@ ffi.cdef[[
     } DependencyInfo;
     // Expected size: 24 bytes
 
+    //  Raw Ed25519 public-key bytes (the 32-byte compressed Edwards point encoding).
+    // 
+    //  # Layout
+    //  `#[repr(C)]`, 32 bytes, align 1 — a bare byte array with no padding.
+    typedef struct Ed25519PublicKey {
+        //  The 32 raw bytes of the Ed25519 verifying key.
+        uint8_t bytes[32];
+    } Ed25519PublicKey;
+    // Expected size: 32 bytes
+
     //  Non-owning UTF-8 string view.
     // 
     //  OWNERSHIP: borrowed reference. `ptr` must remain valid for the duration
@@ -970,10 +981,42 @@ ffi.cdef[[
         // 
         //  # Layout note
         //  Placed at offset 0x2C (44), filling the 4-byte tail padding that existed
-        //  after `log_max_level` at 0x28. The struct remains 48 bytes, align 8.
+        //  after `log_max_level` at 0x28.
         SignaturePolicy signature_policy;
+        //  Host-configured trusted Ed25519 verifying-key allowlist (key pinning).
+        // 
+        //  Controls signing-key authenticity on top of the integrity guarantee that
+        //  [`signature_policy`](Self::signature_policy) provides:
+        // 
+        //  - **Empty (default)** — Trust-On-First-Use (TOFU). The runtime trusts the
+        //    verifying key embedded in each bundle's `bundle.sig`; signature
+        //    verification proves the bundle is internally consistent and untampered,
+        //    but NOT that any particular author signed it.
+        //  - **Non-empty** — Key pinning. After the normal Ed25519 verification, the
+        //    runtime additionally requires the bundle's embedded verifying key to be
+        //    a member of this allowlist; a bundle re-signed with an attacker key is
+        //    rejected even though its self-consistent signature is valid.
+        // 
+        //  Only public (verifying) keys are pinned — the private signing key stays
+        //  offline. This field is read alongside `signature_policy`; with policy
+        //  [`SignaturePolicy::Off`](crate::runtime::SignaturePolicy::Off) no
+        //  verification runs and the allowlist is not consulted.
+        // 
+        //  # Ownership
+        //  Borrowed for the duration of `polyplug_runtime_create` only. The runtime
+        //  COPIES the key bytes it needs out of this buffer during construction and
+        //  never retains the pointer — the host may free the backing storage as soon
+        //  as `create` returns.
+        // 
+        //  # Layout note
+        //  Placed at offset 0x30 (48), immediately after `signature_policy` plus its
+        //  4 bytes of pre-existing tail padding. The struct grows to 72 bytes,
+        //  align 8 (the 24-byte `Array` raises the size from 48 to 72).
+        void* trusted_keys;
+        size_t trusted_keys_len;
+        size_t trusted_keys__align;
     } RuntimeConfig;
-    // Expected size: 48 bytes
+    // Expected size: 72 bytes
 
     //  ABI error — returned by value from all ABI calls.
     // 

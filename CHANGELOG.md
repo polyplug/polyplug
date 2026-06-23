@@ -12,6 +12,42 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ## [Unreleased]
 
+### Security
+
+- **Bundle-signing hardening.** The canonical digest now **rejects symlinks and
+  irregular files** (fifo/socket/device) and an **empty bundle**, closing a
+  signature-bypass hole where a symlinked artifact was excluded from the digest
+  yet still `dlopen`ed. Path relativization is now a hard error (`PathOutsideBundle`)
+  instead of a silent absolute-path fallback that could yield a non-reproducible,
+  machine-specific digest. The signed message gains a **domain-separation prefix**:
+  the fixed tag `polyplug-bundle-sig\0`, a 1-byte algorithm version (`0x01`), and
+  the file count (`u64` little-endian) before the per-file entries (pre-release
+  format change). The native loader now **confines the artifact path** to the
+  bundle directory — a `manifest.file` that is a symlink or canonicalizes outside
+  the bundle root (`../../evil.so`, an absolute path) is rejected with
+  `LoaderError::ArtifactPathEscape`. `save_signing_key` now creates the private key
+  file with `0o600` from the start (and tightens a pre-existing `0o644` file before
+  writing any secret bytes), eliminating the brief world-readable window.
+
+- **Bundle-signing key pinning (opt-in authenticity).** `RuntimeConfig` gains a
+  `trusted_keys: Array<Ed25519PublicKey>` field. Empty (the default) keeps today's
+  Trust-On-First-Use behaviour — verification proves *integrity* only. When the
+  host configures one or more keys (via `RuntimeBuilder::trusted_keys(&[VerifyingKey])`),
+  the runtime additionally requires each bundle's embedded `bundle.sig` key to be a
+  member of the allowlist, so a bundle re-signed with an attacker key is rejected
+  (`LoaderError::UntrustedSigningKey` under `Required`, logged under `WarnOnly`).
+  Only public verifying keys are pinned; the private key stays offline. A malformed
+  host key fails the load with `LoaderError::MalformedTrustedKey`. New
+  `polyplug_signing` surface: `PinnedKeyVerifier`, `verifying_key_from_bytes`, and
+  `SigError::UntrustedKey`.
+
+  - **ABI change (pre-1.0, owner-approved).** A new `#[repr(C)]` 32-byte
+    `Ed25519PublicKey` type is added, and `RuntimeConfig` grows from **48 to 72
+    bytes** (align 8): `trusted_keys` lands at offset `0x30`, immediately after
+    `signature_policy`. Every pre-existing field offset is unchanged; all six host
+    SDK abi mirrors carry the new type and field and default `trusted_keys` to an
+    empty `Array`, so zero-initialized hosts get TOFU and are unaffected.
+
 ### Added
 
 - **JS SDK runs on Node.js (koffi) and Bun (bun:ffi) in addition to Deno**,

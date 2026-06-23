@@ -79,6 +79,64 @@ pub fn verify_bundle(bundle_dir: &Path) -> Result<VerifiedBundle, SigError> {
     Ed25519Verifier.verify(bundle_dir)
 }
 
+/// Build a `VerifyingKey` from raw 32-byte Ed25519 public-key encoding.
+///
+/// Returns [`SigError::InvalidKeyData`] if the bytes are not a valid compressed
+/// Edwards point. This is the entry point used to turn host-supplied trusted-key
+/// bytes (`Ed25519PublicKey`) into verifying keys for [`PinnedKeyVerifier`].
+pub fn verifying_key_from_bytes(bytes: &[u8; 32]) -> Result<VerifyingKey, SigError> {
+    VerifyingKey::from_bytes(bytes).map_err(|e: ed25519_dalek::SignatureError| {
+        SigError::InvalidKeyData {
+            reason: e.to_string(),
+        }
+    })
+}
+
+/// Key-pinning verifier: performs the normal Ed25519 verification, then requires
+/// the bundle's embedded verifying key to be a member of a host-trusted set.
+///
+/// # Empty set = reject-all
+/// A `PinnedKeyVerifier` with an empty trusted set rejects EVERY bundle (no key
+/// can be a member), so [`PinnedKeyVerifier::new`] is documented to be called
+/// only when at least one key exists. The runtime constructs this verifier
+/// exclusively when the host's allowlist is non-empty; an empty allowlist stays
+/// on the TOFU [`Ed25519Verifier`] path instead.
+pub struct PinnedKeyVerifier {
+    trusted: Vec<VerifyingKey>,
+}
+
+impl PinnedKeyVerifier {
+    /// Create a key-pinning verifier from a set of trusted verifying keys.
+    ///
+    /// An empty `keys` vector yields a verifier that rejects every bundle (see
+    /// the type-level docs) — callers must supply at least one key.
+    pub fn new(keys: Vec<VerifyingKey>) -> PinnedKeyVerifier {
+        PinnedKeyVerifier { trusted: keys }
+    }
+}
+
+impl BundleVerifier for PinnedKeyVerifier {
+    fn verify(&self, bundle_dir: &Path) -> Result<VerifiedBundle, SigError> {
+        // First run the full TOFU verification: this proves the bundle is
+        // internally consistent and untampered against its embedded key.
+        let verified: VerifiedBundle = Ed25519Verifier.verify(bundle_dir)?;
+
+        // Then enforce authenticity: the embedded key must be in the allowlist.
+        let is_trusted: bool = self
+            .trusted
+            .iter()
+            .any(|trusted: &VerifyingKey| trusted.as_bytes() == verified.verifying_key.as_bytes());
+
+        if is_trusted {
+            Ok(verified)
+        } else {
+            Err(SigError::UntrustedKey {
+                bundle: bundle_dir.display().to_string(),
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -120,6 +178,31 @@ mod tests {
 
         // Flip a byte in the artifact AFTER signing.
         fs::write(tmp.path().join("artifact.so"), b"TAMPERED DATA").expect("overwrite artifact");
+
+        assert!(matches!(
+            verify_bundle(tmp.path()),
+            Err(SigError::SignatureMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn tampered_nested_subdirectory_file_fails_verification() {
+        let tmp: TempDir = TempDir::new().expect("tmp dir");
+        write_test_bundle(tmp.path());
+
+        // Add a file in a nested subdirectory, then sign.
+        let nested: std::path::PathBuf = tmp.path().join("lib").join("inner");
+        fs::create_dir_all(&nested).expect("create nested dirs");
+        fs::write(nested.join("deep.so"), b"deep bytes").expect("write deep");
+
+        let (signing_key, _): (SigningKey, VerifyingKey) = generate_keypair();
+        sign_bundle(tmp.path(), &signing_key).expect("sign");
+
+        // The sign→verify roundtrip with the new digest format must still pass.
+        verify_bundle(tmp.path()).expect("verify after sign with nested file");
+
+        // Tamper the nested file AFTER signing → verification must fail.
+        fs::write(nested.join("deep.so"), b"DEEP TAMPERED").expect("rewrite deep");
 
         assert!(matches!(
             verify_bundle(tmp.path()),
@@ -179,6 +262,81 @@ mod tests {
         assert!(matches!(
             verify_bundle(tmp.path()),
             Err(SigError::SignatureMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn pinned_verifier_accepts_bundle_whose_key_is_in_the_set() {
+        let tmp: TempDir = TempDir::new().expect("tmp dir");
+        write_test_bundle(tmp.path());
+
+        let (signing_key, verifying_key): (SigningKey, VerifyingKey) = generate_keypair();
+        sign_bundle(tmp.path(), &signing_key).expect("sign");
+
+        // The signing key's public key IS in the trusted set → accept.
+        let verifier: PinnedKeyVerifier = PinnedKeyVerifier::new(vec![verifying_key]);
+        let result: VerifiedBundle = verifier.verify(tmp.path()).expect("pinned verify accepts");
+        assert_eq!(result.bundle_dir, tmp.path());
+    }
+
+    #[test]
+    fn pinned_verifier_rejects_bundle_whose_key_is_not_in_the_set() {
+        let tmp: TempDir = TempDir::new().expect("tmp dir");
+        write_test_bundle(tmp.path());
+
+        // Sign with key A, but pin only an unrelated key B.
+        let (signing_key_a, _): (SigningKey, VerifyingKey) = generate_keypair();
+        sign_bundle(tmp.path(), &signing_key_a).expect("sign");
+        let (_, verifying_key_b): (SigningKey, VerifyingKey) = generate_keypair();
+
+        let verifier: PinnedKeyVerifier = PinnedKeyVerifier::new(vec![verifying_key_b]);
+        assert!(matches!(
+            verifier.verify(tmp.path()),
+            Err(SigError::UntrustedKey { .. })
+        ));
+    }
+
+    #[test]
+    fn pinned_verifier_rejects_a_normally_valid_tofu_bundle_when_key_excluded() {
+        let tmp: TempDir = TempDir::new().expect("tmp dir");
+        write_test_bundle(tmp.path());
+
+        let (signing_key, _): (SigningKey, VerifyingKey) = generate_keypair();
+        sign_bundle(tmp.path(), &signing_key).expect("sign");
+
+        // The bundle passes the default TOFU verifier...
+        verify_bundle(tmp.path()).expect("tofu verify accepts");
+
+        // ...but a pinned verifier whose set excludes its key rejects it.
+        let (_, unrelated): (SigningKey, VerifyingKey) = generate_keypair();
+        let verifier: PinnedKeyVerifier = PinnedKeyVerifier::new(vec![unrelated]);
+        assert!(matches!(
+            verifier.verify(tmp.path()),
+            Err(SigError::UntrustedKey { .. })
+        ));
+    }
+
+    #[test]
+    fn verifying_key_from_bytes_roundtrips_a_real_key() {
+        let (_, verifying_key): (SigningKey, VerifyingKey) = generate_keypair();
+        let rebuilt: VerifyingKey =
+            verifying_key_from_bytes(verifying_key.as_bytes()).expect("rebuild key");
+        assert_eq!(rebuilt.as_bytes(), verifying_key.as_bytes());
+    }
+
+    #[test]
+    fn verifying_key_from_bytes_rejects_invalid_point() {
+        // A 32-byte y-coordinate whose Edwards point cannot be decompressed: the
+        // x-recovery has no solution, so dalek's `from_bytes` rejects it. (dalek
+        // accepts most arbitrary 32-byte inputs lazily, so this is a verified
+        // non-decompressible encoding rather than a "random bytes" guess.)
+        let bad: [u8; 32] = [
+            19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+            41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+        ];
+        assert!(matches!(
+            verifying_key_from_bytes(&bad),
+            Err(SigError::InvalidKeyData { .. })
         ));
     }
 

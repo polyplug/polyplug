@@ -20,6 +20,7 @@ import {
     ARENA_OVERFLOW_BLOCK_SIZE,
     CALL_ARENA_SIZE,
     DEPENDENCY_INFO_SIZE,
+    ED25519PUBLIC_KEY_SIZE,
     STRING_VIEW_SIZE,
     VERSION_SIZE,
 } from "./abi.ts";
@@ -73,8 +74,8 @@ test("ReloadPhase is 48 bytes", () => {
     assertStrictEquals(RELOAD_PHASE_SIZE, 48);
 });
 
-test("RuntimeConfig is 48 bytes", () => {
-    assertStrictEquals(RUNTIME_CONFIG_SIZE, 48);
+test("RuntimeConfig is 72 bytes", () => {
+    assertStrictEquals(RUNTIME_CONFIG_SIZE, 72);
 });
 
 test("AbiError is 24 bytes", () => {
@@ -95,6 +96,10 @@ test("CallArena is 40 bytes", () => {
 
 test("DependencyInfo is 24 bytes", () => {
     assertStrictEquals(DEPENDENCY_INFO_SIZE, 24);
+});
+
+test("Ed25519PublicKey is 32 bytes", () => {
+    assertStrictEquals(ED25519PUBLIC_KEY_SIZE, 32);
 });
 
 test("StringView is 16 bytes", () => {
