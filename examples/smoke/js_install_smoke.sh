@@ -63,13 +63,14 @@ command -v node >/dev/null 2>&1 || fail "node not found on PATH"
 command -v npm  >/dev/null 2>&1 || fail "npm not found on PATH"
 command -v npx  >/dev/null 2>&1 || fail "npx not found on PATH"
 command -v deno >/dev/null 2>&1 || fail "deno not found on PATH"
+command -v bun  >/dev/null 2>&1 || fail "bun not found on PATH"
 
 # DO NOT run cargo. The prebuilt native must already exist.
 if [ ! -f "$PREBUILT_SO" ]; then
   fail "prebuilt native missing: $PREBUILT_SO (build it with 'cargo build --release -p polyplug'; this script will NOT run cargo)"
 fi
 
-echo "==> node $(node --version), npm $(npm --version), deno $(deno --version | head -1)"
+echo "==> node $(node --version), npm $(npm --version), deno $(deno --version | head -1), bun $(bun --version)"
 echo "==> using prebuilt native: $PREBUILT_SO"
 
 # --------------------------------------------------------------------------
@@ -239,5 +240,57 @@ DENO_EOF
     --node-modules-dir=manual \
     deno_smoke.ts
 )
+
+# --------------------------------------------------------------------------
+# 3c/3d. Smoke under NODE and BUN: import @polyplug/host (+ @polyplug/loaders-native)
+#     FROM the installed node_modules, resolve the embedded linux native, dlopen
+#     it via the host SDK, and construct + destroy a real Runtime. This is the
+#     key proof that the PUBLISHED Node (koffi) and Bun (bun:ffi) FFI backends
+#     load through the transpiled dist/ package — getBackend() picks the right
+#     backend per runtime, and ffi/index.js lazy-requires dist/ffi/node.js /
+#     bun.js. A broken dist transpile or a stale require specifier fails here.
+#
+# Both runtimes execute the SAME ESM file (.mjs): the backend is runtime-detected,
+# so the only difference is which interpreter runs it. The native loads through
+# koffi.load under Node and bun:ffi's dlopen under Bun.
+# --------------------------------------------------------------------------
+cat > "$CONSUMER_DIR/ffi_smoke.mjs" <<'FFI_EOF'
+import {
+  loadNativeLibrary,
+  openPolyplug,
+  runtimeNew,
+} from "@polyplug/host";
+// Importing the loader package proves it transpiled and its "@polyplug/host"
+// specifier resolves from the installed node_modules.
+import { registerNativeLoader } from "@polyplug/loaders-native";
+
+const runtime = typeof Bun !== "undefined" ? "BUN" : "NODE";
+
+if (typeof registerNativeLoader !== "function") {
+  throw new Error("@polyplug/loaders-native did not export registerNativeLoader");
+}
+
+// Resolve the embedded native (POLYPLUG_LIB env override honored if set).
+const resolved = loadNativeLibrary();
+console.log(runtime + " resolved native: " + resolved.path + " (embedded=" +
+            resolved.isEmbedded + ", platform=" + resolved.platform + ")");
+
+// dlopen the core native and create a real runtime — this drives getBackend()
+// under the current runtime, exercising the published koffi/bun:ffi FFI path.
+const lib = openPolyplug(resolved.path);
+const rt = runtimeNew(lib);
+if (rt.host() === null) {
+  throw new Error("polyplug_runtime_create returned a null HostApi pointer");
+}
+rt.destroy();
+lib.close();
+console.log(runtime + " OK: native loaded via FFI backend + Runtime created/destroyed");
+FFI_EOF
+
+echo "==> NODE-FFI smoke: load embedded native + construct Runtime (koffi backend)"
+( cd "$CONSUMER_DIR" && node ffi_smoke.mjs )
+
+echo "==> BUN-FFI smoke: load embedded native + construct Runtime (bun:ffi backend)"
+( cd "$CONSUMER_DIR" && bun ffi_smoke.mjs )
 
 echo "JS SMOKE OK"

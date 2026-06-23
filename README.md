@@ -43,7 +43,7 @@ Planned (post-0.1.x): an **optional process-isolation mode**. See [docs/TRUST_MO
 
 ## Features
 
-- **Cross-Language** — Write plugins in Rust, Python, C#, Lua, JavaScript (QuickJS), or C++ (host applications can also be written in any of the six, including JS on Deno)
+- **Cross-Language** — Write plugins in Rust, Python, C#, Lua, JavaScript (QuickJS), or C++ (host applications can also be written in any of the six, including JS on Deno, Node.js, and Bun)
 - **Cross-Platform** — Linux (x64), macOS (x64/ARM64), and Windows (x64)
 - **Hot Reload** — Native, Lua, and JS (QuickJS) bundles reload at runtime; the host observes reloads through the `on_reload` phase callback (Python and .NET bundles do not hot-reload)
 - **Zero/Minimal-Overhead FFI** — Direct function pointer dispatch with near-zero overhead for native languages (~2.4 ns/call measured), minimal overhead for VM-based languages
@@ -77,15 +77,20 @@ dotnet add package Polyplug.Loaders.Native
 # Lua (LuaJIT)
 luarocks install polyplug polyplug-loader-native
 
-# JavaScript / TypeScript (Deno runtime required)
-deno add jsr:@polyplug/host jsr:@polyplug/loaders-native   # or npm:@polyplug/host
+# JavaScript / TypeScript (Deno, Node.js, and Bun)
+deno add jsr:@polyplug/host jsr:@polyplug/loaders-native    # Deno
+npm  i  @polyplug/host @polyplug/loaders-native             # Node.js (koffi auto-installed)
+bun  add @polyplug/host @polyplug/loaders-native            # Bun (uses built-in bun:ffi)
 ```
 
 - The Rust `polyplug` crate is the runtime engine; every other `host` package is
   an FFI binding that loads it. Guest authors add the `guest` package for their
   language. The `polyplugc` CLI generates the typed glue from a `.toml` contract.
-- The JS/TS packages target the **Deno** runtime (they use `Deno.dlopen`); the
-  npm packages publish the same code for name reservation and Deno consumption.
+- The JS/TS packages run on **Deno, Node.js, and Bun** behind one
+  runtime-detected FFI seam: Deno uses `Deno.dlopen`, Node uses the `koffi`
+  C-FFI module (an auto-installed optional dependency), and Bun uses its built-in
+  `bun:ffi`. The same published package works on all three — the backend is
+  selected automatically at runtime.
 - To build from source instead: `cargo build --release` then
   `bash examples/build_all.sh`.
 - See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) for the full end-to-end setup.

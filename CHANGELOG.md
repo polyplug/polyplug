@@ -12,7 +12,17 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ## [Unreleased]
 
-_No changes yet._
+### Added
+
+- **JS SDK runs on Node.js (koffi) and Bun (bun:ffi) in addition to Deno**,
+  behind one runtime-detected FFI seam (`sdks/js/abi/ffi/`). `getBackend()` picks
+  the backend per runtime — `Deno.dlopen` under Deno, the `koffi` C-FFI module
+  under Node (an auto-installed **optional** dependency), and the built-in
+  `bun:ffi` under Bun — so the same published `@polyplug/host` /
+  `@polyplug/loaders-native` packages work on all three. The host-SDK test suite
+  runs identically on every runtime, and the install-smoke
+  (`examples/smoke/js_install_smoke.sh`) loads the embedded native through the
+  Deno, Node, and Bun FFI backends from the published tarballs.
 
 ## [0.1.2] - 2026-06-22
 

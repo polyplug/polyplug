@@ -23,85 +23,85 @@ import {
     STRING_VIEW_SIZE,
     VERSION_SIZE,
 } from "./abi.ts";
-import { assert } from "jsr:@std/assert";
+import { assertStrictEquals, test } from "../testing/harness.ts";
 
-Deno.test("NativeDispatch is 16 bytes", () => {
-    assert(NATIVE_DISPATCH_SIZE === 16);
+test("NativeDispatch is 16 bytes", () => {
+    assertStrictEquals(NATIVE_DISPATCH_SIZE, 16);
 });
 
-Deno.test("VmDispatch is 16 bytes", () => {
-    assert(VM_DISPATCH_SIZE === 16);
+test("VmDispatch is 16 bytes", () => {
+    assertStrictEquals(VM_DISPATCH_SIZE, 16);
 });
 
-Deno.test("VmLoaderData is 8 bytes", () => {
-    assert(VM_LOADER_DATA_SIZE === 8);
+test("VmLoaderData is 8 bytes", () => {
+    assertStrictEquals(VM_LOADER_DATA_SIZE, 8);
 });
 
-Deno.test("GuestContractInstance is 16 bytes", () => {
-    assert(GUEST_CONTRACT_INSTANCE_SIZE === 16);
+test("GuestContractInstance is 16 bytes", () => {
+    assertStrictEquals(GUEST_CONTRACT_INSTANCE_SIZE, 16);
 });
 
-Deno.test("GuestContractInterface is 56 bytes", () => {
-    assert(GUEST_CONTRACT_INTERFACE_SIZE === 56);
+test("GuestContractInterface is 56 bytes", () => {
+    assertStrictEquals(GUEST_CONTRACT_INTERFACE_SIZE, 56);
 });
 
-Deno.test("HostApi is 184 bytes", () => {
-    assert(HOST_API_SIZE === 184);
+test("HostApi is 184 bytes", () => {
+    assertStrictEquals(HOST_API_SIZE, 184);
 });
 
-Deno.test("HostContractInstance is 8 bytes", () => {
-    assert(HOST_CONTRACT_INSTANCE_SIZE === 8);
+test("HostContractInstance is 8 bytes", () => {
+    assertStrictEquals(HOST_CONTRACT_INSTANCE_SIZE, 8);
 });
 
-Deno.test("HostContractInterface is 80 bytes", () => {
-    assert(HOST_CONTRACT_INTERFACE_SIZE === 80);
+test("HostContractInterface is 80 bytes", () => {
+    assertStrictEquals(HOST_CONTRACT_INTERFACE_SIZE, 80);
 });
 
-Deno.test("GuestContractHandle is 8 bytes", () => {
-    assert(GUEST_CONTRACT_HANDLE_SIZE === 8);
+test("GuestContractHandle is 8 bytes", () => {
+    assertStrictEquals(GUEST_CONTRACT_HANDLE_SIZE, 8);
 });
 
-Deno.test("BundleInitContext is 24 bytes", () => {
-    assert(BUNDLE_INIT_CONTEXT_SIZE === 24);
+test("BundleInitContext is 24 bytes", () => {
+    assertStrictEquals(BUNDLE_INIT_CONTEXT_SIZE, 24);
 });
 
-Deno.test("PluginDescriptor is 48 bytes", () => {
-    assert(PLUGIN_DESCRIPTOR_SIZE === 48);
+test("PluginDescriptor is 48 bytes", () => {
+    assertStrictEquals(PLUGIN_DESCRIPTOR_SIZE, 48);
 });
 
-Deno.test("ReloadPhase is 48 bytes", () => {
-    assert(RELOAD_PHASE_SIZE === 48);
+test("ReloadPhase is 48 bytes", () => {
+    assertStrictEquals(RELOAD_PHASE_SIZE, 48);
 });
 
-Deno.test("RuntimeConfig is 48 bytes", () => {
-    assert(RUNTIME_CONFIG_SIZE === 48);
+test("RuntimeConfig is 48 bytes", () => {
+    assertStrictEquals(RUNTIME_CONFIG_SIZE, 48);
 });
 
-Deno.test("AbiError is 24 bytes", () => {
-    assert(ABI_ERROR_SIZE === 24);
+test("AbiError is 24 bytes", () => {
+    assertStrictEquals(ABI_ERROR_SIZE, 24);
 });
 
-Deno.test("Buffer is 24 bytes", () => {
-    assert(BUFFER_SIZE === 24);
+test("Buffer is 24 bytes", () => {
+    assertStrictEquals(BUFFER_SIZE, 24);
 });
 
-Deno.test("ArenaOverflowBlock is 24 bytes", () => {
-    assert(ARENA_OVERFLOW_BLOCK_SIZE === 24);
+test("ArenaOverflowBlock is 24 bytes", () => {
+    assertStrictEquals(ARENA_OVERFLOW_BLOCK_SIZE, 24);
 });
 
-Deno.test("CallArena is 40 bytes", () => {
-    assert(CALL_ARENA_SIZE === 40);
+test("CallArena is 40 bytes", () => {
+    assertStrictEquals(CALL_ARENA_SIZE, 40);
 });
 
-Deno.test("DependencyInfo is 24 bytes", () => {
-    assert(DEPENDENCY_INFO_SIZE === 24);
+test("DependencyInfo is 24 bytes", () => {
+    assertStrictEquals(DEPENDENCY_INFO_SIZE, 24);
 });
 
-Deno.test("StringView is 16 bytes", () => {
-    assert(STRING_VIEW_SIZE === 16);
+test("StringView is 16 bytes", () => {
+    assertStrictEquals(STRING_VIEW_SIZE, 16);
 });
 
-Deno.test("Version is 12 bytes", () => {
-    assert(VERSION_SIZE === 12);
+test("Version is 12 bytes", () => {
+    assertStrictEquals(VERSION_SIZE, 12);
 });
 

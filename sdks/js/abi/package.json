@@ -18,5 +18,6 @@
   "author": "polyplug",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/polyplug/polyplug.git", "directory": "sdks/js/abi" },
-  "dependencies": { "koffi": "^2.15.1" }
+  "comment:optionalDependencies": "koffi is the Node-only FFI backend (loaded lazily by ffi/index.ts only under Node). It is OPTIONAL so Deno and Bun consumers are never forced to build the koffi native addon — Bun uses its built-in bun:ffi and Deno uses Deno.dlopen. npm installs it automatically for Node consumers; if its native build fails the install still succeeds and only the Node FFI path is unavailable.",
+  "optionalDependencies": { "koffi": "^2.15.1" }
 }

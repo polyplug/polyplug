@@ -8,6 +8,7 @@
 //
 // To add a test file, add a single side-effect import line here.
 
+import "../abi/test_layout.ts";
 import "../host/tests/reload_notification_test.ts";
 import "../host/tests/native_loader_test.ts";
 import "../host/tests/signature_policy_config_test.ts";

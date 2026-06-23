@@ -58,6 +58,7 @@ than abandon it.
 | **Real per-instance state — VM guests + host contracts (all 6 langs)** | ✅ Done (#74) — replaced the VM `create/destroy_instance` stubs; python/lua/js guests AND lua + Deno host-contract providers now build a fresh impl per `create_instance` and route dispatch by instance id (native = boxed payload, null rejected; VM = non-zero id keyed, id 0 → per-contract default). Owner-approved layout-neutral `loader_data` ABI change |
 | **JS (Deno) host-contract provider** | ✅ Done (#85) — native dispatch via `Deno.UnsafeCallback` + per-instance, marshalling the **full ABI type universe** (no per-language limitation) |
 | **Lua/JS host-SDK suites in CI** | ✅ Done (#26) — the `test` job runs `just test-host-lua test-host-js`; closes the no-cargo-coverage gap that previously hid two bugs until after merge |
+| **JS host SDK on Node.js + Bun (not just Deno)** | ✅ Done — one runtime-detected FFI seam (`sdks/js/abi/ffi/`): Deno → `Deno.dlopen`, Node → `koffi` (optional dep, lazy-loaded), Bun → built-in `bun:ffi`. Same 57-test suite runs green on all three (`test-host-js` / `-node` / `-bun`); the install-smoke loads the embedded native via the Node and Bun FFI backends from the published tarballs |
 | **Incremental codegen writes** | ✅ Done (#31) — `polyplugc generate` skips bindings whose content is unchanged (mtime-preserving, no downstream rebuild cascade) and always rewrites `manifest.toml` via the wired `force_regenerate` flag |
 
 ---

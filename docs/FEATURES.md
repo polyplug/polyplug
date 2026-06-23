@@ -76,6 +76,17 @@ structs — by packing a C-layout argument buffer and reading a C-layout out
 buffer (`DataView` + `Deno.UnsafePointer`). Runtime-proven against a native guest
 by `integration_host_deno_caller`.
 
+The JS **host SDK** runtime itself (`@polyplug/host` + the loaders) is not
+Deno-only: it runs on **Deno, Node.js, and Bun** behind one runtime-detected FFI
+seam (`sdks/js/abi/ffi/`). `getBackend()` picks `Deno.dlopen` under Deno, the
+`koffi` C-FFI module under Node (an auto-installed optional dependency), and the
+built-in `bun:ffi` under Bun — the same published package works on all three. The
+host SDK test suite runs identically on every runtime (`just test-host-js` /
+`test-host-js-node` / `test-host-js-bun`), and the install-smoke
+(`examples/smoke/js_install_smoke.sh`) loads the embedded native through the Deno,
+Node, and Bun FFI backends from the published tarballs. (The generated host
+**caller** above remains Deno-targeted for now.)
+
 **generate-e2e guarantee:** all six languages generate code that compiles/loads
 with zero hand edits. Proof tests live in
 `crates/polyplugc/tests/generate_e2e.rs` (rust → cargo build),

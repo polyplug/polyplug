@@ -2021,12 +2021,12 @@ fn generate_js_layout_tests(sized_structs: &[(&str, usize)]) -> String {
         ));
     }
     output.push_str("} from \"./abi.ts\";\n");
-    output.push_str("import { assert } from \"jsr:@std/assert\";\n\n");
+    output.push_str("import { assertStrictEquals, test } from \"../testing/harness.ts\";\n\n");
 
     for (name, size) in sized_structs {
         let const_name = format!("{}_SIZE", to_upper_snake_case_for_generate(name));
         output.push_str(&format!(
-            "Deno.test(\"{} is {} bytes\", () => {{\n    assert({} === {});\n}});\n\n",
+            "test(\"{} is {} bytes\", () => {{\n    assertStrictEquals({}, {});\n}});\n\n",
             name, size, const_name, size
         ));
     }
