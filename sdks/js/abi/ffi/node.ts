@@ -37,6 +37,8 @@
 
 import koffiModule from "koffi";
 import { statSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import process from "node:process";
 
 import {
     type FfiBackend,

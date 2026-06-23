@@ -44,6 +44,7 @@
 
 import { CFunction, dlopen, JSCallback, ptr, read, toArrayBuffer } from "bun:ffi";
 import { statSync } from "node:fs";
+import process from "node:process";
 
 import {
     type FfiBackend,
